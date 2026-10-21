@@ -73,6 +73,20 @@ When possible, we recommend splitting your contributions into multiple smaller
 focused PRs rather than large PRs, because they are more likely to be reviewed
 quickly and are easier to understand and review.
 
+### Pull Requests from Forks
+
+To reduce load on ASF's shared runners, pull requests from forks to `main`
+run tests in the fork and lightweight checks upstream.
+
+1. Open the **Actions** tab in your fork and enable workflows before pushing.
+2. Sync your fork and rebase your branch onto upstream `main` to include the
+   current CI workflows.
+3. Push your branch, or manually run `CI` from your fork's **Actions** tab.
+   View results and rerun failed jobs there; the PR's `CI (fork)` check may lag.
+
+Fork results are informational. The merge queue tests the proposed merge with
+`main`, including Miri. Same-repository and release-branch PRs retain upstream testing.
+
 ## Developer's guide to Arrow Rust
 
 ### Setting Up Your Build Environment

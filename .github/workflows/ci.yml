@@ -22,10 +22,13 @@ on:
   merge_group:
     types: [checks_requested]
   push:
-    branches: [main]
+    # Forks need CI on feature branches as well as main. The selector job
+    # ignores upstream feature-branch pushes, which are tested by their PRs.
+    branches-ignore: [asf-site]
+  workflow_dispatch:
 
 concurrency:
-  group: ${{ github.repository }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}-${{ github.workflow }}
+  group: ${{ github.repository }}-${{ github.event_name }}-${{ github.event.pull_request.number || (github.repository != 'apache/arrow-rs' && github.ref) || github.sha }}-${{ github.workflow }}
   cancel-in-progress: true
 
 permissions:
@@ -34,10 +37,12 @@ permissions:
 jobs:
   changes:
     name: Select and validate CI suites
+    if: github.event_name != 'push' || github.repository != 'apache/arrow-rs' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     outputs:
       suites: ${{ steps.select.outputs.suites }}
       cache-refresh-only: ${{ steps.select.outputs.cache-refresh-only }}
+      fork-pr: ${{ steps.select.outputs.fork-pr }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -56,11 +61,18 @@ jobs:
           done
       - name: Validate CI configuration and routing
         run: python3 .github/ci/scripts/check-ci-config.py
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: '24'
+      - name: Test fork CI status bridge
+        run: node --test .github/ci/scripts/test-fork-ci-status.cjs
       - name: Select suites
         id: select
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: python3 .github/ci/scripts/compute-changes.py
 
   arrow:
@@ -101,6 +113,8 @@ jobs:
     needs: changes
     if: contains(fromJSON(needs.changes.outputs.suites), 'rust')
     uses: ./.github/workflows/rust.yml
+    with:
+      lint-only: ${{ needs.changes.outputs.fork-pr == 'true' }}
 
   docs:
     needs: changes
@@ -119,7 +133,7 @@ jobs:
     # Like datafusion-comet: one stable check name even when a reusable
     # workflow is skipped (its individual check names would be different).
     name: Required Checks
-    if: always()
+    if: always() && (github.event_name != 'push' || github.repository != 'apache/arrow-rs' || github.ref == 'refs/heads/main')
     permissions: {}
     needs:
       - changes
@@ -138,8 +152,20 @@ jobs:
         env:
           NEEDS: ${{ toJSON(needs) }}
         run: echo "$NEEDS"
-      # Path-filtered suites and Miri outside the queue are intentionally
-      # skipped. A failed/cancelled selector or suite must still block merging.
+      - name: Link to fork CI
+        if: needs.changes.outputs.fork-pr == 'true'
+        env:
+          FORK_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          {
+            printf 'Full test results: [CI on %s](https://github.com/%s/actions/workflows/ci.yml).\n\n' "$FORK_REPOSITORY" "$FORK_REPOSITORY"
+            printf 'Look for commit `%s`. Enable Actions in your fork and push your branch if no run exists.\n\n' "$PR_HEAD_SHA"
+            printf 'This upstream PR run checks formatting and contributor hygiene. The merge queue runs the full suite before merge.\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+      # Fork PRs to main only run lightweight checks here. The informational
+      # CI (fork) check is separate; the merge queue runs every suite here.
+      # A failed/cancelled selector or suite must still block merging.
       - name: Fail if any suite failed or was cancelled
         if: needs.changes.result != 'success' || contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         run: |
