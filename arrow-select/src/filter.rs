@@ -734,8 +734,9 @@ where
     let values = array.values_slice();
     let values = filter(values.as_ref(), &pred)?;
 
-    let run_ends = PrimitiveArray::<R>::try_new(new_run_ends.into(), None)?;
-    RunArray::try_new(&run_ends, &values)
+    let run_ends = RunEndBuffer::new(new_run_ends.into(), 0, count.as_usize());
+    // SAFETY: filtering preserves the value type and nullability, with one value per run.
+    Ok(unsafe { RunArray::new_unchecked(array.data_type().clone(), run_ends, values) })
 }
 
 /// Filter the packed bitmask `buffer` with `predicate`, choosing between the
@@ -1278,6 +1279,19 @@ mod tests {
     use rand::distr::{Alphanumeric, StandardUniform};
     use rand::prelude::*;
     use rand::rng;
+
+    #[test]
+    fn test_filter_preserves_run_end_type() {
+        for array in crate::test_util::run_arrays() {
+            let selected = UInt32Array::from_iter_values((0..array.len() as u32).step_by(2));
+            let mask = BooleanArray::from_iter((0..array.len()).map(|i| Some(i % 2 == 0)));
+            let expected = crate::take::take(&array, &selected, None).unwrap();
+            let actual = filter(&array, &mask).unwrap();
+            assert_eq!(actual.data_type(), array.data_type());
+            assert_eq!(actual.to_data(), expected.to_data());
+            actual.to_data().validate_full().unwrap();
+        }
+    }
 
     #[test]
     fn test_filter_nulls_all() {

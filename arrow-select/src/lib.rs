@@ -42,3 +42,42 @@ pub mod take;
 pub mod union_extract;
 pub mod window;
 pub mod zip;
+
+#[cfg(test)]
+mod test_util {
+    use std::sync::Arc;
+
+    use arrow_array::{
+        Array, ArrayRef, Int16Array, Int32Array, Int64Array, StringArray, make_array,
+    };
+    use arrow_data::ArrayData;
+    use arrow_schema::{DataType, Field};
+
+    pub(crate) fn run_arrays() -> Vec<ArrayRef> {
+        let mut arrays = Vec::new();
+        for ends in [
+            Int16Array::from(vec![2, 4]).to_data(),
+            Int32Array::from(vec![2, 4]).to_data(),
+            Int64Array::from(vec![2, 4]).to_data(),
+        ] {
+            for nullable in [false, true] {
+                let values =
+                    StringArray::from(vec![Some("a"), if nullable { None } else { Some("b") }]);
+                let values_field = Field::new("strings", DataType::Utf8, nullable)
+                    .with_metadata([("source".to_string(), "test".to_string())]);
+                let data_type = DataType::RunEndEncoded(
+                    Arc::new(Field::new("ends", ends.data_type().clone(), false)),
+                    Arc::new(values_field),
+                );
+                let data = ArrayData::builder(data_type)
+                    .len(4)
+                    .child_data(vec![ends.clone(), values.to_data()])
+                    .build()
+                    .unwrap();
+                let array = make_array(data);
+                arrays.extend([Arc::clone(&array), array.slice(1, 3), array.slice(4, 0)]);
+            }
+        }
+        arrays
+    }
+}
