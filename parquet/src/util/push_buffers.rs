@@ -70,19 +70,10 @@ pub struct PushBuffers {
     /// lookup cannot stop at the nearest buffer. `max_len` tells the lookup
     /// when no earlier buffer can reach the requested range, so it checks one
     /// or two buffers, not all of them. See [`Self::find`].
-    max_len: u64,
-    /// The number of ranges in `ranges` with the length `max_len`. `max_len`
-    /// can decrease only when this count goes to zero. Thus, a release does
-    /// not scan all ranges to update `max_len` while other ranges of that
-    /// length remain.
-    max_len_count: usize,
+    max_len: MaxLen,
     /// The sum of the lengths of `ranges`, kept up to date so that
     /// [`Self::buffered_bytes`] does not scan all ranges.
     buffered_bytes: u64,
-    /// The number of empty ranges in `ranges`. [`Self::push_range`] accepts
-    /// them, and [`Self::release_ranges`] removes them. The count tells
-    /// `release_ranges` when it must look for them in all buffers.
-    empty: usize,
 }
 
 impl Display for PushBuffers {
@@ -121,10 +112,8 @@ impl PushBuffers {
             file_len,
             ranges: VecDeque::new(),
             buffers: VecDeque::new(),
-            max_len: 0,
-            max_len_count: 0,
+            max_len: MaxLen::default(),
             buffered_bytes: 0,
-            empty: 0,
         }
     }
 
@@ -154,6 +143,9 @@ impl PushBuffers {
 
     /// Push a new range and its associated buffer
     ///
+    /// An empty range adds no bytes, so it is not stored. An empty range is
+    /// always available (see `has_range`).
+    ///
     /// # Errors
     /// Returns an error if the buffer's length does not match the range's
     /// length, e.g. when a truncated (short) read is pushed.
@@ -168,24 +160,24 @@ impl PushBuffers {
                 range.end
             ));
         }
+        if expected == 0 {
+            return Ok(());
+        }
         // Insert after all buffers that start at or before `range.start`.
         // Thus, ranges pushed in file order go at the end.
         let idx = self.ranges.partition_point(|r| r.start <= range.start);
-        match expected.cmp(&self.max_len) {
-            Ordering::Greater => (self.max_len, self.max_len_count) = (expected, 1),
-            Ordering::Equal => self.max_len_count += 1,
-            Ordering::Less => {}
-        }
+        self.max_len.add(expected);
         self.buffered_bytes += expected;
-        self.empty += usize::from(expected == 0);
         self.ranges.insert(idx, range);
         self.buffers.insert(idx, buffer);
         Ok(())
     }
 
     /// Returns true if the Buffers contains data for the given range
+    ///
+    /// An empty range needs no bytes, so it is always available.
     pub(crate) fn has_range(&self, range: &Range<u64>) -> bool {
-        self.find(range.start, range.end).is_some()
+        range.is_empty() || self.find(range.start, range.end).is_some()
     }
 
     /// Returns the index of a buffer that contains all bytes of `start..end`,
@@ -222,7 +214,7 @@ impl PushBuffers {
             .range(..candidates)
             .enumerate()
             .rev()
-            .take_while(|(_, r)| r.start.saturating_add(self.max_len) >= end)
+            .take_while(|(_, r)| r.start.saturating_add(self.max_len.get()) >= end)
             .find(|(_, r)| r.end >= end)
             .map(|(idx, _)| idx)
     }
@@ -287,10 +279,7 @@ impl PushBuffers {
             if remove.next_if_eq(&idx).is_some() {
                 let len = self.ranges[idx].end.saturating_sub(self.ranges[idx].start);
                 self.buffered_bytes -= len;
-                self.empty -= usize::from(len == 0);
-                if len == self.max_len {
-                    self.max_len_count -= 1;
-                }
+                self.max_len.remove(len);
             } else {
                 self.ranges.swap(kept, idx);
                 self.buffers.swap(kept, idx);
@@ -300,27 +289,8 @@ impl PushBuffers {
         self.ranges.drain(kept..=last);
         self.buffers.drain(kept..=last);
         // `max_len` changes only when no buffer of that length remains.
-        if self.max_len_count == 0 {
-            self.update_max_len();
-        }
-    }
-
-    /// Set `max_len` to the maximum length of the remaining ranges, and
-    /// `max_len_count` to the number of ranges of that length.
-    ///
-    /// A `max_len` that is too large is still correct, lookups only scan
-    /// further. This update is for performance: a large buffer that was
-    /// removed must not slow down later lookups.
-    #[cfg(feature = "arrow")]
-    fn update_max_len(&mut self) {
-        (self.max_len, self.max_len_count) = (0, 0);
-        for len in self.ranges.iter().map(|r| r.end.saturating_sub(r.start)) {
-            match len.cmp(&self.max_len) {
-                Ordering::Greater => (self.max_len, self.max_len_count) = (len, 1),
-                Ordering::Equal => self.max_len_count += 1,
-                Ordering::Less => {}
-            }
-        }
+        self.max_len
+            .rescan_if_stale(self.ranges.iter().map(|r| r.end.saturating_sub(r.start)));
     }
 
     /// Remove all buffered bytes in `ranges`.
@@ -362,7 +332,7 @@ impl PushBuffers {
         let mut overlapping = vec![];
         let mut visited = 0;
         for r in &release {
-            let max_len = self.max_len;
+            let max_len = self.max_len.get();
             let first = self
                 .ranges
                 .partition_point(|b| b.start.saturating_add(max_len) <= r.start);
@@ -388,9 +358,7 @@ impl PushBuffers {
             let (range, buffer) = (&mut self.ranges[idx], &mut self.buffers[idx]);
             let whole = range.clone();
             // Each kept part is shorter than `whole`.
-            if whole.end - whole.start == self.max_len {
-                self.max_len_count -= 1;
-            }
+            self.max_len.remove(whole.end - whole.start);
             let offset = |pos: u64| (pos - whole.start) as usize;
             // The parts of `whole` between the released ranges.
             let first = release.partition_point(|r| r.end <= whole.start);
@@ -429,15 +397,9 @@ impl PushBuffers {
                 }
             }
         }
-        if emptied || self.empty > 0 {
-            // Remove the released buffers. As before, this also removes empty
-            // buffers that were pushed. The released buffers are all in
-            // `first..=last`, so look at all buffers only if empty buffers
-            // were pushed.
-            let span = match self.empty {
-                0 => first..last + 1,
-                _ => 0..self.ranges.len(),
-            };
+        if emptied {
+            // Remove the released buffers. They are all in `first..=last`.
+            let span = first..last + 1;
             let mut kept = span.start;
             for idx in span.clone() {
                 if !self.ranges[idx].is_empty() {
@@ -448,7 +410,6 @@ impl PushBuffers {
             }
             self.ranges.drain(kept..span.end);
             self.buffers.drain(kept..span.end);
-            self.empty = 0;
         }
         // A trim moves the start of a buffer only past released bytes. Each
         // other buffer that starts in those bytes is trimmed past them too,
@@ -466,10 +427,9 @@ impl PushBuffers {
         }
         // `max_len` changes only when no buffer of that length remains. Only
         // then pay for the pass over all buffers, which keeps `max_len` exact
-        // (see `update_max_len`).
-        if self.max_len_count == 0 {
-            self.update_max_len();
-        }
+        // (see `MaxLen::rescan_if_stale`).
+        self.max_len
+            .rescan_if_stale(self.ranges.iter().map(|r| r.end.saturating_sub(r.start)));
     }
 
     /// Remove all buffered bytes outside `keep`.
@@ -492,10 +452,8 @@ impl PushBuffers {
     pub(crate) fn clear_all_ranges(&mut self) {
         self.ranges.clear();
         self.buffers.clear();
-        self.max_len = 0;
-        self.max_len_count = 0;
+        self.max_len = MaxLen::default();
         self.buffered_bytes = 0;
-        self.empty = 0;
     }
 
     /// Panics if `ranges`, `buffers` and `max_len` do not agree, or if the
@@ -518,14 +476,17 @@ impl PushBuffers {
             .map(|r| r.end.saturating_sub(r.start))
             .max();
         let max_len = max_len.unwrap_or(0);
-        assert_eq!(self.max_len, max_len);
+        assert_eq!(self.max_len.len, max_len);
         let is_longest = |r: &&Range<u64>| r.end.saturating_sub(r.start) == max_len;
         assert_eq!(
-            self.max_len_count,
+            self.max_len.count,
             self.ranges.iter().filter(is_longest).count()
         );
-        let empty = self.ranges.iter().filter(|r| r.is_empty()).count();
-        assert_eq!(self.empty, empty);
+        assert!(
+            self.ranges.iter().all(|r| !r.is_empty()),
+            "empty buffer: {:?}",
+            self.ranges
+        );
     }
 }
 
@@ -554,6 +515,9 @@ impl Length for PushBuffers {
 /// less efficient implementation of Read for Buffers
 impl std::io::Read for PushBuffers {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
         // Find the range that contains the start offset
         let found = self.find(self.offset, self.offset + buf.len() as u64);
         if let Some(idx) = found {
@@ -582,6 +546,10 @@ impl ChunkReader for PushBuffers {
     }
 
     fn get_bytes(&self, start: u64, length: usize) -> Result<Bytes, ParquetError> {
+        // An empty range needs no bytes (see `has_range`)
+        if length == 0 {
+            return Ok(Bytes::new());
+        }
         // find the range that contains the start offset
         if let Some(idx) = self.find(start, start + length as u64) {
             // Found the range, figure out the starting offset in the buffer
@@ -591,6 +559,63 @@ impl ChunkReader for PushBuffers {
         // Signal that we need more data
         let requested_end = start + length as u64;
         Err(ParquetError::NeedMoreDataRange(start..requested_end))
+    }
+}
+
+/// The length of the longest buffered range, and the number of ranges of
+/// that length.
+///
+/// The two values change together, so only the methods of this type change
+/// them. The length can decrease only when the count goes to zero. Thus, a
+/// release does not scan all ranges while other ranges of that length remain.
+#[derive(Debug, Default, Clone, Copy)]
+struct MaxLen {
+    len: u64,
+    count: usize,
+}
+
+impl MaxLen {
+    /// The length of the longest range. It can be too large until the next
+    /// call to [`Self::rescan_if_stale`]. A length that is too large is still
+    /// correct, lookups only scan further.
+    #[inline]
+    fn get(&self) -> u64 {
+        self.len
+    }
+
+    /// Record a new range of length `len`.
+    #[inline]
+    fn add(&mut self, len: u64) {
+        match len.cmp(&self.len) {
+            Ordering::Greater => (self.len, self.count) = (len, 1),
+            Ordering::Equal => self.count += 1,
+            Ordering::Less => {}
+        }
+    }
+
+    /// Record that a range of length `len` was removed. Call
+    /// [`Self::rescan_if_stale`] after the removals.
+    #[cfg(feature = "arrow")]
+    #[inline]
+    fn remove(&mut self, len: u64) {
+        if len == self.len {
+            self.count -= 1;
+        }
+    }
+
+    /// If no range of the current length remains, set the length from the
+    /// lengths of the remaining ranges in `lens`.
+    ///
+    /// This update is for performance: a large buffer that was removed must
+    /// not slow down later lookups. The pass over `lens` occurs only when the
+    /// last range of the longest length is removed.
+    #[cfg(feature = "arrow")]
+    #[inline]
+    fn rescan_if_stale(&mut self, lens: impl IntoIterator<Item = u64>) {
+        if self.count == 0 {
+            *self = Self::default();
+            lens.into_iter().for_each(|len| self.add(len));
+        }
     }
 }
 
@@ -860,7 +885,10 @@ mod tests {
                     0..4 => {
                         let range = random_range(&mut rng);
                         push(&mut buffers, range.clone());
-                        model.push(range);
+                        // An empty push is not stored.
+                        if !range.is_empty() {
+                            model.push(range);
+                        }
                     }
                     4..6 => {
                         // Clear some pushed ranges and some other ranges.
@@ -875,9 +903,10 @@ mod tests {
                     }
                     _ => {
                         let range = random_range(&mut rng);
-                        let expected = model
-                            .iter()
-                            .any(|r| r.start <= range.start && r.end >= range.end);
+                        let expected = range.is_empty()
+                            || model
+                                .iter()
+                                .any(|r| r.start <= range.start && r.end >= range.end);
                         assert_eq!(buffers.has_range(&range), expected, "seed {seed} {range:?}");
                         if expected {
                             let len = (range.end - range.start) as usize;
@@ -941,6 +970,40 @@ mod tests {
         }
         parts.sort_by_key(|(range, _)| range.start);
         parts
+    }
+
+    #[test]
+    #[expect(clippy::reversed_empty_ranges)]
+    fn empty_ranges() {
+        use std::io::Read;
+        // An empty range is available without any buffers.
+        let mut buffers = PushBuffers::new(100);
+        assert!(buffers.has_range(&(50..50)));
+        assert_eq!(buffers.get_bytes(50, 0).unwrap(), Bytes::new());
+        assert_eq!(buffers.get_read(50).unwrap().read(&mut []).unwrap(), 0);
+
+        // Pushing an empty or an inverted range is a no-op.
+        buffers.push_range(30..30, Bytes::new()).unwrap();
+        buffers.push_range(10..5, Bytes::new()).unwrap();
+        assert!(buffers.ranges.is_empty());
+        assert!(buffers.buffers.is_empty());
+        buffers.assert_invariants();
+
+        // Reads of real data still work after an empty push.
+        buffers
+            .push_range(20..25, Bytes::from_static(b"abcde"))
+            .unwrap();
+        buffers.push_range(22..22, Bytes::new()).unwrap();
+        buffers.assert_invariants();
+        assert_eq!(buffers.ranges, vec![20..25]);
+        assert!(buffers.has_range(&(21..24)));
+        assert_eq!(
+            buffers.get_bytes(21, 3).unwrap(),
+            Bytes::from_static(b"bcd")
+        );
+        let mut buf = [0; 2];
+        buffers.get_read(23).unwrap().read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"de");
     }
 
     #[test]
