@@ -27,7 +27,7 @@ concurrency:
 on:
   push:
     branches:
-      - main
+      - 57_maintenance
   pull_request:
     paths:
       - parquet/**
