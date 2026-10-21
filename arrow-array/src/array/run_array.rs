@@ -93,6 +93,7 @@ macro_rules! ree_map {
 /// A [`RunArray`] must satisfy the following invariants:
 ///
 /// * every run end is greater than zero and `run_ends` is strictly increasing
+/// * `run_ends` has no null values
 /// * `run_ends` and `values` have the same length
 /// * if `len > 0`, the last run end is greater than or equal to `offset + len`.
 ///
@@ -121,13 +122,14 @@ macro_rules! ree_map {
 /// # Sliced child arrays
 ///
 /// [`RunArray::slice`] doesn't slice child arrays, but a `RunArray` may be
-/// built from child arrays that are already sliced. In that case the offset of
-/// each child is respected:
+/// built (for example from [`ArrayData`]) from child arrays that are already
+/// sliced. In that case each child's own `offset` and `len` are respected,
+/// independently of the logical `offset` and `len` of the `RunArray`:
 ///
-/// * The values are the `len` elements of the values `values` child, starting
-///   at its offset. This means the value of run `i` is `values.value(i)`
-/// * The run ends are the `len` elements of the `run_ends` child
-///   starting at its `offset`.
+/// * Run `i` ends at `run_ends.value(i)`, the `i`th element after the
+///   `run_ends` child's own offset.
+/// * The value of run `i` is `values.value(i)`, the `i`th element after the
+///   `values` child's own offset.
 ///
 /// [run-end encoded values]: https://arrow.apache.org/docs/format/Columnar.html#run-end-encoded-layout
 /// [run-length encoding (RLE)]: https://en.wikipedia.org/wiki/Run-length_encoding
