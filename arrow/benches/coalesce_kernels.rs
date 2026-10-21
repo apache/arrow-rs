@@ -18,6 +18,7 @@
 //! Benchmarks for the `coalesce` kernels in Arrow.
 
 use arrow::util::bench_util::*;
+use arrow::util::data_gen::create_random_array;
 use std::sync::Arc;
 
 use arrow::array::*;
@@ -104,6 +105,29 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
         Field::new("float_val2", DataType::Float64, true),
         // TODO model other dictionary types here (FixedSizeBinary for example)
     ]));
+
+    let single_dictionary_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        true,
+    )]));
+
+    let single_run_end_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::RunEndEncoded(
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                true,
+            )),
+        ),
+        true,
+    )]));
 
     let single_fsb16_schema = SchemaRef::new(Schema::new(vec![Field::new(
         "value",
@@ -322,6 +346,18 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
 
             FilterBenchmarkBuilder {
                 c,
+                name: "single_dict",
+                batch_size,
+                num_output_batches: 25,
+                null_density,
+                selectivity,
+                max_string_len: 30,
+                schema: &single_dictionary_schema,
+            }
+            .build();
+
+            FilterBenchmarkBuilder {
+                c,
                 name: "single_fsb16",
                 batch_size,
                 num_output_batches: 50,
@@ -353,6 +389,18 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
                 selectivity,
                 max_string_len: 0,
                 schema: &single_boolean_schema,
+            }
+            .build();
+
+            FilterBenchmarkBuilder {
+                c,
+                name: "single_ree",
+                batch_size,
+                num_output_batches: 25,
+                null_density,
+                selectivity,
+                max_string_len: 0,
+                schema: &single_run_end_schema,
             }
             .build();
 
@@ -470,6 +518,29 @@ fn add_all_gather_benchmarks(c: &mut Criterion, operation: GatherOperation) {
         Field::new("float_val2", DataType::Float64, true),
     ]));
 
+    let single_dictionary_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        true,
+    )]));
+
+    let single_run_end_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::RunEndEncoded(
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                true,
+            )),
+        ),
+        true,
+    )]));
+
     let single_fsb16_schema = SchemaRef::new(Schema::new(vec![Field::new(
         "value",
         DataType::FixedSizeBinary(16),
@@ -569,6 +640,12 @@ fn add_all_gather_benchmarks(c: &mut Criterion, operation: GatherOperation) {
                     schema: &mixed_dict_schema,
                 },
                 GatherBenchmarkScenario {
+                    name: "single_dict",
+                    num_output_batches: 25,
+                    max_string_len: 30,
+                    schema: &single_dictionary_schema,
+                },
+                GatherBenchmarkScenario {
                     name: "single_fsb16",
                     num_output_batches: 50,
                     max_string_len: 16,
@@ -585,6 +662,12 @@ fn add_all_gather_benchmarks(c: &mut Criterion, operation: GatherOperation) {
                     num_output_batches: 50,
                     max_string_len: 0,
                     schema: &single_boolean_schema,
+                },
+                GatherBenchmarkScenario {
+                    name: "single_ree",
+                    num_output_batches: 25,
+                    max_string_len: 0,
+                    schema: &single_run_end_schema,
                 },
                 GatherBenchmarkScenario {
                     name: "single_fsl4",
@@ -1385,6 +1468,9 @@ impl DataStreamBuilder {
                 10,
                 seed,
             )),
+            DataType::RunEndEncoded(_, _) => {
+                create_random_array(field, self.batch_size, self.null_density, 0.5).unwrap()
+            }
             _ => panic!("Unsupported data type: {field:?}"),
         }
     }
