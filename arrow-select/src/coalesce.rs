@@ -790,12 +790,7 @@ fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn 
     }
 }
 
-/// Returns an error if `filter` selects rows beyond `source_len`.
-///
-/// Specialized [`InProgressArray`] implementations rely on this check before
-/// copying rows selected by a [`FilterPredicate`] with unchecked indexing:
-/// every index the predicate yields is less than its filter length, so once
-/// `filter.filter_len() <= source_len` all selected rows are in bounds.
+/// Returns an error if `filter` selects more rows than `source_len`.
 fn check_filter_len(filter: &FilterPredicate, source_len: usize) -> Result<(), ArrowError> {
     let filter_len = filter.filter_len();
     if filter_len > source_len {
