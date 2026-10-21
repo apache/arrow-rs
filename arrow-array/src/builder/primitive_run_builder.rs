@@ -360,4 +360,15 @@ mod tests {
         let values = array.values();
         assert_eq!(values.timezone(), Some("Europe/Paris"));
     }
+
+    #[test]
+    fn test_finish_cloned_keeps_data_type() {
+        let data_type = DataType::Decimal128(5, 2);
+        let mut builder = PrimitiveRunBuilder::<Int16Type, Decimal128Type>::new()
+            .with_data_type(data_type.clone());
+        // Leave the run open, so `finish_cloned` has to add it to a copy of the values
+        builder.append_value(123);
+        let array = builder.finish_cloned();
+        assert_eq!(array.values().data_type(), &data_type);
+    }
 }
