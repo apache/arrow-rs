@@ -40,12 +40,13 @@ use crate::encodings::rle::{MAX_RLE_DICTIONARY_BIT_WIDTH, RleDecoder};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::BitPacking;
+use crate::util::utf8::check_valid_utf8;
 
 /// A macro to reduce verbosity of [`make_byte_array_dictionary_reader`]
 macro_rules! make_reader {
     (
         ($pages:expr, $column_desc:expr, $data_type:expr, $batch_size:expr, $padding_threshold:expr) => match ($k:expr, $v:expr) {
-            $(($key_arrow:pat, $value_arrow:pat) => ($key_type:ty, $value_type:ty),)+
+            $(($key_arrow:pat, $value_arrow:pat) => ($key_type:ty, $value_type:ty, $utf8:literal),)+
         }
     ) => {
         match ($k, $v) {
@@ -55,7 +56,7 @@ macro_rules! make_reader {
                     if let Some(threshold) = $padding_threshold {
                         reader.set_padding_threshold(threshold);
                     }
-                    Ok(Box::new(ByteArrayDictionaryReader::<$key_type, $value_type>::try_new(
+                    Ok(Box::new(ByteArrayDictionaryReader::<$key_type, $value_type, $utf8>::try_new(
                         $pages, $data_type, reader,
                     )?))
                 }
@@ -65,7 +66,7 @@ macro_rules! make_reader {
                 $data_type
             )),
         }
-    }
+    };
 }
 
 /// Returns an [`ArrayReader`] that decodes the provided byte array column
@@ -98,22 +99,38 @@ pub fn make_byte_array_dictionary_reader(
         ArrowType::Dictionary(key_type, value_type) => {
             make_reader! {
                 (pages, column_desc, data_type, batch_size, padding_threshold) => match (key_type.as_ref(), value_type.as_ref()) {
-                    (ArrowType::UInt8, ArrowType::Binary | ArrowType::Utf8 | ArrowType::Utf8View | ArrowType::BinaryView | ArrowType::FixedSizeBinary(_)) => (u8, i32),
-                    (ArrowType::UInt8, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (u8, i64),
-                    (ArrowType::Int8, ArrowType::Binary | ArrowType::Utf8 | ArrowType::Utf8View | ArrowType::BinaryView | ArrowType::FixedSizeBinary(_)) => (i8, i32),
-                    (ArrowType::Int8, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (i8, i64),
-                    (ArrowType::UInt16, ArrowType::Binary | ArrowType::Utf8 | ArrowType::Utf8View | ArrowType::BinaryView | ArrowType::FixedSizeBinary(_)) => (u16, i32),
-                    (ArrowType::UInt16, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (u16, i64),
-                    (ArrowType::Int16, ArrowType::Binary | ArrowType::Utf8 | ArrowType::Utf8View | ArrowType::BinaryView | ArrowType::FixedSizeBinary(_)) => (i16, i32),
-                    (ArrowType::Int16, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (i16, i64),
-                    (ArrowType::UInt32, ArrowType::Binary | ArrowType::Utf8 | ArrowType::Utf8View | ArrowType::BinaryView | ArrowType::FixedSizeBinary(_)) => (u32, i32),
-                    (ArrowType::UInt32, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (u32, i64),
-                    (ArrowType::Int32, ArrowType::Binary | ArrowType::Utf8 | ArrowType::Utf8View | ArrowType::BinaryView | ArrowType::FixedSizeBinary(_)) => (i32, i32),
-                    (ArrowType::Int32, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (i32, i64),
-                    (ArrowType::UInt64, ArrowType::Binary | ArrowType::Utf8 | ArrowType::Utf8View | ArrowType::BinaryView | ArrowType::FixedSizeBinary(_)) => (u64, i32),
-                    (ArrowType::UInt64, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (u64, i64),
-                    (ArrowType::Int64, ArrowType::Binary | ArrowType::Utf8 | ArrowType::Utf8View | ArrowType::BinaryView | ArrowType::FixedSizeBinary(_)) => (i64, i32),
-                    (ArrowType::Int64, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (i64, i64),
+                    (ArrowType::UInt8, ArrowType::Binary | ArrowType::BinaryView | ArrowType::FixedSizeBinary(_)) => (u8, i32, false),
+                    (ArrowType::UInt8, ArrowType::Utf8 | ArrowType::Utf8View) => (u8, i32, true),
+                    (ArrowType::UInt8, ArrowType::LargeBinary) => (u8, i64, false),
+                    (ArrowType::UInt8, ArrowType::LargeUtf8) => (u8, i64, true),
+                    (ArrowType::Int8, ArrowType::Binary | ArrowType::BinaryView | ArrowType::FixedSizeBinary(_)) => (i8, i32, false),
+                    (ArrowType::Int8, ArrowType::Utf8 | ArrowType::Utf8View) => (i8, i32, true),
+                    (ArrowType::Int8, ArrowType::LargeBinary) => (i8, i64, false),
+                    (ArrowType::Int8, ArrowType::LargeUtf8) => (i8, i64, true),
+                    (ArrowType::UInt16, ArrowType::Binary | ArrowType::BinaryView | ArrowType::FixedSizeBinary(_)) => (u16, i32, false),
+                    (ArrowType::UInt16, ArrowType::Utf8 | ArrowType::Utf8View) => (u16, i32, true),
+                    (ArrowType::UInt16, ArrowType::LargeBinary) => (u16, i64, false),
+                    (ArrowType::UInt16, ArrowType::LargeUtf8) => (u16, i64, true),
+                    (ArrowType::Int16, ArrowType::Binary | ArrowType::BinaryView | ArrowType::FixedSizeBinary(_)) => (i16, i32, false),
+                    (ArrowType::Int16, ArrowType::Utf8 | ArrowType::Utf8View) => (i16, i32, true),
+                    (ArrowType::Int16, ArrowType::LargeBinary) => (i16, i64, false),
+                    (ArrowType::Int16, ArrowType::LargeUtf8) => (i16, i64, true),
+                    (ArrowType::UInt32, ArrowType::Binary | ArrowType::BinaryView | ArrowType::FixedSizeBinary(_)) => (u32, i32, false),
+                    (ArrowType::UInt32, ArrowType::Utf8 | ArrowType::Utf8View) => (u32, i32, true),
+                    (ArrowType::UInt32, ArrowType::LargeBinary) => (u32, i64, false),
+                    (ArrowType::UInt32, ArrowType::LargeUtf8) => (u32, i64, true),
+                    (ArrowType::Int32, ArrowType::Binary | ArrowType::BinaryView | ArrowType::FixedSizeBinary(_)) => (i32, i32, false),
+                    (ArrowType::Int32, ArrowType::Utf8 | ArrowType::Utf8View) => (i32, i32, true),
+                    (ArrowType::Int32, ArrowType::LargeBinary) => (i32, i64, false),
+                    (ArrowType::Int32, ArrowType::LargeUtf8) => (i32, i64, true),
+                    (ArrowType::UInt64, ArrowType::Binary | ArrowType::BinaryView | ArrowType::FixedSizeBinary(_)) => (u64, i32, false),
+                    (ArrowType::UInt64, ArrowType::Utf8 | ArrowType::Utf8View) => (u64, i32, true),
+                    (ArrowType::UInt64, ArrowType::LargeBinary) => (u64, i64, false),
+                    (ArrowType::UInt64, ArrowType::LargeUtf8) => (u64, i64, true),
+                    (ArrowType::Int64, ArrowType::Binary | ArrowType::BinaryView | ArrowType::FixedSizeBinary(_)) => (i64, i32, false),
+                    (ArrowType::Int64, ArrowType::Utf8 | ArrowType::Utf8View) => (i64, i32, true),
+                    (ArrowType::Int64, ArrowType::LargeBinary) => (i64, i64, false),
+                    (ArrowType::Int64, ArrowType::LargeUtf8) => (i64, i64, true),
                 }
             }
         }
@@ -155,19 +172,19 @@ fn convert_values_to_view(array: ArrayRef, to_type: &ArrowType) -> Result<ArrayR
 /// An [`ArrayReader`] for dictionary encoded byte arrays
 ///
 /// Will attempt to preserve any dictionary encoding present in the parquet data
-struct ByteArrayDictionaryReader<K: ArrowNativeType, V: OffsetSizeTrait> {
+struct ByteArrayDictionaryReader<K: ArrowNativeType, V: OffsetSizeTrait, const UTF8: bool> {
     data_type: ArrowType,
     /// Type used by the dictionary buffer when it is different from the output data type.
     buffer_type: Option<ArrowType>,
     pages: Box<dyn PageIterator>,
     def_levels_buffer: Option<Vec<i16>>,
     rep_levels_buffer: Option<Vec<i16>>,
-    record_reader: GenericRecordReader<DictionaryBuffer<K, V>, DictionaryDecoder<K, V>>,
+    record_reader: GenericRecordReader<DictionaryBuffer<K, V>, DictionaryDecoder<K, V, UTF8>>,
     /// Reusable scratch space for hashing byte slices when building dictionaries from plain-encoded values.
     hash_scratch: MutableBuffer,
 }
 
-impl<K, V> ByteArrayDictionaryReader<K, V>
+impl<K, V, const UTF8: bool> ByteArrayDictionaryReader<K, V, UTF8>
 where
     K: BitPacking + Ord + ArrowNativeType,
     V: OffsetSizeTrait,
@@ -175,7 +192,7 @@ where
     fn try_new(
         pages: Box<dyn PageIterator>,
         data_type: ArrowType,
-        record_reader: GenericRecordReader<DictionaryBuffer<K, V>, DictionaryDecoder<K, V>>,
+        record_reader: GenericRecordReader<DictionaryBuffer<K, V>, DictionaryDecoder<K, V, UTF8>>,
     ) -> Result<Self> {
         let ArrowType::Dictionary(key_type, value_type) = &data_type else {
             return Err(general_err!(
@@ -208,7 +225,7 @@ where
     }
 }
 
-impl<K, V> ArrayReader for ByteArrayDictionaryReader<K, V>
+impl<K, V, const UTF8: bool> ArrayReader for ByteArrayDictionaryReader<K, V, UTF8>
 where
     K: BitPacking + Ord + ArrowNativeType,
     V: OffsetSizeTrait,
@@ -287,8 +304,15 @@ enum MaybeDictionaryDecoder {
     Fixed(FixedByteArrayDecoder),
 }
 
+fn validate_utf8_values<V: OffsetSizeTrait>(values: &OffsetBuffer<V>, start: usize) -> Result<()> {
+    for offsets in values.offsets[start..].windows(2) {
+        check_valid_utf8(&values.values[offsets[0].as_usize()..offsets[1].as_usize()])?;
+    }
+    Ok(())
+}
+
 /// A [`ColumnValueDecoder`] for dictionary encoded byte arrays
-struct DictionaryDecoder<K, V> {
+struct DictionaryDecoder<K, V, const UTF8: bool> {
     /// The current dictionary
     dict: Option<ArrayRef>,
 
@@ -306,7 +330,7 @@ struct DictionaryDecoder<K, V> {
     phantom: PhantomData<(K, V)>,
 }
 
-impl<K, V> ColumnValueDecoder for DictionaryDecoder<K, V>
+impl<K, V, const UTF8: bool> ColumnValueDecoder for DictionaryDecoder<K, V, UTF8>
 where
     K: BitPacking + Ord + ArrowNativeType,
     V: OffsetSizeTrait,
@@ -314,9 +338,8 @@ where
     type Buffer = DictionaryBuffer<K, V>;
 
     fn new(col: &ColumnDescPtr) -> Self {
-        let validate_utf8 = col.converted_type() == ConvertedType::UTF8;
-
-        let value_type = match (V::IS_LARGE, col.converted_type() == ConvertedType::UTF8) {
+        let validate_utf8 = UTF8 || col.converted_type() == ConvertedType::UTF8;
+        let value_type = match (V::IS_LARGE, UTF8) {
             (true, true) => ArrowType::LargeUtf8,
             (true, false) => ArrowType::LargeBinary,
             (false, true) => ArrowType::Utf8,
@@ -370,6 +393,9 @@ where
                 return Err(general_err!(
                     "too few bytes in fixed-length dictionary page"
                 ));
+            }
+            if self.validate_utf8 {
+                validate_utf8_values(&buffer, 0)?;
             }
         } else {
             ByteArrayDecoderPlain::new(buf, len, Some(len), self.validate_utf8)
@@ -431,7 +457,13 @@ where
                 decoder.read(out.spill_values()?, num_values, None)
             }
             MaybeDictionaryDecoder::Fixed(decoder) => {
-                decoder.read_offsets(out.spill_values()?, num_values)
+                let values = out.spill_values()?;
+                let start = values.len();
+                let read = decoder.read_offsets(values, num_values)?;
+                if self.validate_utf8 {
+                    validate_utf8_values(values, start)?;
+                }
+                Ok(read)
             }
             MaybeDictionaryDecoder::Dict {
                 decoder,
@@ -541,7 +573,7 @@ mod tests {
         );
         // Canonical PLAIN has no length prefixes, independent of ArrowWriter.
         let raw = Bytes::from_static(b"abcdEFGHijkl");
-        let mut decoder = DictionaryDecoder::<i32, i32>::new(&desc);
+        let mut decoder = DictionaryDecoder::<i32, i32, false>::new(&desc);
         decoder
             .set_dict(raw.clone(), 3, Encoding::PLAIN, false)
             .unwrap();
@@ -637,7 +669,7 @@ mod tests {
             Encoding::PLAIN_DICTIONARY,
             Encoding::RLE_DICTIONARY,
         ] {
-            check::<DictionaryDecoder<i32, i32>>(&desc, encoding);
+            check::<DictionaryDecoder<i32, i32, false>>(&desc, encoding);
             check::<FixedByteArrayDecoder>(&desc, encoding);
             check::<ColumnValueDecoderImpl<FixedLenByteArrayType>>(&desc, encoding);
         }
@@ -658,7 +690,7 @@ mod tests {
         let (dict, encoded) = encode_dictionary(&data);
 
         let column_desc = utf8_column();
-        let mut decoder = DictionaryDecoder::<i32, i32>::new(&column_desc);
+        let mut decoder = DictionaryDecoder::<i32, i32, true>::new(&column_desc);
 
         decoder
             .set_dict(dict, 3, Encoding::RLE_DICTIONARY, false)
@@ -728,7 +760,7 @@ mod tests {
         let (dict, encoded) = encode_dictionary(&data);
 
         let column_desc = utf8_column();
-        let mut decoder = DictionaryDecoder::<i32, i32>::new(&column_desc);
+        let mut decoder = DictionaryDecoder::<i32, i32, true>::new(&column_desc);
 
         decoder
             .set_dict(dict, 3, Encoding::RLE_DICTIONARY, false)
@@ -784,7 +816,7 @@ mod tests {
         let num_encodings = pages.len();
 
         let column_desc = utf8_column();
-        let mut decoder = DictionaryDecoder::<i32, i32>::new(&column_desc);
+        let mut decoder = DictionaryDecoder::<i32, i32, true>::new(&column_desc);
 
         decoder
             .set_dict(encoded_dictionary, 4, Encoding::RLE_DICTIONARY, false)
@@ -829,7 +861,7 @@ mod tests {
         let num_encodings = pages.len();
 
         let column_desc = utf8_column();
-        let mut decoder = DictionaryDecoder::<i32, i32>::new(&column_desc);
+        let mut decoder = DictionaryDecoder::<i32, i32, true>::new(&column_desc);
 
         decoder
             .set_dict(encoded_dictionary, 4, Encoding::RLE_DICTIONARY, false)
@@ -875,7 +907,7 @@ mod tests {
 
         let column_desc = utf8_column();
 
-        let mut decoder = DictionaryDecoder::<i8, i32>::new(&column_desc);
+        let mut decoder = DictionaryDecoder::<i8, i32, true>::new(&column_desc);
         let err = decoder
             .set_dict(dictionary.clone(), 128, Encoding::RLE_DICTIONARY, false)
             .unwrap_err()
@@ -883,7 +915,7 @@ mod tests {
 
         assert!(err.contains("dictionary too large for index type"));
 
-        let mut decoder = DictionaryDecoder::<i16, i32>::new(&column_desc);
+        let mut decoder = DictionaryDecoder::<i16, i32, true>::new(&column_desc);
         decoder
             .set_dict(dictionary, 128, Encoding::RLE_DICTIONARY, false)
             .unwrap();
@@ -895,7 +927,7 @@ mod tests {
         let (pages, encoded_dictionary) = byte_array_all_encodings(Vec::<&str>::new());
 
         let column_desc = utf8_column();
-        let mut decoder = DictionaryDecoder::new(&column_desc);
+        let mut decoder = DictionaryDecoder::<i32, i32, true>::new(&column_desc);
 
         decoder
             .set_dict(encoded_dictionary, 4, Encoding::PLAIN_DICTIONARY, false)
@@ -943,7 +975,7 @@ mod tests {
     #[test]
     fn test_dictionary_decoder_empty_data() {
         let column_desc = utf8_column();
-        let mut decoder = DictionaryDecoder::<i32, i32>::new(&column_desc);
+        let mut decoder = DictionaryDecoder::<i32, i32, true>::new(&column_desc);
         let err = decoder
             .set_data(Encoding::RLE_DICTIONARY, Bytes::new(), 0, None)
             .unwrap_err();
@@ -956,7 +988,7 @@ mod tests {
     #[test]
     fn test_dictionary_decoder_invalid_bit_width() {
         let column_desc = utf8_column();
-        let mut decoder = DictionaryDecoder::<i32, i32>::new(&column_desc);
+        let mut decoder = DictionaryDecoder::<i32, i32, true>::new(&column_desc);
         let data = Bytes::from_static(&[33, 0, 0, 0]);
         let err = decoder
             .set_data(Encoding::RLE_DICTIONARY, data, 1, None)
@@ -970,7 +1002,7 @@ mod tests {
     #[test]
     fn test_dictionary_decoder_rejects_rle_value_exceeding_bit_width() {
         let column_desc = utf8_column();
-        let mut decoder = DictionaryDecoder::<i32, i32>::new(&column_desc);
+        let mut decoder = DictionaryDecoder::<i32, i32, true>::new(&column_desc);
 
         // Bit width 1, run length 1, value 0xff.
         let data = Bytes::from_static(&[1, 2, 0xff]);
