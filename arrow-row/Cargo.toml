@@ -19,7 +19,6 @@
 name = "arrow-row"
 version = { workspace = true }
 description = "Arrow row format"
-homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
 license = { workspace = true }

@@ -63,7 +63,7 @@
 //!
 //! By default, the writer converts your Arrow schema to Avro (including a top‑level record
 //! name). If you already have an Avro schema JSON you want to use verbatim, put it into the
-//! Arrow schema metadata under the [`SCHEMA_METADATA_KEY`](crate::schema::SCHEMA_METADATA_KEY)
+//! Arrow schema metadata under the [`SCHEMA_METADATA_KEY`]
 //! key before constructing the writer. The builder will use that schema instead of generating
 //! a new one.
 //!

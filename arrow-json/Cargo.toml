@@ -19,7 +19,6 @@
 name = "arrow-json"
 version = { workspace = true }
 description = "Support for parsing JSON format to and from the Arrow format"
-homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
 license = { workspace = true }
