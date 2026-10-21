@@ -876,17 +876,6 @@ trait InProgressArray: std::fmt::Debug + Send + Sync {
     fn size(&self) -> usize;
 }
 
-/// Asserts that `actual` contains `searched_for`
-#[cfg(test)]
-pub(crate) fn assert_contains(actual: impl AsRef<str>, searched_for: impl AsRef<str>) {
-    let actual = actual.as_ref();
-    let searched_for = searched_for.as_ref();
-    assert!(
-        actual.contains(searched_for),
-        "Expected '{actual}' to contain '{searched_for}'"
-    );
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

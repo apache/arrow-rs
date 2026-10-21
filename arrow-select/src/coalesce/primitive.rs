@@ -260,7 +260,6 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::coalesce::assert_contains;
     use crate::filter::FilterBuilder;
     use arrow_array::types::Int32Type;
     use arrow_array::{BooleanArray, Int32Array};
@@ -416,13 +415,19 @@ mod tests {
         let predicate = FilterBuilder::new(&filter).build();
         assert!(matches!(predicate.selection(), FilterSelection::Indices(_)));
         let err = in_progress.copy_rows_by_filter(&predicate).unwrap_err();
-        assert_contains(err.to_string(), "larger than source array");
+        assert!(
+            err.to_string().contains("larger than source array"),
+            "unexpected error: {err}"
+        );
 
         // Slice iterator: a dense filter longer than the source
         let filter = BooleanArray::from_iter((0..8).map(|idx| Some(idx != 3)));
         let predicate = FilterBuilder::new(&filter).build();
         assert!(matches!(predicate.selection(), FilterSelection::Slices(_)));
         let err = in_progress.copy_rows_by_filter(&predicate).unwrap_err();
-        assert_contains(err.to_string(), "larger than source array");
+        assert!(
+            err.to_string().contains("larger than source array"),
+            "unexpected error: {err}"
+        );
     }
 }
