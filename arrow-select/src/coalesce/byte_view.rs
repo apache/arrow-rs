@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::coalesce::InProgressArray;
+use crate::coalesce::{InProgressArray, check_filter_len};
 use crate::filter::{FilterPredicate, FilterSelection};
 use arrow_array::cast::AsArray;
 use arrow_array::types::ByteViewType;
@@ -121,13 +121,22 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
         self.completed.push(buffer);
     }
 
-    fn append_views_by_filter(&mut self, views: &[u128], filter: &FilterPredicate) {
+    /// Append the `views` selected by `filter` to `self.views`.
+    ///
+    /// # Safety
+    ///
+    /// Every row selected by `filter` must be less than `views.len()`, i.e.
+    /// `filter.filter_len() <= views.len()`.
+    unsafe fn append_views_by_filter(&mut self, views: &[u128], filter: &FilterPredicate) {
         let selected_count = filter.count();
         let current_len = self.views.len();
         self.views.reserve(selected_count);
 
         let mut written = 0;
 
+        // SAFETY: the caller guarantees all selected rows are in bounds,
+        // `FilterPredicate` guarantees exactly `selected_count` rows are
+        // selected, and capacity was reserved above.
         unsafe {
             let mut out = self.views.spare_capacity_mut().as_mut_ptr().cast::<u128>();
 
@@ -448,8 +457,14 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
             ));
         }
 
+        if let Err(e) = check_filter_len(filter, s.len()) {
+            self.source = Some(source);
+            return Err(e);
+        }
+
         self.append_nulls_by_filter(filter, s.nulls());
-        self.append_views_by_filter(s.views(), filter);
+        // SAFETY: `check_filter_len` verified all selected rows are in bounds
+        unsafe { self.append_views_by_filter(s.views(), filter) };
 
         self.source = Some(source);
         Ok(())
@@ -464,9 +479,11 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
         // The source views reference no external buffers, so they must all be
         // inline and we can copy just the nulls and views.
         if s.data_buffers().is_empty() {
+            check_filter_len(filter, s.len())?;
             self.ensure_capacity();
             self.append_nulls_by_filter(filter, s.nulls());
-            self.append_views_by_filter(s.views(), filter);
+            // SAFETY: `check_filter_len` verified all selected rows are in bounds
+            unsafe { self.append_views_by_filter(s.views(), filter) };
             return Ok(());
         }
 
@@ -735,5 +752,33 @@ mod tests {
         };
 
         assert_eq!(in_progress_size_with_split, in_progress_size_without_split);
+    }
+
+    #[test]
+    fn test_copy_rows_by_filter_rejects_filter_longer_than_source() {
+        let values: Vec<Option<&[u8]>> = vec![Some(b"a"), Some(b"b"), Some(b"c")];
+        let array = BinaryViewArray::from_iter(values);
+        assert!(array.data_buffers().is_empty());
+        let array: ArrayRef = Arc::new(array);
+
+        let filter = BooleanArray::from_iter((0..8).map(|idx| Some(idx != 3)));
+        let predicate = FilterBuilder::new(&filter).build();
+
+        let mut in_progress = InProgressByteViewArray::<BinaryViewType>::new(8);
+        in_progress.set_source(Some(Arc::clone(&array)));
+        let err = in_progress.copy_rows_by_filter(&predicate).unwrap_err();
+        assert!(
+            err.to_string().contains("larger than source array"),
+            "unexpected error: {err}"
+        );
+
+        let mut in_progress = InProgressByteViewArray::<BinaryViewType>::new(8);
+        let err = in_progress
+            .copy_rows_by_filter_from(array, &predicate)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("larger than source array"),
+            "unexpected error: {err}"
+        );
     }
 }
