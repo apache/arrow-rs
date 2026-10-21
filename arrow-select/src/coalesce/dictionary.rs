@@ -19,16 +19,74 @@ use super::InProgressArray;
 use crate::concat::concat;
 use crate::filter::{FilterPredicate, FilterSelection};
 use crate::interleave::interleave;
-use arrow_array::builder::{PrimitiveBuilder, StringDictionaryBuilder};
+use ahash::RandomState;
+use arrow_array::builder::{ArrayBuilder, PrimitiveBuilder};
 use arrow_array::cast::AsArray;
 use arrow_array::types::ArrowDictionaryKeyType;
-use arrow_array::{Array, ArrayRef, DictionaryArray, StringArray, new_empty_array};
+use arrow_array::{Array, ArrayRef, DictionaryArray, new_empty_array};
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::{ArrowError, DataType};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 const LOW_CARDINALITY_MAX_SELECTIVITY_DENOMINATOR: usize = 128;
 const HIGH_CARDINALITY_MAX_SELECTIVITY_DENOMINATOR: usize = 64;
+/// Linear lookup avoids hash-table setup for the smallest sparse selections.
+const LINEAR_KEY_REMAP_MAX_LEN: usize = 32;
+
+enum KeyRemap<V> {
+    Linear(Vec<(usize, V)>),
+    Hashed(HashMap<usize, V, RandomState>),
+}
+
+impl<V: Copy> KeyRemap<V> {
+    fn with_capacity(capacity: usize) -> Self {
+        if capacity <= LINEAR_KEY_REMAP_MAX_LEN {
+            Self::Linear(Vec::with_capacity(capacity))
+        } else {
+            Self::Hashed(HashMap::with_capacity_and_hasher(
+                capacity,
+                RandomState::with_seeds(0, 0, 0, 0),
+            ))
+        }
+    }
+
+    fn get(&self, old_key: usize) -> Option<V> {
+        match self {
+            Self::Linear(remap) => remap
+                .iter()
+                .find_map(|(key, remapped)| (*key == old_key).then_some(*remapped)),
+            Self::Hashed(remap) => remap.get(&old_key).copied(),
+        }
+    }
+
+    fn insert(&mut self, old_key: usize, new_key: V) {
+        match self {
+            Self::Linear(remap) if remap.len() < LINEAR_KEY_REMAP_MAX_LEN => {
+                remap.push((old_key, new_key));
+            }
+            Self::Linear(remap) => {
+                let mut hashed = HashMap::with_capacity_and_hasher(
+                    remap.len() + 1,
+                    RandomState::with_seeds(0, 0, 0, 0),
+                );
+                hashed.extend(remap.drain(..));
+                hashed.insert(old_key, new_key);
+                *self = Self::Hashed(hashed);
+            }
+            Self::Hashed(remap) => {
+                remap.insert(old_key, new_key);
+            }
+        }
+    }
+
+    fn size(&self) -> usize {
+        match self {
+            Self::Linear(remap) => remap.capacity() * size_of::<(usize, V)>(),
+            Self::Hashed(remap) => remap.capacity() * size_of::<(usize, V)>(),
+        }
+    }
+}
 
 fn try_for_each_selected_index(
     filter: &FilterPredicate,
@@ -60,21 +118,20 @@ fn try_for_each_selected_index(
 pub(crate) struct InProgressDictionaryArray<K: ArrowDictionaryKeyType> {
     source: Option<ArrayRef>,
     data_type: DataType,
-    utf8_values: bool,
-    batch_size: usize,
-    string_builder: Option<StringDictionaryBuilder<K>>,
+    keys: PrimitiveBuilder<K>,
+    value_arrays: Vec<ArrayRef>,
+    key_remaps: Vec<KeyRemap<K::Native>>,
+    selected_values: Vec<(usize, usize)>,
     buffered_arrays: Vec<ArrayRef>,
     source_data_referenced_in_buffers: bool,
     total_size_of_non_shared_buffers: usize,
-    builder_rows: usize,
-    builder_value_bytes: usize,
 }
 
 impl<K: ArrowDictionaryKeyType> std::fmt::Debug for InProgressDictionaryArray<K> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("InProgressDictionaryArray")
-            .field("batch_size", &self.batch_size)
-            .field("builder_rows", &self.builder_rows)
+            .field("keys", &self.keys.len())
+            .field("selected_values", &self.selected_values.len())
             .field("buffered_arrays", &self.buffered_arrays.len())
             .finish()
     }
@@ -82,49 +139,17 @@ impl<K: ArrowDictionaryKeyType> std::fmt::Debug for InProgressDictionaryArray<K>
 
 impl<K: ArrowDictionaryKeyType> InProgressDictionaryArray<K> {
     pub(crate) fn new(data_type: DataType, batch_size: usize) -> Self {
-        let utf8_values = matches!(&data_type, DataType::Dictionary(_, value) if value.as_ref() == &DataType::Utf8);
         Self {
             source: None,
             data_type,
-            utf8_values,
-            batch_size,
-            string_builder: None,
+            keys: PrimitiveBuilder::with_capacity(batch_size),
+            value_arrays: Vec::new(),
+            key_remaps: Vec::new(),
+            selected_values: Vec::new(),
             buffered_arrays: Vec::new(),
             source_data_referenced_in_buffers: false,
             total_size_of_non_shared_buffers: 0,
-            builder_rows: 0,
-            builder_value_bytes: 0,
         }
-    }
-
-    fn append_string_index(
-        builder: &mut StringDictionaryBuilder<K>,
-        source: &DictionaryArray<K>,
-        values: &StringArray,
-        index: usize,
-    ) -> Result<usize, ArrowError> {
-        match source.key(index) {
-            Some(key) => {
-                let value = values.value(key);
-                builder.append(value)?;
-                Ok(value.len())
-            }
-            None => {
-                builder.append_null();
-                Ok(0)
-            }
-        }
-    }
-
-    fn flush_string_builder(&mut self) {
-        let Some(mut builder) = self.string_builder.take() else {
-            return;
-        };
-        let array = Arc::new(builder.finish()) as ArrayRef;
-        self.total_size_of_non_shared_buffers += array.get_array_memory_size();
-        self.buffered_arrays.push(array);
-        self.builder_rows = 0;
-        self.builder_value_bytes = 0;
     }
 
     fn buffer_array(&mut self, array: ArrayRef) {
@@ -132,24 +157,25 @@ impl<K: ArrowDictionaryKeyType> InProgressDictionaryArray<K> {
         self.buffered_arrays.push(array);
     }
 
-    fn append_generic_index(
+    fn append_index(
         keys: &mut PrimitiveBuilder<K>,
-        remap: &mut [Option<K::Native>],
+        remap: &mut KeyRemap<K::Native>,
         selected_values: &mut Vec<(usize, usize)>,
         dictionary: &DictionaryArray<K>,
+        array_index: usize,
         index: usize,
     ) -> Result<(), ArrowError> {
         let Some(old_key) = dictionary.key(index) else {
             keys.append_null();
             return Ok(());
         };
-        let new_key = match remap[old_key] {
+        let new_key = match remap.get(old_key) {
             Some(key) => key,
             None => {
                 let key = K::Native::from_usize(selected_values.len())
                     .ok_or(ArrowError::DictionaryKeyOverflowError)?;
-                remap[old_key] = Some(key);
-                selected_values.push((0, old_key));
+                remap.insert(old_key, key);
+                selected_values.push((array_index, old_key));
                 key
             }
         };
@@ -157,31 +183,61 @@ impl<K: ArrowDictionaryKeyType> InProgressDictionaryArray<K> {
         Ok(())
     }
 
-    fn buffer_sparse_generic(
+    fn buffer_sparse_filter(
         &mut self,
         dictionary: &DictionaryArray<K>,
         filter: &FilterPredicate,
     ) -> Result<(), ArrowError> {
-        self.flush_string_builder();
         if filter.count() == 0 {
             return Ok(());
         }
 
-        let mut remap = vec![None; dictionary.values().len()];
-        let mut selected_values = Vec::with_capacity(filter.count());
-        let mut keys = PrimitiveBuilder::<K>::with_capacity(filter.count());
+        let array_index = match self
+            .value_arrays
+            .iter()
+            .position(|values| Arc::ptr_eq(values, dictionary.values()))
+        {
+            Some(index) => index,
+            None => {
+                let index = self.value_arrays.len();
+                self.value_arrays.push(Arc::clone(dictionary.values()));
+                self.key_remaps.push(KeyRemap::with_capacity(
+                    filter.count().min(dictionary.values().len()),
+                ));
+                index
+            }
+        };
+        let remap = &mut self.key_remaps[array_index];
         try_for_each_selected_index(filter, |index| {
-            Self::append_generic_index(
-                &mut keys,
-                &mut remap,
-                &mut selected_values,
+            Self::append_index(
+                &mut self.keys,
+                remap,
+                &mut self.selected_values,
                 dictionary,
+                array_index,
                 index,
             )
         })?;
+        Ok(())
+    }
 
-        let values = interleave(&[dictionary.values().as_ref()], &selected_values)?;
-        let array = DictionaryArray::<K>::try_new(keys.finish(), values)?;
+    fn flush_sparse_filter(&mut self) -> Result<(), ArrowError> {
+        if self.keys.len() == 0 {
+            return Ok(());
+        }
+
+        let values = interleave(
+            &self
+                .value_arrays
+                .iter()
+                .map(|array| array.as_ref())
+                .collect::<Vec<_>>(),
+            &self.selected_values,
+        )?;
+        let array = DictionaryArray::<K>::try_new(self.keys.finish(), values)?;
+        self.value_arrays.clear();
+        self.key_remaps.clear();
+        self.selected_values.clear();
         self.buffer_array(Arc::new(array));
         Ok(())
     }
@@ -191,33 +247,9 @@ impl<K: ArrowDictionaryKeyType> InProgressDictionaryArray<K> {
         source: &dyn Array,
         filter: &FilterPredicate,
     ) -> Result<(), ArrowError> {
-        self.flush_string_builder();
+        self.flush_sparse_filter()?;
         let filtered = filter.filter(source)?;
         self.buffer_array(filtered);
-        Ok(())
-    }
-
-    fn buffer_sparse_strings(
-        &mut self,
-        dictionary: &DictionaryArray<K>,
-        values: &StringArray,
-        filter: &FilterPredicate,
-    ) -> Result<(), ArrowError> {
-        let builder = self.string_builder.get_or_insert_with(|| {
-            StringDictionaryBuilder::with_capacity(
-                self.batch_size,
-                values.len(),
-                values.get_array_memory_size(),
-            )
-        });
-
-        let mut appended_value_bytes = 0;
-        try_for_each_selected_index(filter, |index| {
-            appended_value_bytes += Self::append_string_index(builder, dictionary, values, index)?;
-            Ok(())
-        })?;
-        self.builder_rows += filter.count();
-        self.builder_value_bytes += appended_value_bytes;
         Ok(())
     }
 }
@@ -234,7 +266,7 @@ impl<K: ArrowDictionaryKeyType> InProgressArray for InProgressDictionaryArray<K>
     }
 
     fn copy_rows(&mut self, offset: usize, len: usize) -> Result<(), ArrowError> {
-        self.flush_string_builder();
+        self.flush_sparse_filter()?;
         let source = self.source.as_ref().ok_or_else(|| {
             ArrowError::InvalidArgumentError(
                 "Internal Error: InProgressDictionaryArray: source not set".to_string(),
@@ -260,17 +292,11 @@ impl<K: ArrowDictionaryKeyType> InProgressArray for InProgressDictionaryArray<K>
             return self.buffer_materialized_filter(source.as_ref(), filter);
         }
 
-        if self.utf8_values {
-            let values = dictionary.values().as_string::<i32>();
-            if values.null_count() == 0 {
-                return self.buffer_sparse_strings(dictionary, values, filter);
-            }
-        }
-        self.buffer_sparse_generic(dictionary, filter)
+        self.buffer_sparse_filter(dictionary, filter)
     }
 
     fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
-        self.flush_string_builder();
+        self.flush_sparse_filter()?;
         let result = match self.buffered_arrays.len() {
             0 => new_empty_array(&self.data_type),
             1 => self.buffered_arrays.pop().unwrap(),
@@ -291,12 +317,21 @@ impl<K: ArrowDictionaryKeyType> InProgressArray for InProgressDictionaryArray<K>
     fn size(&self) -> usize {
         self.total_size_of_non_shared_buffers
             + self.buffered_arrays.capacity() * size_of::<ArrayRef>()
+            + self.keys.capacity() * size_of::<K::Native>()
+            + self.keys.validity_capacity()
+            + self.value_arrays.capacity() * size_of::<ArrayRef>()
+            + self
+                .value_arrays
+                .iter()
+                .map(|array| array.get_array_memory_size())
+                .sum::<usize>()
+            + self.key_remaps.capacity() * size_of::<KeyRemap<K::Native>>()
+            + self.key_remaps.iter().map(KeyRemap::size).sum::<usize>()
+            + self.selected_values.capacity() * size_of::<(usize, usize)>()
             + self
                 .source
                 .as_ref()
                 .map_or(0, |source| source.get_array_memory_size())
-            + self.builder_rows * size_of::<K::Native>()
-            + self.builder_value_bytes
     }
 }
 
@@ -352,7 +387,7 @@ mod tests {
     }
 
     #[test]
-    fn sparse_copy_unifies_dictionary_values_across_inputs() {
+    fn sparse_copy_supports_shared_value_types_across_inputs() {
         let first = (0..256)
             .map(|index| match index {
                 0 => Some("a"),
@@ -386,11 +421,40 @@ mod tests {
             .unwrap();
         let output = in_progress.finish().unwrap();
         let output = output.as_dictionary::<Int32Type>();
-        assert_eq!(
-            output.values().as_string::<i32>(),
-            &StringArray::from(vec!["a", "b", "c"])
-        );
-        assert_eq!(output.keys().values(), &[0, 1, 1, 2]);
+        let values = output.values().as_string::<i32>();
+        let decoded = output
+            .keys_iter()
+            .map(|key| key.map(|key| values.value(key)))
+            .collect::<Vec<_>>();
+        assert_eq!(decoded, vec![Some("a"), Some("b"), Some("b"), Some("c")]);
+    }
+
+    #[test]
+    fn sparse_copy_reuses_shared_dictionary_values() {
+        let values = Arc::new(StringArray::from_iter_values(
+            (0..64).map(|index| format!("value-{index}")),
+        ));
+        let source = Arc::new(DictionaryArray::<Int32Type>::new(
+            Int32Array::from_iter_values((0..5120).map(|index| index % 64)),
+            values,
+        )) as ArrayRef;
+        let filter = BooleanArray::from((0..5120).map(|index| index < 40).collect::<Vec<_>>());
+        let predicate = FilterBuilder::new(&filter).build();
+
+        let mut in_progress =
+            InProgressDictionaryArray::<Int32Type>::new(source.data_type().clone(), 80);
+        in_progress
+            .copy_rows_by_filter_from(Arc::clone(&source), &predicate)
+            .unwrap();
+        in_progress
+            .copy_rows_by_filter_from(source, &predicate)
+            .unwrap();
+
+        let output = in_progress.finish().unwrap();
+        let output = output.as_dictionary::<Int32Type>();
+        let expected_keys = (0..40).chain(0..40).collect::<Vec<_>>();
+        assert_eq!(output.values().len(), 40);
+        assert_eq!(output.keys().values().as_ref(), expected_keys.as_slice());
     }
 
     #[test]
