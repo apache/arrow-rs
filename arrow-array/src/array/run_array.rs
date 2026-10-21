@@ -126,10 +126,8 @@ macro_rules! ree_map {
 /// sliced. In that case each child's own `offset` and `len` are respected,
 /// independently of the logical `offset` and `len` of the `RunArray`:
 ///
-/// * Run `i` ends at `run_ends.value(i)`, the `i`th element after the
-///   `run_ends` child's own offset.
-/// * The value of run `i` is `values.value(i)`, the `i`th element after the
-///   `values` child's own offset.
+/// * Run `i` ends at `run_ends.value(i)`, the `i`th (logical) element
+/// * The value of run `i` is `values.value(i)`, the `i`th (logical) element
 ///
 /// [run-end encoded values]: https://arrow.apache.org/docs/format/Columnar.html#run-end-encoded-layout
 /// [run-length encoding (RLE)]: https://en.wikipedia.org/wiki/Run-length_encoding
