@@ -20,7 +20,6 @@ name = "parquet-variant-compute"
 version = { workspace = true }
 license = { workspace = true }
 description = "Apache Parquet Variant Batch Processing"
-homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
 keywords = ["arrow", "parquet", "variant"]

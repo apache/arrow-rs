@@ -19,7 +19,6 @@
 name = "arrow-string"
 version = { workspace = true }
 description = "String kernels for arrow arrays"
-homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
 license = { workspace = true }
