@@ -164,9 +164,8 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
 
         // Copy the values
         let values = s.values();
-        // SAFETY: copy_rows is called with ranges derived from the source array.
         self.current
-            .extend_from_slice(unsafe { values.get_unchecked(offset..offset + len) });
+            .extend_from_slice(&values[offset..offset + len]);
 
         Ok(())
     }
