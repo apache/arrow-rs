@@ -657,7 +657,7 @@ impl BatchCoalescer {
         Ok(())
     }
 
-    /// Returns true if there is any buffered data
+    /// Returns true if there are no buffered rows and no completed batches
     pub fn is_empty(&self) -> bool {
         self.buffered_rows == 0 && self.completed.is_empty()
     }
