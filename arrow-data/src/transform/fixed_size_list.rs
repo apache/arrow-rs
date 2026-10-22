@@ -25,13 +25,23 @@ pub(super) fn build_extend(array: &ArrayData) -> Extend<'_> {
         DataType::FixedSizeList(_, i) => *i as usize,
         _ => unreachable!(),
     };
+    let offset = array.offset();
 
     Box::new(
         move |mutable: &mut _MutableArrayData, index: usize, start: usize, len: usize| {
-            mutable
-                .child_data
-                .iter_mut()
-                .for_each(|child| child.extend(index, start * size, (start + len) * size))
+            let start = start
+                .checked_add(offset)
+                .expect("fixed size list range overflows usize");
+            let end = start
+                .checked_add(len)
+                .expect("fixed size list range overflows usize");
+            let (child_start, child_end) = start
+                .checked_mul(size)
+                .zip(end.checked_mul(size))
+                .expect("fixed size list range overflows usize");
+            for child in &mut mutable.child_data {
+                child.extend(index, child_start, child_end);
+            }
         },
     )
 }
