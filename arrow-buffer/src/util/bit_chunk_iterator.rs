@@ -185,26 +185,31 @@ fn count_ones_words(words: &[u64]) -> usize {
 /// the `u64` sum measured faster (#11776), so this is only used on aarch64.
 #[cfg(target_arch = "aarch64")]
 fn count_ones_words(words: &[u64]) -> usize {
-    let (chunks, rem) = words.to_byte_slice().as_chunks::<64>();
+    let (chunks, remainder) = words.to_byte_slice().as_chunks::<64>();
     let mut total = 0;
-    // `acc` counts in u16 lanes so that one widening per chunk suffices. Each lane
-    // gains at most 32 (four bytes of eight bits) per chunk, so add the lanes into
-    // `total` and reset them before they can overflow.
+    // `lane_counts` counts in u16 lanes so that one widening per chunk suffices. Each
+    // lane gains at most 32 (four bytes of eight bits) per chunk, so add the lanes
+    // into `total` and reset them before they can overflow.
     const CHUNKS_PER_FLUSH: usize = (u16::MAX / 32) as usize;
-    for block in chunks.chunks(CHUNKS_PER_FLUSH) {
-        let mut acc = [0u16; 16];
-        for c in block {
-            for i in 0..16 {
-                let s = c[i].count_ones() as u8
-                    + c[16 + i].count_ones() as u8
-                    + c[32 + i].count_ones() as u8
-                    + c[48 + i].count_ones() as u8;
-                acc[i] += s as u16;
+    for flush_group in chunks.chunks(CHUNKS_PER_FLUSH) {
+        let mut lane_counts = [0u16; 16];
+        for chunk in flush_group {
+            // Lane `lane` sums byte `lane` of each of the chunk's four 16-byte vectors.
+            for lane in 0..16 {
+                let count = chunk[lane].count_ones() as u8
+                    + chunk[16 + lane].count_ones() as u8
+                    + chunk[32 + lane].count_ones() as u8
+                    + chunk[48 + lane].count_ones() as u8;
+                lane_counts[lane] += count as u16;
             }
         }
-        total += acc.iter().map(|&a| a as usize).sum::<usize>();
+        total += lane_counts.iter().copied().map(usize::from).sum::<usize>();
     }
-    total + rem.iter().map(|b| b.count_ones() as usize).sum::<usize>()
+    total
+        + remainder
+            .iter()
+            .map(|byte| byte.count_ones() as usize)
+            .sum::<usize>()
 }
 
 impl<'a> IntoIterator for &UnalignedBitChunk<'a> {
