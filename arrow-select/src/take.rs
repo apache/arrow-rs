@@ -207,7 +207,14 @@ where
         };
     };
 
-    if indices.null_count() > 0 {
+    // Null slots usually hold in-bounds values, so first check every value with a loop that
+    // vectorizes, and look at validity only if that finds one out of bounds
+    let in_bounds = indices.values().iter().fold(true, |in_bounds, &i| {
+        in_bounds & (i >= T::Native::ZERO) & (i < len)
+    });
+    if in_bounds {
+        Ok(())
+    } else if indices.null_count() > 0 {
         indices.iter().flatten().try_for_each(|index| {
             if index >= len {
                 return Err(ArrowError::ComputeError(format!(
@@ -217,20 +224,13 @@ where
             Ok(())
         })
     } else {
-        let in_bounds = indices.values().iter().fold(true, |in_bounds, &i| {
-            in_bounds & (i >= T::Native::ZERO) & (i < len)
-        });
-
-        if !in_bounds {
-            for &index in indices.values() {
-                if index < T::Native::ZERO || index >= len {
-                    return Err(ArrowError::ComputeError(format!(
-                        "Array index out of bounds, cannot get item at index {index} from {len} entries"
-                    )));
-                }
+        for &index in indices.values() {
+            if index < T::Native::ZERO || index >= len {
+                return Err(ArrowError::ComputeError(format!(
+                    "Array index out of bounds, cannot get item at index {index} from {len} entries"
+                )));
             }
         }
-
         Ok(())
     }
 }
@@ -1673,8 +1673,9 @@ to_indices_reinterpret!(Int64Type, UInt64Type);
 ///
 /// # Errors
 /// This function errors whenever:
-/// * An index cannot be casted to `usize` (typically 32 bit architectures)
+/// * `indices` is not an integer array
 /// * A non-null index is not less than the number of rows
+/// * A taken column's offsets overflow, e.g. more than `i32::MAX` bytes of `Utf8` data
 ///
 /// # Example
 /// ```
