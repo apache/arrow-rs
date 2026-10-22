@@ -36,7 +36,6 @@ use arrow_array::builder::BufferBuilder;
 use arrow_array::cast::*;
 use arrow_array::types::{Int16Type, Int32Type, Int64Type, RunEndIndexType};
 use arrow_array::*;
-use arrow_buffer::bit_util;
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer, ToByteSlice};
 use arrow_data::{ArrayData, ArrayDataBuilder, BufferSpec, layout};
 use arrow_schema::*;
@@ -2373,10 +2372,11 @@ fn write_array_data(
 ) -> Result<i64, ArrowError> {
     let mut offset = offset;
     let num_rows = array_data.len();
+    let null_count = array_data.null_count();
     if !matches!(array_data.data_type(), DataType::Null) {
         meta.nodes.push(crate::FieldNode::new(
             num_rows as i64,
-            array_data.null_count() as i64,
+            null_count as i64,
         ));
     } else {
         // NullArray's null_count equals to len, but ArrayData null_count is always 0.
@@ -2384,16 +2384,11 @@ fn write_array_data(
             .push(crate::FieldNode::new(num_rows as i64, num_rows as i64));
     }
     if has_validity_bitmap(array_data.data_type(), write_options) {
-        // write null buffer if exists
+        // Fields with null_count == 0 may write a 0-length validity buffer
+        // instead of a materialized bitmap (see FieldNode in Message.fbs)
         let null_buffer = match array_data.nulls() {
-            None => {
-                // create a buffer and fill it with valid bits
-                let num_bytes = bit_util::ceil(num_rows, 8);
-                let buffer = MutableBuffer::new(num_bytes);
-                let buffer = buffer.with_bitset(num_bytes, true);
-                buffer.into()
-            }
-            Some(buffer) => buffer.inner().sliced(),
+            Some(buffer) if null_count > 0 => buffer.inner().sliced(),
+            _ => MutableBuffer::new(0).into(),
         };
 
         offset = encode_sink_buffer(
@@ -3464,6 +3459,37 @@ mod tests {
         assert!(deserialized_batch.column(1).is_valid(1));
 
         assert_eq!(record_batch_slice, deserialized_batch);
+    }
+
+    #[test]
+    fn test_write_empty_validity_buffer_without_nulls() {
+        let batch = RecordBatch::try_from_iter([
+            ("a", Arc::new(Int32Array::from(vec![1, 2])) as _),
+            // Keeps a null buffer, but the slice has no nulls
+            (
+                "b",
+                Arc::new(Int32Array::from(vec![None, Some(2), Some(3)]).slice(1, 2)) as _,
+            ),
+            ("c", Arc::new(Int32Array::from(vec![Some(1), None])) as _),
+        ])
+        .unwrap();
+        assert_eq!(batch.column(1).nulls().map(|n| n.null_count()), Some(0));
+
+        let (_, encoded) = IpcDataGenerator::default()
+            .encode(
+                &batch,
+                &mut DictionaryTracker::new(false),
+                &Default::default(),
+                &mut Default::default(),
+            )
+            .unwrap();
+        let message = crate::root_as_message(&encoded.ipc_message).unwrap();
+        let buffers = message.header_as_record_batch().unwrap().buffers().unwrap();
+        // Each column writes a validity buffer, then a values buffer
+        let validity_lengths: Vec<_> = buffers.iter().step_by(2).map(|b| b.length()).collect();
+        assert_eq!(validity_lengths, [0, 0, 1]);
+
+        assert_eq!(deserialize_stream(serialize_stream(&batch)), batch);
     }
 
     #[test]
@@ -4613,13 +4639,15 @@ mod tests {
         const IPC_ALIGNMENT: usize = 8;
 
         let num_cols = 2;
-        let num_rows = 1;
 
         let mut fields = Vec::new();
         let mut arrays = Vec::new();
         for i in 0..num_cols {
             let field = Field::new(format!("col_{i}"), DataType::Decimal128(38, 10), true);
-            let array = Decimal128Array::from(vec![num_cols as i128; num_rows]);
+            // The null makes the writer emit a 1-byte validity buffer. With IPC_ALIGNMENT = 8,
+            // the writer pads that buffer to 8 bytes, so the decimal values that follow start
+            // at offset 8 of the body, which is not a multiple of 16.
+            let array = Decimal128Array::from(vec![Some(num_cols as i128), None]);
             fields.push(field);
             arrays.push(Arc::new(array) as Arc<dyn Array>);
         }
