@@ -865,8 +865,9 @@ mod tests {
 
     #[test]
     fn test_unaligned_bit_chunk_count_ones() {
-        // Sizes in bytes around the 64-byte chunk and the 2047-chunk flush. All ones
-        // gives each u16 lane its maximum gain per chunk.
+        // Sizes in bytes around the 64-byte chunk and the 2047-chunk flush in
+        // `count_ones_words`. With all-ones input, this fails if the flush comes too
+        // late and a u16 lane counter overflows.
         let sizes = [
             0, 1, 7, 8, 63, 64, 65, 72, 136, 131_008, 131_072, 131_136, 131_207,
         ];
