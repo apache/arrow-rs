@@ -41,3 +41,6 @@
 - [57_maintenance] fix: finish methods in `PrimitiveDictionaryBuilder` discard type params by @Jefffrey in [#11805](https://github.com/apache/arrow-rs/pull/11805)
 - [57_maintenance] fix(arrow-buffer): prevent use-after-free in Buffer::shrink_to_fit when MemoryReservation::resize panics by @alamb in [#11786](https://github.com/apache/arrow-rs/pull/11786)
 - [57_maintenance] fix: `UnionFields::from_iter` should validate input by @alamb in [#11726](https://github.com/apache/arrow-rs/pull/11726)
+
+### Miscellaneous
+- [57_maintenance] chore: update tokio to 1.54.1 to fix cargo audit CI by @alamb in [#11819](https://github.com/apache/arrow-rs/pull/11819)
