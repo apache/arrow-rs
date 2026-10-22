@@ -62,12 +62,8 @@ jobs:
     permissions:
       contents: write
     runs-on: ubuntu-latest
-    # ci.yml keys its concurrency group on the commit SHA, so CI runs for
-    # consecutive pushes to main execute in parallel. Each deploy force-pushes
-    # the asf-site branch, and two deploys pushing at the same time race:
-    # the loser fails with "cannot lock ref 'refs/heads/asf-site'".
-    # Serialize deploys (without cancelling any of them) so every push to
-    # main publishes its docs in turn.
+    # Ensure only one of these jobs runs at a time because each force-pushes
+    # the asf-site branch, so concurrent runs can conflct
     concurrency:
       group: ${{ github.repository }}-docs-deploy
       cancel-in-progress: false
