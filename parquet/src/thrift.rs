@@ -38,6 +38,7 @@ mod tests {
     };
 
     #[test]
+    #[allow(deprecated)]
     fn legacy_statistics_reject_oversized_binary_before_allocation() {
         use crate::{format::Statistics, thrift::TSerializable};
         use thrift::{Error, ProtocolErrorKind, protocol::TCompactInputProtocol};
@@ -53,6 +54,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn legacy_statistics_compact_protocol_roundtrip() {
         use crate::{format::Statistics, thrift::TSerializable};
         use thrift::protocol::{TCompactInputProtocol, TCompactOutputProtocol};
