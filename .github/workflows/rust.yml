@@ -116,9 +116,10 @@ jobs:
       - uses: actions/checkout@v6
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-      - name: Install cargo-msrv (if needed)
-        # cargo-msrv binary may be cached by the cargo cache step in setup-builder, and cargo install will error if it is already installed
-        run: if which cargo-msrv ; then echo "using existing cargo-msrv binary" ; else cargo install cargo-msrv --locked ; fi
+      - name: Install cargo-msrv
+        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8  # v2.87.28
+        with:
+          tool: cargo-msrv
       - name: Check all packages
         run: |
           # run `cargo msrv verify --manifest-path "path/to/Cargo.toml"` to see problematic dependencies
