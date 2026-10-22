@@ -702,7 +702,11 @@ impl From<ArrayData> for UnionArray {
         let max_id = fields.iter().map(|(i, _)| i).max().unwrap_or_default() as usize;
         let mut boxed_fields = vec![None; max_id + 1];
         for (cd, (field_id, _)) in data.child_data().iter().zip(fields.iter()) {
-            boxed_fields[field_id as usize] = Some(make_array(cd.clone()));
+            let cd = match mode {
+                UnionMode::Sparse => cd.slice(data.offset(), data.len()),
+                UnionMode::Dense => cd.clone(),
+            };
+            boxed_fields[field_id as usize] = Some(make_array(cd));
         }
         Self {
             data_type: data.data_type().clone(),
@@ -794,18 +798,23 @@ unsafe impl Array for UnionArray {
         };
 
         if fields.len() <= 1 {
-            return self.fields.iter().find_map(|field_opt| {
-                field_opt
-                    .as_ref()
-                    .and_then(|field| field.logical_nulls())
-                    .map(|logical_nulls| {
-                        if self.is_dense() {
-                            self.gather_nulls(vec![(0, logical_nulls)]).into()
-                        } else {
-                            logical_nulls
-                        }
-                    })
-            });
+            return self
+                .fields
+                .iter()
+                .enumerate()
+                .find_map(|(type_id, field_opt)| {
+                    field_opt
+                        .as_ref()
+                        .and_then(|field| field.logical_nulls())
+                        .map(|logical_nulls| {
+                            if self.is_dense() {
+                                self.gather_nulls(vec![(type_id as i8, logical_nulls)])
+                                    .into()
+                            } else {
+                                logical_nulls
+                            }
+                        })
+                });
         }
 
         let logical_nulls = self.fields_logical_nulls();
@@ -1681,6 +1690,55 @@ mod tests {
     }
 
     #[test]
+    fn test_union_from_sliced_array_data() {
+        for mode in [UnionMode::Sparse, UnionMode::Dense] {
+            let fields = UnionFields::try_new(
+                [3, 7],
+                [
+                    Field::new("ints", DataType::Int32, false),
+                    Field::new("floats", DataType::Float64, false),
+                ],
+            )
+            .unwrap();
+            let offsets = (mode == UnionMode::Dense).then(|| vec![0, 1, 2, 3].into());
+            let array = UnionArray::try_new(
+                fields,
+                vec![3, 7, 3, 7].into(),
+                offsets,
+                vec![
+                    Arc::new(Int32Array::from(vec![10, 20, 30, 40])),
+                    Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0])),
+                ],
+            )
+            .unwrap();
+            for (offset, len) in [(1, 2), (0, 2), (4, 0), (0, 4)] {
+                let expected = array.slice(offset, len);
+                let actual = make_array(array.to_data().slice(offset, len));
+                let actual = actual.as_any().downcast_ref::<UnionArray>().unwrap();
+                for i in 0..len {
+                    assert_eq!(actual.value(i).to_data(), expected.value(i).to_data());
+                }
+                assert_eq!(actual.to_data(), expected.to_data());
+            }
+        }
+    }
+
+    #[test]
+    fn test_sparse_union_from_sliced_array_data_logical_nulls() {
+        let child = Int32Array::from(vec![Some(10), None, Some(30)]);
+        let fields =
+            UnionFields::try_new([0], [Field::new("ints", DataType::Int32, true)]).unwrap();
+        let array =
+            UnionArray::try_new(fields, vec![0, 0, 0].into(), None, vec![Arc::new(child)]).unwrap();
+        for (offset, len) in [(0, 1), (1, 1), (2, 1), (3, 0)] {
+            let expected = array.slice(offset, len);
+            let actual = make_array(array.to_data().slice(offset, len));
+            assert_eq!(actual.logical_nulls(), expected.logical_nulls());
+            assert_eq!(actual.to_data(), expected.to_data());
+        }
+    }
+
+    #[test]
     fn test_custom_type_ids() {
         let data_type = DataType::Union(
             UnionFields::try_new(
@@ -2010,6 +2068,23 @@ mod tests {
 
         assert_eq!(expected, array.logical_nulls().unwrap().into_inner());
         assert_eq!(expected, array.gather_nulls(array.fields_logical_nulls()));
+    }
+
+    #[test]
+    fn test_dense_union_one_field_nonzero_type_id_logical_nulls() {
+        let fields = UnionFields::try_new([5], [Field::new("a", DataType::Int32, true)]).unwrap();
+        let child = Arc::new(Int32Array::from(vec![None, Some(1)]));
+        let array = UnionArray::try_new(
+            fields,
+            vec![5, 5, 5].into(),
+            Some(vec![1, 0, 1].into()),
+            vec![child],
+        )
+        .unwrap();
+
+        let expected = NullBuffer::from(vec![true, false, true]);
+        assert_eq!(array.logical_nulls(), Some(expected));
+        assert_eq!(array.logical_null_count(), 1);
     }
 
     #[test]
