@@ -16,21 +16,19 @@
 // under the License.
 
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, Decimal128Array, FixedSizeBinaryArray, FixedSizeBinaryBuilder,
-    FixedSizeListBuilder, GenericBinaryArray, GenericStringArray, Int32Array, Int32Builder,
-    Int64Builder, ListArray, ListBuilder, NullArray, OffsetSizeTrait, StringArray,
-    StringDictionaryBuilder, StructArray, UnionBuilder, make_array,
+    Array, ArrayRef, BinaryViewArray, BooleanArray, Decimal128Array, DictionaryArray,
+    FixedSizeBinaryArray, FixedSizeBinaryBuilder, FixedSizeListArray, FixedSizeListBuilder,
+    GenericBinaryArray, GenericListViewArray, GenericStringArray, Int32Array, Int32Builder,
+    Int64Builder, ListArray, ListBuilder, NullArray, OffsetSizeTrait, PrimitiveArray, StringArray,
+    StringDictionaryBuilder, StringViewArray, StructArray, UnionBuilder, make_array,
 };
 use arrow::datatypes::{Int16Type, Int32Type};
 use arrow_array::builder::{
     GenericListViewBuilder, StringBuilder, StringViewBuilder, StructBuilder,
 };
 use arrow_array::cast::AsArray;
-use arrow_array::{
-    DictionaryArray, FixedSizeListArray, Float32Array, GenericListViewArray, PrimitiveArray,
-    RunArray, StringViewArray,
-};
-use arrow_buffer::{Buffer, ToByteSlice};
+use arrow_array::{Float32Array, RunArray};
+use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer, ToByteSlice};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{DataType, Field, Fields};
 use arrow_select::take::take;
@@ -356,6 +354,49 @@ fn test_string_view_equal() {
     let a1_s = a1.slice(1, 2);
     let a2_s = a2.slice(2, 2);
     test_equal(&a1_s, &a2_s, true);
+}
+
+/// Builds `[[child[0]], [child[1]]]` with the given child validity and slices it to its second
+/// row, so the equality check compares a child range that starts at 1 instead of 0.
+fn sliced_list_of_view(child: ArrayData, validity: [bool; 2]) -> ListArray {
+    let child = child
+        .into_builder()
+        .nulls(Some(NullBuffer::from(validity.to_vec())))
+        .build()
+        .unwrap();
+    let field = Arc::new(Field::new("item", child.data_type().clone(), true));
+    let list = ListArray::new(
+        field,
+        OffsetBuffer::from_lengths([1, 1]),
+        make_array(child),
+        None,
+    );
+    list.slice(1, 1)
+}
+
+// https://github.com/apache/arrow-rs/issues/11583
+#[test]
+fn test_list_of_view_child_nulls_past_start() {
+    let long_a = "a long string that is not inlined in the view";
+    let long_b = "another long string that is not inlined either";
+
+    let children: [fn(&str) -> ArrayData; 2] = [
+        |second| StringViewArray::from(vec!["x", second]).into_data(),
+        |second| BinaryViewArray::from(vec![b"x".as_slice(), second.as_bytes()]).into_data(),
+    ];
+
+    for child in children {
+        // Both are [[null]] and differ only in the data under the null slot
+        let a = sliced_list_of_view(child(long_a), [true, false]);
+        let b = sliced_list_of_view(child(long_b), [true, false]);
+        test_equal(&a, &b, true);
+
+        // Both rows are valid and hold different values; the null at child index 0 is
+        // outside the compared range and must not hide the difference
+        let a = sliced_list_of_view(child(long_a), [false, true]);
+        let b = sliced_list_of_view(child(long_b), [false, true]);
+        test_equal(&a, &b, false);
+    }
 }
 
 #[test]
