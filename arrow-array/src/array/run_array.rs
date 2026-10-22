@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, RunEndBuffer};
+use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, RunEndBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field};
 
@@ -227,7 +227,7 @@ impl<R: RunEndIndexType> From<ArrayData> for RunArray<R> {
         let child = &data.child_data()[0];
         assert_eq!(child.data_type(), &R::DATA_TYPE, "Incorrect run ends type");
         let run_ends = unsafe {
-            let scalar = child.buffers()[0].clone().into();
+            let scalar = ScalarBuffer::new(child.buffers()[0].clone(), child.offset(), child.len());
             RunEndBuffer::new_unchecked(scalar, data.offset(), data.len())
         };
 
@@ -628,6 +628,7 @@ mod tests {
     use rand::seq::SliceRandom;
 
     use super::*;
+    use crate::Float32Array;
     use crate::builder::PrimitiveRunBuilder;
     use crate::cast::AsArray;
     use crate::types::{Int8Type, UInt32Type};
@@ -1129,5 +1130,33 @@ mod tests {
         let array_i16_2 = RunArray::<Int16Type>::try_new(&run_ends_i16_2, &values_i16_2).unwrap();
 
         assert_eq!(array_i16_1, array_i16_2);
+    }
+
+    #[test]
+    fn test_from_array_data_offset() {
+        let dt = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Float32, true)),
+        );
+
+        let runs = ArrayData::builder(DataType::Int32)
+            .len(2)
+            .offset(2)
+            .add_buffer(vec![-10_i32, -20, 1_i32, 4, 0, 100].into())
+            .build()
+            .unwrap();
+        let values = Float32Array::from(vec![1.5, 2.5]);
+
+        let data = ArrayDataBuilder::new(dt)
+            .len(3)
+            .child_data(vec![runs, values.to_data()])
+            .build()
+            .unwrap();
+        let array = RunArray::<Int32Type>::from(data);
+        let array = array.downcast::<Float32Array>().unwrap();
+
+        assert_eq!(array.value(0), 1.5);
+        assert_eq!(array.value(1), 2.5);
+        assert_eq!(array.value(2), 2.5);
     }
 }

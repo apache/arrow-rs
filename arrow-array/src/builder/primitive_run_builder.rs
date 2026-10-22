@@ -108,6 +108,20 @@ where
             prev_run_end_index: 0,
         }
     }
+
+    /// Overrides the data type of the values child array.
+    ///
+    /// By default, `V::DATA_TYPE` is used (via [`PrimitiveBuilder`]). This
+    /// allows setting the timezone of a Timestamp, the precision & scale of a
+    /// Decimal, etc.
+    ///
+    /// # Panics
+    ///
+    /// This method panics if `values_builder` rejects `data_type`.
+    pub fn with_data_type(mut self, data_type: arrow_schema::DataType) -> Self {
+        self.values_builder = self.values_builder.with_data_type(data_type);
+        self
+    }
 }
 
 impl<R, V> ArrayBuilder for PrimitiveRunBuilder<R, V>
@@ -183,9 +197,10 @@ where
         // write the last run end to the array.
         self.append_run_end();
 
-        // reset the run index to zero.
+        // reset the run indexes to zero.
         self.current_value = None;
         self.current_run_end_index = 0;
+        self.prev_run_end_index = 0;
 
         // build the run encoded array by adding run_ends and values array as its children.
         let run_ends_array = self.run_ends_builder.finish();
@@ -259,10 +274,12 @@ where
 
 #[cfg(test)]
 mod tests {
+    use arrow_schema::DataType;
+
     use crate::builder::PrimitiveRunBuilder;
     use crate::cast::AsArray;
-    use crate::types::{Int16Type, UInt32Type};
-    use crate::{Array, UInt32Array};
+    use crate::types::{Decimal128Type, Int16Type, TimestampMicrosecondType, UInt32Type};
+    use crate::{Array, Decimal128Array, TimestampMicrosecondArray, UInt32Array};
 
     #[test]
     fn test_primitive_ree_array_builder() {
@@ -309,5 +326,67 @@ mod tests {
             array.values().as_primitive::<Int16Type>().values(),
             &[1, 2, 5, 4, 6, 2]
         );
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_override_data_type_invalid() {
+        PrimitiveRunBuilder::<Int16Type, UInt32Type>::new().with_data_type(DataType::UInt64);
+    }
+
+    #[test]
+    fn test_override_data_type() {
+        // Noop.
+        PrimitiveRunBuilder::<Int16Type, UInt32Type>::new().with_data_type(DataType::UInt32);
+
+        // Setting scale & precision.
+        let mut builder = PrimitiveRunBuilder::<Int16Type, Decimal128Type>::new()
+            .with_data_type(DataType::Decimal128(1, 2));
+        builder.append_value(123);
+        let array = builder.finish();
+        let array = array.downcast::<Decimal128Array>().unwrap();
+        let values = array.values();
+        assert_eq!(values.precision(), 1);
+        assert_eq!(values.scale(), 2);
+
+        // Setting timezone.
+        let mut builder = PrimitiveRunBuilder::<Int16Type, TimestampMicrosecondType>::new()
+            .with_data_type(DataType::Timestamp(
+                arrow_schema::TimeUnit::Microsecond,
+                Some("Europe/Paris".into()),
+            ));
+        builder.append_value(1);
+        let array = builder.finish();
+        let array = array.downcast::<TimestampMicrosecondArray>().unwrap();
+        let values = array.values();
+        assert_eq!(values.timezone(), Some("Europe/Paris"));
+    }
+
+    #[test]
+    fn test_finish_cloned_keeps_data_type() {
+        let data_type = DataType::Decimal128(5, 2);
+        let mut builder = PrimitiveRunBuilder::<Int16Type, Decimal128Type>::new()
+            .with_data_type(data_type.clone());
+        // Leave the run open, so `finish_cloned` has to add it to a copy of the values
+        builder.append_value(123);
+        let array = builder.finish_cloned();
+        assert_eq!(array.values().data_type(), &data_type);
+    }
+
+    #[test]
+    fn test_reuse_after_finish() {
+        let mut builder = PrimitiveRunBuilder::<Int16Type, Int16Type>::new();
+        builder.extend([1, 2, 3].into_iter().map(Some));
+        builder.finish();
+
+        // A single run with the same length as the previous batch
+        builder.extend([7, 7, 7].into_iter().map(Some));
+        let array = builder.finish();
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.run_ends().values(), &[3]);
+        assert_eq!(array.values().as_primitive::<Int16Type>().values(), &[7]);
+
+        // Nothing appended since the last finish
+        assert_eq!(builder.finish().len(), 0);
     }
 }
