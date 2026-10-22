@@ -222,17 +222,16 @@ impl Buffer {
         };
         if desired_capacity < self.capacity() {
             if let Some(bytes) = Arc::get_mut(&mut self.data) {
-                if bytes.try_realloc(desired_capacity).is_ok() {
-                    // Realloc complete - update our pointer into `bytes`:
-                    self.ptr = if is_empty {
-                        bytes.as_ptr()
-                    } else {
-                        // SAFETY: we kept all elements leading up to the offset
-                        unsafe { bytes.as_ptr().add(offset) }
-                    }
-                } else {
-                    // Failure to reallocate is fine; we just failed to free up memory.
-                }
+                bytes
+                    .try_realloc(desired_capacity, |base| {
+                        self.ptr = if is_empty {
+                            base.as_ptr()
+                        } else {
+                            // SAFETY: we kept all elements leading up to the offset
+                            unsafe { base.as_ptr().add(offset) }
+                        };
+                    })
+                    .ok(); // Failure to reallocate is fine; we just failed to free up memory.
             }
         }
     }
@@ -369,8 +368,8 @@ impl Buffer {
         UnalignedBitChunk::new(self.as_slice(), offset, len).count_ones()
     }
 
-    /// Returns `MutableBuffer` for mutating the buffer if this buffer is not shared.
-    /// Returns `Err` if this is shared or its allocation is from an external source or
+    /// Returns `MutableBuffer` for mutating the buffer if this buffer is not shared or sliced.
+    /// Returns `Err` if this is shared or the [`Self::ptr_offset`] is greater than 0 or its allocation is from an external source or
     /// it is not allocated with alignment [`ALIGNMENT`]
     ///
     /// # Example: Creating a [`MutableBuffer`] from a [`Buffer`]
@@ -394,17 +393,30 @@ impl Buffer {
     pub fn into_mutable(self) -> Result<MutableBuffer, Self> {
         let ptr = self.ptr;
         let length = self.length;
-        Arc::try_unwrap(self.data)
-            .and_then(|bytes| {
-                // The pointer of underlying buffer should not be offset.
-                assert_eq!(ptr, bytes.ptr().as_ptr());
-                MutableBuffer::from_bytes(bytes).map_err(Arc::new)
-            })
-            .map_err(|bytes| Buffer {
-                data: bytes,
-                ptr,
-                length,
-            })
+
+        // Disallow converting when the offset is not 0 because we can't start a mutable from offset
+        let res = if self.ptr_offset() > 0 {
+            Err(self.data)
+        } else {
+            Arc::try_unwrap(self.data)
+        };
+
+        res.and_then(|bytes| {
+            // The pointer of underlying buffer should not be offset.
+            assert_eq!(ptr, bytes.ptr().as_ptr());
+            MutableBuffer::from_bytes(bytes).map_err(Arc::new)
+        })
+        .map_err(|bytes| Buffer {
+            data: bytes,
+            ptr,
+            length,
+        })
+        .map(|mut mutable| {
+            // We need to update the length since in case we are converting sliced buffer we need to return MutableBuffer with the same length
+            // SAFETY: this is safe as the length is coming from valid Buffer (this) and it is guaranteed to be less than the underlying data buffer
+            unsafe { mutable.set_len(length) };
+            mutable
+        })
     }
 
     /// Converts self into a `Vec`, if possible.
@@ -1090,5 +1102,101 @@ mod tests {
 
         drop(capture);
         assert_eq!(buffer2.strong_count(), 1);
+    }
+
+    #[test]
+    fn into_mutable_should_return_error_for_sliced_owned_buffer_when_ptr_offset_is_not_0() {
+        let original_buffer_data = [1_u8, 2, 3, 4, 5, 6, 7, 8];
+        for (slice_from, slice_length) in [
+            (original_buffer_data.len(), 0),
+            (2, 4),
+            (2, original_buffer_data.len() - 2),
+        ] {
+            let buffer = Buffer::from(original_buffer_data);
+            let sliced = buffer.slice_with_length(slice_from, slice_length);
+            drop(buffer); // Keep only 1 owner
+            assert_ne!(sliced.ptr_offset(), 0);
+
+            sliced
+                .into_mutable()
+                .expect_err("should not convert sliced buffer when ptr_offset is not 0");
+        }
+    }
+
+    #[test]
+    fn into_mutable_should_allow_converting_sliced_owned_buffer_when_ptr_offset_is_0() {
+        let original_buffer_data = [1_u8, 2, 3, 4, 5, 6, 7, 8];
+        for slice_length in [0, original_buffer_data.len() - 2] {
+            let buffer = Buffer::from(original_buffer_data);
+            let sliced = buffer.slice_with_length(0, slice_length);
+            drop(buffer); // Keep only 1 owner
+            assert_eq!(sliced.ptr_offset(), 0);
+
+            let original_ptr = sliced.data_ptr();
+
+            let mutable = sliced
+                        .into_mutable()
+                        .unwrap_or_else(|_| panic!("should allow converting to mutable when not sliced from end when slice_length is {slice_length}"));
+
+            let buffer_back: Buffer = mutable.into();
+            assert_eq!(buffer_back.data_ptr(), original_ptr);
+
+            let expected = Buffer::from(original_buffer_data).slice_with_length(0, slice_length);
+            assert_eq!(buffer_back.as_slice(), expected.as_slice());
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "pool")]
+    fn test_shrink_to_fit_panicking_reservation() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        use crate::pool::{MemoryPool, MemoryReservation};
+
+        #[derive(Debug)]
+        struct PanicPool;
+
+        #[derive(Debug)]
+        struct PanicReservation {
+            panicked: bool,
+        }
+
+        impl MemoryReservation for PanicReservation {
+            fn size(&self) -> usize {
+                0
+            }
+            fn resize(&mut self, _: usize) {
+                if !self.panicked {
+                    self.panicked = true;
+                    panic!("intentional panic in resize");
+                }
+            }
+        }
+
+        impl MemoryPool for PanicPool {
+            fn reserve(&self, _: usize) -> Box<dyn MemoryReservation> {
+                Box::new(PanicReservation { panicked: false })
+            }
+            fn available(&self) -> isize {
+                isize::MAX
+            }
+            fn used(&self) -> usize {
+                0
+            }
+            fn capacity(&self) -> usize {
+                usize::MAX
+            }
+        }
+
+        let pool = PanicPool;
+        let data: Vec<u8> = (0..8).collect();
+        let mut buf = Buffer::from_slice_ref(data.as_slice());
+        buf.claim(&pool);
+
+        // shrink_to_fit panics because PanicReservation::resize panics, but
+        // Buffer::ptr must stay consistent with Bytes::ptr (no use-after-free).
+        let _ = catch_unwind(AssertUnwindSafe(|| buf.shrink_to_fit()));
+
+        assert_eq!(buf.as_slice(), data.as_slice());
     }
 }

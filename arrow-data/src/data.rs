@@ -1436,12 +1436,47 @@ impl ArrayData {
                 let child = &self.child_data[0];
                 self.validate_offsets_full::<i64>(child.len)
             }
-            DataType::Union(_, _) => {
-                // Validate Union Array as part of implementing new Union semantics
-                // See comments in `ArrayData::validate()`
-                // https://github.com/apache/arrow-rs/issues/85
-                //
-                // TODO file follow on ticket for full union validation
+            DataType::Union(fields, mode) => {
+                let mut child_lens: Vec<Option<usize>> = vec![None; 128];
+                for (index, (type_id, _)) in fields.iter().enumerate() {
+                    let child = &self.child_data[index];
+                    child_lens[type_id as usize] = Some(child.len());
+                }
+
+                // Type id values must match one of the fields.
+                let type_ids = self.typed_buffer::<i8>(0, self.len)?;
+                for (index, &type_id) in type_ids.iter().enumerate() {
+                    if type_id < 0 {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "Type id values cannot be negative, got {type_id} at index {index}"
+                        )));
+                    }
+                    let type_id = type_id as usize;
+                    if child_lens[type_id].is_none() {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "Type id values must match one of the field type ids, got {type_id} at index {index}"
+                        )));
+                    }
+                }
+
+                // Check the value offsets are in bounds.
+                if mode == &UnionMode::Dense {
+                    let offsets = self.typed_buffer::<i32>(1, self.len)?;
+
+                    if type_ids
+                        .iter()
+                        .zip(offsets.iter())
+                        .any(|(&type_id, &offset)| {
+                            offset < 0 || offset as usize >= child_lens[type_id as usize].unwrap()
+                        })
+                    {
+                        return Err(ArrowError::InvalidArgumentError(
+                            "Offsets must be non-negative and within the length of the child array"
+                                .to_string(),
+                        ));
+                    }
+                }
+
                 Ok(())
             }
             DataType::Dictionary(key_type, _value_type) => {
@@ -1460,11 +1495,19 @@ impl ArrayData {
                 }
             }
             DataType::RunEndEncoded(run_ends, _values) => {
+                let len_plus_offset =
+                    checked_len_plus_offset(&self.data_type, self.len, self.offset)?;
                 let run_ends_data = self.child_data()[0].clone();
                 match run_ends.data_type() {
-                    DataType::Int16 => run_ends_data.check_run_ends::<i16>(),
-                    DataType::Int32 => run_ends_data.check_run_ends::<i32>(),
-                    DataType::Int64 => run_ends_data.check_run_ends::<i64>(),
+                    DataType::Int16 => {
+                        run_ends_data.check_run_ends::<i16>(self.len, len_plus_offset)
+                    }
+                    DataType::Int32 => {
+                        run_ends_data.check_run_ends::<i32>(self.len, len_plus_offset)
+                    }
+                    DataType::Int64 => {
+                        run_ends_data.check_run_ends::<i64>(self.len, len_plus_offset)
+                    }
                     _ => unreachable!(),
                 }
             }
@@ -1612,7 +1655,11 @@ impl ArrayData {
     }
 
     /// Validates that each value in run_ends array is positive and strictly increasing.
-    fn check_run_ends<T>(&self) -> Result<(), ArrowError>
+    fn check_run_ends<T>(
+        &self,
+        parent_len: usize,
+        parent_len_plus_offset: usize,
+    ) -> Result<(), ArrowError>
     where
         T: ArrowNativeType + TryInto<i64> + num_traits::Num + std::fmt::Display,
     {
@@ -1639,11 +1686,9 @@ impl ArrayData {
             Ok(())
         })?;
 
-        let len_plus_offset = checked_len_plus_offset(&self.data_type, self.len, self.offset)?;
-        if prev_value.as_usize() < len_plus_offset {
+        if parent_len > 0 && prev_value.as_usize() < parent_len_plus_offset {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "The offset + length of array should be less or equal to last value in the run_ends array. The last value of run_ends array is {prev_value} and offset + length of array is {}.",
-                len_plus_offset
+                "The offset + length of array should be less or equal to last value in the run_ends array. The last value of run_ends array is {prev_value} and offset + length of array is {parent_len_plus_offset}."
             )));
         }
         Ok(())
@@ -2264,8 +2309,10 @@ impl From<ArrayData> for ArrayDataBuilder {
 
 #[cfg(test)]
 mod tests {
+    use crate::transform::MutableArrayData;
+
     use super::*;
-    use arrow_schema::{Field, Fields};
+    use arrow_schema::{Field, Fields, UnionFields};
 
     // See arrow/tests/array_data_validation.rs for test of array validation
 
@@ -2329,6 +2376,29 @@ mod tests {
         assert_eq!(5, arr_data.len());
         assert_eq!(1, arr_data.child_data().len());
         assert_eq!(child_arr_data, arr_data.child_data()[0]);
+    }
+
+    #[test]
+    fn test_extend_fixed_size_list_accounts_for_parent_offset() {
+        let field = Arc::new(Field::new("item", DataType::Int32, false));
+        let child = ArrayData::builder(DataType::Int32)
+            .len(6)
+            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5]))
+            .build()
+            .unwrap();
+
+        let data = ArrayData::builder(DataType::FixedSizeList(field, 2))
+            .len(2)
+            .offset(1)
+            .add_child_data(child)
+            .build()
+            .unwrap();
+
+        let mut mutable = MutableArrayData::new(vec![&data], false, data.len());
+        mutable.extend(0, 0, data.len());
+        let output = mutable.freeze();
+
+        assert_eq!(output.child_data()[0].buffer::<i32>(0), &[2, 3, 4, 5]);
     }
 
     #[test]
@@ -2704,5 +2774,162 @@ mod tests {
         for i in 0..array.len() {
             assert!(array.is_null(i));
         }
+    }
+
+    #[test]
+    fn test_union_validate_type_ids() {
+        let dt = DataType::Union(
+            UnionFields::try_new(
+                vec![5],
+                vec![Arc::new(Field::new("a", DataType::Int32, true))],
+            )
+            .unwrap(),
+            UnionMode::Sparse,
+        );
+
+        let child = ArrayData::builder(DataType::Int32)
+            .len(2)
+            .add_buffer(make_i32_buffer(2))
+            .build()
+            .unwrap();
+
+        let err = ArrayDataBuilder::new(dt)
+            .len(2)
+            .offset(0)
+            .buffers(vec![vec![5_i8, 2].into()])
+            .child_data(vec![child])
+            .build()
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Type id values must match one of the field type ids, got 2 at index 1"
+        );
+    }
+
+    #[test]
+    fn test_union_validate_dense_offsets() {
+        let dt = DataType::Union(
+            UnionFields::try_new(
+                vec![5],
+                vec![Arc::new(Field::new("a", DataType::Int32, true))],
+            )
+            .unwrap(),
+            UnionMode::Dense,
+        );
+
+        let child = ArrayData::builder(DataType::Int32)
+            .len(2)
+            .add_buffer(make_i32_buffer(2))
+            .build()
+            .unwrap();
+
+        let err = ArrayDataBuilder::new(dt.clone())
+            .len(2)
+            // 2nd offset '10' is out of bounds
+            .buffers(vec![vec![5_i8, 5].into(), vec![0_i32, 10].into()])
+            .child_data(vec![child.clone()])
+            .build()
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Offsets must be non-negative and within the length of the child array"
+        );
+
+        let err = ArrayDataBuilder::new(dt)
+            .len(2)
+            // 2nd offset is negative
+            .buffers(vec![vec![5_i8, 5].into(), vec![0_i32, -1].into()])
+            .child_data(vec![child])
+            .build()
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Offsets must be non-negative and within the length of the child array"
+        );
+    }
+
+    /// Returns a `RunEndEncoded<Int32, Float32>` data type and run ends / values
+    /// children whose runs end at `[1, 3]`, i.e. a logical length of 3.
+    fn run_array_test_children() -> (DataType, Vec<ArrayData>) {
+        let dt = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Float32, true)),
+        );
+
+        let runs = ArrayData::builder(DataType::Int32)
+            .len(2)
+            .add_buffer(vec![1_i32, 3].into())
+            .build()
+            .unwrap();
+        let values = ArrayData::builder(DataType::Float32)
+            .len(2)
+            .add_buffer(vec![1.5_f32, 2.5].into())
+            .build()
+            .unwrap();
+
+        (dt, vec![runs, values])
+    }
+
+    #[test]
+    fn test_run_array_validates_last_run() {
+        let (dt, children) = run_array_test_children();
+
+        let err = ArrayDataBuilder::new(dt)
+            .len(4)
+            .offset(0)
+            .child_data(children)
+            .build()
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: The offset + length of array should be less or equal to last value in the run_ends array. The last value of run_ends array is 3 and offset + length of array is 4."
+        );
+    }
+
+    #[test]
+    fn test_run_array_empty_validates() {
+        let (dt, children) = run_array_test_children();
+
+        let data = ArrayDataBuilder::new(dt)
+            .len(0)
+            .offset(4)
+            .child_data(children)
+            .build()
+            .unwrap();
+        assert_eq!(data.len(), 0);
+    }
+
+    /// The parent's offset must be included when checking the last run end:
+    /// offset 2 + length 2 = 4 exceeds the last run end of 3.
+    #[test]
+    fn test_run_array_validates_last_run_with_offset() {
+        let (dt, children) = run_array_test_children();
+
+        let err = ArrayDataBuilder::new(dt)
+            .len(2)
+            .offset(2)
+            .child_data(children)
+            .build()
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: The offset + length of array should be less or equal to last value in the run_ends array. The last value of run_ends array is 3 and offset + length of array is 4."
+        );
+    }
+
+    /// A slice that stays within the last run end is valid:
+    /// offset 1 + length 2 = 3 equals the last run end of 3.
+    #[test]
+    fn test_run_array_sliced_validates() {
+        let (dt, children) = run_array_test_children();
+
+        let data = ArrayDataBuilder::new(dt)
+            .len(2)
+            .offset(1)
+            .child_data(children)
+            .build()
+            .unwrap();
+        assert_eq!(data.len(), 2);
+        assert_eq!(data.offset(), 1);
     }
 }

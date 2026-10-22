@@ -25,7 +25,7 @@ concurrency:
 on:
   push:
     branches:
-      - main
+      - 58_maintenance
   pull_request:
 
 env:
@@ -36,7 +36,7 @@ jobs:
 
   rat:
     name: Release Audit Tool (RAT)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
       - name: Setup Python
