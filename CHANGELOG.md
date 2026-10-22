@@ -41,5 +41,3 @@
 - [59_maintenance] Parquet: list the dictionary page first in page_encoding_stats by @Jefffrey in [#11699](https://github.com/apache/arrow-rs/pull/11699)
 - [59_maintenance] fix(arrow-data): check view nulls at the right index in `ArrayData` equality by @Jefffrey in [#11675](https://github.com/apache/arrow-rs/pull/11675)
 
-### Miscellaneous
-- [59_maintenance] chore: update webpki dependencies to fix cargo audit CI by @alamb in [#11793](https://github.com/apache/arrow-rs/pull/11793)

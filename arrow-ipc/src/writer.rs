@@ -2374,10 +2374,8 @@ fn write_array_data(
     let num_rows = array_data.len();
     let null_count = array_data.null_count();
     if !matches!(array_data.data_type(), DataType::Null) {
-        meta.nodes.push(crate::FieldNode::new(
-            num_rows as i64,
-            null_count as i64,
-        ));
+        meta.nodes
+            .push(crate::FieldNode::new(num_rows as i64, null_count as i64));
     } else {
         // NullArray's null_count equals to len, but ArrayData null_count is always 0.
         meta.nodes
