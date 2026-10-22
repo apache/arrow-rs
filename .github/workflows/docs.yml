@@ -62,6 +62,16 @@ jobs:
     permissions:
       contents: write
     runs-on: ubuntu-latest
+    # ci.yml keys its concurrency group on the commit SHA, so CI runs for
+    # consecutive pushes to main execute in parallel. Each deploy force-pushes
+    # the asf-site branch, and two deploys pushing at the same time race:
+    # the loser fails with "cannot lock ref 'refs/heads/asf-site'".
+    # Serialize deploys (without cancelling any of them) so every push to
+    # main publishes its docs in turn.
+    concurrency:
+      group: ${{ github.repository }}-docs-deploy
+      cancel-in-progress: false
+      queue: max
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Download crate docs
