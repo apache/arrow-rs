@@ -46,7 +46,5 @@
 - [58_maintenance] fix: finish methods in `PrimitiveDictionaryBuilder` discard type params by @Jefffrey in [#11705](https://github.com/apache/arrow-rs/pull/11705)
 
 ### Miscellaneous
-- [58_maintenance] chore: update tokio to 1.54.1 to fix cargo audit CI by @alamb in [#11821](https://github.com/apache/arrow-rs/pull/11821)
 - [58_maintenance] Upgrade legacy Thrift dependency to 0.23 by @beinan in [#11365](https://github.com/apache/arrow-rs/pull/11365)
-- [58_maintenance] chore: update webpki dependencies to fix cargo audit CI by @alamb in [#11794](https://github.com/apache/arrow-rs/pull/11794)
 
