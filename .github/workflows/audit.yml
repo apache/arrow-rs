@@ -27,7 +27,6 @@ permissions:
 jobs:
   cargo-audit:
     name: Audit
-    # Only needs the prebuilt cargo-audit binary and Cargo.lock
     runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -36,6 +35,4 @@ jobs:
         with:
           tool: cargo-audit
       - name: Run audit check
-        # ubuntu-slim has no Rust toolchain, so run the binary directly
-        # rather than as a cargo subcommand
         run: cargo-audit audit

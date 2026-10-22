@@ -34,7 +34,6 @@ permissions:
 jobs:
   changes:
     name: Select and validate CI suites
-    # Only runs python scripts
     runs-on: ubuntu-slim
     outputs:
       suites: ${{ steps.select.outputs.suites }}

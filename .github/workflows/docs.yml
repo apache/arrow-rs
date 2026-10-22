@@ -61,7 +61,6 @@ jobs:
     needs: docs
     permissions:
       contents: write
-    # Only downloads the docs artifact and pushes it to gh-pages
     runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1

@@ -30,7 +30,6 @@ env:
 jobs:
   publish:
     name: Publish
-    # Only runs `gh release create`
     runs-on: ubuntu-slim
     timeout-minutes: 5
     steps:

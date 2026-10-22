@@ -27,7 +27,6 @@ permissions:
 jobs:
   rat:
     name: Release Audit Tool (RAT)
-    # Only runs the RAT jar and a python script
     runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -36,7 +35,6 @@ jobs:
         with:
           python-version: 3.8
       - name: Setup Java
-        # ubuntu-slim does not ship a JDK, which run-rat.sh needs
         uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad  # v6.1.0
         with:
           distribution: temurin
@@ -59,7 +57,6 @@ jobs:
           git diff --exit-code
   typos:
     name: Spell Check with Typos
-    # Only needs the prebuilt typos binary
     runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
