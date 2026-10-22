@@ -76,7 +76,8 @@ quickly and are easier to understand and review.
 ### Pull Requests from Forks
 
 To reduce load on ASF's shared runners, pull requests from forks to `main`
-run tests in the fork and lightweight checks upstream.
+run the CPU intensive tests on your fork (using the forks github runners). To 
+enable actions in your fork:
 
 1. Open the **Actions** tab in your fork and enable workflows before pushing.
 2. Sync your fork and rebase your branch onto upstream `main` to include the
