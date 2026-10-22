@@ -187,7 +187,7 @@ jobs:
   # test FFI against the C-Data interface exposed by pyarrow
   pyarrow-integration-test:
     name: Pyarrow C Data Interface
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         rust: [stable]
