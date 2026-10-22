@@ -19,7 +19,6 @@
 name = "arrow-array"
 version = { workspace = true }
 description = "Array abstractions for Apache Arrow"
-homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
 license = "Apache-2.0 AND MIT"
@@ -55,7 +54,7 @@ arrow-buffer = { workspace = true }
 arrow-schema = { workspace = true }
 arrow-data = { workspace = true }
 chrono = { workspace = true }
-chrono-tz = { version = "0.10", optional = true }
+chrono-tz = { version = "0.10.3", optional = true }
 futures = { version = "0.3", optional = true }
 num-complex = { version = "0.4.6", default-features = false, features = ["std"] }
 num-integer = { version = "0.1.46", default-features = false, features = ["std"] }
@@ -69,7 +68,7 @@ all-features = true
 [features]
 async = ["dep:futures"]
 ffi = ["arrow-schema/ffi", "arrow-data/ffi", "dep:libc"]
-force_validate = []
+force_validate = ["arrow-data/force_validate"]
 # Enable memory tracking support
 pool = ["arrow-buffer/pool", "arrow-data/pool"]
 
@@ -107,6 +106,10 @@ harness = false
 
 [[bench]]
 name = "boolean_array"
+harness = false
+
+[[bench]]
+name = "primitive_array"
 harness = false
 
 [lints]

@@ -36,6 +36,13 @@
 //!    `flight-sql` feature of this crate to be activated.
 //!
 //! [Flight SQL]: https://arrow.apache.org/docs/format/FlightSql.html
+//!
+//! # Platform Support
+//!
+//! Only little-endian platforms are officially supported and tested in CI.
+//! Big-endian platforms are not tested in CI and may not work correctly.
+//! Fixes for big-endian platforms are welcome and handled on a best-effort basis,
+//! but compatibility is not guaranteed.
 
 #![doc(
     html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
@@ -44,8 +51,6 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![allow(rustdoc::invalid_html_tags)]
 #![warn(missing_docs)]
-// The unused_crate_dependencies lint does not work well for crates defining additional examples/bin targets
-#![allow(unused_crate_dependencies)]
 
 use arrow_ipc::{convert, writer, writer::EncodedData, writer::IpcWriteOptions};
 use arrow_schema::{ArrowError, Schema};

@@ -18,16 +18,9 @@
 # workspace wide tests
 name: rust
 
-concurrency:
-  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
-  cancel-in-progress: true
-
-# trigger for all PRs and changes to main
+# Triggered by ci.yml, which owns event routing and concurrency.
 on:
-  push:
-    branches:
-      - main
-  pull_request:
+  workflow_call:
 
 permissions:
   contents: read
@@ -99,16 +92,32 @@ jobs:
         uses: ./.github/actions/setup-builder
       - name: Setup rustfmt
         run: rustup component add rustfmt
-      - name: Format arrow
+      - name: Format workspace
         run: cargo fmt --all -- --check
-      - name: Format parquet
-        # Many modules in parquet are skipped, so check parquet separately
-        # https://github.com/apache/arrow-rs/issues/6179
-        working-directory: parquet
-        run: |
-          # if this fails, run this from the parquet directory:
-          # cargo fmt -p parquet -- --config skip_children=true `find . -name "*.rs" \! -name format.rs`
-          cargo fmt -p parquet -- --check --config skip_children=true `find . -name "*.rs" \! -name format.rs`
+
+  unused-dependencies:
+    name: Check unused dependencies
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+      - name: Install cargo-shear
+        id: install-shear
+        uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7  # v2.87.23
+        with:
+          tool: cargo-shear
+      - name: Check workspace dependencies
+        run: cargo shear --deny-warnings
+      - name: Check arrow-pyarrow-testing dependencies
+        # Report excluded crates even when an earlier scan finds issues.
+        if: ${{ !cancelled() && steps.install-shear.outcome == 'success' }}
+        run: cargo shear --deny-warnings arrow-pyarrow-testing
+      - name: Check arrow-pyarrow-integration-testing dependencies
+        if: ${{ !cancelled() && steps.install-shear.outcome == 'success' }}
+        run: cargo shear --deny-warnings arrow-pyarrow-integration-testing
 
   msrv:
     name: Verify MSRV (Minimum Supported Rust Version)
@@ -120,7 +129,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv
-        uses: taiki-e/install-action@288e746965032cfcc232e09af2daf5f23c14d780  # v2.86.1
+        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8  # v2.87.28
         with:
           tool: cargo-msrv
       - name: Check all packages

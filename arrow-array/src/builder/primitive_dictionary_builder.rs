@@ -231,9 +231,13 @@ where
 
         Ok(Self {
             map,
-            keys_builder: new_keys
-                .into_builder()
-                .expect("underlying buffer has no references"),
+            keys_builder: new_keys.into_builder().map_err(|_| {
+                ArrowError::ComputeError(
+                    "Internal Error: the keys just derived from the source builder are \
+                     unexpectedly shared, so they cannot be reused as a builder"
+                        .to_string(),
+                )
+            })?,
             values_builder,
         })
     }
@@ -450,6 +454,7 @@ where
             .data_type(data_type)
             .child_data(vec![values.into_data()]);
 
+        // SAFETY: builder is constructed from valid key/value arrays produced by the builder
         DictionaryArray::from(unsafe { builder.build_unchecked() })
     }
 
@@ -458,7 +463,8 @@ where
         let values = self.values_builder.finish_cloned();
         let keys = self.keys_builder.finish_cloned();
 
-        let data_type = DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(V::DATA_TYPE));
+        let data_type =
+            DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(values.data_type().clone()));
 
         let builder = keys
             .into_data()
@@ -466,6 +472,7 @@ where
             .data_type(data_type)
             .child_data(vec![values.into_data()]);
 
+        // SAFETY: builder is constructed from valid key/value arrays produced by the builder
         DictionaryArray::from(unsafe { builder.build_unchecked() })
     }
 
@@ -490,7 +497,8 @@ where
         let values = self.values_builder.finish_cloned();
         let keys = self.keys_builder.finish();
 
-        let data_type = DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(V::DATA_TYPE));
+        let data_type =
+            DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(values.data_type().clone()));
 
         let builder = keys
             .into_data()
@@ -498,6 +506,7 @@ where
             .data_type(data_type)
             .child_data(vec![values.into_data()]);
 
+        // SAFETY: builder is constructed from valid key/value arrays produced by the builder
         DictionaryArray::from(unsafe { builder.build_unchecked() })
     }
 
@@ -601,15 +610,16 @@ mod tests {
                 keys_builder,
                 values_builder,
             );
+        let expected = DataType::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(DataType::Decimal128(1, 2)),
+        );
+        assert_eq!(builder.finish_cloned().data_type(), &expected);
+        assert_eq!(builder.finish_preserve_values().data_type(), &expected);
+
         let dict_array = builder.finish();
         assert_eq!(dict_array.value_type(), DataType::Decimal128(1, 2));
-        assert_eq!(
-            dict_array.data_type(),
-            &DataType::Dictionary(
-                Box::new(DataType::Int32),
-                Box::new(DataType::Decimal128(1, 2)),
-            )
-        );
+        assert_eq!(dict_array.data_type(), &expected);
     }
 
     #[test]

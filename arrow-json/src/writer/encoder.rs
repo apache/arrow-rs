@@ -139,12 +139,24 @@ impl EncoderOptions {
     }
 }
 
-/// A trait to create custom encoders for specific data types.
+/// Creates custom encoders for specific data types when writing JSON data.
 ///
-/// This allows overriding the default encoders for specific data types,
-/// or adding new encoders for custom data types.
+/// This trait allows customizing JSON encoding for specific data types,
+/// or adding new encoders for unsupported or custom data types.
 ///
-/// # Examples
+/// You can register an implementation of this trait using
+/// [`WriterBuilder::with_encoder_factory`].
+///
+/// [`WriterBuilder::with_encoder_factory`]: crate::writer::WriterBuilder::with_encoder_factory
+///
+/// # Example: Encode a `BinaryArray` as an array of integers
+///
+/// This example encodes each `BinaryArray` value as an array of integers. For
+/// example, the bytes `b"abc"` would be encoded as `[97, 98, 99]`. See the
+/// example on [`DecoderFactory`] for how to decode this back into a
+/// `BinaryArray`.
+///
+/// [`DecoderFactory`]: crate::DecoderFactory
 ///
 /// ```
 /// use std::io::Write;
@@ -158,6 +170,8 @@ impl EncoderOptions {
 /// use serde_json::json;
 /// use serde_json::Value;
 ///
+/// /// Encoder for `BinaryArray` that encodes the bytes as an array of integers.
+/// /// For example, the bytes `b"abc"` would be encoded as `[97, 98, 99]`.
 /// struct IntArrayBinaryEncoder<B> {
 ///     array: B,
 /// }
@@ -179,10 +193,11 @@ impl EncoderOptions {
 ///     }
 /// }
 ///
+/// /// Factory that creates an `IntArrayBinaryEncoder` for `BinaryArray` types.
 /// #[derive(Debug)]
-/// struct IntArayBinaryEncoderFactory;
+/// struct IntArrayBinaryEncoderFactory;
 ///
-/// impl EncoderFactory for IntArayBinaryEncoderFactory {
+/// impl EncoderFactory for IntArrayBinaryEncoderFactory {
 ///     fn make_default_encoder<'a>(
 ///         &self,
 ///         _field: &'a FieldRef,
@@ -202,6 +217,9 @@ impl EncoderOptions {
 ///     }
 /// }
 ///
+/// // The input has two columns:
+/// // bytes: [b"a", null, b"b"]
+/// // float: [1.0, 2.3, null]
 /// let binary_array = BinaryArray::from_iter([Some(b"a".as_slice()), None, Some(b"b".as_slice())]);
 /// let float_array = Float64Array::from(vec![Some(1.0), Some(2.3), None]);
 /// let fields = vec![
@@ -217,10 +235,12 @@ impl EncoderOptions {
 /// )
 /// .unwrap();
 ///
+/// // write the record batch to JSON using the custom encoder factory
+/// // and then reparse into serde_json::Value to verify the output
 /// let json_value: Value = {
 ///     let mut buf = Vec::new();
 ///     let mut writer = WriterBuilder::new()
-///         .with_encoder_factory(Arc::new(IntArayBinaryEncoderFactory))
+///         .with_encoder_factory(Arc::new(IntArrayBinaryEncoderFactory))
 ///         .build::<_, JsonArray>(&mut buf);
 ///     writer.write_batches(&[&batch]).unwrap();
 ///     writer.finish().unwrap();

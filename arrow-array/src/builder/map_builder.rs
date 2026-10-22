@@ -286,6 +286,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
             .add_child_data(struct_array.into_data())
             .nulls(nulls);
 
+        // SAFETY: builder is constructed from valid offset buffer and struct child array maintained by the builder
         let array_data = unsafe { array_data.build_unchecked() };
 
         MapArray::from(array_data)

@@ -32,6 +32,26 @@ use std::sync::Arc;
 /// [`MapArray`] is physically a [`ListArray`] of key values pairs stored as an `entries`
 /// [`StructArray`] with 2 child fields.
 ///
+/// # Slicing
+///
+/// Slicing a `MapArray` via [`Self::slice`] creates a new `MapArray` without
+/// copying any data. The sliced array shares the same `entries` child array and
+/// only narrows its offsets and validity, which means:
+///
+/// 1. [`Self::entries`], [`Self::keys`] and [`Self::values`] are unchanged and
+///    may contain entries both before and after the slice.
+/// 2. [`Self::offsets`] do not necessarily start at `0`, nor cover all entries.
+///
+/// For example, given a `MapArray` holding the three maps `{a: 1, b: 2}`,
+/// `{c: 3}` and `{d: 4, e: 5}`, the `entries` array holds five key-value pairs
+/// and the offsets are `[0, 2, 3, 5]`. Calling `slice(1, 1)` yields a `MapArray`
+/// holding the single map `{c: 3}`, but [`Self::keys`] still returns all five
+/// keys `a, b, c, d, e` and [`Self::offsets`] is `[2, 3]`. Use the offsets, or
+/// [`Self::value`], to find the entries belonging to each map.
+///
+/// The same applies to any `MapArray` constructed with offsets that do not start
+/// at `0` or do not extend to the end of `entries`.
+///
 /// # See also
 /// * [`MapBuilder`](crate::builder::MapBuilder) for how to construct a [`MapArray`]
 /// * [`Self::from_vec_of_maps`] for ergonomically creating maps for testing
@@ -70,7 +90,7 @@ impl MapArray {
         ordered: bool,
     ) -> Result<Self, ArrowError> {
         let len = offsets.len() - 1; // Offsets guaranteed to not be empty
-        let end_offset = offsets.last().unwrap().as_usize();
+        let end_offset = offsets.last().as_usize();
         // don't need to check other values of `offsets` because they are checked
         // during construction of `OffsetBuffer`
         if end_offset > entries.len() {
@@ -210,22 +230,40 @@ impl MapArray {
     ///
     /// Unlike [`Self::value_offsets`] this returns the [`OffsetBuffer`]
     /// allowing for zero-copy cloning
+    ///
+    /// Note: The offsets may not start at `0` and may not cover all entries in
+    /// [`Self::entries`]. This can happen when the map array was sliced via
+    /// [`Self::slice`]. See documentation for [`Self`] for more details.
     #[inline]
     pub fn offsets(&self) -> &OffsetBuffer<i32> {
         &self.value_offsets
     }
 
-    /// Returns a reference to the keys of this map
+    /// Returns a reference to all keys in the entries backing this map
+    ///
+    /// Note: The map array may not refer to all keys in the returned array, for
+    /// example after slicing via [`Self::slice`]. Use [`Self::offsets`] to find
+    /// the keys for each map; those offsets index into the returned array and
+    /// may not start at `0`. See documentation for [`Self`] for more details.
     pub fn keys(&self) -> &ArrayRef {
         self.entries.column(0)
     }
 
-    /// Returns a reference to the values of this map
+    /// Returns a reference to all values in the entries backing this map
+    ///
+    /// Note: The map array may not refer to all values in the returned array, for
+    /// example after slicing via [`Self::slice`]. Use [`Self::offsets`] to find
+    /// the values for each map; those offsets index into the returned array and
+    /// may not start at `0`. See documentation for [`Self`] for more details.
     pub fn values(&self) -> &ArrayRef {
         self.entries.column(1)
     }
 
     /// Returns a reference to the [`StructArray`] entries of this map
+    ///
+    /// Note: The map array may not refer to all entries in the returned array,
+    /// for example after slicing via [`Self::slice`]. See documentation for
+    /// [`Self`] for more details.
     pub fn entries(&self) -> &StructArray {
         &self.entries
     }
@@ -259,7 +297,7 @@ impl MapArray {
         let end = *unsafe { self.value_offsets().get_unchecked(i + 1) };
         let start = *unsafe { self.value_offsets().get_unchecked(i) };
         self.entries
-            .slice(start.to_usize().unwrap(), (end - start).to_usize().unwrap())
+            .slice(start.as_usize(), (end - start).as_usize())
     }
 
     /// Returns ith value of this map array.
@@ -278,6 +316,8 @@ impl MapArray {
     }
 
     /// Returns the offset values in the offsets buffer
+    ///
+    /// See [`Self::offsets`] for more details.
     #[inline]
     pub fn value_offsets(&self) -> &[i32] {
         &self.value_offsets
@@ -617,8 +657,8 @@ impl ArrayAccessor for &MapArray {
 impl std::fmt::Debug for MapArray {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "MapArray\n[\n")?;
-        print_long_array(self, f, |array, index, f| {
-            std::fmt::Debug::fmt(&array.value(index), f)
+        print_long_array(self, f, &mut |index, f| {
+            std::fmt::Debug::fmt(&self.value(index), f)
         })?;
         write!(f, "]")
     }

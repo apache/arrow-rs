@@ -111,6 +111,13 @@ arrow-rs and parquet are built and tested with stable Rust, and will keep a roll
 
 Note: If a Rust hotfix is released for the current MSRV, the MSRV will be updated to the specific minor version that includes all applicable hotfixes preceding other policies.
 
+### Platform Support
+
+Only little-endian platforms are officially supported and tested in CI.
+Big-endian platforms are not tested in CI and may not work correctly.
+Fixes for big-endian platforms are welcome and handled on a best-effort basis,
+but compatibility is not guaranteed.
+
 ### Guidelines for `panic` vs `Result`
 
 In general, use panics for bad states that are unreachable, unrecoverable or harmful.

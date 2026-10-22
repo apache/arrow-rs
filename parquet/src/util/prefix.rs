@@ -40,7 +40,12 @@ pub(crate) fn common_prefix_length(a: &[u8], b: &[u8]) -> usize {
     let (a, b) = (&a[..n], &b[..n]);
 
     let mut matched = 0;
-    for (x, y) in a.chunks_exact(BLOCK).zip(b.chunks_exact(BLOCK)) {
+    for (x, y) in a
+        .as_chunks::<BLOCK>()
+        .0
+        .iter()
+        .zip(b.as_chunks::<BLOCK>().0)
+    {
         if x != y {
             break;
         }
@@ -83,6 +88,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_common_prefix_length_around_block_boundaries() {
         // Mismatches placed on, either side of, and well past the 32-byte
         // block boundary the scan steps in.
@@ -105,6 +111,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_common_prefix_length_unequal_lengths() {
         // Result is capped by the shorter value even when the longer one
         // continues to match, across block boundaries.

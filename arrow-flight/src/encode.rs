@@ -22,7 +22,7 @@ use crate::{FlightData, FlightDescriptor, SchemaAsIpc, error::Result};
 use arrow_array::{Array, ArrayRef, RecordBatch, RecordBatchOptions, UnionArray};
 use arrow_ipc::writer::{DictionaryTracker, IpcDataGenerator, IpcWriteContext, IpcWriteOptions};
 
-use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef, UnionMode};
+use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, Schema, SchemaRef, UnionMode};
 use bytes::Bytes;
 use futures::{Stream, StreamExt, ready, stream::BoxStream};
 
@@ -38,7 +38,11 @@ use futures::{Stream, StreamExt, ready, stream::BoxStream};
 /// several have already been successfully produced.
 ///
 /// # Caveats
-/// 1. When [`DictionaryHandling`] is [`DictionaryHandling::Hydrate`],
+///
+/// 1. All input record batches must have the same schema. The first batch sets the
+///    expected schema unless [`FlightDataEncoderBuilder::with_schema`] supplies it.
+///    A batch with a different schema produces an error and ends the stream.
+/// 2. When [`DictionaryHandling`] is [`DictionaryHandling::Hydrate`],
 ///    [`DictionaryArray`]s are converted to their underlying types prior to
 ///    transport.
 ///    When [`DictionaryHandling`] is [`DictionaryHandling::Resend`], Dictionary [`FlightData`] is sent with every
@@ -223,6 +227,7 @@ impl FlightDataEncoderBuilder {
     /// is not specified, an encoded Schema message will be sent when
     /// the first [`RecordBatch`], if any, is encoded. Some clients
     /// expect a Schema message even if there is no data sent.
+    /// Every input batch must match this schema.
     pub fn with_schema(mut self, schema: SchemaRef) -> Self {
         self.schema = Some(schema);
         self
@@ -269,6 +274,8 @@ impl FlightDataEncoderBuilder {
 pub struct FlightDataEncoder {
     /// Input stream
     inner: BoxStream<'static, Result<RecordBatch>>,
+    /// Schema of input batches before dictionary handling
+    input_schema: Option<SchemaRef>,
     /// schema, set after the first batch
     schema: Option<SchemaRef>,
     /// Target maximum size of flight data
@@ -301,6 +308,7 @@ impl FlightDataEncoder {
     ) -> Self {
         let mut encoder = Self {
             inner,
+            input_schema: schema.clone(),
             schema: None,
             max_flight_data_size,
             encoder: FlightIpcEncoder::new(
@@ -362,6 +370,17 @@ impl FlightDataEncoder {
 
     /// Encodes batch into one or more `FlightData` messages in self.queue
     fn encode_batch(&mut self, batch: RecordBatch) -> Result<()> {
+        match &self.input_schema {
+            Some(expected) if expected.as_ref() != batch.schema_ref().as_ref() => {
+                return Err(ArrowError::SchemaError(
+                    "Record batch schema does not match input schema".to_string(),
+                )
+                .into());
+            }
+            None => self.input_schema = Some(batch.schema()),
+            _ => {}
+        }
+
         let schema = match &self.schema {
             Some(schema) => schema.clone(),
             // encode the schema if this is the first time we have seen it
@@ -2025,7 +2044,7 @@ mod tests {
         ])
         .unwrap();
 
-        verify_encoded_split(batch, 120).await;
+        verify_encoded_split(batch, 88).await;
     }
 
     #[tokio::test]
@@ -2036,7 +2055,7 @@ mod tests {
 
         // overage is much higher than ideal
         // https://github.com/apache/arrow-rs/issues/3478
-        verify_encoded_split(batch, 4312).await;
+        verify_encoded_split(batch, 4304).await;
     }
 
     #[tokio::test]
@@ -2072,7 +2091,7 @@ mod tests {
         // 5k over limit (which is 2x larger than limit of 5k)
         // overage is much higher than ideal
         // https://github.com/apache/arrow-rs/issues/3478
-        verify_encoded_split(batch, 5808).await;
+        verify_encoded_split(batch, 5784).await;
     }
 
     #[tokio::test]
@@ -2102,7 +2121,7 @@ mod tests {
 
         // overage is much higher than ideal
         // https://github.com/apache/arrow-rs/issues/3478
-        verify_encoded_split(batch, 3336).await;
+        verify_encoded_split(batch, 3328).await;
     }
 
     #[tokio::test]
@@ -2116,7 +2135,7 @@ mod tests {
 
         // overage is much higher than ideal
         // https://github.com/apache/arrow-rs/issues/3478
-        verify_encoded_split(batch, 5288).await;
+        verify_encoded_split(batch, 5280).await;
     }
 
     #[tokio::test]
@@ -2141,7 +2160,7 @@ mod tests {
 
         // overage is much higher than ideal
         // https://github.com/apache/arrow-rs/issues/3478
-        verify_encoded_split(batch, 4136).await;
+        verify_encoded_split(batch, 4112).await;
     }
 
     /// Return size, in memory of flight data
@@ -2208,7 +2227,7 @@ mod tests {
             }
         }
 
-        // ensure that the specified overage is exactly the maxmium so
+        // ensure that the specified overage is exactly the maximum so
         // that when the splitting logic improves, the tests must be
         // updated to reflect the better logic
         assert_eq!(
