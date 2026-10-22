@@ -27,7 +27,7 @@ concurrency:
 on:
   push:
     branches:
-      - main
+      - 59_maintenance
   pull_request:
     paths:
       - rust-toolchain.toml
@@ -151,7 +151,7 @@ jobs:
 
   pyspark-integration-test:
     name: PySpark Integration Test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         rust: [ stable ]
