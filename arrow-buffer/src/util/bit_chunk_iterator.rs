@@ -17,6 +17,8 @@
 
 //! Types for iterating over bitmasks in 64-bit chunks
 
+#[cfg(target_arch = "aarch64")]
+use crate::ToByteSlice;
 use crate::util::bit_util::ceil;
 use std::fmt::Debug;
 
@@ -168,8 +170,41 @@ impl<'a> UnalignedBitChunk<'a> {
 
     /// Counts the number of ones
     pub fn count_ones(&self) -> usize {
-        self.iter().map(|x| x.count_ones() as usize).sum()
+        let edges = self.prefix.into_iter().chain(self.suffix);
+        edges.map(|x| x.count_ones() as usize).sum::<usize>() + count_ones_words(self.chunks)
     }
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+fn count_ones_words(words: &[u64]) -> usize {
+    words.iter().map(|x| x.count_ones() as usize).sum()
+}
+
+/// Summing four byte popcounts in `u8` lanes before widening lets LLVM emit one
+/// widening per 64 bytes. A `u64::count_ones` sum widens every 16 bytes. On x86
+/// the `u64` sum measured faster (#11776), so this is only used on aarch64.
+#[cfg(target_arch = "aarch64")]
+fn count_ones_words(words: &[u64]) -> usize {
+    let (chunks, rem) = words.to_byte_slice().as_chunks::<64>();
+    let mut total = 0;
+    // `acc` counts in u16 lanes so that one widening per chunk suffices. Each lane
+    // gains at most 32 (four bytes of eight bits) per chunk, so add the lanes into
+    // `total` and reset them before they can overflow.
+    const CHUNKS_PER_FLUSH: usize = (u16::MAX / 32) as usize;
+    for block in chunks.chunks(CHUNKS_PER_FLUSH) {
+        let mut acc = [0u16; 16];
+        for c in block {
+            for i in 0..16 {
+                let s = c[i].count_ones() as u8
+                    + c[16 + i].count_ones() as u8
+                    + c[32 + i].count_ones() as u8
+                    + c[48 + i].count_ones() as u8;
+                acc[i] += s as u16;
+            }
+        }
+        total += acc.iter().map(|&a| a as usize).sum::<usize>();
+    }
+    total + rem.iter().map(|b| b.count_ones() as usize).sum::<usize>()
 }
 
 impl<'a> IntoIterator for &UnalignedBitChunk<'a> {
@@ -464,6 +499,7 @@ mod tests {
 
     use crate::buffer::Buffer;
     use crate::util::bit_chunk_iterator::UnalignedBitChunk;
+    use crate::util::bit_util::get_bit;
 
     #[test]
     fn test_iter_aligned() {
@@ -820,6 +856,33 @@ mod tests {
         assert!(unaligned.chunks().is_empty());
         assert_eq!(unaligned.lead_padding(), 1);
         assert_eq!(unaligned.trailing_padding(), 62);
+    }
+
+    #[test]
+    fn test_unaligned_bit_chunk_count_ones() {
+        // Sizes in bytes around the 64-byte chunk and the 2047-chunk flush. All ones
+        // gives each u16 lane its maximum gain per chunk.
+        let sizes = [
+            0, 1, 7, 8, 63, 64, 65, 72, 136, 131_008, 131_072, 131_136, 131_207,
+        ];
+        for size in sizes {
+            for byte in [0xFF_u8, 0xA5, 0x00] {
+                let buffer = Buffer::from(vec![byte; size]);
+                let bits = size * 8;
+                for offset in [0, 3.min(bits), 64.min(bits)] {
+                    let len = bits - offset;
+                    let unaligned = UnalignedBitChunk::new(buffer.as_slice(), offset, len);
+                    let expected = (offset..bits)
+                        .filter(|i| get_bit(buffer.as_slice(), *i))
+                        .count();
+                    assert_eq!(
+                        unaligned.count_ones(),
+                        expected,
+                        "{size} {byte:#x} {offset}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
