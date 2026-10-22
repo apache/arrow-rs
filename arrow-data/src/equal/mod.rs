@@ -58,6 +58,9 @@ use variable_size::variable_sized_equal;
 
 /// Compares the values of two [ArrayData] starting at `lhs_start` and `rhs_start` respectively
 /// for `len` slots.
+///
+/// Assumes the null masks of the two ranges are already known to be equal. To compare
+/// ranges of child data, use [`equal_range`], which also compares the null masks.
 #[inline]
 fn equal_values(
     lhs: &ArrayData,
