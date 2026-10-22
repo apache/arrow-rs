@@ -20,15 +20,22 @@
 //! See the module level documentation for the
 //! [`reader`] and [`writer`] for usage examples.
 //!
-//! # Binary Data uses `Base16` Encoding
+//! # Binary Data Encoding
 //!
 //! As per [RFC7159] JSON cannot encode arbitrary binary data. This crate works around that
 //! limitation by encoding/decoding binary data as a [hexadecimal] string (i.e.
 //! [`Base16` encoding]).
 //!
 //! Note that `Base16` only has 50% space efficiency (i.e., the encoded data is twice as large
-//! as the original). If that is an issue, we recommend to convert binary data to/from a different
-//! encoding format such as `Base64` instead. See the following example for details.
+//! as the original). If that is an issue, there are two alternatives:
+//!
+//! 1. Provide a custom encoder and/or decoder. See the [Customizing the encoder] section of the
+//!    writer documentation and the [Customizing the decoder] section of the reader documentation.
+//! 2. Convert binary data to/from a different encoding format such as `Base64` before
+//!    writing / after reading, as shown in the following example.
+//!
+//! [Customizing the encoder]: writer#customizing-the-encoder
+//! [Customizing the decoder]: reader#customizing-the-decoder
 //!
 //! ## `Base64` Encoding Example
 //!
@@ -74,6 +81,13 @@
 //! [hexadecimal]: https://en.wikipedia.org/wiki/Hexadecimal
 //! [`Base16` encoding]: https://en.wikipedia.org/wiki/Base16#Base16
 //! [`Base64`]: https://en.wikipedia.org/wiki/Base64
+//!
+//! # Platform Support
+//!
+//! Only little-endian platforms are officially supported and tested in CI.
+//! Big-endian platforms are not tested in CI and may not work correctly.
+//! Fixes for big-endian platforms are welcome and handled on a best-effort basis,
+//! but compatibility is not guaranteed.
 
 #![doc(
     html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
@@ -86,7 +100,9 @@
 pub mod reader;
 pub mod writer;
 
-pub use self::reader::{Reader, ReaderBuilder};
+pub use self::reader::{
+    ArrayDecoder, DecoderContext, DecoderFactory, Reader, ReaderBuilder, Tape, TapeElement,
+};
 pub use self::writer::{
     ArrayWriter, Encoder, EncoderFactory, EncoderOptions, LineDelimitedWriter, Writer,
     WriterBuilder,
@@ -282,7 +298,7 @@ mod tests {
         assert!(str::from_utf8(not_utf8).is_err());
 
         let values: &[Option<&[u8]>] = &[
-            Some(b"Ned Flanders" as &[u8]),
+            Some(b"Bob Thompson" as &[u8]),
             None,
             Some(b"Troy McClure" as &[u8]),
             Some(not_utf8),

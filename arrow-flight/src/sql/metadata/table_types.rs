@@ -19,12 +19,11 @@
 //!
 //! [`CommandGetTableTypes`]: crate::sql::CommandGetTableTypes
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use arrow_array::{ArrayRef, RecordBatch, builder::StringBuilder};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use arrow_select::take::take;
-use once_cell::sync::Lazy;
 
 use crate::error::*;
 use crate::sql::CommandGetTableTypes;
@@ -101,7 +100,7 @@ fn get_table_types_schema() -> SchemaRef {
 }
 
 /// The schema for [`CommandGetTableTypes`].
-static GET_TABLE_TYPES_SCHEMA: Lazy<SchemaRef> = Lazy::new(|| {
+static GET_TABLE_TYPES_SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
     Arc::new(Schema::new(vec![Field::new(
         "table_type",
         DataType::Utf8,

@@ -1060,11 +1060,16 @@ unsafe fn get_offsets_from_buffer<O: ArrowNativeType>(
 }
 
 /// Helper function for printing potentially long arrays.
-fn print_long_array<A, F>(array: &A, f: &mut std::fmt::Formatter, print_item: F) -> std::fmt::Result
-where
-    A: Array,
-    F: Fn(&A, usize, &mut std::fmt::Formatter) -> std::fmt::Result,
-{
+///
+/// Note this function is deliberately not generic over the array or closure
+/// type: it is called from `Debug` impls that are instantiated for many
+/// concrete array types, and using dynamic dispatch here avoids duplicating
+/// this function's code in each of those instantiations
+fn print_long_array(
+    array: &dyn Array,
+    f: &mut std::fmt::Formatter,
+    print_item: &mut dyn FnMut(usize, &mut std::fmt::Formatter) -> std::fmt::Result,
+) -> std::fmt::Result {
     let head = std::cmp::min(10, array.len());
 
     for i in 0..head {
@@ -1072,7 +1077,7 @@ where
             writeln!(f, "  null,")?;
         } else {
             write!(f, "  ")?;
-            print_item(array, i, f)?;
+            print_item(i, f)?;
             writeln!(f, ",")?;
         }
     }
@@ -1088,7 +1093,7 @@ where
                 writeln!(f, "  null,")?;
             } else {
                 write!(f, "  ")?;
-                print_item(array, i, f)?;
+                print_item(i, f)?;
                 writeln!(f, ",")?;
             }
         }
@@ -1266,8 +1271,12 @@ mod tests {
     fn test_null_runs() {
         for r in [DataType::Int16, DataType::Int32, DataType::Int64] {
             let data_type = DataType::RunEndEncoded(
-                Arc::new(Field::new("run_ends", r, false)),
-                Arc::new(Field::new("values", DataType::Utf8, true)),
+                Arc::new(Field::new(Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME, r, false)),
+                Arc::new(Field::new(
+                    Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                    DataType::Utf8,
+                    true,
+                )),
             );
 
             let array = new_null_array(&data_type, 4);

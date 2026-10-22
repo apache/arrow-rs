@@ -18,7 +18,6 @@
 //! Defines sort kernel for `ArrayRef`
 
 use crate::ord::{DynComparator, make_comparator};
-use arrow_array::builder::BufferBuilder;
 use arrow_array::cast::*;
 use arrow_array::types::*;
 use arrow_array::*;
@@ -722,14 +721,14 @@ fn sort_run_downcasted<R: RunEndIndexType>(
 
     let run_ends = run_array.run_ends();
 
-    let mut new_run_ends_builder = BufferBuilder::<R::Native>::new(run_ends.len());
+    let mut new_run_ends = Vec::with_capacity(run_ends.len());
     let mut new_run_end: usize = 0;
     let mut new_physical_len: usize = 0;
 
     let consume_runs = |run_length, _| {
         new_run_end += run_length;
         new_physical_len += 1;
-        new_run_ends_builder.append(R::Native::from_usize(new_run_end).unwrap());
+        new_run_ends.push(R::Native::from_usize(new_run_end).unwrap());
     };
 
     let (values_indices, run_values) = sort_run_inner(run_array, options, output_len, consume_runs);
@@ -739,7 +738,7 @@ fn sort_run_downcasted<R: RunEndIndexType>(
         // The function builds a valid run_ends array and hence need not be validated.
         ArrayDataBuilder::new(R::DATA_TYPE)
             .len(new_physical_len)
-            .add_buffer(new_run_ends_builder.finish())
+            .add_buffer(new_run_ends.into())
             .build_unchecked()
     };
 
@@ -934,6 +933,42 @@ pub fn lexsort(columns: &[SortColumn], limit: Option<usize>) -> Result<Vec<Array
 
 /// Sort elements lexicographically from a list of `ArrayRef` into an unsigned integer
 /// (`UInt32Array`) of indices.
+///
+/// # Example
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_array::{ArrayRef, UInt32Array, Int32Array, RecordBatch, StringArray};
+/// # use arrow_ord::sort::{lexsort_to_indices, SortColumn};
+/// # use arrow_select::take::take_record_batch;
+/// // Two columns (a, b). Values (2,x), (1, z), (1(a))
+/// let batch = RecordBatch::try_from_iter(vec![
+///     ("a", Arc::new(Int32Array::from(vec![2, 1, 1])) as ArrayRef),
+///     ("b", Arc::new(StringArray::from(vec!["x", "z", "a"])) as ArrayRef),
+/// ])
+/// .unwrap();
+///
+/// // Configure sort by (a, b)
+/// let sort_columns = vec![
+///     SortColumn {
+///         values: batch.column(0).clone(),
+///         options: None,
+///     },
+///     SortColumn {
+///         values: batch.column(1).clone(),
+///         options: None,
+///     },
+/// ];
+///
+/// // indices of the rows of (a,b), in lexicographic order
+/// let indices = lexsort_to_indices(&sort_columns, None).unwrap();
+/// assert_eq!(&indices, &UInt32Array::from(vec![2, 1, 0]));
+/// // Create new sorted RecordBatch by copying values at indices
+/// let sorted = take_record_batch(&batch, &indices).unwrap();
+///
+/// assert_eq!(sorted.column(0).as_ref(), &Int32Array::from(vec![1, 1, 2]));
+/// assert_eq!(sorted.column(1).as_ref(), &StringArray::from(vec!["a", "z", "x"]));
+/// ```
 ///
 /// Note: for multi-column sorts without a limit, using the [row format](https://docs.rs/arrow-row/latest/arrow_row/)
 /// may be significantly faster

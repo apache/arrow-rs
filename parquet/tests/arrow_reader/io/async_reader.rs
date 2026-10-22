@@ -328,8 +328,7 @@ async fn async_builder(
             .as_ref()
             .clone()
             .into_builder()
-            .set_column_index(None)
-            .set_offset_index(None)
+            .set_page_index(None)
             .build();
         Arc::new(metadata)
     };
@@ -392,7 +391,7 @@ impl AsyncFileReader for RecordingAsyncFileReader {
 
     fn get_byte_ranges(&mut self, ranges: Vec<Range<u64>>) -> BoxFuture<'_, Result<Vec<Bytes>>> {
         let ops = Arc::clone(&self.ops);
-        let datas = ranges
+        let data_ranges = ranges
             .iter()
             .map(|range| {
                 self.bytes
@@ -411,7 +410,7 @@ impl AsyncFileReader for RecordingAsyncFileReader {
 
         async move {
             ops.add_entry_for_ranges(&logged_ranges);
-            Ok(datas)
+            Ok(data_ranges)
         }
         .boxed()
     }

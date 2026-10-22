@@ -698,7 +698,11 @@ pub(crate) mod private {
 
     use super::{ParquetError, Result, SliceAsBytes};
     use crate::basic::Type;
+    use crate::column::writer::min_max::{
+        fallback_min_max, min_max_f32, min_max_f64, min_max_i32, min_max_i64,
+    };
     use crate::file::metadata::HeapSize;
+    use crate::schema::types::BasicTypeInfo;
 
     /// Sealed trait to start to remove specialisation from implementations
     ///
@@ -718,6 +722,7 @@ pub(crate) mod private {
         + Send
         + HeapSize
         + crate::encodings::decoding::private::GetDecoder
+        + crate::encodings::encoding::private::GetEncoder
         + crate::file::statistics::private::MakeStatistics
     {
         const PHYSICAL_TYPE: Type;
@@ -767,6 +772,12 @@ pub(crate) mod private {
                 .map(|x| x as u64)
         }
 
+        /// Return the min, max and NaN count of `values` for column statistics,
+        /// or `None` if `values` is empty
+        fn min_max(basic_type_info: &BasicTypeInfo, values: &[Self]) -> Option<(Self, Self, u64)> {
+            fallback_min_max(basic_type_info, values.iter())
+        }
+
         /// Return the value as an Any to allow for downcasts without transmutation
         fn as_any(&self) -> &dyn std::any::Any;
 
@@ -790,9 +801,7 @@ pub(crate) mod private {
             _: &mut W,
             bit_writer: &mut BitWriter,
         ) -> Result<()> {
-            for value in values {
-                bit_writer.put_value(*value as u64, 1)
-            }
+            bit_writer.put_batch(values, 1);
             Ok(())
         }
 
@@ -836,7 +845,7 @@ pub(crate) mod private {
     }
 
     macro_rules! impl_from_raw {
-        ($ty: ty, $physical_ty: expr, $self: ident => $as_i64: block) => {
+        ($ty: ty, $physical_ty: expr, $self: ident => $as_i64: block, min_max: ($info: ident, $values: ident) => $min_max: block) => {
             impl ParquetValueType for $ty {
                 const PHYSICAL_TYPE: Type = $physical_ty;
 
@@ -909,6 +918,11 @@ pub(crate) mod private {
                 }
 
                 #[inline]
+                fn min_max($info: &BasicTypeInfo, $values: &[Self]) -> Option<(Self, Self, u64)> {
+                    $min_max
+                }
+
+                #[inline]
                 fn as_any(&self) -> &dyn std::any::Any {
                     self
                 }
@@ -921,10 +935,23 @@ pub(crate) mod private {
         }
     }
 
-    impl_from_raw!(i32, Type::INT32, self => { Ok(*self as i64) });
-    impl_from_raw!(i64, Type::INT64, self => { Ok(*self) });
-    impl_from_raw!(f32, Type::FLOAT, self => { Err(general_err!("Type cannot be converted to i64")) });
-    impl_from_raw!(f64, Type::DOUBLE, self => { Err(general_err!("Type cannot be converted to i64")) });
+    impl_from_raw!(
+        i32, Type::INT32, self => { Ok(*self as i64) },
+        min_max: (info, values) => { min_max_i32(info, values).map(|(min, max)| (min, max, 0)) }
+    );
+    impl_from_raw!(
+        i64, Type::INT64, self => { Ok(*self) },
+        min_max: (info, values) => { min_max_i64(info, values).map(|(min, max)| (min, max, 0)) }
+    );
+    // The float kernels return `None` for all NaN input, which the scalar path handles
+    impl_from_raw!(
+        f32, Type::FLOAT, self => { Err(general_err!("Type cannot be converted to i64")) },
+        min_max: (info, values) => { min_max_f32(values).or_else(|| fallback_min_max(info, values.iter())) }
+    );
+    impl_from_raw!(
+        f64, Type::DOUBLE, self => { Err(general_err!("Type cannot be converted to i64")) },
+        min_max: (info, values) => { min_max_f64(values).or_else(|| fallback_min_max(info, values.iter())) }
+    );
 
     impl ParquetValueType for super::Int96 {
         const PHYSICAL_TYPE: Type = Type::INT96;
@@ -1366,8 +1393,8 @@ mod tests {
         assert_eq!(i96.as_bytes(), &[1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0]);
 
         // Test ByteArray
-        let ba = ByteArray::from(vec![1, 2, 3]);
-        assert_eq!(ba.as_bytes(), &[1, 2, 3]);
+        let byte_arr = ByteArray::from(vec![1, 2, 3]);
+        assert_eq!(byte_arr.as_bytes(), &[1, 2, 3]);
 
         // Test Decimal
         let decimal = Decimal::from_i32(123, 5, 2);
@@ -1407,26 +1434,26 @@ mod tests {
             Decimal::from_i32(3, 5, 2)
         );
 
-        assert!(Decimal::from_i32(222, 5, 2) != Decimal::from_i32(111, 5, 2));
-        assert!(Decimal::from_i32(222, 5, 2) != Decimal::from_i32(222, 6, 2));
-        assert!(Decimal::from_i32(222, 5, 2) != Decimal::from_i32(222, 5, 3));
+        assert_ne!(Decimal::from_i32(222, 5, 2), Decimal::from_i32(111, 5, 2));
+        assert_ne!(Decimal::from_i32(222, 5, 2), Decimal::from_i32(222, 6, 2));
+        assert_ne!(Decimal::from_i32(222, 5, 2), Decimal::from_i32(222, 5, 3));
 
-        assert!(Decimal::from_i64(222, 5, 2) != Decimal::from_i32(222, 5, 2));
+        assert_ne!(Decimal::from_i64(222, 5, 2), Decimal::from_i32(222, 5, 2));
     }
 
     #[test]
     fn test_byte_array_ord() {
-        let ba1 = ByteArray::from(vec![1, 2, 3]);
-        let ba11 = ByteArray::from(vec![1, 2, 3]);
-        let ba2 = ByteArray::from(vec![3, 4]);
-        let ba3 = ByteArray::from(vec![1, 2, 4]);
-        let ba4 = ByteArray::from(vec![]);
-        let ba5 = ByteArray::from(vec![2, 2, 3]);
+        let byte_arr1 = ByteArray::from(vec![1, 2, 3]);
+        let byte_arr11 = ByteArray::from(vec![1, 2, 3]);
+        let byte_arr2 = ByteArray::from(vec![3, 4]);
+        let byte_arr3 = ByteArray::from(vec![1, 2, 4]);
+        let byte_arr4 = ByteArray::from(vec![]);
+        let byte_arr5 = ByteArray::from(vec![2, 2, 3]);
 
-        assert!(ba1 < ba2);
-        assert!(ba3 > ba1);
-        assert!(ba1 > ba4);
-        assert_eq!(ba1, ba11);
-        assert!(ba5 > ba1);
+        assert!(byte_arr1 < byte_arr2);
+        assert!(byte_arr3 > byte_arr1);
+        assert!(byte_arr1 > byte_arr4);
+        assert_eq!(byte_arr1, byte_arr11);
+        assert!(byte_arr5 > byte_arr1);
     }
 }

@@ -49,9 +49,10 @@ If you want to work on an issue which is not already assigned to someone else
 and there are no comment indicating that someone is already working on that
 issue then you can assign the issue to yourself by submitting a single word
 comment `take`. This will assign the issue to yourself. However, if you are
-unable to make progress you should unassign the issue by using the `unassign me`
-link at the top of the issue page (and ask for help if are stuck) so that
-someone else can get involved in the work.
+unable to make progress you should unassign the issue so that someone else can
+get involved in the work. You can do this either by using the `unassign me`
+link at the top of the issue page or by leaving a single word comment `untake`
+(and ask for help if you are stuck).
 
 If you plan to work on a new feature that doesn't have an existing ticket, it is
 a good idea to open a ticket to discuss the feature. Advanced discussion often
@@ -60,6 +61,17 @@ Arrow-rs before too much time is invested. It also often helps to discuss your
 ideas with the community to get feedback on implementation.
 
 [good-first-issue]: https://github.com/apache/arrow-rs/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22
+
+## Creating Pull Requests
+
+With coding agents, the number of open PRs now far exceeds our review capacity.
+To encourage submitters to curate and prepare a small number of high quality PRs,
+and to help reviewers focus on them, users without write access are limited to
+**3 open, non-draft PRs** at a time.
+
+When possible, we recommend splitting your contributions into multiple smaller
+focused PRs rather than large PRs, because they are more likely to be reviewed
+quickly and are easier to understand and review.
 
 ## Developer's guide to Arrow Rust
 
@@ -159,12 +171,39 @@ PR be sure to run the following and check for lint issues:
 cargo +stable fmt --all -- --check
 ```
 
-Note that currently the above will not check all source files in the parquet crate. To check all
-parquet files run the following from the top-level `arrow-rs` directory:
+## Miri
 
-```bash
-cargo fmt -p parquet -- --check --config skip_children=true `find ./parquet -name "*.rs" \! -name format.rs`
+Run tests under [`Miri`](https://github.com/rust-lang/miri) like so, assuming
+[`cargo-nextest`](https://nexte.st/) is available:
+
+```sh
+# Run all tests
+MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-no-extra-rounding-error" cargo +nightly miri nextest run
+# Run specific tests
+MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-no-extra-rounding-error" cargo +nightly miri nextest run -p arrow-buffer --lib bigint
+# Run specific crate
+MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-no-extra-rounding-error" cargo +nightly miri nextest run -p arrow-buffer
 ```
+
+The whole suite will take a long time to run so it's suggested to run individual
+suites/tests when required.
+
+Add a `cfg_attr` to tests in cases where the test should be ignored by Miri:
+
+```rust
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn test123() {}
+```
+
+Please ensure you include a comment why the test is being ignored. Common cases
+are:
+
+- Takes too long
+  - Threshold is if it takes longer than 1 minute
+- Zstd code unsupported by Miri
+- Inline assembly unsupported by Miri
+- Any other operation thats unsupported by Miri
 
 ## Breaking Changes
 
@@ -213,6 +252,49 @@ Tests, benchmarks and the helpers they use are free to panic, so they carry a fi
 `#![expect(clippy::missing_panics_doc, ...)]` rather than a `# Panics` section per function.
 Public helper modules such as `arrow::util::bench_util` say so in their module docs, since
 the file-level suppression hides the panics from their own documentation.
+
+## Spell Checking
+
+We use [`typos`](https://github.com/crate-ci/typos) to catch spelling mistakes in source code and
+comments. CI runs a spell check on every pull request.
+
+### Running locally
+
+Install `typos` and run it from the repo root:
+
+```bash
+cargo install typos-cli
+typos --config typos.toml
+```
+
+### Adding a pre-commit hook
+
+To catch typos before they reach CI, add `typos` as a Git pre-commit hook:
+
+```bash
+cat > .git/hooks/pre-commit << 'EOF'
+#!/bin/sh
+typos --config typos.toml
+EOF
+chmod +x .git/hooks/pre-commit
+```
+
+After that, `typos` will run automatically on every `git commit`. If it finds an issue, the commit
+is blocked until you fix or allowlist the word.
+
+### Allowlisting false positives
+
+If `typos` flags a word that is intentionally spelled that way (a test value, a domain-specific
+term, a crate name, etc.), add it to `[default.extend-words]` in `typos.toml` at the repo root
+with a short comment explaining why:
+
+```toml
+[default.extend-words]
+flate = "flate"  # flate2 is the crate name for the deflate/inflate compression library
+```
+
+Prefer renaming variables over adding allowlist entries when the flagged word is just a local
+identifier that can be changed without affecting test semantics.
 
 ## Performance Improvements
 

@@ -49,6 +49,7 @@ use arrow_array::{Array, ArrayRef, Int32Array, OffsetSizeTrait, RunArray, downca
 use arrow_buffer::bit_iterator::BitIndexIterator;
 use arrow_buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_schema::{DataType, Field};
+use arrow_select::take::take;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -70,7 +71,7 @@ fn expand_typed_ree<R: RunEndIndexType>(run_array: &RunArray<R>) -> Result<Array
     let indices: Int32Array = (0..len)
         .map(|i| run_ends.get_physical_index(i) as i32)
         .collect();
-    arrow_select::take::take(values.as_ref(), &indices, None)
+    take(values.as_ref(), &indices, None)
         .map_err(|e| arrow_err!("Failed to expand REE array: {}", e))
 }
 
@@ -133,6 +134,8 @@ struct LevelContext {
 /// A helper to construct [`ArrayLevels`] from a potentially nested [`Field`]
 #[derive(Debug)]
 enum LevelInfoBuilder {
+    /// Validate required fields only at slots reached during traversal.
+    Required(Box<LevelInfoBuilder>, NullBuffer, String),
     /// A primitive, leaf array
     Primitive(ArrayLevels),
     /// A list array
@@ -185,9 +188,62 @@ enum LevelInfoBuilder {
 /// see <https://github.com/apache/arrow-rs/pull/9967> for the rationale.
 const BULK_FILL_MIN_LEN: usize = 64;
 
+fn logical_type(mut data_type: &DataType) -> (&DataType, bool) {
+    let mut nullable = false;
+    loop {
+        match data_type {
+            DataType::Dictionary(_, value) => data_type = value,
+            DataType::RunEndEncoded(_, value) => {
+                nullable |= value.is_nullable();
+                data_type = value.data_type();
+            }
+            _ => return (data_type, nullable),
+        }
+    }
+}
+
 impl LevelInfoBuilder {
     /// Create a new [`LevelInfoBuilder`] for the given [`Field`] and parent [`LevelContext`]
     fn try_new(field: &Field, parent_ctx: LevelContext, array: &ArrayRef) -> Result<Self> {
+        let builder = Self::build(field, parent_ctx, array)?;
+        let (_, nullable) = logical_type(field.data_type());
+        if !field.is_nullable()
+            && !nullable
+            && !matches!(
+                array.data_type(),
+                DataType::RunEndEncoded(_, _) | DataType::Dictionary(_, _)
+            )
+            && let Some(nulls) = array.logical_nulls().filter(|n| n.null_count() != 0)
+        {
+            Ok(Self::Required(
+                Box::new(builder),
+                nulls,
+                field.name().clone(),
+            ))
+        } else if !field.is_nullable()
+            && !nullable
+            && matches!(array.data_type(), DataType::Dictionary(_, value) if is_leaf(value))
+            && let Some(nulls) = array.logical_nulls().filter(|n| n.null_count() != 0)
+        {
+            Ok(Self::Required(
+                Box::new(builder),
+                nulls,
+                field.name().clone(),
+            ))
+        } else {
+            Ok(builder)
+        }
+    }
+
+    fn build(field: &Field, parent_ctx: LevelContext, array: &ArrayRef) -> Result<Self> {
+        let (data_type, nullable) = logical_type(field.data_type());
+        if data_type != field.data_type() {
+            let field = field
+                .clone()
+                .with_data_type(data_type.clone())
+                .with_nullable(field.is_nullable() || nullable);
+            return Self::try_new(&field, parent_ctx, array);
+        }
         if !Self::types_compatible(field.data_type(), array.data_type()) {
             return Err(arrow_err!(format!(
                 "Incompatible type. Field '{}' has type {}, array has type {}",
@@ -208,16 +264,19 @@ impl LevelInfoBuilder {
                 let levels = ArrayLevels::new(parent_ctx, is_nullable, array.clone());
                 Ok(Self::Primitive(levels))
             }
-            DataType::RunEndEncoded(_, value_field) => {
+            DataType::RunEndEncoded(_, _) => {
                 let flat = expand_ree_array(array)?;
-                let flat_field = Field::new(
-                    field.name(),
-                    value_field.data_type().clone(),
-                    field.is_nullable(),
-                );
-                Self::try_new(&flat_field, parent_ctx, &flat)
+                Self::try_new(field, parent_ctx, &flat)
             }
-            DataType::Struct(children) => {
+            DataType::Dictionary(_, _) => {
+                let dictionary = array.as_any_dictionary();
+                let flat = take(dictionary.values(), dictionary.keys(), None)?;
+                Self::try_new(field, parent_ctx, &flat)
+            }
+            DataType::Struct(_) => {
+                let DataType::Struct(children) = field.data_type() else {
+                    unreachable!()
+                };
                 let array = array.as_struct();
                 let def_level = match is_nullable {
                     true => parent_ctx.def_level + 1,
@@ -237,12 +296,21 @@ impl LevelInfoBuilder {
 
                 Ok(Self::Struct(children, ctx, array.nulls().cloned()))
             }
-            DataType::List(child)
-            | DataType::LargeList(child)
-            | DataType::Map(child, _)
-            | DataType::FixedSizeList(child, _)
-            | DataType::ListView(child)
-            | DataType::LargeListView(child) => {
+            DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::Map(_, _)
+            | DataType::FixedSizeList(_, _)
+            | DataType::ListView(_)
+            | DataType::LargeListView(_) => {
+                let (DataType::List(child)
+                | DataType::LargeList(child)
+                | DataType::Map(child, _)
+                | DataType::FixedSizeList(child, _)
+                | DataType::ListView(child)
+                | DataType::LargeListView(child)) = field.data_type()
+                else {
+                    unreachable!()
+                };
                 let def_level = match is_nullable {
                     true => parent_ctx.def_level + 2,
                     false => parent_ctx.def_level + 1,
@@ -316,6 +384,7 @@ impl LevelInfoBuilder {
     /// as enumerated by a depth-first search
     fn finish(self) -> Vec<ArrayLevels> {
         match self {
+            LevelInfoBuilder::Required(v, _, _) => v.finish(),
             LevelInfoBuilder::Primitive(v) => vec![v],
             LevelInfoBuilder::List(v, _, _, _, _)
             | LevelInfoBuilder::LargeList(v, _, _, _, _)
@@ -329,6 +398,20 @@ impl LevelInfoBuilder {
     /// Given an `array`, write the level data for the elements in `range`
     fn write(&mut self, range: Range<usize>) {
         match self {
+            LevelInfoBuilder::Required(child, nulls, name) => {
+                if let Some(index) = range.clone().find(|&index| nulls.is_null(index)) {
+                    let message =
+                        format!("Found null at index {index} for required field '{name}'");
+                    child.visit_leaves(|leaf| {
+                        if leaf.validation_error.is_none() {
+                            leaf.validation_error = Some(message.clone());
+                        }
+                    });
+                }
+                // Parents still need the child levels to backfill list boundaries;
+                // the recorded error prevents these invalid values from being encoded.
+                child.write(range);
+            }
             LevelInfoBuilder::Primitive(info) => Self::write_leaf(info, range),
             LevelInfoBuilder::List(child, ctx, offsets, nulls, is_last) => {
                 Self::write_list(child, ctx, offsets, nulls.as_ref(), range, *is_last)
@@ -356,6 +439,7 @@ impl LevelInfoBuilder {
     /// This is true for `Primitive` children and `Struct` trees with no list descendants.
     fn child_has_no_nested_rep(&self) -> bool {
         match self {
+            LevelInfoBuilder::Required(child, _, _) => child.child_has_no_nested_rep(),
             LevelInfoBuilder::Primitive(_) => true,
             LevelInfoBuilder::Struct(children, _, _) => {
                 children.iter().all(|c| c.child_has_no_nested_rep())
@@ -418,7 +502,7 @@ impl LevelInfoBuilder {
             // mapping between child elements and rep_level entries, the position
             // of each slot's first element is directly computable from offsets.
             child.visit_leaves(|leaf| {
-                debug_assert!(leaf.max_rep_level == ctx.rep_level);
+                debug_assert_eq!(leaf.max_rep_level, ctx.rep_level);
                 let rep_levels = leaf.rep_levels.materialize_mut().unwrap();
                 let batch_len = values_end - values_start;
                 let batch_base = rep_levels.len() - batch_len;
@@ -913,6 +997,7 @@ impl LevelInfoBuilder {
     /// Visits all children of this node in depth first order
     fn visit_leaves(&mut self, visit: impl Fn(&mut ArrayLevels) + Copy) {
         match self {
+            LevelInfoBuilder::Required(child, _, _) => child.visit_leaves(visit),
             LevelInfoBuilder::Primitive(info) => visit(info),
             LevelInfoBuilder::List(c, _, _, _, _)
             | LevelInfoBuilder::LargeList(c, _, _, _, _)
@@ -927,48 +1012,52 @@ impl LevelInfoBuilder {
         }
     }
 
-    /// Determine if the fields are compatible for purposes of constructing `LevelBuilderInfo`.
+    /// Determine if the logical types are compatible for constructing [`LevelInfoBuilder`].
     ///
-    /// Fields are compatible if they're the same type. Otherwise if one of them is a dictionary
-    /// and the other is a native array, the dictionary values must have the same type as the
-    /// native array
-    fn types_compatible(a: &DataType, b: &DataType) -> bool {
-        // if the Arrow data types are equal, the types are deemed compatible
-        if a.equals_datatype(b) {
-            return true;
-        }
-
-        // get the values out of the dictionaries
-        let (a, b) = match (a, b) {
-            (DataType::Dictionary(_, va), DataType::Dictionary(_, vb)) => {
-                (va.as_ref(), vb.as_ref())
+    /// Resolve dictionary and REE wrappers at each logical node, including nested children.
+    /// Container variants must match, as must fixed-size list lengths and map sortedness.
+    /// String and binary leaves may use different offset widths or view layouts. Child field
+    /// names, metadata, and nullability are ignored here: the writer's target fields determine
+    /// nullability and the resulting levels.
+    fn types_compatible(left: &DataType, right: &DataType) -> bool {
+        let (left, _) = logical_type(left);
+        let (right, _) = logical_type(right);
+        match (left, right) {
+            (DataType::Struct(left_fields), DataType::Struct(right_fields)) => {
+                left_fields.len() == right_fields.len()
+                    && left_fields
+                        .iter()
+                        .zip(right_fields)
+                        .all(|(left_field, right_field)| {
+                            Self::types_compatible(left_field.data_type(), right_field.data_type())
+                        })
             }
-            (DataType::Dictionary(_, v), b) => (v.as_ref(), b),
-            (a, DataType::Dictionary(_, v)) => (a, v.as_ref()),
-            _ => (a, b),
-        };
-
-        // now that we've got the values from one/both dictionaries, if the values
-        // have the same Arrow data type, they're compatible
-        if a == b {
-            return true;
-        }
-
-        // here we have different Arrow data types, but if the array contains the same type of data
-        // then we consider the type compatible
-        match a {
-            // String, StringView and LargeString are compatible
-            DataType::Utf8 => matches!(b, DataType::LargeUtf8 | DataType::Utf8View),
-            DataType::Utf8View => matches!(b, DataType::LargeUtf8 | DataType::Utf8),
-            DataType::LargeUtf8 => matches!(b, DataType::Utf8 | DataType::Utf8View),
-
-            // Binary, BinaryView and LargeBinary are compatible
-            DataType::Binary => matches!(b, DataType::LargeBinary | DataType::BinaryView),
-            DataType::BinaryView => matches!(b, DataType::LargeBinary | DataType::Binary),
-            DataType::LargeBinary => matches!(b, DataType::Binary | DataType::BinaryView),
-
-            // otherwise we have incompatible types
-            _ => false,
+            (DataType::List(left_field), DataType::List(right_field))
+            | (DataType::LargeList(left_field), DataType::LargeList(right_field))
+            | (DataType::ListView(left_field), DataType::ListView(right_field))
+            | (DataType::LargeListView(left_field), DataType::LargeListView(right_field)) => {
+                Self::types_compatible(left_field.data_type(), right_field.data_type())
+            }
+            (
+                DataType::FixedSizeList(left_field, left_len),
+                DataType::FixedSizeList(right_field, right_len),
+            ) if left_len == right_len => {
+                Self::types_compatible(left_field.data_type(), right_field.data_type())
+            }
+            (DataType::Map(left_field, left_sorted), DataType::Map(right_field, right_sorted))
+                if left_sorted == right_sorted =>
+            {
+                Self::types_compatible(left_field.data_type(), right_field.data_type())
+            }
+            (
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+            )
+            | (
+                DataType::Binary | DataType::BinaryView | DataType::LargeBinary,
+                DataType::Binary | DataType::BinaryView | DataType::LargeBinary,
+            ) => true,
+            _ => left.equals_datatype(right),
         }
     }
 }
@@ -1127,6 +1216,7 @@ pub(crate) struct ArrayLevels {
 
     /// cached logical nulls of the array.
     logical_nulls: Option<NullBuffer>,
+    validation_error: Option<String>,
 }
 
 impl PartialEq for ArrayLevels {
@@ -1143,6 +1233,13 @@ impl PartialEq for ArrayLevels {
 impl Eq for ArrayLevels {}
 
 impl ArrayLevels {
+    pub(crate) fn validate(&self) -> Result<()> {
+        match &self.validation_error {
+            Some(message) => Err(ParquetError::ArrowError(message.clone())),
+            None => Ok(()),
+        }
+    }
+
     fn new(ctx: LevelContext, is_nullable: bool, array: ArrayRef) -> Self {
         let max_rep_level = ctx.rep_level;
         let max_def_level = match is_nullable {
@@ -1160,6 +1257,7 @@ impl ArrayLevels {
             max_rep_level,
             array,
             logical_nulls,
+            validation_error: None,
         }
     }
 
@@ -1210,6 +1308,7 @@ impl ArrayLevels {
             max_rep_level: self.max_rep_level,
             array,
             logical_nulls,
+            validation_error: None,
         }
     }
 
@@ -1283,6 +1382,7 @@ mod tests {
             max_rep_level: 2,
             array: Arc::new(primitives),
             logical_nulls: None,
+            validation_error: None,
         };
         assert_eq!(&levels[0], &expected);
     }
@@ -1304,6 +1404,7 @@ mod tests {
             max_rep_level: 0,
             array,
             logical_nulls: None,
+            validation_error: None,
         };
         assert_eq!(&levels[0], &expected_levels);
     }
@@ -1332,6 +1433,7 @@ mod tests {
             max_rep_level: 0,
             array,
             logical_nulls,
+            validation_error: None,
         };
         assert_eq!(&levels[0], &expected_levels);
     }
@@ -1367,6 +1469,7 @@ mod tests {
             max_rep_level: 1,
             array: Arc::new(leaf_array),
             logical_nulls: None,
+            validation_error: None,
         };
         assert_eq!(&levels[0], &expected_levels);
 
@@ -1401,6 +1504,7 @@ mod tests {
             max_rep_level: 1,
             array: Arc::new(leaf_array),
             logical_nulls: None,
+            validation_error: None,
         };
         assert_eq!(&levels[0], &expected_levels);
     }
@@ -1451,6 +1555,7 @@ mod tests {
             max_rep_level: 1,
             array: Arc::new(leaf),
             logical_nulls: None,
+            validation_error: None,
         };
 
         assert_eq!(&levels[0], &expected_levels);
@@ -1502,6 +1607,7 @@ mod tests {
             max_rep_level: 2,
             array: Arc::new(leaf),
             logical_nulls: None,
+            validation_error: None,
         };
 
         assert_eq!(&levels[0], &expected_levels);
@@ -1540,6 +1646,7 @@ mod tests {
             max_rep_level: 1,
             array: Arc::new(leaf),
             logical_nulls: None,
+            validation_error: None,
         };
         assert_eq!(&levels[0], &expected_levels);
 
@@ -1573,6 +1680,7 @@ mod tests {
             max_rep_level: 1,
             array: Arc::new(leaf),
             logical_nulls: None,
+            validation_error: None,
         };
         assert_eq!(&levels[0], &expected_levels);
 
@@ -1626,6 +1734,7 @@ mod tests {
             max_rep_level: 2,
             array: Arc::new(leaf),
             logical_nulls: None,
+            validation_error: None,
         };
         assert_eq!(&levels[0], &expected_levels);
     }
@@ -1667,6 +1776,7 @@ mod tests {
             max_rep_level: 0,
             array: leaf,
             logical_nulls,
+            validation_error: None,
         };
         assert_eq!(&levels[0], &expected_levels);
     }
@@ -1707,6 +1817,7 @@ mod tests {
             max_rep_level: 1,
             array: Arc::new(a_values),
             logical_nulls: None,
+            validation_error: None,
         };
         assert_eq!(list_level, &expected_level);
     }
@@ -1800,6 +1911,7 @@ mod tests {
             max_rep_level: 0,
             array: Arc::new(a),
             logical_nulls: None,
+            validation_error: None,
         };
         assert_eq!(list_level, &expected_level);
 
@@ -1815,6 +1927,7 @@ mod tests {
             max_rep_level: 0,
             array: Arc::new(b),
             logical_nulls: b_logical_nulls,
+            validation_error: None,
         };
         assert_eq!(list_level, &expected_level);
 
@@ -1830,6 +1943,7 @@ mod tests {
             max_rep_level: 0,
             array: Arc::new(d),
             logical_nulls: d_logical_nulls,
+            validation_error: None,
         };
         assert_eq!(list_level, &expected_level);
 
@@ -1845,6 +1959,7 @@ mod tests {
             max_rep_level: 0,
             array: Arc::new(f),
             logical_nulls: f_logical_nulls,
+            validation_error: None,
         };
         assert_eq!(list_level, &expected_level);
     }
@@ -1957,6 +2072,7 @@ mod tests {
             max_rep_level: 1,
             array: map.keys().clone(),
             logical_nulls: map_keys_logical_nulls,
+            validation_error: None,
         };
         assert_eq!(list_level, &expected_level);
 
@@ -1972,6 +2088,7 @@ mod tests {
             max_rep_level: 1,
             array: map.values().clone(),
             logical_nulls: map_values_logical_nulls,
+            validation_error: None,
         };
         assert_eq!(list_level, &expected_level);
     }
@@ -2059,6 +2176,7 @@ mod tests {
             max_rep_level: 1,
             array: values,
             logical_nulls,
+            validation_error: None,
         };
 
         assert_eq!(list_level, &expected_level);
@@ -2101,6 +2219,7 @@ mod tests {
             max_rep_level: 1,
             array: values,
             logical_nulls,
+            validation_error: None,
         };
 
         assert_eq!(&levels[0], &expected_level);
@@ -2188,6 +2307,7 @@ mod tests {
             max_rep_level: 2,
             array: a1_values,
             logical_nulls: a1_logical_nulls,
+            validation_error: None,
         };
 
         assert_eq!(&levels[0], &expected_level);
@@ -2201,6 +2321,7 @@ mod tests {
             max_rep_level: 1,
             array: a2_values,
             logical_nulls: a2_logical_nulls,
+            validation_error: None,
         };
 
         assert_eq!(&levels[1], &expected_level);
@@ -2241,6 +2362,7 @@ mod tests {
             max_rep_level: 1,
             array: values,
             logical_nulls,
+            validation_error: None,
         };
         assert_eq!(list_level, &expected_level);
     }
@@ -2393,6 +2515,7 @@ mod tests {
             max_rep_level: 1,
             array: values_a,
             logical_nulls: values_a_logical_nulls,
+            validation_error: None,
         };
         // [[{b: 2}, null], null, [null, null], [{b: 3}, {b: 4}]]
         let values_b_logical_nulls = values_b.logical_nulls();
@@ -2404,6 +2527,7 @@ mod tests {
             max_rep_level: 1,
             array: values_b,
             logical_nulls: values_b_logical_nulls,
+            validation_error: None,
         };
 
         assert_eq!(a_levels, &expected_a);
@@ -2437,6 +2561,7 @@ mod tests {
             max_rep_level: 1,
             array: values,
             logical_nulls,
+            validation_error: None,
         };
         assert_eq!(list_level, &expected_level);
     }
@@ -2474,6 +2599,7 @@ mod tests {
             max_rep_level: 2,
             array: values,
             logical_nulls,
+            validation_error: None,
         };
 
         assert_eq!(levels[0], expected_level);
@@ -2507,6 +2633,7 @@ mod tests {
             max_rep_level: 0,
             array: Arc::new(dict),
             logical_nulls,
+            validation_error: None,
         };
         assert_eq!(levels[0], expected_level);
     }
@@ -2547,6 +2674,7 @@ mod tests {
             max_rep_level: 0,
             array,
             logical_nulls,
+            validation_error: None,
         };
         let sliced = levels.slice_for_chunk(&CdcChunk {
             level_offset: 0,
@@ -2581,6 +2709,7 @@ mod tests {
             max_rep_level: 0,
             array,
             logical_nulls,
+            validation_error: None,
         };
         let sliced = levels.slice_for_chunk(&CdcChunk {
             level_offset: 1,
@@ -2635,6 +2764,7 @@ mod tests {
             max_rep_level: 1,
             array,
             logical_nulls,
+            validation_error: None,
         };
 
         // Chunk 0: rows 0-1, nni=[0] → array sliced to [0..1]
@@ -2681,6 +2811,7 @@ mod tests {
             max_rep_level: 0,
             array,
             logical_nulls,
+            validation_error: None,
         };
         // Chunk covering only the two null rows (levels 1..3), zero non-null values.
         let sliced = levels.slice_for_chunk(&CdcChunk {
@@ -2719,6 +2850,7 @@ mod tests {
             max_rep_level: 1,
             array: values,
             logical_nulls,
+            validation_error: None,
         };
         assert_eq!(&levels[0], &expected);
     }
@@ -2748,6 +2880,7 @@ mod tests {
             max_rep_level: 1,
             array: values,
             logical_nulls,
+            validation_error: None,
         };
         assert_eq!(&levels[0], &expected);
     }
@@ -2778,6 +2911,7 @@ mod tests {
             max_rep_level: 0,
             array: leaf,
             logical_nulls: Some(NullBuffer::new_null(4)),
+            validation_error: None,
         };
         assert_eq!(&levels[0], &expected);
     }
@@ -2812,6 +2946,7 @@ mod tests {
             max_rep_level: 0,
             array: leaf,
             logical_nulls: Some(NullBuffer::new_null(3)),
+            validation_error: None,
         };
         assert_eq!(&levels[0], &expected);
     }
@@ -2846,6 +2981,7 @@ mod tests {
                 max_rep_level: 0,
                 array: leaf,
                 logical_nulls: Some(NullBuffer::new_null(2)),
+                validation_error: None,
             };
             assert_eq!(&levels[i], &expected, "leaf {i} mismatch");
         }

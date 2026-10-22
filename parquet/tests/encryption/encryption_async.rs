@@ -800,7 +800,7 @@ fn spawn_parquet_parallel_serialization_task(
         let mut current_rg_rows = 0;
 
         while let Some(mut rb) = data.recv().await {
-            // This loop allows the "else" block to repeatedly split the RecordBatch to handle the case
+            // This loop repeatedly splits the RecordBatch to handle the case
             // when max_row_group_rows < execution.batch_size as an alternative to a recursive async
             // function.
             loop {
@@ -808,33 +808,33 @@ fn spawn_parquet_parallel_serialization_task(
                     send_arrays_to_column_writers(&col_array_channels, &rb, &schema).await?;
                     current_rg_rows += rb.num_rows();
                     break;
-                } else {
-                    let rows_left = max_row_group_rows - current_rg_rows;
-                    let rb_split = rb.slice(0, rows_left);
-                    send_arrays_to_column_writers(&col_array_channels, &rb_split, &schema).await?;
-
-                    // Signal the parallel column writers that the RowGroup is done, join and finalize RowGroup
-                    // on a separate task, so that we can immediately start on the next RG before waiting
-                    // for the current one to finish.
-                    drop(col_array_channels);
-
-                    let finalize_rg_task =
-                        spawn_rg_join_and_finalize_task(col_writer_tasks, max_row_group_rows);
-
-                    // Do not surface error from closed channel (means something
-                    // else hit an error, and the plan is shutting down).
-                    if serialize_tx.send(finalize_rg_task).await.is_err() {
-                        return Ok(());
-                    }
-
-                    current_rg_rows = 0;
-                    rb = rb.slice(rows_left, rb.num_rows() - rows_left);
-
-                    row_group_index += 1;
-                    let column_writers = writer_factory.create_column_writers(row_group_index)?;
-                    (col_writer_tasks, col_array_channels) =
-                        spawn_column_parallel_row_group_writer(column_writers, 100)?;
                 }
+
+                let rows_left = max_row_group_rows - current_rg_rows;
+                let rb_split = rb.slice(0, rows_left);
+                send_arrays_to_column_writers(&col_array_channels, &rb_split, &schema).await?;
+
+                // Signal the parallel column writers that the RowGroup is done, join and finalize RowGroup
+                // on a separate task, so that we can immediately start on the next RG before waiting
+                // for the current one to finish.
+                drop(col_array_channels);
+
+                let finalize_rg_task =
+                    spawn_rg_join_and_finalize_task(col_writer_tasks, max_row_group_rows);
+
+                // Do not surface error from closed channel (means something
+                // else hit an error, and the plan is shutting down).
+                if serialize_tx.send(finalize_rg_task).await.is_err() {
+                    return Ok(());
+                }
+
+                current_rg_rows = 0;
+                rb = rb.slice(rows_left, rb.num_rows() - rows_left);
+
+                row_group_index += 1;
+                let column_writers = writer_factory.create_column_writers(row_group_index)?;
+                (col_writer_tasks, col_array_channels) =
+                    spawn_column_parallel_row_group_writer(column_writers, 100)?;
             }
         }
 

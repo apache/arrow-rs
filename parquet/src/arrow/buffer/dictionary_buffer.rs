@@ -18,24 +18,48 @@
 use crate::arrow::buffer::offset_buffer::OffsetBuffer;
 use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::errors::{ParquetError, Result};
-use arrow_array::{Array, GenericByteArray, downcast_integer};
+use ahash::RandomState;
+use arrow_array::{Array, DictionaryArray, PrimitiveArray, downcast_integer};
 use arrow_array::{
-    ArrayRef, FixedSizeBinaryArray, OffsetSizeTrait,
-    builder::{FixedSizeBinaryDictionaryBuilder, GenericByteDictionaryBuilder},
+    ArrayRef, FixedSizeBinaryArray, GenericBinaryArray, OffsetSizeTrait,
+    builder::FixedSizeBinaryDictionaryBuilder,
     cast::AsArray,
-    make_array,
-    types::{ArrowDictionaryKeyType, ByteArrayType},
+    types::{
+        ArrowDictionaryKeyType, ArrowPrimitiveType, Int8Type, Int16Type, Int32Type, Int64Type,
+        UInt8Type, UInt16Type, UInt32Type, UInt64Type,
+    },
 };
-use arrow_buffer::{ArrowNativeType, Buffer};
-use arrow_data::ArrayDataBuilder;
+use arrow_buffer::{
+    ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, ScalarBuffer,
+};
 use arrow_schema::DataType as ArrowType;
+use hashbrown::HashMap as HbHashMap;
+use hashbrown::hash_map::Entry;
+use std::hash::{BuildHasher, Hasher};
+use std::mem::size_of;
+use std::ptr::write_unaligned;
+use std::slice::{from_raw_parts, from_raw_parts_mut};
 use std::sync::Arc;
 
 /// An array of variable length byte arrays that are potentially dictionary encoded
 /// and can be converted into a corresponding [`ArrayRef`]
 pub enum DictionaryBuffer<K: ArrowNativeType, V: OffsetSizeTrait> {
-    Dict { keys: Vec<K>, values: ArrayRef },
-    Values { values: OffsetBuffer<V> },
+    Dict {
+        keys: Vec<K>,
+        values: ArrayRef,
+        /// Exclusive upper bound for decoded keys.
+        key_upper_bound: Option<u64>,
+    },
+    Values {
+        values: OffsetBuffer<V>,
+    },
+}
+
+fn widen_key_bound(existing: &mut Option<u64>, incoming: Option<u64>) {
+    *existing = match (*existing, incoming) {
+        (Some(current), Some(new)) => Some(current.max(new)),
+        _ => None,
+    };
 }
 
 impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
@@ -47,27 +71,41 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
         }
     }
 
-    /// Returns a mutable reference to a keys array
+    /// Returns the key buffer or `None` if the dictionary must be rebuilt.
     ///
-    /// Returns None if the dictionary needs to be recomputed
+    /// Records an exclusive bound derived from `rle_bit_width`. A missing width
+    /// discards any previously recorded bound.
     ///
     /// # Panics
     ///
-    /// Panics if the dictionary is too large for `K`
-    pub fn as_keys(&mut self, dictionary: &ArrayRef) -> Option<&mut Vec<K>> {
+    /// Panics if the dictionary is too large for `K`.
+    pub fn as_keys_with_bit_width(
+        &mut self,
+        dictionary: &ArrayRef,
+        rle_bit_width: Option<u8>,
+    ) -> Option<&mut Vec<K>> {
         assert!(K::from_usize(dictionary.len()).is_some());
 
+        // Dictionary RLE bit widths are validated to be at most 32.
+        let incoming_bound = rle_bit_width.map(|bit_width| 1u64 << bit_width);
+
         match self {
-            Self::Dict { keys, values } => {
+            Self::Dict {
+                keys,
+                values,
+                key_upper_bound,
+            } => {
                 // Need to discard fat pointer for equality check
                 // - https://stackoverflow.com/a/67114787
                 // - https://github.com/rust-lang/rust/issues/46139
                 let values_ptr = std::ptr::from_ref(values.as_ref()).cast::<()>();
                 let dict_ptr = std::ptr::from_ref(dictionary.as_ref()).cast::<()>();
                 if values_ptr == dict_ptr {
+                    widen_key_bound(key_upper_bound, incoming_bound);
                     Some(keys)
                 } else if keys.is_empty() {
                     *values = Arc::clone(dictionary);
+                    *key_upper_bound = incoming_bound;
                     Some(keys)
                 } else {
                     None
@@ -77,6 +115,7 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                 *self = Self::Dict {
                     keys: Default::default(),
                     values: Arc::clone(dictionary),
+                    key_upper_bound: incoming_bound,
                 };
                 match self {
                     Self::Dict { keys, .. } => Some(keys),
@@ -94,7 +133,7 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
     pub fn spill_values(&mut self) -> Result<&mut OffsetBuffer<V>> {
         match self {
             Self::Values { values } => Ok(values),
-            Self::Dict { keys, values } => {
+            Self::Dict { keys, values, .. } => {
                 let mut spilled = OffsetBuffer::with_capacity(0);
                 let data = values.to_data();
                 let dict_buffers = data.buffers();
@@ -127,25 +166,32 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
         self,
         null_buffer: Option<Buffer>,
         data_type: &ArrowType,
+        hash_scratch: &mut MutableBuffer,
     ) -> Result<ArrayRef> {
         assert!(matches!(data_type, ArrowType::Dictionary(_, _)));
 
         match self {
-            Self::Dict { keys, values } => {
-                // Validate keys unless dictionary is empty
-                if !values.is_empty() {
+            Self::Dict {
+                keys,
+                values,
+                key_upper_bound,
+            } => {
+                let keys_provably_in_range = key_upper_bound
+                    .map(|bound| bound <= values.len() as u64)
+                    .unwrap_or(false);
+
+                if !values.is_empty() && !keys_provably_in_range {
                     let min = K::from_usize(0).unwrap();
                     let max = K::from_usize(values.len()).unwrap();
 
-                    // using copied and fold gets auto-vectorized since rust 1.70
-                    // all/any would allow early exit on invalid values
-                    // but in the happy case all values have to be checked anyway
-                    if !keys
-                        .as_slice()
-                        .iter()
-                        .copied()
-                        .fold(true, |a, x| a && x >= min && x < max)
-                    {
+                    let (observed_min, observed_max) = keys.as_slice().iter().copied().fold(
+                        (max, min),
+                        |(current_min, current_max), key| {
+                            (current_min.min(key), current_max.max(key))
+                        },
+                    );
+
+                    if observed_min < min || observed_max >= max {
                         return Err(general_err!(
                             "dictionary key beyond bounds of dictionary: 0..{}",
                             values.len()
@@ -153,7 +199,7 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                     }
                 }
 
-                let ArrowType::Dictionary(_, value_type) = data_type else {
+                let ArrowType::Dictionary(key_type, value_type) = data_type else {
                     unreachable!()
                 };
                 let values = if let ArrowType::FixedSizeBinary(size) = **value_type {
@@ -167,18 +213,12 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                     values
                 };
 
-                let builder = ArrayDataBuilder::new(data_type.clone())
-                    .len(keys.len())
-                    .add_buffer(Buffer::from_vec(keys))
-                    .add_child_data(values.into_data())
-                    .null_bit_buffer(null_buffer);
+                let num_keys = keys.len();
+                let keys_buffer = Buffer::from_vec(keys);
+                let null_buffer =
+                    null_buffer.map(|b| NullBuffer::new(BooleanBuffer::new(b, 0, num_keys)));
 
-                let data = match cfg!(debug_assertions) {
-                    true => builder.build().unwrap(),
-                    false => unsafe { builder.build_unchecked() },
-                };
-
-                Ok(make_array(data))
+                build_dictionary_array(key_type, keys_buffer, num_keys, null_buffer, values)
             }
             Self::Values { values } => {
                 let (key_type, value_type) = match data_type {
@@ -186,8 +226,21 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                     _ => unreachable!(),
                 };
 
-                let array = values.into_array(null_buffer, value_type);
-                pack_values(key_type, &array)
+                // Plain byte-array pages are decoded into an offset buffer. Convert
+                // this representation explicitly before rebuilding an FSB dictionary,
+                // as FixedSizeBinary arrays have no offsets buffer.
+                if let ArrowType::FixedSizeBinary(size) = value_type {
+                    let binary = values.into_array(null_buffer, GenericBinaryArray::<V>::DATA_TYPE);
+                    let binary = binary.as_binary::<V>();
+                    let array =
+                        FixedSizeBinaryArray::try_from_sparse_iter_with_size(binary.iter(), size)?;
+                    return pack_fixed_values(key_type, &array);
+                }
+
+                hash_byte_slices(&values.offsets, &values.values, hash_scratch);
+                let hashes = hashes_as_u64(hash_scratch);
+
+                pack_values_from_offsets(key_type, &value_type, &values, hashes, null_buffer)
             }
         }
     }
@@ -226,40 +279,49 @@ impl<K: ArrowNativeType, V: OffsetSizeTrait> ValuesBuffer for DictionaryBuffer<K
     }
 }
 
-macro_rules! dict_helper {
+/// Build a dictionary array from a raw keys buffer and an already-decoded values
+/// `ArrayRef`, skipping the ArrayData round-trip.
+fn build_dictionary_array(
+    key_type: &ArrowType,
+    keys_buffer: Buffer,
+    num_keys: usize,
+    null_buffer: Option<NullBuffer>,
+    values: ArrayRef,
+) -> Result<ArrayRef> {
+    macro_rules! build {
+        ($kt:ty) => {{
+            let scalars =
+                ScalarBuffer::<<$kt as ArrowPrimitiveType>::Native>::new(keys_buffer, 0, num_keys);
+            let keys = PrimitiveArray::<$kt>::new(scalars, null_buffer);
+            // SAFETY: key bounds already validated by caller
+            let dict = unsafe { DictionaryArray::<$kt>::new_unchecked(keys, values) };
+            Ok(Arc::new(dict) as ArrayRef)
+        }};
+    }
+    match key_type {
+        ArrowType::Int8 => build!(Int8Type),
+        ArrowType::Int16 => build!(Int16Type),
+        ArrowType::Int32 => build!(Int32Type),
+        ArrowType::Int64 => build!(Int64Type),
+        ArrowType::UInt8 => build!(UInt8Type),
+        ArrowType::UInt16 => build!(UInt16Type),
+        ArrowType::UInt32 => build!(UInt32Type),
+        ArrowType::UInt64 => build!(UInt64Type),
+        _ => Err(general_err!("unsupported dictionary key type: {key_type}")),
+    }
+}
+
+macro_rules! fixed_dict_helper {
     ($k:ty, $array:ident) => {
-        match $array.data_type() {
-            ArrowType::Utf8 => pack_values_impl::<$k, _>($array.as_string::<i32>()),
-            ArrowType::LargeUtf8 => pack_values_impl::<$k, _>($array.as_string::<i64>()),
-            ArrowType::Binary => pack_values_impl::<$k, _>($array.as_binary::<i32>()),
-            ArrowType::LargeBinary => pack_values_impl::<$k, _>($array.as_binary::<i64>()),
-            ArrowType::FixedSizeBinary(_) => {
-                pack_fixed_values_impl::<$k>($array.as_fixed_size_binary())
-            }
-            _ => unreachable!(),
-        }
+        pack_fixed_values_impl::<$k>($array)
     };
 }
 
-fn pack_values(key_type: &ArrowType, values: &ArrayRef) -> Result<ArrayRef> {
+fn pack_fixed_values(key_type: &ArrowType, array: &FixedSizeBinaryArray) -> Result<ArrayRef> {
     downcast_integer! {
-        key_type => (dict_helper, values),
-            _ => unreachable!(),
+        key_type => (fixed_dict_helper, array),
+        _ => unreachable!(),
     }
-}
-
-fn pack_values_impl<K: ArrowDictionaryKeyType, T: ByteArrayType>(
-    array: &GenericByteArray<T>,
-) -> Result<ArrayRef> {
-    let mut builder = GenericByteDictionaryBuilder::<K, T>::with_capacity(array.len(), 1024, 1024);
-    for x in array {
-        match x {
-            Some(x) => builder.append_value(x),
-            None => builder.append_null(),
-        }
-    }
-    let raw = builder.finish();
-    Ok(Arc::new(raw))
 }
 
 fn pack_fixed_values_impl<K: ArrowDictionaryKeyType>(
@@ -272,12 +334,209 @@ fn pack_fixed_values_impl<K: ArrowDictionaryKeyType>(
     );
     for x in array {
         match x {
-            Some(x) => builder.append_value(x),
+            Some(x) => {
+                builder.append(x)?;
+            }
             None => builder.append_null(),
         }
     }
-    let raw = builder.finish();
-    Ok(Arc::new(raw))
+    Ok(Arc::new(builder.finish()))
+}
+
+macro_rules! offsets_dict_helper {
+    ($k:ty, $key_type:ident, $value_type:ident, $values:ident, $hashes:ident, $null_buffer:ident) => {
+        pack_values_from_offsets_impl::<$k, _>(
+            $values,
+            $hashes,
+            $null_buffer,
+            $key_type,
+            $value_type,
+        )
+    };
+}
+
+fn pack_values_from_offsets<V: OffsetSizeTrait>(
+    key_type: &ArrowType,
+    value_type: &ArrowType,
+    values: &OffsetBuffer<V>,
+    hashes: &[u64],
+    null_buffer: Option<Buffer>,
+) -> Result<ArrayRef> {
+    downcast_integer! {
+        key_type => (offsets_dict_helper, key_type, value_type, values, hashes, null_buffer),
+        _ => unreachable!(),
+    }
+}
+
+// Avoids double-hashing: keys are already high-quality u64 hashes from ahash,
+// so we pass them through directly rather than re-hashing inside the HashMap.
+struct PassthroughHasher(u64);
+impl std::hash::Hasher for PassthroughHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, _: &[u8]) {
+        unreachable!()
+    }
+    fn write_u64(&mut self, value: u64) {
+        self.0 = value;
+    }
+}
+#[derive(Default)]
+struct BuildPassthroughHasher;
+impl std::hash::BuildHasher for BuildPassthroughHasher {
+    type Hasher = PassthroughHasher;
+    fn build_hasher(&self) -> PassthroughHasher {
+        PassthroughHasher(0)
+    }
+}
+
+/// Builds a [`DictionaryArray`] directly from a flat [`OffsetBuffer`] using pre-computed
+/// hashes to deduplicate values in a single pass, avoiding the intermediate StringArray
+/// materialization
+fn pack_values_from_offsets_impl<K: ArrowDictionaryKeyType, V: OffsetSizeTrait>(
+    offset_buffer: &OffsetBuffer<V>,
+    hashes: &[u64],
+    null_buffer: Option<Buffer>,
+    key_type: &ArrowType,
+    value_type: &ArrowType,
+) -> Result<ArrayRef> {
+    let dict_type = ArrowType::Dictionary(Box::new(key_type.clone()), Box::new(value_type.clone()));
+    let num_values = offset_buffer.len();
+
+    let mut keys: Vec<K::Native> = Vec::with_capacity(num_values);
+    let mut unique_offsets: Vec<V> = Vec::with_capacity(num_values + 1);
+    unique_offsets.push(V::default());
+    let mut unique_bytes: Vec<u8> = Vec::with_capacity(offset_buffer.values.len());
+
+    let mut dedup: HbHashMap<u64, (usize, usize), BuildPassthroughHasher> =
+        HbHashMap::with_capacity_and_hasher(num_values, BuildPassthroughHasher);
+
+    // Tracks colliding values (same hash, different bytes) so repeated occurrences
+    // are deduplicated rather than inserted as new entries. Empty in the common case.
+    let mut collision_overflow: Vec<(u64, usize, usize)> = Vec::new();
+
+    for (input_idx, &hash) in hashes.iter().enumerate() {
+        let byte_start = offset_buffer.offsets[input_idx].as_usize();
+        let byte_end = offset_buffer.offsets[input_idx + 1].as_usize();
+        let bytes = &offset_buffer.values[byte_start..byte_end];
+
+        let output_idx = match dedup.entry(hash) {
+            Entry::Occupied(entry) => {
+                let (first_input_idx, existing_output_idx) = *entry.get();
+                let first_start = offset_buffer.offsets[first_input_idx].as_usize();
+                let first_end = offset_buffer.offsets[first_input_idx + 1].as_usize();
+                if &offset_buffer.values[first_start..first_end] == bytes {
+                    existing_output_idx
+                } else {
+                    // True hash collision — check overflow list before inserting.
+                    let existing = collision_overflow
+                        .iter()
+                        .find(|&&(entry_hash, collision_input_idx, _)| {
+                            if entry_hash != hash {
+                                return false;
+                            }
+                            let collision_start =
+                                offset_buffer.offsets[collision_input_idx].as_usize();
+                            let collision_end =
+                                offset_buffer.offsets[collision_input_idx + 1].as_usize();
+                            &offset_buffer.values[collision_start..collision_end] == bytes
+                        })
+                        .map(|&(_, _, collision_output_idx)| collision_output_idx);
+
+                    match existing {
+                        Some(collision_output_idx) => collision_output_idx,
+                        None => {
+                            let new_output_idx = unique_offsets.len() - 1;
+                            unique_bytes.extend_from_slice(bytes);
+                            let new_end = V::from_usize(unique_bytes.len()).ok_or_else(|| {
+                                general_err!("offset overflow building dictionary")
+                            })?;
+                            unique_offsets.push(new_end);
+                            collision_overflow.push((hash, input_idx, new_output_idx));
+                            new_output_idx
+                        }
+                    }
+                }
+            }
+            Entry::Vacant(entry) => {
+                let output_idx = unique_offsets.len() - 1;
+                unique_bytes.extend_from_slice(bytes);
+                let new_end = V::from_usize(unique_bytes.len())
+                    .ok_or_else(|| general_err!("offset overflow building dictionary"))?;
+                unique_offsets.push(new_end);
+                entry.insert((input_idx, output_idx));
+                output_idx
+            }
+        };
+
+        let key = K::Native::from_usize(output_idx)
+            .ok_or_else(|| general_err!("dictionary key overflow"))?;
+        keys.push(key);
+    }
+
+    let num_unique = unique_offsets.len() - 1;
+
+    // SAFETY: buffers are constructed directly from typed Vecs above; offsets are
+    // monotonically non-decreasing and bounded by unique_bytes.len(), and all
+    // key values are within 0..num_unique, so the invariants Arrow requires hold.
+    let value_data = unsafe {
+        arrow_data::ArrayData::builder(value_type.clone())
+            .len(num_unique)
+            .add_buffer(Buffer::from_vec(unique_offsets))
+            .add_buffer(Buffer::from_vec(unique_bytes))
+            .build_unchecked()
+    };
+
+    // SAFETY: keys are within 0..num_unique and value_data is valid.
+    let dict_array: DictionaryArray<K> = unsafe {
+        arrow_data::ArrayData::builder(dict_type)
+            .len(keys.len())
+            .add_buffer(Buffer::from_vec(keys))
+            .add_child_data(value_data)
+            .null_bit_buffer(null_buffer)
+            .build_unchecked()
+            .into()
+    };
+
+    Ok(Arc::new(dict_array))
+}
+
+fn hash_byte_slices<I: ArrowNativeType>(offsets: &[I], values: &[u8], scratch: &mut MutableBuffer) {
+    let count = offsets.len().saturating_sub(1);
+    scratch.clear();
+    scratch.resize(count * size_of::<u64>(), 0u8);
+
+    let state = RandomState::new();
+
+    // SAFETY: MutableBuffer is 64-byte aligned; scratch is sized to exactly count * size_of::<u64>()
+    #[expect(
+        clippy::cast_ptr_alignment,
+        reason = "MutableBuffer is 64-byte aligned"
+    )]
+    let hash_slots = unsafe { from_raw_parts_mut(scratch.as_mut_ptr().cast::<u64>(), count) };
+
+    for idx in 0..count {
+        let start = offsets[idx].as_usize();
+        let end = offsets[idx + 1].as_usize();
+        let mut hasher = state.build_hasher();
+        hasher.write(&values[start..end]);
+        // SAFETY: idx is within 0..count
+        unsafe { write_unaligned(hash_slots.as_mut_ptr().add(idx), hasher.finish()) };
+    }
+}
+
+#[inline]
+fn hashes_as_u64(scratch: &[u8]) -> &[u64] {
+    let n = scratch.len() / size_of::<u64>();
+    // SAFETY: scratch was written as u64s by hash_byte_slices, and MutableBuffer is 64-byte aligned
+    #[expect(
+        clippy::cast_ptr_alignment,
+        reason = "MutableBuffer is 64-byte aligned"
+    )]
+    unsafe {
+        from_raw_parts(scratch.as_ptr().cast::<u64>(), n)
+    }
 }
 
 #[cfg(test)]
@@ -297,7 +556,10 @@ mod tests {
 
         // Read some data preserving the dictionary
         let values = &[1, 0, 3, 2, 4];
-        buffer.as_keys(&d1).unwrap().extend_from_slice(values);
+        buffer
+            .as_keys_with_bit_width(&d1, None)
+            .unwrap()
+            .extend_from_slice(values);
 
         let mut valid = vec![false, false, true, true, false, true, true, true];
         let valid_buffer = Buffer::from_iter(valid.iter().copied());
@@ -321,7 +583,9 @@ mod tests {
         assert_eq!(buffer.len(), 13);
         let split = std::mem::replace(&mut buffer, DictionaryBuffer::with_capacity(0));
 
-        let array = split.into_array(Some(null_buffer), &dict_type).unwrap();
+        let array = split
+            .into_array(Some(null_buffer), &dict_type, &mut MutableBuffer::new(0))
+            .unwrap();
         assert_eq!(array.data_type(), &dict_type);
 
         let strings = cast(&array, &ArrowType::Utf8).unwrap();
@@ -350,12 +614,12 @@ mod tests {
         assert_eq!(buffer.len(), 0);
         let d2 = Arc::new(StringArray::from(vec!["bingo", ""])) as ArrayRef;
         buffer
-            .as_keys(&d2)
+            .as_keys_with_bit_width(&d2, None)
             .unwrap()
             .extend_from_slice(&[0, 1, 0, 1]);
 
         let array = std::mem::replace(&mut buffer, DictionaryBuffer::with_capacity(0))
-            .into_array(None, &dict_type)
+            .into_array(None, &dict_type, &mut MutableBuffer::new(0))
             .unwrap();
         assert_eq!(array.data_type(), &dict_type);
 
@@ -370,11 +634,14 @@ mod tests {
         assert!(matches!(&buffer, DictionaryBuffer::Values { .. }));
         assert_eq!(buffer.len(), 0);
         let d3 = Arc::new(StringArray::from(vec!["bongo"])) as ArrayRef;
-        buffer.as_keys(&d3).unwrap().extend_from_slice(&[0, 0]);
+        buffer
+            .as_keys_with_bit_width(&d3, None)
+            .unwrap()
+            .extend_from_slice(&[0, 0]);
 
         // Cannot change dictionary as keys not empty
         let d4 = Arc::new(StringArray::from(vec!["bananas"])) as ArrayRef;
-        assert!(buffer.as_keys(&d4).is_none());
+        assert!(buffer.as_keys_with_bit_width(&d4, None).is_none());
     }
 
     #[test]
@@ -384,9 +651,15 @@ mod tests {
 
         let mut buffer = DictionaryBuffer::<i32, i32>::with_capacity(0);
         let d = Arc::new(StringArray::from(vec!["", "f"])) as ArrayRef;
-        buffer.as_keys(&d).unwrap().extend_from_slice(&[0, 2, 0]);
+        buffer
+            .as_keys_with_bit_width(&d, None)
+            .unwrap()
+            .extend_from_slice(&[0, 2, 0]);
 
-        let err = buffer.into_array(None, &dict_type).unwrap_err().to_string();
+        let err = buffer
+            .into_array(None, &dict_type, &mut MutableBuffer::new(0))
+            .unwrap_err()
+            .to_string();
         assert!(
             err.contains("dictionary key beyond bounds of dictionary: 0..2"),
             "{}",
@@ -395,7 +668,10 @@ mod tests {
 
         let mut buffer = DictionaryBuffer::<i32, i32>::with_capacity(0);
         let d = Arc::new(StringArray::from(vec![""])) as ArrayRef;
-        buffer.as_keys(&d).unwrap().extend_from_slice(&[0, 1, 0]);
+        buffer
+            .as_keys_with_bit_width(&d, None)
+            .unwrap()
+            .extend_from_slice(&[0, 1, 0]);
 
         let err = buffer.spill_values().unwrap_err().to_string();
         assert!(
@@ -403,5 +679,226 @@ mod tests {
             "{}",
             err
         );
+    }
+
+    /// A dictionary requested with LargeUtf8 values must come back with LargeUtf8, not Utf8.
+    #[test]
+    fn test_values_path_large_utf8_type() {
+        let dict_type =
+            ArrowType::Dictionary(Box::new(ArrowType::Int32), Box::new(ArrowType::LargeUtf8));
+        let mut buffer = DictionaryBuffer::<i32, i64>::with_capacity(0);
+        let values = buffer.spill_values().unwrap();
+        for s in ["foo", "bar", "foo"] {
+            values.try_push(s.as_bytes(), false).unwrap();
+        }
+
+        let array = buffer
+            .into_array(None, &dict_type, &mut MutableBuffer::new(0))
+            .unwrap();
+        let dict = array
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int32Type>>()
+            .unwrap();
+
+        assert_eq!(dict.data_type(), &dict_type);
+        assert_eq!(dict.values().data_type(), &ArrowType::LargeUtf8);
+    }
+
+    /// 128 unique strings fill Int8 keys to capacity (last index = 127 = i8::MAX).
+    /// A 129th unique string overflows and must return an error.
+    #[test]
+    fn test_int8_key_overflow_boundary() {
+        let dict_type = ArrowType::Dictionary(Box::new(ArrowType::Int8), Box::new(ArrowType::Utf8));
+        let mut scratch = MutableBuffer::new(0);
+
+        {
+            let mut buffer = DictionaryBuffer::<i32, i32>::with_capacity(0);
+            let values = buffer.spill_values().unwrap();
+            for i in 0u32..128 {
+                values
+                    .try_push(format!("val{i}").as_bytes(), false)
+                    .unwrap();
+            }
+            buffer
+                .into_array(None, &dict_type, &mut scratch)
+                .expect("128 unique strings must fit: last index is 127 = i8::MAX");
+        }
+
+        {
+            let mut buffer = DictionaryBuffer::<i32, i32>::with_capacity(0);
+            let values = buffer.spill_values().unwrap();
+            for i in 0u32..129 {
+                values
+                    .try_push(format!("val{i}").as_bytes(), false)
+                    .unwrap();
+            }
+            let err = buffer
+                .into_array(None, &dict_type, &mut scratch)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("dictionary key overflow"),
+                "expected 'dictionary key overflow', got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_fixed_size_binary_key_overflow_boundary() {
+        for (key_type, capacity) in [(ArrowType::Int8, 128u32), (ArrowType::UInt8, 256)] {
+            for unique in [capacity, capacity + 1] {
+                let values = (0..unique)
+                    .map(|value| Some(value.to_le_bytes()))
+                    .chain([None, Some(0u32.to_le_bytes())]);
+                let values =
+                    FixedSizeBinaryArray::try_from_sparse_iter_with_size(values, 4).unwrap();
+                let result = pack_fixed_values(&key_type, &values);
+                if unique > capacity {
+                    let error = result.unwrap_err();
+                    let ParquetError::External(source) = &error else {
+                        panic!("expected an Arrow dictionary overflow error, got {error}");
+                    };
+                    assert!(
+                        matches!(
+                            source.downcast_ref::<arrow_schema::ArrowError>(),
+                            Some(arrow_schema::ArrowError::DictionaryKeyOverflowError)
+                        ),
+                        "{error}"
+                    );
+                } else {
+                    let array = result.unwrap();
+                    assert_eq!(array.len(), unique as usize + 2);
+                    assert_eq!(array.null_count(), 1);
+                    assert!(array.is_null(unique as usize));
+                    assert!(array.is_valid(unique as usize + 1));
+                    let dictionary = array.as_any_dictionary();
+                    assert_eq!(dictionary.values().len(), unique as usize);
+                    assert_eq!(
+                        dictionary.values().data_type(),
+                        &ArrowType::FixedSizeBinary(4)
+                    );
+                }
+            }
+        }
+    }
+
+    /// A colliding string repeated after its initial collision must reuse its key,
+    /// not be inserted again as a new dictionary entry.
+    #[test]
+    fn test_hash_collision_deduplication() {
+        let key_type = ArrowType::Int32;
+        let value_type = ArrowType::Utf8;
+
+        // "alpha", "beta", "beta" — all forced to share the same hash.
+        let mut ob = OffsetBuffer::<i32>::with_capacity(3);
+        ob.try_push(b"alpha", false).unwrap();
+        ob.try_push(b"beta", false).unwrap();
+        ob.try_push(b"beta", false).unwrap();
+        let hashes = [0xdeadbeef_u64; 3];
+
+        let array = pack_values_from_offsets_impl::<Int32Type, i32>(
+            &ob,
+            &hashes,
+            None,
+            &key_type,
+            &value_type,
+        )
+        .unwrap();
+
+        let dict = array
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int32Type>>()
+            .unwrap();
+
+        assert_eq!(dict.values().len(), 2);
+        let keys: Vec<i32> = dict.keys().values().iter().copied().collect();
+        assert_eq!(keys, vec![0, 1, 1]);
+    }
+
+    /// A dictionary requested with Binary values must come back with Binary, not Utf8.
+    #[test]
+    fn test_values_path_binary_type() {
+        let dict_type =
+            ArrowType::Dictionary(Box::new(ArrowType::Int32), Box::new(ArrowType::Binary));
+        let mut buffer = DictionaryBuffer::<i32, i32>::with_capacity(0);
+        let values = buffer.spill_values().unwrap();
+        for s in [b"abc".as_ref(), b"\x00\xff", b"abc"] {
+            values.try_push(s, false).unwrap();
+        }
+
+        let array = buffer
+            .into_array(None, &dict_type, &mut MutableBuffer::new(0))
+            .unwrap();
+        let dict = array
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int32Type>>()
+            .unwrap();
+
+        assert_eq!(dict.data_type(), &dict_type);
+        assert_eq!(dict.values().data_type(), &ArrowType::Binary);
+    }
+
+    #[test]
+    fn test_key_upper_bound_skip_scan_when_bound_fits_otherwise_scan() {
+        let dict_type =
+            ArrowType::Dictionary(Box::new(ArrowType::Int32), Box::new(ArrowType::Utf8));
+        let dict_5 = Arc::new(StringArray::from(vec!["a", "b", "c", "d", "e"])) as ArrayRef;
+
+        let mut buffer = DictionaryBuffer::<i32, i32>::with_capacity(0);
+        buffer
+            .as_keys_with_bit_width(&dict_5, Some(2))
+            .unwrap()
+            .extend_from_slice(&[0, 1, 2, 3]);
+        assert!(matches!(
+            buffer,
+            DictionaryBuffer::Dict {
+                key_upper_bound: Some(4),
+                ..
+            }
+        ));
+        let array = buffer
+            .into_array(None, &dict_type, &mut MutableBuffer::new(0))
+            .unwrap();
+        assert_eq!(array.len(), 4);
+
+        let mut buffer = DictionaryBuffer::<i32, i32>::with_capacity(0);
+        buffer
+            .as_keys_with_bit_width(&dict_5, Some(4))
+            .unwrap()
+            .extend_from_slice(&[0, 10]);
+        let err = buffer
+            .into_array(None, &dict_type, &mut MutableBuffer::new(0))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("dictionary key beyond bounds"), "{err}");
+
+        let mut buffer = DictionaryBuffer::<i32, i32>::with_capacity(0);
+        buffer
+            .as_keys_with_bit_width(&dict_5, None)
+            .unwrap()
+            .extend_from_slice(&[0, 7]);
+        buffer
+            .into_array(None, &dict_type, &mut MutableBuffer::new(0))
+            .unwrap_err();
+
+        let mut buffer = DictionaryBuffer::<i32, i32>::with_capacity(0);
+        buffer
+            .as_keys_with_bit_width(&dict_5, Some(2))
+            .unwrap()
+            .extend_from_slice(&[0, 1]);
+        buffer
+            .as_keys_with_bit_width(&dict_5, Some(4))
+            .unwrap()
+            .extend_from_slice(&[10]);
+        assert!(matches!(
+            buffer,
+            DictionaryBuffer::Dict {
+                key_upper_bound: Some(16),
+                ..
+            }
+        ));
+        buffer
+            .into_array(None, &dict_type, &mut MutableBuffer::new(0))
+            .unwrap_err();
     }
 }

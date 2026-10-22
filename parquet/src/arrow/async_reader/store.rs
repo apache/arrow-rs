@@ -244,6 +244,16 @@ impl AsyncFileReader for ParquetObjectReader {
                     .with_column_index_policy(options.column_index_policy())
                     .with_offset_index_policy(options.offset_index_policy());
             }
+            // TODO: https://github.com/apache/arrow-rs/issues/11395 may deprecate this API. Decide
+            // at that time if masks should be added to ParquetObjectReader.
+            if let Some(options) = options {
+                if !options.column_index_mask().is_all() {
+                    metadata = metadata.with_column_index_mask(options.column_index_mask().clone());
+                }
+                if !options.offset_index_mask().is_all() {
+                    metadata = metadata.with_offset_index_mask(options.offset_index_mask().clone());
+                }
+            }
 
             let metadata = if let Some(file_size) = self.file_size {
                 metadata.load_and_finish(self, file_size).await?
@@ -447,7 +457,7 @@ mod tests {
         let metadata = reader.get_metadata(Some(&options)).await.unwrap();
 
         // With preload=true, indexes should be loaded since the test file has them
-        assert!(metadata.column_index().is_some());
+        assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
     }
 
     #[tokio::test]
@@ -468,7 +478,7 @@ mod tests {
 
         // With Optional policy, it will TRY to load indexes but won't fail if they don't exist
         // The test file has page indexes, so they will be some
-        assert!(metadata.column_index().is_some());
+        assert!(metadata.page_index().is_some());
     }
 
     #[tokio::test]
@@ -496,8 +506,8 @@ mod tests {
         // Both should succeed (no panic/error)
         // metadata1 (Skip) uses preload=false -> Skip policy
         // metadata2 (Optional) overrides preload=false -> Optional policy
-        assert!(metadata1.column_index().is_none());
-        assert!(metadata2.column_index().is_some());
+        assert!(metadata1.page_index().is_none());
+        assert!(metadata2.page_index().is_some());
     }
 
     #[tokio::test]
@@ -516,6 +526,6 @@ mod tests {
         // With no options provided, preload flags (true) should be respected
         // and converted to Optional policy internally (preload=true -> Optional)
         // The test file has page indexes, so they will be some
-        assert!(metadata.column_index().is_some() && metadata.column_index().is_some());
+        assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
     }
 }

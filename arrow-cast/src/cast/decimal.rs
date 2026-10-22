@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::cast::*;
+use crate::parse::{DecimalParseError, parse_decimal_checked};
 
 /// A utility trait that provides checked conversions between
 /// decimal types inspired by [`NumCast`]
@@ -171,7 +172,7 @@ where
     I::Native: DecimalCast + ArrowNativeTypeOp,
     O::Native: DecimalCast + ArrowNativeTypeOp,
 {
-    let delta_scale = output_scale - input_scale;
+    let delta_scale = output_scale as i16 - input_scale as i16;
 
     // O::MAX_FOR_EACH_PRECISION[k] stores 10^k - 1 (e.g., 9, 99, 999, ...).
     // Adding 1 yields exactly 10^k without computing a power at runtime.
@@ -187,7 +188,7 @@ where
     // then an increase of scale by 3 will have the following effect on the representation:
     // [xxxxx] -> [xxxxx000], so for the cast to be infallible, the output type
     // needs to provide at least 8 digits precision
-    let is_infallible_cast = (input_precision as i8) + delta_scale <= (output_precision as i8);
+    let is_infallible_cast = (input_precision as i16) + delta_scale <= (output_precision as i16);
     let f_infallible = is_infallible_cast
         .then_some(move |x| O::Native::from_decimal(x).unwrap().mul_wrapping(mul));
     Some((f_fallible, f_infallible))
@@ -220,7 +221,7 @@ where
     I::Native: DecimalCast + ArrowNativeTypeOp,
     O::Native: DecimalCast + ArrowNativeTypeOp,
 {
-    let delta_scale = input_scale - output_scale;
+    let delta_scale = input_scale as i16 - output_scale as i16;
 
     // delta_scale is guaranteed to be > 0, but may also be larger than I::MAX_PRECISION. If so, the
     // scale change divides out more digits than the input has precision and the result of the cast
@@ -236,8 +237,7 @@ where
 
     let f_fallible = move |x: I::Native| {
         // div is >= 10 and so this cannot overflow
-        let d = x.div_wrapping(div);
-        let r = x.mod_wrapping(div);
+        let (d, r) = x.div_rem_wrapping(div);
 
         // Round result
         let adjusted = match x >= I::Native::ZERO {
@@ -258,7 +258,7 @@ where
     // the output type needs to have at least 3 digits of precision.
     // e.g. Decimal(5, 3) 99.999 to Decimal(3, 0) will result in 100:
     // [99999] -> [99] + 1 = [100], a cast to Decimal(2, 0) would not be possible
-    let is_infallible_cast = (input_precision as i8) - delta_scale < (output_precision as i8);
+    let is_infallible_cast = (input_precision as i16) - delta_scale < (output_precision as i16);
     let f_infallible = is_infallible_cast.then_some(move |x| f_fallible(x).unwrap());
     Some((f_fallible, f_infallible))
 }
@@ -532,176 +532,31 @@ where
 /// unscaled representation in the decimal type's native integer (e.g. `i32`
 /// for `Decimal32Type`, `i256` for `Decimal256Type`).
 ///
-/// The input is an optionally signed (`+`/`-`) sequence of digits containing
-/// at most one decimal point, with optional surrounding whitespace. Fractional
-/// digits beyond `scale` do not appear in the result but round it half away
-/// from zero (e.g. `"1.005"` at scale 2 parses as `101`).
-///
 /// Returns an error if the input is not a valid decimal string, or if the
-/// scaled and rounded value overflows the native type. The caller is
-/// responsible for validating the result against a precision.
+/// scaled and rounded value does not fit the maximum precision of the decimal
+/// type. The caller is responsible for validating the result against any
+/// smaller target precision.
+#[deprecated(
+    since = "60.0.0",
+    note = "Use `arrow_cast::parse::parse_decimal` instead"
+)]
 pub fn parse_string_to_decimal_native<T: DecimalType>(
     value_str: &str,
     scale: usize,
-) -> Result<T::Native, ArrowError>
-where
-    T::Native: DecimalCast + ArrowNativeTypeOp,
-{
-    let value_str = value_str.trim();
-    let bytes = value_str.as_bytes();
-
-    let mut index = 0;
-    let negative = match bytes.first() {
-        Some(b'-') => {
-            index += 1;
-            true
-        }
-        Some(b'+') => {
-            index += 1;
-            false
-        }
-        _ => false,
+) -> Result<T::Native, ArrowError> {
+    let overflow = || {
+        ArrowError::InvalidArgumentError(format!(
+            "Cannot convert {value_str} to {}: Overflow",
+            T::PREFIX
+        ))
     };
-
-    let mut value = T::Native::ZERO;
-    let mut chunk = 0_u64;
-    let mut chunk_len = 0_usize;
-    let mut saw_digit = false;
-    let mut saw_point = false;
-    let mut fractionals = 0_usize;
-    let mut first_discarded_digit = None;
-
-    while let Some(&b) = bytes.get(index) {
-        match b {
-            b'0'..=b'9' => {
-                saw_digit = true;
-                let digit = b - b'0';
-                if saw_point {
-                    if fractionals == scale {
-                        first_discarded_digit.get_or_insert(digit);
-                        index += 1;
-                        continue;
-                    }
-                    fractionals += 1;
-                }
-
-                // Cannot overflow: the chunk is folded into `value` before it
-                // exceeds MAX_CHUNK_DIGITS digits, all of which fit in a u64
-                chunk = chunk * 10 + digit as u64;
-                chunk_len += 1;
-                if chunk_len == MAX_CHUNK_DIGITS {
-                    value = fold_decimal_chunk::<T>(value, chunk, chunk_len, negative, value_str)?;
-                    chunk = 0;
-                    chunk_len = 0;
-                }
-            }
-            b'.' if !saw_point => saw_point = true,
-            _ => {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Invalid decimal format: {value_str:?}"
-                )));
-            }
+    let scale = i8::try_from(scale).map_err(|_| overflow())?;
+    parse_decimal_checked::<T>(value_str, T::MAX_PRECISION, scale).map_err(|e| match e {
+        DecimalParseError::InvalidFormat => {
+            ArrowError::InvalidArgumentError(format!("Invalid decimal format: {value_str:?}"))
         }
-        index += 1;
-    }
-
-    if chunk_len > 0 {
-        value = fold_decimal_chunk::<T>(value, chunk, chunk_len, negative, value_str)?;
-    }
-
-    if !saw_digit {
-        return Err(ArrowError::InvalidArgumentError(format!(
-            "Invalid decimal format: {value_str:?}"
-        )));
-    }
-
-    // Scale the value up to the target scale. Skipped for zero, where computing
-    // 10^(scale - fractionals) could overflow the native type even though the
-    // result (zero) is always representable.
-    if fractionals < scale && !value.is_zero() {
-        value = value
-            .mul_checked(decimal_pow::<T>(scale - fractionals, value_str)?)
-            .map_err(|_| decimal_parse_overflow::<T>(value_str))?;
-    }
-
-    if first_discarded_digit.is_some_and(|digit| digit >= 5) {
-        value = if negative {
-            value.sub_checked(T::Native::ONE)
-        } else {
-            value.add_checked(T::Native::ONE)
-        }
-        .map_err(|_| decimal_parse_overflow::<T>(value_str))?;
-    }
-
-    Ok(value)
-}
-
-/// The maximum number of decimal digits a u64 can accumulate without
-/// overflowing: every 19-digit number fits in a u64.
-const MAX_CHUNK_DIGITS: usize = 19;
-
-/// Folds a chunk of up to [`MAX_CHUNK_DIGITS`] digits into `value`, producing
-/// `value * 10^chunk_len + chunk` (`chunk` is negated first when parsing a
-/// negative number).
-#[inline]
-fn fold_decimal_chunk<T: DecimalType>(
-    value: T::Native,
-    chunk: u64,
-    chunk_len: usize,
-    negative: bool,
-    value_str: &str,
-) -> Result<T::Native, ArrowError>
-where
-    T::Native: DecimalCast + ArrowNativeTypeOp,
-{
-    // Negate before narrowing to the native type so that a chunk with the
-    // magnitude of the native type's minimum value (e.g. "2147483648" for
-    // Decimal32) remains representable.
-    let signed_chunk = if negative {
-        -(chunk as i128)
-    } else {
-        chunk as i128
-    };
-    let chunk = T::Native::from_decimal(signed_chunk)
-        .ok_or_else(|| decimal_parse_overflow::<T>(value_str))?;
-
-    // When `value` is zero the multiply would be a no-op; skipping it avoids
-    // computing 10^chunk_len, which can overflow a narrow native type even
-    // though the result (the chunk itself) is representable.
-    if value.is_zero() {
-        return Ok(chunk);
-    }
-
-    value
-        .mul_checked(decimal_pow::<T>(chunk_len, value_str)?)
-        .map_err(|_| decimal_parse_overflow::<T>(value_str))?
-        .add_checked(chunk)
-        .map_err(|_| decimal_parse_overflow::<T>(value_str))
-}
-
-/// Returns `10^exp` as a `T::Native`, or an overflow error if the result does
-/// not fit in the native type.
-#[inline]
-fn decimal_pow<T: DecimalType>(exp: usize, value_str: &str) -> Result<T::Native, ArrowError>
-where
-    T::Native: ArrowNativeTypeOp,
-{
-    // T::MAX_FOR_EACH_PRECISION[k] holds 10^k - 1, so adding one yields 10^k
-    // without computing a power at runtime. Exponents beyond the table always
-    // overflow: the native type cannot hold 10^(MAX_PRECISION + 1).
-    let max = T::MAX_FOR_EACH_PRECISION
-        .get(exp)
-        .ok_or_else(|| decimal_parse_overflow::<T>(value_str))?;
-    Ok(max.add_wrapping(T::Native::ONE))
-}
-
-#[inline]
-fn decimal_parse_overflow<T: DecimalType>(value_str: &str) -> ArrowError {
-    ArrowError::InvalidArgumentError(format!(
-        "Cannot convert {} to {}: Overflow",
-        value_str,
-        T::PREFIX
-    ))
+        DecimalParseError::Overflow => overflow(),
+    })
 }
 
 pub(crate) fn generic_string_to_decimal_cast<'a, T, S>(
@@ -712,14 +567,12 @@ pub(crate) fn generic_string_to_decimal_cast<'a, T, S>(
 ) -> Result<PrimitiveArray<T>, ArrowError>
 where
     T: DecimalType,
-    T::Native: DecimalCast + ArrowNativeTypeOp,
     &'a S: StringArrayType<'a>,
 {
     if cast_options.safe {
-        let iter = from.iter().map(|v| {
-            let v = v.and_then(|v| parse_string_to_decimal_native::<T>(v, scale as usize).ok())?;
-            T::is_valid_decimal_precision(v, precision).then_some(v)
-        });
+        let iter = from
+            .iter()
+            .map(|v| parse_decimal_checked::<T>(v?, precision, scale).ok());
         // Benefit:
         //     15-19% faster than appending to a PrimitiveBuilder (measured
         //     with the cast_kernels string-to-decimal benchmarks)
@@ -734,16 +587,16 @@ where
         for v in from.iter() {
             match v {
                 Some(v) => {
-                    let v = parse_string_to_decimal_native::<T>(v, scale as usize)
-                        .map_err(|e| {
-                            ArrowError::CastError(format!(
-                                "Cannot cast string '{v}' to value of {}({precision}, {scale}) type: {e}",
-                                T::PREFIX,
-                            ))
-                        })
-                        .and_then(|v| {
-                            T::validate_decimal_precision(v, precision, scale).map(|()| v)
-                        })?;
+                    let v = parse_decimal_checked::<T>(v, precision, scale).map_err(|e| {
+                        let reason = match e {
+                            DecimalParseError::InvalidFormat => "invalid decimal format",
+                            DecimalParseError::Overflow => "value does not fit",
+                        };
+                        ArrowError::CastError(format!(
+                            "Cannot cast string '{v}' to value of {}({precision}, {scale}) type: {reason}",
+                            T::PREFIX,
+                        ))
+                    })?;
                     builder.append_value(v);
                 }
                 None => builder.append_null(),
@@ -753,16 +606,12 @@ where
     }
 }
 
-pub(crate) fn string_to_decimal_cast<T, Offset: OffsetSizeTrait>(
+pub(crate) fn string_to_decimal_cast<T: DecimalType, Offset: OffsetSizeTrait>(
     from: &GenericStringArray<Offset>,
     precision: u8,
     scale: i8,
     cast_options: &CastOptions,
-) -> Result<PrimitiveArray<T>, ArrowError>
-where
-    T: DecimalType,
-    T::Native: DecimalCast + ArrowNativeTypeOp,
-{
+) -> Result<PrimitiveArray<T>, ArrowError> {
     generic_string_to_decimal_cast::<T, GenericStringArray<Offset>>(
         from,
         precision,
@@ -771,42 +620,23 @@ where
     )
 }
 
-pub(crate) fn string_view_to_decimal_cast<T>(
+pub(crate) fn string_view_to_decimal_cast<T: DecimalType>(
     from: &StringViewArray,
     precision: u8,
     scale: i8,
     cast_options: &CastOptions,
-) -> Result<PrimitiveArray<T>, ArrowError>
-where
-    T: DecimalType,
-    T::Native: DecimalCast + ArrowNativeTypeOp,
-{
+) -> Result<PrimitiveArray<T>, ArrowError> {
     generic_string_to_decimal_cast::<T, StringViewArray>(from, precision, scale, cast_options)
 }
 
 /// Cast Utf8 to decimal
-pub(crate) fn cast_string_to_decimal<T, Offset: OffsetSizeTrait>(
+pub(crate) fn cast_string_to_decimal<T: DecimalType, Offset: OffsetSizeTrait>(
     from: &dyn Array,
     precision: u8,
     scale: i8,
     cast_options: &CastOptions,
-) -> Result<ArrayRef, ArrowError>
-where
-    T: DecimalType,
-    T::Native: DecimalCast + ArrowNativeTypeOp,
-{
-    if scale < 0 {
-        return Err(ArrowError::InvalidArgumentError(format!(
-            "Cannot cast string to decimal with negative scale {scale}"
-        )));
-    }
-
-    if scale > T::MAX_SCALE {
-        return Err(ArrowError::InvalidArgumentError(format!(
-            "Cannot cast string to decimal greater than maximum scale {}",
-            T::MAX_SCALE
-        )));
-    }
+) -> Result<ArrayRef, ArrowError> {
+    validate_decimal_precision_and_scale::<T>(precision, scale)?;
 
     let result = match from.data_type() {
         DataType::Utf8View => string_view_to_decimal_cast::<T>(
@@ -844,37 +674,116 @@ where
     D: DecimalType + ArrowPrimitiveType,
     <D as ArrowPrimitiveType>::Native: DecimalCast,
 {
+    validate_decimal_precision_and_scale::<D>(precision, scale)?;
     let mul = 10_f64.powi(scale as i32);
 
     if cast_options.safe {
         array
-            .unary_opt::<_, D>(|v| {
-                single_float_to_decimal::<D>(v.as_(), mul)
-                    .filter(|v| D::is_valid_decimal_precision(*v, precision))
-            })
+            .unary_opt::<_, D>(|v| float_to_decimal_checked::<D>(v.as_(), mul, precision).ok())
             .with_precision_and_scale(precision, scale)
             .map(|a| Arc::new(a) as ArrayRef)
     } else {
         array
             .try_unary::<_, D, _>(|v| {
-                let v = single_float_to_decimal::<D>(v.as_(), mul).ok_or_else(|| {
-                    ArrowError::CastError(format!(
-                        "Cannot cast to {}({}, {}). Overflowing on {:?}",
-                        D::PREFIX,
-                        precision,
-                        scale,
-                        v
-                    ))
-                })?;
-                D::validate_decimal_precision(v, precision, scale).map(|()| v)
+                float_to_decimal_checked::<D>(v.as_(), mul, precision)
+                    .map_err(|e| e.into_arrow_error(v, precision, scale))
             })?
             .with_precision_and_scale(precision, scale)
             .map(|a| Arc::new(a) as ArrayRef)
     }
 }
 
+/// Converts a floating point value to the unscaled integer representation of a decimal.
+///
+/// Scales the input by `10^scale` and rounds half away from zero. Returns an error
+/// if the precision or scale is invalid, or the result does not fit the native
+/// type or the requested precision. Non-finite inputs are rejected.
+/// Use [`float_to_decimal_opt`] when the reason for failure is not needed.
+///
+/// ```
+/// use arrow_array::types::Decimal32Type;
+/// use arrow_cast::cast::float_to_decimal;
+///
+/// assert_eq!(float_to_decimal::<Decimal32Type>(12.345, 5, 2).unwrap(), 1235);
+/// assert!(float_to_decimal::<Decimal32Type>(12345.678, 5, 2).is_err());
+/// ```
+#[inline]
+pub fn float_to_decimal<D>(input: f64, precision: u8, scale: i8) -> Result<D::Native, ArrowError>
+where
+    D: DecimalType,
+    D::Native: DecimalCast,
+{
+    validate_decimal_precision_and_scale::<D>(precision, scale)?;
+    float_to_decimal_checked::<D>(input, 10_f64.powi(scale as i32), precision)
+        .map_err(|e| e.into_arrow_error(input, precision, scale))
+}
+
+/// Like [`float_to_decimal`], but returns `None` on failure.
+/// With valid precision and scale, conversion failures do not allocate an error message.
+///
+/// ```
+/// use arrow_array::types::Decimal32Type;
+/// use arrow_cast::cast::float_to_decimal_opt;
+///
+/// assert_eq!(float_to_decimal_opt::<Decimal32Type>(12.345, 5, 2), Some(1235));
+/// assert_eq!(float_to_decimal_opt::<Decimal32Type>(12345.678, 5, 2), None);
+/// ```
+pub fn float_to_decimal_opt<D>(input: f64, precision: u8, scale: i8) -> Option<D::Native>
+where
+    D: DecimalType,
+    D::Native: DecimalCast,
+{
+    validate_decimal_precision_and_scale::<D>(precision, scale).ok()?;
+    float_to_decimal_checked::<D>(input, 10_f64.powi(scale as i32), precision).ok()
+}
+
+// Keep failure reporting allocation-free for scalar Option and safe array casts.
+enum FloatToDecimalError<D: DecimalType> {
+    NativeOverflow,
+    PrecisionOverflow(D::Native),
+}
+
+impl<D: DecimalType> FloatToDecimalError<D> {
+    fn into_arrow_error(self, input: impl std::fmt::Debug, precision: u8, scale: i8) -> ArrowError {
+        match self {
+            Self::NativeOverflow => ArrowError::CastError(format!(
+                "Cannot cast to {}({}, {}). Overflowing on {:?}",
+                D::PREFIX,
+                precision,
+                scale,
+                input
+            )),
+            Self::PrecisionOverflow(value) => {
+                D::validate_decimal_precision(value, precision, scale).unwrap_err()
+            }
+        }
+    }
+}
+
+// `mul` is precomputed once for array casts. Precision must already be validated.
+#[inline]
+fn float_to_decimal_checked<D>(
+    input: f64,
+    mul: f64,
+    precision: u8,
+) -> Result<D::Native, FloatToDecimalError<D>>
+where
+    D: DecimalType,
+    D::Native: DecimalCast,
+{
+    let value =
+        D::Native::from_f64((mul * input).round()).ok_or(FloatToDecimalError::NativeOverflow)?;
+    if D::is_valid_decimal_precision(value, precision) {
+        Ok(value)
+    } else {
+        Err(FloatToDecimalError::PrecisionOverflow(value))
+    }
+}
+
 /// Cast a single floating point value to a decimal native with the given multiple.
-/// Returns `None` if the value cannot be represented with the requested precision.
+/// Returns `None` if the scaled and rounded value does not fit the native integer
+/// type. The caller must separately validate the decimal precision.
+#[deprecated(since = "60.0.0", note = "Use `float_to_decimal` instead")]
 #[inline(always)]
 pub fn single_float_to_decimal<D>(input: f64, mul: f64) -> Option<D::Native>
 where
@@ -886,7 +795,6 @@ where
 
 pub(crate) fn cast_decimal_to_integer<D, T>(
     array: &dyn Array,
-    base: D::Native,
     scale: i8,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError>
@@ -898,13 +806,16 @@ where
 {
     let array = array.as_primitive::<D>();
 
-    let div: D::Native = base.pow_checked(scale.unsigned_abs() as u32).map_err(|_| {
-        ArrowError::CastError(format!(
-            "Cannot cast to {:?}. The scale {} causes overflow.",
-            D::PREFIX,
-            scale,
-        ))
-    })?;
+    // div is always > 0, so div_wrapping(div) can never overflow/panic
+    let div: D::Native = D::Native::usize_as(10)
+        .pow_checked(scale.unsigned_abs() as u32)
+        .map_err(|_| {
+            ArrowError::CastError(format!(
+                "Cannot cast to {:?}. The scale {} causes overflow.",
+                D::PREFIX,
+                scale,
+            ))
+        })?;
 
     let mut value_builder = PrimitiveBuilder::<T>::with_capacity(array.len());
 
@@ -952,11 +863,8 @@ where
                     if array.is_null(i) {
                         value_builder.append_null();
                     } else {
-                        let v = array
-                            .value(i)
-                            .div_checked(div)
-                            .ok()
-                            .and_then(<T::Native as NumCast>::from::<D::Native>);
+                        let v = array.value(i).div_wrapping(div);
+                        let v = <T::Native as NumCast>::from(v);
                         value_builder.append_option(v);
                     }
                 }
@@ -966,7 +874,7 @@ where
                     if array.is_null(i) {
                         value_builder.append_null();
                     } else {
-                        let v = array.value(i).div_checked(div)?;
+                        let v = array.value(i).div_wrapping(div);
 
                         let value =
                             <T::Native as NumCast>::from::<D::Native>(v).ok_or_else(|| {
@@ -1008,225 +916,119 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_string_to_decimal_native() -> Result<(), ArrowError> {
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal128Type>("0", 0)?,
-            0_i128
-        );
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal128Type>("0", 5)?,
-            0_i128
-        );
-
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal128Type>("123", 0)?,
-            123_i128
-        );
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal128Type>("123", 5)?,
-            12300000_i128
-        );
-
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal128Type>("123.45", 0)?,
-            123_i128
-        );
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal128Type>("123.45", 5)?,
-            12345000_i128
-        );
-
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal128Type>("123.4567891", 0)?,
-            123_i128
-        );
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal128Type>("123.4567891", 5)?,
-            12345679_i128
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_parse_string_to_decimal_native_integer_widths() -> Result<(), ArrowError> {
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal32Type>("123.45", 2)?,
-            12_345_i32
-        );
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal32Type>("-2147483648", 0)?,
-            i32::MIN
-        );
-        assert!(parse_string_to_decimal_native::<Decimal32Type>("2147483648", 0).is_err());
-
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal64Type>("123.45", 2)?,
-            12_345_i64
-        );
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal64Type>("-9223372036854775808", 0)?,
-            i64::MIN
-        );
-        assert!(parse_string_to_decimal_native::<Decimal64Type>("9223372036854775808", 0).is_err());
-
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal128Type>(&i128::MAX.to_string(), 0)?,
-            i128::MAX
-        );
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal128Type>(&i128::MIN.to_string(), 0)?,
-            i128::MIN
-        );
-
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal256Type>(&i256::MAX.to_string(), 0)?,
-            i256::MAX
-        );
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal256Type>(&i256::MIN.to_string(), 0)?,
-            i256::MIN
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_parse_string_to_decimal_native_rounding_and_padding() -> Result<(), ArrowError> {
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal128Type>("12.", 2)?,
-            1_200_i128
-        );
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal128Type>(".12", 2)?,
-            12_i128
-        );
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal128Type>("+.12", 2)?,
-            12_i128
-        );
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal128Type>("-.12", 2)?,
-            -12_i128
-        );
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal128Type>(".5", 0)?,
-            1_i128
-        );
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal128Type>("-.5", 0)?,
-            -1_i128
-        );
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal128Type>("1.234", 2)?,
-            123_i128
-        );
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal128Type>("1.235", 2)?,
-            124_i128
-        );
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal128Type>("-1.234", 2)?,
-            -123_i128
-        );
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal128Type>("-1.235", 2)?,
-            -124_i128
-        );
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal128Type>("-0.004", 2)?,
-            0_i128
-        );
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal128Type>("-0.005", 2)?,
-            -1_i128
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_parse_string_to_decimal_native_rounding_overflow() {
-        assert!(parse_string_to_decimal_native::<Decimal32Type>("2147483647.5", 0).is_err());
-        assert!(parse_string_to_decimal_native::<Decimal32Type>("-2147483648.5", 0).is_err());
-
-        assert!(
-            parse_string_to_decimal_native::<Decimal128Type>(&format!("{}.5", i128::MAX), 0)
-                .is_err()
-        );
-        assert!(
-            parse_string_to_decimal_native::<Decimal128Type>(&format!("{}.5", i128::MIN), 0)
-                .is_err()
-        );
-
-        assert!(
-            parse_string_to_decimal_native::<Decimal256Type>(&format!("{}.5", i256::MAX), 0)
-                .is_err()
-        );
-        assert!(
-            parse_string_to_decimal_native::<Decimal256Type>(&format!("{}.5", i256::MIN), 0)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn test_parse_string_to_decimal_native_overflow_not_wrapped() {
-        // The unscaled value (integer digits scaled by 10^21) far exceeds the
-        // i256 range, so this must report overflow rather than wrapping to an
-        // arbitrary (possibly in-range) value
-        let input = format!("{}.12345678901234567890123", "7".repeat(71));
-        assert!(parse_string_to_decimal_native::<Decimal256Type>(&input, 21).is_err());
-    }
-
-    #[test]
-    fn test_parse_string_to_decimal_native_long_fraction() -> Result<(), ArrowError> {
-        // Fractional parts longer than any native integer type parse fine;
-        // digits beyond the scale only matter for rounding
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal128Type>(&format!(".{}", "1".repeat(100)), 4)?,
-            1_111_i128
-        );
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal64Type>(&format!(".{}", "5".repeat(100)), 4)?,
-            5_556_i64
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_parse_string_to_decimal_native_zero_with_large_scale() -> Result<(), ArrowError> {
-        // 10^scale overflows the native type, but zero is still representable
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal32Type>("0", 10)?,
-            0_i32
-        );
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal32Type>("-0.0", 10)?,
-            0_i32
-        );
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal64Type>("0", 20)?,
-            0_i64
-        );
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal128Type>("0", 40)?,
-            0_i128
-        );
-        assert!(parse_string_to_decimal_native::<Decimal32Type>("1", 10).is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn test_parse_string_to_decimal_native_invalid_syntax() {
-        for input in [
-            "", " ", ".", "+", "-", "+.", "-.", "1.2.3", "1e2", "1.-2", "--1",
-        ] {
-            assert!(
-                parse_string_to_decimal_native::<Decimal128Type>(input, 2).is_err(),
-                "expected {input:?} to fail parsing as Decimal128"
-            );
-            assert!(
-                parse_string_to_decimal_native::<Decimal256Type>(input, 2).is_err(),
-                "expected {input:?} to fail parsing as Decimal256"
-            );
+    fn test_float_to_decimal() {
+        fn check<D: DecimalType>()
+        where
+            D::Native: DecimalCast,
+        {
+            for (input, scale, expected) in [
+                (12.345, 2, 1235),
+                (-12.345, 2, -1235),
+                (999.99, 2, 99999),
+                (-999.99, 2, -99999),
+                (99999.25, 0, 99999),
+                (999992.5, -1, 99999),
+                (0.0, 2, 0),
+            ] {
+                assert_eq!(
+                    float_to_decimal_opt::<D>(input, 5, scale),
+                    float_to_decimal::<D>(input, 5, scale).ok(),
+                );
+                assert_eq!(
+                    float_to_decimal::<D>(input, 5, scale)
+                        .unwrap()
+                        .to_i128()
+                        .unwrap(),
+                    expected,
+                );
+            }
+            for (input, scale) in [
+                (12345.678, 2),
+                (-12345.678, 2),
+                (999.9975, 2),
+                (-999.9975, 2),
+                (99999.75, 0),
+                (-99999.75, 0),
+                (999997.5, -1),
+                (-999997.5, -1),
+                (f64::NAN, 0),
+                (f64::INFINITY, 0),
+                (f64::NEG_INFINITY, 0),
+                (f64::MAX, 0),
+            ] {
+                assert!(float_to_decimal::<D>(input, 5, scale).is_err());
+                assert!(float_to_decimal_opt::<D>(input, 5, scale).is_none());
+            }
+            for (precision, scale) in [(0, 0), (D::MAX_PRECISION + 1, 0), (5, 6)] {
+                assert!(float_to_decimal::<D>(0.0, precision, scale).is_err());
+                assert!(float_to_decimal_opt::<D>(0.0, precision, scale).is_none());
+            }
         }
+        check::<Decimal32Type>();
+        check::<Decimal64Type>();
+        check::<Decimal128Type>();
+        check::<Decimal256Type>();
+    }
+
+    #[test]
+    #[expect(deprecated)]
+    fn test_single_float_to_decimal_preserves_native_range() {
+        // Deprecation preserves acceptance of values that fit i32 but exceed
+        // Decimal32's maximum precision. The new API checks that precision.
+        for (input, expected) in [
+            (1_000_000_000.0, 1_000_000_000),
+            (-1_000_000_000.0, -1_000_000_000),
+            (999_999_999.75, 1_000_000_000),
+            (-999_999_999.75, -1_000_000_000),
+        ] {
+            assert_eq!(
+                single_float_to_decimal::<Decimal32Type>(input, 1.0),
+                Some(expected)
+            );
+            assert!(float_to_decimal::<Decimal32Type>(input, 9, 0).is_err());
+        }
+        assert_eq!(
+            single_float_to_decimal::<Decimal32Type>(999_999_999.0, 1.0),
+            Some(999_999_999),
+        );
+        assert_eq!(
+            single_float_to_decimal::<Decimal32Type>(12.345, 100.0),
+            Some(1235)
+        );
+        assert_eq!(
+            single_float_to_decimal::<Decimal32Type>(f64::MAX, 1.0),
+            None
+        );
+    }
+
+    #[test]
+    #[expect(deprecated)]
+    fn test_parse_string_to_decimal_native() {
+        assert_eq!(
+            parse_string_to_decimal_native::<Decimal128Type>("123.456", 2).unwrap(),
+            12346
+        );
+        // The value is checked against the maximum precision of the type, not
+        // against any target precision
+        assert_eq!(
+            parse_string_to_decimal_native::<Decimal128Type>(&"9".repeat(38), 0).unwrap(),
+            10_i128.pow(38) - 1
+        );
+        assert!(
+            parse_string_to_decimal_native::<Decimal128Type>(&i128::MAX.to_string(), 0).is_err()
+        );
+        assert_eq!(
+            parse_string_to_decimal_native::<Decimal128Type>("abc", 2)
+                .unwrap_err()
+                .to_string(),
+            "Invalid argument error: Invalid decimal format: \"abc\""
+        );
+        assert_eq!(
+            parse_string_to_decimal_native::<Decimal32Type>("1", 10)
+                .unwrap_err()
+                .to_string(),
+            "Invalid argument error: Cannot convert 1 to Decimal32: Overflow"
+        );
     }
 
     #[test]
@@ -1269,6 +1071,26 @@ mod tests {
     fn test_rescale_decimal_upscale_overflow_returns_none() {
         let result = rescale_decimal::<Decimal32Type, Decimal32Type>(9_999_i32, 4, 0, 5, 2);
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_rescale_decimal256_extreme_scales() {
+        assert_eq!(
+            rescale_decimal::<Decimal256Type, Decimal256Type>(i256::ONE, 76, -76, 76, 0),
+            None
+        );
+        assert_eq!(
+            rescale_decimal::<Decimal256Type, Decimal256Type>(i256::ZERO, 76, -76, 76, 0),
+            Some(i256::ZERO)
+        );
+        assert_eq!(
+            rescale_decimal::<Decimal256Type, Decimal256Type>(i256::ONE, 76, i8::MIN, 76, 76),
+            None
+        );
+        assert_eq!(
+            rescale_decimal::<Decimal256Type, Decimal256Type>(i256::ONE, 76, 76, 76, i8::MIN),
+            Some(i256::ZERO)
+        );
     }
 
     #[test]

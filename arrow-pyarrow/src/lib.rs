@@ -43,11 +43,11 @@
 //! | `pyarrow.Schema`            | [Schema]                                                           |
 //! | `pyarrow.Array`             | [ArrayData]                                                        |
 //! | `pyarrow.RecordBatch`       | [RecordBatch]                                                      |
-//! | `pyarrow.RecordBatchReader` | [ArrowArrayStreamReader] / `Box<dyn RecordBatchReader + Send>` (1) |
+//! | `pyarrow.RecordBatchReader` | [RecordBatchStreamReader] / `Box<dyn RecordBatchReader + Send>` (1) |
 //! | `pyarrow.Table`             | [Table] (2)                                                        |
 //!
-//! (1) `pyarrow.RecordBatchReader` can be imported as [ArrowArrayStreamReader]. Either
-//! [ArrowArrayStreamReader] or `Box<dyn RecordBatchReader + Send>` can be exported
+//! (1) `pyarrow.RecordBatchReader` can be imported as [RecordBatchStreamReader]. Either
+//! [RecordBatchStreamReader] or `Box<dyn RecordBatchReader + Send>` can be exported
 //! as `pyarrow.RecordBatchReader`. (`Box<dyn RecordBatchReader + Send>` is typically
 //! easier to create.)
 //!
@@ -56,7 +56,7 @@
 //! have `Vec<RecordBatch>` on the Rust side and want to export that in bulk as a `pyarrow.Table`.
 //! In general, it is recommended to use streaming approaches instead of dealing with data in bulk.
 //! For example, a `pyarrow.Table` (or any other object that implements the ArrayStream PyCapsule
-//! interface) can be imported to Rust through `PyArrowType<ArrowArrayStreamReader>` instead of
+//! interface) can be imported to Rust through `PyArrowType<RecordBatchStreamReader>` instead of
 //! forcing eager reading into `Vec<RecordBatch>`.
 //!
 //! # Type stubs
@@ -68,6 +68,13 @@
 //!
 //! Input hints name the pyarrow classes only, and are therefore narrower than what is accepted: the
 //! PyCapsule interface is duck-typed and has no canonical Python type to name.
+//!
+//! # Platform Support
+//!
+//! Only little-endian platforms are officially supported and tested in CI.
+//! Big-endian platforms are not tested in CI and may not work correctly.
+//! Fixes for big-endian platforms are welcome and handled on a best-effort basis,
+//! but compatibility is not guaranteed.
 
 use std::convert::{From, TryFrom};
 use std::ffi::CStr;
@@ -76,7 +83,7 @@ use std::sync::Arc;
 
 use arrow_array::ffi;
 use arrow_array::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
-use arrow_array::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
+use arrow_array::ffi_stream::{FFI_ArrowArrayStream, RecordBatchStreamReader};
 use arrow_array::{
     RecordBatch, RecordBatchIterator, RecordBatchOptions, RecordBatchReader, StructArray,
     make_array,
@@ -113,17 +120,30 @@ fn to_py_err(err: ArrowError) -> PyErr {
 }
 
 /// The type hint shared by every conversion that imports through the ArrowArrayStream PyCapsule
-/// interface, i.e. [`ArrowArrayStreamReader`] and [`Table`].
+/// interface, i.e. [`RecordBatchStreamReader`] and [`Table`].
 ///
 /// Both go through the same `__arrow_c_stream__` path and therefore accept exactly the same
 /// objects, so naming only one of the two classes would make a stub generator reject usage this
 /// crate's own documentation recommends — importing a `pyarrow.Table` as a
-/// `PyArrowType<ArrowArrayStreamReader>`.
+/// `PyArrowType<RecordBatchStreamReader>`.
 #[cfg(feature = "experimental-inspect")]
 const ARRAY_STREAM_INPUT_TYPE: PyStaticExpr = type_hint_union!(
     type_hint_identifier!("pyarrow", "RecordBatchReader"),
     type_hint_identifier!("pyarrow", "Table")
 );
+
+/// Trait for converting Python objects to arrow-rs types without validation.
+///
+/// Prefer [`FromPyArrow`] where possible, as it validates the result before returning.
+pub trait FromPyArrowUnchecked: Sized {
+    /// Convert a Python object to an arrow-rs type without validating the result.
+    ///
+    /// # Safety
+    ///
+    /// The data exported by the Python object must satisfy all Arrow spec invariants
+    /// (valid offsets, buffer sizes, UTF-8, etc.) that [`ArrayData::validate_full`] checks.
+    unsafe fn from_pyarrow_bound_unchecked(value: &Bound<PyAny>) -> PyResult<Self>;
+}
 
 /// Trait for converting Python objects to arrow-rs types.
 pub trait FromPyArrow: Sized {
@@ -314,10 +334,8 @@ impl ToPyArrow for Schema {
     }
 }
 
-impl FromPyArrow for ArrayData {
-    type_hint!(INPUT_TYPE = type_hint_identifier!("pyarrow", "Array"));
-
-    fn from_pyarrow_bound(value: &Bound<PyAny>) -> PyResult<Self> {
+impl FromPyArrowUnchecked for ArrayData {
+    unsafe fn from_pyarrow_bound_unchecked(value: &Bound<PyAny>) -> PyResult<Self> {
         // Newer versions of PyArrow as well as other libraries with Arrow data implement this
         // method, so prefer it over _export_to_c.
         // See https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
@@ -347,6 +365,16 @@ impl FromPyArrow for ArrayData {
         )?;
 
         unsafe { ffi::from_ffi(array, &schema) }.map_err(to_py_err)
+    }
+}
+
+impl FromPyArrow for ArrayData {
+    type_hint!(INPUT_TYPE = type_hint_identifier!("pyarrow", "Array"));
+
+    fn from_pyarrow_bound(value: &Bound<PyAny>) -> PyResult<Self> {
+        let data = unsafe { ArrayData::from_pyarrow_bound_unchecked(value)? };
+        data.validate_full().map_err(to_py_err)?;
+        Ok(data)
     }
 }
 
@@ -396,63 +424,80 @@ impl<T: ToPyArrow> ToPyArrow for Vec<T> {
     }
 }
 
+fn record_batch_from_pyarrow_bound_impl(
+    value: &Bound<PyAny>,
+    validate: bool,
+) -> PyResult<RecordBatch> {
+    // Newer versions of PyArrow as well as other libraries with Arrow data implement this
+    // method, so prefer it over _export_to_c.
+    // See https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
+    if let Some((schema_capsule, array_capsule)) = call_arrow_c_array_method_if_exists(value)? {
+        let schema_ptr = extract_capsule(&schema_capsule, c"arrow_schema", "__arrow_c_array__")?;
+        let array_ptr = extract_capsule(&array_capsule, c"arrow_array", "__arrow_c_array__")?;
+        let ffi_array = unsafe { FFI_ArrowArray::from_raw(array_ptr.as_ptr()) };
+        let array_data =
+            unsafe { ffi::from_ffi(ffi_array, schema_ptr.as_ref()) }.map_err(to_py_err)?;
+        if validate {
+            array_data.validate_full().map_err(to_py_err)?;
+        }
+        if !matches!(array_data.data_type(), DataType::Struct(_)) {
+            return Err(PyTypeError::new_err(format!(
+                "Expected Struct type from __arrow_c_array__, found {}.",
+                array_data.data_type()
+            )));
+        }
+        let options = RecordBatchOptions::default().with_row_count(Some(array_data.len()));
+        let array = StructArray::from(array_data);
+        // StructArray does not embed metadata from schema. We need to override
+        // the output schema with the schema from the capsule.
+        let schema = unsafe { Arc::new(Schema::try_from(schema_ptr.as_ref()).map_err(to_py_err)?) };
+        let (_fields, columns, nulls) = array.into_parts();
+        if nulls.map(|n| n.null_count()).unwrap_or_default() != 0 {
+            return Err(PyValueError::new_err(
+                "Cannot convert nullable StructArray to RecordBatch, see StructArray documentation",
+            ));
+        }
+        return RecordBatch::try_new_with_options(schema, columns, &options).map_err(to_py_err);
+    }
+
+    validate_class(record_batch_class(value.py())?, value)?;
+    // TODO(kszucs): implement the FFI conversions in arrow-rs for RecordBatches
+    let schema = value.getattr("schema")?;
+    let schema = Arc::new(Schema::from_pyarrow_bound(&schema)?);
+
+    let arrays = value.getattr("columns")?;
+    let arrays = arrays
+        .cast::<PyList>()?
+        .iter()
+        .map(|a| {
+            let data = unsafe { ArrayData::from_pyarrow_bound_unchecked(&a)? };
+            if validate {
+                data.validate_full().map_err(to_py_err)?;
+            }
+            Ok(make_array(data))
+        })
+        .collect::<PyResult<_>>()?;
+
+    let row_count = value
+        .getattr("num_rows")
+        .ok()
+        .and_then(|x| x.extract().ok());
+    let options = RecordBatchOptions::default().with_row_count(row_count);
+
+    RecordBatch::try_new_with_options(schema, arrays, &options).map_err(to_py_err)
+}
+
 impl FromPyArrow for RecordBatch {
     type_hint!(INPUT_TYPE = type_hint_identifier!("pyarrow", "RecordBatch"));
 
     fn from_pyarrow_bound(value: &Bound<PyAny>) -> PyResult<Self> {
-        // Newer versions of PyArrow as well as other libraries with Arrow data implement this
-        // method, so prefer it over _export_to_c.
-        // See https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
+        record_batch_from_pyarrow_bound_impl(value, true)
+    }
+}
 
-        if let Some((schema_capsule, array_capsule)) = call_arrow_c_array_method_if_exists(value)? {
-            let schema_ptr =
-                extract_capsule(&schema_capsule, c"arrow_schema", "__arrow_c_array__")?;
-            let array_ptr = extract_capsule(&array_capsule, c"arrow_array", "__arrow_c_array__")?;
-            let ffi_array = unsafe { FFI_ArrowArray::from_raw(array_ptr.as_ptr()) };
-            let array_data =
-                unsafe { ffi::from_ffi(ffi_array, schema_ptr.as_ref()) }.map_err(to_py_err)?;
-            if !matches!(array_data.data_type(), DataType::Struct(_)) {
-                return Err(PyTypeError::new_err(format!(
-                    "Expected Struct type from __arrow_c_array__, found {}.",
-                    array_data.data_type()
-                )));
-            }
-            let options = RecordBatchOptions::default().with_row_count(Some(array_data.len()));
-            let array = StructArray::from(array_data);
-            // StructArray does not embed metadata from schema. We need to override
-            // the output schema with the schema from the capsule.
-            let schema =
-                unsafe { Arc::new(Schema::try_from(schema_ptr.as_ref()).map_err(to_py_err)?) };
-            let (_fields, columns, nulls) = array.into_parts();
-            if nulls.map(|n| n.null_count()).unwrap_or_default() != 0 {
-                return Err(PyValueError::new_err(
-                    "Cannot convert nullable StructArray to RecordBatch, see StructArray documentation",
-                ));
-            }
-            return RecordBatch::try_new_with_options(schema, columns, &options).map_err(to_py_err);
-        }
-
-        validate_class(record_batch_class(value.py())?, value)?;
-        // TODO(kszucs): implement the FFI conversions in arrow-rs for RecordBatches
-        let schema = value.getattr("schema")?;
-        let schema = Arc::new(Schema::from_pyarrow_bound(&schema)?);
-
-        let arrays = value.getattr("columns")?;
-        let arrays = arrays
-            .cast::<PyList>()?
-            .iter()
-            .map(|a| Ok(make_array(ArrayData::from_pyarrow_bound(&a)?)))
-            .collect::<PyResult<_>>()?;
-
-        let row_count = value
-            .getattr("num_rows")
-            .ok()
-            .and_then(|x| x.extract().ok());
-        let options = RecordBatchOptions::default().with_row_count(row_count);
-
-        let batch =
-            RecordBatch::try_new_with_options(schema, arrays, &options).map_err(to_py_err)?;
-        Ok(batch)
+impl FromPyArrowUnchecked for RecordBatch {
+    unsafe fn from_pyarrow_bound_unchecked(value: &Bound<PyAny>) -> PyResult<Self> {
+        record_batch_from_pyarrow_bound_impl(value, false)
     }
 }
 
@@ -468,8 +513,8 @@ impl ToPyArrow for RecordBatch {
     }
 }
 
-/// Supports conversion from `pyarrow.RecordBatchReader` to [ArrowArrayStreamReader].
-impl FromPyArrow for ArrowArrayStreamReader {
+/// Supports conversion from `pyarrow.RecordBatchReader` to [RecordBatchStreamReader].
+impl FromPyArrow for RecordBatchStreamReader {
     type_hint!(INPUT_TYPE = ARRAY_STREAM_INPUT_TYPE);
 
     fn from_pyarrow_bound(value: &Bound<PyAny>) -> PyResult<Self> {
@@ -483,7 +528,7 @@ impl FromPyArrow for ArrowArrayStreamReader {
                 extract_capsule(&capsule, c"arrow_array_stream", "__arrow_c_stream__")?;
             let stream = unsafe { FFI_ArrowArrayStream::from_raw(stream_ptr.as_ptr()) };
 
-            let stream_reader = ArrowArrayStreamReader::try_new(stream)
+            let stream_reader = RecordBatchStreamReader::try_new(stream)
                 .map_err(|err| PyValueError::new_err(err.to_string()))?;
 
             return Ok(stream_reader);
@@ -502,7 +547,7 @@ impl FromPyArrow for ArrowArrayStreamReader {
             (&raw mut stream as Py_uintptr_t,),
         )?;
 
-        ArrowArrayStreamReader::try_new(stream)
+        RecordBatchStreamReader::try_new(stream)
             .map_err(|err| PyValueError::new_err(err.to_string()))
     }
 }
@@ -522,8 +567,8 @@ impl IntoPyArrow for Box<dyn RecordBatchReader + Send> {
     }
 }
 
-/// Convert a [`ArrowArrayStreamReader`] into a `pyarrow.RecordBatchReader`.
-impl IntoPyArrow for ArrowArrayStreamReader {
+/// Convert a [`RecordBatchStreamReader`] into a `pyarrow.RecordBatchReader`.
+impl IntoPyArrow for RecordBatchStreamReader {
     type_hint!(OUTPUT_TYPE = type_hint_identifier!("pyarrow", "RecordBatchReader"));
 
     fn into_pyarrow(self, py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
@@ -537,7 +582,7 @@ impl IntoPyArrow for ArrowArrayStreamReader {
 ///
 /// This could be used in circumstances where you either want to consume a `pyarrow.Table` directly
 /// (although technically, since `pyarrow.Table` implements the ArrayStreamReader PyCapsule
-/// interface, one could also consume a `PyArrowType<ArrowArrayStreamReader>` instead) or, more
+/// interface, one could also consume a `PyArrowType<RecordBatchStreamReader>` instead) or, more
 /// importantly, where one wants to export a `pyarrow.Table` from a `Vec<RecordBatch>` from the Rust
 /// side.
 ///
@@ -605,7 +650,7 @@ impl FromPyArrow for Table {
 
     fn from_pyarrow_bound(ob: &Bound<PyAny>) -> PyResult<Self> {
         let reader: Box<dyn RecordBatchReader> =
-            Box::new(ArrowArrayStreamReader::from_pyarrow_bound(ob)?);
+            Box::new(RecordBatchStreamReader::from_pyarrow_bound(ob)?);
         Self::try_from(reader).map_err(|err| PyValueError::new_err(err.to_string()))
     }
 }
@@ -813,11 +858,11 @@ mod introspection_tests {
     #[test]
     fn readers_and_tables_map_to_their_pyarrow_class() {
         assert_eq!(
-            input_type::<ArrowArrayStreamReader>(),
+            input_type::<RecordBatchStreamReader>(),
             "pyarrow.RecordBatchReader | pyarrow.Table"
         );
         assert_eq!(
-            output_type::<ArrowArrayStreamReader>(),
+            output_type::<RecordBatchStreamReader>(),
             "pyarrow.RecordBatchReader"
         );
         assert_eq!(

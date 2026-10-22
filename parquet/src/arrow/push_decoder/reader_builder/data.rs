@@ -22,7 +22,6 @@ use crate::arrow::arrow_reader::RowSelection;
 use crate::arrow::in_memory_row_group::{ColumnChunkData, FetchRanges, InMemoryRowGroup};
 use crate::errors::ParquetError;
 use crate::file::metadata::ParquetMetaData;
-use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::reader::ChunkReader;
 use crate::util::push_buffers::PushBuffers;
 use bytes::Bytes;
@@ -40,7 +39,7 @@ pub(super) struct DataRequest {
     ranges: Vec<Range<u64>>,
     /// Optional page start offsets for each requested range. This is used
     /// to create the relevant InMemoryRowGroup
-    page_start_offsets: Option<Vec<Vec<u64>>>,
+    page_start_offsets: Option<Vec<Option<Vec<u64>>>>,
 }
 
 impl DataRequest {
@@ -92,13 +91,22 @@ impl DataRequest {
             page_start_offsets,
         } = self;
 
+        let page_index = if parquet_metadata
+            .page_index()
+            .is_some_and(|pi| pi.has_offset_indexes())
+        {
+            Some(parquet_metadata.page_index_for_row_group(row_group_idx))
+        } else {
+            None
+        };
+
         // Create an InMemoryRowGroup to hold the column chunks, this is a
         // temporary structure used to tell the ArrowReaders what pages are
         // needed for decoding
         let mut in_memory_row_group = InMemoryRowGroup {
             row_count,
             column_chunks,
-            offset_index: get_offset_index(parquet_metadata, row_group_idx),
+            page_index,
             row_group_idx,
             metadata: parquet_metadata,
         };
@@ -196,13 +204,22 @@ impl<'a> DataRequestBuilder<'a> {
         let column_chunks =
             column_chunks.unwrap_or_else(|| vec![None; row_group_meta_data.columns().len()]);
 
+        let page_index = if parquet_metadata
+            .page_index()
+            .is_some_and(|pi| pi.has_offset_indexes())
+        {
+            Some(parquet_metadata.page_index_for_row_group(row_group_idx))
+        } else {
+            None
+        };
+
         // Create an InMemoryRowGroup to hold the column chunks, this is a
         // temporary structure used to tell the ArrowReaders what pages are
         // needed for decoding
         let row_group = InMemoryRowGroup {
             row_count,
             column_chunks,
-            offset_index: get_offset_index(parquet_metadata, row_group_idx),
+            page_index,
             row_group_idx,
             metadata: parquet_metadata,
         };
@@ -221,13 +238,36 @@ impl<'a> DataRequestBuilder<'a> {
     }
 }
 
-fn get_offset_index(
-    parquet_metadata: &ParquetMetaData,
-    row_group_idx: usize,
-) -> Option<&[OffsetIndexMetaData]> {
-    parquet_metadata
-        .offset_index()
-        // filter out empty offset indexes (old versions specified Some(vec![]) when no present)
-        .filter(|index| !index.is_empty())
-        .map(|x| x[row_group_idx].as_slice())
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A zero-length requested range (for example, a column chunk with no
+    /// bytes) must never be in `NeedsData`. Before, the decoder requested it
+    /// again after each push, because an empty push is not stored, and did
+    /// not make progress.
+    #[test]
+    fn needed_ranges_never_contains_an_empty_range() {
+        let request = DataRequest {
+            column_chunks: vec![None, None],
+            ranges: vec![100..100, 200..210],
+            page_start_offsets: None,
+        };
+        let mut buffers = PushBuffers::new(1000);
+        assert_eq!(request.needed_ranges(&buffers), vec![200..210]);
+
+        // A caller that pushes the empty range anyway does not change this.
+        buffers.push_range(100..100, Bytes::new()).unwrap();
+        assert_eq!(request.needed_ranges(&buffers), vec![200..210]);
+
+        buffers
+            .push_range(200..210, Bytes::from_static(b"0123456789"))
+            .unwrap();
+        assert!(request.needed_ranges(&buffers).is_empty());
+        let chunks = request.get_chunks(&buffers).unwrap();
+        assert_eq!(
+            chunks,
+            vec![Bytes::new(), Bytes::from_static(b"0123456789")]
+        );
+    }
 }

@@ -20,11 +20,14 @@ use crate::bloom_filter::Sbbf;
 use crate::column::writer::encoder::{
     ColumnValueEncoder, DataPageValues, DictionaryPage, create_bloom_filter,
 };
+use crate::column::writer::{compare_greater_byte_array_decimals, is_decimal_descr};
 use crate::data_type::{AsBytes, ByteArray, Int32Type};
 use crate::encodings::encoding::{DeltaBitPackEncoder, Encoder};
 use crate::encodings::rle::RleEncoder;
 use crate::errors::{ParquetError, Result};
-use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
+use crate::file::properties::{
+    EnabledStatistics, ResolvedColumnProperties, WriterProperties, WriterVersion,
+};
 use crate::geospatial::accumulator::{GeoStatsAccumulator, try_new_geo_stats_accumulator};
 use crate::geospatial::statistics::GeospatialStatistics;
 use crate::schema::types::ColumnDescPtr;
@@ -88,9 +91,15 @@ macro_rules! downcast_op {
                 DataType::LargeUtf8 => {
                     downcast_dict_op!(key, LargeStringArray, $array, $op$(, $arg)*)
                 }
+                DataType::Utf8View => {
+                    downcast_dict_op!(key, StringViewArray, $array, $op$(, $arg)*)
+                }
                 DataType::Binary => downcast_dict_op!(key, BinaryArray, $array, $op$(, $arg)*),
                 DataType::LargeBinary => {
                     downcast_dict_op!(key, LargeBinaryArray, $array, $op$(, $arg)*)
+                }
+                DataType::BinaryView => {
+                    downcast_dict_op!(key, BinaryViewArray, $array, $op$(, $arg)*)
                 }
                 DataType::FixedSizeBinary(_) => {
                     downcast_dict_op!(key, FixedSizeBinaryArray, $array, $op$(, $arg)*)
@@ -129,16 +138,16 @@ enum FallbackEncoderImpl {
 }
 
 impl FallbackEncoder {
-    /// Create the fallback encoder for the given [`ColumnDescPtr`] and [`WriterProperties`]
-    fn new(descr: &ColumnDescPtr, props: &WriterProperties) -> Result<Self> {
+    /// Create the fallback encoder for the given [`WriterProperties`] and the
+    /// column settings already resolved from them
+    fn new(props: &WriterProperties, column_props: &ResolvedColumnProperties) -> Result<Self> {
         // Set either main encoder or fallback encoder.
-        let encoding =
-            props
-                .encoding(descr.path())
-                .unwrap_or_else(|| match props.writer_version() {
-                    WriterVersion::PARQUET_1_0 => Encoding::PLAIN,
-                    WriterVersion::PARQUET_2_0 => Encoding::DELTA_BYTE_ARRAY,
-                });
+        let encoding = column_props
+            .encoding
+            .unwrap_or_else(|| match props.writer_version() {
+                WriterVersion::PARQUET_1_0 => Encoding::PLAIN,
+                WriterVersion::PARQUET_2_0 => Encoding::DELTA_BYTE_ARRAY,
+            });
 
         let encoder = match encoding {
             Encoding::PLAIN => FallbackEncoderImpl::Plain { buffer: vec![] },
@@ -393,9 +402,7 @@ impl DictEncoder {
         buffer.push(self.bit_width());
 
         let mut encoder = RleEncoder::new_from_buf(self.bit_width(), buffer);
-        for index in &self.indices {
-            encoder.put(*index)
-        }
+        encoder.put_batch(&self.indices);
 
         self.indices.clear();
 
@@ -424,6 +431,7 @@ pub struct ByteArrayEncoder {
     bloom_filter: Option<Sbbf>,
     bloom_filter_target_fpp: f64,
     geo_stats_accumulator: Option<Box<dyn GeoStatsAccumulator>>,
+    is_decimal: bool,
 }
 
 impl ColumnValueEncoder for ByteArrayEncoder {
@@ -435,21 +443,25 @@ impl ColumnValueEncoder for ByteArrayEncoder {
         Some(sbbf)
     }
 
-    fn try_new(descr: &ColumnDescPtr, props: &WriterProperties) -> Result<Self>
+    fn try_new(
+        descr: &ColumnDescPtr,
+        props: &WriterProperties,
+        column_props: &ResolvedColumnProperties,
+    ) -> Result<Self>
     where
         Self: Sized,
     {
-        let dictionary = props
-            .dictionary_enabled(descr.path())
-            .then(DictEncoder::default);
+        let dictionary = column_props.dictionary_enabled.then(DictEncoder::default);
 
-        let fallback = FallbackEncoder::new(descr, props)?;
+        let fallback = FallbackEncoder::new(props, column_props)?;
 
-        let (bloom_filter, bloom_filter_target_fpp) = create_bloom_filter(props, descr)?;
+        let (bloom_filter, bloom_filter_target_fpp) = create_bloom_filter(column_props)?;
 
-        let statistics_enabled = props.statistics_enabled(descr.path());
+        let statistics_enabled = column_props.statistics_enabled;
 
         let geo_stats_accumulator = try_new_geo_stats_accumulator(descr);
+
+        let is_decimal = is_decimal_descr(descr.get_basic_info());
 
         Ok(Self {
             fallback,
@@ -460,6 +472,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
             min_value: None,
             max_value: None,
             geo_stats_accumulator,
+            is_decimal,
         })
     }
 
@@ -567,6 +580,14 @@ impl ColumnValueEncoder for ByteArrayEncoder {
         self.dict_encoder.is_some()
     }
 
+    fn compresses_against_previous_value(&self) -> bool {
+        // While dictionary encoding is active the data page holds RLE
+        // indices, which carry no cross-value state; only the DELTA_BYTE_ARRAY
+        // fallback shares prefixes with the preceding value.
+        self.dict_encoder.is_none()
+            && matches!(self.fallback.encoder, FallbackEncoderImpl::Delta { .. })
+    }
+
     fn estimated_memory_size(&self) -> usize {
         let encoder_size = match &self.dict_encoder {
             Some(encoder) => encoder.estimated_memory_size(),
@@ -611,6 +632,13 @@ impl ColumnValueEncoder for ByteArrayEncoder {
                     ));
                 }
 
+                if let Some(bloom_filter) = &mut self.bloom_filter {
+                    let storage = encoder.interner.storage();
+                    for range in &storage.values {
+                        bloom_filter.insert(&storage.page[range.clone()]);
+                    }
+                }
+
                 Ok(Some(encoder.flush_dict_page()))
             }
             _ => Ok(None),
@@ -644,27 +672,45 @@ where
     if encoder.statistics_enabled != EnabledStatistics::None {
         if let Some(accumulator) = encoder.geo_stats_accumulator.as_mut() {
             update_geo_stats_accumulator(accumulator.as_mut(), values, indices.clone());
-        } else if let Some((min, max)) = compute_min_max(values, indices.clone()) {
-            if encoder.min_value.as_ref().is_none_or(|m| m > &min) {
-                encoder.min_value = Some(min);
+        } else if let Some((min, max)) =
+            compute_min_max(values, indices.clone(), encoder.is_decimal)
+        {
+            // Compare before copying: `write_gather` runs once per
+            // mini-batch, and a byte-budgeted mini-batch of large values can
+            // hold a single value, so an unconditional copy here would
+            // duplicate every value once for `min` and once for `max`.
+            let min = min.as_ref();
+            if encoder
+                .min_value
+                .as_ref()
+                .is_none_or(|m| is_greater(encoder.is_decimal, m.data(), min))
+            {
+                encoder.min_value = Some(min.to_vec().into());
             }
 
-            if encoder.max_value.as_ref().is_none_or(|m| m < &max) {
-                encoder.max_value = Some(max);
+            let max = max.as_ref();
+            if encoder
+                .max_value
+                .as_ref()
+                .is_none_or(|m| is_greater(encoder.is_decimal, max, m.data()))
+            {
+                encoder.max_value = Some(max.to_vec().into());
             }
         }
     }
 
-    // encode the values into bloom filter if enabled
-    if let Some(bloom_filter) = &mut encoder.bloom_filter {
-        for idx in indices.clone() {
-            bloom_filter.insert(values.value(idx).as_ref());
-        }
-    }
-
+    // While a dictionary is in use the filter is populated from its distinct values in
+    // `flush_dict_page`, so each value is hashed once rather than once per row.
     match &mut encoder.dict_encoder {
         Some(dict_encoder) => dict_encoder.encode(values, indices),
-        None => encoder.fallback.encode(values, indices),
+        None => {
+            if let Some(bloom_filter) = &mut encoder.bloom_filter {
+                for idx in indices.clone() {
+                    bloom_filter.insert(values.value(idx).as_ref());
+                }
+            }
+            encoder.fallback.encode(values, indices)
+        }
     }
 }
 
@@ -767,13 +813,24 @@ fn count_within_budget_offsets<T: ByteArrayType>(
     n
 }
 
+/// Returns `true` if `a > b`.
+#[inline]
+fn is_greater(is_decimal: bool, a: &[u8], b: &[u8]) -> bool {
+    if is_decimal {
+        compare_greater_byte_array_decimals(a, b)
+    } else {
+        a > b
+    }
+}
+
 /// Computes the min and max for the provided array and indices
 ///
 /// This is a free function so it can be used with `downcast_op!`
 fn compute_min_max<T>(
     array: T,
     mut valid: impl Iterator<Item = usize>,
-) -> Option<(ByteArray, ByteArray)>
+    is_decimal: bool,
+) -> Option<(T::Item, T::Item)>
 where
     T: ArrayAccessor,
     T::Item: Copy + Ord + AsRef<[u8]>,
@@ -785,10 +842,14 @@ where
     let mut max = first_val;
     for idx in valid {
         let val = array.value(idx);
-        min = min.min(val);
-        max = max.max(val);
+        if is_greater(is_decimal, min.as_ref(), val.as_ref()) {
+            min = val;
+        }
+        if is_greater(is_decimal, val.as_ref(), max.as_ref()) {
+            max = val;
+        }
     }
-    Some((min.as_ref().to_vec().into(), max.as_ref().to_vec().into()))
+    Some((min, max))
 }
 
 /// Updates geospatial statistics for the provided array and indices

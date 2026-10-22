@@ -67,7 +67,7 @@ impl FooterTail {
             return Err(general_err!("Invalid Parquet file. Corrupt footer"));
         };
         // get the metadata length from the footer
-        let metadata_len = u32::from_le_bytes(slice[..4].try_into().unwrap());
+        let metadata_len = u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]);
 
         Ok(FooterTail {
             // u32 won't be larger than usize in most cases

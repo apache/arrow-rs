@@ -95,7 +95,7 @@ impl StructArrayDecoder {
                 // StructArrayDecoder::decode verifies that if the child is not nullable
                 // it doesn't contain any nulls not masked by its parent
                 let nullable = f.is_nullable() || is_nullable;
-                ctx.make_decoder(f.data_type(), nullable)
+                ctx.make_decoder(f, nullable)
             })
             .collect::<Result<Vec<_>, ArrowError>>()?;
 

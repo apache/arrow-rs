@@ -18,9 +18,12 @@
 //! Benchmarks for the `coalesce` kernels in Arrow.
 
 use arrow::util::bench_util::*;
+use arrow::util::data_gen::create_random_array;
 use std::sync::Arc;
 
 use arrow::array::*;
+use arrow_array::FixedSizeBinaryArray;
+use arrow_array::builder::FixedSizeBinaryBuilder;
 use arrow_array::types::{Float64Type, Int32Type, TimestampNanosecondType};
 use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow_select::coalesce::BatchCoalescer;
@@ -72,6 +75,17 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
         Field::new("binaryview_val", DataType::BinaryView, true),
     ]));
 
+    // Single Utf8 column
+    let single_utf8_schema =
+        SchemaRef::new(Schema::new(vec![Field::new("value", DataType::Utf8, true)]));
+
+    // Single Binary column
+    let single_binary_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Binary,
+        true,
+    )]));
+
     // Mixed primitive, StringArray
     let mixed_utf8_schema = SchemaRef::new(Schema::new(vec![
         Field::new("int32_val", DataType::Int32, true),
@@ -91,6 +105,58 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
         Field::new("float_val2", DataType::Float64, true),
         // TODO model other dictionary types here (FixedSizeBinary for example)
     ]));
+
+    let single_dictionary_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        true,
+    )]));
+
+    let single_run_end_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::RunEndEncoded(
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                true,
+            )),
+        ),
+        true,
+    )]));
+
+    let single_fsb16_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::FixedSizeBinary(16),
+        true,
+    )]));
+    let single_fsb32_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::FixedSizeBinary(32),
+        true,
+    )]));
+
+    let single_boolean_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Boolean,
+        true,
+    )]));
+
+    let single_fsl4_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, false)), 4),
+        true,
+    )]));
+
+    let single_list_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+        true,
+    )]));
 
     // Null density: 0, 10%
     for null_density in [0.0, 0.1] {
@@ -153,6 +219,30 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
                 selectivity,
                 max_string_len: 8,
                 schema: &single_binaryview_schema,
+            }
+            .build();
+
+            FilterBenchmarkBuilder {
+                c,
+                name: "single_utf8",
+                batch_size,
+                num_output_batches: 50,
+                null_density,
+                selectivity,
+                max_string_len: 30,
+                schema: &single_utf8_schema,
+            }
+            .build();
+
+            FilterBenchmarkBuilder {
+                c,
+                name: "single_binary",
+                batch_size,
+                num_output_batches: 50,
+                null_density,
+                selectivity,
+                max_string_len: 30,
+                schema: &single_binary_schema,
             }
             .build();
 
@@ -253,11 +343,120 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
                 schema: &mixed_dict_schema,
             }
             .build();
+
+            FilterBenchmarkBuilder {
+                c,
+                name: "single_dict",
+                batch_size,
+                num_output_batches: 25,
+                null_density,
+                selectivity,
+                max_string_len: 30,
+                schema: &single_dictionary_schema,
+            }
+            .build();
+
+            FilterBenchmarkBuilder {
+                c,
+                name: "single_fsb16",
+                batch_size,
+                num_output_batches: 50,
+                null_density,
+                selectivity,
+                max_string_len: 16,
+                schema: &single_fsb16_schema,
+            }
+            .build();
+
+            FilterBenchmarkBuilder {
+                c,
+                name: "single_fsb32",
+                batch_size,
+                num_output_batches: 50,
+                null_density,
+                selectivity,
+                max_string_len: 32,
+                schema: &single_fsb32_schema,
+            }
+            .build();
+
+            FilterBenchmarkBuilder {
+                c,
+                name: "single_boolean",
+                batch_size,
+                num_output_batches: 50,
+                null_density,
+                selectivity,
+                max_string_len: 0,
+                schema: &single_boolean_schema,
+            }
+            .build();
+
+            FilterBenchmarkBuilder {
+                c,
+                name: "single_ree",
+                batch_size,
+                num_output_batches: 25,
+                null_density,
+                selectivity,
+                max_string_len: 0,
+                schema: &single_run_end_schema,
+            }
+            .build();
+
+            FilterBenchmarkBuilder {
+                c,
+                name: "single_fsl4",
+                batch_size,
+                num_output_batches: 50,
+                null_density,
+                selectivity,
+                max_string_len: 0,
+                schema: &single_fsl4_schema,
+            }
+            .build();
+
+            FilterBenchmarkBuilder {
+                c,
+                name: "single_list",
+                batch_size,
+                num_output_batches: 50,
+                null_density,
+                selectivity,
+                max_string_len: 0,
+                schema: &single_list_schema,
+            }
+            .build();
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum GatherOperation {
+    Take,
+    Interleave,
+}
+
+const NUM_INTERLEAVE_INPUT_BATCHES: usize = 4;
+
+impl GatherOperation {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Take => "take",
+            Self::Interleave => "interleave",
         }
     }
 }
 
 fn add_all_take_benchmarks(c: &mut Criterion) {
+    add_all_gather_benchmarks(c, GatherOperation::Take);
+}
+
+fn add_all_interleave_benchmarks(c: &mut Criterion) {
+    add_all_gather_benchmarks(c, GatherOperation::Interleave);
+}
+
+fn add_all_gather_benchmarks(c: &mut Criterion, operation: GatherOperation) {
     let batch_size = 8192;
 
     let primitive_schema = SchemaRef::new(Schema::new(vec![
@@ -300,6 +499,15 @@ fn add_all_take_benchmarks(c: &mut Criterion) {
         Field::new("utf8", DataType::Utf8, true),
     ]));
 
+    let single_utf8_schema =
+        SchemaRef::new(Schema::new(vec![Field::new("value", DataType::Utf8, true)]));
+
+    let single_binary_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Binary,
+        true,
+    )]));
+
     let mixed_dict_schema = SchemaRef::new(Schema::new(vec![
         Field::new(
             "string_dict",
@@ -310,66 +518,173 @@ fn add_all_take_benchmarks(c: &mut Criterion) {
         Field::new("float_val2", DataType::Float64, true),
     ]));
 
+    let single_dictionary_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        true,
+    )]));
+
+    let single_run_end_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::RunEndEncoded(
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                true,
+            )),
+        ),
+        true,
+    )]));
+
+    let single_fsb16_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::FixedSizeBinary(16),
+        true,
+    )]));
+    let single_fsb32_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::FixedSizeBinary(32),
+        true,
+    )]));
+
+    let single_boolean_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Boolean,
+        true,
+    )]));
+
+    let single_fsl4_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, false)), 4),
+        true,
+    )]));
+
+    let single_list_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+        true,
+    )]));
+
     for null_density in [0.0, 0.1] {
         for selectivity in [0.001, 0.01, 0.1, 0.8] {
             for scenario in [
-                TakeBenchmarkScenario {
+                GatherBenchmarkScenario {
                     name: "primitive",
                     num_output_batches: 50,
                     max_string_len: 30,
                     schema: &primitive_schema,
                 },
-                TakeBenchmarkScenario {
+                GatherBenchmarkScenario {
                     name: "single_utf8view",
                     num_output_batches: 50,
                     max_string_len: 30,
                     schema: &single_schema,
                 },
-                TakeBenchmarkScenario {
+                GatherBenchmarkScenario {
                     name: "single_binaryview",
                     num_output_batches: 50,
                     max_string_len: 30,
                     schema: &single_binaryview_schema,
                 },
-                TakeBenchmarkScenario {
+                GatherBenchmarkScenario {
                     name: "mixed_utf8view (max_string_len=20)",
                     num_output_batches: 20,
                     max_string_len: 20,
                     schema: &mixed_utf8view_schema,
                 },
-                TakeBenchmarkScenario {
+                GatherBenchmarkScenario {
                     name: "mixed_utf8view (max_string_len=128)",
                     num_output_batches: 20,
                     max_string_len: 128,
                     schema: &mixed_utf8view_schema,
                 },
-                TakeBenchmarkScenario {
+                GatherBenchmarkScenario {
                     name: "mixed_binaryview (max_string_len=20)",
                     num_output_batches: 20,
                     max_string_len: 20,
                     schema: &mixed_binaryview_schema,
                 },
-                TakeBenchmarkScenario {
+                GatherBenchmarkScenario {
                     name: "mixed_binaryview (max_string_len=128)",
                     num_output_batches: 20,
                     max_string_len: 128,
                     schema: &mixed_binaryview_schema,
                 },
-                TakeBenchmarkScenario {
+                GatherBenchmarkScenario {
+                    name: "single_utf8",
+                    num_output_batches: 50,
+                    max_string_len: 30,
+                    schema: &single_utf8_schema,
+                },
+                GatherBenchmarkScenario {
+                    name: "single_binary",
+                    num_output_batches: 50,
+                    max_string_len: 30,
+                    schema: &single_binary_schema,
+                },
+                GatherBenchmarkScenario {
                     name: "mixed_utf8",
                     num_output_batches: 20,
                     max_string_len: 30,
                     schema: &mixed_utf8_schema,
                 },
-                TakeBenchmarkScenario {
+                GatherBenchmarkScenario {
                     name: "mixed_dict",
                     num_output_batches: 10,
                     max_string_len: 30,
                     schema: &mixed_dict_schema,
                 },
+                GatherBenchmarkScenario {
+                    name: "single_dict",
+                    num_output_batches: 25,
+                    max_string_len: 30,
+                    schema: &single_dictionary_schema,
+                },
+                GatherBenchmarkScenario {
+                    name: "single_fsb16",
+                    num_output_batches: 50,
+                    max_string_len: 16,
+                    schema: &single_fsb16_schema,
+                },
+                GatherBenchmarkScenario {
+                    name: "single_fsb32",
+                    num_output_batches: 50,
+                    max_string_len: 32,
+                    schema: &single_fsb32_schema,
+                },
+                GatherBenchmarkScenario {
+                    name: "single_boolean",
+                    num_output_batches: 50,
+                    max_string_len: 0,
+                    schema: &single_boolean_schema,
+                },
+                GatherBenchmarkScenario {
+                    name: "single_ree",
+                    num_output_batches: 25,
+                    max_string_len: 0,
+                    schema: &single_run_end_schema,
+                },
+                GatherBenchmarkScenario {
+                    name: "single_fsl4",
+                    num_output_batches: 50,
+                    max_string_len: 0,
+                    schema: &single_fsl4_schema,
+                },
+                GatherBenchmarkScenario {
+                    name: "single_list",
+                    num_output_batches: 50,
+                    max_string_len: 0,
+                    schema: &single_list_schema,
+                },
             ] {
-                TakeBenchmarkBuilder::from_scenario(
+                GatherBenchmarkBuilder::from_scenario(
                     c,
+                    operation,
                     batch_size,
                     null_density,
                     selectivity,
@@ -380,18 +695,19 @@ fn add_all_take_benchmarks(c: &mut Criterion) {
         }
     }
 
-    // Repeated indices make the taken batch much larger than the source batch,
-    // which exercises the materialized fallback path for unsupported schemas.
+    // Repeated indices make the gathered batch much larger than a source batch,
+    // which exercises the materialized path before coalescing.
     for (name, schema) in [
         ("primitive extra_large_repeat", &primitive_schema),
         ("mixed_utf8 extra_large_repeat", &mixed_utf8_schema),
     ] {
-        TakeBenchmarkBuilder::from_scenario(
+        GatherBenchmarkBuilder::from_scenario(
             c,
+            operation,
             batch_size,
             0.0,
             1.0,
-            TakeBenchmarkScenario {
+            GatherBenchmarkScenario {
                 name,
                 num_output_batches: 64,
                 max_string_len: 30,
@@ -405,7 +721,12 @@ fn add_all_take_benchmarks(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, add_all_filter_benchmarks, add_all_take_benchmarks);
+criterion_group!(
+    benches,
+    add_all_filter_benchmarks,
+    add_all_take_benchmarks,
+    add_all_interleave_benchmarks
+);
 criterion_main!(benches);
 
 /// Run the filters with a batch_size, null_density, selectivity, and schema
@@ -469,8 +790,9 @@ impl FilterBenchmarkBuilder<'_> {
     }
 }
 
-struct TakeBenchmarkBuilder<'a> {
+struct GatherBenchmarkBuilder<'a> {
     c: &'a mut Criterion,
+    operation: GatherOperation,
     name: &'a str,
     batch_size: usize,
     num_output_batches: usize,
@@ -484,30 +806,32 @@ struct TakeBenchmarkBuilder<'a> {
 }
 
 #[derive(Clone, Copy)]
-struct TakeBenchmarkScenario<'a> {
+struct GatherBenchmarkScenario<'a> {
     name: &'a str,
     num_output_batches: usize,
     max_string_len: usize,
     schema: &'a SchemaRef,
 }
 
-impl<'a> TakeBenchmarkBuilder<'a> {
+impl<'a> GatherBenchmarkBuilder<'a> {
     fn from_scenario(
         c: &'a mut Criterion,
+        operation: GatherOperation,
         batch_size: usize,
         null_density: f32,
         selectivity: f32,
-        scenario: TakeBenchmarkScenario<'a>,
-    ) -> TakeBenchmarkBuilder<'a> {
-        let TakeBenchmarkScenario {
+        scenario: GatherBenchmarkScenario<'a>,
+    ) -> GatherBenchmarkBuilder<'a> {
+        let GatherBenchmarkScenario {
             name,
             num_output_batches,
             max_string_len,
             schema,
         } = scenario;
 
-        TakeBenchmarkBuilder {
+        GatherBenchmarkBuilder {
             c,
+            operation,
             name,
             batch_size,
             num_output_batches,
@@ -539,6 +863,7 @@ impl<'a> TakeBenchmarkBuilder<'a> {
     fn build(self) {
         let Self {
             c,
+            operation,
             name,
             batch_size,
             num_output_batches,
@@ -554,41 +879,66 @@ impl<'a> TakeBenchmarkBuilder<'a> {
         let output_len = index_output_len
             .unwrap_or_else(|| ((batch_size as f32) * selectivity).round().max(1.0) as usize);
 
-        let indices = match index_output_len {
-            Some(_) => IndexStreamBuilder::new()
-                .with_batch_size(batch_size)
-                .with_output_len(output_len)
-                .build(),
-            None => IndexStreamBuilder::new()
-                .with_batch_size(batch_size)
-                .with_selectivity(selectivity)
-                .build(),
-        };
-
         let data = DataStreamBuilder::new(Arc::clone(schema))
             .with_batch_size(batch_size)
             .with_null_density(null_density)
             .with_max_string_len(max_string_len)
             .build();
 
+        let operation_name = operation.name();
         let id = if index_output_len.is_some() || biggest_coalesce_batch_size.is_some() {
             format!(
-                "take: {name}, input: {batch_size}, output: {output_len}, nulls: {null_density}, biggest: {biggest_coalesce_batch_size:?}"
+                "{operation_name}: {name}, input: {batch_size}, output: {output_len}, nulls: {null_density}, biggest: {biggest_coalesce_batch_size:?}"
             )
         } else {
-            format!("take: {name}, {batch_size}, nulls: {null_density}, selectivity: {selectivity}")
+            format!(
+                "{operation_name}: {name}, {batch_size}, nulls: {null_density}, selectivity: {selectivity}"
+            )
         };
-        c.bench_function(&id, |b| {
-            b.iter(|| {
-                take_streams(
-                    num_output_batches,
-                    indices.clone(),
-                    data.clone(),
-                    biggest_coalesce_batch_size,
-                    drain_all_completed_batches,
-                );
-            })
-        });
+
+        match operation {
+            GatherOperation::Take => {
+                let indices = match index_output_len {
+                    Some(_) => IndexStreamBuilder::new()
+                        .with_batch_size(batch_size)
+                        .with_output_len(output_len)
+                        .build(),
+                    None => IndexStreamBuilder::new()
+                        .with_batch_size(batch_size)
+                        .with_selectivity(selectivity)
+                        .build(),
+                };
+                c.bench_function(&id, |b| {
+                    b.iter(|| {
+                        take_streams(
+                            num_output_batches,
+                            indices.clone(),
+                            data.clone(),
+                            biggest_coalesce_batch_size,
+                            drain_all_completed_batches,
+                        );
+                    })
+                });
+            }
+            GatherOperation::Interleave => {
+                let indices = InterleaveIndexStreamBuilder::new()
+                    .with_batch_size(batch_size)
+                    .with_num_input_batches(NUM_INTERLEAVE_INPUT_BATCHES)
+                    .with_output_len(output_len)
+                    .build();
+                c.bench_function(&id, |b| {
+                    b.iter(|| {
+                        interleave_streams(
+                            num_output_batches,
+                            indices.clone(),
+                            data.clone(),
+                            biggest_coalesce_batch_size,
+                            drain_all_completed_batches,
+                        );
+                    })
+                });
+            }
+        }
     }
 }
 
@@ -645,6 +995,36 @@ fn take_streams(
     }
 }
 
+fn interleave_streams(
+    mut num_output_batches: usize,
+    mut index_stream: InterleaveIndexStream,
+    data_stream: DataStream,
+    biggest_coalesce_batch_size: Option<usize>,
+    drain_all_completed_batches: bool,
+) {
+    let schema = data_stream.schema();
+    let batch_size = data_stream.batch_size();
+    let num_input_batches = index_stream.num_input_batches();
+    let batches = data_stream
+        .batches
+        .get(..num_input_batches)
+        .expect("Not enough input batches for interleave benchmark");
+    let mut coalescer = BatchCoalescer::new(Arc::clone(schema), batch_size)
+        .with_biggest_coalesce_batch_size(biggest_coalesce_batch_size);
+
+    while num_output_batches > 0 {
+        let indices = index_stream.next_indices();
+        coalescer.push_batch_interleaved(batches, indices).unwrap();
+        if drain_all_completed_batches {
+            while num_output_batches > 0 && coalescer.next_completed_batch().is_some() {
+                num_output_batches -= 1;
+            }
+        } else if coalescer.next_completed_batch().is_some() {
+            num_output_batches -= 1;
+        }
+    }
+}
+
 /// Stream of filters to apply to a sequence of input RecordBatches
 ///
 /// This pre-computes a sequence of filters and then repeats it forever.
@@ -661,6 +1041,13 @@ struct IndexStream {
     batches: Arc<[UInt32Array]>,
 }
 
+#[derive(Debug, Clone)]
+struct InterleaveIndexStream {
+    index: usize,
+    num_input_batches: usize,
+    batches: Arc<[Vec<(usize, usize)>]>,
+}
+
 impl IndexStream {
     fn next_indices(&mut self) -> &UInt32Array {
         let current_index = self.index;
@@ -671,6 +1058,23 @@ impl IndexStream {
         self.batches
             .get(current_index)
             .expect("No more index batches available")
+    }
+}
+
+impl InterleaveIndexStream {
+    fn num_input_batches(&self) -> usize {
+        self.num_input_batches
+    }
+
+    fn next_indices(&mut self) -> &[(usize, usize)] {
+        let current_index = self.index;
+        self.index += 1;
+        if self.index >= self.batches.len() {
+            self.index = 0;
+        }
+        self.batches
+            .get(current_index)
+            .expect("No more interleave index batches available")
     }
 }
 
@@ -796,11 +1200,83 @@ impl IndexStreamBuilder {
     }
 }
 
+#[derive(Debug)]
+struct InterleaveIndexStreamBuilder {
+    batch_size: usize,
+    num_batches: usize,
+    num_input_batches: usize,
+    output_len: usize,
+}
+
+impl InterleaveIndexStreamBuilder {
+    fn new() -> Self {
+        Self {
+            batch_size: 8192,
+            num_batches: 11,
+            num_input_batches: NUM_INTERLEAVE_INPUT_BATCHES,
+            output_len: 4096,
+        }
+    }
+
+    fn with_batch_size(mut self, batch_size: usize) -> Self {
+        self.batch_size = batch_size;
+        self
+    }
+
+    fn with_num_input_batches(mut self, num_input_batches: usize) -> Self {
+        self.num_input_batches = num_input_batches;
+        self
+    }
+
+    fn with_output_len(mut self, output_len: usize) -> Self {
+        self.output_len = output_len.max(1);
+        self
+    }
+
+    fn build(self) -> InterleaveIndexStream {
+        let Self {
+            batch_size,
+            num_batches,
+            num_input_batches,
+            output_len,
+        } = self;
+
+        let batches = (0..num_batches)
+            .map(|seed| {
+                create_interleave_indices(num_input_batches, batch_size, output_len, seed as u64)
+            })
+            .collect::<Vec<_>>();
+
+        InterleaveIndexStream {
+            index: 0,
+            num_input_batches,
+            batches: Arc::from(batches),
+        }
+    }
+}
+
 fn create_index_array(input_len: usize, output_len: usize, seed: u64) -> UInt32Array {
     let mut rng = StdRng::seed_from_u64(seed);
     UInt32Array::from_iter_values(
         (0..output_len).map(|_| rng.random_range(0..u32::try_from(input_len).unwrap())),
     )
+}
+
+fn create_interleave_indices(
+    num_input_batches: usize,
+    input_len: usize,
+    output_len: usize,
+    seed: u64,
+) -> Vec<(usize, usize)> {
+    let mut rng = StdRng::seed_from_u64(seed);
+    (0..output_len)
+        .map(|_| {
+            (
+                rng.random_range(0..num_input_batches),
+                rng.random_range(0..input_len),
+            )
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone)]
@@ -927,6 +1403,16 @@ impl DataStreamBuilder {
                 self.batch_size,
                 self.null_density,
             )), // TODO seed
+            DataType::Binary => Arc::new(create_binary_array_with_len_range_and_prefix_and_seed::<
+                i32,
+            >(
+                self.batch_size,
+                self.null_density,
+                0,
+                self.max_string_len,
+                b"",
+                seed,
+            )),
             DataType::Utf8View => {
                 Arc::new(create_string_view_array_with_max_len(
                     self.batch_size,
@@ -955,7 +1441,57 @@ impl DataStreamBuilder {
                     self.max_string_len,
                 )) // TODO seed
             }
+            DataType::FixedSizeBinary(size) => Arc::new(create_fixed_size_binary_array(
+                self.batch_size,
+                self.null_density,
+                *size,
+                seed,
+            )),
+            DataType::Boolean => Arc::new(create_boolean_array_with_seed(
+                self.batch_size,
+                self.null_density,
+                0.5,
+                seed,
+            )),
+            DataType::FixedSizeList(_, list_size) => {
+                Arc::new(create_primitive_fixed_size_list_array::<Int32Type>(
+                    self.batch_size,
+                    self.null_density,
+                    0.0,
+                    *list_size,
+                ))
+            }
+            DataType::List(_) => Arc::new(create_primitive_list_array_with_seed::<i32, Int32Type>(
+                self.batch_size,
+                self.null_density,
+                0.0,
+                10,
+                seed,
+            )),
+            DataType::RunEndEncoded(_, _) => {
+                create_random_array(field, self.batch_size, self.null_density, 0.5).unwrap()
+            }
             _ => panic!("Unsupported data type: {field:?}"),
         }
     }
+}
+
+fn create_fixed_size_binary_array(
+    batch_size: usize,
+    null_density: f32,
+    value_length: i32,
+    seed: u64,
+) -> FixedSizeBinaryArray {
+    let size = value_length as usize;
+    let mut rng = StdRng::seed_from_u64(seed);
+    let mut builder = FixedSizeBinaryBuilder::with_capacity(batch_size, value_length);
+    for _ in 0..batch_size {
+        if rng.random::<f32>() < null_density {
+            builder.append_null();
+        } else {
+            let value: Vec<u8> = (0..size).map(|_| rng.random::<u8>()).collect();
+            builder.append_value(&value).unwrap();
+        }
+    }
+    builder.finish()
 }

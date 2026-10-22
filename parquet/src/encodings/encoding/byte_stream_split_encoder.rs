@@ -31,8 +31,14 @@ pub struct ByteStreamSplitEncoder<T> {
     _p: PhantomData<T>,
 }
 
+impl<T: DataType> Default for ByteStreamSplitEncoder<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T: DataType> ByteStreamSplitEncoder<T> {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             buffer: Vec::new(),
             _p: PhantomData,
@@ -70,7 +76,7 @@ fn split_streams_variable(src: &[u8], dst: &mut [u8], type_size: usize) {
 impl<T: DataType> Encoder<T> for ByteStreamSplitEncoder<T> {
     fn put(&mut self, values: &[T::T]) -> Result<()> {
         self.buffer
-            .extend(<T as DataType>::T::slice_as_bytes(values));
+            .extend_from_slice(<T as DataType>::T::slice_as_bytes(values));
 
         ensure_phys_ty!(
             Type::FLOAT | Type::DOUBLE | Type::INT32 | Type::INT64,
@@ -119,7 +125,7 @@ pub struct VariableWidthByteStreamSplitEncoder<T> {
 }
 
 impl<T: DataType> VariableWidthByteStreamSplitEncoder<T> {
-    pub(crate) fn new(type_length: i32) -> Self {
+    pub fn new(type_length: i32) -> Self {
         Self {
             buffer: Vec::new(),
             type_width: type_length as usize,

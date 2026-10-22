@@ -237,6 +237,6 @@ mod tests {
         let data = mutable.freeze();
 
         let struct_array = Arc::new(StructArray::from(data.clone()));
-        assert!(make_array(data) == struct_array);
+        assert_eq!(&make_array(data), &(struct_array as ArrayRef));
     }
 }

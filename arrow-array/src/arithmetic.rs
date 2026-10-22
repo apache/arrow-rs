@@ -28,8 +28,9 @@ use std::cmp::Ordering;
 /// types they will wrap around the boundary of the type. For floating point types they
 /// will overflow to INF or -INF preserving the expected sign value
 ///
-/// Note `div_wrapping` and `mod_wrapping` will panic for integer types if `rhs` is zero
-/// although this may be subject to change <https://github.com/apache/arrow-rs/issues/2647>
+/// Note `div_wrapping`, `mod_wrapping` and `div_rem_wrapping` will panic for integer types if
+/// `rhs` is zero, although this may be subject to change
+/// <https://github.com/apache/arrow-rs/issues/2647>
 ///
 /// The APIs with `_checked` suffix perform overflow-checking. For integer types
 /// these will return `Err` instead of wrapping. For floating point types they will
@@ -93,6 +94,43 @@ pub trait ArrowNativeTypeOp: ArrowNativeType {
     /// Panics if `rhs` is zero for integer types
     fn mod_wrapping(self, rhs: Self) -> Self;
 
+    /// Checked division and remainder operation, returning `(quotient, remainder)`
+    ///
+    /// Returns the same results as [`Self::div_checked`] and [`Self::mod_checked`]. `i256`
+    /// computes both with one division.
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_array::ArrowNativeTypeOp;
+    /// assert_eq!((-7_i32).div_rem_checked(2).unwrap(), (-3, -1));
+    /// assert!(7_i32.div_rem_checked(0).is_err());
+    /// assert!(i32::MIN.div_rem_checked(-1).is_err());
+    /// ```
+    #[inline]
+    fn div_rem_checked(self, rhs: Self) -> Result<(Self, Self), ArrowError> {
+        Ok((self.div_checked(rhs)?, self.mod_checked(rhs)?))
+    }
+
+    /// Wrapping division and remainder operation, returning `(quotient, remainder)`
+    ///
+    /// Returns the same results as [`Self::div_wrapping`] and [`Self::mod_wrapping`]. `i256`
+    /// computes both with one division.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `rhs` is zero for integer types
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_array::ArrowNativeTypeOp;
+    /// assert_eq!((-7_i32).div_rem_wrapping(2), (-3, -1));
+    /// assert_eq!(i32::MIN.div_rem_wrapping(-1), (i32::MIN, 0));
+    /// ```
+    #[inline]
+    fn div_rem_wrapping(self, rhs: Self) -> (Self, Self) {
+        (self.div_wrapping(rhs), self.mod_wrapping(rhs))
+    }
+
     /// Checked negation operation
     fn neg_checked(self) -> Result<Self, ArrowError>;
 
@@ -152,8 +190,10 @@ macro_rules! native_type_op {
     ($t:tt, $zero:expr, $one: expr) => {
         native_type_op!($t, $zero, $one, $t::MIN, $t::MAX);
     };
-    ($t:tt, $zero:expr, $one: expr, $min: expr, $max: expr) => {
+    ($t:tt, $zero:expr, $one: expr, $min: expr, $max: expr $(, $extra:item)*) => {
         impl ArrowNativeTypeOp for $t {
+            $($extra)*
+
             const ZERO: Self = $zero;
             const ONE: Self = $one;
             const MIN_TOTAL_ORDER: Self = $min;
@@ -296,7 +336,26 @@ native_type_op!(u8);
 native_type_op!(u16);
 native_type_op!(u32);
 native_type_op!(u64);
-native_type_op!(i256, i256::ZERO, i256::ONE);
+native_type_op!(
+    i256,
+    i256::ZERO,
+    i256::ONE,
+    i256::MIN,
+    i256::MAX,
+    #[inline]
+    fn div_rem_checked(self, rhs: Self) -> Result<(Self, Self), ArrowError> {
+        if rhs.is_zero() {
+            return Err(ArrowError::DivideByZero);
+        }
+        self.checked_div_rem(rhs).ok_or_else(|| {
+            ArrowError::ArithmeticOverflow(format!("Overflow happened on: {self:?} / {rhs:?}"))
+        })
+    },
+    #[inline]
+    fn div_rem_wrapping(self, rhs: Self) -> (Self, Self) {
+        self.wrapping_div_rem(rhs)
+    }
+);
 
 native_type_op!(IntervalDayTime, IntervalDayTime::ZERO, IntervalDayTime::ONE);
 native_type_op!(
@@ -775,6 +834,48 @@ mod tests {
         );
         assert_eq!(9.0_f32.mod_checked(2.0_f32).unwrap(), 1_f32);
         assert_eq!(9.0_f64.mod_checked(2.0_f64).unwrap(), 1_f64);
+    }
+
+    #[test]
+    fn test_i256_div_rem() {
+        let values = [
+            i256::MIN,
+            i256::MIN + i256::ONE,
+            i256::from_i128(-7),
+            i256::MINUS_ONE,
+            i256::ZERO,
+            i256::ONE,
+            i256::from_i128(2),
+            i256::from_i128(7),
+            i256::from_i128(i128::MAX),
+            i256::MAX,
+        ];
+        for n in values {
+            for d in values {
+                let checked = n
+                    .div_checked(d)
+                    .and_then(|q| Ok((q, n.mod_checked(d)?)))
+                    .map_err(|e| e.to_string());
+                assert_eq!(
+                    n.div_rem_checked(d).map_err(|e| e.to_string()),
+                    checked,
+                    "{n} / {d}"
+                );
+                if !d.is_zero() {
+                    assert_eq!(
+                        n.div_rem_wrapping(d),
+                        (n.div_wrapping(d), n.mod_wrapping(d)),
+                        "{n} / {d}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "attempt to divide by zero")]
+    fn test_i256_div_rem_wrapping_zero_panics() {
+        let _ = i256::ONE.div_rem_wrapping(i256::ZERO);
     }
 
     #[test]

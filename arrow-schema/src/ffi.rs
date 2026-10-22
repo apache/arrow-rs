@@ -132,17 +132,26 @@ unsafe extern "C" fn release_schema(schema: *mut FFI_ArrowSchema) {
 }
 
 impl FFI_ArrowSchema {
-    /// create a new [`FFI_ArrowSchema`]. This fails if the fields'
-    /// [`DataType`] is not supported.
+    /// create a new [`FFI_ArrowSchema`].
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `format` contains an interior nul byte
+    /// Errors if the fields' [`DataType`] is not supported,
+    /// or if `format` contains an interior nul byte.
     pub fn try_new(
         format: &str,
         children: Vec<FFI_ArrowSchema>,
         dictionary: Option<FFI_ArrowSchema>,
     ) -> Result<Self, ArrowError> {
+        // Convert the format before leaking any of the children,
+        // so that an error here does not leak memory.
+        let format = CString::new(format).map_err(|err| {
+            ArrowError::CDataInterface(format!(
+                "Null byte at position {} not allowed in format",
+                err.nul_position()
+            ))
+        })?;
+
         let mut this = Self::empty();
 
         let children_ptr = children
@@ -151,7 +160,7 @@ impl FFI_ArrowSchema {
             .map(Box::into_raw)
             .collect::<Box<_>>();
 
-        this.format = CString::new(format).unwrap().into_raw();
+        this.format = format.into_raw();
         this.release = Some(release_schema);
         this.n_children = children_ptr.len() as i64;
 
@@ -194,8 +203,17 @@ impl FFI_ArrowSchema {
         Ok(self)
     }
 
-    /// Add metadata to the schema
-    pub fn with_metadata<I, S>(mut self, metadata: I) -> Result<Self, ArrowError>
+    /// Add metadata to the schema.
+    ///
+    /// # Safety
+    ///
+    /// `self` must be a schema this crate produced (e.g. via
+    /// [`FFI_ArrowSchema::try_new`] or a `TryFrom`), not one from a foreign
+    /// producer and not [`FFI_ArrowSchema::empty`]. It reinterprets
+    /// `private_data` as our own type, so any other schema is undefined
+    /// behavior. See <https://github.com/apache/arrow-rs/issues/10679> and
+    /// <https://github.com/apache/arrow-rs/issues/10286>.
+    pub unsafe fn with_metadata<I, S>(mut self, metadata: I) -> Result<Self, ArrowError>
     where
         I: IntoIterator<Item = (S, S)>,
         S: AsRef<str>,
@@ -242,6 +260,9 @@ impl FFI_ArrowSchema {
             None
         };
 
+        // Safety: `self.private_data` was allocated as `Box<SchemaPrivateData>` by `try_new`.
+        // We take ownership temporarily with `from_raw` and put it back with `into_raw`,
+        // so there is no double-free and no other code can access `private_data` concurrently.
         unsafe {
             let mut private_data = Box::from_raw(self.private_data.cast::<SchemaPrivateData>());
             private_data.metadata = new_metadata;
@@ -363,7 +384,7 @@ impl FFI_ArrowSchema {
     ///
     /// Panics if `index` is greater than or equal to the number of children.
     ///
-    /// This is to make sure that the unsafe acces to raw pointer is sound.
+    /// This is to make sure that the unsafe access to raw pointer is sound.
     pub fn child(&self, index: usize) -> &Self {
         assert!(index < self.n_children as usize);
         unsafe { self.children.add(index).as_ref().unwrap().as_ref().unwrap() }
@@ -385,6 +406,8 @@ impl FFI_ArrowSchema {
     ///
     /// This must be `Some` if the schema represents a dictionary-encoded type, `None` otherwise.
     pub fn dictionary(&self) -> Option<&Self> {
+        // Safety: per the C Data Interface spec, `self.dictionary` is either null (returns None)
+        // or a valid pointer to an `FFI_ArrowSchema` that lives at least as long as `self`.
         unsafe { self.dictionary.as_ref() }
     }
 
@@ -410,51 +433,47 @@ impl FFI_ArrowSchema {
             // On some platforms, c_char = u8, and on some, c_char = i8.
             let buffer = self.metadata.cast::<u8>();
 
-            fn next_four_bytes(buffer: *const u8, pos: &mut isize) -> [u8; 4] {
+            fn next_four_bytes(buffer: *const u8, pos: &mut usize) -> [u8; 4] {
+                // Safety: the caller advances `pos` only by the number of bytes consumed,
+                // so `*pos..*pos+4` is always within the bounds of the metadata buffer.
                 let out = unsafe {
                     [
-                        *buffer.offset(*pos),
-                        *buffer.offset(*pos + 1),
-                        *buffer.offset(*pos + 2),
-                        *buffer.offset(*pos + 3),
+                        *buffer.add(*pos),
+                        *buffer.add(*pos + 1),
+                        *buffer.add(*pos + 2),
+                        *buffer.add(*pos + 3),
                     ]
                 };
                 *pos += 4;
                 out
             }
 
-            fn next_n_bytes(buffer: *const u8, pos: &mut isize, n: i32) -> &[u8] {
-                let out = unsafe {
-                    std::slice::from_raw_parts(buffer.offset(*pos), n.try_into().unwrap())
-                };
-                *pos += isize::try_from(n).unwrap();
+            fn next_n_bytes(buffer: *const u8, pos: &mut usize, n: usize) -> &[u8] {
+                // Safety: same as `next_four_bytes`; `*pos..*pos+n` is within the metadata buffer.
+                let out = unsafe { std::slice::from_raw_parts(buffer.add(*pos), n) };
+                *pos += n;
                 out
             }
 
-            let num_entries = i32::from_ne_bytes(next_four_bytes(buffer, &mut pos));
-            if num_entries < 0 {
-                return Err(ArrowError::CDataInterface(
-                    "Negative number of metadata entries".to_string(),
-                ));
+            /// A length read from the metadata, which the producer may have got wrong.
+            fn checked_length(what: &str, length: i32) -> Result<usize, ArrowError> {
+                usize::try_from(length).map_err(|_| {
+                    ArrowError::CDataInterface(format!("Invalid {what} in metadata: {length}"))
+                })
             }
 
-            let mut metadata =
-                HashMap::with_capacity(num_entries.try_into().expect("Too many metadata entries"));
+            let num_entries = i32::from_ne_bytes(next_four_bytes(buffer, &mut pos));
+            let num_entries = checked_length("number of entries", num_entries)?;
+
+            // The count comes from the producer, so do not preallocate all of it
+            let mut metadata = HashMap::with_capacity(num_entries.min(128));
 
             for _ in 0..num_entries {
                 let key_length = i32::from_ne_bytes(next_four_bytes(buffer, &mut pos));
-                if key_length < 0 {
-                    return Err(ArrowError::CDataInterface(
-                        "Negative key length in metadata".to_string(),
-                    ));
-                }
+                let key_length = checked_length("key length", key_length)?;
                 let key = String::from_utf8(next_n_bytes(buffer, &mut pos, key_length).to_vec())?;
                 let value_length = i32::from_ne_bytes(next_four_bytes(buffer, &mut pos));
-                if value_length < 0 {
-                    return Err(ArrowError::CDataInterface(
-                        "Negative value length in metadata".to_string(),
-                    ));
-                }
+                let value_length = checked_length("value length", value_length)?;
                 let value =
                     String::from_utf8(next_n_bytes(buffer, &mut pos, value_length).to_vec())?;
                 metadata.insert(key, value);
@@ -469,6 +488,9 @@ impl Drop for FFI_ArrowSchema {
     fn drop(&mut self) {
         match self.release {
             None => (),
+            // Safety: the release callback was set by the schema producer and follows the
+            // C Data Interface contract: it frees all resources associated with the schema
+            // and sets `release` to None. `self` is a valid, non-null pointer here.
             Some(release) => unsafe { release(self) },
         }
     }
@@ -867,10 +889,15 @@ impl TryFrom<&Field> for FFI_ArrowSchema {
             flags |= Flags::DICTIONARY_ORDERED;
         }
 
-        FFI_ArrowSchema::try_from(field.data_type())?
+        if let DataType::Map(_, true) = field.data_type() {
+            flags |= Flags::MAP_KEYS_SORTED;
+        }
+
+        let schema = FFI_ArrowSchema::try_from(field.data_type())?
             .with_name(field.name())?
-            .with_flags(flags)?
-            .with_metadata(field.metadata())
+            .with_flags(flags)?;
+        // SAFETY: schema was just constructed by this crate.
+        unsafe { schema.with_metadata(field.metadata()) }
     }
 }
 
@@ -879,8 +906,9 @@ impl TryFrom<&Schema> for FFI_ArrowSchema {
 
     fn try_from(schema: &Schema) -> Result<Self, ArrowError> {
         let dtype = DataType::Struct(schema.fields().clone());
-        let c_schema = FFI_ArrowSchema::try_from(&dtype)?.with_metadata(&schema.metadata)?;
-        Ok(c_schema)
+        let c_schema = FFI_ArrowSchema::try_from(&dtype)?;
+        // SAFETY: c_schema was just constructed by this crate.
+        unsafe { c_schema.with_metadata(&schema.metadata) }
     }
 }
 
@@ -933,6 +961,15 @@ mod tests {
     }
 
     #[test]
+    fn test_try_new_with_interior_nul_byte() {
+        let err = FFI_ArrowSchema::try_new("i\0nt", vec![], None).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "C Data interface error: Null byte at position 1 not allowed in format"
+        );
+    }
+
+    #[test]
     fn test_type() {
         round_trip_type(DataType::Int64);
         round_trip_type(DataType::UInt64);
@@ -970,8 +1007,16 @@ mod tests {
             true,
         )])));
         round_trip_type(DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Int32, false)),
-            Arc::new(Field::new("values", DataType::Binary, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Binary,
+                true,
+            )),
         ));
     }
 
@@ -1027,6 +1072,56 @@ mod tests {
         assert!(arrow_schema.map_keys_sorted());
     }
 
+    fn map_type(keys_sorted: bool) -> DataType {
+        let entries = Field::new(
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+            DataType::Struct(Fields::from(vec![
+                Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int32, true),
+            ])),
+            false,
+        );
+        DataType::Map(Arc::new(entries), keys_sorted)
+    }
+
+    #[test]
+    fn test_map_keys_sorted_field() {
+        for keys_sorted in [false, true] {
+            for nullable in [false, true] {
+                let field = Field::new("m", map_type(keys_sorted), nullable);
+                let c_schema = FFI_ArrowSchema::try_from(&field).unwrap();
+                assert_eq!(c_schema.map_keys_sorted(), keys_sorted);
+                assert_eq!(c_schema.nullable(), nullable);
+                round_trip_field(field);
+            }
+        }
+    }
+
+    #[test]
+    fn test_map_keys_sorted_nested() {
+        let map = |keys_sorted| Field::new("m", map_type(keys_sorted), true);
+
+        for keys_sorted in [false, true] {
+            round_trip_type(DataType::Struct(Fields::from(vec![
+                Field::new("a", DataType::Int32, true),
+                map(keys_sorted),
+            ])));
+            round_trip_type(DataType::List(Arc::new(map(keys_sorted))));
+            round_trip_type(DataType::Union(
+                UnionFields::try_new(
+                    vec![0, 1],
+                    vec![Field::new("i", DataType::Int32, true), map(keys_sorted)],
+                )
+                .unwrap(),
+                UnionMode::Dense,
+            ));
+            round_trip_schema(Schema::new(vec![
+                Field::new("id", DataType::Int64, false),
+                map(keys_sorted),
+            ]));
+        }
+    }
+
     #[test]
     fn test_dictionary_ordered() {
         #[expect(deprecated)]
@@ -1065,7 +1160,8 @@ mod tests {
             .unwrap();
 
         for metadata in metadata_cases {
-            schema = schema.with_metadata(&metadata).unwrap();
+            // SAFETY: schema was constructed by this crate via try_new.
+            schema = unsafe { schema.with_metadata(&metadata) }.unwrap();
             let field = Field::try_from(&schema).unwrap();
             assert_eq!(field.metadata(), &metadata);
         }

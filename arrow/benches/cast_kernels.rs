@@ -22,11 +22,11 @@ use rand::RngExt;
 use rand::distr::{Distribution, StandardUniform, Uniform};
 use std::hint;
 
-use chrono::DateTime;
+use chrono::{DateTime, NaiveDate, NaiveDateTime};
 use std::sync::Arc;
 
 use arrow::array::*;
-use arrow::compute::cast;
+use arrow::compute::{CastOptions, cast, cast_with_options};
 use arrow::datatypes::*;
 use arrow::util::bench_util::*;
 use arrow::util::test_util::seedable_rng;
@@ -172,6 +172,28 @@ fn build_float64_array_invalid_items(size: usize, null_density: f32) -> ArrayRef
     build_array_with_samples!(builder, size, null_density, invalid_values)
 }
 
+// Builds a BinaryArray of `size` rows over `unique_count` distinct byte strings.
+// `null_every` controls null density: Some(n) inserts a null every n rows, None means no nulls.
+// Binary and Utf8 both route through pack_byte_to_dictionary, so binary covers both paths.
+fn build_binary_array_for_dict_cast(
+    size: usize,
+    unique_count: usize,
+    null_every: Option<usize>,
+) -> ArrayRef {
+    let values: Vec<Vec<u8>> = (0..unique_count)
+        .map(|i| format!("value{i:08}").into_bytes())
+        .collect();
+    let mut builder = BinaryBuilder::with_capacity(size, size * 10);
+    for i in 0..size {
+        if null_every.is_some_and(|n| i % n == 0) {
+            builder.append_null();
+        } else {
+            builder.append_value(&values[i % unique_count]);
+        }
+    }
+    Arc::new(builder.finish())
+}
+
 fn build_dict_array(size: usize) -> ArrayRef {
     let values = StringArray::from_iter([
         Some("small"),
@@ -237,7 +259,15 @@ fn cast_array(array: &ArrayRef, to_type: DataType) {
 
 fn add_benchmark(c: &mut Criterion) {
     let i32_array = build_array::<Int32Type>(512);
+    let i32_array_8192 = build_array::<Int32Type>(8192);
+    let bool_array: ArrayRef = Arc::new(create_boolean_array(8192, 0.1, 0.5));
+    let bool_array_no_nulls: ArrayRef = Arc::new(create_boolean_array(8192, 0.0, 0.5));
     let i64_array = build_array::<Int64Type>(512);
+    let i64_within_1e6 = create_primitive_array_range::<Int64Type>(512, 0.1, -1_000_000..1_000_000);
+    let mut values: Vec<Option<i64>> = i64_within_1e6.iter().collect();
+    *values.last_mut().unwrap() = Some(10_000_000_000_000_000);
+    let i64_late_overflow = Arc::new(Int64Array::from(values)) as ArrayRef;
+    let i64_within_1e6 = Arc::new(i64_within_1e6) as ArrayRef;
     let f32_array = build_array::<Float32Type>(512);
     let f32_utf8_array = cast(&build_array::<Float32Type>(512), &DataType::Utf8).unwrap();
     let i32_utf8_array = cast(&build_array::<Int32Type>(512), &DataType::Utf8).unwrap();
@@ -256,6 +286,13 @@ fn add_benchmark(c: &mut Criterion) {
     let decimal256_array = build_decimal256_array(8_000, 50, 3);
     let string_array = build_string_array(512);
     let wide_string_array = cast(&string_array, &DataType::LargeUtf8).unwrap();
+
+    let binary_low_card = build_binary_array_for_dict_cast(10_000, 25, Some(20));
+    let binary_med_card = build_binary_array_for_dict_cast(10_000, 500, Some(20));
+    let binary_high_card = build_binary_array_for_dict_cast(10_000, 2_500, Some(20));
+    let binary_low_card_no_nulls = build_binary_array_for_dict_cast(10_000, 25, None);
+    let binary_med_card_no_nulls = build_binary_array_for_dict_cast(10_000, 500, None);
+    let binary_high_card_no_nulls = build_binary_array_for_dict_cast(10_000, 2_500, None);
 
     let dict_array = build_dict_array(10_000);
     let nested_dict_array = build_nested_dict_array(10_000);
@@ -290,6 +327,24 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("cast int32 to int64 512", |b| {
         b.iter(|| cast_array(&i32_array, DataType::Int64))
     });
+    c.bench_function("cast int32 to bool 8192", |b| {
+        b.iter(|| cast_array(&i32_array_8192, DataType::Boolean))
+    });
+    c.bench_function("cast bool to int32 8192", |b| {
+        b.iter(|| cast_array(&bool_array, DataType::Int32))
+    });
+    c.bench_function("cast bool to string 8192", |b| {
+        b.iter(|| cast_array(&bool_array, DataType::Utf8))
+    });
+    c.bench_function("cast bool to string no nulls 8192", |b| {
+        b.iter(|| cast_array(&bool_array_no_nulls, DataType::Utf8))
+    });
+    c.bench_function("cast bool to string view 8192", |b| {
+        b.iter(|| cast_array(&bool_array, DataType::Utf8View))
+    });
+    c.bench_function("cast bool to string view no nulls 8192", |b| {
+        b.iter(|| cast_array(&bool_array_no_nulls, DataType::Utf8View))
+    });
     c.bench_function("cast float32 to int32 512", |b| {
         b.iter(|| cast_array(&f32_array, DataType::Int32))
     });
@@ -302,6 +357,22 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("cast int64 to int32 512", |b| {
         b.iter(|| cast_array(&i64_array, DataType::Int32))
     });
+    c.bench_function("cast int64 to decimal32(9, 0) 512", |b| {
+        b.iter(|| cast_array(&i64_array, DataType::Decimal32(9, 0)))
+    });
+    c.bench_function("cast int64 to decimal32(9, -1) 512", |b| {
+        b.iter(|| cast_array(&i64_array, DataType::Decimal32(9, -1)))
+    });
+    c.bench_function("cast int64 to decimal128(38, 10) 512", |b| {
+        b.iter(|| cast_array(&i64_array, DataType::Decimal128(38, 10)))
+    });
+    c.bench_function("cast int64 within 1e6 to decimal128(18, 2) 512", |b| {
+        b.iter(|| cast_array(&i64_within_1e6, DataType::Decimal128(18, 2)))
+    });
+    c.bench_function(
+        "cast int64 within 1e6 late overflow to decimal128(18, 2) 512",
+        |b| b.iter(|| cast_array(&i64_late_overflow, DataType::Decimal128(18, 2))),
+    );
     c.bench_function("cast date64 to date32 512", |b| {
         b.iter(|| cast_array(&date64_array, DataType::Date32))
     });
@@ -403,6 +474,54 @@ fn add_benchmark(c: &mut Criterion) {
             )
         })
     });
+    c.bench_function("cast binary to dict low cardinality", |b| {
+        b.iter(|| {
+            cast_array(
+                &binary_low_card,
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
+            )
+        })
+    });
+    c.bench_function("cast binary to dict medium cardinality", |b| {
+        b.iter(|| {
+            cast_array(
+                &binary_med_card,
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
+            )
+        })
+    });
+    c.bench_function("cast binary to dict high cardinality", |b| {
+        b.iter(|| {
+            cast_array(
+                &binary_high_card,
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
+            )
+        })
+    });
+    c.bench_function("cast binary to dict low cardinality no nulls", |b| {
+        b.iter(|| {
+            cast_array(
+                &binary_low_card_no_nulls,
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
+            )
+        })
+    });
+    c.bench_function("cast binary to dict medium cardinality no nulls", |b| {
+        b.iter(|| {
+            cast_array(
+                &binary_med_card_no_nulls,
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
+            )
+        })
+    });
+    c.bench_function("cast binary to dict high cardinality no nulls", |b| {
+        b.iter(|| {
+            cast_array(
+                &binary_high_card_no_nulls,
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
+            )
+        })
+    });
     c.bench_function("cast string view to dict", |b| {
         b.iter(|| {
             cast_array(
@@ -498,8 +617,16 @@ fn add_benchmark(c: &mut Criterion) {
         let source_array = StringArray::from(vec!["a"; 8192]);
         let array_ref = Arc::new(source_array) as ArrayRef;
         let target_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Int32, false)),
-            Arc::new(Field::new("values", DataType::Utf8, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                true,
+            )),
         );
         b.iter(|| cast(&array_ref, &target_type).unwrap());
     });
@@ -508,8 +635,16 @@ fn add_benchmark(c: &mut Criterion) {
         let source_array: Int32Array = (0..8192).map(|i| i / 10).collect();
         let array_ref = Arc::new(source_array) as ArrayRef;
         let target_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Int32, false)),
-            Arc::new(Field::new("values", DataType::Int32, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                true,
+            )),
         );
         b.iter(|| cast(&array_ref, &target_type).unwrap());
     });
@@ -518,8 +653,16 @@ fn add_benchmark(c: &mut Criterion) {
         let source_array: Int32Array = (0..8192).map(|i| i / 1000).collect();
         let array_ref = Arc::new(source_array) as ArrayRef;
         let target_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Int32, false)),
-            Arc::new(Field::new("values", DataType::Int32, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                true,
+            )),
         );
         b.iter(|| cast(&array_ref, &target_type).unwrap());
     });
@@ -528,11 +671,178 @@ fn add_benchmark(c: &mut Criterion) {
         let source_array: Int32Array = (0..8192).collect();
         let array_ref = Arc::new(source_array) as ArrayRef;
         let target_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Int32, false)),
-            Arc::new(Field::new("values", DataType::Int32, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                true,
+            )),
         );
         b.iter(|| cast(&array_ref, &target_type).unwrap());
     });
+
+    c.bench_function("cast date to string", |b| {
+        // the min and max of the date32 type
+        let range = NaiveDate::MIN.to_epoch_days()..NaiveDate::MAX.to_epoch_days();
+        let date32_array: PrimitiveArray<Date32Type> =
+            create_primitive_array_range::<Date32Type>(8192, 0.1, range);
+        let target_type = DataType::Utf8;
+        b.iter(|| cast(&date32_array, &target_type).unwrap());
+    });
+    c.bench_function("cast time64 to string", |b| {
+        let time64_array: PrimitiveArray<Time64MicrosecondType> =
+            create_primitive_array_range::<Time64MicrosecondType>(8192, 0.1, 0..86400000000);
+        let target_type = DataType::Utf8;
+        b.iter(|| cast(&time64_array, &target_type).unwrap());
+    });
+    c.bench_function("cast micro timestamp to string", |b| {
+        let range = NaiveDateTime::MIN.and_utc().timestamp_micros()
+            ..NaiveDateTime::MAX.and_utc().timestamp_micros();
+        let timestamp_micro_array: PrimitiveArray<TimestampMicrosecondType> =
+            create_primitive_array_range::<TimestampMicrosecondType>(8192, 0.1, range);
+        let target_type = DataType::Utf8;
+        b.iter(|| cast(&timestamp_micro_array, &target_type).unwrap());
+    });
+    c.bench_function("cast micro timestamp with timezone to string", |b| {
+        let range = NaiveDateTime::MIN.and_utc().timestamp_micros()
+            ..NaiveDateTime::MAX.and_utc().timestamp_micros();
+        let timestamp_micro_utc_array =
+            create_primitive_array_range::<TimestampMicrosecondType>(8192, 0.1, range)
+                .with_timezone("+08:00");
+        let target_type = DataType::Utf8;
+        b.iter(|| cast(&timestamp_micro_utc_array, &target_type).unwrap());
+    });
+
+    const ROWS: usize = 8192;
+    let mut bench = |name: &str, input: ArrayRef, target: DataType, modes: &[bool]| {
+        for &safe in modes {
+            let options = CastOptions {
+                safe,
+                ..Default::default()
+            };
+            let mode = if safe { "safe" } else { "strict" };
+            c.bench_function(&format!("{name} {mode}"), |b| {
+                b.iter(|| {
+                    cast_with_options(
+                        hint::black_box(input.as_ref()),
+                        hint::black_box(&target),
+                        &options,
+                    )
+                    .unwrap()
+                })
+            });
+        }
+    };
+
+    // Choose fixtures for distinct conversion paths, rather than every type pair.
+    let int32: ArrayRef = Arc::new(create_primitive_array_range::<Int32Type>(
+        ROWS,
+        0.1,
+        -1_000_000..1_000_000,
+    ));
+    let int64: ArrayRef = Arc::new(create_primitive_array_range::<Int64Type>(
+        ROWS,
+        0.1,
+        10..1_000_000,
+    ));
+    let uint64: ArrayRef = Arc::new(create_primitive_array_range::<UInt64Type>(
+        ROWS,
+        0.1,
+        10..1_000_000,
+    ));
+    for (name, input, target) in [
+        (
+            "cast int32 to decimal32(9, 0) 8192 valid",
+            int32,
+            DataType::Decimal32(9, 0),
+        ),
+        (
+            "cast int64 to decimal128(38, 2) 8192 valid",
+            int64.clone(),
+            DataType::Decimal128(38, 2),
+        ),
+    ] {
+        bench(name, input, target, &[true, false]);
+    }
+    bench(
+        "cast uint64 to decimal256(76, -1) 8192 scale down",
+        uint64,
+        DataType::Decimal256(76, -1),
+        &[true],
+    );
+    bench(
+        "cast int64 to decimal32(9, -20) 8192 all zero",
+        int64,
+        DataType::Decimal32(9, -20),
+        &[true],
+    );
+    let overflow: ArrayRef = Arc::new(create_primitive_array_range::<Int32Type>(
+        ROWS,
+        0.1,
+        100_000_000..1_000_000_000,
+    ));
+    bench(
+        "cast int32 to decimal32(8, 0) 8192 precision overflow",
+        overflow,
+        DataType::Decimal32(8, 0),
+        &[true],
+    );
+    let wide: ArrayRef = Arc::new(Int64Array::from_iter(
+        (0..ROWS).map(|i| (i % 10 != 0).then_some(5_000_000_000 + i as i64)),
+    ));
+    bench(
+        "cast int64 to decimal32(9, -1) 8192 scale before narrowing",
+        wide,
+        DataType::Decimal32(9, -1),
+        &[true],
+    );
+
+    // Choose distinct conversion paths, not every source/destination pair.
+    let float32: ArrayRef = Arc::new(create_primitive_array_range::<Float32Type>(
+        ROWS,
+        0.1,
+        -9999.0..9999.0,
+    ));
+    bench(
+        "cast float32 to decimal32(7, 2) 8192 valid",
+        float32,
+        DataType::Decimal32(7, 2),
+        &[true, false],
+    );
+    let float64: ArrayRef = Arc::new(create_primitive_array_range::<Float64Type>(
+        ROWS,
+        0.1,
+        -9999.0..9999.0,
+    ));
+    // Safe Float64 -> Decimal128 and non-finite inputs are already covered above.
+    bench(
+        "cast float64 to decimal128(20, 3) 8192 valid",
+        float64.clone(),
+        DataType::Decimal128(20, 3),
+        &[false],
+    );
+    // Decimal256 uses a separate float-to-i256 conversion implementation.
+    bench(
+        "cast float64 to decimal256(40, -2) 8192 scale down",
+        float64,
+        DataType::Decimal256(40, -2),
+        &[true],
+    );
+    // Direct and rounding-induced overflow share the precision-failure path.
+    // The existing non-finite benchmark already covers native conversion failure.
+    let samples = [1000.0, -1000.0, 999.75, -999.75];
+    let mut builder = Float64Builder::with_capacity(ROWS);
+    let overflow = build_array_with_samples!(builder, ROWS, 0.1, samples);
+    bench(
+        "cast float64 to decimal64(3, 0) 8192 precision overflow",
+        overflow,
+        DataType::Decimal64(3, 0),
+        &[true],
+    );
 }
 
 criterion_group!(benches, add_benchmark);

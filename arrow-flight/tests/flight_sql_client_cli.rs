@@ -33,7 +33,7 @@ use arrow_flight::{
         ActionCreatePreparedStatementRequest, ActionCreatePreparedStatementResult, Any,
         CommandGetCatalogs, CommandGetDbSchemas, CommandGetTableTypes, CommandGetTables,
         CommandPreparedStatementQuery, CommandStatementQuery, DoPutPreparedStatementResult,
-        ProstMessageExt, SqlInfo,
+        ProstMessageExt,
         server::{FlightSqlService, PeekableFlightDataStream},
     },
     utils::batches_to_flight_data,
@@ -486,7 +486,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         };
         let schema = batch.schema_ref();
         let batches = vec![batch.clone()];
-        let flight_data = batches_to_flight_data(schema, batches)
+        let flight_data = batches_to_flight_data(schema, &batches)
             .unwrap()
             .into_iter()
             .map(Ok);
@@ -751,8 +751,6 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Self::create_fake_prepared_stmt()
             .map_err(|e| Status::internal(format!("Unable to serialize schema: {e}")))
     }
-
-    async fn register_sql_info(&self, _id: i32, _result: &SqlInfo) {}
 }
 
 #[derive(Clone, PartialEq, ::prost::Message)]
