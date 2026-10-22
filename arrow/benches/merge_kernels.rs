@@ -171,8 +171,6 @@ fn mask_cases(len: usize) -> Vec<(&'static str, BooleanArray)> {
 fn run_mask_cases(len: usize) -> Vec<(&'static str, BooleanArray)> {
     [
         ("runs_of_64_50pct_true", 0.5, 64.0),
-        ("runs_of_64_10pct_true", 0.1, 64.0),
-        ("runs_of_512_50pct_true", 0.5, 512.0),
         ("runs_of_512_10pct_true", 0.1, 512.0),
     ]
     .into_iter()
@@ -263,11 +261,6 @@ fn bench_merge_on_input_generator(
     // Benchmarks for different scalar combinations
     for (description, truthy, falsy) in &[
         ("null_vs_non_null_scalar", &null_scalar, &non_null_scalar_1),
-        (
-            "non_null_scalar_vs_null_scalar",
-            &non_null_scalar_1,
-            &null_scalar,
-        ),
         ("non_nulls_scalars", &non_null_scalar_1, &non_null_scalar_2),
     ] {
         bench_merge_input_on_all_masks(
@@ -325,45 +318,11 @@ fn add_benchmark(c: &mut Criterion) {
         Scenarios::ScalarSide,
     );
 
-    // Short strings
     bench_merge_on_input_generator(
         c,
         &GenerateBytes::<GenericStringType<i32>> {
-            description: "short strings (3..10)".to_string(),
-            range_length: 3..10,
-            _marker: std::marker::PhantomData,
-        },
-        Scenarios::All,
-    );
-
-    // Long strings
-    bench_merge_on_input_generator(
-        c,
-        &GenerateBytes::<GenericStringType<i32>> {
-            description: "long strings (100..400)".to_string(),
-            range_length: 100..400,
-            _marker: std::marker::PhantomData,
-        },
-        Scenarios::All,
-    );
-
-    // Short Bytes
-    bench_merge_on_input_generator(
-        c,
-        &GenerateBytes::<GenericBinaryType<i32>> {
-            description: "short bytes (3..10)".to_string(),
-            range_length: 3..10,
-            _marker: std::marker::PhantomData,
-        },
-        Scenarios::All,
-    );
-
-    // Long Bytes
-    bench_merge_on_input_generator(
-        c,
-        &GenerateBytes::<GenericBinaryType<i32>> {
-            description: "long bytes (100..400)".to_string(),
-            range_length: 100..400,
+            description: "strings (3..20)".to_string(),
+            range_length: 3..20,
             _marker: std::marker::PhantomData,
         },
         Scenarios::All,
