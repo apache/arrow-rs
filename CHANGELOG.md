@@ -25,6 +25,7 @@
 [Full Changelog](https://github.com/apache/arrow-rs/compare/59.3.1...59.3.2)
 
 ### Bug fixes
+- [59_maintenance] Write empty validity buffers for arrays without nulls in IPC writer by @alamb in [#11820](https://github.com/apache/arrow-rs/pull/11820)
 - [59_maintenance] fix(arrow-buffer): prevent use-after-free in Buffer::shrink_to_fit when MemoryReservation::resize panics by @alamb in [#11787](https://github.com/apache/arrow-rs/pull/11787)
 - [59_maintenance] fix(parquet): skip miniblocks wider than 64 values instead of erroring by @Jefffrey in [#11754](https://github.com/apache/arrow-rs/pull/11754)
 - [59_maintenance] fix: account for offsets in runarrays when using extend for MutableArrayData by @Jefffrey in [#11671](https://github.com/apache/arrow-rs/pull/11671)
