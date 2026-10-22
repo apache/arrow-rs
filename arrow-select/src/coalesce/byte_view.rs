@@ -369,14 +369,22 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
                 (false, 0)
             } else {
                 let ideal_buffer_size = s.total_buffer_bytes_used();
-                // We don't use get_buffer_memory_size here, because gc is for the contents of the
-                // data buffers, not views and nulls.
-                let actual_buffer_size =
-                    s.data_buffers().iter().map(|b| b.capacity()).sum::<usize>();
                 // copying strings is expensive, so only do it if the array is
                 // sparse (uses at least 2x the memory it needs)
-                let need_gc =
-                    ideal_buffer_size != 0 && actual_buffer_size > (ideal_buffer_size * 2);
+                let need_gc = if ideal_buffer_size != 0 {
+                    let mut is_sparse = false;
+                    let mut curr_buffer_size = 0;
+                    for buffer in s.data_buffers().iter() {
+                        curr_buffer_size += buffer.capacity();
+                        if curr_buffer_size > ideal_buffer_size * 2 {
+                            is_sparse = true;
+                            break;
+                        }
+                    }
+                    is_sparse
+                } else {
+                    false
+                };
                 (need_gc, ideal_buffer_size)
             };
 
