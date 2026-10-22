@@ -1720,18 +1720,10 @@ pub fn take_record_batch(
                     columns.push(take_impl::<_, false>(col.as_ref(), &indices)?);
                 }
             }
-            if indices.null_count() == 0 {
-                // Without null indices no column gains a null, so the result is valid if the
-                // input batch is.
-                // Safety: take returns one column per input column, of the same type and with
-                // indices.len() rows
-                Ok(unsafe { RecordBatch::new_unchecked(record_batch.schema(), columns, indices.len()) })
-            } else {
-                // Null indices can put nulls in non-nullable columns, which this rejects. The
-                // row count is needed for a batch with no columns.
-                let options = RecordBatchOptions::new().with_row_count(Some(indices.len()));
-                RecordBatch::try_new_with_options(record_batch.schema(), columns, &options)
-            }
+            // Null indices can put nulls in non-nullable columns, which this rejects. The
+            // row count is needed for a batch with no columns.
+            let options = RecordBatchOptions::new().with_row_count(Some(indices.len()));
+            RecordBatch::try_new_with_options(record_batch.schema(), columns, &options)
         },
         d => Err(ArrowError::InvalidArgumentError(format!("Take only supported for integers, got {d:?}")))
     )
