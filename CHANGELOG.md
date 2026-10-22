@@ -20,23 +20,22 @@
 # Changelog
 
 
-## [59.3.1](https://github.com/apache/arrow-rs/tree/59.3.1) - (2026-10-10)
+## [59.3.2](https://github.com/apache/arrow-rs/tree/59.3.2) - (2026-10-22)
 
-[Full Changelog](https://github.com/apache/arrow-rs/compare/59.3.0...59.3.1)
+[Full Changelog](https://github.com/apache/arrow-rs/compare/59.3.1...59.3.2)
 
 ### Bug fixes
-- [59_maintenance] fix(arrow-array): avoid returning corrupt array in `GenericByteArray::into_builder` by @Jefffrey in [#11446](https://github.com/apache/arrow-rs/pull/11446)
-- [59_maintenance] fix(arrow-array): preserve type params in `PrimitiveArray::into_builder` by @Jefffrey in [#11448](https://github.com/apache/arrow-rs/pull/11448)
-- [59_maintenance] fix(arrow-cast): avoid panicking during failed List -> ListView cast by @Jefffrey in [#11445](https://github.com/apache/arrow-rs/pull/11445)
-- [59_maintenance] Fix filter_nulls for predicates selecting all or no rows by @Jefffrey in [#11444](https://github.com/apache/arrow-rs/pull/11444)
-- [59_maintenance] fix: finish methods in `PrimitiveDictionaryBuilder` discard type params by @Jefffrey in [#11442](https://github.com/apache/arrow-rs/pull/11442)
-- [59_maintenance] fix(arrow-array): `PrimitiveRunBuilder` was buggy after `finish` by @Jefffrey in [#11441](https://github.com/apache/arrow-rs/pull/11441)
-- [59_maintenance] fix(parquet): keep virtual columns in the schema reported with a schema hint by @Jefffrey in [#11447](https://github.com/apache/arrow-rs/pull/11447)
-- [59_maintenance] fix(arrow-data): fix gaps in ListView equality by @Jefffrey in [#11439](https://github.com/apache/arrow-rs/pull/11439)
-- [59_maintenance] fix: Parquet `ByteArrayDecoderPlain::read` can silently fail to read the correct number of values by @Jefffrey in [#11440](https://github.com/apache/arrow-rs/pull/11440)
-- [59_maintenance] fix(parquet): reject Thrift list sizes larger than remaining input by @Jefffrey in [#11353](https://github.com/apache/arrow-rs/pull/11353)
-
-### Miscellaneous
-- [59_maintenance] Identify the chronoutil-derived MIT code in the root LICENSE.txt by @Jefffrey in [#11358](https://github.com/apache/arrow-rs/pull/11358)
-- [59_maintenance] fix: update rustls to address RUSTSEC-2026-0285 by @Jefffrey in [#11357](https://github.com/apache/arrow-rs/pull/11357)
-
+- [59_maintenance] fix(arrow-buffer): prevent use-after-free in Buffer::shrink_to_fit when MemoryReservation::resize panics by @alamb in [#11787](https://github.com/apache/arrow-rs/pull/11787)
+- [59_maintenance] fix(parquet): skip miniblocks wider than 64 values instead of erroring by @Jefffrey in [#11754](https://github.com/apache/arrow-rs/pull/11754)
+- [59_maintenance] fix: account for offsets in runarrays when using extend for MutableArrayData by @Jefffrey in [#11671](https://github.com/apache/arrow-rs/pull/11671)
+- [59_maintenance] fix: account for offset when building RunArray from ArrayData by @alamb in [#11739](https://github.com/apache/arrow-rs/pull/11739)
+- [59_maintenance] fix: use correct length in runarray validation by @alamb in [#11740](https://github.com/apache/arrow-rs/pull/11740)
+- [59_maintenance] fix: account for arraydata offset when comparing runarrays by @Jefffrey in [#11673](https://github.com/apache/arrow-rs/pull/11673)
+- [59_maintenance] fix(arrow-schema): validate `UnionFields` when deserializing by @Jefffrey in [#11672](https://github.com/apache/arrow-rs/pull/11672)
+- [59_maintenance] fix: implement `ArrayData::validate_values` for union types by @Jefffrey in [#11678](https://github.com/apache/arrow-rs/pull/11678)
+- [59_maintenance] Fix sliced sparse union ArrayData conversion by @Jefffrey in [#11679](https://github.com/apache/arrow-rs/pull/11679)
+- [59_maintenance] fix(arrow-data): account for FixedSizeList parent offset in MutableArrayData by @Jefffrey in [#11683](https://github.com/apache/arrow-rs/pull/11683)
+- [59_maintenance] fix: `UnionFields::from_iter` should validate input by @Jefffrey in [#11670](https://github.com/apache/arrow-rs/pull/11670)
+- [59_maintenance] fix(arrow-array): use the field's type id in dense union logical_nulls by @Jefffrey in [#11680](https://github.com/apache/arrow-rs/pull/11680)
+- [59_maintenance] Parquet: list the dictionary page first in page_encoding_stats by @Jefffrey in [#11699](https://github.com/apache/arrow-rs/pull/11699)
+- [59_maintenance] fix(arrow-data): check view nulls at the right index in `ArrayData` equality by @Jefffrey in [#11675](https://github.com/apache/arrow-rs/pull/11675)
