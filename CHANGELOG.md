@@ -20,7 +20,7 @@
 # Changelog
 
 
-## [60.1.0](https://github.com/apache/arrow-rs/tree/60.1.0) - (2026-10-20)
+## [60.1.0](https://github.com/apache/arrow-rs/tree/60.1.0) - (2026-10-22)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/60.0.0...60.1.0)
 
@@ -62,6 +62,7 @@
 - deps: removed unneeded once_cell dependency if favor of std::sync::LazyLock by @aectaan in [#11066](https://github.com/apache/arrow-rs/pull/11066)
 
 ### Bug fixes
+- fix(parquet): align encoded Arrow schemas and nested nullability by @HippoBaro in [#11278](https://github.com/apache/arrow-rs/pull/11278)
 - Fix incorrect Decimal statistics for BYTE_ARRAY columns written via ArrowColumnWriter by @DeviousCardi in [#11092](https://github.com/apache/arrow-rs/pull/11092)
 - fix(parquet): return an error for RLE run lengths above the spec limit by @hhhizzz in [#11517](https://github.com/apache/arrow-rs/pull/11517)
 - fix: use correct length in runarray validation by @Jefffrey in [#11668](https://github.com/apache/arrow-rs/pull/11668)
@@ -156,6 +157,7 @@
 - fix(parquet): do not cache an ALP preset built from an empty first page by @Abdallah-Afifi in [#11004](https://github.com/apache/arrow-rs/pull/11004)
 
 ### Performance improvements
+- perf(parquet): skip per-batch key-bounds scan when RLE bit width proves keys are in bounds by @Rich-T-kid in [#11462](https://github.com/apache/arrow-rs/pull/11462)
 - perf(arrow-cmp): add fast paths to dictionary_cmp by @Rich-T-kid in [#11407](https://github.com/apache/arrow-rs/pull/11407)
 - speed up dict cast key width by @Rich-T-kid in [#11502](https://github.com/apache/arrow-rs/pull/11502)
 - perf: Inline `SlicesIterator::next` by @haohuaijin in [#11646](https://github.com/apache/arrow-rs/pull/11646)
@@ -216,5 +218,4 @@
 - Document platform endianness support by @sdf-jkl in [#11056](https://github.com/apache/arrow-rs/pull/11056)
 - chore: Fix duplicated word typos in comments and docs by @geographybuff in [#11034](https://github.com/apache/arrow-rs/pull/11034)
 - docs(parquet): add OpenDAL read and write example by @Xuanwo in [#11014](https://github.com/apache/arrow-rs/pull/11014)
-
 
