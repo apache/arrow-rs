@@ -416,6 +416,22 @@ impl<W: Write + Send> ArrowWriter<W> {
                         }
                     }
                 }
+            } else if let Some(max_bytes) = self.max_row_group_bytes
+                && candidate_rows > 1
+            {
+                // Nothing buffered to measure yet, so estimate the row size from the
+                // batch's in-memory size. Otherwise a batch larger than the limit would
+                // always be written whole into an empty row group. Once some rows are
+                // buffered, the measured average above takes over.
+                let batch_bytes = remaining.columns().iter().try_fold(0usize, |acc, column| {
+                    Some(acc + column.to_data().get_slice_memory_size().ok()?)
+                });
+                let avg_row_bytes = batch_bytes.map_or(0, |bytes| bytes / remaining.num_rows());
+                if let Some(rows_that_fit) = max_bytes.checked_div(avg_row_bytes)
+                    && candidate_rows > rows_that_fit
+                {
+                    split_at = Some(rows_that_fit.max(1));
+                }
             }
 
             let rest = split_at.map(|to_write| {
@@ -4829,6 +4845,35 @@ mod tests {
 
         let total_rows: i64 = sizes.iter().sum();
         assert_eq!(total_rows, 100, "Total rows should be preserved");
+    }
+
+    #[test]
+    // A batch larger than the byte limit must be split even when it is the first
+    // batch written to a row group, where there are no buffered rows to measure.
+    fn test_row_group_limit_bytes_splits_first_batch() {
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(None)
+            .set_max_row_group_bytes(Some(3500))
+            .set_dictionary_enabled(false)
+            .build();
+
+        let builder = write_batches(
+            WriteBatchesShape {
+                num_batches: 2,
+                rows_per_batch: 100,
+                row_size: 100,
+            },
+            props,
+        );
+
+        let sizes = row_group_sizes(builder.metadata());
+
+        assert!(
+            sizes.iter().all(|&rows| rows <= 40),
+            "Each row group should stay near the byte limit, got {sizes:?}",
+        );
+        let total_rows: i64 = sizes.iter().sum();
+        assert_eq!(total_rows, 200, "Total rows should be preserved");
     }
 
     #[test]
