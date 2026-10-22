@@ -80,6 +80,27 @@ impl<V: Copy> KeyRemap<V> {
         }
     }
 
+    fn reset(&mut self, capacity: usize) {
+        match self {
+            Self::Linear(remap) if capacity <= LINEAR_KEY_REMAP_MAX_LEN => {
+                remap.clear();
+                remap.reserve(capacity);
+            }
+            Self::Hashed(remap) if capacity > LINEAR_KEY_REMAP_MAX_LEN => {
+                remap.clear();
+                remap.reserve(capacity);
+            }
+            _ => *self = Self::with_capacity(capacity),
+        }
+    }
+
+    fn clear(&mut self) {
+        match self {
+            Self::Linear(remap) => remap.clear(),
+            Self::Hashed(remap) => remap.clear(),
+        }
+    }
+
     fn size(&self) -> usize {
         match self {
             Self::Linear(remap) => remap.capacity() * size_of::<(usize, V)>(),
@@ -118,8 +139,10 @@ fn try_for_each_selected_index(
 pub(crate) struct InProgressDictionaryArray<K: ArrowDictionaryKeyType> {
     source: Option<ArrayRef>,
     data_type: DataType,
+    batch_size: usize,
     keys: PrimitiveBuilder<K>,
     value_arrays: Vec<ArrayRef>,
+    value_array_indices: HashMap<usize, usize, RandomState>,
     key_remaps: Vec<KeyRemap<K::Native>>,
     selected_values: Vec<(usize, usize)>,
     buffered_arrays: Vec<ArrayRef>,
@@ -142,8 +165,10 @@ impl<K: ArrowDictionaryKeyType> InProgressDictionaryArray<K> {
         Self {
             source: None,
             data_type,
+            batch_size,
             keys: PrimitiveBuilder::with_capacity(batch_size),
             value_arrays: Vec::new(),
+            value_array_indices: HashMap::with_hasher(RandomState::with_seeds(0, 0, 0, 0)),
             key_remaps: Vec::new(),
             selected_values: Vec::new(),
             buffered_arrays: Vec::new(),
@@ -191,19 +216,22 @@ impl<K: ArrowDictionaryKeyType> InProgressDictionaryArray<K> {
         if filter.count() == 0 {
             return Ok(());
         }
+        if self.keys.capacity() == 0 {
+            self.keys = PrimitiveBuilder::with_capacity(self.batch_size);
+        }
 
-        let array_index = match self
-            .value_arrays
-            .iter()
-            .position(|values| Arc::ptr_eq(values, dictionary.values()))
-        {
-            Some(index) => index,
+        let values_id = Arc::as_ptr(dictionary.values()).cast::<()>() as usize;
+        let array_index = match self.value_array_indices.get(&values_id) {
+            Some(index) => *index,
             None => {
                 let index = self.value_arrays.len();
                 self.value_arrays.push(Arc::clone(dictionary.values()));
-                self.key_remaps.push(KeyRemap::with_capacity(
-                    filter.count().min(dictionary.values().len()),
-                ));
+                self.value_array_indices.insert(values_id, index);
+                let capacity = filter.count().min(dictionary.values().len());
+                match self.key_remaps.get_mut(index) {
+                    Some(remap) => remap.reset(capacity),
+                    None => self.key_remaps.push(KeyRemap::with_capacity(capacity)),
+                }
                 index
             }
         };
@@ -236,7 +264,8 @@ impl<K: ArrowDictionaryKeyType> InProgressDictionaryArray<K> {
         )?;
         let array = DictionaryArray::<K>::try_new(self.keys.finish(), values)?;
         self.value_arrays.clear();
-        self.key_remaps.clear();
+        self.value_array_indices.clear();
+        self.key_remaps.iter_mut().for_each(KeyRemap::clear);
         self.selected_values.clear();
         self.buffer_array(Arc::new(array));
         Ok(())
@@ -320,6 +349,7 @@ impl<K: ArrowDictionaryKeyType> InProgressArray for InProgressDictionaryArray<K>
             + self.keys.capacity() * size_of::<K::Native>()
             + self.keys.validity_capacity()
             + self.value_arrays.capacity() * size_of::<ArrayRef>()
+            + self.value_array_indices.capacity() * size_of::<(usize, usize)>()
             + self
                 .value_arrays
                 .iter()
@@ -443,18 +473,20 @@ mod tests {
 
         let mut in_progress =
             InProgressDictionaryArray::<Int32Type>::new(source.data_type().clone(), 80);
-        in_progress
-            .copy_rows_by_filter_from(Arc::clone(&source), &predicate)
-            .unwrap();
-        in_progress
-            .copy_rows_by_filter_from(source, &predicate)
-            .unwrap();
-
-        let output = in_progress.finish().unwrap();
-        let output = output.as_dictionary::<Int32Type>();
         let expected_keys = (0..40).chain(0..40).collect::<Vec<_>>();
-        assert_eq!(output.values().len(), 40);
-        assert_eq!(output.keys().values().as_ref(), expected_keys.as_slice());
+        for _ in 0..2 {
+            in_progress
+                .copy_rows_by_filter_from(Arc::clone(&source), &predicate)
+                .unwrap();
+            in_progress
+                .copy_rows_by_filter_from(Arc::clone(&source), &predicate)
+                .unwrap();
+
+            let output = in_progress.finish().unwrap();
+            let output = output.as_dictionary::<Int32Type>();
+            assert_eq!(output.values().len(), 40);
+            assert_eq!(output.keys().values().as_ref(), expected_keys.as_slice());
+        }
     }
 
     #[test]
