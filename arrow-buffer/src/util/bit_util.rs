@@ -193,7 +193,8 @@ fn compress_bytes(value: u64, mask: u64) -> u64 {
 /// `bmi2` target feature enabled (for example `-C target-cpu=x86-64-v3`)
 /// this lowers to the hardware `pdep` instruction; otherwise it falls back
 /// to a portable scalar loop that visits whichever is fewer: unset or set
-/// bits in `mask`.
+/// bits in `mask`. The fallback returns early for a full `mask` and when the
+/// taken bits of `value` are all clear or all set.
 ///
 /// # Functional Example
 ///
@@ -228,12 +229,24 @@ pub fn expand(value: u64, mask: u64) -> u64 {
     #[cfg(not(all(target_arch = "x86_64", target_feature = "bmi2")))]
     {
         let mut value = value;
-        if value == 0 {
-            return 0;
+        // Counted up front, so an inlined caller counting the same mask shares it.
+        let count = mask.count_ones();
+
+        // Selections and validity masks often come in whole words, in `mask` or in the
+        // taken bits of `value`. Those need neither loop below.
+        if count == 64 {
+            return value;
+        }
+        // `count < 64` here, so the shift cannot overflow
+        let taken = (1 << count) - 1;
+        match value & taken {
+            0 => return 0,
+            t if t == taken => return mask,
+            _ => {}
         }
 
         let mut zeros = !mask;
-        if zeros.count_ones() <= 32 {
+        if count >= 32 {
             // Insert zeros from low to high; excess input bits shift out.
             while zeros != 0 {
                 let lower = (1_u64 << zeros.trailing_zeros()) - 1;
@@ -1233,6 +1246,23 @@ mod tests {
                     assert_eq!(expand(values, mask), reference(values, mask), "{mask:#x}");
                 }
             }
+        }
+
+        // Taken bits all clear or all set with other bits above them, and full
+        // masks: the early returns of the portable fallback.
+        for _ in 0..4_000 {
+            let density = rng.random_range(0.0..=1.0);
+            let mask = (0..64).fold(0_u64, |mask, bit| {
+                mask | ((rng.random_bool(density) as u64) << bit)
+            });
+            let count = mask.count_ones();
+            let above = rng.random::<u64>().checked_shl(count).unwrap_or(0);
+            let taken = u64::MAX.checked_shr(64 - count).unwrap_or(0);
+            for value in [above, above | taken, rng.random::<u64>()] {
+                assert_eq!(expand(value, mask), reference(value, mask), "{mask:#x}");
+            }
+            let value = rng.random::<u64>();
+            assert_eq!(expand(value, u64::MAX), value);
         }
 
         // Masks across the full density range, exercising the hardware `pdep`
