@@ -1720,8 +1720,10 @@ pub fn take_record_batch(
                     columns.push(take_impl::<_, false>(col.as_ref(), &indices)?);
                 }
             }
-            // Safety: indices were validated by the first take_impl call
-            Ok(unsafe { RecordBatch::new_unchecked(record_batch.schema(), columns, indices.len()) })
+            // Null indices can put nulls in non-nullable columns, which this rejects. The
+            // row count is needed for a batch with no columns.
+            let options = RecordBatchOptions::new().with_row_count(Some(indices.len()));
+            RecordBatch::try_new_with_options(record_batch.schema(), columns, &options)
         },
         d => Err(ArrowError::InvalidArgumentError(format!("Take only supported for integers, got {d:?}")))
     )
@@ -1732,7 +1734,7 @@ mod tests {
     use super::*;
     use arrow_array::builder::*;
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
-    use arrow_schema::{Field, Fields, TimeUnit, UnionFields};
+    use arrow_schema::{Field, Fields, Schema, TimeUnit, UnionFields};
     use num_traits::ToPrimitive;
 
     fn test_take_decimal_arrays(
@@ -4199,5 +4201,82 @@ mod tests {
         let result = take(&input, &indices, None).unwrap();
 
         assert_eq!(result.len(), 2);
+    }
+
+    /// Non-nullable columns of 3 rows, one per layout that represents a null differently
+    fn non_nullable_columns() -> Vec<ArrayRef> {
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(StringArray::from(vec!["a", "bb", "ccc"])),
+            Arc::new(DictionaryArray::<Int8Type>::from_iter(["x", "y", "x"])),
+            Arc::new(StructArray::from(vec![(
+                Arc::new(Field::new("c", DataType::Int32, false)),
+                Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+            )])),
+            Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+                vec![
+                    Some(vec![Some(1)]),
+                    Some(vec![Some(2)]),
+                    Some(vec![Some(3)]),
+                ],
+                1,
+            )),
+        ]
+    }
+
+    /// A batch with a nullable column followed by `column` in the non-nullable field "a"
+    fn batch_with_non_nullable(column: ArrayRef) -> RecordBatch {
+        let schema = Schema::new(vec![
+            Field::new("n", DataType::Int32, true),
+            Field::new("a", column.data_type().clone(), false),
+        ]);
+        let n = Arc::new(Int32Array::from(vec![Some(1), None, Some(3)]));
+        RecordBatch::try_new(Arc::new(schema), vec![n, column]).unwrap()
+    }
+
+    #[test]
+    fn test_take_record_batch_null_index_non_nullable_column() {
+        let indices = UInt32Array::from(vec![Some(2), None]);
+        for column in non_nullable_columns() {
+            let batch = batch_with_non_nullable(column);
+            let err = take_record_batch(&batch, &indices).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                "Invalid argument error: Column 'a' is declared as non-nullable but contains null values",
+                "{}",
+                batch.column(1).data_type()
+            );
+        }
+    }
+
+    #[test]
+    fn test_take_record_batch_non_nullable_column() {
+        let indices = [
+            UInt32Array::from(vec![2, 0, 2]),
+            // A validity buffer with no nulls
+            UInt32Array::new(vec![2, 0].into(), Some(NullBuffer::new_valid(2))),
+        ];
+        for column in non_nullable_columns() {
+            let batch = batch_with_non_nullable(column);
+            for indices in &indices {
+                let taken = take_record_batch(&batch, indices).unwrap();
+
+                assert_eq!(taken.schema(), batch.schema());
+                for (taken, column) in taken.columns().iter().zip(batch.columns()) {
+                    assert_eq!(taken, &take(column, indices, None).unwrap());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_take_record_batch_no_columns_row_count() {
+        let options = RecordBatchOptions::new().with_row_count(Some(3));
+        let batch =
+            RecordBatch::try_new_with_options(Arc::new(Schema::empty()), vec![], &options).unwrap();
+
+        let indices = UInt32Array::from(vec![Some(2), None, Some(0), Some(2)]);
+        let taken = take_record_batch(&batch, &indices).unwrap();
+        assert_eq!(taken.num_rows(), 4);
     }
 }
