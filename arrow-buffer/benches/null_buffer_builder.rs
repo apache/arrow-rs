@@ -24,7 +24,7 @@ const LEN: usize = WORDS * 64;
 
 fn criterion_benchmark(c: &mut Criterion) {
     let very_sparse_nulls = (0..WORDS)
-        .map(|i| if i % 64 == 0 { u64::MAX - 1 } else { u64::MAX })
+        .map(|i| if i % 32 == 0 { u64::MAX - 1 } else { u64::MAX })
         .collect();
     let sparse_nulls = (0..WORDS)
         .map(|i| if i % 8 == 0 { u64::MAX - 1 } else { u64::MAX })

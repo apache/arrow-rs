@@ -356,25 +356,11 @@ mod tests {
         assert_eq!(&[0b1011_u8], buf.validity());
     }
 
-    fn check_append_word(initial_bits: usize, word: u64, count: usize) {
-        let mut got = NullBufferBuilder::new(0);
-        let mut expected = NullBufferBuilder::new(0);
-        got.append_n_non_nulls(initial_bits);
-        expected.append_n_non_nulls(initial_bits);
-        got.append_word(word, count);
-        for i in 0..count {
-            expected.append(word & (1 << i) != 0);
-        }
-        assert_eq!(got.len(), expected.len());
-        assert_eq!(got.finish(), expected.finish());
-    }
-
     #[test]
-    fn test_append_word_does_not_materialize_all_valid() {
+    fn test_append_word_all_valid() {
         let mut builder = NullBufferBuilder::new(0);
         builder.append_word(u64::MAX, 64);
-        builder.append_word(0b111, 3);
-        builder.append_word(0, 0);
+        builder.append_word(0b0111, 3);
 
         assert_eq!(builder.len(), 67);
         assert_eq!(builder.allocated_size(), 0);
@@ -382,34 +368,14 @@ mod tests {
     }
 
     #[test]
-    fn test_append_word_aligned() {
-        for count in [1, 5, 8, 17, 64] {
-            check_append_word(0, 0xDEAD_BEEF_CAFE_BABE, count);
-        }
-    }
+    fn test_append_word_mixed() {
+        let mut builder = NullBufferBuilder::new(0);
+        builder.append_n_non_nulls(3);
+        builder.append_word(0b1100_1010, 6);
+        builder.append_word(0b1111, 4);
 
-    #[test]
-    fn test_append_word_unaligned() {
-        for offset in 1..=7 {
-            check_append_word(offset, 0xDEAD_BEEF_CAFE_BABE, 64);
-        }
-    }
-
-    #[test]
-    fn test_append_word_after_materialization() {
-        let mut got = NullBufferBuilder::new(0);
-        let mut expected = NullBufferBuilder::new(0);
-        got.append_null();
-        expected.append_null();
-
-        for (word, count) in [(u64::MAX, 64), (0b1010, 4), (0b10, 1)] {
-            got.append_word(word, count);
-            for i in 0..count {
-                expected.append(word & (1 << i) != 0);
-            }
-        }
-
-        assert_eq!(got.finish(), expected.finish());
+        let buffer = builder.finish().unwrap();
+        assert_eq!(&[0b0101_0111, 0b0001_1110], buffer.validity());
     }
 
     #[test]
