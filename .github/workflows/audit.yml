@@ -27,7 +27,7 @@ permissions:
 jobs:
   cargo-audit:
     name: Audit
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Install cargo-audit
@@ -35,4 +35,6 @@ jobs:
         with:
           tool: cargo-audit
       - name: Run audit check
-        run: cargo audit
+        # ubuntu-slim has no Rust toolchain to dispatch `cargo audit`, so
+        # call the binary directly.
+        run: cargo-audit audit
