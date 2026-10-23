@@ -1478,6 +1478,27 @@ mod tests {
             ),]),
         );
 
+        // union members with the same type id must be the same field
+        let res = Schema::try_merge(vec![
+            Schema::new(vec![Field::new_union(
+                "c1",
+                vec![0],
+                vec![Field::new("c11", DataType::Utf8, true)],
+                UnionMode::Dense,
+            )]),
+            Schema::new(vec![Field::new_union(
+                "c1",
+                vec![0],
+                vec![Field::new("c12", DataType::Int64, true)],
+                UnionMode::Dense,
+            )]),
+        ])
+        .unwrap_err();
+        assert_eq!(
+            res.to_string(),
+            "Schema error: Fail to merge schema field 'c12' because type id 0 is already used by field 'c11'"
+        );
+
         // incompatible field should throw error
         assert!(
             Schema::try_merge(vec![
