@@ -79,13 +79,20 @@ url="https://dist.apache.org/repos/dist/dev/arrow/${release}-rc${rc}"
 
 echo "Attempting to create ${tarball} from tag ${tag}"
 
+# Write out the submodule commits referenced so that release verification
+# can later ensure it uses the same versions of test data.
+tmpdir=$(mktemp -d)
+trap 'rm -r "${tmpdir}"' EXIT
+git -C "${SOURCE_TOP_DIR}" ls-tree -r ${tag} \
+    | awk '$2 == "commit" { print $4, $3 }' > ${tmpdir}/.gitmodules-commits
 
 # create <tarball> containing the files in git at $tag
 # the files in the tarball are prefixed with {release}
 # (e.g. apache-arrow-rs-4.0.1)
 mkdir -p ${distdir}
 (cd "${SOURCE_TOP_DIR}" && \
-     git archive ${tag} --prefix ${release}/ \
+     git archive --prefix ${release}/ \
+         --add-file ${tmpdir}/.gitmodules-commits ${tag} \
          | gzip > ${tarball})
 
 echo "Running rat license checker on ${tarball}"
@@ -118,7 +125,7 @@ The proposed release tarball and signatures are hosted at [2].
 
 The changelog is located at [3].
 
-The release tracking issue is: [4]
+The release tracking issue is: [5]
 
 Please download, verify checksums and signatures, run the unit tests,
 and vote on the release. There is a script [4] that automates some of
