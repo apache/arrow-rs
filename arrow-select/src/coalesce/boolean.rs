@@ -16,18 +16,12 @@
 // under the License.
 
 use super::InProgressArray;
-use crate::filter::{FilterPredicate, FilterSelection};
+use crate::filter::FilterPredicate;
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, BooleanArray};
 use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder, NullBufferBuilder};
 use arrow_schema::ArrowError;
 use std::sync::Arc;
-
-/// With nulls, per-bit copying wins at 0.5% selectivity; use a 1/128 cutoff.
-const BOOLEAN_FILTER_COPY_MAX_SELECTIVITY_DENOMINATOR_WITH_NULLS: usize = 128;
-
-/// Without nulls, per-bit copying wins at 0.1% but loses at 0.5%; 1/256 splits them.
-const BOOLEAN_FILTER_COPY_MAX_SELECTIVITY_DENOMINATOR_WITHOUT_NULLS: usize = 256;
 
 #[derive(Debug)]
 pub(crate) struct InProgressBooleanArray {
@@ -83,39 +77,8 @@ impl InProgressArray for InProgressBooleanArray {
         source: ArrayRef,
         filter: &FilterPredicate,
     ) -> Result<(), ArrowError> {
-        let max_selectivity_denominator = if source.null_count() == 0 {
-            BOOLEAN_FILTER_COPY_MAX_SELECTIVITY_DENOMINATOR_WITHOUT_NULLS
-        } else {
-            BOOLEAN_FILTER_COPY_MAX_SELECTIVITY_DENOMINATOR_WITH_NULLS
-        };
-        let indices = match filter.selection() {
-            FilterSelection::Indices(indices)
-                if filter.count() <= filter.filter_len() / max_selectivity_denominator =>
-            {
-                indices
-            }
-            _ => {
-                let filtered = filter.filter(source.as_ref())?;
-                self.append_array(filtered.as_boolean());
-                return Ok(());
-            }
-        };
-
-        let source = source.as_boolean();
-        let source_values = source.values();
-        let values = self
-            .values
-            .get_or_insert_with(|| BooleanBufferBuilder::new(self.batch_size));
-        match source.nulls().filter(|nulls| nulls.null_count() != 0) {
-            Some(nulls) => indices.for_each(|index| {
-                values.append(source_values.value(index));
-                self.nulls.append(nulls.is_valid(index));
-            }),
-            None => {
-                indices.for_each(|index| values.append(source_values.value(index)));
-                self.nulls.append_n_non_nulls(filter.count());
-            }
-        }
+        let filtered = filter.filter(source.as_ref())?;
+        self.append_array(filtered.as_boolean());
         Ok(())
     }
 
@@ -145,7 +108,7 @@ impl InProgressArray for InProgressBooleanArray {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::filter::{FilterBuilder, FilterIterator};
+    use crate::filter::FilterBuilder;
 
     #[test]
     fn copies_slices_and_sparse_filters() {
@@ -170,118 +133,6 @@ mod tests {
         let output = in_progress.finish().unwrap();
         let expected = BooleanArray::from(vec![None, Some(false), Some(true), Some(true)]);
         assert_eq!(output.as_boolean(), &expected);
-    }
-
-    const SPARSE_FILTER_LEN: usize = BOOLEAN_FILTER_COPY_MAX_SELECTIVITY_DENOMINATOR_WITH_NULLS * 2;
-    const SOURCE_OFFSET: usize = 3;
-    const PREFIX_LEN: usize = 3;
-
-    fn sparse_filter_builder(selected_indices: &[usize]) -> FilterBuilder {
-        let filter = BooleanArray::from_iter(
-            (0..SPARSE_FILTER_LEN).map(|idx| Some(selected_indices.contains(&idx))),
-        );
-        FilterBuilder::new(&filter)
-    }
-
-    fn non_nullable_source() -> BooleanArray {
-        BooleanArray::from(
-            (0..SOURCE_OFFSET + SPARSE_FILTER_LEN)
-                .map(|idx| idx % 3 == 0)
-                .collect::<Vec<_>>(),
-        )
-    }
-
-    fn nullable_source() -> BooleanArray {
-        BooleanArray::from_iter((0..SOURCE_OFFSET + SPARSE_FILTER_LEN).map(|idx| {
-            if idx % 8 == 0 {
-                None
-            } else {
-                Some(idx % 3 == 0)
-            }
-        }))
-    }
-
-    fn assert_sparse_copy_matches_filter(
-        source: BooleanArray,
-        predicate: &FilterPredicate,
-        max_selectivity_denominator: usize,
-    ) {
-        assert_eq!(
-            predicate.count(),
-            SPARSE_FILTER_LEN / max_selectivity_denominator
-        );
-
-        let source = Arc::new(source.slice(SOURCE_OFFSET, SPARSE_FILTER_LEN)) as ArrayRef;
-        let prefix = source.slice(0, PREFIX_LEN);
-        let filtered = predicate.filter(source.as_ref()).unwrap();
-        let expected = crate::concat::concat(&[prefix.as_ref(), filtered.as_ref()]).unwrap();
-
-        let mut in_progress = InProgressBooleanArray::new(8);
-        in_progress.set_source(Some(Arc::clone(&source)));
-        in_progress.copy_rows(0, PREFIX_LEN).unwrap();
-        in_progress.set_source(None);
-        in_progress
-            .copy_rows_by_filter_from(source, predicate)
-            .unwrap();
-
-        let output = in_progress.finish().unwrap();
-        assert_eq!(output.as_boolean(), expected.as_boolean());
-    }
-
-    #[test]
-    fn copies_unoptimized_sparse_indices_without_nulls() {
-        let predicate = sparse_filter_builder(&[5]).build();
-        assert!(matches!(
-            predicate.selection(),
-            FilterSelection::Indices(FilterIterator::Lazy(_))
-        ));
-        assert_sparse_copy_matches_filter(
-            non_nullable_source(),
-            &predicate,
-            BOOLEAN_FILTER_COPY_MAX_SELECTIVITY_DENOMINATOR_WITHOUT_NULLS,
-        );
-    }
-
-    #[test]
-    fn copies_unoptimized_sparse_indices_with_nulls() {
-        let predicate = sparse_filter_builder(&[5, 132]).build();
-        assert!(matches!(
-            predicate.selection(),
-            FilterSelection::Indices(FilterIterator::Lazy(_))
-        ));
-        assert_sparse_copy_matches_filter(
-            nullable_source(),
-            &predicate,
-            BOOLEAN_FILTER_COPY_MAX_SELECTIVITY_DENOMINATOR_WITH_NULLS,
-        );
-    }
-
-    #[test]
-    fn copies_optimized_sparse_indices_without_nulls() {
-        let predicate = sparse_filter_builder(&[5]).optimize().build();
-        assert!(matches!(
-            predicate.selection(),
-            FilterSelection::Indices(FilterIterator::Materialized(_))
-        ));
-        assert_sparse_copy_matches_filter(
-            non_nullable_source(),
-            &predicate,
-            BOOLEAN_FILTER_COPY_MAX_SELECTIVITY_DENOMINATOR_WITHOUT_NULLS,
-        );
-    }
-
-    #[test]
-    fn copies_optimized_sparse_indices_with_nulls() {
-        let predicate = sparse_filter_builder(&[5, 132]).optimize().build();
-        assert!(matches!(
-            predicate.selection(),
-            FilterSelection::Indices(FilterIterator::Materialized(_))
-        ));
-        assert_sparse_copy_matches_filter(
-            nullable_source(),
-            &predicate,
-            BOOLEAN_FILTER_COPY_MAX_SELECTIVITY_DENOMINATOR_WITH_NULLS,
-        );
     }
 
     #[test]
