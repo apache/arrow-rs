@@ -1743,10 +1743,12 @@ pub fn cast_with_options(
         (Date64, Date32) => {
             let array = array.as_primitive::<Date64Type>();
             let result = if cast_options.safe {
-                array.unary_opt::<_, Date32Type>(|x| i32::try_from(x / MILLISECONDS_IN_DAY).ok())
+                array.unary_opt::<_, Date32Type>(|x| {
+                    i32::try_from(x.div_euclid(MILLISECONDS_IN_DAY)).ok()
+                })
             } else {
                 array.try_unary::<_, Date32Type, _>(|x| {
-                    i32::try_from(x / MILLISECONDS_IN_DAY).map_err(|_| {
+                    i32::try_from(x.div_euclid(MILLISECONDS_IN_DAY)).map_err(|_| {
                         ArrowError::CastError(format!(
                             "Cannot cast Date64 value {x} to Date32 without overflow"
                         ))
@@ -4711,6 +4713,36 @@ mod tests {
             err.to_string().contains("Cannot cast Date64 value"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn test_cast_date64_to_date32_negative() {
+        // Date64 values before the epoch that are not an exact midnight must
+        // round down to the day containing the instant (floor semantics, as in
+        // the Timestamp -> Date32 cast), not truncate toward zero
+        let a = Date64Array::from(vec![
+            Some(-1),        // 1969-12-31 23:59:59.999
+            Some(-86399999), // 1969-12-31 00:00:00.001
+            Some(-86400000), // 1969-12-31 00:00:00.000 (exact midnight)
+            Some(-86400001), // 1969-12-30 23:59:59.999
+            Some(86399999),  // 1970-01-01 23:59:59.999
+            None,
+        ]);
+        let array = Arc::new(a) as ArrayRef;
+        let expected = [-1, -1, -1, -2, 0];
+
+        for safe in [true, false] {
+            let options = CastOptions {
+                safe,
+                ..Default::default()
+            };
+            let b = cast_with_options(&array, &DataType::Date32, &options).unwrap();
+            let c = b.as_primitive::<Date32Type>();
+            for (i, expected) in expected.iter().enumerate() {
+                assert_eq!(c.value(i), *expected, "safe: {safe}, index: {i}");
+            }
+            assert!(c.is_null(5));
+        }
     }
 
     #[test]
