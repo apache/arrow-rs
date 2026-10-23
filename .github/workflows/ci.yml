@@ -28,7 +28,8 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.repository }}-${{ github.event_name }}-${{ github.event.pull_request.number || (github.repository != 'apache/arrow-rs' && github.ref) || github.sha }}-${{ github.workflow }}
+  # Fork pushes and manual runs share a branch group so newer runs replace both.
+  group: ${{ github.repository }}-${{ github.repository != 'apache/arrow-rs' && github.event_name == 'workflow_dispatch' && 'push' || github.event_name }}-${{ github.event.pull_request.number || (github.repository != 'apache/arrow-rs' && github.ref) || github.sha }}-${{ github.workflow }}
   cancel-in-progress: true
 
 permissions:

@@ -229,7 +229,11 @@ test('a deleted run clears its stale success result', async () => {
   assert.equal(writes[0].conclusion, 'neutral');
 });
 test('unchanged results do not consume check write requests', async () => {
-  assert.deepEqual((await execute({ checks: [await existing()] })).writes, []);
+  const check = await existing();
+  // GitHub can replace details_url with the check's own URL.
+  for (const details_url of [check.details_url, 'https://github.com/apache/arrow-rs/runs/100']) {
+    assert.deepEqual((await execute({ checks: [{ ...check, details_url }] })).writes, []);
+  }
 });
 test('a same-name check from another app or PR is not overwritten', async () => {
   const check = await existing();
@@ -288,10 +292,22 @@ test('successive fork pushes share a cancellation group, separate branches do no
   assert.equal(group(forkPush), group({ ...forkPush, sha: 'second' }));
   assert.notEqual(group(forkPush), group({ ...forkPush, ref: 'refs/heads/other' }));
 });
+test('fork push and manual runs replace each other on the same branch', () => {
+  const manual = { ...forkPush, event_name: 'workflow_dispatch' };
+  assert.equal(group(forkPush), group(manual));
+  assert.equal(group({ ...forkPush, sha: 'second' }), group(manual));
+  assert.notEqual(group(forkPush), group({ ...manual, ref: 'refs/heads/other' }));
+  assert.notEqual(group(forkPush), group({ ...manual, event_name: 'pull_request',
+    event: { pull_request: { number: 1 } } }));
+});
 test('upstream main and merge queue runs remain separate per commit', () => {
   for (const event_name of ['push', 'merge_group']) {
     const upstream = { ...forkPush, repository: 'apache/arrow-rs', event_name };
     assert.notEqual(group(upstream), group({ ...upstream, sha: 'second' }));
+  }
+  const upstream = { ...forkPush, repository: 'apache/arrow-rs' };
+  for (const event_name of ['workflow_dispatch', 'merge_group']) {
+    assert.notEqual(group(upstream), group({ ...upstream, event_name }));
   }
 });
 test('same-named branches from different fork PRs cannot cancel each other', () => {

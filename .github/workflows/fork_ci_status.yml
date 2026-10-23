@@ -38,10 +38,11 @@ permissions:
   checks: write
   pull-requests: read
 
-# Serialize notifications and sweeps so they cannot create duplicate checks.
+# Like DataFusion, group notifications separately from scheduled/manual sweeps.
+# workflow_run identifies the fork and branch rather than the PR number.
 concurrency:
-  group: ${{ github.workflow }}
-  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ github.event.workflow_run.head_repository.full_name || 'update' }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_run' }}
 
 jobs:
   bridge:
@@ -153,7 +154,6 @@ jobs:
               }
               if (check && check.status === payload.status &&
                   check.conclusion === (payload.conclusion || null) &&
-                  check.details_url === payload.details_url &&
                   check.output?.text === payload.output.text &&
                   check.output?.summary === payload.output.summary) return;
               if (check) {
