@@ -640,6 +640,9 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
             DataType::LargeList(_) => {
                 Ok(Arc::new(filter_list::<i64>(values.as_list(), predicate)?))
             }
+            DataType::Map(_, _) => {
+                Ok(Arc::new(filter_map(values.as_map(), predicate)?))
+            }
             DataType::ListView(_) => {
                 Ok(Arc::new(filter_list_view::<i32>(values.as_list_view(), predicate)))
             }
@@ -1354,6 +1357,24 @@ fn filter_list<O: OffsetSizeTrait>(
     Ok(unsafe { GenericListArray::new_unchecked(field, offsets, values, nulls) })
 }
 
+/// `filter` implementation for maps
+fn filter_map(array: &MapArray, predicate: &FilterPredicate) -> Result<MapArray, ArrowError> {
+    let (offsets, child_predicate) = filter_offsets(array.value_offsets(), predicate);
+    let entries = filter_struct(array.entries(), &child_predicate)?;
+
+    let (field, ordered) = match array.data_type() {
+        DataType::Map(field, ordered) => (field.clone(), *ordered),
+        _ => unreachable!(),
+    };
+    let nulls = predicate.filter_nulls(array.nulls());
+
+    // SAFETY: `offsets` has `predicate.count + 1` elements and `nulls`, if
+    // any, has `predicate.count` bits. The last offset is the length of
+    // `entries`, which keeps the fields of the entries of `array`, so its
+    // keys column is still non-nullable.
+    Ok(unsafe { MapArray::new_unchecked(field, offsets, entries, nulls, ordered) })
+}
+
 /// `filter` implementation for list views
 fn filter_list_view<OffsetType: OffsetSizeTrait>(
     array: &GenericListViewArray<OffsetType>,
@@ -2054,6 +2075,108 @@ mod tests {
     fn test_filter_list() {
         test_case_filter_list::<i32>();
         test_case_filter_list::<i64>();
+    }
+
+    /// The entries of a `Map<Utf8, Int32>` row
+    type MapEntries<'a> = &'a [(&'a str, Option<i32>)];
+
+    /// Builds a `Map<Utf8, Int32>` array from `rows`, where `None` is a null map
+    fn build_map(rows: &[Option<MapEntries>]) -> MapArray {
+        let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+        for row in rows {
+            match row {
+                Some(entries) => {
+                    for (key, value) in *entries {
+                        builder.keys().append_value(key);
+                        builder.values().append_option(*value);
+                    }
+                    builder.append(true).unwrap();
+                }
+                None => builder.append(false).unwrap(),
+            }
+        }
+        builder.finish()
+    }
+
+    #[test]
+    fn test_filter_map_cases() {
+        let map = build_map(&[
+            Some(&[("a", Some(1)), ("b", None)]),
+            Some(&[]),
+            None,
+            Some(&[("c", Some(3))]),
+            Some(&[("d", Some(4)), ("e", Some(5)), ("f", None)]),
+            None,
+            Some(&[]),
+            Some(&[("g", Some(7))]),
+        ]);
+        for predicate in test_predicates(map.len()) {
+            assert_filter_matches_take(&map, &predicate);
+        }
+
+        // Sliced so that the first offset is not zero
+        let sliced = map.slice(3, 4);
+        for predicate in test_predicates(sliced.len()) {
+            assert_filter_matches_take(&sliced, &predicate);
+        }
+
+        // Only empty and null maps remain selected
+        let predicate = BooleanArray::from(vec![false, true, true, false, false, true, true]);
+        assert_filter_matches_take(&map, &predicate);
+        let filtered = filter(&map, &predicate).unwrap();
+        assert_eq!(filtered.as_map().entries().len(), 0);
+
+        // Map nested in a list
+        let field = Arc::new(Field::new_list_field(map.data_type().clone(), true));
+        let offsets = OffsetBuffer::<i32>::from_lengths([3, 0, 2, 3]);
+        let nested = ListArray::new(field, offsets, Arc::new(map), None);
+        for predicate in test_predicates(nested.len()) {
+            assert_filter_matches_take(&nested, &predicate);
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
+    fn fuzz_filter_map() {
+        let mut rng = rng();
+
+        for i in 0..50 {
+            let filter_percent = match i {
+                0..=2 => 1.,
+                3..=5 => 0.,
+                _ => rng.random_range(0.0..1.0),
+            };
+
+            let array_len = rng.random_range(32..256);
+            let array_offset = rng.random_range(0..10);
+
+            let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+            for _ in 0..array_len + array_offset {
+                if rng.random_bool(0.8) {
+                    for _ in 0..rng.random_range(0..6) {
+                        let key: String = (0..4)
+                            .map(|_| char::from(rng.sample(Alphanumeric)))
+                            .collect();
+                        builder.keys().append_value(key);
+                        builder
+                            .values()
+                            .append_option(rng.random_bool(0.8).then(|| rng.random()));
+                    }
+                    builder.append(true).unwrap();
+                } else {
+                    builder.append(false).unwrap();
+                }
+            }
+            let map = builder.finish();
+            let map = map.slice(array_offset, array_len);
+
+            let predicate_len = array_len - rng.random_range(0..10);
+            let predicate = BooleanArray::from_iter(
+                (0..predicate_len).map(|_| Some(rng.random_bool(filter_percent))),
+            );
+
+            assert_filter_matches_take(&map, &predicate);
+        }
     }
 
     /// Generates a `Struct<a: Int32, items: List<Struct<x: Int32, y: Utf8>>>`
