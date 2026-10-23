@@ -26,3 +26,9 @@ A single required status check combines the results and blocks merging on failur
 Miri runs separately every day at 03:17 UTC and on demand through the `miri`
 workflow's **Run workflow** button or
 `gh workflow run miri.yaml --repo apache/arrow-rs --ref <branch-or-tag>`.
+
+New jobs that are small and short should use `runs-on: ubuntu-slim`, as ASF Infra recommends.
+These runners have 1 vCPU, 5 GB of memory, no Docker engine and a 15-minute hard limit, but
+they usually start much sooner than `ubuntu-latest` when the shared ASF runner pool is busy.
+They come without a Rust toolchain, so jobs that need `cargo` can use
+`.github/actions/setup-rustup`.

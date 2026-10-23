@@ -90,13 +90,11 @@ jobs:
   # Run cargo fmt for all crates
   lint:
     name: Lint (cargo fmt)
-    runs-on: ubuntu-latest
-    container:
-      image: amd64/rust
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: ./.github/actions/setup-rustup
       - name: Setup rustfmt
         run: rustup component add rustfmt
       - name: Format workspace
@@ -104,13 +102,11 @@ jobs:
 
   unused-dependencies:
     name: Check unused dependencies
-    runs-on: ubuntu-latest
-    container:
-      image: amd64/rust
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: ./.github/actions/setup-rustup
       - name: Install cargo-shear
         id: install-shear
         uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7  # v2.87.23

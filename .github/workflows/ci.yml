@@ -39,7 +39,7 @@ jobs:
   changes:
     name: Select and validate CI suites
     if: github.event_name != 'push' || github.repository != 'apache/arrow-rs' || github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       suites: ${{ steps.select.outputs.suites }}
       cache-refresh-only: ${{ steps.select.outputs.cache-refresh-only }}
