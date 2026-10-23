@@ -53,6 +53,12 @@ pub(crate) fn try_add_extension_type(
             arrow_field.try_with_extension_type(parquet_variant_compute::VariantType)?;
             arrow_field
         }
+        #[cfg(feature = "file_experimental")]
+        LogicalType::File => {
+            let mut arrow_field = arrow_field;
+            arrow_field.try_with_extension_type(crate::arrow::file_type::FileType)?;
+            arrow_field
+        }
         #[cfg(feature = "arrow_canonical_extension_types")]
         LogicalType::Uuid => {
             let mut arrow_field = arrow_field;
@@ -110,6 +116,8 @@ pub(crate) fn has_extension_type(parquet_type: &Type) -> bool {
     match parquet_logical_type {
         #[cfg(feature = "variant_experimental")]
         LogicalType::Variant { .. } => true,
+        #[cfg(feature = "file_experimental")]
+        LogicalType::File => true,
         #[cfg(feature = "arrow_canonical_extension_types")]
         LogicalType::Uuid => true,
         #[cfg(feature = "arrow_canonical_extension_types")]
@@ -123,17 +131,20 @@ pub(crate) fn has_extension_type(parquet_type: &Type) -> bool {
 }
 
 /// Return the Parquet logical type to use for the specified Arrow Struct field, if any.
-#[cfg(feature = "variant_experimental")]
+#[cfg(any(feature = "variant_experimental", feature = "file_experimental"))]
 pub(crate) fn logical_type_for_struct(field: &Field) -> Option<LogicalType> {
-    use parquet_variant_compute::VariantType;
-    if field.has_valid_extension_type::<VariantType>() {
-        Some(LogicalType::variant(None))
-    } else {
-        None
+    #[cfg(feature = "variant_experimental")]
+    if field.has_valid_extension_type::<parquet_variant_compute::VariantType>() {
+        return Some(LogicalType::variant(None));
     }
+    #[cfg(feature = "file_experimental")]
+    if field.has_valid_extension_type::<crate::arrow::file_type::FileType>() {
+        return Some(LogicalType::File);
+    }
+    None
 }
 
-#[cfg(not(feature = "variant_experimental"))]
+#[cfg(not(any(feature = "variant_experimental", feature = "file_experimental")))]
 pub(crate) fn logical_type_for_struct(_field: &Field) -> Option<LogicalType> {
     None
 }

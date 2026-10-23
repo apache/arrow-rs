@@ -113,7 +113,7 @@ json = ["serde_json", "base64"]
 # Enable internal testing APIs
 test_common = ["arrow/test_utils"]
 # Experimental, unstable functionality primarily used for testing
-experimental = ["variant_experimental"]
+experimental = ["variant_experimental", "file_experimental"]
 # Enable async APIs
 async = ["futures", "tokio"]
 # Enable object_store integration
@@ -134,6 +134,8 @@ flate2-rust_backend = ["flate2/rust_backend"]
 flate2-zlib-rs = ["flate2/zlib-rs"]
 # Enable parquet variant support
 variant_experimental = ["arrow", "parquet-variant", "parquet-variant-compute"]
+# Enable parquet FILE logical type support
+file_experimental = ["arrow"]
 # Enable geospatial support
 geospatial = ["parquet-geospatial"]
 # Alias for typo. TODO: Remove in future major version bump.
