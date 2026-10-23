@@ -4315,13 +4315,18 @@ mod tests {
 
     /// A batch of 3 rows with `first` followed by columns whose `take` reads every index
     fn batch_with_first_column(first: ArrayRef) -> RecordBatch {
-        RecordBatch::try_from_iter([
-            ("first", first),
+        RecordBatch::try_from_iter_with_nullable([
+            ("first", first, true),
             (
                 "i",
                 Arc::new(Int32Array::from(vec![Some(1), None, Some(3)])) as ArrayRef,
+                true,
             ),
-            ("s", Arc::new(StringArray::from(vec!["a", "bb", "ccc"]))),
+            (
+                "s",
+                Arc::new(StringArray::from(vec!["a", "bb", "ccc"])),
+                true,
+            ),
             (
                 "l",
                 Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
@@ -4329,6 +4334,7 @@ mod tests {
                     None,
                     Some(vec![Some(3), None]),
                 ])),
+                true,
             ),
         ])
         .unwrap()
