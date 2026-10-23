@@ -57,13 +57,13 @@ jobs:
 
   deploy:
     # Only deploy if a push to main
-    if: github.ref_name == 'main' && github.event_name == 'push'
+    if: github.repository == 'apache/arrow-rs' && github.ref_name == 'main' && github.event_name == 'push'
     needs: docs
     permissions:
       contents: write
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     # Ensure only one of these jobs runs at a time because each force-pushes
-    # the asf-site branch, so concurrent runs can conflct
+    # the asf-site branch, so concurrent runs can conflict
     concurrency:
       group: ${{ github.repository }}-docs-deploy
       cancel-in-progress: false
