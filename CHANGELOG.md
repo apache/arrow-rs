@@ -19,26 +19,27 @@
 
 # Changelog
 
-## [57.3.1](https://github.com/apache/arrow-rs/tree/57.3.1) (2026-05-07)
 
-[Full Changelog](https://github.com/apache/arrow-rs/compare/57.3.0...57.3.1)
+## [57.3.2](https://github.com/apache/arrow-rs/tree/57.3.2) - (2026-10-22)
 
-**Fixed bugs:**
+[Full Changelog](https://github.com/apache/arrow-rs/compare/57.3.1...57.3.2)
 
-- \[arrow-buffer\] Integer overflow in BufferBuilder::reserve leads to undefined behavior [\#9897](https://github.com/apache/arrow-rs/issues/9897) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- \[arrow-array\] Integer overflow in FixedSizeBinaryArray::value leads to undefined behavior [\#9898](https://github.com/apache/arrow-rs/issues/9898) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- \[arrow-data\] Integer overflow in ArrayData::slice leads to undefined behavior [\#9899](https://github.com/apache/arrow-rs/issues/9899) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- \[arrow-data\] Integer overflow in ArrayData validation leads to undefined behavior [\#9900](https://github.com/apache/arrow-rs/issues/9900) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- \[arrow-row\] Integer overflow in Rows::row index handling leads to undefined behavior [\#9901](https://github.com/apache/arrow-rs/issues/9901) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- \[arrow-buffer\] Integer overflow in BitChunks::new leads to undefined behavior [\#9903](https://github.com/apache/arrow-rs/issues/9903) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- \[arrow-buffer\] Integer overflow in repeat_slice_n_times leads to undefined behavior [\#9904](https://github.com/apache/arrow-rs/issues/9904) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+### Bug fixes
+- [57_maintenance] fix: implement `ArrayData::validate_values` for union types by @Jefffrey in [#11814](https://github.com/apache/arrow-rs/pull/11814)
+- [57_maintenance] fix(arrow-array): avoid returning corrupt array in `GenericByteArray::into_builder` by @Jefffrey in [#11816](https://github.com/apache/arrow-rs/pull/11816)
+- [57_maintenance] fix: account for offsets in runarrays when using extend for MutableArrayData by @Jefffrey in [#11815](https://github.com/apache/arrow-rs/pull/11815)
+- [57_maintenance] fix(arrow-schema): validate `UnionFields` when deserializing by @Jefffrey in [#11813](https://github.com/apache/arrow-rs/pull/11813)
+- [57_maintenance] Fix sliced sparse union ArrayData conversion by @Jefffrey in [#11812](https://github.com/apache/arrow-rs/pull/11812)
+- [57_maintenance] fix(arrow-data): account for FixedSizeList parent offset in MutableArrayData by @Jefffrey in [#11809](https://github.com/apache/arrow-rs/pull/11809)
+- [57_maintenance] fix(arrow-array): preserve type params in `PrimitiveArray::into_builder` by @Jefffrey in [#11807](https://github.com/apache/arrow-rs/pull/11807)
+- [57_maintenance] fix: use correct length in runarray validation by @Jefffrey in [#11801](https://github.com/apache/arrow-rs/pull/11801)
+- [57_maintenance] fix(arrow-data): check view nulls at the right index in `ArrayData` equality by @Jefffrey in [#11811](https://github.com/apache/arrow-rs/pull/11811)
+- [57_maintenance] fix: account for offset when building RunArray from ArrayData by @Jefffrey in [#11800](https://github.com/apache/arrow-rs/pull/11800)
+- [57_maintenance] fix: `Buffer::into_mutable` return error instead of panic for converting owned sliced when not start at 0 and fix returned Mutable length by @Jefffrey in [#11806](https://github.com/apache/arrow-rs/pull/11806)
+- [57_maintenance] fix(arrow-array): `PrimitiveRunBuilder` was buggy after `finish` by @Jefffrey in [#11804](https://github.com/apache/arrow-rs/pull/11804)
+- [57_maintenance] fix(arrow-data): fix gaps in ListView equality by @Jefffrey in [#11802](https://github.com/apache/arrow-rs/pull/11802)
+- [57_maintenance] fix(arrow-array): use the field's type id in dense union logical_nulls by @Jefffrey in [#11810](https://github.com/apache/arrow-rs/pull/11810)
+- [57_maintenance] fix: finish methods in `PrimitiveDictionaryBuilder` discard type params by @Jefffrey in [#11805](https://github.com/apache/arrow-rs/pull/11805)
+- [57_maintenance] fix(arrow-buffer): prevent use-after-free in Buffer::shrink_to_fit when MemoryReservation::resize panics by @alamb in [#11786](https://github.com/apache/arrow-rs/pull/11786)
+- [57_maintenance] fix: `UnionFields::from_iter` should validate input by @alamb in [#11726](https://github.com/apache/arrow-rs/pull/11726)
 
-**Merged pull requests:**
-
-- \[57_maintenance\] Prevent ArrayData::slice length overflow \(\#9813\) [\#9927](https://github.com/apache/arrow-rs/pull/9927) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
-- \[57_maintenance\] Prevent repeat slice length overflow \(\#9819\) [\#9920](https://github.com/apache/arrow-rs/pull/9920) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
-- \[57_maintenance\] Prevent buffer builder length overflow in MutableBuffer::extend_zeros \(\#9820\) [\#9926](https://github.com/apache/arrow-rs/pull/9926) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
-- \[57_maintenance\] Prevent FixedSizeBinaryArray i32 offset overflows \(\#9872\) [\#9928](https://github.com/apache/arrow-rs/pull/9928) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
-- \[57_maintenance\] Prevent ArrayData validation length overflow \(\#9816\) [\#9925](https://github.com/apache/arrow-rs/pull/9925) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
-- \[57_maintenance\] Prevent Rows row index overflow \(\#9817\) [\#9922](https://github.com/apache/arrow-rs/pull/9922) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
-- \[57_maintenance\] Prevent BitChunks length overflow \(\#9818\) [\#9918](https://github.com/apache/arrow-rs/pull/9918) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
