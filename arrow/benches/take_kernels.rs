@@ -201,6 +201,19 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("take check bounds i32 1024", |b| {
         b.iter(|| bench_take_bounds_check(&values, &indices))
     });
+    let indices = create_random_index(1024, 0.5);
+    c.bench_function("take check bounds i32 null indices 1024", |b| {
+        b.iter(|| bench_take_bounds_check(&values, &indices))
+    });
+    // The value in a null slot is unspecified and need not be in bounds
+    let indices = UInt32Array::new(
+        indices.iter().map(|i| i.unwrap_or(u32::MAX)).collect(),
+        indices.nulls().cloned(),
+    );
+    c.bench_function(
+        "take check bounds i32 null indices out of bounds 1024",
+        |b| b.iter(|| bench_take_bounds_check(&values, &indices)),
+    );
 
     let values = create_boolean_array(512, 0.0, 0.5);
     let indices = create_random_index(512, 0.0);
