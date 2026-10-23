@@ -33,23 +33,27 @@ set -o pipefail
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 ARROW_DIR="$(dirname $(dirname ${SOURCE_DIR}))"
-ARROW_DIST_URL='https://dist.apache.org/repos/dist/dev/arrow'
+ARROW_RC_URL="https://dist.apache.org/repos/dist/dev/arrow"
+ARROW_KEYS_URL="https://www.apache.org/dyn/closer.lua?action=download&filename=arrow/KEYS"
 
-download_dist_file() {
+download_file() {
   curl \
     --silent \
     --show-error \
     --fail \
     --location \
-    --remote-name $ARROW_DIST_URL/$1
+    --output "$2" \
+    "$1"
 }
 
 download_rc_file() {
-  download_dist_file apache-arrow-rs-${VERSION}-rc${RC_NUMBER}/$1
+  download_file \
+  "${ARROW_RC_URL}/apache-arrow-rs-${VERSION}-rc${RC_NUMBER}/$1" \
+  "$1"
 }
 
 import_gpg_keys() {
-  download_dist_file KEYS
+  download_file "${ARROW_KEYS_URL}" KEYS
   gpg --import KEYS
 }
 
@@ -91,6 +95,17 @@ setup_tempdir() {
   fi
 }
 
+# Print the commit for the submodule at path $1 recorded in .gitmodules-commits
+submodule_commit() {
+  local commit
+  commit=$(awk -v path="$1" '$1 == path { print $2 }' .gitmodules-commits)
+  if [ -z "${commit}" ]; then
+    echo "No commit for submodule $1 found in .gitmodules-commits" >&2
+    return 1
+  fi
+  echo "${commit}"
+}
+
 test_source_distribution() {
   # install rust toolchain in a similar fashion like test-miniconda
   export RUSTUP_HOME=$PWD/test-rustup
@@ -112,6 +127,19 @@ test_source_distribution() {
   git clone https://github.com/apache/parquet-testing.git parquet-testing-data
   export ARROW_TEST_DATA=$PWD/arrow-testing-data/data
   export PARQUET_TEST_DATA=$PWD/parquet-testing-data/data
+
+  if [ -f .gitmodules-commits ]; then
+    # Use the testing repository commits referenced by the release
+    local arrow_testing_commit parquet_testing_commit
+    arrow_testing_commit=$(submodule_commit testing)
+    parquet_testing_commit=$(submodule_commit parquet-testing)
+    # Fetch the commits explicitly, as they may not be reachable from any
+    # branch (e.g. a submodule pinned to a pull request's head commit)
+    git -C arrow-testing-data fetch origin "${arrow_testing_commit}"
+    git -C arrow-testing-data checkout "${arrow_testing_commit}"
+    git -C parquet-testing-data fetch origin "${parquet_testing_commit}"
+    git -C parquet-testing-data checkout "${parquet_testing_commit}"
+  fi
 
   cargo test --all
 
