@@ -345,7 +345,7 @@ impl RecordBatch {
             })?;
 
         for (c, f) in columns.iter().zip(&schema.fields) {
-            if !f.is_nullable() && c.null_count() > 0 {
+            if !f.is_nullable() && c.logical_null_count() > 0 {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "Column '{}' is declared as non-nullable but contains null values",
                     f.name()
@@ -739,7 +739,7 @@ impl RecordBatch {
         // https://github.com/rust-lang/rust/issues/50133 is no longer an
         // issue
         let iter = value.into_iter().map(|(field_name, array)| {
-            let nullable = array.null_count() > 0;
+            let nullable = array.logical_null_count() > 0;
             (field_name, array, nullable)
         });
 
@@ -1668,6 +1668,79 @@ mod tests {
             "Invalid argument error: Column 'a' is declared as non-nullable but contains null values",
             format!("{}", maybe_batch.err().unwrap())
         );
+
+        // Sparse UnionArray with logical null in child
+        let fields =
+            arrow_schema::UnionFields::try_new([0], [Field::new("u", DataType::Int32, true)])
+                .unwrap();
+        let child = Arc::new(Int32Array::from(vec![Some(1), None])) as ArrayRef;
+        let union_array = Arc::new(
+            crate::UnionArray::try_new(fields, vec![0, 0].into(), None, vec![child]).unwrap(),
+        );
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            union_array.data_type().clone(),
+            false,
+        )]));
+        let maybe_batch = RecordBatch::try_new(schema, vec![union_array]);
+        assert_eq!(
+            "Invalid argument error: Column 'a' is declared as non-nullable but contains null values",
+            format!("{}", maybe_batch.err().unwrap())
+        );
+
+        // RunArray whose value is null
+        let values = Int32Array::from(vec![None]);
+        let run_array = Arc::new(
+            crate::RunArray::<crate::types::Int32Type>::try_new(
+                &Int32Array::from(vec![2]),
+                &values,
+            )
+            .unwrap(),
+        );
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            run_array.data_type().clone(),
+            false,
+        )]));
+        let maybe_batch = RecordBatch::try_new(schema, vec![run_array]);
+        assert_eq!(
+            "Invalid argument error: Column 'a' is declared as non-nullable but contains null values",
+            format!("{}", maybe_batch.err().unwrap())
+        );
+
+        // DictionaryArray with keys pointing to a null value
+        let values = Arc::new(Int32Array::from(vec![None]));
+        let dict_array = Arc::new(
+            crate::DictionaryArray::<crate::types::Int8Type>::try_new(
+                Int8Array::from(vec![0, 0]),
+                values,
+            )
+            .unwrap(),
+        );
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            dict_array.data_type().clone(),
+            false,
+        )]));
+        let maybe_batch = RecordBatch::try_new(schema, vec![dict_array]);
+        assert_eq!(
+            "Invalid argument error: Column 'a' is declared as non-nullable but contains null values",
+            format!("{}", maybe_batch.err().unwrap())
+        );
+    }
+
+    #[test]
+    fn test_try_from_iter_logical_nulls() {
+        let values = Arc::new(Int32Array::from(vec![None]));
+        let dict_array = Arc::new(
+            crate::DictionaryArray::<crate::types::Int8Type>::try_new(
+                Int8Array::from(vec![0, 0]),
+                values,
+            )
+            .unwrap(),
+        );
+        let batch = RecordBatch::try_from_iter(vec![("d", dict_array as ArrayRef)]).unwrap();
+        assert!(batch.schema().field(0).is_nullable());
     }
     #[test]
     fn test_record_batch_options() {
