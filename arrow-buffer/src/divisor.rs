@@ -22,7 +22,7 @@ macro_rules! divisor_enum {
         /// Division by a divisor that is only known at run time needs a divide instruction.
         /// [`Self::new`] precomputes a shift and a mask when the magnitude of the divisor is a
         /// power of two, and otherwise a multiplier with the method in
-        /// [Granlund and Montgomery (1994)](https://gmplib.org/~tege/divcnst-pldi94.pdf),
+        /// [Granlund and Montgomery, "Division by Invariant Integers using Multiplication" (1994)](https://gmplib.org/~tege/divcnst-pldi94.pdf),
         /// so that each division is a high multiply, shifts and additions.
         ///
         /// To divide many values, match on the variant once, before the loop, and call the
@@ -121,23 +121,26 @@ macro_rules! unsigned_divisor {
             pub const fn wrapping_div_rem(self, n: $t) -> ($t, $t) {
                 (n >> self.shift, n & self.mask)
             }
-
         }
 
         #[doc = concat!("A `", stringify!($t), "` divisor that isn't a power of two, see [`", stringify!($name), "`]")]
         ///
-        /// It uses the multiplier from figure 4.1 of Granlund and Montgomery (1994).
+        /// It uses the multiplier from figure 4.1 of
+        /// [Granlund and Montgomery, "Division by Invariant Integers using Multiplication" (1994)](https://gmplib.org/~tege/divcnst-pldi94.pdf).
         #[derive(Debug, Clone, Copy)]
         pub struct $multiplier {
             divisor: $t,
+            /// `m'` in figure 4.1
             multiplier: $t,
+            /// `sh2` in figure 4.1
             shift: u32,
         }
 
         impl $multiplier {
             /// `divisor` must be at least 3 and not a power of two
             const fn new(divisor: $t) -> Self {
-                // ceil(log2(divisor)), which is at least 2 because divisor >= 3
+                // ceil(log2(divisor)), which is at least 2 because divisor >= 3. So figure 4.1's
+                // `sh1 = min(l, 1)` is always 1 and `sh2 = max(l - 1, 0)` is `l - 1`
                 let l = <$t>::BITS - (divisor - 1).leading_zeros();
                 // 2^l - divisor < divisor, so the multiplier fits in the narrow type
                 let numerator = ((1 << l) - divisor as $wide) << <$t>::BITS;
@@ -159,10 +162,10 @@ macro_rules! unsigned_divisor {
             #[inline]
             pub const fn wrapping_div_rem(self, n: $t) -> ($t, $t) {
                 let t = ((self.multiplier as $wide * n as $wide) >> <$t>::BITS) as $t;
+                // `(n + t) >> l` could overflow, so this halves `n - t` first, as figure 4.1 does
                 let q = (t + ((n - t) >> 1)) >> self.shift;
                 (q, n - q * self.divisor)
             }
-
         }
     };
 }
@@ -195,6 +198,11 @@ macro_rules! signed_divisor {
         }
 
         #[doc = concat!("A `", stringify!($t), "` divisor whose magnitude is a power of two, see [`", stringify!($name), "`]")]
+        ///
+        /// The quotient and remainder follow sections 10-1 and 10-2 of Warren, "Hacker's Delight",
+        /// 2nd edition. Those sections compute the addend `2^k - 1` for a negative `n` with two
+        /// shifts. This type computes it with one shift that spreads the sign bit of `n` and an AND
+        /// with `2^k - 1`, which it computes once for the divisor.
         #[derive(Debug, Clone, Copy)]
         pub struct $power_of_two {
             shift: u32,
@@ -234,6 +242,7 @@ macro_rules! signed_divisor {
                 let t = n + ((n >> (<$t>::BITS - 1)) & self.mask);
                 let q = t >> self.shift;
                 // `(x ^ sign) - sign` negates `x` when `sign` is -1, and wraps only for `MIN / -1`
+                // `t & !mask` is `n` rounded toward zero to a multiple of `|divisor|`
                 ((q ^ self.sign).wrapping_sub(self.sign), n - (t & !self.mask))
             }
 
@@ -261,11 +270,14 @@ macro_rules! signed_divisor {
 
         #[doc = concat!("A `", stringify!($t), "` divisor whose magnitude isn't a power of two, see [`", stringify!($name), "`]")]
         ///
-        /// It uses the signed multiplier from figure 5.2 of Granlund and Montgomery (1994).
+        /// It uses the signed multiplier from figure 5.1 of
+        /// [Granlund and Montgomery, "Division by Invariant Integers using Multiplication" (1994)](https://gmplib.org/~tege/divcnst-pldi94.pdf).
         #[derive(Debug, Clone, Copy)]
         pub struct $multiplier {
             divisor: $t,
+            /// `m'` in figure 5.1
             multiplier: $t,
+            /// `sh_post` in figure 5.1
             shift: u32,
         }
 
@@ -273,7 +285,8 @@ macro_rules! signed_divisor {
             /// `|divisor|` must be at least 3 and not a power of two
             const fn new(divisor: $t) -> Self {
                 let magnitude = divisor.unsigned_abs();
-                // ceil(log2(|divisor|)), which is at least 2 because |divisor| >= 3
+                // ceil(log2(|divisor|)), which is at least 2 because |divisor| >= 3, so figure
+                // 5.1's `max(..., 1)` isn't needed
                 let l = <$t>::BITS - (magnitude - 1).leading_zeros();
                 // m = 1 + floor(2^(N + l - 1) / |divisor|) is between 2^(N - 1) and 2^N, so
                 // m - 2^N fits in the narrow type
@@ -295,6 +308,7 @@ macro_rules! signed_divisor {
             /// ```
             #[inline]
             pub const fn wrapping_div_rem(self, n: $t) -> ($t, $t) {
+                // `MULSH(m', n)` in figure 5.1
                 let high = ((self.multiplier as $wide * n as $wide) >> <$t>::BITS) as $t;
                 // The shift rounds down, and subtracting the sign of `n` rounds toward zero instead
                 let q = ((n + high) >> self.shift) - (n >> (<$t>::BITS - 1));
@@ -302,7 +316,6 @@ macro_rules! signed_divisor {
                 let q = (q ^ sign) - sign;
                 (q, n - q * self.divisor)
             }
-
         }
     };
 }
