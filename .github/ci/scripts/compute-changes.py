@@ -36,7 +36,7 @@ def load_yaml(path):
 def select_suites(event, paths, filters):
     suites = set(filters["suites"]) | ALWAYS
     if event == "merge_group":
-        return sorted(suites | {"miri"})
+        return sorted(suites)
     if event == "push":
         # The queue already tested the merge result. Publish docs and populate
         # main's caches through the reusable workflows' cache-refresh-only mode.
