@@ -18,6 +18,10 @@
 -->
 
 CI runs a subset of checks on pull requests, selected by the changed files.
-The merge queue runs the full test suite against the proposed merge result.
+The merge queue runs the full test suite, except Miri, against the proposed merge result.
 Pushes to `main` populate caches and publish documentation without repeating tests.
 A single required status check combines the results and blocks merging on failure.
+
+Miri runs separately every day at 03:17 UTC and on demand through the `miri`
+workflow's **Run workflow** button or
+`gh workflow run miri.yaml --repo apache/arrow-rs --ref <branch-or-tag>`.

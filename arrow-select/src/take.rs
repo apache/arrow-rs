@@ -207,7 +207,14 @@ where
         };
     };
 
-    if indices.null_count() > 0 {
+    // Null slots usually hold in-bounds values, so first check every value with a loop that
+    // vectorizes, and look at validity only if that finds one out of bounds
+    let in_bounds = indices.values().iter().fold(true, |in_bounds, &i| {
+        in_bounds & (i >= T::Native::ZERO) & (i < len)
+    });
+    if in_bounds {
+        Ok(())
+    } else if indices.null_count() > 0 {
         indices.iter().flatten().try_for_each(|index| {
             if index >= len {
                 return Err(ArrowError::ComputeError(format!(
@@ -217,20 +224,13 @@ where
             Ok(())
         })
     } else {
-        let in_bounds = indices.values().iter().fold(true, |in_bounds, &i| {
-            in_bounds & (i >= T::Native::ZERO) & (i < len)
-        });
-
-        if !in_bounds {
-            for &index in indices.values() {
-                if index < T::Native::ZERO || index >= len {
-                    return Err(ArrowError::ComputeError(format!(
-                        "Array index out of bounds, cannot get item at index {index} from {len} entries"
-                    )));
-                }
+        for &index in indices.values() {
+            if index < T::Native::ZERO || index >= len {
+                return Err(ArrowError::ComputeError(format!(
+                    "Array index out of bounds, cannot get item at index {index} from {len} entries"
+                )));
             }
         }
-
         Ok(())
     }
 }
@@ -1671,6 +1671,12 @@ to_indices_reinterpret!(Int64Type, UInt64Type);
 ///
 /// This function will call [`take`] on each array of the [`RecordBatch`] and assemble a new [`RecordBatch`].
 ///
+/// # Errors
+/// This function errors whenever:
+/// * `indices` is not an integer array
+/// * A non-null index is not less than the number of rows
+/// * A taken column's offsets overflow, e.g. more than `i32::MAX` bytes of `Utf8` data
+///
 /// # Example
 /// ```
 /// # use std::sync::Arc;
@@ -1712,15 +1718,16 @@ pub fn take_record_batch(
     downcast_integer_array!(
         indices => {
             let indices = indices.to_indices();
-            let cols = record_batch.columns();
-            let mut columns = Vec::with_capacity(cols.len());
-            if let Some(first) = cols.first() {
-                columns.push(take_impl::<_, true>(first.as_ref(), &indices)?);
-                for col in &cols[1..] {
-                    columns.push(take_impl::<_, false>(col.as_ref(), &indices)?);
-                }
-            }
-            // Safety: indices were validated by the first take_impl call
+            // Check once against the row count, which every column shares. A checked take of
+            // one column would not do: some types (e.g. `Null`) read no index.
+            check_bounds(record_batch.num_rows(), &indices)?;
+            let columns = record_batch
+                .columns()
+                .iter()
+                .map(|c| take_impl::<_, false>(c.as_ref(), &indices))
+                .collect::<Result<Vec<_>, _>>()?;
+            // Safety: take returns one column per input column, of the same type and with
+            // indices.len() rows
             Ok(unsafe { RecordBatch::new_unchecked(record_batch.schema(), columns, indices.len()) })
         },
         d => Err(ArrowError::InvalidArgumentError(format!("Take only supported for integers, got {d:?}")))
@@ -1732,7 +1739,7 @@ mod tests {
     use super::*;
     use arrow_array::builder::*;
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
-    use arrow_schema::{Field, Fields, TimeUnit, UnionFields};
+    use arrow_schema::{Field, Fields, Schema, TimeUnit, UnionFields};
     use num_traits::ToPrimitive;
 
     fn test_take_decimal_arrays(
@@ -4199,5 +4206,147 @@ mod tests {
         let result = take(&input, &indices, None).unwrap();
 
         assert_eq!(result.len(), 2);
+    }
+
+    /// Columns whose `take` reads no index, so taking them alone does not check bounds
+    fn zero_width_columns(len: usize) -> Vec<ArrayRef> {
+        vec![
+            Arc::new(NullArray::new(len)),
+            Arc::new(StructArray::new_empty_fields(len, None)),
+            Arc::new(
+                FixedSizeListArray::try_new_with_length(
+                    Field::new_list_field(DataType::Int32, true).into(),
+                    0,
+                    Arc::new(Int32Array::new_null(0)),
+                    None,
+                    len,
+                )
+                .unwrap(),
+            ),
+            Arc::new(
+                FixedSizeBinaryArray::try_new_with_len(
+                    0,
+                    Buffer::from(Vec::<u8>::new()),
+                    None,
+                    len,
+                )
+                .unwrap(),
+            ),
+        ]
+    }
+
+    /// A batch of 3 rows with `first` followed by columns whose `take` reads every index
+    fn batch_with_first_column(first: ArrayRef) -> RecordBatch {
+        RecordBatch::try_from_iter([
+            ("first", first),
+            (
+                "i",
+                Arc::new(Int32Array::from(vec![Some(1), None, Some(3)])) as ArrayRef,
+            ),
+            ("s", Arc::new(StringArray::from(vec!["a", "bb", "ccc"]))),
+            (
+                "l",
+                Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                    Some(vec![Some(1)]),
+                    None,
+                    Some(vec![Some(3), None]),
+                ])),
+            ),
+        ])
+        .unwrap()
+    }
+
+    #[test]
+    fn test_take_record_batch() {
+        let first: ArrayRef = Arc::new(BooleanArray::from(vec![true, false, true]));
+        let mut columns = vec![first];
+        columns.extend(zero_width_columns(3));
+        for first in columns {
+            let batch = batch_with_first_column(first);
+            let indices = UInt32Array::from(vec![Some(2), None, Some(0), Some(2)]);
+            let taken = take_record_batch(&batch, &indices).unwrap();
+
+            assert_eq!(taken.schema(), batch.schema());
+            assert_eq!(taken.num_rows(), 4);
+            for (taken, column) in taken.columns().iter().zip(batch.columns()) {
+                assert_eq!(taken, &take(column, &indices, None).unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn test_take_record_batch_out_of_bounds() {
+        let indices: [ArrayRef; 5] = [
+            // One past the end
+            Arc::new(UInt32Array::from(vec![0, 3])),
+            Arc::new(UInt32Array::from(vec![None, Some(3)])),
+            Arc::new(Int32Array::from(vec![-1])),
+            Arc::new(Int8Array::from(vec![i8::MAX])),
+            Arc::new(UInt64Array::from(vec![u64::MAX])),
+        ];
+        let first: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3]));
+        let mut columns = vec![first];
+        columns.extend(zero_width_columns(3));
+        for first in columns {
+            let batch = batch_with_first_column(first);
+            for indices in &indices {
+                let err = take_record_batch(&batch, indices).unwrap_err();
+                assert!(
+                    err.to_string().contains("Array index out of bounds"),
+                    "{}: {err}",
+                    batch.column(0).data_type()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_take_record_batch_null_index_out_of_bounds_value() {
+        // The value in a null index slot is never read, so it need not be in bounds
+        let indices = UInt32Array::new(
+            vec![2, u32::MAX, 0].into(),
+            Some(NullBuffer::from(vec![true, false, true])),
+        );
+        for first in zero_width_columns(3) {
+            let batch = batch_with_first_column(first);
+            let taken = take_record_batch(&batch, &indices).unwrap();
+
+            assert_eq!(taken.num_rows(), 3);
+            assert_eq!(
+                taken.column(1).as_primitive::<Int32Type>(),
+                &Int32Array::from(vec![Some(3), None, Some(1)])
+            );
+            assert_eq!(
+                taken.column(2).as_string::<i32>(),
+                &StringArray::from(vec![Some("ccc"), None, Some("a")])
+            );
+        }
+    }
+
+    #[test]
+    fn test_take_record_batch_empty() {
+        let batch = batch_with_first_column(Arc::new(NullArray::new(3))).slice(0, 0);
+
+        let taken = take_record_batch(&batch, &UInt32Array::from(Vec::<u32>::new())).unwrap();
+        assert_eq!(taken.num_rows(), 0);
+        assert_eq!(taken.schema(), batch.schema());
+
+        let taken = take_record_batch(&batch, &UInt32Array::from(vec![None, None])).unwrap();
+        assert_eq!(taken.num_rows(), 2);
+        assert_eq!(taken.column(1).null_count(), 2);
+
+        assert!(take_record_batch(&batch, &UInt32Array::from(vec![0])).is_err());
+    }
+
+    #[test]
+    fn test_take_record_batch_no_columns() {
+        let options = RecordBatchOptions::new().with_row_count(Some(3));
+        let batch =
+            RecordBatch::try_new_with_options(Arc::new(Schema::empty()), vec![], &options).unwrap();
+
+        let taken = take_record_batch(&batch, &UInt32Array::from(vec![2, 0, 2, 1])).unwrap();
+        assert_eq!(taken.num_rows(), 4);
+
+        assert!(take_record_batch(&batch, &UInt32Array::from(vec![3])).is_err());
     }
 }
