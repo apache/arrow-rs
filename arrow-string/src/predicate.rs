@@ -117,7 +117,7 @@ impl<'a> Predicate<'a> {
             }),
             Predicate::StartsWith(v) => {
                 if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
-                    let nulls = string_view_array.logical_nulls();
+                    let nulls = string_view_array.logical_nulls().map(|n| n.into_owned());
                     let values = BooleanBuffer::from(
                         string_view_array
                             .prefix_bytes_iter(v.len())
@@ -135,7 +135,7 @@ impl<'a> Predicate<'a> {
             }
             Predicate::IStartsWithAscii(v) => {
                 if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
-                    let nulls = string_view_array.logical_nulls();
+                    let nulls = string_view_array.logical_nulls().map(|n| n.into_owned());
                     let values = BooleanBuffer::from(
                         string_view_array
                             .prefix_bytes_iter(v.len())
@@ -157,7 +157,7 @@ impl<'a> Predicate<'a> {
             }
             Predicate::EndsWith(v) => {
                 if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
-                    let nulls = string_view_array.logical_nulls();
+                    let nulls = string_view_array.logical_nulls().map(|n| n.into_owned());
                     let values = BooleanBuffer::from(
                         string_view_array
                             .suffix_bytes_iter(v.len())
@@ -175,7 +175,7 @@ impl<'a> Predicate<'a> {
             }
             Predicate::IEndsWithAscii(v) => {
                 if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
-                    let nulls = string_view_array.logical_nulls();
+                    let nulls = string_view_array.logical_nulls().map(|n| n.into_owned());
                     let values = BooleanBuffer::from(
                         string_view_array
                             .suffix_bytes_iter(v.len())

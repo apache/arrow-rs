@@ -25,6 +25,7 @@ use arrow_schema::{ArrowError, DataType, UnionFields, UnionMode};
 /// Contains the `UnionArray` type.
 ///
 use std::any::Any;
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -671,7 +672,9 @@ impl UnionArray {
         self.fields
             .iter()
             .enumerate()
-            .filter_map(|(type_id, field)| Some((type_id as i8, field.as_ref()?.logical_nulls()?)))
+            .filter_map(|(type_id, field)| {
+                Some((type_id as i8, field.as_ref()?.logical_nulls()?.into_owned()))
+            })
             .filter(|(_, nulls)| nulls.null_count() > 0)
             .collect()
     }
@@ -793,7 +796,7 @@ unsafe impl Array for UnionArray {
         None
     }
 
-    fn logical_nulls(&self) -> Option<NullBuffer> {
+    fn logical_nulls(&self) -> Option<Cow<'_, NullBuffer>> {
         let DataType::Union(fields, _) = self.data_type() else {
             unreachable!()
         };
@@ -809,8 +812,13 @@ unsafe impl Array for UnionArray {
                         .and_then(|field| field.logical_nulls())
                         .map(|logical_nulls| {
                             if self.is_dense() {
-                                self.gather_nulls(vec![(type_id as i8, logical_nulls)])
-                                    .into()
+                                Cow::Owned(
+                                    self.gather_nulls(vec![(
+                                        type_id as i8,
+                                        logical_nulls.into_owned(),
+                                    )])
+                                    .into(),
+                                )
                             } else {
                                 logical_nulls
                             }
@@ -834,17 +842,17 @@ unsafe impl Array for UnionArray {
                 .iter()
                 .find(|(_, nulls)| nulls.len() == self.len())
             {
-                return Some(exactly_sized.clone());
+                return Some(Cow::Owned(exactly_sized.clone()));
             }
 
             if let Some((_, bigger)) = logical_nulls
                 .iter()
                 .find(|(_, nulls)| nulls.len() > self.len())
             {
-                return Some(bigger.slice(0, self.len()));
+                return Some(Cow::Owned(bigger.slice(0, self.len())));
             }
 
-            return Some(NullBuffer::new_null(self.len()));
+            return Some(Cow::Owned(NullBuffer::new_null(self.len())));
         }
 
         let boolean_buffer = match &self.offsets {
@@ -914,7 +922,7 @@ unsafe impl Array for UnionArray {
         let null_buffer = NullBuffer::from(boolean_buffer);
 
         if null_buffer.null_count() > 0 {
-            Some(null_buffer)
+            Some(Cow::Owned(null_buffer))
         } else {
             None
         }
@@ -2066,7 +2074,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(array.logical_nulls(), Some(NullBuffer::new_null(2)));
+        assert_eq!(
+            array.logical_nulls().map(|n| n.into_owned()),
+            Some(NullBuffer::new_null(2))
+        );
 
         let array = UnionArray::try_new(
             nullable_fields.clone(),
@@ -2080,7 +2091,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(array.logical_nulls(), Some(NullBuffer::new_null(2)));
+        assert_eq!(
+            array.logical_nulls().map(|n| n.into_owned()),
+            Some(NullBuffer::new_null(2))
+        );
     }
 
     #[test]
@@ -2104,7 +2118,10 @@ mod tests {
 
         let expected = BooleanBuffer::from(vec![true, true, true, false, false, false]);
 
-        assert_eq!(expected, array.logical_nulls().unwrap().into_inner());
+        assert_eq!(
+            expected,
+            array.logical_nulls().unwrap().into_owned().into_inner()
+        );
         assert_eq!(expected, array.gather_nulls(array.fields_logical_nulls()));
     }
 
@@ -2121,7 +2138,10 @@ mod tests {
         .unwrap();
 
         let expected = NullBuffer::from(vec![true, false, true]);
-        assert_eq!(array.logical_nulls(), Some(expected));
+        assert_eq!(
+            array.logical_nulls().map(|n| n.into_owned()),
+            Some(expected)
+        );
         assert_eq!(array.logical_null_count(), 1);
     }
 
@@ -2145,7 +2165,10 @@ mod tests {
 
         let expected = BooleanBuffer::from(vec![false, false, true, false]);
 
-        assert_eq!(expected, array.logical_nulls().unwrap().into_inner());
+        assert_eq!(
+            expected,
+            array.logical_nulls().unwrap().into_owned().into_inner()
+        );
         assert_eq!(
             expected,
             array.mask_sparse_all_with_nulls_skip_one(array.fields_logical_nulls())
@@ -2170,7 +2193,10 @@ mod tests {
             BooleanBuffer::from_iter([false, false, true, false].into_iter().cycle().take(len));
 
         assert_eq!(array.len(), len);
-        assert_eq!(expected, array.logical_nulls().unwrap().into_inner());
+        assert_eq!(
+            expected,
+            array.logical_nulls().unwrap().into_owned().into_inner()
+        );
         assert_eq!(
             expected,
             array.mask_sparse_all_with_nulls_skip_one(array.fields_logical_nulls())
@@ -2195,7 +2221,10 @@ mod tests {
 
         let expected = BooleanBuffer::from(vec![true, true, true, true, false, false]);
 
-        assert_eq!(expected, array.logical_nulls().unwrap().into_inner());
+        assert_eq!(
+            expected,
+            array.logical_nulls().unwrap().into_owned().into_inner()
+        );
         assert_eq!(
             expected,
             array.mask_sparse_skip_without_nulls(array.fields_logical_nulls())
@@ -2225,7 +2254,10 @@ mod tests {
         );
 
         assert_eq!(array.len(), len);
-        assert_eq!(expected, array.logical_nulls().unwrap().into_inner());
+        assert_eq!(
+            expected,
+            array.logical_nulls().unwrap().into_owned().into_inner()
+        );
         assert_eq!(
             expected,
             array.mask_sparse_skip_without_nulls(array.fields_logical_nulls())
@@ -2250,7 +2282,10 @@ mod tests {
 
         let expected = BooleanBuffer::from(vec![false, false, true, true, false, false]);
 
-        assert_eq!(expected, array.logical_nulls().unwrap().into_inner());
+        assert_eq!(
+            expected,
+            array.logical_nulls().unwrap().into_owned().into_inner()
+        );
         assert_eq!(
             expected,
             array.mask_sparse_skip_fully_null(array.fields_logical_nulls())
@@ -2280,7 +2315,10 @@ mod tests {
         );
 
         assert_eq!(array.len(), len);
-        assert_eq!(expected, array.logical_nulls().unwrap().into_inner());
+        assert_eq!(
+            expected,
+            array.logical_nulls().unwrap().into_owned().into_inner()
+        );
         assert_eq!(
             expected,
             array.mask_sparse_skip_fully_null(array.fields_logical_nulls())
@@ -2322,7 +2360,10 @@ mod tests {
 
         let expected = BooleanBuffer::from(vec![true, false, true, false]);
 
-        assert_eq!(expected, array.logical_nulls().unwrap().into_inner());
+        assert_eq!(
+            expected,
+            array.logical_nulls().unwrap().into_owned().into_inner()
+        );
         assert_eq!(expected, array.gather_nulls(array.fields_logical_nulls()));
     }
 

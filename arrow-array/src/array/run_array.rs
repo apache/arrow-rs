@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, RunEndBuffer, ScalarBuffer};
@@ -512,7 +513,7 @@ unsafe impl<T: RunEndIndexType> Array for RunArray<T> {
         None
     }
 
-    fn logical_nulls(&self) -> Option<NullBuffer> {
+    fn logical_nulls(&self) -> Option<Cow<'_, NullBuffer>> {
         let len = self.len();
         let nulls = self.values.logical_nulls()?;
         let mut out = BooleanBufferBuilder::new(len);
@@ -542,7 +543,7 @@ unsafe impl<T: RunEndIndexType> Array for RunArray<T> {
         }
         // Sanity check
         assert_eq!(out.len(), len);
-        Some(out.finish().into())
+        Some(Cow::Owned(out.finish().into()))
     }
 
     fn is_nullable(&self) -> bool {
@@ -773,7 +774,7 @@ unsafe impl<R: RunEndIndexType, V: Sync> Array for TypedRunArray<'_, R, V> {
         self.run_array.nulls()
     }
 
-    fn logical_nulls(&self) -> Option<NullBuffer> {
+    fn logical_nulls(&self) -> Option<Cow<'_, NullBuffer>> {
         self.run_array.logical_nulls()
     }
 

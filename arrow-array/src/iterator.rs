@@ -56,7 +56,10 @@ impl<T: ArrayAccessor> ArrayIter<T> {
     /// create a new iterator
     pub fn new(array: T) -> Self {
         let len = array.len();
-        let logical_nulls = array.logical_nulls().filter(|x| x.null_count() > 0);
+        let logical_nulls = array
+            .logical_nulls()
+            .filter(|x| x.null_count() > 0)
+            .map(|x| x.into_owned());
         ArrayIter {
             array,
             logical_nulls,

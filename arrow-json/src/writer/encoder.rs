@@ -361,7 +361,10 @@ pub fn make_encoder<'a>(
             let array = array.as_boolean();
             NullableEncoder::new(Box::new(BooleanEncoder(array)), array.nulls().cloned())
         }
-        DataType::Null => NullableEncoder::new(Box::new(NullEncoder), array.logical_nulls()),
+        DataType::Null => NullableEncoder::new(
+            Box::new(NullEncoder),
+            array.logical_nulls().map(|n| n.into_owned()),
+        ),
         DataType::Utf8 => {
             let array = array.as_string::<i32>();
             NullableEncoder::new(Box::new(StringEncoder(array)), array.nulls().cloned())
@@ -410,7 +413,7 @@ pub fn make_encoder<'a>(
             array => {
                 NullableEncoder::new(
                     Box::new(RunEndEncodedEncoder::try_new(field, array, options)?),
-                    array.logical_nulls(),
+                    array.logical_nulls().map(|n| n.into_owned()),
                 )
             },
             _ => unreachable!()

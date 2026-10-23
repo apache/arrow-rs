@@ -85,8 +85,14 @@ where
     A: Array + Clone,
     F: Fn(usize, usize) -> Ordering + Send + Sync + 'static,
 {
-    let l = l.logical_nulls().filter(|x| x.null_count() > 0);
-    let r = r.logical_nulls().filter(|x| x.null_count() > 0);
+    let l = l
+        .logical_nulls()
+        .filter(|x| x.null_count() > 0)
+        .map(|x| x.into_owned());
+    let r = r
+        .logical_nulls()
+        .filter(|x| x.null_count() > 0)
+        .map(|x| x.into_owned());
     match (opts.nulls_first, opts.descending) {
         (true, true) => compare_impl::<true, true, _>(l, r, cmp),
         (true, false) => compare_impl::<true, false, _>(l, r, cmp),

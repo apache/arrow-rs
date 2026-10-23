@@ -1132,7 +1132,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     where
         F: FnMut(U::Item) -> T::Native,
     {
-        let nulls = left.logical_nulls();
+        let nulls = left.logical_nulls().map(|n| n.into_owned());
         let buffer: Vec<_> = (0..left.len())
             // SAFETY: i in range 0..left.len()
             .map(|i| op(unsafe { left.value_unchecked(i) }))
