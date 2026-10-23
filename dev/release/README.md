@@ -92,6 +92,19 @@ Note that when reviewing the change log, rather than editing the
 
 Merge this PR to `main` prior to the next step.
 
+## Verify Miri results (required)
+
+Before cutting a release candidate, run the
+[Miri workflow](https://github.com/apache/arrow-rs/actions/workflows/miri.yaml)
+on `main`:
+
+```shell
+gh workflow run miri.yaml --repo apache/arrow-rs --ref main
+```
+
+All partitions must pass before creating the RC tag. Review the results and
+link the run in the release tracking issue.
+
 ## Prepare release candidate tarball
 
 After you have merged the updates to the `CHANGELOG` and version,
