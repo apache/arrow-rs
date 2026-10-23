@@ -56,7 +56,7 @@ def select_suites(event, paths, filters, *, repository=UPSTREAM,
     if event != "pull_request":
         raise ValueError(f"Unsupported CI event: {event}")
     if is_fork_pr(event, repository, head_repository, base_ref):
-        # Keep quick checks upstream; the queue still selects every suite.
+        # Keep quick checks upstream; the queue still selects all regular suites.
         return ["dev", "rust"]
 
     def matches(patterns):

@@ -76,7 +76,8 @@ quickly and are easier to understand and review.
 ### Pull Requests from Forks
 
 To reduce load on ASF's shared runners, pull requests from forks to `main`
-run tests in the fork and lightweight checks upstream.
+run CPU-intensive tests on your fork using your fork's GitHub runners, with
+lightweight checks upstream. To enable Actions in your fork:
 
 1. Open the **Actions** tab in your fork and enable workflows before pushing.
 2. Sync your fork and rebase your branch onto upstream `main` to include the
@@ -84,8 +85,11 @@ run tests in the fork and lightweight checks upstream.
 3. Push your branch, or manually run `CI` from your fork's **Actions** tab.
    View results and rerun failed jobs there; the PR's `CI (fork)` check may lag.
 
-Fork results are informational. The merge queue tests the proposed merge with
-`main`, including Miri. Same-repository and release-branch PRs retain upstream testing.
+Fork branch pushes and manual runs execute all regular suites, excluding Miri.
+The `CI (fork)` check links to the fork run and is informational. When your PR is
+approved and added to the merge queue, the final CI checks run using ASF's runners
+against the proposed merge with `main`. Same-repository and release-branch PRs
+retain upstream testing. Miri runs separately on a daily schedule and on demand.
 
 ## Developer's guide to Arrow Rust
 

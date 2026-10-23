@@ -55,9 +55,9 @@ const run = (id = 1, extra = {}) => ({
 async function execute({
   event = 'schedule', checks = [], runs = [run()], workflowState = 'active',
   recent = [pr], slice = [pr], candidates = [pr], repo = 'arrow-rs',
-  owner = 'apache', runError, count = 1, notification = {},
+  owner = 'apache', runError, count = 1, notification = {}, checkErrors = {},
 } = {}) {
-  const writes = [], calls = [];
+  const writes = [], calls = [], failures = [];
   let sweepPage;
   const github = { rest: { checks: {}, actions: {}, pulls: {} } };
   github.rest.checks.listForRef = async () => {};
@@ -89,6 +89,7 @@ async function execute({
   github.paginate = async (fn, params) => {
     if (fn === github.rest.checks.listForRef) {
       calls.push(['checks', params]);
+      if (checkErrors[params.ref]) throw new Error(checkErrors[params.ref]);
       return checks;
     }
     assert.equal(fn, github.rest.pulls.list);
@@ -104,8 +105,8 @@ async function execute({
       event: 'pull_request', head_sha: sha, head_branch: 'feature',
       head_repository: pr.head.repo, pull_requests: [], ...notification,
     } },
-  }, { info: () => {} }, Clock);
-  return { writes, calls, sweepPage };
+  }, { info: () => {}, setFailed: (message) => failures.push(message) }, Clock);
+  return { writes, calls, sweepPage, failures };
 }
 async function existing(runValue = run()) {
   const { writes } = await execute({ runs: [runValue] });
@@ -169,13 +170,42 @@ test('a missing workflow endpoint is handled as missing CI', async () => {
 });
 test('permission, rate limit and server errors are not reported as missing CI', async () => {
   for (const runError of [403, 429, 500]) {
-    await assert.rejects(execute({ runError }), /API failure/);
+    const result = await execute({ runError });
+    assert.deepEqual(result.writes, []);
+    assert.deepEqual(result.failures, ['#10: API failure']);
+    await assert.rejects(execute({ event: 'workflow_run', runError }), /API failure/);
   }
 });
-for (const conclusion of ['failure', 'cancelled', 'timed_out', 'startup_failure']) {
+for (const conclusion of ['failure', 'cancelled', 'timed_out', 'startup_failure', 'stale']) {
   test('mirrors ' + conclusion + ' without reporting success', async () => {
     const { writes } = await execute({ runs: [run(1, { conclusion })] });
-    assert.equal(writes[0].conclusion, conclusion === 'startup_failure' ? 'failure' : conclusion);
+    assert.equal(writes[0].conclusion,
+      ['startup_failure', 'stale'].includes(conclusion) ? 'failure' : conclusion);
+  });
+}
+test('a stale run updates an existing check with failure, not the reserved conclusion', async () => {
+  const { writes } = await execute({
+    checks: [await existing()], runs: [run(1, { conclusion: 'stale' })],
+  });
+  assert.equal(writes[0].method, 'update');
+  assert.equal(writes[0].conclusion, 'failure');
+});
+for (const source of ['recent', 'slice']) {
+  test('the sweep continues after errors in the ' + source + ' PRs and reports every failure', async () => {
+    const broken = ['b', 'c'].map((letter, index) => ({
+      ...pr, number: 20 + index, head: { ...pr.head, sha: letter.repeat(40) },
+    }));
+    const result = await execute({
+      recent: [], slice: [], [source]: [...broken, pr], count: 3,
+      checkErrors: {
+        [broken[0].head.sha]: 'First API failure',
+        [broken[1].head.sha]: 'Second API failure',
+      },
+    });
+    assert.equal(result.writes.length, 1);
+    assert.equal(result.writes[0].external_id, 'arrow-rs-fork-ci:10');
+    assert.equal(result.writes[0].conclusion, 'success');
+    assert.deepEqual(result.failures, ['#20: First API failure\n#21: Second API failure']);
   });
 }
 test('a rerun of the same workflow run updates the existing check', async () => {

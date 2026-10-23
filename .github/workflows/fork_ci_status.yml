@@ -15,8 +15,14 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# Mirror fork results using reviewed default-branch code and public API reads.
+# Mirror fork results as the informational CI (fork) check after upstream PR CI
+# completes and through scheduled polling for late runs and reruns. Read fork
+# runs and write upstream checks using reviewed default-branch code.
 # No checkout, artifacts, or code from the pull request are used here.
+# Test with Python 3.11+, PyYAML, and Node.js 24:
+#   node --test .github/ci/scripts/test-fork-ci-status.cjs
+# Tests mock GitHub APIs. End-to-end testing requires a test repository with
+# the upstream guards adapted and this workflow installed on its default branch.
 name: Fork CI status
 
 on:
@@ -61,11 +67,11 @@ jobs:
               pr.head.repo.full_name.toLowerCase() !== repository.toLowerCase() && pr.base.ref === 'main';
             const externalId = (pr) => 'arrow-rs-fork-ci:' + pr.number;
             const conclusions = new Set([
-              'action_required', 'cancelled', 'failure', 'neutral', 'skipped', 'stale', 'success', 'timed_out',
+              'action_required', 'cancelled', 'failure', 'neutral', 'skipped', 'success', 'timed_out',
             ]);
             const UPDATE_NOTE =
               'This check is informational: the contributor controls the fork workflow. ' +
-              'The upstream merge queue runs every suite, including Miri, on the proposed merge result. ' +
+              'The upstream merge queue runs the required CI checks on the proposed merge result. ' +
               'Active or missing runs on recently updated PRs are polled every 15 minutes; ' +
               'a rotating sweep also discovers reruns on older PRs. Scheduled updates may be delayed.';
 
@@ -178,6 +184,15 @@ jobs:
             }
 
             async function update() {
+              const errors = [];
+              // A failed update must not prevent unrelated PRs from being refreshed.
+              async function syncPr(pr, includeCompleted) {
+                try {
+                  await syncCheck(pr, includeCompleted);
+                } catch (error) {
+                  errors.push('#' + pr.number + ': ' + error.message);
+                }
+              }
               const count = await github.rest.pulls.list({ ...listing, per_page: 1 });
               const last = /[?&]page=(\d+)>;\s*rel="last"/.exec(count.headers.link || '');
               const total = last ? Number(last[1]) : count.data.length;
@@ -198,13 +213,14 @@ jobs:
                 for (const pr of page.data) {
                   if (new Date(pr.updated_at).getTime() < cutoff) { stale = true; break; }
                   seen.add(pr.number);
-                  await syncCheck(pr, sweepNumbers.has(pr.number));
+                  await syncPr(pr, sweepNumbers.has(pr.number));
                 }
                 if (stale) break;
               }
               for (const pr of slice) {
-                if (!seen.has(pr.number)) await syncCheck(pr);
+                if (!seen.has(pr.number)) await syncPr(pr);
               }
+              if (errors.length) core.setFailed(errors.join('\n'));
             }
 
             if (repository === 'apache/arrow-rs') {

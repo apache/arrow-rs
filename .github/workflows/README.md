@@ -17,27 +17,11 @@
   under the License.
 -->
 
-CI runs lightweight checks upstream for fork pull requests to `main`. Fork
-branch pushes and manual CI runs execute all regular suites, excluding Miri.
-Other pull requests run suites selected by their changed files upstream.
-The merge queue runs the full test suite against the proposed merge result.
+CI selects checks for pull requests according to their source and changed files.
+See the [contributor guide](../../CONTRIBUTING.md#pull-requests-from-forks) for fork CI setup.
+The merge queue runs the full test suite, except Miri, against the proposed merge result.
 Pushes to upstream `main` populate caches and publish documentation without repeating tests.
 A single required status check combines the results and blocks merging on failure.
-
-`fork_ci_status.yml` mirrors fork results in an informational `CI (fork)` check,
-using `workflow_run` and scheduled polling. It reads fork runs and writes upstream
-checks through GitHub APIs without checking out PR code or consuming PR artifacts.
-See [fork CI setup](../../CONTRIBUTING.md#pull-requests-from-forks).
-
-Run the routing and bridge tests with Python 3.11+, PyYAML, and Node.js 24:
-
-```shell
-python3 .github/ci/scripts/check-ci-config.py
-node --test .github/ci/scripts/test-fork-ci-status.cjs
-```
-
-Bridge tests mock GitHub APIs. End-to-end testing requires a test repository
-with the upstream guards adapted and the bridge installed on its default branch.
 
 Miri runs separately every day at 03:17 UTC and on demand through the `miri`
 workflow's **Run workflow** button or

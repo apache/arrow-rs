@@ -155,10 +155,10 @@ jobs:
           {
             printf 'Full test results: [CI on %s](https://github.com/%s/actions/workflows/ci.yml).\n\n' "$FORK_REPOSITORY" "$FORK_REPOSITORY"
             printf 'Look for commit `%s`. Enable Actions in your fork and push your branch if no run exists.\n\n' "$PR_HEAD_SHA"
-            printf 'This upstream PR run checks formatting and contributor hygiene. The merge queue runs the full suite before merge.\n'
+            printf 'This upstream PR run checks formatting and contributor hygiene. The merge queue runs the required CI checks before merge.\n'
           } >> "$GITHUB_STEP_SUMMARY"
       # Fork PRs to main only run lightweight checks here. The informational
-      # CI (fork) check is separate; the merge queue runs every suite here.
+      # CI (fork) check is separate; the merge queue runs the required suites here.
       # A failed/cancelled selector or suite must still block merging.
       # Miri runs separately to reduce runner time:
       # https://github.com/apache/arrow-rs/issues/11548

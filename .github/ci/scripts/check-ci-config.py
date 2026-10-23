@@ -17,7 +17,7 @@
 
 """Check CI configuration and routing policy, following Comet's structure.
 
-Run from the repository root:
+Run from the repository root with Python 3.11+ and PyYAML:
     python3 .github/ci/scripts/check-ci-config.py
 """
 
