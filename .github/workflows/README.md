@@ -38,3 +38,7 @@ node --test .github/ci/scripts/test-fork-ci-status.cjs
 
 Bridge tests mock GitHub APIs. End-to-end testing requires a test repository
 with the upstream guards adapted and the bridge installed on its default branch.
+
+Miri runs separately every day at 03:17 UTC and on demand through the `miri`
+workflow's **Run workflow** button or
+`gh workflow run miri.yaml --repo apache/arrow-rs --ref <branch-or-tag>`.

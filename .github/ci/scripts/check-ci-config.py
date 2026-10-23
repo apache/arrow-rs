@@ -125,8 +125,8 @@ def validate_config(root=ROOT):
     ci = load_yaml(workflows / "ci.yml")
     filters = load_yaml(root / ".github/ci/paths.yaml")
     jobs = ci["jobs"]
-    suites = set(filters["suites"]) | ALWAYS | {"miri"}
-    assert not (set(filters["suites"]) & (ALWAYS | {"miri"})), "Unexpected filtered suite"
+    suites = set(filters["suites"]) | ALWAYS
+    assert not (set(filters["suites"]) & ALWAYS), "Unexpected filtered suite"
     assert set(jobs) == suites | {"changes", "required-checks"}, "CI suites and jobs differ"
     # PyYAML's YAML 1.1 loader treats the key 'on' as the boolean True.
     events = ci[True]
@@ -186,8 +186,6 @@ def validate_config(root=ROOT):
         and "workflow_call" in load_yaml(path).get(True, {})
     }
     assert called == reusable, "A reusable workflow is missing from Required Checks"
-    miri = load_yaml(workflows / "miri.yaml")["jobs"]["miri-checks"]
-    assert "if" not in miri, "Miri event routing belongs in compute-changes.py"
     print("CI configuration is valid")
 
 
@@ -205,7 +203,7 @@ class RoutingTests(unittest.TestCase):
     def test_event_policy(self):
         for paths in [[], ["README.md"], ["arrow-buffer/src/lib.rs"]]:
             with self.subTest(paths=paths):
-                self.assertEqual(self.select("merge_group", paths), self.all_suites | {"miri"})
+                self.assertEqual(self.select("merge_group", paths), self.all_suites)
                 self.assertEqual(self.select("push", paths), {"docs", "integration", "parquet"})
                 self.assertNotIn("miri", self.select("pull_request", paths))
         with self.assertRaises(ValueError):
@@ -233,13 +231,13 @@ class RoutingTests(unittest.TestCase):
         # Even a queue event with fork metadata must run the full validation.
         selected = changes.select_suites("merge_group", [], self.filters,
                                          head_repository="contributor/arrow-rs")
-        self.assertEqual(set(selected), self.all_suites | {"miri"})
+        self.assertEqual(set(selected), self.all_suites)
 
     def test_selector_outputs(self):
         cases = [
             ("push", changes.UPSTREAM, "", {"docs", "integration", "parquet"}, True, False),
             ("push", "contributor/arrow-rs", "", self.all_suites, False, False),
-            ("merge_group", changes.UPSTREAM, "", self.all_suites | {"miri"}, False, False),
+            ("merge_group", changes.UPSTREAM, "", self.all_suites, False, False),
             ("pull_request", changes.UPSTREAM, changes.UPSTREAM, self.always, False, False),
             ("pull_request", changes.UPSTREAM, "contributor/arrow-rs", {"dev", "rust"}, False, True),
             ("workflow_dispatch", "contributor/arrow-rs", "", self.all_suites, False, False),
@@ -312,10 +310,9 @@ class ConfigurationTests(unittest.TestCase):
             (".github/workflows/ci.yml", "      lint-only: ${{ needs.changes.outputs.fork-pr == 'true' }}\n", ""),
             (".github/workflows/docs.yml", "github.repository == 'apache/arrow-rs' && ", ""),
             (".asf.yaml", '"Required Checks"', '"Missing Check"'),
-            (".github/workflows/ci.yml", "      - miri\n", ""),
+            (".github/workflows/ci.yml", "      - arrow\n", ""),
             (".github/workflows/ci.yml", "  pull_request:\n", "  pull_request:\n    paths: ['arrow/**']\n"),
             (".github/workflows/ci.yml", "    if: always()", "    if: success()"),
-            (".github/workflows/miri.yaml", "    name: MIRI\n", "    name: MIRI\n    if: github.event_name == 'merge_group'\n"),
             (".github/workflows/arrow.yml", "  workflow_call:", "  workflow_call:\n  pull_request:"),
             (".github/ci/paths.yaml", "    - arrow-integration-testing/**\n", ""),
             (".github/workflows/ci.yml", "      cache-refresh-only: ${{ steps.select.outputs.cache-refresh-only }}\n", ""),

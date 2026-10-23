@@ -124,11 +124,6 @@ jobs:
       contents: write
     uses: ./.github/workflows/docs.yml
 
-  miri:
-    needs: changes
-    if: contains(fromJSON(needs.changes.outputs.suites), 'miri')
-    uses: ./.github/workflows/miri.yaml
-
   required-checks:
     # Like datafusion-comet: one stable check name even when a reusable
     # workflow is skipped (its individual check names would be different).
@@ -145,7 +140,6 @@ jobs:
       - dev
       - rust
       - docs
-      - miri
     runs-on: ubuntu-slim
     steps:
       - name: Summarize suite results
@@ -166,6 +160,8 @@ jobs:
       # Fork PRs to main only run lightweight checks here. The informational
       # CI (fork) check is separate; the merge queue runs every suite here.
       # A failed/cancelled selector or suite must still block merging.
+      # Miri runs separately to reduce runner time:
+      # https://github.com/apache/arrow-rs/issues/11548
       - name: Fail if any suite failed or was cancelled
         if: needs.changes.result != 'success' || contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         run: |

@@ -44,7 +44,7 @@ def select_suites(event, paths, filters, *, repository=UPSTREAM,
                  head_repository=UPSTREAM, base_ref="main"):
     suites = set(filters["suites"]) | ALWAYS
     if event == "merge_group":
-        return sorted(suites | {"miri"})
+        return sorted(suites)
     if event == "workflow_dispatch" or (event == "push" and repository != UPSTREAM):
         # Fork pushes test the branch head, including pushes to the fork's main.
         # Unlike upstream main, these commits have not passed the merge queue.
