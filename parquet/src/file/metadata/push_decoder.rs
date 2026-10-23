@@ -427,7 +427,13 @@ impl ParquetMetaDataPushDecoder {
 
                 DecodeState::ReadingMetadata(footer_tail) => {
                     let metadata_len: u64 = footer_tail.metadata_length() as u64;
-                    let metadata_start = file_len - footer_len - metadata_len;
+                    // A corrupt footer can claim more metadata than the file holds
+                    let needed = footer_len + metadata_len;
+                    let Some(metadata_start) = file_len.checked_sub(needed) else {
+                        return Err(eof_err!(
+                            "Parquet file too small. Size is {file_len} but need {needed}"
+                        ));
+                    };
                     let metadata_end = metadata_start + metadata_len;
                     let metadata_range = metadata_start..metadata_end;
 
@@ -688,6 +694,24 @@ mod tests {
         assert_eq!(metadata.row_group(0).num_rows(), 200);
         assert_eq!(metadata.row_group(1).num_rows(), 200);
         assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
+    }
+
+    /// A footer whose metadata length exceeds the file length is an error, not a panic
+    #[test]
+    fn test_metadata_decoder_metadata_length_exceeds_file() {
+        // 4 bytes of data, then a footer claiming 1000 bytes of metadata
+        let mut file = vec![0u8; 4];
+        file.extend_from_slice(&1000u32.to_le_bytes());
+        file.extend_from_slice(b"PAR1");
+        let file_len = file.len() as u64;
+
+        let mut decoder = ParquetMetaDataPushDecoder::try_new(file_len).unwrap();
+        decoder.push_range(0..file_len, Bytes::from(file)).unwrap();
+        let err = decoder.try_decode().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "EOF: Parquet file too small. Size is 12 but need 1008"
+        );
     }
 
     #[test]
