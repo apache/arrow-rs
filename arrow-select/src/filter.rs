@@ -989,16 +989,6 @@ where
         self.src_offsets[idx].as_usize()
     }
 
-    /// Returns the start and end of the value at index `idx` along with its length
-    #[inline]
-    fn get_value_range(&self, idx: usize) -> (usize, usize, OffsetSize) {
-        // These can only fail if `array` contains invalid data
-        let start = self.get_value_offset(idx);
-        let end = self.get_value_offset(idx + 1);
-        let len = OffsetSize::from_usize(end - start).expect("illegal offset range");
-        (start, end, len)
-    }
-
     fn extend_offsets_idx(&mut self, iter: impl Iterator<Item = usize>) {
         self.dst_offsets.extend(iter.map(|idx| {
             let start = self.src_offsets[idx].as_usize();
@@ -1025,12 +1015,13 @@ where
     fn extend_offsets_slices(&mut self, iter: impl Iterator<Item = (usize, usize)>, count: usize) {
         self.dst_offsets.reserve_exact(count);
         for (start, end) in iter {
-            // These can only fail if `array` contains invalid data
-            for idx in start..end {
-                let (_, _, len) = self.get_value_range(idx);
-                self.cur_offset += len;
-                self.dst_offsets.push(self.cur_offset);
-            }
+            // Shift the source offsets of the slice so that it starts at
+            // `cur_offset`, which vectorizes better than summing the lengths
+            let src = &self.src_offsets[start..=end];
+            let shift = self.cur_offset - src[0];
+            self.dst_offsets
+                .extend(src[1..].iter().map(|&offset| offset + shift));
+            self.cur_offset += src[end - start] - src[0];
         }
     }
 
