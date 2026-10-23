@@ -63,7 +63,7 @@ fn read_buffer(
     decompression_context: &mut DecompressionContext,
 ) -> Result<Buffer, ArrowError> {
     let start_offset = buf.offset() as usize;
-    let buf_data = a_data.slice_with_length(start_offset, buf.length() as usize);
+    let buf_data = slice_buffer(a_data, start_offset, buf.length() as usize)?;
     // corner case: empty buffer
     match (buf_data.is_empty(), compression_codec) {
         (true, _) | (_, None) => Ok(buf_data),
@@ -72,6 +72,19 @@ fn read_buffer(
         }
     }
 }
+
+/// Like [`Buffer::slice_with_length`], but returns an error instead of panicking
+/// if the range is out of bounds
+fn slice_buffer(buffer: &Buffer, offset: usize, length: usize) -> Result<Buffer, ArrowError> {
+    if offset.saturating_add(length) > buffer.len() {
+        return Err(ArrowError::IpcError(format!(
+            "Buffer slice out of bounds: offset {offset} length {length} buffer length {}",
+            buffer.len()
+        )));
+    }
+    Ok(buffer.slice_with_length(offset, length))
+}
+
 impl RecordBatchDecoder<'_> {
     /// Coordinates reading arrays based on data types.
     ///
@@ -201,13 +214,12 @@ impl RecordBatchDecoder<'_> {
                     self.next_buffer()?;
                 }
 
-                let type_ids: ScalarBuffer<i8> =
-                    self.next_buffer()?.slice_with_length(0, len).into();
+                let type_ids: ScalarBuffer<i8> = slice_buffer(&self.next_buffer()?, 0, len)?.into();
 
                 let value_offsets = match mode {
                     UnionMode::Dense => {
                         let offsets: ScalarBuffer<i32> =
-                            self.next_buffer()?.slice_with_length(0, len * 4).into();
+                            slice_buffer(&self.next_buffer()?, 0, len * 4)?.into();
                         Some(offsets)
                     }
                     UnionMode::Sparse => None,
@@ -2311,6 +2323,88 @@ mod tests {
                 assert_eq!(msg, "Buffer count mismatched with metadata");
             }
             other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_read_record_batch_buffer_out_of_bounds() {
+        use crate::r#gen::Message::*;
+        use flatbuffers::FlatBufferBuilder;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Int32, false)]));
+        let body = Buffer::from(vec![0u8; 8]);
+        let mut fbb = FlatBufferBuilder::new();
+        let nodes = fbb.create_vector(&[FieldNode::new(2, 0)]);
+        // Empty validity buffer followed by two Int32 values whose range exceeds the body.
+        let buffers = fbb.create_vector(&[crate::Buffer::new(0, 0), crate::Buffer::new(4, 8)]);
+        let batch = RecordBatch::create(
+            &mut fbb,
+            &RecordBatchArgs {
+                length: 2,
+                nodes: Some(nodes),
+                buffers: Some(buffers),
+                ..Default::default()
+            },
+        );
+        fbb.finish_minimal(batch);
+        let batch = flatbuffers::root::<RecordBatch>(fbb.finished_data()).unwrap();
+
+        read_record_batch(
+            &body,
+            batch,
+            schema,
+            &HashMap::new(),
+            None,
+            &MetadataVersion::V5,
+        )
+        .expect_err("invalid IPC buffer range must return an error");
+    }
+
+    #[test]
+    fn test_union_short_buffers() {
+        use crate::r#gen::Message::*;
+
+        let fields = UnionFields::from_fields([Field::new("child", DataType::Null, true)]);
+        // All buffer ranges fit in the body. Only the union length is inconsistent:
+        // sparse has one type id for two rows, dense has one offset for two rows
+        let cases = [
+            (UnionMode::Sparse, vec![crate::Buffer::new(0, 1)]),
+            (
+                UnionMode::Dense,
+                vec![crate::Buffer::new(0, 2), crate::Buffer::new(8, 4)],
+            ),
+        ];
+        for (mode, buffers) in cases {
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "union",
+                DataType::Union(fields.clone(), mode),
+                false,
+            )]));
+
+            let mut fbb = flatbuffers::FlatBufferBuilder::new();
+            let nodes = fbb.create_vector(&[FieldNode::new(2, 0), FieldNode::new(2, 2)]);
+            let buffers = fbb.create_vector(&buffers);
+            let batch = RecordBatch::create(
+                &mut fbb,
+                &RecordBatchArgs {
+                    length: 2,
+                    nodes: Some(nodes),
+                    buffers: Some(buffers),
+                    ..Default::default()
+                },
+            );
+            fbb.finish_minimal(batch);
+            let batch = flatbuffers::root::<RecordBatch>(fbb.finished_data()).unwrap();
+
+            read_record_batch(
+                &Buffer::from(vec![0u8; 16]),
+                batch,
+                schema,
+                &HashMap::new(),
+                None,
+                &MetadataVersion::V5,
+            )
+            .expect_err("a short union buffer should return an error");
         }
     }
 
