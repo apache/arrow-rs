@@ -20,13 +20,12 @@
 # Changelog
 
 
-## [60.1.0](https://github.com/apache/arrow-rs/tree/60.1.0) - (2026-10-22)
+## [60.1.0](https://github.com/apache/arrow-rs/tree/60.1.0) - (2026-10-23)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/60.0.0...60.1.0)
 
 ### Security fixes
 - Redact Parquet encryption keys from Debug output by @autoCAT6 in [#11614](https://github.com/apache/arrow-rs/pull/11614)
-- fix: update rustls to address RUSTSEC-2026-0285 by @Phoenix500526 in [#11091](https://github.com/apache/arrow-rs/pull/11091)
 
 ### Enhancements
 - Implement `BatchCoalescer::push_batch_interleaved` by @Rich-T-kid in [#11519](https://github.com/apache/arrow-rs/pull/11519)
@@ -62,6 +61,9 @@
 - deps: removed unneeded once_cell dependency if favor of std::sync::LazyLock by @aectaan in [#11066](https://github.com/apache/arrow-rs/pull/11066)
 
 ### Bug fixes
+- fix(arrow-select): reject nulls in non-nullable columns in take_record_batch by @mbutrovich in [#11831](https://github.com/apache/arrow-rs/pull/11831)
+- [Variant] Restore object field offsets after failed append by @osipovartem in [#11403](https://github.com/apache/arrow-rs/pull/11403)
+- fix(arrow-select): bounds-check take_record_batch once, with a faster check_bounds for null indices by @mbutrovich in [#11829](https://github.com/apache/arrow-rs/pull/11829)
 - fix(parquet): align encoded Arrow schemas and nested nullability by @HippoBaro in [#11278](https://github.com/apache/arrow-rs/pull/11278)
 - Fix incorrect Decimal statistics for BYTE_ARRAY columns written via ArrowColumnWriter by @DeviousCardi in [#11092](https://github.com/apache/arrow-rs/pull/11092)
 - fix(parquet): return an error for RLE run lengths above the spec limit by @hhhizzz in [#11517](https://github.com/apache/arrow-rs/pull/11517)
@@ -157,7 +159,8 @@
 - fix(parquet): do not cache an ALP preset built from an empty first page by @Abdallah-Afifi in [#11004](https://github.com/apache/arrow-rs/pull/11004)
 
 ### Performance improvements
-- perf(parquet): skip per-batch key-bounds scan when RLE bit width proves keys are in bounds by @Rich-T-kid in [#11462](https://github.com/apache/arrow-rs/pull/11462)
+- perf(arrow-buffer): divide `i256` by a single word with a reciprocal on 64-bit targets other than x86_64 by @mbutrovich in [#11580](https://github.com/apache/arrow-rs/pull/11580)
+- perf(parquet): skip per-batch key-bounds scan when RLE bit width prov… by @Rich-T-kid in [#11462](https://github.com/apache/arrow-rs/pull/11462)
 - perf(arrow-cmp): add fast paths to dictionary_cmp by @Rich-T-kid in [#11407](https://github.com/apache/arrow-rs/pull/11407)
 - speed up dict cast key width by @Rich-T-kid in [#11502](https://github.com/apache/arrow-rs/pull/11502)
 - perf: Inline `SlicesIterator::next` by @haohuaijin in [#11646](https://github.com/apache/arrow-rs/pull/11646)
@@ -210,6 +213,7 @@
 - Replace OffsetBufferBuilder with Vec in scalar byte-array zip by @yashkuceriya in [#10913](https://github.com/apache/arrow-rs/pull/10913)
 
 ### Documentation updates
+- Fix BatchCoalescer::is_empty documentation by @Rich-T-kid in [#11790](https://github.com/apache/arrow-rs/pull/11790)
 - docs: Add example to `BitChunks::chunk` by @alamb in [#11214](https://github.com/apache/arrow-rs/pull/11214)
 - Document how to customize JSON decoding via `DecoderFactory` by @alamb in [#10897](https://github.com/apache/arrow-rs/pull/10897)
 - doc: Describe potential footgun in `MapArray::keys` and `values` by @neilconway in [#11145](https://github.com/apache/arrow-rs/pull/11145)
@@ -218,4 +222,3 @@
 - Document platform endianness support by @sdf-jkl in [#11056](https://github.com/apache/arrow-rs/pull/11056)
 - chore: Fix duplicated word typos in comments and docs by @geographybuff in [#11034](https://github.com/apache/arrow-rs/pull/11034)
 - docs(parquet): add OpenDAL read and write example by @Xuanwo in [#11014](https://github.com/apache/arrow-rs/pull/11014)
-
