@@ -21,6 +21,11 @@ name: rust
 # Triggered by ci.yml, which owns event routing and concurrency.
 on:
   workflow_call:
+    inputs:
+      lint-only:
+        description: Run only formatting and unused dependency checks
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -29,6 +34,7 @@ jobs:
   # Check workspace wide compile and test with default features for
   # mac
   macos:
+    if: ${{ !inputs.lint-only }}
     name: Test on Mac
     runs-on: macos-latest
     steps:
@@ -52,6 +58,7 @@ jobs:
   # Check workspace wide compile and test with default features for
   # windows
   windows:
+    if: ${{ !inputs.lint-only }}
     name: Test on Windows
     runs-on: windows-latest
     steps:
@@ -116,6 +123,7 @@ jobs:
         run: cargo shear --deny-warnings arrow-pyarrow-integration-testing
 
   msrv:
+    if: ${{ !inputs.lint-only }}
     name: Verify MSRV (Minimum Supported Rust Version)
     runs-on: ubuntu-latest
     container:

@@ -17,7 +17,7 @@
 
 """Check CI configuration and routing policy, following Comet's structure.
 
-Run from the repository root:
+Run from the repository root with Python 3.11+ and PyYAML:
     python3 .github/ci/scripts/check-ci-config.py
 """
 
@@ -56,6 +56,31 @@ CACHE_REFRESH_STEPS = {
     "parquet": {"pyspark-integration-test": {"Install Python dependencies"}},
 }
 FULL_RUN = "${{ !inputs.cache-refresh-only }}"
+CI_EVENT = "github.event_name != 'push' || github.repository != 'apache/arrow-rs' || github.ref == 'refs/heads/main'"
+LINT_ONLY = "${{ needs.changes.outputs.fork-pr == 'true' }}"
+
+
+def validate_fork_ci(workflows, ci):
+    """Fork feedback cannot replace the upstream merge-queue gate."""
+    jobs = ci["jobs"]
+    assert jobs["changes"]["if"] == CI_EVENT, "Unexpected CI event guard"
+    assert jobs["changes"]["outputs"].get("fork-pr") == "${{ steps.select.outputs.fork-pr }}", "Missing fork PR output"
+    assert (jobs["rust"].get("with") or {}).get("lint-only") == LINT_ONLY, "Missing Rust lint mode"
+    rust = load_yaml(workflows / "rust.yml")
+    for name, job in rust["jobs"].items():
+        if name in {"lint", "unused-dependencies"}:
+            assert "if" not in job, f"rust/{name}: lightweight check must run upstream"
+        else:
+            assert job.get("if") == "${{ !inputs.lint-only }}", f"rust/{name}: runs during lint-only mode"
+    docs = load_yaml(workflows / "docs.yml")
+    assert docs["jobs"]["deploy"]["if"] == "github.repository == 'apache/arrow-rs' && github.ref_name == 'main' && github.event_name == 'push'", "Forks must not deploy docs"
+    bridge = load_yaml(workflows / "fork_ci_status.yml")
+    assert set(bridge[True]) == {"workflow_run", "schedule", "workflow_dispatch"}, "Unexpected fork bridge triggers"
+    assert bridge[True]["workflow_run"] == {"workflows": ["CI"], "types": ["completed"]}, "Bridge must follow CI"
+    assert bridge["permissions"] == {"actions": "read", "checks": "write", "pull-requests": "read"}, "Unexpected bridge permissions"
+    steps = bridge["jobs"]["bridge"]["steps"]
+    assert len(steps) == 1 and steps[0]["uses"].startswith("actions/github-script@"), "Bridge must not check out or execute PR code"
+    assert "${{" not in steps[0]["with"]["script"], "Do not interpolate untrusted values into JavaScript"
 
 
 def validate_cache_refresh(ci, suite, workflow):
@@ -106,18 +131,28 @@ def validate_config(root=ROOT):
     # PyYAML's YAML 1.1 loader treats the key 'on' as the boolean True.
     events = ci[True]
     assert jobs["changes"]["outputs"].get("cache-refresh-only") == "${{ steps.select.outputs.cache-refresh-only }}", "Missing cache mode output"
-    assert set(events) == {"pull_request", "push", "merge_group"}, "Unexpected CI triggers"
+    assert set(events) == {"pull_request", "push", "merge_group", "workflow_dispatch"}, "Unexpected CI triggers"
     assert events["pull_request"] is None, "Required CI must run on every PR"
     assert events["merge_group"] == {"types": ["checks_requested"]}, "Missing queue trigger"
-    assert events["push"] == {"branches": ["main"]}, "Only main pushes should run CI"
+    assert events["push"] == {"branches-ignore": ["asf-site"]}, "Fork branches must trigger CI"
+    validate_fork_ci(workflows, ci)
 
     gate = jobs["required-checks"]
     assert set(gate["needs"]) == set(jobs) - {"required-checks"}, "Required Checks omits a job"
-    assert gate["if"] == "always()", "Required Checks must run after failures and cancellations"
+    assert gate["if"] == f"always() && ({CI_EVENT})", "Required Checks must run after failures and cancellations"
     asf = load_yaml(root / ".asf.yaml")["github"]
     checks = asf["protected_branches"]["main"]["required_status_checks"]
     assert checks["contexts"] == [gate["name"]], "Required check name does not match .asf.yaml"
     assert checks["strict"] is False, "The queue handles up-to-date checks"
+    assert any(
+        ruleset.get("enforcement") == "active"
+        and ruleset.get("target") == "branch"
+        and ruleset.get("conditions", {}).get("ref_name") == {
+            "include": ["~DEFAULT_BRANCH"], "exclude": [],
+        }
+        and any(rule.get("type") == "merge_queue" for rule in ruleset.get("rules", []))
+        for ruleset in asf.get("rulesets", [])
+    ), "Fork PRs require an active merge queue on the default branch"
 
     called = set()
     for suite in suites:
@@ -134,6 +169,11 @@ def validate_config(root=ROOT):
                 "type": "boolean", "default": False,
             }}}
             validate_cache_refresh(ci, suite, workflow)
+        if suite == "rust":
+            call = {"inputs": {"lint-only": {
+                "description": "Run only formatting and unused dependency checks",
+                "type": "boolean", "default": False,
+            }}}
         assert workflow[True] == {"workflow_call": call}, f"{suite}: duplicate or missing triggers/inputs"
         assert "concurrency" not in workflow, f"{suite}: concurrency is owned by ci.yml"
         if suite in filters["suites"]:
@@ -169,19 +209,51 @@ class RoutingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.select("pull_request_target", [])
 
+    def test_fork_pr_policy(self):
+        for base, expected in [("main", {"dev", "rust"}),
+                               ("maintenance", self.all_suites)]:
+            selected = changes.select_suites(
+                "pull_request", ["Cargo.toml"], self.filters,
+                head_repository="contributor/arrow-rs", base_ref=base)
+            self.assertEqual(set(selected), expected)
+        # PRs inside a contributor's fork retain ordinary path-based testing.
+        selected = changes.select_suites(
+            "pull_request", ["Cargo.toml"], self.filters,
+            repository="contributor/arrow-rs", head_repository="other/arrow-rs")
+        self.assertEqual(set(selected), self.all_suites)
+
+    def test_fork_push_and_manual_runs(self):
+        for repository, event in [("contributor/arrow-rs", "push"),
+                                  ("contributor/arrow-rs", "workflow_dispatch"),
+                                  (changes.UPSTREAM, "workflow_dispatch")]:
+            selected = changes.select_suites(event, [], self.filters, repository=repository)
+            self.assertEqual(set(selected), self.all_suites)
+        # Even a queue event with fork metadata must run the full validation.
+        selected = changes.select_suites("merge_group", [], self.filters,
+                                         head_repository="contributor/arrow-rs")
+        self.assertEqual(set(selected), self.all_suites)
+
     def test_selector_outputs(self):
-        for event, expected in [("push", {"docs", "integration", "parquet"}),
-                                ("merge_group", self.all_suites),
-                                ("pull_request", self.always)]:
-            with self.subTest(event=event), tempfile.TemporaryDirectory() as directory:
+        cases = [
+            ("push", changes.UPSTREAM, "", {"docs", "integration", "parquet"}, True, False),
+            ("push", "contributor/arrow-rs", "", self.all_suites, False, False),
+            ("merge_group", changes.UPSTREAM, "", self.all_suites, False, False),
+            ("pull_request", changes.UPSTREAM, changes.UPSTREAM, self.always, False, False),
+            ("pull_request", changes.UPSTREAM, "contributor/arrow-rs", {"dev", "rust"}, False, True),
+            ("workflow_dispatch", "contributor/arrow-rs", "", self.all_suites, False, False),
+        ]
+        for event, repo, head_repo, expected, cache_only, fork_pr in cases:
+            with self.subTest(event=event, repo=repo, head_repo=head_repo), tempfile.TemporaryDirectory() as directory:
                 output = Path(directory) / "output"
                 env = dict(os.environ, GITHUB_EVENT_NAME=event, GITHUB_OUTPUT=str(output),
+                           GITHUB_REPOSITORY=repo, PR_HEAD_REPOSITORY=head_repo, PR_BASE_REF="main",
                            PR_BASE_SHA="HEAD", PR_HEAD_SHA="HEAD")
                 subprocess.run([sys.executable, str(ROOT / ".github/ci/scripts/compute-changes.py")],
                                env=env, check=True, capture_output=True)
                 values = dict(line.split("=", 1) for line in output.read_text().splitlines())
                 self.assertEqual(set(json.loads(values["suites"])), expected)
-                self.assertEqual(json.loads(values["cache-refresh-only"]), event == "push")
+                self.assertEqual(json.loads(values["cache-refresh-only"]), cache_only)
+                self.assertEqual(json.loads(values["fork-pr"]), fork_pr)
 
     def test_pr_path_routing(self):
         cases = [
@@ -232,6 +304,11 @@ class ConfigurationTests(unittest.TestCase):
 
     def test_configuration_regressions(self):
         cases = [
+            (".asf.yaml", "enforcement: active", "enforcement: disabled"),
+            (".asf.yaml", "type: merge_queue", "type: deletion"),
+            (".github/workflows/rust.yml", "    if: ${{ !inputs.lint-only }}\n", ""),
+            (".github/workflows/ci.yml", "      lint-only: ${{ needs.changes.outputs.fork-pr == 'true' }}\n", ""),
+            (".github/workflows/docs.yml", "github.repository == 'apache/arrow-rs' && ", ""),
             (".asf.yaml", '"Required Checks"', '"Missing Check"'),
             (".github/workflows/ci.yml", "      - arrow\n", ""),
             (".github/workflows/ci.yml", "  pull_request:\n", "  pull_request:\n    paths: ['arrow/**']\n"),
