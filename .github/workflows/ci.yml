@@ -34,7 +34,7 @@ permissions:
 jobs:
   changes:
     name: Select and validate CI suites
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       suites: ${{ steps.select.outputs.suites }}
       cache-refresh-only: ${{ steps.select.outputs.cache-refresh-only }}
