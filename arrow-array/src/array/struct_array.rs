@@ -166,15 +166,24 @@ impl StructArray {
                 )));
             }
 
-            if !f.is_nullable()
-                && let Some(a) = a.logical_nulls()
-                && nulls.as_ref().is_none_or(|n| !n.contains(&a))
-                && a.null_count() > 0
-            {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Found unmasked nulls for non-nullable StructArray field {:?}",
-                    f.name()
-                )));
+            if !f.is_nullable() {
+                // A Null array is logically null at every row. Avoid materializing its
+                // logical null bitmap just to determine whether the parent masks it.
+                let has_unmasked_nulls = if f.data_type() == &DataType::Null {
+                    len > 0 && nulls.as_ref().is_none_or(|n| n.null_count() != len)
+                } else {
+                    a.logical_nulls().is_some_and(|a_nulls| {
+                        nulls.as_ref().is_none_or(|n| !n.contains(&a_nulls))
+                            && a_nulls.null_count() > 0
+                    })
+                };
+
+                if has_unmasked_nulls {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "Found unmasked nulls for non-nullable StructArray field {:?}",
+                        f.name()
+                    )));
+                }
             }
         }
 
@@ -631,7 +640,7 @@ mod tests {
     use super::*;
 
     use crate::{
-        BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array, StringArray,
+        BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array, NullArray, StringArray,
         cast::AsArray, types::Int32Type,
     };
     use arrow_buffer::ToByteSlice;
@@ -1156,6 +1165,31 @@ mod tests {
             Arc::new(Field::new("c", DataType::Int32, false)),
             Arc::new(Int32Array::from(vec![Some(42), None, Some(19)])) as ArrayRef,
         )]));
+    }
+
+    #[test]
+    fn test_non_nullable_null_array_with_max_length_returns_error() {
+        let fields = Fields::from(vec![Field::new("a", DataType::Null, false)]);
+        let arrays = vec![Arc::new(NullArray::new(usize::MAX)) as ArrayRef];
+
+        let error = StructArray::try_new_with_length(fields, arrays, None, usize::MAX)
+            .expect_err("a non-nullable Null field must be rejected");
+
+        assert_eq!(
+            error.to_string(),
+            "Invalid argument error: Found unmasked nulls for non-nullable StructArray field \"a\""
+        );
+    }
+
+    #[test]
+    fn test_non_nullable_null_array_is_allowed_when_parent_masks_all_nulls() {
+        let fields = Fields::from(vec![Field::new("a", DataType::Null, false)]);
+        let arrays = vec![Arc::new(NullArray::new(2)) as ArrayRef];
+        let parent_nulls = Some(NullBuffer::new_null(2));
+
+        let array = StructArray::try_new_with_length(fields, arrays, parent_nulls, 2).unwrap();
+
+        assert_eq!(array.null_count(), 2);
     }
 
     #[test]
