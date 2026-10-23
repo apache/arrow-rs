@@ -57,7 +57,7 @@ jobs:
 
   deploy:
     # Only deploy if a push to main
-    if: github.ref_name == 'main' && github.event_name == 'push'
+    if: github.repository == 'apache/arrow-rs' && github.ref_name == 'main' && github.event_name == 'push'
     needs: docs
     permissions:
       contents: write
