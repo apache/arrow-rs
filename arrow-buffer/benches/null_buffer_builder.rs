@@ -23,12 +23,17 @@ const WORDS: usize = 512;
 const LEN: usize = WORDS * 64;
 
 fn criterion_benchmark(c: &mut Criterion) {
+    let very_sparse_nulls = (0..WORDS)
+        .map(|i| if i % 64 == 0 { u64::MAX - 1 } else { u64::MAX })
+        .collect();
     let sparse_nulls = (0..WORDS)
         .map(|i| if i % 8 == 0 { u64::MAX - 1 } else { u64::MAX })
         .collect();
     let inputs = [
         ("all_valid", vec![u64::MAX; WORDS]),
+        ("very_sparse_nulls", very_sparse_nulls),
         ("sparse_nulls", sparse_nulls),
+        ("dense_nulls", vec![0x0000_0000_0000_FFFF; WORDS]),
         ("alternating", vec![0xAAAA_AAAA_AAAA_AAAA; WORDS]),
     ];
 
@@ -36,19 +41,6 @@ fn criterion_benchmark(c: &mut Criterion) {
     group.throughput(Throughput::Elements(LEN as u64));
 
     for (name, words) in inputs {
-        group.bench_with_input(BenchmarkId::new("bit", name), &words, |b, words| {
-            b.iter(|| {
-                let mut builder = NullBufferBuilder::new(LEN);
-                for &word in words {
-                    let word = hint::black_box(word);
-                    for i in 0..64 {
-                        builder.append(word & (1 << i) != 0);
-                    }
-                }
-                hint::black_box(builder.finish())
-            })
-        });
-
         group.bench_with_input(BenchmarkId::new("word", name), &words, |b, words| {
             b.iter(|| {
                 let mut builder = NullBufferBuilder::new(LEN);
