@@ -156,9 +156,13 @@ impl NullBufferBuilder {
     /// are ignored.
     ///
     /// This does not materialize the null buffer when all appended bits are set.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `count` is greater than 64.
     #[inline]
     pub fn append_word(&mut self, word: u64, count: usize) {
-        debug_assert!(count <= 64);
+        assert!(count <= 64, "count must be less than or equal to 64");
         if word.trailing_ones() as usize >= count {
             self.append_n_non_nulls(count);
         } else {
@@ -376,6 +380,13 @@ mod tests {
 
         let buffer = builder.finish().unwrap();
         assert_eq!(&[0b0101_0111, 0b0001_1110], buffer.validity());
+    }
+
+    #[test]
+    #[should_panic(expected = "count must be less than or equal to 64")]
+    fn test_append_word_count_too_large() {
+        let mut builder = NullBufferBuilder::new(0);
+        builder.append_word(u64::MAX, 65);
     }
 
     #[test]
