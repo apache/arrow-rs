@@ -35,7 +35,6 @@ use flatbuffers::FlatBufferBuilder;
 use arrow_array::cast::*;
 use arrow_array::types::{Int16Type, Int32Type, Int64Type, RunEndIndexType};
 use arrow_array::*;
-use arrow_buffer::bit_util;
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer, ToByteSlice};
 use arrow_data::{ArrayData, ArrayDataBuilder, BufferSpec, layout};
 use arrow_schema::*;
@@ -2443,16 +2442,11 @@ fn write_array_data(
             .push(crate::FieldNode::new(num_rows as i64, num_rows as i64));
     }
     if has_validity_bitmap(array_data.data_type(), write_options) {
-        // write null buffer if exists
+        // Fields with null_count == 0 may write a 0-length validity buffer
+        // instead of a materialized bitmap (see FieldNode in Message.fbs)
         let null_buffer = match array_data.nulls() {
-            None => {
-                // create a buffer and fill it with valid bits
-                let num_bytes = bit_util::ceil(num_rows, 8);
-                let buffer = MutableBuffer::new(num_bytes);
-                let buffer = buffer.with_bitset(num_bytes, true);
-                buffer.into()
-            }
-            Some(buffer) => buffer.inner().sliced(),
+            Some(buffer) if null_count > 0 => buffer.inner().sliced(),
+            _ => MutableBuffer::new(0).into(),
         };
 
         offset = encode_sink_buffer(
@@ -2649,6 +2643,24 @@ fn write_array_data(
             write_options,
         )?;
         return Ok(offset);
+    } else if matches!(data_type, DataType::Union(_, _)) {
+        for (buffer, byte_width) in array_data
+            .buffers()
+            .iter()
+            .zip([size_of::<i8>(), size_of::<i32>()])
+        {
+            let buffer =
+                buffer.slice_with_length(array_data.offset() * byte_width, num_rows * byte_width);
+            offset = encode_sink_buffer(
+                buffer,
+                meta,
+                sink,
+                offset,
+                compression_codec,
+                ipc_write_context,
+                write_options.alignment,
+            )?;
+        }
     } else {
         for buffer in array_data.buffers() {
             offset = encode_sink_buffer(
@@ -2673,6 +2685,20 @@ fn write_array_data(
                 // write the nested data (e.g list data)
                 offset = write_array_data(
                     data_ref,
+                    meta,
+                    sink,
+                    offset,
+                    compression_codec,
+                    ipc_write_context,
+                    write_options,
+                )?;
+            }
+        }
+        DataType::Union(_, UnionMode::Sparse) => {
+            for data_ref in array_data.child_data() {
+                let child_data = data_ref.slice(array_data.offset(), num_rows);
+                offset = write_array_data(
+                    &child_data,
                     meta,
                     sink,
                     offset,
@@ -2834,6 +2860,77 @@ mod tests {
     use crate::root_as_footer;
 
     use super::*;
+
+    #[test]
+    fn test_roundtrip_sliced_list_of_union() {
+        fn decoded(array: &ArrayRef) -> Vec<Vec<Option<i32>>> {
+            (0..array.len())
+                .map(|row| {
+                    let values = array.as_list::<i32>().value(row);
+                    let union = values.as_union();
+                    (0..union.len())
+                        .map(|index| {
+                            union
+                                .value(index)
+                                .as_primitive::<Int32Type>()
+                                .iter()
+                                .next()
+                                .unwrap()
+                        })
+                        .collect()
+                })
+                .collect()
+        }
+
+        for mode in [UnionMode::Dense, UnionMode::Sparse] {
+            let fields = UnionFields::try_new(
+                [3, 7],
+                [
+                    Field::new("a", DataType::Int32, true),
+                    Field::new("b", DataType::Int32, true),
+                ],
+            )
+            .unwrap();
+            let offsets = (mode == UnionMode::Dense).then(|| vec![2, 0, 1].into());
+            let union: ArrayRef = Arc::new(
+                UnionArray::try_new(
+                    fields,
+                    vec![3_i8, 7, 3].into(),
+                    offsets,
+                    vec![
+                        Arc::new(Int32Array::from(vec![Some(11), None, Some(33)])),
+                        Arc::new(Int32Array::from(vec![Some(101), Some(202), None])),
+                    ],
+                )
+                .unwrap(),
+            );
+            let item = Arc::new(Field::new("item", union.data_type().clone(), true));
+            let list: ArrayRef = Arc::new(ListArray::new(
+                item,
+                arrow_buffer::OffsetBuffer::from_lengths([1, 2]),
+                union,
+                None,
+            ));
+            for (offset, len) in [(0, 2), (1, 1), (2, 0)] {
+                let array = list.slice(offset, len);
+                array.to_data().validate_full().unwrap();
+                let expected = decoded(&array);
+                let schema = Arc::new(Schema::new(vec![Field::new(
+                    "v",
+                    array.data_type().clone(),
+                    true,
+                )]));
+                let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
+                for output in [
+                    deserialize_file(serialize_file(&batch)),
+                    deserialize_stream(serialize_stream(&batch)),
+                ] {
+                    output.column(0).to_data().validate_full().unwrap();
+                    assert_eq!(decoded(output.column(0)), expected);
+                }
+            }
+        }
+    }
 
     fn serialize_file(rb: &RecordBatch) -> Vec<u8> {
         let mut writer = FileWriter::try_new(vec![], rb.schema_ref()).unwrap();
@@ -3522,6 +3619,37 @@ mod tests {
         assert!(deserialized_batch.column(1).is_valid(1));
 
         assert_eq!(record_batch_slice, deserialized_batch);
+    }
+
+    #[test]
+    fn test_write_empty_validity_buffer_without_nulls() {
+        let batch = RecordBatch::try_from_iter([
+            ("a", Arc::new(Int32Array::from(vec![1, 2])) as _),
+            // Keeps a null buffer, but the slice has no nulls
+            (
+                "b",
+                Arc::new(Int32Array::from(vec![None, Some(2), Some(3)]).slice(1, 2)) as _,
+            ),
+            ("c", Arc::new(Int32Array::from(vec![Some(1), None])) as _),
+        ])
+        .unwrap();
+        assert_eq!(batch.column(1).nulls().map(|n| n.null_count()), Some(0));
+
+        let (_, encoded) = IpcDataGenerator::default()
+            .encode(
+                &batch,
+                &mut DictionaryTracker::new(false),
+                &Default::default(),
+                &mut Default::default(),
+            )
+            .unwrap();
+        let message = crate::root_as_message(&encoded.ipc_message).unwrap();
+        let buffers = message.header_as_record_batch().unwrap().buffers().unwrap();
+        // Each column writes a validity buffer, then a values buffer
+        let validity_lengths: Vec<_> = buffers.iter().step_by(2).map(|b| b.length()).collect();
+        assert_eq!(validity_lengths, [0, 0, 1]);
+
+        assert_eq!(deserialize_stream(serialize_stream(&batch)), batch);
     }
 
     #[test]
@@ -4762,13 +4890,15 @@ mod tests {
         const IPC_ALIGNMENT: usize = 8;
 
         let num_cols = 2;
-        let num_rows = 1;
 
         let mut fields = Vec::new();
         let mut arrays = Vec::new();
         for i in 0..num_cols {
             let field = Field::new(format!("col_{i}"), DataType::Decimal128(38, 10), true);
-            let array = Decimal128Array::from(vec![num_cols as i128; num_rows]);
+            // The null makes the writer emit a 1-byte validity buffer. With IPC_ALIGNMENT = 8,
+            // the writer pads that buffer to 8 bytes, so the decimal values that follow start
+            // at offset 8 of the body, which is not a multiple of 16.
+            let array = Decimal128Array::from(vec![Some(num_cols as i128), None]);
             fields.push(field);
             arrays.push(Arc::new(array) as Arc<dyn Array>);
         }

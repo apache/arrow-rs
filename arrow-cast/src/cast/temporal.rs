@@ -355,6 +355,55 @@ pub(crate) fn timestamp_to_date32<T: ArrowTimestampType>(
     Ok(Arc::new(array))
 }
 
+/// Casts a timestamp array to `Date64`.
+///
+/// `Date64` values must be whole days, so this truncates to the start of the
+/// day the same way [`timestamp_to_date32`] does: in the array's timezone when it
+/// has one, otherwise rounding down so that a timestamp just before the epoch
+/// belongs to the preceding day.
+pub(crate) fn timestamp_to_date64<T: ArrowTimestampType>(
+    array: &PrimitiveArray<T>,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let err = |x: i64| {
+        ArrowError::CastError(format!(
+            "Cannot convert {} {x} to Date64",
+            std::any::type_name::<T>()
+        ))
+    };
+
+    let array: Date64Array = match array.timezone() {
+        Some(tz) => {
+            let tz: Tz = tz.parse()?;
+            // Chrono's date range is small enough that the product cannot overflow.
+            let date = |x: i64| {
+                as_datetime_with_timezone::<T>(x, tz).map(|d| {
+                    Date32Type::from_naive_date(d.date_naive()) as i64 * MILLISECONDS_IN_DAY
+                })
+            };
+            if cast_options.safe {
+                array.unary_opt(date)
+            } else {
+                array.try_unary(|x| date(x).ok_or_else(|| err(x)))?
+            }
+        }
+        None => {
+            // Rescaling whole days to milliseconds can overflow for second and
+            // millisecond timestamps near the ends of the i64 range.
+            let date = |x: i64| {
+                x.div_euclid(units_per_day::<T>())
+                    .checked_mul(MILLISECONDS_IN_DAY)
+            };
+            if cast_options.safe {
+                array.unary_opt(date)
+            } else {
+                array.try_unary(|x| date(x).ok_or_else(|| err(x)))?
+            }
+        }
+    };
+    Ok(Arc::new(array))
+}
+
 /// Returns the offset to use when interpreting `local` as a wall clock reading
 /// in `tz`, or `None` if it cannot be resolved.
 ///
