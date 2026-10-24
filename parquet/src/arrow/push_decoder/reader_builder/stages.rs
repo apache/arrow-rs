@@ -36,9 +36,9 @@ pub(crate) enum Stage {
 /// The columns that each decoding stage of a row group fetches.
 ///
 /// A stage does not fetch a column that an earlier stage of the same row
-/// group read (see [`columns_to_fetch`]).
+/// group read (see [`Self::is_read_before`] and [`column_fetches`]).
 ///
-/// [`columns_to_fetch`]: crate::arrow::in_memory_row_group::columns_to_fetch
+/// [`column_fetches`]: crate::arrow::in_memory_row_group::column_fetches
 #[derive(Debug)]
 pub(crate) struct StageSchedule {
     /// Columns in the output.
@@ -74,9 +74,19 @@ impl StageSchedule {
         }
     }
 
-    /// Predicate columns whose decoded values are cached for the output.
-    pub(crate) fn cache_projection(&self) -> Option<&ProjectionMask> {
-        self.cache_projection.as_ref()
+    /// Returns `true` if a stage before `stage` reads leaf column
+    /// `column_idx`, so `stage` does not fetch it again.
+    ///
+    /// The decoder keeps the column chunks that a stage read for the later
+    /// stages of the row group. This gives the same answer without them.
+    pub(crate) fn is_read_before(&self, stage: Stage, column_idx: usize) -> bool {
+        let earlier = match stage {
+            Stage::Predicate(idx) => &self.predicate_projections[..idx],
+            Stage::Projection => &self.predicate_projections,
+        };
+        earlier
+            .iter()
+            .any(|projection| projection.leaf_included(column_idx))
     }
 
     /// Every stage, in decoding order, with what it fetches.
