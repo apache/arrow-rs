@@ -112,6 +112,9 @@
 //! [sbbf-paper]: https://arxiv.org/pdf/2101.01719
 //! [bf-formulae]: http://tfk.mit.edu/pdf/bloom.pdf
 
+#[cfg(feature = "arrow")]
+mod arrow;
+
 use crate::basic::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
 use crate::data_type::AsBytes;
 use crate::errors::{ParquetError, Result};
@@ -246,6 +249,22 @@ impl Block {
             }
         }
         true
+    }
+}
+
+impl Block {
+    /// Same result as [`Block::check`], but tests all 8 words without an early
+    /// exit. This has no data-dependent branch, so it is faster when many
+    /// hashes are checked in a loop.
+    #[cfg_attr(not(any(feature = "arrow", test)), expect(dead_code))]
+    #[inline(always)]
+    fn check_branch_free(&self, hash: u32) -> bool {
+        let mut missing = 0u32;
+        for (word, salt) in self.0.iter().zip(SALT) {
+            let bit = 1u32 << (hash.wrapping_mul(salt) >> 27);
+            missing |= !word & bit;
+        }
+        missing == 0
     }
 }
 
@@ -549,8 +568,21 @@ impl Sbbf {
         self.insert_hash(hash_as_bytes(value));
     }
 
-    /// Insert a hash into the filter
-    fn insert_hash(&mut self, hash: u64) {
+    /// Return the hash that [`Self::insert`] and [`Self::check`] use for `value`.
+    ///
+    /// This is xxHash64 (seed 0) of the plain-encoded bytes of the value, as the
+    /// Parquet specification requires. Use it with [`Self::insert_hash`] and
+    /// [`Self::check_hash`] to hash a value once and use the hash many times, for
+    /// example to compute and sort the hashes before the filter is allocated.
+    pub fn hash_value<T: AsBytes + ?Sized>(value: &T) -> u64 {
+        hash_as_bytes(value)
+    }
+
+    /// Insert a hash into the filter.
+    ///
+    /// The hash must come from [`Self::hash_value`] (or an equal function), otherwise
+    /// [`Self::check`] will not find the value.
+    pub fn insert_hash(&mut self, hash: u64) {
         let block_index = self.hash_to_block_index(hash);
         self.0[block_index].insert(hash as u32)
     }
@@ -563,9 +595,19 @@ impl Sbbf {
     /// Check if a hash is in the filter. May return
     /// true for values that was never inserted ("false positive")
     /// but will always return false if a hash has not been inserted.
-    fn check_hash(&self, hash: u64) -> bool {
+    ///
+    /// See [`Self::hash_value`].
+    pub fn check_hash(&self, hash: u64) -> bool {
         let block_index = self.hash_to_block_index(hash);
         self.0[block_index].check(hash as u32)
+    }
+
+    /// Same result as [`Self::check_hash`], without data-dependent branches.
+    #[cfg_attr(not(any(feature = "arrow", test)), expect(dead_code))]
+    #[inline(always)]
+    fn check_hash_branch_free(&self, hash: u64) -> bool {
+        let block_index = self.hash_to_block_index(hash);
+        self.0[block_index].check_branch_free(hash as u32)
     }
 
     /// Return the total in memory size of this bloom filter in bytes
@@ -786,6 +828,27 @@ fn hash_as_bytes<A: AsBytes + ?Sized>(value: &A) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_hash_value_insert_hash_check_hash() {
+        let mut filter = Sbbf::new_with_ndv_fpp(100, 0.01).unwrap();
+        filter.insert_hash(Sbbf::hash_value(&42i64));
+        assert!(filter.check(&42i64));
+        assert!(filter.check_hash(Sbbf::hash_value(&42i64)));
+        assert_eq!(Sbbf::hash_value("hello"), hash_as_bytes("hello"));
+    }
+
+    #[test]
+    fn test_branch_free_check_matches_check() {
+        let mut filter = Sbbf::new_with_num_of_bytes(256);
+        for i in 0..200u64 {
+            filter.insert(&(i * 7));
+        }
+        for i in 0..5000u64 {
+            let h = Sbbf::hash_value(&i);
+            assert_eq!(filter.check_hash(h), filter.check_hash_branch_free(h));
+        }
+    }
 
     #[test]
     fn test_hash_bytes() {
