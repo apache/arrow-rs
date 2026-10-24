@@ -3445,6 +3445,7 @@ mod tests {
         use crate::bloom_filter::Sbbf;
         use crate::file::properties::BloomFilterProperties;
 
+        let target_fpp = 0.01;
         for dictionary_enabled in [false, true] {
             let arrays: Vec<ArrayRef> = vec![
                 Arc::new(Int32Array::from_iter_values(0..100)),
@@ -3461,8 +3462,8 @@ mod tests {
                     RecordBatch::try_new(schema.clone(), vec![array.clone(), array]).unwrap();
                 let bloom_props = |folding_enabled| {
                     BloomFilterProperties::builder()
-                        .with_max_ndv(1000)
-                        .with_fpp(0.01)
+                        .with_max_ndv(100_000)
+                        .with_fpp(target_fpp)
                         .with_folding_enabled(folding_enabled)
                         .build()
                 };
@@ -3490,7 +3491,7 @@ mod tests {
                 let row_group = reader.get_row_group(0).unwrap();
                 let folded = row_group.get_column_bloom_filter(0).unwrap();
                 let retained = row_group.get_column_bloom_filter(1).unwrap();
-                let mut expected = Sbbf::new_with_ndv_fpp(1000, 0.01).unwrap();
+                let mut expected = Sbbf::new_with_ndv_fpp(100_000, target_fpp).unwrap();
                 for i in 0..100 {
                     match batch.column(0).data_type() {
                         DataType::Int32 => {
@@ -3514,6 +3515,28 @@ mod tests {
                 };
                 assert_eq!(serialize(retained), serialize(&expected));
                 assert!(serialize(folded).len() < serialize(retained).len());
+                if batch.column(0).data_type() == &DataType::Int32 {
+                    // Extra allocation can provide much stronger pruning than the requested
+                    // FPP. Retaining it must preserve that benefit, not just its byte length.
+                    let absent_values = 10_000_000_i32..11_000_000;
+                    let folded_positives =
+                        absent_values.clone().filter(|v| folded.check(v)).count();
+                    let retained_positives = absent_values.filter(|v| retained.check(v)).count();
+                    let mut folded_bits = Vec::new();
+                    let mut retained_bits = Vec::new();
+                    folded.write_bitset(&mut folded_bits).unwrap();
+                    retained.write_bitset(&mut retained_bits).unwrap();
+                    assert_eq!(folded_bits.len(), 128);
+                    assert_eq!(retained_bits.len(), 128 * 1024);
+                    assert_eq!(folded_positives, 9_088);
+                    assert_eq!(retained_positives, 0);
+                    let realized_fpp = folded_positives as f64 / 1_000_000.0;
+                    assert!(realized_fpp <= target_fpp);
+                    assert!(
+                        folded_positives > retained_positives,
+                        "folded={folded_positives}, retained={retained_positives}"
+                    );
+                }
             }
         }
     }
