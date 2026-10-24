@@ -53,6 +53,10 @@ name = "bit_mask"
 harness = false
 
 [[bench]]
+name = "divisor"
+harness = false
+
+[[bench]]
 name = "i256"
 harness = false
 
