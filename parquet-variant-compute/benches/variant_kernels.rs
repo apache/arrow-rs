@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![expect(clippy::missing_panics_doc, reason = "benchmarks are free to panic")]
+
 use arrow::array::{
     Array, ArrayRef, BinaryViewArray, BinaryViewBuilder, Int32Array, StringArray, StructArray,
     StructArrayAssembler,

@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![expect(clippy::missing_panics_doc, reason = "benchmarks are free to panic")]
+
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::{DataType, Field, Float32Type, Float64Type, Int32Type, Int64Type, Schema};
 use arrow::util::bench_util::{

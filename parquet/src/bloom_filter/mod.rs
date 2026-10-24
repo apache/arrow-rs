@@ -391,6 +391,10 @@ impl Sbbf {
 
     /// Create a new [Sbbf] with given number of bytes, the exact number of bytes will be adjusted
     /// to the next power of two bounded by [BITSET_MIN_LENGTH] and [BITSET_MAX_LENGTH].
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "`optimal_num_of_bytes` always returns a multiple of the block size"
+    )]
     pub fn new_with_num_of_bytes(num_bytes: usize) -> Self {
         let num_bytes = optimal_num_of_bytes(num_bytes);
         assert_eq!(num_bytes % size_of::<Block>(), 0);

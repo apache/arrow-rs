@@ -136,6 +136,10 @@ impl Fields {
     /// ]);
     /// assert_eq!(filtered, expected);
     /// ```
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "the predicate passed to `try_filter_leaves` is infallible"
+    )]
     pub fn filter_leaves<F: FnMut(usize, &FieldRef) -> bool>(&self, mut filter: F) -> Self {
         self.try_filter_leaves(|idx, field| Ok(filter(idx, field)))
             .unwrap()

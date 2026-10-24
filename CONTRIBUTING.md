@@ -266,6 +266,11 @@ Search for `expect(clippy::` in the codebase to identify lints that are intentio
 - If you have several lints on a function or module, you may disable the lint on the function or module.
 - If a lint is pervasive across multiple modules, you may disable it at the crate level.
 
+Tests, benchmarks and the helpers they use are free to panic, so they carry a file-level
+`#![expect(clippy::missing_panics_doc, ...)]` rather than a `# Panics` section per function.
+Public helper modules such as `arrow::util::bench_util` say so in their module docs, since
+the file-level suppression hides the panics from their own documentation.
+
 ## Spell Checking
 
 We use [`typos`](https://github.com/crate-ci/typos) to catch spelling mistakes in source code and

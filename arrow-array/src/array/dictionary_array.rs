@@ -496,6 +496,10 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
     /// Returns `PrimitiveDictionaryBuilder` of this dictionary array for mutating
     /// its keys and values if the underlying data buffer is not shared by others.
     #[expect(clippy::result_large_err)]
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "rebuilding the dictionary from its own keys and values always succeeds"
+    )]
     pub fn into_primitive_dict_builder<V>(self) -> Result<PrimitiveDictionaryBuilder<K, V>, Self>
     where
         V: ArrowPrimitiveType,

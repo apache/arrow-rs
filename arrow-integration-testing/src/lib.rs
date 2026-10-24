@@ -18,6 +18,10 @@
 //! Common code used in the integration test binaries
 
 #![warn(missing_docs)]
+#![expect(
+    clippy::missing_panics_doc,
+    reason = "these are integration test binaries, which are free to panic"
+)]
 use serde_json::Value;
 
 use arrow::array::{Array, StructArray};
