@@ -1668,8 +1668,10 @@ mod tests {
             "Invalid argument error: Column 'a' is declared as non-nullable but contains null values",
             format!("{}", maybe_batch.err().unwrap())
         );
+    }
 
-        // Sparse UnionArray with logical null in child
+    #[test]
+    fn test_validate_logical_nulls_union() {
         let fields =
             arrow_schema::UnionFields::try_new([0], [Field::new("u", DataType::Int32, true)])
                 .unwrap();
@@ -1687,8 +1689,10 @@ mod tests {
             "Invalid argument error: Column 'a' is declared as non-nullable but contains null values",
             format!("{}", maybe_batch.err().unwrap())
         );
+    }
 
-        // RunArray whose value is null
+    #[test]
+    fn test_validate_logical_nulls_run_array() {
         let values = Int32Array::from(vec![None]);
         let run_array = Arc::new(
             crate::RunArray::<crate::types::Int32Type>::try_new(
@@ -1707,8 +1711,10 @@ mod tests {
             "Invalid argument error: Column 'a' is declared as non-nullable but contains null values",
             format!("{}", maybe_batch.err().unwrap())
         );
+    }
 
-        // DictionaryArray with keys pointing to a null value
+    #[test]
+    fn test_validate_logical_nulls_dictionary() {
         let values = Arc::new(Int32Array::from(vec![None]));
         let dict_array = Arc::new(
             crate::DictionaryArray::<crate::types::Int8Type>::try_new(
