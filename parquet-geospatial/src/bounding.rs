@@ -22,7 +22,7 @@ use geo_traits::{
     CoordTrait, Dimensions, GeometryCollectionTrait, GeometryTrait, GeometryType, LineStringTrait,
     MultiLineStringTrait, MultiPointTrait, MultiPolygonTrait, PointTrait, PolygonTrait,
 };
-use wkb::reader::Wkb;
+use wkb::reader::{Dimension as WkbDimension, Wkb};
 
 use crate::interval::{Interval, IntervalTrait, WraparoundInterval};
 
@@ -153,9 +153,11 @@ impl GeometryBounder {
     /// Update this bounder with one WKB-encoded geometry
     ///
     /// Parses and accumulates the bounds of one WKB-encoded geometry. This function
-    /// will error for invalid WKB input; however, clients may wish to ignore such
-    /// an error for the purposes of writing statistics.
+    /// will error for invalid WKB input and for geometry types beyond the seven
+    /// basic types supported for bounds. Clients may ignore such an error when
+    /// writing statistics.
     pub fn update_wkb(&mut self, wkb: &[u8]) -> Result<(), ArrowError> {
+        validate_supported_wkb_geometry_types(wkb)?;
         let wkb = Wkb::try_new(wkb).map_err(|e| ArrowError::ExternalError(Box::new(e)))?;
         self.update_geometry(&wkb)?;
         Ok(())
@@ -187,6 +189,169 @@ impl GeometryBounder {
             self.x_mid.update_interval(x);
         }
     }
+}
+
+/// Validate every WKB type header before passing the geometry to `wkb`.
+///
+/// The `wkb` crate currently identifies geometries using the lowest three bits
+/// of the type code. ISO WKB extension types such as Triangle (17) can therefore
+/// be parsed as Point (1), producing plausible but incorrect bounds. Walking
+/// nested collection members here ensures the same check applies below a
+/// GeometryCollection or multi-geometry.
+fn validate_supported_wkb_geometry_types(wkb: &[u8]) -> Result<(), ArrowError> {
+    type ChildConstraint = (u32, WkbDimension, u8, bool);
+
+    let mut offset = 0;
+    let mut pending_geometries = vec![(1_usize, None::<ChildConstraint>)];
+
+    while let Some((remaining, expected_child)) = pending_geometries.last_mut() {
+        if *remaining == 0 {
+            pending_geometries.pop();
+            continue;
+        }
+        *remaining -= 1;
+        let expected_child = *expected_child;
+
+        let byte_order = *wkb.get(offset).ok_or_else(invalid_wkb_header)?;
+        offset = offset.checked_add(1).ok_or_else(invalid_wkb_header)?;
+        let code_bytes: [u8; 4] = wkb
+            .get(offset..offset.checked_add(4).ok_or_else(invalid_wkb_header)?)
+            .ok_or_else(invalid_wkb_header)?
+            .try_into()
+            .map_err(|_| invalid_wkb_header())?;
+        offset += 4;
+
+        let code = match byte_order {
+            0 => u32::from_be_bytes(code_bytes),
+            1 => u32::from_le_bytes(code_bytes),
+            _ => return Err(invalid_wkb_header()),
+        };
+
+        let ewkb_z = code & 0x8000_0000 != 0;
+        let ewkb_m = code & 0x4000_0000 != 0;
+        let ewkb_srid = code & 0x2000_0000 != 0;
+        let code_without_ewkb_flags = code & 0x1fff_ffff;
+
+        let (base_type, dimension) = if ewkb_z || ewkb_m || ewkb_srid {
+            if !(1..=7).contains(&code_without_ewkb_flags) {
+                return Err(unsupported_wkb_geometry_type(code));
+            }
+            let dimension = match (ewkb_z, ewkb_m) {
+                (true, true) => WkbDimension::Xyzm,
+                (true, false) => WkbDimension::Xyz,
+                (false, true) => WkbDimension::Xym,
+                (false, false) => WkbDimension::Xy,
+            };
+            (code_without_ewkb_flags, dimension)
+        } else {
+            let dimension = match code_without_ewkb_flags {
+                1..=7 => WkbDimension::Xy,
+                1001..=1007 => WkbDimension::Xyz,
+                2001..=2007 => WkbDimension::Xym,
+                3001..=3007 => WkbDimension::Xyzm,
+                _ => return Err(unsupported_wkb_geometry_type(code)),
+            };
+            (code_without_ewkb_flags % 1000, dimension)
+        };
+
+        let dimensions = match dimension {
+            WkbDimension::Xy => 2,
+            WkbDimension::Xyz | WkbDimension::Xym => 3,
+            WkbDimension::Xyzm => 4,
+        };
+
+        if let Some((expected_type, expected_dimensions, expected_byte_order, srid_allowed)) =
+            expected_child
+            && (base_type != expected_type
+                || dimension != expected_dimensions
+                || byte_order != expected_byte_order
+                || (ewkb_srid && !srid_allowed))
+        {
+            return Err(invalid_wkb_header());
+        }
+
+        if ewkb_srid {
+            skip_wkb_bytes(wkb, &mut offset, 4)?;
+        }
+
+        match base_type {
+            1 => skip_wkb_coordinates(wkb, &mut offset, 1, dimensions)?,
+            2 => {
+                let point_count = read_wkb_u32(wkb, &mut offset, byte_order)? as usize;
+                skip_wkb_coordinates(wkb, &mut offset, point_count, dimensions)?;
+            }
+            3 => {
+                let ring_count = read_wkb_u32(wkb, &mut offset, byte_order)? as usize;
+                for _ in 0..ring_count {
+                    let point_count = read_wkb_u32(wkb, &mut offset, byte_order)? as usize;
+                    skip_wkb_coordinates(wkb, &mut offset, point_count, dimensions)?;
+                }
+            }
+            4..=7 => {
+                let geometry_count = read_wkb_u32(wkb, &mut offset, byte_order)? as usize;
+                let child_constraint = match base_type {
+                    4 => Some((1, dimension, byte_order, false)),
+                    5 => Some((2, dimension, byte_order, true)),
+                    6 => Some((3, dimension, byte_order, true)),
+                    _ => None,
+                };
+                pending_geometries.push((geometry_count, child_constraint));
+            }
+            _ => return Err(unsupported_wkb_geometry_type(code)),
+        }
+    }
+
+    Ok(())
+}
+
+fn read_wkb_u32(wkb: &[u8], offset: &mut usize, byte_order: u8) -> Result<u32, ArrowError> {
+    let end = offset.checked_add(4).ok_or_else(invalid_wkb_header)?;
+    let bytes: [u8; 4] = wkb
+        .get(*offset..end)
+        .ok_or_else(invalid_wkb_header)?
+        .try_into()
+        .map_err(|_| invalid_wkb_header())?;
+    *offset = end;
+
+    match byte_order {
+        0 => Ok(u32::from_be_bytes(bytes)),
+        1 => Ok(u32::from_le_bytes(bytes)),
+        _ => Err(invalid_wkb_header()),
+    }
+}
+
+fn skip_wkb_coordinates(
+    wkb: &[u8],
+    offset: &mut usize,
+    point_count: usize,
+    dimensions: usize,
+) -> Result<(), ArrowError> {
+    let byte_count = point_count
+        .checked_mul(dimensions)
+        .and_then(|count| count.checked_mul(std::mem::size_of::<f64>()))
+        .ok_or_else(invalid_wkb_header)?;
+    skip_wkb_bytes(wkb, offset, byte_count)
+}
+
+fn skip_wkb_bytes(wkb: &[u8], offset: &mut usize, byte_count: usize) -> Result<(), ArrowError> {
+    let end = offset
+        .checked_add(byte_count)
+        .ok_or_else(invalid_wkb_header)?;
+    if end > wkb.len() {
+        return Err(invalid_wkb_header());
+    }
+    *offset = end;
+    Ok(())
+}
+
+fn invalid_wkb_header() -> ArrowError {
+    ArrowError::InvalidArgumentError("Invalid WKB geometry header or body".to_string())
+}
+
+fn unsupported_wkb_geometry_type(code: u32) -> ArrowError {
+    ArrowError::InvalidArgumentError(format!(
+        "Unsupported WKB geometry type code {code}; bounds are available only for the seven basic geometry types"
+    ))
 }
 
 /// Visit contiguous intervals for a given dimension within a [GeometryTrait]
@@ -377,6 +542,180 @@ mod test {
 
         assert_eq!(bounds.x(), (0, 2).into());
         assert_eq!(bounds.y(), (1, 3).into());
+
+        let wkt: Wkt = Wkt::from_str("GEOMETRYCOLLECTION (POINT (0 1), POINT (2 3))").unwrap();
+        let mut wkb = Vec::new();
+        wkb::writer::write_geometry(&mut wkb, &wkt, &Default::default()).unwrap();
+
+        let mut bounds = GeometryBounder::empty();
+        bounds.update_wkb(&wkb).unwrap();
+        assert_eq!(bounds.x(), (0, 2).into());
+        assert_eq!(bounds.y(), (1, 3).into());
+    }
+
+    #[test]
+    fn test_update_wkb_rejects_big_endian_triangle_type() {
+        let mut wkb = vec![0];
+        wkb.extend_from_slice(&1017_u32.to_be_bytes());
+        wkb.extend_from_slice(&1_u32.to_be_bytes());
+        wkb.extend_from_slice(&4_u32.to_be_bytes());
+        for coordinate in [
+            (10.0_f64, 20.0_f64, 30.0_f64),
+            (11.0, 20.0, 30.0),
+            (10.0, 21.0, 30.0),
+            (10.0, 20.0, 30.0),
+        ] {
+            for value in [coordinate.0, coordinate.1, coordinate.2] {
+                wkb.extend_from_slice(&value.to_be_bytes());
+            }
+        }
+
+        assert!(GeometryBounder::empty().update_wkb(&wkb).is_err());
+    }
+
+    #[test]
+    fn test_update_wkb_accepts_ewkb_with_z_m_and_srid_flags() {
+        let mut wkb = vec![1];
+        wkb.extend_from_slice(&0xe000_0001_u32.to_le_bytes());
+        wkb.extend_from_slice(&4326_u32.to_le_bytes());
+        for value in [1.0_f64, 2.0, 3.0, 4.0] {
+            wkb.extend_from_slice(&value.to_le_bytes());
+        }
+
+        let mut bounds = GeometryBounder::empty();
+        bounds.update_wkb(&wkb).unwrap();
+
+        assert_eq!(bounds.geometry_types(), vec![3001]);
+        assert_eq!(bounds.x(), (1, 1).into());
+        assert_eq!(bounds.y(), (2, 2).into());
+        assert_eq!(bounds.z(), (3, 3).into());
+        assert_eq!(bounds.m(), (4, 4).into());
+    }
+
+    #[test]
+    fn test_update_wkb_rejects_unsupported_iso_geometry_types() {
+        let polygon_z = || {
+            let mut wkb = Vec::new();
+            wkb.push(1);
+            wkb.extend_from_slice(&1003_u32.to_le_bytes());
+            wkb.extend_from_slice(&1_u32.to_le_bytes()); // exterior ring
+            wkb.extend_from_slice(&4_u32.to_le_bytes()); // coordinate count
+            for coordinate in [
+                (0.0_f64, 0.0_f64, 0.0_f64),
+                (1.0, 0.0, 0.0),
+                (0.0, 1.0, 0.0),
+                (0.0, 0.0, 0.0),
+            ] {
+                for value in [coordinate.0, coordinate.1, coordinate.2] {
+                    wkb.extend_from_slice(&value.to_le_bytes());
+                }
+            }
+            wkb
+        };
+
+        let mut polyhedral_surface_z = Vec::new();
+        polyhedral_surface_z.push(1);
+        polyhedral_surface_z.extend_from_slice(&1015_u32.to_le_bytes());
+        polyhedral_surface_z.extend_from_slice(&1_u32.to_le_bytes());
+        polyhedral_surface_z.extend_from_slice(&polygon_z());
+
+        let mut triangle_z = Vec::new();
+        triangle_z.push(1);
+        triangle_z.extend_from_slice(&1017_u32.to_le_bytes());
+        triangle_z.extend_from_slice(&1_u32.to_le_bytes()); // ring count
+        triangle_z.extend_from_slice(&4_u32.to_le_bytes()); // coordinate count
+        for coordinate in [
+            (10.0_f64, 20.0_f64, 30.0_f64),
+            (11.0, 20.0, 30.0),
+            (10.0, 21.0, 30.0),
+            (10.0, 20.0, 30.0),
+        ] {
+            for value in [coordinate.0, coordinate.1, coordinate.2] {
+                triangle_z.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+
+        let mut tin_z = Vec::new();
+        tin_z.push(1);
+        tin_z.extend_from_slice(&1016_u32.to_le_bytes());
+
+        for (name, wkb) in [
+            ("PolyhedralSurface Z", polyhedral_surface_z),
+            ("Triangle Z", triangle_z),
+            ("TIN Z", tin_z),
+        ] {
+            assert!(
+                GeometryBounder::empty().update_wkb(&wkb).is_err(),
+                "{name} must not be interpreted as one of the seven basic WKB types"
+            );
+        }
+    }
+
+    #[test]
+    fn test_update_wkb_rejects_extension_type_nested_in_collection() {
+        let mut triangle_z = vec![1];
+        triangle_z.extend_from_slice(&1017_u32.to_le_bytes());
+        triangle_z.extend_from_slice(&1_u32.to_le_bytes());
+        triangle_z.extend_from_slice(&4_u32.to_le_bytes());
+        for coordinate in [
+            (10.0_f64, 20.0_f64, 30.0_f64),
+            (11.0, 20.0, 30.0),
+            (10.0, 21.0, 30.0),
+            (10.0, 20.0, 30.0),
+        ] {
+            for value in [coordinate.0, coordinate.1, coordinate.2] {
+                triangle_z.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+
+        let mut collection_z = vec![1];
+        collection_z.extend_from_slice(&1007_u32.to_le_bytes());
+        collection_z.extend_from_slice(&1_u32.to_le_bytes());
+        collection_z.extend_from_slice(&triangle_z);
+
+        assert!(GeometryBounder::empty().update_wkb(&collection_z).is_err());
+    }
+
+    #[test]
+    fn test_update_wkb_rejects_multipoint_with_srid_child() {
+        let mut wkb = vec![1];
+        wkb.extend_from_slice(&4_u32.to_le_bytes()); // MultiPoint
+        wkb.extend_from_slice(&1_u32.to_le_bytes()); // one Point
+        wkb.push(1);
+        wkb.extend_from_slice(&0x2000_0001_u32.to_le_bytes()); // Point with SRID
+        wkb.extend_from_slice(&4326_u32.to_le_bytes());
+        wkb.extend_from_slice(&1.0_f64.to_le_bytes());
+        wkb.extend_from_slice(&2.0_f64.to_le_bytes());
+
+        assert!(GeometryBounder::empty().update_wkb(&wkb).is_err());
+    }
+
+    #[test]
+    fn test_update_wkb_rejects_wrong_multipoint_child_type() {
+        let mut wkb = vec![1];
+        wkb.extend_from_slice(&4_u32.to_le_bytes()); // MultiPoint
+        wkb.extend_from_slice(&1_u32.to_le_bytes()); // one member
+        wkb.push(1);
+        wkb.extend_from_slice(&2_u32.to_le_bytes()); // LineString, not Point
+        wkb.extend_from_slice(&1_u32.to_le_bytes());
+        wkb.extend_from_slice(&10.0_f64.to_le_bytes());
+        wkb.extend_from_slice(&20.0_f64.to_le_bytes());
+
+        assert!(GeometryBounder::empty().update_wkb(&wkb).is_err());
+    }
+
+    #[test]
+    fn test_update_wkb_rejects_z_multipoint_with_m_point_child() {
+        let mut wkb = vec![1];
+        wkb.extend_from_slice(&1004_u32.to_le_bytes()); // MultiPoint Z
+        wkb.extend_from_slice(&1_u32.to_le_bytes());
+        wkb.push(1);
+        wkb.extend_from_slice(&2001_u32.to_le_bytes()); // Point M
+        for value in [10.0_f64, 20.0, 30.0] {
+            wkb.extend_from_slice(&value.to_le_bytes());
+        }
+
+        assert!(GeometryBounder::empty().update_wkb(&wkb).is_err());
     }
 
     #[test]
