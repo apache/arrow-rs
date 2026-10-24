@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Edges","Hint"],"struct":["Metadata","WkbType"],"type":["ArrowResult"]};

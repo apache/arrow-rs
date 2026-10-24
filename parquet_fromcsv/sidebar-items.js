@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["CsvDialect","ParquetFromCsvError","RecordTerminator"],"fn":["compression_from_str","configure_reader_builder","configure_writer_properties","convert_csv_to_parquet","main","writer_version_from_str"],"struct":["Args"]};

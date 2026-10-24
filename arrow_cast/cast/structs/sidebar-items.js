@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["cast_struct_fields_by_name","cast_struct_fields_in_order","cast_struct_to_struct"]};

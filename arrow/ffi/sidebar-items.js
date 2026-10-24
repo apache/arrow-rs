@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["from_ffi","from_ffi_and_data_type","to_ffi"],"struct":["FFI_ArrowArray","FFI_ArrowSchema"]};

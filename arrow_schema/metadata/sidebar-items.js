@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["serde_impl"],"struct":["Metadata"],"type":["MetadataIter"]};

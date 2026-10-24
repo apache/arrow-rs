@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["lexsort_to_indices"],"mod":["catalogs","db_schemas","sql_info","table_types","tables","xdbc_info"],"struct":["GetCatalogsBuilder","GetDbSchemasBuilder","GetSqlInfoBuilder","GetTableTypesBuilder","GetTablesBuilder","GetXdbcTypeInfoBuilder","SqlInfoData","SqlInfoDataBuilder","XdbcTypeInfo","XdbcTypeInfoData","XdbcTypeInfoDataBuilder"]};

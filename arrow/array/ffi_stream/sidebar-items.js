@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"struct":["ArrayStreamReader","FFI_ArrowArrayStream","RecordBatchStreamReader"],"type":["ArrowArrayStreamReader"]};
