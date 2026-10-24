@@ -458,6 +458,32 @@ impl<'m, 'v> Variant<'m, 'v> {
         Ok(new_self)
     }
 
+    /// Encoded size, excluding trailing bytes.
+    pub(crate) fn encoded_len(&self) -> usize {
+        match self {
+            Self::Null | Self::BooleanTrue | Self::BooleanFalse => 1,
+            Self::Int8(_) => 2,
+            Self::Int16(_) => 3,
+            Self::Int32(_) | Self::Float(_) | Self::Date(_) => 5,
+            Self::Int64(_)
+            | Self::Double(_)
+            | Self::Time(_)
+            | Self::TimestampMicros(_)
+            | Self::TimestampNtzMicros(_)
+            | Self::TimestampNanos(_)
+            | Self::TimestampNtzNanos(_) => 9,
+            Self::Decimal4(_) => 6,
+            Self::Decimal8(_) => 10,
+            Self::Decimal16(_) => 18,
+            Self::Uuid(_) => 17,
+            Self::ShortString(value) => 1 + value.0.len(),
+            Self::String(value) => 5 + value.len(),
+            Self::Binary(value) => 5 + value.len(),
+            Self::Object(value) => value.value.len(),
+            Self::List(value) => value.value.len(),
+        }
+    }
+
     /// True if this variant instance has already been [validated].
     ///
     /// [validated]: Self#Validation
