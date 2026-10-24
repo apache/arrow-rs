@@ -149,6 +149,10 @@ impl FixedSizeListArray {
     /// - `values.len() == len * size as usize`
     /// - `nulls.len() == len` if `nulls` is `Some`
     /// - `field.data_type() == values.data_type()`
+    ///
+    /// # Panics
+    ///
+    /// With the `force_validate` feature enabled, panics if the arguments are invalid.
     pub unsafe fn new_unchecked(
         field: FieldRef,
         size: i32,

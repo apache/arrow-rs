@@ -210,6 +210,11 @@ impl StructArray {
     /// # Safety
     ///
     /// Safe if [`Self::new`] would not panic with the given arguments
+    ///
+    /// # Panics
+    ///
+    /// Panics if `arrays` is empty, as the length cannot be inferred.
+    /// With the `force_validate` feature enabled, also panics if the arguments are invalid.
     pub unsafe fn new_unchecked(
         fields: Fields,
         arrays: Vec<ArrayRef>,
@@ -235,6 +240,10 @@ impl StructArray {
     /// # Safety
     ///
     /// Safe if [`Self::new`] would not panic with the given arguments
+    ///
+    /// # Panics
+    ///
+    /// With the `force_validate` feature enabled, panics if the arguments are invalid.
     pub unsafe fn new_unchecked_with_length(
         fields: Fields,
         arrays: Vec<ArrayRef>,
