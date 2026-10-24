@@ -384,7 +384,13 @@ pub(crate) fn get_data_type(
             let fsb = field
                 .type_as_fixed_size_binary()
                 .ok_or_else(|| type_err("fixed size binary"))?;
-            DataType::FixedSizeBinary(fsb.byteWidth())
+            let byte_width = fsb.byteWidth();
+            if byte_width < 0 {
+                return Err(ArrowError::ParseError(format!(
+                    "FixedSizeBinary byte width must be non-negative, got {byte_width}"
+                )));
+            }
+            DataType::FixedSizeBinary(byte_width)
         }
         crate::Type::FloatingPoint => {
             let float = field
@@ -1149,6 +1155,22 @@ mod tests {
             b.add_type_(float.as_union_value());
             b.finish()
         };
+        assert_single_field_schema_is_err(fbb, field);
+    }
+
+    #[test]
+    fn try_fb_to_schema_negative_fixed_size_binary_width_is_err() {
+        let mut fbb = FlatBufferBuilder::new();
+        let fsb =
+            crate::FixedSizeBinary::create(&mut fbb, &crate::FixedSizeBinaryArgs { byteWidth: -1 });
+        let field = crate::Field::create(
+            &mut fbb,
+            &crate::FieldArgs {
+                type_type: crate::Type::FixedSizeBinary,
+                type_: Some(fsb.as_union_value()),
+                ..Default::default()
+            },
+        );
         assert_single_field_schema_is_err(fbb, field);
     }
 
