@@ -29,10 +29,16 @@ use arrow::datatypes::{
     Decimal256Type, DecimalType,
 };
 use arrow::error::{ArrowError, Result};
+use arrow::util::display::{
+    CompiledTimeFormat, FormatError, write_temporal_display, write_timestamp,
+};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use half::f16;
+use lexical_core::FormattedSize;
 use num_traits::NumCast;
 use parquet_variant::{Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16};
+use ryu::Float;
+use std::fmt::Write;
 
 /// Controls the conversions allowed when extracting a typed value from a variant.
 #[derive(Debug, Clone, Copy)]
@@ -720,6 +726,222 @@ pub(crate) fn variant_to_boolean(
     }
 }
 
+#[inline]
+fn write_float_to_string<F: Float>(f: F, out: &mut String) {
+    let mut buffer = ryu::Buffer::new();
+    out.push_str(buffer.format(f));
+}
+
+#[derive(Default)]
+pub(crate) struct CompiledCastFormats<'a> {
+    date: CompiledTimeFormat<'a>,
+    time: CompiledTimeFormat<'a>,
+    timestamp: CompiledTimeFormat<'a>,
+    timestamp_tz: CompiledTimeFormat<'a>,
+    null: &'a str,
+    quoted_strings: bool,
+}
+
+impl<'a> CompiledCastFormats<'a> {
+    pub(crate) fn new(options: &CastOptions<'a>) -> Self {
+        let options = &options.format_options;
+        Self {
+            date: CompiledTimeFormat::new(options.date_format()),
+            time: CompiledTimeFormat::new(options.time_format()),
+            timestamp: CompiledTimeFormat::new(options.timestamp_format()),
+            timestamp_tz: CompiledTimeFormat::new(options.timestamp_tz_format()),
+            null: options.null(),
+            quoted_strings: options.quoted_strings(),
+        }
+    }
+}
+
+fn write_lexical_to_string<N: lexical_core::ToLexical>(out: &mut String, n: N) {
+    // i64::FORMATTED_SIZE is the upper bound for all integer types we support
+    // (i8/i16/i32/i64). With power-of-two feature it's 128, otherwise 20.
+    // We can't use N::FORMATTED_SIZE in a generic function (generic_const_exprs).
+    let mut buf = [0u8; i64::FORMATTED_SIZE];
+    let written = lexical_core::write(n, &mut buf);
+    // Lexical core produces valid UTF-8
+    out.push_str(unsafe { std::str::from_utf8_unchecked(written) });
+}
+
+fn format_to_arrow_err(e: FormatError) -> ArrowError {
+    match e {
+        FormatError::Arrow(e) => e,
+        FormatError::Format(e) => ArrowError::CastError(format!("Format error: {e}")),
+    }
+}
+
+// Convert a variant into the output with the given format.
+pub(crate) fn write_variant_to_string(
+    variant: &Variant<'_, '_>,
+    formats: &CompiledCastFormats<'_>,
+    out: &mut String,
+) -> Result<bool> {
+    match variant {
+        Variant::Null => {
+            out.push_str(formats.null);
+        }
+        Variant::String(s) => {
+            if formats.quoted_strings {
+                write!(out, "{s:?}").expect("writing string to string should never fail");
+            } else {
+                out.push_str(s);
+            }
+        }
+        Variant::ShortString(s) => {
+            if formats.quoted_strings {
+                write!(out, "{:?}", s.as_str())
+                    .expect("writing string to string should never fail");
+            } else {
+                out.push_str(s);
+            }
+        }
+        Variant::BooleanTrue => {
+            out.push_str("true");
+        }
+        Variant::BooleanFalse => {
+            out.push_str("false");
+        }
+        Variant::Int8(i) => {
+            write_lexical_to_string(out, *i);
+        }
+        Variant::Int16(i) => {
+            write_lexical_to_string(out, *i);
+        }
+        Variant::Int32(i) => {
+            write_lexical_to_string(out, *i);
+        }
+        Variant::Int64(i) => {
+            write_lexical_to_string(out, *i);
+        }
+        Variant::Float(f) => {
+            write_float_to_string(*f, out);
+        }
+        Variant::Double(f) => {
+            write_float_to_string(*f, out);
+        }
+        Variant::Decimal4(d) => {
+            datatypes::write_decimal(out, d.integer(), d.scale() as _)
+                .expect("writing decimal to string should never fail");
+        }
+        Variant::Decimal8(d) => {
+            // would never fail because we write into a string here
+            datatypes::write_decimal(out, d.integer(), d.scale() as _)
+                .expect("writing decimal to string should never fail");
+        }
+        Variant::Decimal16(d) => {
+            // would never fail because we write into a string here
+            datatypes::write_decimal(out, d.integer(), d.scale() as _)
+                .expect("writing decimal to string should never fail");
+        }
+        Variant::Date(d) => {
+            write_temporal_display(out, d, &formats.date).map_err(format_to_arrow_err)?;
+        }
+        Variant::Time(t) => {
+            write_temporal_display(out, t, &formats.time).map_err(format_to_arrow_err)?;
+        }
+        Variant::TimestampMicros(t) => {
+            write_timestamp(
+                out,
+                t.naive_utc(),
+                "+00:00".parse().ok(),
+                &formats.timestamp_tz,
+            )
+            .map_err(format_to_arrow_err)?;
+        }
+        Variant::TimestampNtzMicros(t) => {
+            write_timestamp(out, *t, None, &formats.timestamp).map_err(format_to_arrow_err)?;
+        }
+        Variant::TimestampNanos(t) => {
+            write_timestamp(
+                out,
+                t.naive_utc(),
+                "+00:00".parse().ok(),
+                &formats.timestamp_tz,
+            )
+            .map_err(format_to_arrow_err)?;
+        }
+        Variant::TimestampNtzNanos(t) => {
+            write_timestamp(out, *t, None, &formats.timestamp).map_err(format_to_arrow_err)?;
+        }
+        Variant::Uuid(u) => {
+            write!(out, "{u}").expect("write to string should not fail");
+        }
+        Variant::Binary(v) => {
+            for byte in *v {
+                write!(out, "{byte:02x}").expect("write to string should never fail");
+            }
+        }
+        Variant::List(l) => {
+            write_list_to_string(l.iter(), formats, out)?;
+        }
+        Variant::Object(o) => {
+            write_map_to_string(o.iter(), formats, out)?;
+        }
+    }
+    Ok(true)
+}
+
+fn write_list_to_string<'m, 'v>(
+    mut iter: impl Iterator<Item = Variant<'m, 'v>>,
+    formats: &CompiledCastFormats,
+    out: &mut String,
+) -> Result<()> {
+    out.push('[');
+    if let Some(item) = iter.next()
+        && !write_variant_to_string(&item, formats, out)?
+    {
+        out.push_str(formats.null);
+    }
+    for item in iter {
+        out.push_str(", ");
+        if !write_variant_to_string(&item, formats, out)? {
+            out.push_str(formats.null);
+        }
+    }
+    out.push(']');
+    Ok(())
+}
+
+fn write_map_to_string<'m, 'v>(
+    mut iter: impl Iterator<Item = (&'m str, Variant<'m, 'v>)>,
+    formats: &CompiledCastFormats,
+    out: &mut String,
+) -> Result<()> {
+    out.push('{');
+
+    if let Some((key, value)) = iter.next() {
+        out.push_str(key);
+        out.push_str(": ");
+        if !write_variant_to_string(&value, formats, out)? {
+            out.push_str(formats.null);
+        }
+    }
+
+    for (key, value) in iter {
+        out.push_str(", ");
+        out.push_str(key);
+        out.push_str(": ");
+        if !write_variant_to_string(&value, formats, out)? {
+            out.push_str(formats.null);
+        }
+    }
+
+    out.push('}');
+    Ok(())
+}
+
+pub(crate) fn variant_to_binary<'v>(variant: &Variant<'_, 'v>) -> Option<&'v [u8]> {
+    match *variant {
+        Variant::Binary(d) => Some(d),
+        Variant::String(s) => Some(s.as_bytes()),
+        Variant::ShortString(s) => Some(s.as_str().as_bytes()),
+        _ => None,
+    }
+}
+
 /// Convert the value at a specific index in the given array into a `Variant`.
 macro_rules! non_generic_conversion_single_value {
     ($array:expr, $cast_fn:expr, $index:expr) => {{
@@ -778,3 +1000,552 @@ macro_rules! primitive_conversion_single_value {
     }};
 }
 pub(crate) use primitive_conversion_single_value;
+
+#[cfg(test)]
+mod tests {
+    use super::CompiledCastFormats;
+    use crate::type_conversion::write_variant_to_string;
+    use arrow::array::{
+        Array, ArrowPrimitiveType, AsArray, BooleanArray, Int32Builder, ListBuilder, MapBuilder,
+        PrimitiveArray, StringBuilder,
+    };
+    use arrow::compute::{CastOptions, cast, cast_with_options};
+    use arrow::datatypes::{
+        Date32Type, Float32Type, Float64Type, Time64MicrosecondType, TimestampMicrosecondType,
+        TimestampNanosecondType,
+    };
+    use arrow::util::display::FormatOptions;
+    use arrow_schema::{DataType, TimeUnit};
+    use chrono::{DateTime, NaiveDate, NaiveTime};
+    use parquet_variant::{Variant, VariantBuilder, VariantBuilderExt};
+    use std::iter::zip;
+
+    fn convert_variant_to_string(value: &Variant, formats: &CompiledCastFormats) -> Option<String> {
+        let mut ret = String::new();
+        match value {
+            Variant::Null => None,
+            _ => write_variant_to_string(value, formats, &mut ret)
+                .ok()?
+                .then_some(ret),
+        }
+    }
+
+    fn test_compatible_between_variant_and_arrow_cast<'a, AT, I, F>(
+        input: I,
+        variant_builder: F,
+        cast_option: &CastOptions<'_>,
+        arrow_data_type: Option<DataType>,
+    ) where
+        AT: ArrowPrimitiveType,
+        AT::Native: Copy,
+        I: IntoIterator<Item = AT::Native>,
+        F: Fn(AT::Native) -> Variant<'a, 'a>,
+    {
+        let values = input.into_iter().collect::<Vec<_>>();
+        let formats = CompiledCastFormats::new(cast_option);
+
+        let variant_as_string_array = values
+            .iter()
+            .copied()
+            .map(|v| {
+                let variant = variant_builder(v);
+                convert_variant_to_string(&variant, &formats)
+            })
+            .collect::<Vec<Option<String>>>();
+
+        let mut arrow_array = PrimitiveArray::<AT>::from_iter_values(values.iter().copied());
+
+        if let Some(data_type) = arrow_data_type {
+            arrow_array = arrow_array.with_data_type(data_type.clone())
+        }
+
+        let cast_strings = cast_with_options(&arrow_array, &DataType::Utf8, cast_option)
+            .unwrap()
+            .as_string::<i32>()
+            .iter()
+            .map(|value| value.map(str::to_owned))
+            .collect::<Vec<_>>();
+
+        assert_eq!(variant_as_string_array, cast_strings);
+    }
+
+    #[test]
+    fn test_compatible_cast_logic_with_cast_kernel() {
+        let default_cast_option = CastOptions::default();
+        // boolean -> string
+        let boolean_array = BooleanArray::from(vec![Some(true), Some(false)]);
+        let cast_array = cast(&boolean_array, &DataType::Utf8).unwrap();
+        let boolean_utf8_array = cast_array.as_string::<i32>();
+        let expected_array = vec![
+            convert_variant_to_string(&Variant::BooleanTrue, &CompiledCastFormats::default()),
+            convert_variant_to_string(&Variant::BooleanFalse, &CompiledCastFormats::default()),
+        ];
+        for (a, b) in zip(boolean_utf8_array, expected_array) {
+            assert_eq!(a.unwrap(), b.unwrap());
+        }
+
+        // float -> string
+        let raw_float_array: Vec<f32> = vec![1.23, 1e10, f32::NAN, f32::INFINITY];
+        test_compatible_between_variant_and_arrow_cast::<Float32Type, _, _>(
+            raw_float_array,
+            Variant::from,
+            &default_cast_option,
+            None,
+        );
+
+        // double -> string
+        let raw_float64_array = vec![1.23, 1e10, f64::NAN, f64::INFINITY];
+        test_compatible_between_variant_and_arrow_cast::<Float64Type, _, _>(
+            raw_float64_array,
+            Variant::from,
+            &default_cast_option,
+            None,
+        );
+
+        let custom_cast_option = CastOptions {
+            safe: false,
+            format_options: FormatOptions::new()
+                // custom format which different with the default format
+                .with_date_format(Some("%Y/%m/%d"))
+                .with_time_format(Some("%H-%M-%S%.f"))
+                .with_timestamp_format(Some("%Y/%m/%d %H:%M:%S%.f"))
+                .with_timestamp_tz_format(Some("%Y/%m/%d %H:%M:%S%.f%:z")),
+        };
+
+        // date -> string
+        let epoch_days = [-10, 0, 18628];
+        test_compatible_between_variant_and_arrow_cast::<Date32Type, _, _>(
+            epoch_days,
+            |d| Variant::Date(NaiveDate::from_epoch_days(d).unwrap()),
+            &default_cast_option,
+            None,
+        );
+
+        test_compatible_between_variant_and_arrow_cast::<Date32Type, _, _>(
+            epoch_days,
+            |d| Variant::Date(NaiveDate::from_epoch_days(d).unwrap()),
+            &custom_cast_option,
+            None,
+        );
+
+        // time -> string
+        let time_tuples = [12_300_000_000, 12_345_797_000, 12_345_456_000];
+        test_compatible_between_variant_and_arrow_cast::<Time64MicrosecondType, _, _>(
+            time_tuples,
+            |t| {
+                let sec = (t / 1_000_000) as u32;
+                let us = (t % 1_000_000) as u32 * 1000;
+                Variant::Time(NaiveTime::from_num_seconds_from_midnight_opt(sec, us).unwrap())
+            },
+            &default_cast_option,
+            None,
+        );
+
+        // time -> string with custom format
+        test_compatible_between_variant_and_arrow_cast::<Time64MicrosecondType, _, _>(
+            time_tuples,
+            |t| {
+                let sec = (t / 1_000_000) as u32;
+                let us = (t % 1_000_000) as u32 * 1000;
+                Variant::Time(NaiveTime::from_num_seconds_from_midnight_opt(sec, us).unwrap())
+            },
+            &custom_cast_option,
+            None,
+        );
+
+        // timestamp(micro) -> string
+        let micros = [-123456, 123456, 45678];
+        test_compatible_between_variant_and_arrow_cast::<TimestampMicrosecondType, _, _>(
+            micros,
+            |m| Variant::TimestampMicros(DateTime::from_timestamp_micros(m).unwrap()),
+            &default_cast_option,
+            Some(DataType::Timestamp(
+                TimeUnit::Microsecond,
+                Some("+00:00".into()),
+            )),
+        );
+
+        // timestamp(micro) -> string with custom format
+        test_compatible_between_variant_and_arrow_cast::<TimestampMicrosecondType, _, _>(
+            micros,
+            |m| Variant::TimestampMicros(DateTime::from_timestamp_micros(m).unwrap()),
+            &custom_cast_option,
+            Some(DataType::Timestamp(
+                TimeUnit::Microsecond,
+                Some("+00:00".into()),
+            )),
+        );
+
+        // timestamp(micro) ntz -> string
+        let micros_ntz = [-123456, 123456, 45678];
+        test_compatible_between_variant_and_arrow_cast::<TimestampMicrosecondType, _, _>(
+            micros_ntz,
+            |m| {
+                Variant::TimestampNtzMicros(DateTime::from_timestamp_micros(m).unwrap().naive_utc())
+            },
+            &default_cast_option,
+            None,
+        );
+
+        // timestamp(micro) ntz -> string with custom format
+        test_compatible_between_variant_and_arrow_cast::<TimestampMicrosecondType, _, _>(
+            micros_ntz,
+            |m| {
+                Variant::TimestampNtzMicros(DateTime::from_timestamp_micros(m).unwrap().naive_utc())
+            },
+            &default_cast_option,
+            None,
+        );
+
+        // timestamp(nano) -> string
+        let nanos = [-2_208_936_075_000_000_000, 0, 1_662_921_288_000_000_000];
+        test_compatible_between_variant_and_arrow_cast::<TimestampNanosecondType, _, _>(
+            nanos,
+            |n| Variant::TimestampNanos(DateTime::from_timestamp_nanos(n)),
+            &default_cast_option,
+            Some(DataType::Timestamp(
+                TimeUnit::Nanosecond,
+                Some("+00:00".into()),
+            )),
+        );
+
+        // timestamp(nano) -> string with custom format
+        test_compatible_between_variant_and_arrow_cast::<TimestampNanosecondType, _, _>(
+            nanos,
+            |n| Variant::TimestampNanos(DateTime::from_timestamp_nanos(n)),
+            &custom_cast_option,
+            Some(DataType::Timestamp(
+                TimeUnit::Nanosecond,
+                Some("+00:00".into()),
+            )),
+        );
+
+        // timestamp(nano) ntz -> string
+        let nanos_ntz = [-2_208_936_075_000_000_000i64, 0, 1_662_921_288_000_000_000];
+        test_compatible_between_variant_and_arrow_cast::<TimestampNanosecondType, _, _>(
+            nanos_ntz,
+            |n| Variant::TimestampNtzNanos(DateTime::from_timestamp_nanos(n).naive_utc()),
+            &default_cast_option,
+            None,
+        );
+
+        // timestamp(nano) ntz -> string with custom format
+        test_compatible_between_variant_and_arrow_cast::<TimestampNanosecondType, _, _>(
+            nanos_ntz,
+            |n| Variant::TimestampNtzNanos(DateTime::from_timestamp_nanos(n).naive_utc()),
+            &custom_cast_option,
+            None,
+        );
+    }
+
+    #[test]
+    fn test_compatible_cast_logic_for_list_without_nested_map() {
+        // list -> string without nested map
+        let mut variant_builder = VariantBuilder::new();
+        let mut list_builder = variant_builder.new_list();
+        list_builder.append_value(123);
+        list_builder.append_value(234);
+        list_builder.append_null();
+        list_builder.append_value(345);
+        list_builder.finish();
+        let (metadata, value) = variant_builder.finish();
+        let variant_list = Variant::new(&metadata, &value);
+        let variant_list_as_string =
+            convert_variant_to_string(&variant_list, &CompiledCastFormats::default());
+
+        let inner_builder = Int32Builder::new();
+        let mut builder = ListBuilder::new(inner_builder);
+        builder.values().append_value(123);
+        builder.values().append_value(234);
+        builder.values().append_null();
+        builder.values().append_value(345);
+        builder.append(true);
+        let list_arrow_array = builder.finish();
+        let cast_array = cast(&list_arrow_array, &DataType::Utf8).unwrap();
+        let arrow_list_cast_utf8_array = cast_array.as_string::<i32>();
+
+        assert_eq!(arrow_list_cast_utf8_array.len(), 1);
+        assert_eq!(
+            variant_list_as_string.unwrap(),
+            arrow_list_cast_utf8_array.value(0)
+        );
+    }
+
+    #[test]
+    fn test_compatible_cast_logic_for_nested_map_in_list() {
+        // list -> string with nested map
+        // value: [{"key1":1234, "key2": 5678}, {"key3": 91011, "key4": 121314}, null]
+        let mut variant_builder = VariantBuilder::new();
+        let mut list_builder = variant_builder.new_list();
+        // first object {"key1": 1234, "key2": 5678}
+        let mut object_builder = list_builder.new_object();
+        object_builder.insert("key1", 1234);
+        object_builder.insert("key2", 5678);
+        object_builder.finish();
+        // second object {"key3": 91011, "key4": 121314}
+        let mut object_builder2 = list_builder.new_object();
+        object_builder2.insert("key3", 91011);
+        object_builder2.insert("key4", 121314);
+        object_builder2.finish();
+        // null value
+        list_builder.append_null();
+        list_builder.finish();
+        let (metadata, value) = variant_builder.finish();
+        let variant_list = Variant::new(&metadata, &value);
+        let variant_list_include_nest_map_as_string =
+            convert_variant_to_string(&variant_list, &CompiledCastFormats::default());
+
+        let string_builder = StringBuilder::new();
+        let int_builder = Int32Builder::with_capacity(4);
+        // Construct `[{"key1": 1234, "key2": 5678}, {"key3": 91011, "key4": 121314}, null]`
+        let mut map_builder = MapBuilder::new(None, string_builder, int_builder);
+        // {"key1": 1234, "key2": 5678}
+        map_builder.keys().append_value("key1");
+        map_builder.values().append_value(1234);
+        map_builder.keys().append_value("key2");
+        map_builder.values().append_value(5678);
+        map_builder.append(true).unwrap();
+        // {"key3": 91011, "key4": 121314}
+        map_builder.keys().append_value("key3");
+        map_builder.values().append_value(91011);
+        map_builder.keys().append_value("key4");
+        map_builder.values().append_value(121314);
+        map_builder.append(true).unwrap();
+        // null
+        map_builder.append(false).unwrap();
+        let mut builder = ListBuilder::new(map_builder);
+        builder.append(true);
+        let list_arrow_array = builder.finish();
+        let cast_array = cast(&list_arrow_array, &DataType::Utf8).unwrap();
+        let arrow_list_include_nest_map_cast_utf8_array = cast_array.as_string::<i32>();
+
+        assert_eq!(arrow_list_include_nest_map_cast_utf8_array.len(), 1);
+        assert_eq!(
+            variant_list_include_nest_map_as_string.unwrap(),
+            arrow_list_include_nest_map_cast_utf8_array.value(0)
+        );
+    }
+
+    #[test]
+    fn test_compatible_cast_logic_for_deep_nested_map_in_list() {
+        // Value: [{outer: {inner1: 1234, inner2: 5678}}, null]
+        let mut variant_builder = VariantBuilder::new();
+        let mut list_builder = variant_builder.new_list();
+
+        let mut outer_object_builder = list_builder.new_object();
+        let mut inner_object_builder = outer_object_builder.new_object("outer");
+        inner_object_builder.insert("inner1", 1234);
+        inner_object_builder.insert("inner2", 5678);
+        inner_object_builder.finish();
+        outer_object_builder.finish();
+
+        list_builder.append_null();
+        list_builder.finish();
+
+        let (metadata, value) = variant_builder.finish();
+        let variant_list = Variant::new(&metadata, &value);
+        let variant_list_as_string =
+            convert_variant_to_string(&variant_list, &CompiledCastFormats::default());
+
+        let inner_map_builder =
+            MapBuilder::new(None, StringBuilder::new(), Int32Builder::with_capacity(2));
+        let mut outer_map_builder = MapBuilder::new(None, StringBuilder::new(), inner_map_builder);
+
+        outer_map_builder.keys().append_value("outer");
+        outer_map_builder.values().keys().append_value("inner1");
+        outer_map_builder.values().values().append_value(1234);
+        outer_map_builder.values().keys().append_value("inner2");
+        outer_map_builder.values().values().append_value(5678);
+        outer_map_builder.values().append(true).unwrap();
+        outer_map_builder.append(true).unwrap();
+
+        outer_map_builder.append(false).unwrap();
+
+        let mut list_arrow_builder = ListBuilder::new(outer_map_builder);
+        list_arrow_builder.append(true);
+        let list_arrow_array = list_arrow_builder.finish();
+
+        let cast_array = cast(&list_arrow_array, &DataType::Utf8).unwrap();
+        let arrow_list_cast_utf8_array = cast_array.as_string::<i32>();
+
+        assert_eq!(arrow_list_cast_utf8_array.len(), 1);
+        assert_eq!(
+            variant_list_as_string.unwrap(),
+            arrow_list_cast_utf8_array.value(0)
+        );
+    }
+
+    #[test]
+    fn test_compatible_cast_logic_for_nested_list_in_list() {
+        // Value: [[123, 234, null], [345, 456], null]
+        let mut variant_builder = VariantBuilder::new();
+        let mut outer_list_builder = variant_builder.new_list();
+
+        let mut first_inner_list = outer_list_builder.new_list();
+        first_inner_list.append_value(123);
+        first_inner_list.append_value(234);
+        first_inner_list.append_null();
+        first_inner_list.finish();
+
+        let mut second_inner_list = outer_list_builder.new_list();
+        second_inner_list.append_value(345);
+        second_inner_list.append_value(456);
+        second_inner_list.finish();
+
+        outer_list_builder.append_null();
+        outer_list_builder.finish();
+
+        let (metadata, value) = variant_builder.finish();
+        let variant_list = Variant::new(&metadata, &value);
+        let variant_list_as_string =
+            convert_variant_to_string(&variant_list, &CompiledCastFormats::default());
+
+        let inner_builder = Int32Builder::new();
+        let inner_list_builder = ListBuilder::new(inner_builder);
+        let mut outer_list_builder = ListBuilder::new(inner_list_builder);
+
+        outer_list_builder.values().values().append_value(123);
+        outer_list_builder.values().values().append_value(234);
+        outer_list_builder.values().values().append_null();
+        outer_list_builder.values().append(true);
+
+        outer_list_builder.values().values().append_value(345);
+        outer_list_builder.values().values().append_value(456);
+        outer_list_builder.values().append(true);
+
+        outer_list_builder.values().append(false);
+        outer_list_builder.append(true);
+
+        let nested_list_arrow_array = outer_list_builder.finish();
+        let cast_array = cast(&nested_list_arrow_array, &DataType::Utf8).unwrap();
+        let arrow_nested_list_cast_utf8_array = cast_array.as_string::<i32>();
+
+        assert_eq!(arrow_nested_list_cast_utf8_array.len(), 1);
+        assert_eq!(
+            variant_list_as_string.unwrap(),
+            arrow_nested_list_cast_utf8_array.value(0)
+        )
+    }
+
+    #[test]
+    fn test_compatible_cast_with_custom_null_format() {
+        let custom_cast_option = CastOptions {
+            safe: false,
+            format_options: FormatOptions::new().with_null("NULL"),
+        };
+        let custom_temporal_formats = CompiledCastFormats::new(&custom_cast_option);
+
+        // list -> string
+        let mut variant_builder = VariantBuilder::new();
+        let mut list_builder = variant_builder.new_list();
+        list_builder.append_value(123);
+        list_builder.append_value(234);
+        list_builder.append_null();
+        list_builder.append_value(345);
+        list_builder.finish();
+        let (metadata, value) = variant_builder.finish();
+        let variant_list = Variant::new(&metadata, &value);
+        let variant_list_as_string =
+            convert_variant_to_string(&variant_list, &custom_temporal_formats).unwrap();
+
+        let inner_builder = Int32Builder::new();
+        let mut builder = ListBuilder::new(inner_builder);
+        builder.values().append_value(123);
+        builder.values().append_value(234);
+        builder.values().append_null();
+        builder.values().append_value(345);
+        builder.append(true);
+        let list_arrow_array = builder.finish();
+        let cast_array =
+            cast_with_options(&list_arrow_array, &DataType::Utf8, &custom_cast_option).unwrap();
+        let arrow_list_cast_utf8_array = cast_array.as_string::<i32>();
+
+        assert_eq!(arrow_list_cast_utf8_array.len(), 1);
+        let expected_string = format!("[123, 234, {}, 345]", custom_temporal_formats.null);
+        assert_eq!(expected_string, variant_list_as_string.clone());
+        assert_eq!(variant_list_as_string, arrow_list_cast_utf8_array.value(0));
+    }
+
+    #[test]
+    fn test_variant_to_string_list_mixed_types() {
+        // Test mixed types list
+        let mut variant_builder = VariantBuilder::new();
+        let mut list_builder = variant_builder.new_list();
+        list_builder.append_value(42i32);
+        list_builder.append_value("text");
+        list_builder.append_value(true);
+        list_builder.finish();
+        let (metadata, value) = variant_builder.finish();
+        let variant_list = Variant::new(&metadata, &value);
+
+        let result =
+            convert_variant_to_string(&variant_list, &CompiledCastFormats::default()).unwrap();
+        assert_eq!(result, "[42, text, true]");
+    }
+
+    #[test]
+    fn test_variant_to_string_with_quoted_string_option() {
+        let quoted_string_flags = vec![true, false];
+        for flag in quoted_string_flags {
+            let custom_cast_option = CastOptions {
+                safe: false,
+                format_options: FormatOptions::new().with_quoted_strings(flag),
+            };
+            let custom_temporal_formats = CompiledCastFormats::new(&custom_cast_option);
+
+            // list -> string with quoted option
+            let mut variant_builder = VariantBuilder::new();
+            let mut list_builder = variant_builder.new_list();
+            list_builder.append_value("Hello, World");
+            list_builder.append_value("It's ok");
+            list_builder.append_value("\"Quoted\"");
+            list_builder.append_value("New\nLine");
+            list_builder.finish();
+            let (metadata, value) = variant_builder.finish();
+            let variant_string = Variant::new(&metadata, &value);
+            let variant_string_as_string =
+                convert_variant_to_string(&variant_string, &custom_temporal_formats).unwrap();
+
+            let inner_builder = StringBuilder::new();
+            let mut builder = ListBuilder::new(inner_builder);
+            builder.values().append_value("Hello, World");
+            builder.values().append_value("It's ok");
+            builder.values().append_value("\"Quoted\"");
+            builder.values().append_value("New\nLine");
+            builder.append(true);
+            let list_arrow_array = builder.finish();
+            let cast_array =
+                cast_with_options(&list_arrow_array, &DataType::Utf8, &custom_cast_option).unwrap();
+            let arrow_list_cast_utf8_array = cast_array.as_string::<i32>();
+            assert_eq!(1, arrow_list_cast_utf8_array.len());
+            assert_eq!(
+                variant_string_as_string,
+                arrow_list_cast_utf8_array.value(0)
+            );
+        }
+    }
+
+    #[test]
+    fn test_convert_binary_to_string() {
+        let mut builder = VariantBuilder::new();
+        let mut list_builder = builder.new_list();
+        list_builder.append_value(Variant::from(&b"ab"[..]));
+        list_builder.append_value(&[0xff, 0x00][..]);
+        list_builder.finish();
+        let (metadata, data) = builder.finish();
+        let variant_list = Variant::new(&metadata, &data);
+        let converted_str =
+            convert_variant_to_string(&variant_list, &CompiledCastFormats::default()).unwrap();
+
+        let inner_builder = arrow::array::BinaryBuilder::new();
+        let mut list_builder = ListBuilder::new(inner_builder);
+        list_builder.values().append_value(&b"ab"[..]);
+        list_builder.values().append_value(&[0xff, 0x00][..]);
+        list_builder.append(true);
+        let list_arrow_array = list_builder.finish();
+        let cast_array = cast(&list_arrow_array, &DataType::Utf8).unwrap();
+        let arrow_list_cast_utf8_array = cast_array.as_string::<i32>();
+        assert_eq!(1, arrow_list_cast_utf8_array.len());
+        assert_eq!(converted_str, arrow_list_cast_utf8_array.value(0));
+    }
+}

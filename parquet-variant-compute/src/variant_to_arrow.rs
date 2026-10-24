@@ -20,9 +20,9 @@ use crate::shred_variant::{
     make_variant_to_shredded_variant_arrow_row_builder,
 };
 use crate::type_conversion::{
-    PrimitiveFromVariant, ShredDecimalVariant, TimestampFromVariant, VariantCastMode,
-    shred_variant_to_unscaled_decimal, variant_cast_with_options, variant_to_boolean,
-    variant_to_unscaled_decimal,
+    CompiledCastFormats, PrimitiveFromVariant, ShredDecimalVariant, TimestampFromVariant,
+    VariantCastMode, shred_variant_to_unscaled_decimal, variant_cast_with_options,
+    variant_to_binary, variant_to_boolean, variant_to_unscaled_decimal, write_variant_to_string,
 };
 use crate::variant_array::ShreddedVariantFieldArray;
 use crate::{VariantArray, VariantValueArrayBuilder};
@@ -205,6 +205,52 @@ pub(crate) fn make_variant_to_arrow_row_builder<'a>(
     }
 
     Ok(builder)
+}
+
+pub(crate) struct VariantToBinaryArrowRowBuilder<'a, B: BinaryLikeArrayBuilder> {
+    builder: B,
+    cast_options: &'a CastOptions<'a>,
+    cast_mode: VariantCastMode,
+}
+
+impl<'a, B: BinaryLikeArrayBuilder> VariantToBinaryArrowRowBuilder<'a, B> {
+    pub fn new(
+        cast_options: &'a CastOptions<'a>,
+        capacity: usize,
+        cast_mode: VariantCastMode,
+    ) -> Self {
+        Self {
+            builder: B::with_capacity(capacity),
+            cast_options,
+            cast_mode,
+        }
+    }
+
+    fn append_null(&mut self) -> Result<()> {
+        self.builder.append_null();
+        Ok(())
+    }
+
+    fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
+        match variant_cast_with_options(value, self.cast_options, |v| match self.cast_mode {
+            VariantCastMode::Get => variant_to_binary(v),
+            VariantCastMode::Shred => v.as_u8_slice(),
+        }) {
+            Ok(Some(bytes)) => {
+                self.builder.append_value(bytes);
+                Ok(true)
+            }
+            Ok(None) => {
+                self.builder.append_null();
+                Ok(false)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    fn finish(mut self) -> Result<ArrayRef> {
+        Ok(self.builder.finish())
+    }
 }
 
 /// Builder for converting primitive variant values to Arrow arrays. It is used by both
@@ -593,13 +639,21 @@ pub(crate) fn make_primitive_variant_to_arrow_row_builder<'a>(
                     .to_string(),
             ));
         }
-        DataType::Binary => Binary(VariantToBinaryArrowRowBuilder::new(cast_options, capacity)),
-        DataType::LargeBinary => {
-            LargeBinary(VariantToBinaryArrowRowBuilder::new(cast_options, capacity))
-        }
-        DataType::BinaryView => {
-            BinaryView(VariantToBinaryArrowRowBuilder::new(cast_options, capacity))
-        }
+        DataType::Binary => Binary(VariantToBinaryArrowRowBuilder::new(
+            cast_options,
+            capacity,
+            cast_mode,
+        )),
+        DataType::LargeBinary => LargeBinary(VariantToBinaryArrowRowBuilder::new(
+            cast_options,
+            capacity,
+            cast_mode,
+        )),
+        DataType::BinaryView => BinaryView(VariantToBinaryArrowRowBuilder::new(
+            cast_options,
+            capacity,
+            cast_mode,
+        )),
         DataType::FixedSizeBinary(16) => {
             Uuid(VariantToUuidArrowRowBuilder::new(cast_options, capacity))
         }
@@ -608,11 +662,22 @@ pub(crate) fn make_primitive_variant_to_arrow_row_builder<'a>(
                 "DataType {data_type:?} not yet implemented"
             )));
         }
-        DataType::Utf8 => String(VariantToStringArrowBuilder::new(cast_options, capacity)),
-        DataType::LargeUtf8 => {
-            LargeString(VariantToStringArrowBuilder::new(cast_options, capacity))
-        }
-        DataType::Utf8View => StringView(VariantToStringArrowBuilder::new(cast_options, capacity)),
+
+        DataType::Utf8 => String(VariantToStringArrowBuilder::new(
+            cast_options,
+            capacity,
+            cast_mode,
+        )),
+        DataType::LargeUtf8 => LargeString(VariantToStringArrowBuilder::new(
+            cast_options,
+            capacity,
+            cast_mode,
+        )),
+        DataType::Utf8View => StringView(VariantToStringArrowBuilder::new(
+            cast_options,
+            capacity,
+            cast_mode,
+        )),
         DataType::List(_)
         | DataType::LargeList(_)
         | DataType::ListView(_)
@@ -1207,6 +1272,7 @@ impl VariantPathRowBuilder<'_> {
     }
 }
 
+// Define a builder for converting variant values into a primitive Arrow array.
 macro_rules! define_variant_to_primitive_builder {
     (struct $name:ident<$lifetime:lifetime $(, $generic:ident: $bound:path )?>
     |$array_param:ident $(, $field:ident: $field_type:ty)?| -> $builder_name:ident $(< $array_type:ty >)? { $init_expr: expr },
@@ -1216,7 +1282,7 @@ macro_rules! define_variant_to_primitive_builder {
         {
             builder: $builder_name $(<$array_type>)?,
             $($cast_mode: VariantCastMode,)?
-            cast_options: &$lifetime CastOptions<$lifetime>,
+            cast_options: &$lifetime CastOptions<$lifetime>
         }
 
         impl<$lifetime $(, $generic: $bound+ )?> $name<$lifetime $(, $generic )?> {
@@ -1276,12 +1342,79 @@ macro_rules! define_variant_to_primitive_builder {
     }
 }
 
-define_variant_to_primitive_builder!(
-    struct VariantToStringArrowBuilder<'a, B: StringLikeArrayBuilder>
-    |capacity| -> B { B::with_capacity(capacity) },
-    |value| value.as_string(),
-    type_name: B::type_name()
-);
+pub(crate) struct VariantToStringArrowBuilder<'a, B: StringLikeArrayBuilder> {
+    builder: B,
+    cast_options: &'a CastOptions<'a>,
+    formats: CompiledCastFormats<'a>,
+    cast_mode: VariantCastMode,
+    buffer: String,
+}
+
+impl<'a, B: StringLikeArrayBuilder> VariantToStringArrowBuilder<'a, B> {
+    fn new(cast_options: &'a CastOptions<'a>, capacity: usize, cast_mode: VariantCastMode) -> Self {
+        Self {
+            builder: B::with_capacity(capacity),
+            cast_options,
+            formats: CompiledCastFormats::new(cast_options),
+            cast_mode,
+            buffer: String::new(),
+        }
+    }
+
+    fn append_null(&mut self) -> Result<()> {
+        self.builder.append_null();
+        Ok(())
+    }
+
+    fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
+        let value = match value {
+            // short-circuit the common case of string-like variants to avoid the overhead of casting
+            Variant::String(value) => value,
+            Variant::ShortString(value) => value.as_str(),
+            // can't cast to string, so append null
+            Variant::Null | Variant::Object(_) => {
+                self.builder.append_null();
+                return Ok(false);
+            }
+            _ => return self.append_cast_value(value),
+        };
+
+        self.builder.append_value(value);
+        Ok(true)
+    }
+
+    fn append_cast_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
+        self.buffer.clear();
+        match variant_cast_with_options(value, self.cast_options, |value| {
+            match self.cast_mode {
+                VariantCastMode::Get => {
+                    write_variant_to_string(value, &self.formats, &mut self.buffer)
+                        .ok()
+                        .map(|_| self.buffer.as_str())
+                }
+                // for shred always return None, because we don't shred non-string values to strings.
+                VariantCastMode::Shred => None,
+            }
+        }) {
+            Ok(Some(value)) => {
+                self.builder.append_value(value);
+                Ok(true)
+            }
+            Ok(None) => {
+                self.builder.append_null();
+                Ok(false)
+            }
+            Err(_) => Err(ArrowError::CastError(format!(
+                "Failed to extract primitive of type {} from variant {value:?} at path VariantPath([])",
+                B::type_name()
+            ))),
+        }
+    }
+
+    fn finish(mut self) -> Result<ArrayRef> {
+        Ok(self.builder.finish())
+    }
+}
 
 define_variant_to_primitive_builder!(
     struct VariantToBooleanArrowRowBuilder<'a>
@@ -1311,13 +1444,6 @@ define_variant_to_primitive_builder!(
     },
     |value, cast_mode| T::from_variant(value, cast_mode),
     type_name: T::DATA_TYPE
-);
-
-define_variant_to_primitive_builder!(
-    struct VariantToBinaryArrowRowBuilder<'a, B: BinaryLikeArrayBuilder>
-    |capacity| -> B { B::with_capacity(capacity) },
-    |value| value.as_u8_slice(),
-    type_name: B::type_name()
 );
 
 /// Builder for converting variant values to arrow Decimal values
@@ -1767,6 +1893,7 @@ mod tests {
     use super::{
         make_primitive_variant_to_arrow_row_builder, make_typed_variant_to_arrow_row_builder,
     };
+    use crate::VariantArrayBuilder;
     use crate::type_conversion::VariantCastMode;
     use arrow::array::{
         Array, Decimal32Array, FixedSizeBinaryArray, Int32Array, ListArray, StructArray,
@@ -1774,7 +1901,9 @@ mod tests {
     use arrow::compute::CastOptions;
     use arrow::datatypes::{DataType, Field, Fields, UnionFields, UnionMode};
     use arrow::error::ArrowError;
-    use parquet_variant::{Variant, VariantDecimal4};
+    use arrow::util::display::FormatOptions;
+    use chrono::NaiveDate;
+    use parquet_variant::{Variant, VariantBuilderExt, VariantDecimal4};
     use std::sync::Arc;
     use uuid::Uuid;
 
@@ -1944,5 +2073,78 @@ mod tests {
         let struct_array = struct_builder.finish().unwrap();
         let struct_array = struct_array.as_any().downcast_ref::<StructArray>().unwrap();
         assert!(struct_array.is_null(0));
+    }
+
+    #[test]
+    fn test_cast_variant_null_to_string_with_null_format() {
+        let options = vec![
+            CastOptions {
+                safe: false,
+                format_options: FormatOptions::new().with_null("NULL"),
+            },
+            CastOptions::default(),
+        ];
+        for option in options {
+            let mut builder = make_typed_variant_to_arrow_row_builder(
+                &DataType::Utf8,
+                &option,
+                2,
+                VariantCastMode::Get,
+            )
+            .unwrap();
+
+            assert!(!builder.append_value(Variant::Null).unwrap());
+            assert!(builder.append_value(Variant::String("Hello")).unwrap());
+
+            let array = builder.finish().unwrap();
+            let string_array = array
+                .as_any()
+                .downcast_ref::<arrow::array::StringArray>()
+                .unwrap();
+            assert!(string_array.is_null(0));
+            assert_eq!(string_array.value(1), "Hello");
+        }
+    }
+
+    #[test]
+    fn test_incompatible_item_with_strict_mode() {
+        let option = CastOptions {
+            safe: false,
+            format_options: FormatOptions::new().with_date_format(Some("%Y-%m-%d %H")),
+        };
+        let mut builder = make_typed_variant_to_arrow_row_builder(
+            &DataType::Utf8,
+            &option,
+            2,
+            VariantCastMode::Get,
+        )
+        .unwrap();
+
+        let e = builder
+            .append_value(Variant::from(NaiveDate::from_epoch_days(12345).unwrap()))
+            .unwrap_err();
+        if let ArrowError::CastError(msg) = e {
+            assert!(
+                msg.contains("Failed to extract primitive of type arrow_array::builder::generic_bytes_builder::GenericByteBuilder<arrow_array::types::GenericStringType<i32>> from variant Date(2003-10-20)"),
+            "Got error message: [{msg:?}]")
+        } else {
+            panic!(
+                "Cast with strict mode for incompatible types should return ArrowError::CastError, got {e:?}"
+            );
+        }
+        let mut vab = VariantArrayBuilder::new(1);
+        let mut list_builder = vab.new_list();
+        list_builder.append_value(Variant::from(NaiveDate::from_epoch_days(12345).unwrap()));
+        list_builder.finish();
+        let array = vab.build();
+        let e2 = builder.append_value(array.value(0)).unwrap_err();
+        if let ArrowError::CastError(msg) = e2 {
+            assert!(msg.contains("Failed to extract primitive of type arrow_array::builder::generic_bytes_builder::GenericByteBuilder<arrow_array::types::GenericStringType<i32>> from variant [Date(2003-10-20)]"),
+            "Got error message: [{msg:?}]");
+        } else {
+            panic!(
+                "Cast with strict mode for incompatible types should return ArrowError::CastError, got {e2:?}"
+            );
+        }
     }
 }
