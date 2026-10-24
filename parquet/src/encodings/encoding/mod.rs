@@ -22,6 +22,9 @@ use std::{cmp, marker::PhantomData};
 use crate::basic::*;
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
+use crate::encodings::alp::{
+    ALP_DEFAULT_LOG_VECTOR_SIZE, ALP_MAX_LOG_VECTOR_SIZE, ALP_MIN_LOG_VECTOR_SIZE,
+};
 use crate::encodings::rle::RleEncoder;
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::ResolvedColumnProperties;
@@ -207,7 +210,12 @@ pub(crate) mod private {
             options: Option<&ResolvedColumnProperties>,
         ) -> Result<Box<dyn Encoder<T>>> {
             match encoding {
-                Encoding::ALP => Ok(Box::new(AlpEncoder::new())),
+                Encoding::ALP => Ok(Box::new(
+                    match options.and_then(|props| props.alp_encoder_options) {
+                        Some(alp_options) => AlpEncoder::new_with_options(alp_options),
+                        None => AlpEncoder::new(),
+                    },
+                )),
                 _ => get_encoder_default(descr, encoding, options),
             }
         }
@@ -224,7 +232,12 @@ pub(crate) mod private {
             options: Option<&ResolvedColumnProperties>,
         ) -> Result<Box<dyn Encoder<T>>> {
             match encoding {
-                Encoding::ALP => Ok(Box::new(AlpEncoder::new())),
+                Encoding::ALP => Ok(Box::new(
+                    match options.and_then(|props| props.alp_encoder_options) {
+                        Some(alp_options) => AlpEncoder::new_with_options(alp_options),
+                        None => AlpEncoder::new(),
+                    },
+                )),
                 _ => get_encoder_default(descr, encoding, options),
             }
         }
@@ -470,6 +483,54 @@ impl DeltaBinaryPackedEncoderOptions {
     /// Returns the number of mini blocks in each block.
     pub fn mini_blocks_per_block(&self) -> usize {
         self.mini_blocks_per_block
+    }
+}
+
+/// Options for the [Parquet ALP encoding].
+///
+/// ALP divides a column chunk into fixed-size vectors and picks encoding parameters for
+/// each one. A larger vector amortises the per-vector parameters over more values, while a
+/// smaller one lets those parameters track local changes in the data more closely.
+/// Benchmark representative data before changing the default.
+///
+/// The format permits a `log_vector_size` of 3 to 15 inclusive. The default is 10, the
+/// 1024-value vector recommended by the spec and used by the ALP paper.
+///
+/// [Parquet ALP encoding]: https://github.com/apache/parquet-format/blob/master/Encodings.md
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AlpEncoderOptions {
+    log_vector_size: u8,
+}
+
+impl AlpEncoderOptions {
+    /// Creates validated ALP encoder options.
+    pub fn try_new(log_vector_size: u8) -> Result<Self> {
+        if !(ALP_MIN_LOG_VECTOR_SIZE..=ALP_MAX_LOG_VECTOR_SIZE).contains(&log_vector_size) {
+            return Err(general_err!(
+                "ALP log_vector_size must be between {} and {}, got {log_vector_size}",
+                ALP_MIN_LOG_VECTOR_SIZE,
+                ALP_MAX_LOG_VECTOR_SIZE
+            ));
+        }
+        Ok(Self { log_vector_size })
+    }
+
+    /// Returns the base-2 logarithm of the number of values in each vector.
+    pub fn log_vector_size(&self) -> u8 {
+        self.log_vector_size
+    }
+
+    /// Returns the number of values in each vector.
+    pub fn vector_size(&self) -> usize {
+        1usize << self.log_vector_size
+    }
+}
+
+impl Default for AlpEncoderOptions {
+    fn default() -> Self {
+        Self {
+            log_vector_size: ALP_DEFAULT_LOG_VECTOR_SIZE,
+        }
     }
 }
 
@@ -1657,6 +1718,44 @@ mod tests {
         let data = encoder.flush_buffer()?;
         decoder.set_data(data, input.len())?;
         decoder.get(output)
+    }
+
+    /// The configured vector size must travel from `WriterProperties`, through
+    /// `get_encoder_with_properties`, into the encoded page header - which is what
+    /// lets the decoder read the page back without being configured itself.
+    #[test]
+    fn test_alp_encoder_options_reach_the_encoder() {
+        let desc = create_test_col_desc_ptr(-1, Type::DOUBLE);
+        let path = ColumnPath::from("t");
+        let values: Vec<f64> = (0..100).map(|i| i as f64 * 0.01).collect();
+
+        for (opts, expected_log_vector_size) in [
+            (None, 10u8),
+            (Some(AlpEncoderOptions::try_new(3).unwrap()), 3),
+            (Some(AlpEncoderOptions::try_new(13).unwrap()), 13),
+            (Some(AlpEncoderOptions::try_new(15).unwrap()), 15),
+        ] {
+            let mut builder = WriterProperties::builder();
+            if let Some(opts) = opts {
+                builder = builder.set_column_alp_encoder_options(path.clone(), opts);
+            }
+            let props = builder.build();
+
+            let mut encoder = get_encoder_with_properties::<DoubleType>(
+                Encoding::ALP,
+                &desc,
+                &props.resolve_column_properties(&path),
+            )
+            .unwrap();
+            encoder.put(&values).unwrap();
+            let page = encoder.flush_buffer().unwrap();
+
+            // log_vector_size is byte 2 of the ALP page header.
+            assert_eq!(
+                page[2], expected_log_vector_size,
+                "header did not carry the configured log_vector_size"
+            );
+        }
     }
 
     fn create_and_check_encoder<T: DataType>(
