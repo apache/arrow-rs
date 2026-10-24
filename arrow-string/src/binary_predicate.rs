@@ -56,7 +56,7 @@ impl<'a> BinaryPredicate<'a> {
             }),
             Self::StartsWith(v) => {
                 if let Some(view_array) = array.as_any().downcast_ref::<BinaryViewArray>() {
-                    let nulls = view_array.logical_nulls();
+                    let nulls = view_array.logical_nulls().map(|n| n.into_owned());
                     let values = BooleanBuffer::from(
                         view_array
                             .prefix_bytes_iter(v.len())
@@ -72,7 +72,7 @@ impl<'a> BinaryPredicate<'a> {
             }
             Self::EndsWith(v) => {
                 if let Some(view_array) = array.as_any().downcast_ref::<BinaryViewArray>() {
-                    let nulls = view_array.logical_nulls();
+                    let nulls = view_array.logical_nulls().map(|n| n.into_owned());
                     let values = BooleanBuffer::from(
                         view_array
                             .suffix_bytes_iter(v.len())

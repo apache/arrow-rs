@@ -24,6 +24,7 @@ use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, OffsetBuffer, ScalarBuff
 use arrow_data::ArrayData;
 use arrow_schema::{DataType, IntervalUnit, TimeUnit};
 use std::any::Any;
+use std::borrow::Cow;
 use std::sync::Arc;
 
 pub use binary_array::*;
@@ -228,6 +229,9 @@ pub unsafe trait Array: std::fmt::Debug + Send + Sync {
     /// Returns a potentially computed [`NullBuffer`] that represents the logical
     /// null values of this array, if any.
     ///
+    /// This returns a borrowed null buffer when possible, and an owned null
+    /// buffer when the logical nulls must be computed.
+    ///
     /// Logical nulls represent the values that are null in the array,
     /// regardless of the underlying physical arrow representation.
     ///
@@ -243,8 +247,8 @@ pub unsafe trait Array: std::fmt::Debug + Send + Sync {
     /// In these cases a logical [`NullBuffer`] will be computed, encoding the
     /// logical nullability of these arrays, beyond what is encoded in
     /// [`Array::nulls`]
-    fn logical_nulls(&self) -> Option<NullBuffer> {
-        self.nulls().cloned()
+    fn logical_nulls(&self) -> Option<Cow<'_, NullBuffer>> {
+        self.nulls().map(Cow::Borrowed)
     }
 
     /// Returns whether the element at `index` is null according to [`Array::nulls`]
@@ -492,7 +496,7 @@ unsafe impl Array for ArrayRef {
         self.as_ref().nulls()
     }
 
-    fn logical_nulls(&self) -> Option<NullBuffer> {
+    fn logical_nulls(&self) -> Option<Cow<'_, NullBuffer>> {
         self.as_ref().logical_nulls()
     }
 
@@ -567,7 +571,7 @@ unsafe impl<T: Array> Array for &T {
         T::nulls(self)
     }
 
-    fn logical_nulls(&self) -> Option<NullBuffer> {
+    fn logical_nulls(&self) -> Option<Cow<'_, NullBuffer>> {
         T::logical_nulls(self)
     }
 
@@ -1442,6 +1446,15 @@ mod tests {
         let arr: ArrayRef = Arc::new(arr);
         assert!(compute_my_thing(&arr));
         assert!(compute_my_thing(arr.as_ref()));
+    }
+
+    #[test]
+    fn test_logical_nulls_ownership() {
+        let array = Int32Array::from(vec![Some(1), None]);
+        assert!(matches!(array.logical_nulls(), Some(Cow::Borrowed(_))));
+
+        let array = NullArray::new(2);
+        assert!(matches!(array.logical_nulls(), Some(Cow::Owned(_))));
     }
 
     #[test]

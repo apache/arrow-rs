@@ -217,7 +217,7 @@ impl LevelInfoBuilder {
         {
             Ok(Self::Required(
                 Box::new(builder),
-                nulls,
+                nulls.into_owned(),
                 field.name().clone(),
             ))
         } else if !field.is_nullable()
@@ -227,7 +227,7 @@ impl LevelInfoBuilder {
         {
             Ok(Self::Required(
                 Box::new(builder),
-                nulls,
+                nulls.into_owned(),
                 field.name().clone(),
             ))
         } else {
@@ -1247,7 +1247,7 @@ impl ArrayLevels {
             false => ctx.def_level,
         };
 
-        let logical_nulls = array.logical_nulls();
+        let logical_nulls = array.logical_nulls().map(|n| n.into_owned());
 
         Self {
             def_levels: LevelData::new(max_def_level != 0),
@@ -1298,7 +1298,7 @@ impl ArrayLevels {
         let non_null_indices = nni.iter().map(|&idx| idx - start).collect();
         // Slice the array to the computed range.
         let array = self.array.slice(start, end - start);
-        let logical_nulls = array.logical_nulls();
+        let logical_nulls = array.logical_nulls().map(|n| n.into_owned());
 
         Self {
             def_levels,
@@ -1424,7 +1424,7 @@ mod tests {
         let levels = calculate_array_levels(&array, &field).unwrap();
         assert_eq!(levels.len(), 1);
 
-        let logical_nulls = array.logical_nulls();
+        let logical_nulls = array.logical_nulls().map(|n| n.into_owned());
         let expected_levels = ArrayLevels {
             def_levels: LevelData::Materialized(vec![1, 0, 1, 1, 0]),
             rep_levels: LevelData::Absent,
@@ -1767,7 +1767,7 @@ mod tests {
         let levels = calculate_array_levels(&a_array, &a_field).unwrap();
         assert_eq!(levels.len(), 1);
 
-        let logical_nulls = leaf.logical_nulls();
+        let logical_nulls = leaf.logical_nulls().map(|n| n.into_owned());
         let expected_levels = ArrayLevels {
             def_levels: LevelData::Materialized(vec![3, 2, 3, 1, 0, 3]),
             rep_levels: LevelData::Absent,
@@ -1918,7 +1918,7 @@ mod tests {
         // test "b" levels
         let list_level = levels.get(1).unwrap();
 
-        let b_logical_nulls = b.logical_nulls();
+        let b_logical_nulls = b.logical_nulls().map(|n| n.into_owned());
         let expected_level = ArrayLevels {
             def_levels: LevelData::Materialized(vec![1, 0, 0, 1, 1]),
             rep_levels: LevelData::Absent,
@@ -1934,7 +1934,7 @@ mod tests {
         // test "d" levels
         let list_level = levels.get(2).unwrap();
 
-        let d_logical_nulls = d.logical_nulls();
+        let d_logical_nulls = d.logical_nulls().map(|n| n.into_owned());
         let expected_level = ArrayLevels {
             def_levels: LevelData::Materialized(vec![1, 1, 1, 2, 1]),
             rep_levels: LevelData::Absent,
@@ -1950,7 +1950,7 @@ mod tests {
         // test "f" levels
         let list_level = levels.get(3).unwrap();
 
-        let f_logical_nulls = f.logical_nulls();
+        let f_logical_nulls = f.logical_nulls().map(|n| n.into_owned());
         let expected_level = ArrayLevels {
             def_levels: LevelData::Materialized(vec![3, 2, 3, 2, 3]),
             rep_levels: LevelData::Absent,
@@ -2059,7 +2059,7 @@ mod tests {
         assert_eq!(levels.len(), 2);
 
         let map = batch.column(0).as_map();
-        let map_keys_logical_nulls = map.keys().logical_nulls();
+        let map_keys_logical_nulls = map.keys().logical_nulls().map(|n| n.into_owned());
 
         // test key levels
         let list_level = &levels[0];
@@ -2078,7 +2078,7 @@ mod tests {
 
         // test values levels
         let list_level = levels.get(1).unwrap();
-        let map_values_logical_nulls = map.values().logical_nulls();
+        let map_values_logical_nulls = map.values().logical_nulls().map(|n| n.into_owned());
 
         let expected_level = ArrayLevels {
             def_levels: LevelData::Materialized(vec![2, 2, 2, 1, 2, 1, 2]),
@@ -2167,7 +2167,7 @@ mod tests {
         let levels = calculate_array_levels(rb.column(0), rb.schema().field(0)).unwrap();
         let list_level = &levels[0];
 
-        let logical_nulls = values.logical_nulls();
+        let logical_nulls = values.logical_nulls().map(|n| n.into_owned());
         let expected_level = ArrayLevels {
             def_levels: LevelData::Materialized(vec![4, 1, 0, 2, 2, 3, 4]),
             rep_levels: LevelData::Materialized(vec![0, 0, 0, 0, 1, 0, 0]),
@@ -2210,7 +2210,7 @@ mod tests {
 
         assert_eq!(levels.len(), 1);
 
-        let logical_nulls = values.logical_nulls();
+        let logical_nulls = values.logical_nulls().map(|n| n.into_owned());
         let expected_level = ArrayLevels {
             def_levels: LevelData::Materialized(vec![4, 4, 3, 2, 0, 4, 4, 0, 1]),
             rep_levels: LevelData::Materialized(vec![0, 1, 0, 0, 0, 0, 1, 0, 0]),
@@ -2298,7 +2298,7 @@ mod tests {
 
         assert_eq!(levels.len(), 2);
 
-        let a1_logical_nulls = a1_values.logical_nulls();
+        let a1_logical_nulls = a1_values.logical_nulls().map(|n| n.into_owned());
         let expected_level = ArrayLevels {
             def_levels: LevelData::Materialized(vec![0, 0, 1, 6, 5, 2, 3, 1]),
             rep_levels: LevelData::Materialized(vec![0, 0, 0, 0, 2, 0, 1, 0]),
@@ -2312,7 +2312,7 @@ mod tests {
 
         assert_eq!(&levels[0], &expected_level);
 
-        let a2_logical_nulls = a2_values.logical_nulls();
+        let a2_logical_nulls = a2_values.logical_nulls().map(|n| n.into_owned());
         let expected_level = ArrayLevels {
             def_levels: LevelData::Materialized(vec![0, 0, 1, 3, 2, 4, 1]),
             rep_levels: LevelData::Materialized(vec![0, 0, 0, 0, 0, 1, 0]),
@@ -2353,7 +2353,7 @@ mod tests {
 
         let list_level = &levels[0];
 
-        let logical_nulls = values.logical_nulls();
+        let logical_nulls = values.logical_nulls().map(|n| n.into_owned());
         let expected_level = ArrayLevels {
             def_levels: LevelData::Materialized(vec![0, 0, 3, 3]),
             rep_levels: LevelData::Materialized(vec![0, 0, 0, 1]),
@@ -2506,7 +2506,7 @@ mod tests {
         let b_levels = &levels[1];
 
         // [[{a: 1}, null], null, [null, null], [{a: null}, {a: 2}]]
-        let values_a_logical_nulls = values_a.logical_nulls();
+        let values_a_logical_nulls = values_a.logical_nulls().map(|n| n.into_owned());
         let expected_a = ArrayLevels {
             def_levels: LevelData::Materialized(vec![4, 2, 0, 2, 2, 3, 4]),
             rep_levels: LevelData::Materialized(vec![0, 1, 0, 0, 1, 0, 1]),
@@ -2518,7 +2518,7 @@ mod tests {
             validation_error: None,
         };
         // [[{b: 2}, null], null, [null, null], [{b: 3}, {b: 4}]]
-        let values_b_logical_nulls = values_b.logical_nulls();
+        let values_b_logical_nulls = values_b.logical_nulls().map(|n| n.into_owned());
         let expected_b = ArrayLevels {
             def_levels: LevelData::Materialized(vec![3, 2, 0, 2, 2, 3, 3]),
             rep_levels: LevelData::Materialized(vec![0, 1, 0, 0, 1, 0, 1]),
@@ -2552,7 +2552,7 @@ mod tests {
 
         let list_level = &levels[0];
 
-        let logical_nulls = values.logical_nulls();
+        let logical_nulls = values.logical_nulls().map(|n| n.into_owned());
         let expected_level = ArrayLevels {
             def_levels: LevelData::Materialized(vec![1, 0, 1]),
             rep_levels: LevelData::Materialized(vec![0, 0, 0]),
@@ -2590,7 +2590,7 @@ mod tests {
         builder.write(0..4);
         let levels = builder.finish();
 
-        let logical_nulls = values.logical_nulls();
+        let logical_nulls = values.logical_nulls().map(|n| n.into_owned());
         let expected_level = ArrayLevels {
             def_levels: LevelData::Materialized(vec![5, 4, 5, 2, 5, 3, 5, 5, 4, 4, 0]),
             rep_levels: LevelData::Materialized(vec![0, 2, 2, 1, 0, 1, 0, 2, 1, 2, 0]),
@@ -2624,7 +2624,7 @@ mod tests {
         builder.write(0..4);
         let levels = builder.finish();
 
-        let logical_nulls = dict.logical_nulls();
+        let logical_nulls = dict.logical_nulls().map(|n| n.into_owned());
         let expected_level = ArrayLevels {
             def_levels: LevelData::Materialized(vec![0, 0, 1, 1]),
             rep_levels: LevelData::Absent,
@@ -2665,7 +2665,7 @@ mod tests {
         // value_offset=2, num_values=3 → non_null_indices[2..5] = [2,3,4].
         // Array is sliced (no def_levels → write_batch_internal uses values.len()).
         let array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6]));
-        let logical_nulls = array.logical_nulls();
+        let logical_nulls = array.logical_nulls().map(|n| n.into_owned());
         let levels = ArrayLevels {
             def_levels: LevelData::Absent,
             rep_levels: LevelData::Absent,
@@ -2700,7 +2700,7 @@ mod tests {
             Some(5),
             Some(6),
         ]));
-        let logical_nulls = array.logical_nulls();
+        let logical_nulls = array.logical_nulls().map(|n| n.into_owned());
         let levels = ArrayLevels {
             def_levels: LevelData::Materialized(vec![1, 0, 1, 0, 1, 1]),
             rep_levels: LevelData::Absent,
@@ -2755,7 +2755,7 @@ mod tests {
             Some(4), // 8: row 4
             Some(5), // 9: row 4
         ]));
-        let logical_nulls = array.logical_nulls();
+        let logical_nulls = array.logical_nulls().map(|n| n.into_owned());
         let levels = ArrayLevels {
             def_levels: LevelData::Materialized(vec![3, 0, 3, 2, 0, 3, 3]),
             rep_levels: LevelData::Materialized(vec![0, 0, 0, 1, 0, 0, 1]),
@@ -2802,7 +2802,7 @@ mod tests {
     fn test_slice_for_chunk_all_null() {
         // All-null chunk: num_values=0 → empty nni slice → zero-length array.
         let array: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, None, Some(4)]));
-        let logical_nulls = array.logical_nulls();
+        let logical_nulls = array.logical_nulls().map(|n| n.into_owned());
         let levels = ArrayLevels {
             def_levels: LevelData::Materialized(vec![1, 0, 0, 1]),
             rep_levels: LevelData::Absent,
@@ -2841,7 +2841,7 @@ mod tests {
         let levels = calculate_array_levels(&array, &field).unwrap();
         assert_eq!(levels.len(), 1);
 
-        let logical_nulls = values.logical_nulls();
+        let logical_nulls = values.logical_nulls().map(|n| n.into_owned());
         let expected = ArrayLevels {
             def_levels: LevelData::Uniform { value: 0, count: 4 },
             rep_levels: LevelData::Uniform { value: 0, count: 4 },
@@ -2871,7 +2871,7 @@ mod tests {
         let levels = calculate_array_levels(&array, &field).unwrap();
         assert_eq!(levels.len(), 1);
 
-        let logical_nulls = values.logical_nulls();
+        let logical_nulls = values.logical_nulls().map(|n| n.into_owned());
         let expected = ArrayLevels {
             def_levels: LevelData::Uniform { value: 0, count: 3 },
             rep_levels: LevelData::Uniform { value: 0, count: 3 },

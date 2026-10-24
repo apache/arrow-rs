@@ -122,7 +122,7 @@ where
         return Ok(PrimitiveArray::from(ArrayData::new_empty(&O::DATA_TYPE)));
     }
 
-    let nulls = NullBuffer::union(a.logical_nulls().as_ref(), b.logical_nulls().as_ref());
+    let nulls = NullBuffer::union(a.logical_nulls().as_deref(), b.logical_nulls().as_deref());
 
     let values = a
         .values()
@@ -231,7 +231,10 @@ where
     let array = builder.finish();
 
     // The builder has the null buffer from `a`, it is not changed.
-    let nulls = NullBuffer::union(array.logical_nulls().as_ref(), b.logical_nulls().as_ref());
+    let nulls = NullBuffer::union(
+        array.logical_nulls().as_deref(),
+        b.logical_nulls().as_deref(),
+    );
 
     let array_builder = array.into_data().into_builder().nulls(nulls);
 
@@ -277,7 +280,8 @@ where
     if !a.is_nullable() && !b.is_nullable() {
         try_binary_no_nulls(len, a, b, op)
     } else {
-        let Some(nulls) = NullBuffer::union(a.logical_nulls().as_ref(), b.logical_nulls().as_ref())
+        let Some(nulls) =
+            NullBuffer::union(a.logical_nulls().as_deref(), b.logical_nulls().as_deref())
         else {
             return try_binary_no_nulls(len, a, b, op);
         };
@@ -337,7 +341,7 @@ where
         try_binary_no_nulls_mut(len, a, b, op)
     } else {
         let Some(nulls) =
-            create_union_null_buffer(a.logical_nulls().as_ref(), b.logical_nulls().as_ref())
+            create_union_null_buffer(a.logical_nulls().as_deref(), b.logical_nulls().as_deref())
         else {
             return try_binary_no_nulls_mut(len, a, b, op);
         };

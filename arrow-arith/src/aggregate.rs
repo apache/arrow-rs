@@ -458,7 +458,7 @@ where
     F: Fn(&T, &T) -> bool,
 {
     let nulls = array.logical_nulls();
-    let null_count = nulls.as_ref().map_or(0, NullBuffer::null_count);
+    let null_count = nulls.as_deref().map_or(0, NullBuffer::null_count);
     if null_count == array.len() {
         None
     } else if null_count == 0 {

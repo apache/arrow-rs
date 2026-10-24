@@ -29,6 +29,7 @@ use arrow_buffer::{ArrowNativeType, BooleanBuffer, BooleanBufferBuilder, ScalarB
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
+use std::borrow::Cow;
 use std::sync::Arc;
 
 /// A [`DictionaryArray`] indexed by `i8`
@@ -745,9 +746,9 @@ unsafe impl<T: ArrowDictionaryKeyType> Array for DictionaryArray<T> {
         self.keys.nulls()
     }
 
-    fn logical_nulls(&self) -> Option<NullBuffer> {
+    fn logical_nulls(&self) -> Option<Cow<'_, NullBuffer>> {
         match self.values.logical_nulls() {
-            None => self.nulls().cloned(),
+            None => self.nulls().map(Cow::Borrowed),
             Some(value_nulls) => {
                 let mut builder = BooleanBufferBuilder::new(self.len());
                 match self.keys.nulls() {
@@ -761,7 +762,7 @@ unsafe impl<T: ArrowDictionaryKeyType> Array for DictionaryArray<T> {
                         builder.set_bit(idx, false);
                     }
                 }
-                Some(builder.finish().into())
+                Some(Cow::Owned(builder.finish().into()))
             }
         }
     }
@@ -905,7 +906,7 @@ unsafe impl<K: ArrowDictionaryKeyType, V: Sync> Array for TypedDictionaryArray<'
         self.dictionary.nulls()
     }
 
-    fn logical_nulls(&self) -> Option<NullBuffer> {
+    fn logical_nulls(&self) -> Option<Cow<'_, NullBuffer>> {
         self.dictionary.logical_nulls()
     }
 
