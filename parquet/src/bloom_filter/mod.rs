@@ -556,6 +556,14 @@ impl Sbbf {
     }
 
     /// Check if an [AsBytes] value is probably present or definitely absent in the filter
+    ///
+    /// `value` must have the Parquet physical type of the column. To check a
+    /// filter written by [`ArrowWriter`] with Arrow values, which may have been
+    /// converted to a different type before they were written, use
+    /// [`ArrowSbbf`].
+    ///
+    /// [`ArrowWriter`]: crate::arrow::ArrowWriter
+    /// [`ArrowSbbf`]: crate::arrow::bloom_filter::ArrowSbbf
     pub fn check<T: AsBytes + ?Sized>(&self, value: &T) -> bool {
         self.check_hash(hash_as_bytes(value))
     }

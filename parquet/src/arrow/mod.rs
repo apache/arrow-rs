@@ -191,6 +191,7 @@ mod array_reader;
 pub(crate) use array_reader::ByteArrayDecoderPlain;
 pub mod arrow_reader;
 pub mod arrow_writer;
+pub mod bloom_filter;
 mod buffer;
 pub(crate) use buffer::offset_buffer::OffsetBuffer;
 mod decoder;
