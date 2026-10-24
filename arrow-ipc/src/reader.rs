@@ -73,16 +73,17 @@ fn read_buffer(
     }
 }
 
-/// Like [`Buffer::slice_with_length`], but returns an error instead of panicking
-/// if the range is out of bounds
+/// Slices `buffer` with [`Buffer::checked_slice_with_length`], returning an
+/// error if the range is out of bounds
 fn slice_buffer(buffer: &Buffer, offset: usize, length: usize) -> Result<Buffer, ArrowError> {
-    if offset.saturating_add(length) > buffer.len() {
-        return Err(ArrowError::IpcError(format!(
-            "Buffer slice out of bounds: offset {offset} length {length} buffer length {}",
-            buffer.len()
-        )));
-    }
-    Ok(buffer.slice_with_length(offset, length))
+    buffer
+        .checked_slice_with_length(offset, length)
+        .ok_or_else(|| {
+            ArrowError::IpcError(format!(
+                "Buffer slice out of bounds: offset {offset} length {length} buffer length {}",
+                buffer.len()
+            ))
+        })
 }
 
 impl RecordBatchDecoder<'_> {
