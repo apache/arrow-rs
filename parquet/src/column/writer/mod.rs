@@ -1258,8 +1258,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         page_variable_length_bytes: Option<i64>,
     ) {
         // update the column index
+        // `num_page_nulls` counts levels, not rows, so compare it with the number of levels:
+        // with repetition a page can hold as many nulls as rows and still have values.
         let null_page =
-            (self.page_metrics.num_buffered_rows as u64) == self.page_metrics.num_page_nulls;
+            (self.page_metrics.num_buffered_values as u64) == self.page_metrics.num_page_nulls;
         // a page contains only null values,
         // and writers have to set the corresponding entries in min_values and max_values to byte[0]
         if null_page && self.column_index_builder.valid() {
@@ -4352,6 +4354,50 @@ mod tests {
         // definition_level_histogram should be present and should be 0:4, 1:0
         assert!(col_idx.definition_level_histogram(0).is_some());
         assert_eq!(col_idx.definition_level_histogram(0).unwrap(), &[4, 0]);
+    }
+
+    #[test]
+    fn test_column_index_repeated_page_with_values_not_null() {
+        // four lists of [null, 7]: as many null levels as rows, but the page has values
+        let page_writer = get_test_page_writer();
+        let props = Default::default();
+        let mut writer = get_test_column_writer::<Int32Type>(page_writer, 2, 1, props);
+        writer
+            .write_batch(
+                &[7, 7, 7, 7],
+                Some(&[1, 2, 1, 2, 1, 2, 1, 2]),
+                Some(&[0, 1, 0, 1, 0, 1, 0, 1]),
+            )
+            .unwrap();
+
+        let r = writer.close().unwrap();
+        let ColumnIndexMetaData::INT32(col_idx) = r.column_index.unwrap() else {
+            panic!("wrong stats type")
+        };
+        assert!(!col_idx.is_null_page(0));
+        assert_eq!(col_idx.min_value(0), Some(&7));
+        assert_eq!(col_idx.max_value(0), Some(&7));
+        assert_eq!(col_idx.null_count(0), Some(4));
+    }
+
+    #[test]
+    fn test_column_index_repeated_page_of_nulls() {
+        // two lists of [null, null]: no values, more null levels than rows
+        let page_writer = get_test_page_writer();
+        let props = Default::default();
+        let mut writer = get_test_column_writer::<Int32Type>(page_writer, 2, 1, props);
+        writer
+            .write_batch(&[], Some(&[1, 1, 1, 1]), Some(&[0, 1, 0, 1]))
+            .unwrap();
+
+        let r = writer.close().unwrap();
+        let ColumnIndexMetaData::INT32(col_idx) = r.column_index.unwrap() else {
+            panic!("wrong stats type")
+        };
+        assert!(col_idx.is_null_page(0));
+        assert!(col_idx.min_value(0).is_none());
+        assert!(col_idx.max_value(0).is_none());
+        assert_eq!(col_idx.null_count(0), Some(4));
     }
 
     #[test]
