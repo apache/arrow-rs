@@ -36,7 +36,7 @@ use arrow_buffer::ArrowNativeType;
 use arrow_data::decimal::write_decimal;
 use arrow_schema::*;
 use chrono::format::{Item, StrftimeItems};
-use chrono::{NaiveDate, NaiveDateTime, SecondsFormat, TimeZone, Utc};
+use chrono::{NaiveDate, NaiveDateTime, Offset, SecondsFormat, TimeZone, Utc};
 use lexical_core::FormattedSize;
 
 type TimeFormat<'a> = Option<&'a str>;
@@ -761,10 +761,16 @@ fn write_timestamp(
 ) -> FormatResult {
     match timezone {
         Some(tz) => {
-            let date = Utc.from_utc_datetime(&naive).with_timezone(&tz);
+            let utc = Utc.from_utc_datetime(&naive);
+            let date = utc.with_timezone(&tz);
             match format {
                 CompiledTimeFormat::Custom(items) => {
                     write!(f, "{}", date.format_with_items(items.0.iter()))?
+                }
+                // An RFC 3339 offset has no seconds, so rounding one that is not a whole
+                // number of minutes would shift the instant; write that instant in UTC
+                CompiledTimeFormat::Default if date.offset().fix().local_minus_utc() % 60 != 0 => {
+                    write!(f, "{}", utc.to_rfc3339_opts(SecondsFormat::AutoSi, true))?
                 }
                 CompiledTimeFormat::Default => {
                     write!(f, "{}", date.to_rfc3339_opts(SecondsFormat::AutoSi, true))?
@@ -1509,6 +1515,32 @@ mod tests {
         let invalid_options = FormatOptions::new().with_datetime_format(Some("%"));
         let formatter = ArrayFormatter::try_new(&date64, &invalid_options).unwrap();
         assert!(formatter.value(0).try_to_string().is_err());
+    }
+
+    #[test]
+    fn test_timestamp_tz_offset_with_seconds() {
+        // Neither zone had a whole-minute UTC offset at these dates
+        for (tz, (year, month), expected) in [
+            ("Africa/Monrovia", (1960, 6), "1960-06-01T12:00:00.250Z"),
+            ("Europe/Paris", (1900, 6), "1900-06-01T12:00:00.250Z"),
+        ] {
+            let utc = NaiveDate::from_ymd_opt(year, month, 1)
+                .unwrap()
+                .and_hms_milli_opt(12, 0, 0, 250)
+                .unwrap()
+                .and_utc();
+            let array =
+                TimestampMillisecondArray::from(vec![utc.timestamp_millis()]).with_timezone(tz);
+            let formatted = format_array(&array, &FormatOptions::new());
+            assert_eq!(formatted, [expected], "{tz}");
+            let parsed = crate::parse::string_to_datetime(&Utc, &formatted[0]).unwrap();
+            assert_eq!(parsed, utc, "{tz}");
+        }
+
+        // A whole-minute offset keeps the local time and the offset
+        let array = TimestampSecondArray::from(vec![0]).with_timezone("+05:30");
+        let formatted = format_array(&array, &FormatOptions::new());
+        assert_eq!(formatted, ["1970-01-01T05:30:00+05:30"]);
     }
 
     #[test]
