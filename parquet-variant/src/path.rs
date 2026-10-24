@@ -347,6 +347,34 @@ mod tests {
         let path = VariantPath::try_from(r#"["a\]b"]"#).unwrap();
         let expected = VariantPath::from_iter([VariantPathElement::field("a]b")]);
         assert_eq!(path, expected);
+
+        // several escapes, including an escaped backslash, between multi-byte chars
+        let path = VariantPath::try_from(r"['\\é\]ü\'x']").unwrap();
+        let expected = VariantPath::from_iter([VariantPathElement::field(r"\é]ü'x")]);
+        assert_eq!(path, expected);
+    }
+
+    #[test]
+    fn test_variant_path_bracket_field_ownership() {
+        let path = VariantPath::try_from(r#"[""]["plain"]["escaped\]field"]['a]b']"#).unwrap();
+
+        // (field name, borrowed from the input)
+        let fields: Vec<_> = path
+            .iter()
+            .map(|element| match element {
+                VariantPathElement::Field { name } => {
+                    (name.as_ref(), matches!(name, Cow::Borrowed(_)))
+                }
+                other => panic!("expected field, got {other:?}"),
+            })
+            .collect();
+        let expected = [
+            ("", true),
+            ("plain", true),
+            ("escaped]field", false),
+            ("a]b", true),
+        ];
+        assert_eq!(fields, expected);
     }
 
     #[test]
