@@ -234,6 +234,17 @@ impl RecordDecoder {
             })?;
 
         // Need to truncate data t1o the actual amount of data read
+        let num_columns = self.num_columns;
+        let line_offset = self.line_number - self.num_rows;
+        let invalid_utf8_error = |idx: usize| {
+            let field = idx % num_columns + 1;
+            let line = line_offset + idx / num_columns;
+
+            ArrowError::CsvError(format!(
+                "Encountered invalid UTF-8 data for line {line} and field {field}"
+            ))
+        };
+
         let data = std::str::from_utf8(&self.data[..self.data_len]).map_err(|e| {
             let valid_up_to = e.valid_up_to();
 
@@ -243,16 +254,21 @@ impl RecordDecoder {
                 .rposition(|x| *x <= valid_up_to)
                 .unwrap();
 
-            let field = idx % self.num_columns + 1;
-            let line_offset = self.line_number - self.num_rows;
-            let line = line_offset + idx / self.num_columns;
-
-            ArrowError::CsvError(format!(
-                "Encountered invalid UTF-8 data for line {line} and field {field}"
-            ))
+            invalid_utf8_error(idx)
         })?;
 
         let offsets = &self.offsets[..self.offsets_len];
+        if let Some((idx, _)) = offsets
+            .iter()
+            .enumerate()
+            .skip(1)
+            .find(|(_, offset)| !data.is_char_boundary(**offset))
+        {
+            // Fields are concatenated before UTF-8 validation, so a code point can
+            // span two fields even when the combined data is valid UTF-8.
+            return Err(invalid_utf8_error(idx - 1));
+        }
+
         let num_rows = self.num_rows;
 
         // Reset state
@@ -406,6 +422,25 @@ mod tests {
         let remaining = &csv.as_bytes()[bytes..];
         let err = decoder.decode(remaining, 3).unwrap_err().to_string();
         assert_eq!(err, expected);
+    }
+
+    #[test]
+    fn test_flush_rejects_utf8_sequences_split_across_fields() {
+        let cases: &[(&[u8], usize, usize)] = &[(b"\xCD\n\x9C\n", 1, 2), (b"\xCD,\x9C\n", 2, 1)];
+
+        for (csv, num_columns, num_rows) in cases {
+            let mut decoder = RecordDecoder::new(Reader::new(), *num_columns, false);
+            let (read, bytes) = decoder.decode(csv, *num_rows).unwrap();
+
+            assert_eq!(read, *num_rows);
+            assert_eq!(bytes, csv.len());
+
+            let err = decoder.flush().unwrap_err().to_string();
+            assert_eq!(
+                err,
+                "Csv error: Encountered invalid UTF-8 data for line 1 and field 1"
+            );
+        }
     }
 
     #[test]

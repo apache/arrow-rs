@@ -3268,6 +3268,52 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_invalid_utf8_split_across_field_boundaries() {
+        let cases: &[(&[u8], usize, &str)] = &[
+            (
+                b"\xCD\n\x9C\n",
+                1,
+                "Csv error: Encountered invalid UTF-8 data for line 1 and field 1",
+            ),
+            (
+                b"\xCD,\x9C\n",
+                2,
+                "Csv error: Encountered invalid UTF-8 data for line 1 and field 1",
+            ),
+            (
+                b"ok\n\xCD\n\x9C\n",
+                1,
+                "Csv error: Encountered invalid UTF-8 data for line 2 and field 1",
+            ),
+            (
+                b"ok,\xCD,\x9C\n",
+                3,
+                "Csv error: Encountered invalid UTF-8 data for line 1 and field 2",
+            ),
+        ];
+
+        for (csv, num_columns, expected) in cases {
+            for data_type in [DataType::Utf8, DataType::Utf8View] {
+                let fields: Vec<Field> = (0..*num_columns)
+                    .map(|idx| Field::new(format!("column_{idx}"), data_type.clone(), true))
+                    .collect();
+                let schema = Arc::new(Schema::new(fields));
+                let reader = ReaderBuilder::new(schema)
+                    .with_header(false)
+                    .with_batch_size(2)
+                    .build(Cursor::new(*csv))
+                    .unwrap();
+
+                let err = reader
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap_err()
+                    .to_string();
+                assert_eq!(err, *expected, "CSV: {csv:?}");
+            }
+        }
+    }
+
     struct InstrumentedRead<R> {
         r: R,
         fill_count: usize,
