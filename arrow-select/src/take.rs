@@ -306,7 +306,15 @@ fn take_impl<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
             let arrays  = array
                 .columns()
                 .iter()
-                .map(|a| take_impl::<_, VALIDATE_INDICES>(a.as_ref(), indices))
+                .map(|a| {
+                    // A null index becomes a null struct row, so the child slot
+                    // under it is masked and does not need to hold a null.
+                    take_masked_child::<_, VALIDATE_INDICES>(
+                        a.as_ref(),
+                        data_type_can_represent_take_null(a.data_type()),
+                        indices,
+                    )
+                })
                 .collect::<Result<Vec<ArrayRef>, _>>()?;
             let fields: Vec<(FieldRef, ArrayRef)> =
                 fields.iter().cloned().zip(arrays).collect();
@@ -372,7 +380,7 @@ fn take_impl<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
             let children = fields
                 .iter()
                 .map(|(type_id, _)| {
-                    take_sparse_union_child::<_, VALIDATE_INDICES>(
+                    take_masked_child::<_, VALIDATE_INDICES>(
                         values.child(type_id),
                         null_type_id == Some(type_id),
                         indices,
@@ -483,10 +491,16 @@ fn union_null_type_id(fields: &UnionFields) -> Result<i8, ArrowError> {
 /// be represented by a descendant that is marked nullable. A field marked
 /// nullable is not sufficient if its nested type cannot store a null.
 fn field_can_represent_take_null(field: &FieldRef) -> bool {
-    if !field.is_nullable() {
-        return false;
-    }
-    match field.data_type() {
+    field.is_nullable() && data_type_can_represent_take_null(field.data_type())
+}
+
+/// Whether an array of `data_type` can physically store a newly introduced
+/// null, regardless of the nullability of the field that holds it.
+///
+/// This is what [`take_run`] and [`take_union_type_ids`] need to succeed for
+/// null take indices.
+fn data_type_can_represent_take_null(data_type: &DataType) -> bool {
+    match data_type {
         DataType::RunEndEncoded(_, values) => field_can_represent_take_null(values),
         DataType::Union(fields, _) => fields
             .iter()
@@ -495,13 +509,16 @@ fn field_can_represent_take_null(field: &FieldRef) -> bool {
     }
 }
 
-/// Takes a sparse union child for `indices`.
+/// Takes a child array whose slots at null take indices are masked by its
+/// parent, so the values there are unspecified.
 ///
-/// Null take indices select one child that can represent a null
-/// ([`take_union_type_ids`]). Values in the other children at those positions
-/// are unspecified, so they are taken with dummy indices instead of introducing
-/// nulls that would contradict field metadata.
-fn take_sparse_union_child<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
+/// This applies to the children of a sparse union that were not selected to
+/// represent nulls ([`take_union_type_ids`]), and to the children of a struct
+/// or fixed-size list, where a null index becomes a null parent row. When
+/// `represent_nulls` is false, those children are taken with dummy indices
+/// instead of introducing nulls, which would contradict field metadata or fail
+/// for a child that cannot store a null (see [`data_type_can_represent_take_null`]).
+fn take_masked_child<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
     values: &dyn Array,
     represent_nulls: bool,
     indices: &PrimitiveArray<IndexType>,
@@ -511,9 +528,11 @@ fn take_sparse_union_child<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES
     }
 
     if values.is_empty() {
-        // Dummy index 0 is OOB on an empty child. Sparse children have the same
-        // length as the union, so a non-null index is also OOB and already
-        // panics in `take_native` via [`take_union_type_ids`].
+        // Dummy index 0 is OOB on an empty child, and so is any non-null index.
+        // Leave the latter to `take_impl` so it is reported as before.
+        if indices.null_count() != indices.len() {
+            return take_impl::<_, VALIDATE_INDICES>(values, indices);
+        }
         return Ok(make_array(
             new_null_array(values.data_type(), indices.len())
                 .to_data()
@@ -1241,7 +1260,13 @@ fn take_fixed_size_list<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: b
         )
     } else {
         let list_indices = take_value_indices_from_fixed_size_list(values, indices, length)?;
-        take_impl::<UInt32Type, VALIDATE_INDICES>(child.as_ref(), &list_indices)?
+        // A null index becomes a null list, so the child slots under it are
+        // masked and do not need to hold nulls.
+        take_masked_child::<UInt32Type, VALIDATE_INDICES>(
+            child.as_ref(),
+            data_type_can_represent_take_null(child.data_type()),
+            &list_indices,
+        )?
     };
 
     FixedSizeListArray::try_new_with_length(
@@ -3355,6 +3380,134 @@ mod tests {
             error.to_string(),
             "Compute error: Cannot take null indices from a RunEndEncoded array with a non-nullable values field"
         );
+    }
+
+    /// A run-end encoded array of `[10, 20]` whose values field is not nullable,
+    /// so it cannot hold a null introduced by `take`.
+    fn non_nullable_ree() -> (DataType, ArrayRef) {
+        let data_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Int32, false)),
+        );
+        let run_array = unsafe {
+            RunArray::<Int32Type>::new_unchecked(
+                data_type.clone(),
+                RunEndBuffer::new(vec![1_i32, 2].into(), 0, 2),
+                Arc::new(Int32Array::from(vec![10, 20])),
+            )
+        };
+        (data_type, Arc::new(run_array))
+    }
+
+    /// A sparse union of `[10, 20]` with no field that can hold a null.
+    fn union_without_nullable_fields() -> (DataType, ArrayRef) {
+        let fields = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Int32, false),
+            ],
+        )
+        .unwrap();
+        let union = UnionArray::try_new(
+            fields.clone(),
+            ScalarBuffer::from(vec![0_i8, 1]),
+            None,
+            vec![
+                Arc::new(Int32Array::from(vec![10, 0])),
+                Arc::new(Int32Array::from(vec![0, 20])),
+            ],
+        )
+        .unwrap();
+        (DataType::Union(fields, UnionMode::Sparse), Arc::new(union))
+    }
+
+    #[test]
+    fn test_take_struct_null_indices_masks_children_that_cannot_hold_nulls() {
+        for (data_type, child) in [non_nullable_ree(), union_without_nullable_fields()] {
+            for nullable in [false, true] {
+                let field = Field::new("f0", data_type.clone(), nullable);
+                let array = StructArray::new(
+                    Fields::from(vec![field]),
+                    vec![child.clone()],
+                    Some(NullBuffer::new_valid(2)),
+                );
+                let indices = Int32Array::from(vec![Some(1), None, Some(0)]);
+
+                let taken = take(&array, &indices, None).unwrap();
+                assert_eq!(taken.data_type(), array.data_type());
+                assert_eq!(taken.len(), 3);
+                assert_eq!(taken.logical_nulls().unwrap().null_count(), 1);
+                assert!(taken.is_null(1));
+
+                let child = taken.as_struct().column(0);
+                assert_eq!(child.data_type(), &data_type);
+                assert_eq!(child.len(), 3);
+                let expected = [20, 10];
+                for (row, expected) in [0, 2].into_iter().zip(expected) {
+                    let value = match child.data_type() {
+                        DataType::RunEndEncoded(_, _) => {
+                            let run = child.as_run::<Int32Type>();
+                            let physical = run.get_physical_index(row);
+                            run.values().as_primitive::<Int32Type>().value(physical)
+                        }
+                        _ => {
+                            let union = child.as_any().downcast_ref::<UnionArray>().unwrap();
+                            union.value(row).as_primitive::<Int32Type>().value(0)
+                        }
+                    };
+                    assert_eq!(value, expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_take_fixed_size_list_null_indices_masks_children_that_cannot_hold_nulls() {
+        for (data_type, child) in [non_nullable_ree(), union_without_nullable_fields()] {
+            for nullable in [false, true] {
+                let field = Arc::new(Field::new("item", data_type.clone(), nullable));
+                let array = FixedSizeListArray::new(field, 1, child.clone(), None);
+                let indices = Int32Array::from(vec![Some(1), None]);
+
+                let taken = take(&array, &indices, None).unwrap();
+                assert_eq!(taken.data_type(), array.data_type());
+                assert_eq!(taken.len(), 2);
+                assert_eq!(taken.null_count(), 1);
+                assert!(taken.is_null(1));
+                let values = taken.as_fixed_size_list().values();
+                assert_eq!(values.data_type(), &data_type);
+                assert_eq!(values.len(), 2);
+            }
+        }
+    }
+
+    #[test]
+    fn test_take_empty_struct_all_null_indices_masks_children_that_cannot_hold_nulls() {
+        let (data_type, child) = non_nullable_ree();
+        let array = StructArray::new(
+            Fields::from(vec![Field::new("f0", data_type, false)]),
+            vec![child.slice(0, 0)],
+            None,
+        );
+        let taken = take(&array, &Int32Array::from(vec![None, None]), None).unwrap();
+        assert_eq!(taken.data_type(), array.data_type());
+        assert_eq!(taken.len(), 2);
+        assert_eq!(taken.null_count(), 2);
+    }
+
+    #[test]
+    fn test_take_struct_null_indices_keeps_nulls_in_children_that_can_hold_them() {
+        // Children that can store a null still get one at a null index, as before.
+        let child = Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef;
+        let array = StructArray::new(
+            Fields::from(vec![Field::new("f0", DataType::Int32, true)]),
+            vec![child],
+            None,
+        );
+        let taken = take(&array, &Int32Array::from(vec![None, Some(1)]), None).unwrap();
+        let child = taken.as_struct().column(0).as_primitive::<Int32Type>();
+        assert_eq!(child, &Int32Array::from(vec![None, Some(2)]));
     }
 
     #[test]
