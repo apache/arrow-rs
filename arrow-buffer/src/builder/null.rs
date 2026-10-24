@@ -149,6 +149,27 @@ impl NullBufferBuilder {
         }
     }
 
+    /// Appends the low `count` bits from `word` as validity values.
+    ///
+    /// `word` is treated as a packed LSB-first bitmap, where set bits indicate
+    /// non-null values. Only the lowest `count` bits are appended; higher bits
+    /// are ignored.
+    ///
+    /// This does not materialize the null buffer when all appended bits are set.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `count` is greater than 64.
+    #[inline]
+    pub fn append_word(&mut self, word: u64, count: usize) {
+        assert!(count <= 64, "count must be less than or equal to 64");
+        if word.trailing_ones() as usize >= count {
+            self.append_n_non_nulls(count);
+        } else {
+            self.materialize_if_needed().append_word(word, count)
+        }
+    }
+
     /// Sets a bit in the builder at `index`
     ///
     /// # Panics
@@ -337,6 +358,35 @@ mod tests {
 
         let buf = builder.finish().unwrap();
         assert_eq!(&[0b1011_u8], buf.validity());
+    }
+
+    #[test]
+    fn test_append_word_all_valid() {
+        let mut builder = NullBufferBuilder::new(0);
+        builder.append_word(u64::MAX, 64);
+        builder.append_word(0b0111, 3);
+
+        assert_eq!(builder.len(), 67);
+        assert_eq!(builder.allocated_size(), 0);
+        assert!(builder.finish().is_none());
+    }
+
+    #[test]
+    fn test_append_word_mixed() {
+        let mut builder = NullBufferBuilder::new(0);
+        builder.append_n_non_nulls(3);
+        builder.append_word(0b1100_1010, 6);
+        builder.append_word(0b1111, 4);
+
+        let buffer = builder.finish().unwrap();
+        assert_eq!(&[0b0101_0111, 0b0001_1110], buffer.validity());
+    }
+
+    #[test]
+    #[should_panic(expected = "count must be less than or equal to 64")]
+    fn test_append_word_count_too_large() {
+        let mut builder = NullBufferBuilder::new(0);
+        builder.append_word(u64::MAX, 65);
     }
 
     #[test]
