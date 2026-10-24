@@ -960,6 +960,10 @@ pub(crate) fn dangling_ptr() -> NonNull<u8> {
 }
 
 impl<A: ArrowNativeType> Extend<A> for MutableBuffer {
+    /// Appends the items of `iter`.
+    ///
+    /// If `iter`'s [`size_hint`](Iterator::size_hint) reports an exact length,
+    /// at most that many items are appended.
     #[inline]
     fn extend<T: IntoIterator<Item = A>>(&mut self, iter: T) {
         let iterator = iter.into_iter();
@@ -995,11 +999,20 @@ impl MutableBuffer {
         mut iterator: I,
     ) {
         let item_size = std::mem::size_of::<T>();
-        let (lower, _) = iterator.size_hint();
-        let additional = lower * item_size;
-        self.reserve(additional);
+        let (lower, upper) = iterator.size_hint();
+        if let Some(byte_count) = lower.checked_mul(item_size) {
+            self.reserve(byte_count);
+            if upper == Some(lower) {
+                // SAFETY: `reserve` just made room for `lower` items
+                return unsafe { self.extend_from_exact_size_iter(iterator, lower) };
+            }
+        }
 
-        // this is necessary because of https://github.com/rust-lang/rust/issues/32155
+        // Keep the length in a local and write it back when `len` is dropped.
+        // If the loop updated `self.len` directly, the compiler couldn't rule
+        // out that the writes through `dst` change it, so it would load and
+        // store the length for every item. `Vec` works around the same problem
+        // (https://github.com/rust-lang/rust/issues/32155).
         let mut len = SetLenOnDrop::new(&mut self.len);
         let mut dst = unsafe { self.data.as_ptr().add(len.local_len) };
         let capacity = self.layout.size();
@@ -1021,8 +1034,48 @@ impl MutableBuffer {
         iterator.for_each(|item| self.push(item));
     }
 
+    /// Appends the items of `iterator`, whose size hint says it yields exactly
+    /// `count` items.
+    ///
+    /// The loop doesn't check the capacity before each item. If `iterator`
+    /// yields more than `count` items, the extra items are not appended.
+    ///
+    /// # Safety
+    ///
+    /// The buffer must have room for `count` more items.
+    #[inline]
+    unsafe fn extend_from_exact_size_iter<T: ArrowNativeType, I: Iterator<Item = T>>(
+        &mut self,
+        iterator: I,
+        count: usize,
+    ) {
+        debug_assert!(
+            count
+                .checked_mul(std::mem::size_of::<T>())
+                .is_some_and(|bytes| bytes <= self.capacity() - self.len),
+            "buffer has no room for {count} more items"
+        );
+
+        // Keep the length in a local and write it back when `len` is dropped.
+        // If the loop updated `self.len` directly, the compiler couldn't rule
+        // out that the writes through `dst` change it, so it would load and
+        // store the length for every item. `Vec` works around the same problem
+        // (https://github.com/rust-lang/rust/issues/32155).
+        let mut len = SetLenOnDrop::new(&mut self.len);
+        let start = len.local_len;
+        // SAFETY: `start` is at most the capacity. It need not be a multiple of
+        // `T`'s alignment, so `dst` is only written unaligned.
+        let dst = unsafe { self.data.as_ptr().add(start) }.cast::<T>();
+        for (i, item) in (0..count).zip(iterator) {
+            // SAFETY: `i < count`, and the caller guarantees room for `count`
+            // items after the buffer's length.
+            unsafe { dst.add(i).write_unaligned(item) };
+            len.local_len = start + (i + 1) * std::mem::size_of::<T>();
+        }
+    }
+
     /// Creates a [`MutableBuffer`] from an [`Iterator`] with a trusted (upper) length.
-    /// Prefer this to `collect` whenever possible, as it is faster ~60% faster.
+    /// Prefer this to `collect` whenever possible, as it is ~60% faster.
     /// # Example
     /// ```
     /// # use arrow_buffer::buffer::MutableBuffer;
@@ -1105,7 +1158,7 @@ impl MutableBuffer {
 
     /// Creates a [`MutableBuffer`] from an [`Iterator`] with a trusted (upper) length or errors
     /// if any of the items of the iterator is an error.
-    /// Prefer this to `collect` whenever possible, as it is faster ~60% faster.
+    /// Prefer this to `collect` whenever possible, as it is ~60% faster.
     ///
     /// # Errors
     ///
@@ -1292,6 +1345,10 @@ impl std::iter::FromIterator<bool> for MutableBuffer {
 }
 
 impl<T: ArrowNativeType> std::iter::FromIterator<T> for MutableBuffer {
+    /// Collects the items of `iter`.
+    ///
+    /// If `iter`'s [`size_hint`](Iterator::size_hint) reports an exact length,
+    /// at most that many items are collected.
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
         let mut buffer = Self::default();
         buffer.extend_from_iter(iter.into_iter());
@@ -1364,6 +1421,66 @@ mod tests {
         buf.extend([1_u64]);
         assert_eq!(9, buf.len());
         assert_eq!(&[1u8, 1u8, 0, 0, 0, 0, 0, 0, 0], buf.as_slice());
+    }
+
+    /// Yields `items`, but its size hint always claims exactly `claimed` items.
+    struct WrongSizeHint<'a> {
+        items: std::slice::Iter<'a, u32>,
+        claimed: usize,
+    }
+
+    impl Iterator for WrongSizeHint<'_> {
+        type Item = u32;
+
+        fn next(&mut self) -> Option<u32> {
+            self.items.next().copied()
+        }
+
+        fn size_hint(&self) -> (usize, Option<usize>) {
+            (self.claimed, Some(self.claimed))
+        }
+    }
+
+    /// `extend` is safe, so an exact size hint that is wrong must not make it
+    /// write past the reserved space or claim bytes it never wrote. Miri
+    /// catches both when it runs this test.
+    #[test]
+    fn mutable_extend_from_iter_wrong_exact_size_hint() {
+        // Fewer items than claimed: the length covers only the items written
+        let mut buf = MutableBuffer::new(0);
+        buf.extend(WrongSizeHint {
+            items: [1, 2].iter(),
+            claimed: 3,
+        });
+        assert_eq!(buf.typed_data::<u32>(), &[1, 2]);
+
+        // More items than claimed: nothing is written past the reserved space
+        let items: Vec<u32> = (0..32).collect();
+        let mut buf = MutableBuffer::new(0);
+        buf.extend(WrongSizeHint {
+            items: items.iter(),
+            claimed: 2,
+        });
+        assert_eq!(buf.typed_data::<u32>(), &[0, 1]);
+
+        // A claimed size whose byte count overflows `usize`: the hint is ignored
+        let mut buf = MutableBuffer::new(0);
+        buf.extend(WrongSizeHint {
+            items: [1, 2].iter(),
+            claimed: usize::MAX / 4 + 1,
+        });
+        assert_eq!(buf.typed_data::<u32>(), &[1, 2]);
+    }
+
+    #[test]
+    fn mutable_extend_from_iter_inexact_size_hint() {
+        // `filter` reports a lower bound of 0, so nothing is reserved up
+        // front: the first 16 items fill the existing capacity and the rest
+        // are pushed
+        let mut buf = MutableBuffer::new(64);
+        buf.extend((0..100_u32).filter(|x| x % 3 == 0));
+        let expected: Vec<u32> = (0..100).filter(|x| x % 3 == 0).collect();
+        assert_eq!(buf.typed_data::<u32>(), &expected[..]);
     }
 
     #[test]
