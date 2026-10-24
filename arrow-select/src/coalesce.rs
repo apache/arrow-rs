@@ -798,6 +798,17 @@ fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn 
     }
 }
 
+/// Returns an error if `filter` selects more rows than `source_len`.
+fn check_filter_len(filter: &FilterPredicate, source_len: usize) -> Result<(), ArrowError> {
+    let filter_len = filter.filter_len();
+    if filter_len > source_len {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "Filter predicate of length {filter_len} is larger than source array of length {source_len}"
+        )));
+    }
+    Ok(())
+}
+
 /// Incrementally builds up arrays
 ///
 /// [`GenericInProgressArray`] is the default implementation that buffers

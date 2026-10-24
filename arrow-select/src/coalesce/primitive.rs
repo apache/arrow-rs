@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::coalesce::InProgressArray;
+use crate::coalesce::{InProgressArray, check_filter_len};
 use crate::filter::{FilterIndices, FilterPredicate, FilterSelection, FilterSlices};
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
@@ -61,7 +61,15 @@ impl<T: ArrowPrimitiveType> InProgressPrimitiveArray<T> {
         }
     }
 
-    fn append_values_by_indices(
+    /// Append the `values` at `indices` to `current`.
+    ///
+    /// # Safety
+    ///
+    /// * Every index yielded by `indices` must be less than `values.len()`
+    /// * `indices` must yield exactly `selected_count` indices
+    /// * `current` must have spare capacity for at least `selected_count`
+    ///   additional elements
+    unsafe fn append_values_by_indices(
         current: &mut Vec<T::Native>,
         values: &[T::Native],
         indices: FilterIndices<'_>,
@@ -70,6 +78,8 @@ impl<T: ArrowPrimitiveType> InProgressPrimitiveArray<T> {
         let current_len = current.len();
         let mut written = 0;
 
+        // SAFETY: the caller guarantees all indices are in bounds, and that
+        // `current` has capacity for `selected_count` more elements.
         unsafe {
             let mut out = current
                 .spare_capacity_mut()
@@ -77,7 +87,6 @@ impl<T: ArrowPrimitiveType> InProgressPrimitiveArray<T> {
                 .cast::<T::Native>();
 
             indices.for_each(|idx| {
-                // SAFETY: indices are derived from the filter predicate for this source.
                 out.write(*values.get_unchecked(idx));
                 out = out.add(1);
                 written += 1;
@@ -89,7 +98,16 @@ impl<T: ArrowPrimitiveType> InProgressPrimitiveArray<T> {
         debug_assert_eq!(written, selected_count);
     }
 
-    fn append_values_by_slices(
+    /// Append the `values` in each `start..end` range of `slices` to `current`.
+    ///
+    /// # Safety
+    ///
+    /// * Every `(start, end)` yielded by `slices` must satisfy
+    ///   `start <= end <= values.len()`
+    /// * `slices` must cover exactly `selected_count` elements in total
+    /// * `current` must have spare capacity for at least `selected_count`
+    ///   additional elements
+    unsafe fn append_values_by_slices(
         current: &mut Vec<T::Native>,
         values: &[T::Native],
         slices: FilterSlices<'_>,
@@ -98,6 +116,8 @@ impl<T: ArrowPrimitiveType> InProgressPrimitiveArray<T> {
         let current_len = current.len();
         let mut written = 0;
 
+        // SAFETY: the caller guarantees all slices are in bounds, and that
+        // `current` has capacity for `selected_count` more elements.
         unsafe {
             let mut out = current
                 .spare_capacity_mut()
@@ -106,7 +126,6 @@ impl<T: ArrowPrimitiveType> InProgressPrimitiveArray<T> {
 
             slices.for_each(|(start, end)| {
                 let len = end - start;
-                // SAFETY: slices are derived from the filter predicate for this source.
                 std::ptr::copy_nonoverlapping(values.as_ptr().add(start), out, len);
                 out = out.add(len);
                 written += len;
@@ -164,9 +183,8 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
 
         // Copy the values
         let values = s.values();
-        // SAFETY: copy_rows is called with ranges derived from the source array.
         self.current
-            .extend_from_slice(unsafe { values.get_unchecked(offset..offset + len) });
+            .extend_from_slice(&values[offset..offset + len]);
 
         Ok(())
     }
@@ -176,29 +194,41 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
             FilterSelection::Indices(indices) => {
                 self.ensure_capacity();
                 let s = primitive_source::<T>(self.source.as_ref())?;
+                check_filter_len(filter, s.len())?;
 
                 append_filtered_nulls(&mut self.nulls, s.nulls(), filter);
                 self.current.reserve(filter.count());
-                Self::append_values_by_indices(
-                    &mut self.current,
-                    s.values(),
-                    indices,
-                    filter.count(),
-                );
+                // SAFETY: `check_filter_len` verified all selected indices are
+                // in bounds, `FilterPredicate` guarantees `filter.count()`
+                // rows are selected, and capacity was reserved above.
+                unsafe {
+                    Self::append_values_by_indices(
+                        &mut self.current,
+                        s.values(),
+                        indices,
+                        filter.count(),
+                    )
+                };
                 Ok(())
             }
             FilterSelection::Slices(slices) => {
                 self.ensure_capacity();
                 let s = primitive_source::<T>(self.source.as_ref())?;
+                check_filter_len(filter, s.len())?;
 
                 append_filtered_nulls(&mut self.nulls, s.nulls(), filter);
                 self.current.reserve(filter.count());
-                Self::append_values_by_slices(
-                    &mut self.current,
-                    s.values(),
-                    slices,
-                    filter.count(),
-                );
+                // SAFETY: `check_filter_len` verified all selected slices are
+                // in bounds, `FilterPredicate` guarantees `filter.count()`
+                // rows are selected, and capacity was reserved above.
+                unsafe {
+                    Self::append_values_by_slices(
+                        &mut self.current,
+                        s.values(),
+                        slices,
+                        filter.count(),
+                    )
+                };
                 Ok(())
             }
             // Other selection shapes reuse the generic copy_rows path.
@@ -371,6 +401,33 @@ mod tests {
         assert!(
             with_nulls > all_valid,
             "null buffer must be included in size(): with_nulls={with_nulls} all_valid={all_valid}"
+        );
+    }
+
+    #[test]
+    fn test_copy_rows_by_filter_rejects_filter_longer_than_source() {
+        let source = Int32Array::from(vec![1, 2, 3]);
+        let mut in_progress = InProgressPrimitiveArray::<Int32Type>::new(8, DataType::Int32);
+        in_progress.set_source(Some(Arc::new(source)));
+
+        // Index iterator: a sparse filter longer than the source
+        let filter = BooleanArray::from_iter((0..21).map(|idx| Some(idx == 20)));
+        let predicate = FilterBuilder::new(&filter).build();
+        assert!(matches!(predicate.selection(), FilterSelection::Indices(_)));
+        let err = in_progress.copy_rows_by_filter(&predicate).unwrap_err();
+        assert!(
+            err.to_string().contains("larger than source array"),
+            "unexpected error: {err}"
+        );
+
+        // Slice iterator: a dense filter longer than the source
+        let filter = BooleanArray::from_iter((0..8).map(|idx| Some(idx != 3)));
+        let predicate = FilterBuilder::new(&filter).build();
+        assert!(matches!(predicate.selection(), FilterSelection::Slices(_)));
+        let err = in_progress.copy_rows_by_filter(&predicate).unwrap_err();
+        assert!(
+            err.to_string().contains("larger than source array"),
+            "unexpected error: {err}"
         );
     }
 }
