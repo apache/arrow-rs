@@ -867,12 +867,13 @@ mod tests {
     use crate::filter::filter_record_batch;
     use arrow_array::builder::StringViewBuilder;
     use arrow_array::cast::AsArray;
-    use arrow_array::types::Int32Type;
+    use arrow_array::types::{ByteViewType, Int32Type};
     use arrow_array::{
-        BinaryViewArray, Int32Array, Int64Array, RecordBatchOptions, StringArray, StringViewArray,
-        TimestampNanosecondArray, UInt32Array, UInt64Array, make_array, record_batch,
+        BinaryViewArray, GenericByteViewArray, Int32Array, Int64Array, RecordBatchOptions,
+        StringArray, StringViewArray, TimestampNanosecondArray, UInt32Array, UInt64Array,
+        make_array, record_batch,
     };
-    use arrow_buffer::BooleanBufferBuilder;
+    use arrow_buffer::{BooleanBufferBuilder, Buffer};
     use arrow_schema::{DataType, Field, Schema};
     use rand::{RngExt, SeedableRng};
     use std::ops::Range;
@@ -917,6 +918,69 @@ mod tests {
         assert!(should_use_sparse_filter_copy(8192, 81));
         assert!(!should_use_sparse_filter_copy(8192, 819));
         assert!(!should_use_sparse_filter_copy(8192, 6553));
+    }
+
+    #[test]
+    fn test_sparse_filter_compacts_view_buffers() {
+        fn check<B: ByteViewType>(input: GenericByteViewArray<B>) {
+            for offset in [0, 3] {
+                let input = input.slice(offset, 1600);
+                let input_capacity: usize = input.data_buffers().iter().map(Buffer::capacity).sum();
+                let batch = RecordBatch::try_from_iter(vec![(
+                    "value",
+                    Arc::new(input.clone()) as ArrayRef,
+                )])
+                .unwrap();
+                let filter =
+                    BooleanArray::from((0..1600).map(|i| i % 100 == 0).collect::<Vec<_>>());
+                let expected = filter_record_batch(&batch, &filter).unwrap();
+                let mut reference = BatchCoalescer::new(batch.schema(), 1024);
+                reference.push_batch(expected.clone()).unwrap();
+                reference.finish_buffered_batch().unwrap();
+                let reference = reference.next_completed_batch().unwrap();
+
+                let mut coalescer = BatchCoalescer::new(batch.schema(), 1024);
+                coalescer.push_batch_with_filter(batch, &filter).unwrap();
+                coalescer.finish_buffered_batch().unwrap();
+                let output = coalescer.next_completed_batch().unwrap();
+                assert_eq!(output, expected);
+                let output = output.column(0).as_byte_view::<B>();
+                let capacity: usize = output.data_buffers().iter().map(Buffer::capacity).sum();
+                let reference_capacity: usize = reference
+                    .column(0)
+                    .as_byte_view::<B>()
+                    .data_buffers()
+                    .iter()
+                    .map(Buffer::capacity)
+                    .sum();
+                assert_eq!(
+                    capacity, reference_capacity,
+                    "offset={offset}, input_capacity={input_capacity}"
+                );
+                assert!(capacity < input_capacity / 2);
+                assert!(output.data_buffers().iter().all(|buffer| {
+                    input
+                        .data_buffers()
+                        .iter()
+                        .all(|source| !std::ptr::addr_eq(buffer.as_ptr(), source.as_ptr()))
+                }));
+            }
+        }
+
+        let values = (0..1603)
+            .map(|i| {
+                if i % 500 == 0 {
+                    None
+                } else if i % 300 == 100 {
+                    Some("short".to_string())
+                } else {
+                    Some(format!("{i:04}: a value longer than twelve bytes"))
+                }
+            })
+            .collect::<Vec<_>>();
+        let input = StringViewArray::from_iter(values.iter().map(|value| value.as_deref()));
+        check(input.clone());
+        check(input.to_binary_view());
     }
 
     #[test]
