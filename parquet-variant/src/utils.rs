@@ -234,43 +234,36 @@ pub(crate) fn parse_path(s: &str) -> Result<Vec<VariantPathElement<'_>>, ArrowEr
 fn parse_in_bracket(s: &str, i: usize) -> Result<(VariantPathElement<'_>, usize), ArrowError> {
     let start = i + 1; // skip '['
 
-    let mut unescaped = None;
+    // Allocated on the first escape; until then the content borrows from `s`
+    let mut unescaped: Option<String> = None;
+    // Start of the run of literal chars not yet copied into `unescaped`
+    let mut run_start = start;
     let mut chars = s[start..].char_indices();
     let mut end = None;
     let mut quote = None;
 
     while let Some((offset, c)) = chars.next() {
         match c {
-            // Escape: take next char literally
+            // Escape: drop the backslash and take next char literally
             '\\' => {
-                let unescaped =
-                    unescaped.get_or_insert_with(|| String::from(&s[start..start + offset]));
-                if let Some((_, next)) = chars.next() {
-                    unescaped.push(next);
-                }
-                // Trailing backslash will be handled as 'unclosed [' below
+                unescaped
+                    .get_or_insert_default()
+                    .push_str(&s[run_start..start + offset]);
+                // The escaped char begins the next run. Trailing backslash
+                // will be handled as 'unclosed [' below
+                run_start = start + offset + 1;
+                chars.next();
             }
-            '\'' | '"' if quote == Some(c) => {
-                quote = None;
-                if let Some(unescaped) = &mut unescaped {
-                    unescaped.push(c);
-                }
-            }
+            '\'' | '"' if quote == Some(c) => quote = None,
             // Every consumed char advances the offset, so a quote can only
             // open the bracket content at offset 0
-            '\'' | '"' if quote.is_none() && offset == 0 => {
-                quote = Some(c);
-            }
+            '\'' | '"' if quote.is_none() && offset == 0 => quote = Some(c),
             ']' if quote.is_none() => {
                 // An unescaped ']' outside quotes ends the bracket
                 end = Some(start + offset);
                 break;
             }
-            _ => {
-                if let Some(unescaped) = &mut unescaped {
-                    unescaped.push(c);
-                }
-            }
+            _ => {}
         }
     }
 
@@ -279,7 +272,10 @@ fn parse_in_bracket(s: &str, i: usize) -> Result<(VariantPathElement<'_>, usize)
     };
 
     let value = match unescaped {
-        Some(value) => Cow::Owned(value),
+        Some(mut value) => {
+            value.push_str(&s[run_start..end]);
+            Cow::Owned(value)
+        }
         None => Cow::Borrowed(&s[start..end]),
     };
     let element = parse_bracket_element(value)?;
