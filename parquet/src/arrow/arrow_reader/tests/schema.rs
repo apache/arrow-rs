@@ -636,6 +636,91 @@ fn test_read_binary_as_utf8() {
 }
 
 #[test]
+fn test_read_binary_as_utf8_dictionary() {
+    let file = write_parquet_from_iter(vec![(
+        "binary_to_utf8_dictionary",
+        Arc::new(BinaryArray::from(vec![
+            b"one".as_ref(),
+            b"two".as_ref(),
+            b"one".as_ref(),
+            b"two".as_ref(),
+        ])) as ArrayRef,
+    )]);
+    let dictionary_type = ArrowDataType::Dictionary(
+        Box::new(ArrowDataType::Int32),
+        Box::new(ArrowDataType::Utf8),
+    );
+    let supplied_schema = Arc::new(Schema::new(vec![Field::new(
+        "binary_to_utf8_dictionary",
+        dictionary_type.clone(),
+        false,
+    )]));
+
+    let options = ArrowReaderOptions::new().with_schema(Arc::clone(&supplied_schema));
+    let batches = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
+        .unwrap()
+        .with_batch_size(2)
+        .build()
+        .unwrap()
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .unwrap();
+
+    assert_eq!(batches.len(), 2);
+    assert!(
+        batches
+            .iter()
+            .all(|batch| batch.schema() == supplied_schema)
+    );
+    assert!(
+        batches
+            .iter()
+            .all(|batch| batch.column(0).data_type() == &dictionary_type)
+    );
+
+    let first = batches[0]
+        .column(0)
+        .as_dictionary::<arrow_array::types::Int32Type>();
+    let second = batches[1]
+        .column(0)
+        .as_dictionary::<arrow_array::types::Int32Type>();
+    assert_eq!(first.keys().values(), &[0, 1]);
+    assert_eq!(second.keys().values(), &[0, 1]);
+    assert_eq!(
+        first.values().as_string::<i32>().iter().collect::<Vec<_>>(),
+        vec![Some("one"), Some("two")]
+    );
+    assert!(Arc::ptr_eq(first.values(), second.values()));
+}
+
+#[test]
+fn test_read_non_utf8_binary_as_utf8_dictionary() {
+    let file = write_parquet_from_iter(vec![(
+        "non_utf8_binary_dictionary",
+        Arc::new(BinaryArray::from(vec![
+            b"valid".as_ref(),
+            b"\xDE\x00\xFF".as_ref(),
+        ])) as ArrayRef,
+    )]);
+    let supplied_schema = Arc::new(Schema::new(vec![Field::new(
+        "non_utf8_binary_dictionary",
+        ArrowDataType::Dictionary(
+            Box::new(ArrowDataType::Int32),
+            Box::new(ArrowDataType::Utf8),
+        ),
+        false,
+    )]));
+
+    let options = ArrowReaderOptions::new().with_schema(supplied_schema);
+    let mut reader = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let error = reader.next().unwrap().unwrap_err().to_string();
+    assert!(error.contains("encountered non UTF-8 data"), "{error}");
+}
+
+#[test]
 #[should_panic(expected = "Invalid UTF8 sequence at")]
 fn test_read_non_utf8_binary_as_utf8() {
     let file = write_parquet_from_iter(vec![(
