@@ -43,7 +43,7 @@ experimental-inspect = ["pyo3/experimental-inspect"]
 arrow-array = { workspace = true, features = ["ffi"] }
 arrow-data = { workspace = true }
 arrow-schema = { workspace = true }
-pyo3 = { version = "0.29.0", default-features = false }
+pyo3 = { version = "0.30.1", default-features = false }
 
 [lints]
 workspace = true
