@@ -147,6 +147,20 @@ impl BooleanBufferBuilder {
         self.len = new_len;
     }
 
+    /// Advances the buffer with zeroed bits, clearing the padding at the old end.
+    #[inline]
+    fn advance_zeroed(&mut self, additional: usize) {
+        if additional == 0 {
+            return;
+        }
+
+        let old_len = self.len;
+        self.advance(additional);
+
+        let keep_mask = (1_u8 << (old_len & 7)) - 1;
+        self.buffer.as_slice_mut()[old_len / 8] &= keep_mask;
+    }
+
     /// Truncates the builder to the given length
     ///
     /// If `len` is greater than the buffer's current length, this has no effect
@@ -186,7 +200,7 @@ impl BooleanBufferBuilder {
     #[inline]
     pub fn resize(&mut self, len: usize) {
         match len.checked_sub(self.len) {
-            Some(delta) => self.advance(delta),
+            Some(delta) => self.advance_zeroed(delta),
             None => self.truncate(len),
         }
     }
@@ -194,10 +208,9 @@ impl BooleanBufferBuilder {
     /// Appends a boolean `v` into the buffer
     #[inline]
     pub fn append(&mut self, v: bool) {
-        self.advance(1);
-        if v {
-            unsafe { bit_util::set_bit_raw(self.buffer.as_mut_ptr(), self.len - 1) };
-        }
+        let index = self.len;
+        self.advance_zeroed(1);
+        self.buffer.as_slice_mut()[index / 8] |= u8::from(v) << (index & 7);
     }
 
     /// Appends the low `count` bits from `word` into the buffer.
@@ -213,14 +226,9 @@ impl BooleanBufferBuilder {
         let mask = (u64::MAX >> ((64 - count) & 63)) * ((count != 0) as u64);
         let word = word & mask;
 
-        let new_len = self.len + count;
-        let new_len_bytes = bit_util::ceil(new_len, 8);
-        if new_len_bytes > self.buffer.len() {
-            self.buffer.resize(new_len_bytes, 0);
-        }
-
         let bit_offset = self.len & 7;
         let byte_start = self.len / 8;
+        self.advance_zeroed(count);
         let buf = self.buffer.as_slice_mut();
 
         // Shift the word to align with the bit offset within the
@@ -236,8 +244,6 @@ impl BooleanBufferBuilder {
         if bit_offset > 0 && count + bit_offset > 64 {
             buf[byte_start + 8] |= (word >> (64 - bit_offset)) as u8;
         }
-
-        self.len = new_len;
     }
 
     /// Appends n `additional` bits of value `v` into the buffer
@@ -265,7 +271,7 @@ impl BooleanBufferBuilder {
                 }
                 self.len = new_len;
             }
-            false => self.advance(additional),
+            false => self.advance_zeroed(additional),
         }
     }
 
@@ -273,7 +279,7 @@ impl BooleanBufferBuilder {
     #[inline]
     pub fn append_slice(&mut self, slice: &[bool]) {
         let additional = slice.len();
-        self.advance(additional);
+        self.advance_zeroed(additional);
 
         let offset = self.len() - additional;
         for (i, v) in slice.iter().enumerate() {
@@ -385,6 +391,50 @@ impl From<BooleanBufferBuilder> for NullBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_append_with_dirty_padding() {
+        let operations: [fn(&mut BooleanBufferBuilder, usize); 5] = [
+            |b, n| {
+                for _ in 0..n {
+                    b.append(false);
+                }
+            },
+            |b, n| b.append_slice(&vec![false; n]),
+            |b, n| b.append_word(0, n),
+            |b, n| b.append_n(n, false),
+            |b, n| b.resize(b.len() + n),
+        ];
+
+        for initial_len in 0..=16 {
+            for additional in [0, 1, 2, 7, 8, 9, 63, 64] {
+                for operation in operations {
+                    for use_set_bit in [false, true] {
+                        let mut expected: Vec<bool> =
+                            (0..initial_len).map(|i| i % 3 == 0).collect();
+                        let mut builder = BooleanBufferBuilder::new(initial_len);
+                        builder.append_slice(&expected);
+
+                        for i in initial_len..builder.as_slice().len() * 8 {
+                            if use_set_bit {
+                                builder.set_bit(i, true);
+                            } else {
+                                builder.as_slice_mut()[i / 8] |= 1 << (i & 7);
+                            }
+                        }
+
+                        let original = builder.as_slice().to_vec();
+                        operation(&mut builder, additional);
+                        if additional == 0 {
+                            assert_eq!(builder.as_slice(), original);
+                        }
+                        expected.resize(initial_len + additional, false);
+                        assert_eq!(builder.build().iter().collect::<Vec<_>>(), expected);
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_boolean_buffer_builder_write_bytes() {
