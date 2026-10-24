@@ -2524,6 +2524,41 @@ mod tests {
         test_parse_timestamp_impl::<TimestampSecondType>(Some("-03".into()), &[10_800, 0, -7_200]);
     }
 
+    // A local time in a DST gap or overlap of the target timezone is resolved
+    // as described in `arrow_cast::parse::string_to_datetime`: an ambiguous
+    // reading takes the later instant, and a nonexistent reading is shifted
+    // forward by the length of the gap.
+    #[test]
+    fn test_parse_timestamp_dst_transitions() {
+        let csv = [
+            // Nonexistent: 02:30 is skipped, read as 03:30 EDT
+            "2024-03-10 02:30:00",
+            // Ambiguous: 01:30 happens twice, the later (EST) instant wins
+            "2024-11-03 01:30:00",
+        ]
+        .join("\n");
+        let timezone: Option<Arc<str>> = Some("America/New_York".into());
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "field",
+            DataType::Timestamp(TimeUnit::Second, timezone.clone()),
+            true,
+        )]));
+
+        let mut decoder = ReaderBuilder::new(schema).build_decoder();
+        let decoded = decoder.decode(csv.as_bytes()).unwrap();
+        assert_eq!(decoded, csv.len());
+        decoder.decode(&[]).unwrap();
+
+        let batch = decoder.flush().unwrap().unwrap();
+        let col = batch.column(0).as_primitive::<TimestampSecondType>();
+        // 2024-03-10T07:30:00Z and 2024-11-03T06:30:00Z
+        assert_eq!(col.values(), &[1_710_055_800, 1_730_615_400]);
+        assert_eq!(
+            col.data_type(),
+            &DataType::Timestamp(TimeUnit::Second, timezone)
+        );
+    }
+
     #[test]
     #[cfg_attr(miri, ignore)] // Takes too long
     fn test_infer_schema_from_multiple_files() {
