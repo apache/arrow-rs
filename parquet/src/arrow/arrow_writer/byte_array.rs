@@ -429,7 +429,7 @@ pub struct ByteArrayEncoder {
     min_value: Option<ByteArray>,
     max_value: Option<ByteArray>,
     bloom_filter: Option<Sbbf>,
-    bloom_filter_target_fpp: f64,
+    bloom_filter_target_fpp: Option<f64>,
     geo_stats_accumulator: Option<Box<dyn GeoStatsAccumulator>>,
     is_decimal: bool,
 }
@@ -439,7 +439,9 @@ impl ColumnValueEncoder for ByteArrayEncoder {
     type Values = dyn Array;
     fn flush_bloom_filter(&mut self) -> Option<Sbbf> {
         let mut sbbf = self.bloom_filter.take()?;
-        sbbf.fold_to_target_fpp(self.bloom_filter_target_fpp);
+        if let Some(target_fpp) = self.bloom_filter_target_fpp {
+            sbbf.fold_to_target_fpp(target_fpp);
+        }
         Some(sbbf)
     }
 
