@@ -16,6 +16,10 @@
 // under the License.
 
 use crate::cast::*;
+use crate::parse::{
+    IntervalParseConfig, IntervalUnit as IntervalParseUnit, NANOS_PER_DAY,
+    parse_interval_month_day_nano_config,
+};
 use arrow_buffer::NullBuffer;
 
 pub(crate) fn cast_bool_to_string<A>(array: &dyn Array) -> Result<ArrayRef, ArrowError>
@@ -124,6 +128,111 @@ fn parse_string_iter<
                     ))
                 }),
                 None => Ok(P::Native::default()),
+            })
+            .collect::<Result<Vec<_>, ArrowError>>()?;
+        PrimitiveArray::try_new(v.into(), nulls())?
+    };
+
+    Ok(Arc::new(array) as ArrayRef)
+}
+
+/// Parse a string to a duration, accepting integer strings (interpreted
+/// in the target unit) and interval strings with units, such as
+/// `"1 hour 10 minutes"`.
+fn parse_duration<D>(string: &str) -> Result<i64, ArrowError>
+where
+    D: ArrowTemporalType<Native = i64> + Parser,
+{
+    if let Some(duration) = D::parse(string) {
+        return Ok(duration);
+    }
+
+    let (unit, scale) = match D::DATA_TYPE {
+        DataType::Duration(TimeUnit::Second) => (IntervalParseUnit::Second, 1_000_000_000),
+        DataType::Duration(TimeUnit::Millisecond) => (IntervalParseUnit::Millisecond, 1_000_000),
+        DataType::Duration(TimeUnit::Microsecond) => (IntervalParseUnit::Microsecond, 1_000),
+        DataType::Duration(TimeUnit::Nanosecond) => (IntervalParseUnit::Nanosecond, 1),
+        _ => unreachable!(),
+    };
+
+    let interval = parse_interval_month_day_nano_config(string, IntervalParseConfig::new(unit))
+        .map_err(|_| {
+            ArrowError::CastError(format!(
+                "Cannot cast string '{string}' to value of {} type",
+                D::DATA_TYPE
+            ))
+        })?;
+
+    if interval.months != 0 {
+        return Err(ArrowError::ComputeError(
+            "Cannot convert interval containing non-zero months to duration".to_string(),
+        ));
+    }
+
+    let nanos = NANOS_PER_DAY as i128 * interval.days as i128 + interval.nanoseconds as i128;
+    i64::try_from(nanos / scale as i128).map_err(|_| {
+        ArrowError::CastError(format!(
+            "Cannot cast string '{string}' to value of {} type",
+            D::DATA_TYPE
+        ))
+    })
+}
+
+/// Casts generic string arrays to a Duration type
+pub(crate) fn cast_string_to_duration<D, O>(
+    array: &dyn Array,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError>
+where
+    D: ArrowTemporalType<Native = i64> + Parser,
+    O: OffsetSizeTrait,
+{
+    let string_array = array.as_string::<O>();
+    parse_duration_iter::<D, _, _>(string_array.iter(), cast_options, || {
+        string_array.nulls().cloned()
+    })
+}
+
+/// Casts string view arrays to a Duration type
+pub(crate) fn cast_view_to_duration<D>(
+    array: &dyn Array,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError>
+where
+    D: ArrowTemporalType<Native = i64> + Parser,
+{
+    let string_view_array = array.as_string_view();
+    parse_duration_iter::<D, _, _>(string_view_array.iter(), cast_options, || {
+        string_view_array.nulls().cloned()
+    })
+}
+
+fn parse_duration_iter<'a, D, I, F>(
+    iter: I,
+    cast_options: &CastOptions,
+    nulls: F,
+) -> Result<ArrayRef, ArrowError>
+where
+    D: ArrowTemporalType<Native = i64> + Parser,
+    I: Iterator<Item = Option<&'a str>>,
+    F: FnOnce() -> Option<NullBuffer>,
+{
+    let array = if cast_options.safe {
+        let iter = iter.map(|x| {
+            let v = x?;
+            parse_duration::<D>(v).ok()
+        });
+
+        // Benefit:
+        //     20% performance improvement
+        // Soundness:
+        //     The iterator is trustedLen because it comes from an `StringArray`.
+        unsafe { PrimitiveArray::<D>::from_trusted_len_iter(iter) }
+    } else {
+        let v = iter
+            .map(|x| match x {
+                Some(v) => parse_duration::<D>(v),
+                None => Ok(D::Native::default()),
             })
             .collect::<Result<Vec<_>, ArrowError>>()?;
         PrimitiveArray::try_new(v.into(), nulls())?
