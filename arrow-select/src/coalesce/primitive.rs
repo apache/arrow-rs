@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::coalesce::InProgressArray;
+use crate::coalesce::{InProgressArray, append_gathered_nulls};
 use crate::filter::{FilterIndices, FilterPredicate, FilterSelection, FilterSlices};
 use arrow_array::cast::AsArray;
-use arrow_array::{Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
+use arrow_array::{Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray, UInt32Array};
 use arrow_buffer::{NullBuffer, NullBufferBuilder, ScalarBuffer};
 use arrow_schema::{ArrowError, DataType};
 use std::fmt::Debug;
@@ -206,6 +206,52 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
         }
     }
 
+    unsafe fn copy_rows_by_indices(
+        &mut self,
+        source: &ArrayRef,
+        indices: &UInt32Array,
+    ) -> Result<(), ArrowError> {
+        if indices.is_empty() {
+            return Ok(());
+        }
+        let typed = source.as_primitive::<T>();
+        self.ensure_capacity();
+
+        if let Some(src_nulls) = typed.nulls() {
+            // SAFETY: the caller validated every index against `typed.len()`, which
+            // equals the length of its null buffer.
+            unsafe { append_gathered_nulls(&mut self.nulls, src_nulls, indices) };
+        } else {
+            self.nulls.append_n_non_nulls(indices.len());
+        }
+
+        let index_values = indices.values();
+        let values = typed.values();
+        let current_len = self.current.len();
+        self.current.reserve(indices.len());
+        debug_assert!(
+            index_values
+                .iter()
+                .all(|&idx| (idx as usize) < values.len()),
+            "copy_rows_by_indices requires caller-validated in-bounds indices",
+        );
+        // SAFETY: indices were bounds-checked by the coalescer, and reserve
+        // allocated one output slot per index.
+        unsafe {
+            let base = self
+                .current
+                .spare_capacity_mut()
+                .as_mut_ptr()
+                .cast::<T::Native>();
+            let src = values.as_ptr();
+            for (i, &idx) in index_values.iter().enumerate() {
+                base.add(i).write(*src.add(idx as usize));
+            }
+            self.current.set_len(current_len + indices.len());
+        }
+        Ok(())
+    }
+
     fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
         // take and reset the current values and nulls
         let values = std::mem::take(&mut self.current);
@@ -231,8 +277,9 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
 mod tests {
     use super::*;
     use crate::filter::FilterBuilder;
+    use crate::take::take;
     use arrow_array::types::Int32Type;
-    use arrow_array::{BooleanArray, Int32Array};
+    use arrow_array::{BooleanArray, Int32Array, UInt32Array};
 
     #[test]
     fn test_copy_rows_by_filter_index_iterator() {
@@ -372,5 +419,23 @@ mod tests {
             with_nulls > all_valid,
             "null buffer must be included in size(): with_nulls={with_nulls} all_valid={all_valid}"
         );
+    }
+
+    #[test]
+    fn test_copy_rows_by_indices() {
+        let source: ArrayRef = Arc::new(Int32Array::from_iter(
+            (0..32i32).map(|i| if i % 3 == 0 { None } else { Some(i) }),
+        ));
+        let indices = UInt32Array::from(vec![
+            0u32, 15, 2, 7, 3, 9, 12, 1, 20, 15, 6, 8, 11, 18, 21, 24, 30,
+        ]);
+
+        let mut in_progress = InProgressPrimitiveArray::<Int32Type>::new(32, DataType::Int32);
+        // SAFETY: `indices` contains no nulls and every index is less than `source.len()`.
+        unsafe { in_progress.copy_rows_by_indices(&source, &indices).unwrap() };
+        let actual = in_progress.finish().unwrap();
+
+        let expected = take(source.as_ref(), &indices, None).unwrap();
+        assert_eq!(actual.as_ref(), expected.as_ref());
     }
 }

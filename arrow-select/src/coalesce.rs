@@ -22,9 +22,10 @@
 //! [`take`]: crate::take::take
 use crate::filter::{FilterBuilder, FilterPredicate, FilterSelection};
 use crate::interleave::interleave_record_batch;
-use crate::take::take_record_batch;
-use arrow_array::types::{BinaryViewType, StringViewType};
-use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, downcast_primitive};
+use crate::take::{TakeOptions, take, take_arrays_unchecked, take_bits, take_record_batch};
+use arrow_array::types::{BinaryViewType, StringViewType, UInt32Type};
+use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, UInt32Array, downcast_primitive};
+use arrow_buffer::{NullBuffer, NullBufferBuilder};
 use arrow_schema::{ArrowError, DataType, SchemaRef};
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -41,6 +42,54 @@ use fixed_size_binary::InProgressFixedSizeBinaryArray;
 use generic::GenericInProgressArray;
 use primitive::InProgressPrimitiveArray;
 
+/// Appends the validity bits selected by `indices` to `nulls`.
+///
+/// # Safety
+///
+/// `indices` must not contain nulls, and every value must be less than
+/// `source_nulls.len()`.
+pub(crate) unsafe fn append_gathered_nulls(
+    nulls: &mut NullBufferBuilder,
+    source_nulls: &NullBuffer,
+    indices: &UInt32Array,
+) {
+    debug_assert!(
+        indices
+            .values()
+            .iter()
+            .all(|&idx| (idx as usize) < source_nulls.len()),
+        "append_gathered_nulls received out-of-bounds index",
+    );
+    if source_nulls.null_count() == 0 {
+        nulls.append_n_non_nulls(indices.len());
+        return;
+    }
+    let gathered = take_bits::<UInt32Type, false>(source_nulls.inner(), indices);
+    nulls.append_buffer(&NullBuffer::new(gathered));
+}
+
+pub(crate) fn validate_indices_bounds(
+    indices: &[u32],
+    source_len: usize,
+) -> Result<(), ArrowError> {
+    let has_out_of_bounds = indices
+        .iter()
+        .copied()
+        .max()
+        .is_some_and(|idx| (idx as usize) >= source_len);
+    if has_out_of_bounds {
+        let bad = indices
+            .iter()
+            .copied()
+            .find(|&idx| (idx as usize) >= source_len)
+            .expect("maximum index was out of bounds");
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "take index {bad} out of bounds for array of {source_len} rows"
+        )));
+    }
+    Ok(())
+}
+
 fn has_sparse_filter_copy(data_type: &DataType) -> bool {
     data_type.is_primitive() || matches!(data_type, DataType::Utf8View | DataType::BinaryView)
 }
@@ -54,6 +103,20 @@ const SPARSE_FILTER_COPY_MAX_SELECTIVITY_DENOMINATOR: usize = 16;
 
 fn should_use_sparse_filter_copy(filter_len: usize, selected_count: usize) -> bool {
     selected_count <= filter_len / SPARSE_FILTER_COPY_MAX_SELECTIVITY_DENOMINATOR
+}
+
+// Dense selections are faster through `take`.
+const INDEXED_COPY_MAX_SELECTIVITY_DENOMINATOR: usize = 2;
+
+// Byte-view indexed copying is only faster for sparse selections.
+const BYTE_VIEW_INDEXED_COPY_MAX_SELECTIVITY_DENOMINATOR: usize = 16;
+
+fn should_use_indexed_copy(input_rows: usize, selected_rows: usize) -> bool {
+    selected_rows <= input_rows / INDEXED_COPY_MAX_SELECTIVITY_DENOMINATOR
+}
+
+fn should_use_byte_view_indexed_copy(input_rows: usize, selected_rows: usize) -> bool {
+    selected_rows <= input_rows / BYTE_VIEW_INDEXED_COPY_MAX_SELECTIVITY_DENOMINATOR
 }
 
 /// Concatenate multiple [`RecordBatch`]es
@@ -159,6 +222,8 @@ pub struct BatchCoalescer {
     in_progress_arrays: Vec<Box<dyn InProgressArray>>,
     /// True if some column still needs the materialized filter path.
     has_non_specialized_filter_columns: bool,
+    /// True if some column uses the byte-view indexed-copy path.
+    has_byte_view_columns: bool,
     /// Buffered row count. Always less than `batch_size`
     buffered_rows: usize,
     /// Completed batches
@@ -180,6 +245,10 @@ impl BatchCoalescer {
             .fields()
             .iter()
             .any(|field| !has_sparse_filter_copy(field.data_type()));
+        let has_byte_view_columns = schema
+            .fields()
+            .iter()
+            .any(|field| matches!(field.data_type(), DataType::Utf8View | DataType::BinaryView));
         let in_progress_arrays = schema
             .fields()
             .iter()
@@ -191,6 +260,7 @@ impl BatchCoalescer {
             target_batch_size,
             in_progress_arrays,
             has_non_specialized_filter_columns,
+            has_byte_view_columns,
             // We will for sure store at least one completed batch
             completed: VecDeque::with_capacity(1),
             buffered_rows: 0,
@@ -312,15 +382,21 @@ impl BatchCoalescer {
     /// This is semantically equivalent of calling [`Self::push_batch`]
     /// with the results from  [`take_record_batch`]
     ///
+    /// Returns `Err(ArrowError::InvalidArgumentError)` if `indices` is a
+    /// non-null `UInt32Array` with any out-of-bounds value.
+    ///
+    /// Non-null `UInt32Array` indices may use a direct-copy fast path; other
+    /// supported index arrays use [`take_record_batch`] instead.
+    ///
     /// # Example
     /// ```
-    /// # use arrow_array::{record_batch, UInt64Array};
+    /// # use arrow_array::{record_batch, UInt32Array};
     /// # use arrow_select::coalesce::BatchCoalescer;
     /// let batch1 = record_batch!(("a", Int32, [0, 0, 0])).unwrap();
     /// let batch2 = record_batch!(("a", Int32, [1, 1, 4, 5, 1, 4])).unwrap();
     /// // Sorted indices to create a sorted output, this can be obtained with
     /// // `arrow-ord`'s sort_to_indices operation
-    /// let indices = UInt64Array::from(vec![0, 1, 4, 2, 5, 3]);
+    /// let indices = UInt32Array::from(vec![0, 1, 4, 2, 5, 3]);
     /// // create a new Coalescer that targets creating 1000 row batches
     /// let mut coalescer = BatchCoalescer::new(batch1.schema(), 1000);
     /// coalescer.push_batch(batch1);
@@ -336,9 +412,95 @@ impl BatchCoalescer {
         batch: RecordBatch,
         indices: &dyn Array,
     ) -> Result<(), ArrowError> {
-        // todo: optimize this to avoid materializing (copying the results of take indices to a new batch)
-        let taken_batch = take_record_batch(&batch, indices)?;
+        let u32_indices = indices
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .filter(|array| array.null_count() == 0);
+        if let Some(u32_arr) = u32_indices {
+            validate_indices_bounds(u32_arr.values(), batch.num_rows())?;
+        }
+
+        // Direct indexed copying is a fast path for non-null UInt32 selections
+        // that are sparse enough for every column (with a stricter ByteView
+        // threshold). It is only equivalent to `push_batch(take(...))` when the
+        // materialized batch would not trigger the configured large-batch bypass.
+        let exceeds_byte_view_threshold = self.has_byte_view_columns
+            && !should_use_byte_view_indexed_copy(batch.num_rows(), indices.len());
+        let indexed_copy_allowed = should_use_indexed_copy(batch.num_rows(), indices.len())
+            && !exceeds_byte_view_threshold;
+
+        let fast_path_allowed = self
+            .biggest_coalesce_batch_size
+            .is_none_or(|limit| indices.len() <= limit);
+        if indexed_copy_allowed
+            && fast_path_allowed
+            && let Some(u32_arr) = u32_indices
+        {
+            return self.push_batch_with_index(batch, u32_arr);
+        }
+
+        let taken_batch = if let Some(u32_arr) = u32_indices {
+            // SAFETY: `u32_arr` was bounds-checked against `batch.num_rows()` above,
+            // which is the length of every column in the record batch.
+            let columns = unsafe { take_arrays_unchecked(batch.columns(), u32_arr)? };
+            // SAFETY: `take_arrays_unchecked` returns one array of `u32_arr.len()` rows
+            // for every field in `batch.schema()`.
+            unsafe { RecordBatch::new_unchecked(batch.schema(), columns, u32_arr.len()) }
+        } else {
+            take_record_batch(&batch, indices)?
+        };
         self.push_batch(taken_batch)
+    }
+
+    fn push_batch_with_index(
+        &mut self,
+        batch: RecordBatch,
+        indices: &UInt32Array,
+    ) -> Result<(), ArrowError> {
+        if indices.is_empty() {
+            return Ok(());
+        }
+        let columns = batch.columns();
+        if columns.len() != self.in_progress_arrays.len() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Batch has {} columns but BatchCoalescer expects {}",
+                columns.len(),
+                self.in_progress_arrays.len()
+            )));
+        }
+        debug_assert!(
+            indices.null_count() == 0
+                && indices
+                    .values()
+                    .iter()
+                    .all(|&idx| (idx as usize) < batch.num_rows()),
+            "push_batch_with_index requires caller-validated non-null, in-bounds indices",
+        );
+
+        let mut offset = 0;
+        while offset < indices.len() {
+            let room = self.target_batch_size - self.buffered_rows;
+            let take_n = (indices.len() - offset).min(room);
+            let sliced;
+            let chunk: &UInt32Array = if offset == 0 && take_n == indices.len() {
+                indices
+            } else {
+                sliced = indices.slice(offset, take_n);
+                &sliced
+            };
+            for (in_progress, column) in self.in_progress_arrays.iter_mut().zip(columns) {
+                // SAFETY: `push_batch_with_indices` validated every index against
+                // `batch.num_rows()`, which equals `column.len()`, and slicing the
+                // validated indices preserves both bounds and validity.
+                unsafe { in_progress.copy_rows_by_indices(column, chunk)? };
+            }
+            self.buffered_rows += take_n;
+            offset += take_n;
+            if self.buffered_rows >= self.target_batch_size {
+                self.finish_buffered_batch()?;
+            }
+        }
+        Ok(())
     }
 
     /// Push rows gathered from multiple `batches` into the Coalescer.
@@ -861,6 +1023,31 @@ trait InProgressArray: std::fmt::Debug + Send + Sync {
         }
     }
 
+    /// Copy rows at `indices` from `source` into the in-progress array.
+    ///
+    /// # Safety
+    ///
+    /// `indices` must not contain nulls, and every value must be less than
+    /// `source.len()`. Specialized implementations may use unchecked indexing.
+    unsafe fn copy_rows_by_indices(
+        &mut self,
+        source: &ArrayRef,
+        indices: &UInt32Array,
+    ) -> Result<(), ArrowError> {
+        if indices.is_empty() {
+            return Ok(());
+        }
+        let taken = take(
+            source.as_ref(),
+            indices,
+            Some(TakeOptions { check_bounds: true }),
+        )?;
+        self.set_source(Some(taken));
+        let result = self.copy_rows(0, indices.len());
+        self.set_source(None);
+        result
+    }
+
     /// Finish the currently in-progress array and return it as an `ArrayRef`
     fn finish(&mut self) -> Result<ArrayRef, ArrowError>;
 
@@ -873,13 +1060,14 @@ mod tests {
     use super::*;
     use crate::concat::concat_batches;
     use crate::filter::filter_record_batch;
+    use crate::take::take_record_batch;
     use arrow_array::builder::StringViewBuilder;
     use arrow_array::cast::AsArray;
     use arrow_array::types::{Int32Type, UInt8Type};
     use arrow_array::{
-        BinaryViewArray, DictionaryArray, Int32Array, Int64Array, RecordBatchOptions, StringArray,
-        StringViewArray, TimestampNanosecondArray, UInt8Array, UInt32Array, UInt64Array,
-        make_array, record_batch,
+        BinaryViewArray, DictionaryArray, FixedSizeBinaryArray, Int32Array, Int64Array,
+        RecordBatchOptions, StringArray, StringViewArray, TimestampNanosecondArray, UInt8Array,
+        UInt32Array, UInt64Array, make_array, record_batch,
     };
     use arrow_buffer::BooleanBufferBuilder;
     use arrow_schema::{DataType, Field, Schema};
@@ -972,6 +1160,19 @@ mod tests {
         assert!(should_use_sparse_filter_copy(8192, 81));
         assert!(!should_use_sparse_filter_copy(8192, 819));
         assert!(!should_use_sparse_filter_copy(8192, 6553));
+    }
+
+    #[test]
+    fn test_indexed_copy_threshold() {
+        assert!(should_use_indexed_copy(8192, 4096));
+        assert!(!should_use_indexed_copy(8192, 4097));
+    }
+
+    #[test]
+    fn test_byte_view_indexed_copy_threshold() {
+        assert!(should_use_byte_view_indexed_copy(8192, 512));
+        assert!(!should_use_byte_view_indexed_copy(8192, 513));
+        assert!(!should_use_byte_view_indexed_copy(8192, 819));
     }
 
     #[test]
@@ -3042,5 +3243,297 @@ mod tests {
             drained1 < peak1,
             "draining must release the accounted memory"
         );
+    }
+
+    #[test]
+    fn test_push_batch_with_indices_splits_at_target_batch_size() {
+        let schema = Arc::new(Schema::new(vec![Field::new("c0", DataType::Int32, false)]));
+        let array = Int32Array::from_iter_values(0..1000i32);
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(array)]).unwrap();
+        let indices = UInt32Array::from_iter_values((0..1000u32).step_by(3));
+        let target_batch_size = 100;
+
+        let mut coalescer = BatchCoalescer::new(Arc::clone(&schema), target_batch_size);
+        coalescer
+            .push_batch_with_indices(batch.clone(), &indices)
+            .unwrap();
+        coalescer.finish_buffered_batch().unwrap();
+        let mut completed = vec![];
+        while let Some(batch) = coalescer.next_completed_batch() {
+            completed.push(batch);
+        }
+        for batch in &completed[..completed.len() - 1] {
+            assert_eq!(batch.num_rows(), target_batch_size);
+        }
+
+        let actual = concat_batches(&schema, completed.iter()).unwrap();
+        let expected = take_record_batch(&batch, &indices).unwrap();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn test_push_batch_with_indices_mixed_schema_with_nulls_splits_matches_take() {
+        let fsb_size: i32 = 4;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("i", DataType::Int32, true),
+            Field::new("s", DataType::Utf8, true),
+            Field::new("b", DataType::Boolean, true),
+            Field::new("f", DataType::FixedSizeBinary(fsb_size), true),
+        ]));
+
+        let num_rows = 300usize;
+        let int_col = Int32Array::from_iter(
+            (0..num_rows as i32).map(|v| if v % 7 == 0 { None } else { Some(v) }),
+        );
+        let str_col = StringArray::from_iter((0..num_rows).map(|v| {
+            if v % 5 == 0 {
+                None
+            } else {
+                Some(format!("row-{v}"))
+            }
+        }));
+        let bool_col = BooleanArray::from_iter(
+            (0..num_rows).map(|v| if v % 11 == 0 { None } else { Some(v % 2 == 0) }),
+        );
+        let fsb_col = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+            (0..num_rows).map(|v| {
+                if v % 9 == 0 {
+                    None
+                } else {
+                    let mut bytes = [0u8; 4];
+                    bytes.copy_from_slice(&(v as u32).to_le_bytes());
+                    Some(bytes)
+                }
+            }),
+            fsb_size,
+        )
+        .unwrap();
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(int_col),
+                Arc::new(str_col),
+                Arc::new(bool_col),
+                Arc::new(fsb_col),
+            ],
+        )
+        .unwrap();
+
+        let indices = UInt32Array::from_iter_values((0..num_rows as u32).step_by(2));
+        // Prime < indices.len() (150) so the chunking loop in push_batch_with_index
+        // runs multiple times and the final chunk is a partial batch (150 % 37 = 2).
+        let target_batch_size = 37;
+
+        let mut coalescer = BatchCoalescer::new(Arc::clone(&schema), target_batch_size);
+        coalescer
+            .push_batch_with_indices(batch.clone(), &indices)
+            .unwrap();
+        coalescer.finish_buffered_batch().unwrap();
+
+        let mut completed = vec![];
+        while let Some(b) = coalescer.next_completed_batch() {
+            completed.push(b);
+        }
+        assert!(
+            completed.len() > 1,
+            "expected the output to span multiple batches"
+        );
+        for b in &completed[..completed.len() - 1] {
+            assert_eq!(b.num_rows(), target_batch_size);
+        }
+
+        let actual = concat_batches(&schema, completed.iter()).unwrap();
+        let expected = take_record_batch(&batch, &indices).unwrap();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn test_push_batch_with_indices_empty_is_noop() {
+        let schema = Arc::new(Schema::new(vec![Field::new("c0", DataType::Int32, false)]));
+        let array = Int32Array::from_iter_values(0..4i32);
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(array)]).unwrap();
+        let indices = UInt32Array::from(Vec::<u32>::new());
+
+        let mut coalescer = BatchCoalescer::new(schema, 4096);
+        coalescer.push_batch_with_indices(batch, &indices).unwrap();
+        coalescer.finish_buffered_batch().unwrap();
+        assert!(coalescer.next_completed_batch().is_none());
+    }
+
+    #[test]
+    fn test_push_batch_with_indices_rejects_schema_mismatch() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c0", DataType::Int32, false),
+            Field::new("c1", DataType::Int32, false),
+        ]));
+        let mut coalescer = BatchCoalescer::new(schema, 100);
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("c0", DataType::Int32, false)])),
+            vec![Arc::new(Int32Array::from_iter_values(0..5i32))],
+        )
+        .unwrap();
+        let indices = UInt32Array::from(vec![0u32, 1]);
+        let err = coalescer
+            .push_batch_with_indices(batch, &indices)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("Batch has 1 columns but BatchCoalescer expects 2"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_push_batch_with_indices_rejects_oob_before_mutation() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c0", DataType::Int32, false),
+            Field::new("c1", DataType::Utf8View, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from_iter_values(0..16i32)),
+                Arc::new(StringViewArray::from(vec!["a"; 16])),
+            ],
+        )
+        .unwrap();
+        let indices = UInt32Array::from(vec![0u32, 1, 2, 3, 0, 1, 2, 99]);
+        let expected_err = "take index 99 out of bounds for array of 16 rows";
+
+        let mut coalescer = BatchCoalescer::new(schema, 4);
+        let err = coalescer
+            .push_batch_with_indices(batch, &indices)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains(expected_err), "unexpected error: {err}");
+        assert_eq!(coalescer.get_buffered_rows(), 0);
+        assert!(!coalescer.has_completed_batch());
+    }
+
+    #[test]
+    fn test_push_batch_with_indices_rejects_oob_in_direct_copy_chunk() {
+        let schema = Arc::new(Schema::new(vec![Field::new("c0", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from_iter_values(0..64i32))],
+        )
+        .unwrap();
+        let indices = UInt32Array::from(vec![0u32, 1, 99]);
+
+        let mut coalescer = BatchCoalescer::new(schema, 2);
+        let err = coalescer
+            .push_batch_with_indices(batch, &indices)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("take index 99 out of bounds for array of 64 rows"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(coalescer.get_buffered_rows(), 0);
+        assert!(!coalescer.has_completed_batch());
+    }
+
+    #[test]
+    fn test_push_batch_with_indices_oob_error_is_uniform_across_schemas() {
+        let int_only_schema = Arc::new(Schema::new(vec![Field::new("c0", DataType::Int32, false)]));
+        let int_batch = RecordBatch::try_new(
+            Arc::clone(&int_only_schema),
+            vec![Arc::new(Int32Array::from_iter_values(0..64i32))],
+        )
+        .unwrap();
+
+        let view_schema = Arc::new(Schema::new(vec![Field::new(
+            "c0",
+            DataType::Utf8View,
+            false,
+        )]));
+        let view_batch = RecordBatch::try_new(
+            Arc::clone(&view_schema),
+            vec![Arc::new(StringViewArray::from(vec!["a"; 64]))],
+        )
+        .unwrap();
+
+        let short_indices = UInt32Array::from(vec![0u32, 1, 99]);
+        let long_indices = {
+            let mut values: Vec<u32> = (0..39).collect();
+            values.push(99);
+            UInt32Array::from(values)
+        };
+
+        let expected_err = "take index 99 out of bounds for array of 64 rows";
+        for (schema, batch, indices) in [
+            (
+                Arc::clone(&int_only_schema),
+                int_batch.clone(),
+                &short_indices,
+            ),
+            (Arc::clone(&int_only_schema), int_batch, &long_indices),
+            (Arc::clone(&view_schema), view_batch.clone(), &short_indices),
+            (Arc::clone(&view_schema), view_batch, &long_indices),
+        ] {
+            let mut coalescer = BatchCoalescer::new(schema, 100);
+            let err = coalescer
+                .push_batch_with_indices(batch, indices)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains(expected_err), "unexpected error: {err}");
+            assert_eq!(coalescer.get_buffered_rows(), 0);
+            assert!(!coalescer.has_completed_batch());
+        }
+    }
+
+    #[test]
+    fn test_push_batch_with_indices_sparse_byte_view_bounded_size() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "v",
+            DataType::BinaryView,
+            false,
+        )]));
+        let rows_per_batch = 2048;
+        let num_batches = 64;
+        let target_batch_size = 4 * num_batches;
+        let mut coalescer = BatchCoalescer::new(Arc::clone(&schema), target_batch_size);
+
+        for batch_idx in 0..num_batches {
+            let values: Vec<Vec<u8>> = (0..rows_per_batch)
+                .map(|row| {
+                    format!("batch={batch_idx:04} row={row:04} padding padding padding")
+                        .into_bytes()
+                })
+                .collect();
+            let array = BinaryViewArray::from_iter(values.iter().map(|v| Some(v.as_slice())));
+            assert!(
+                !array.data_buffers().is_empty(),
+                "need non-inline views to exercise the sparse path"
+            );
+            let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(array)]).unwrap();
+            let indices = UInt32Array::from(vec![0u32]);
+            coalescer.push_batch_with_indices(batch, &indices).unwrap();
+        }
+
+        let max_expected_size = 256 * 1024;
+        let retained_size = coalescer.size();
+        assert!(
+            retained_size < max_expected_size,
+            "retained {retained_size} bytes; expected under {max_expected_size}",
+        );
+    }
+
+    #[test]
+    fn test_push_batch_with_indices_preserves_biggest_bypass() {
+        let schema = Arc::new(Schema::new(vec![Field::new("c0", DataType::Int32, false)]));
+        let array = Int32Array::from_iter_values(0..1000i32);
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(array)]).unwrap();
+
+        let mut coalescer = BatchCoalescer::new(Arc::clone(&schema), 100)
+            .with_biggest_coalesce_batch_size(Some(50));
+
+        let indices = UInt32Array::from_iter_values(0..500u32);
+        coalescer.push_batch_with_indices(batch, &indices).unwrap();
+
+        let output = coalescer.next_completed_batch().expect("one batch");
+        assert_eq!(output.num_rows(), 500);
+        assert!(coalescer.next_completed_batch().is_none());
     }
 }
