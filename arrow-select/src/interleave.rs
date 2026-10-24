@@ -758,21 +758,32 @@ fn interleave_list_view_copy<O: OffsetSizeTrait>(
         .map(|list| list.values().to_data())
         .collect();
     let child_data_refs: Vec<_> = child_data.iter().collect();
-    let mut mutable_child = MutableArrayData::new(child_data_refs, false, capacity);
-    for &(array_idx, row_idx) in indices {
-        let list = interleaved.arrays[array_idx];
-        let start = list.offsets()[row_idx].as_usize();
-        let size = list.sizes()[row_idx].as_usize();
-        if size > 0 {
-            mutable_child.try_extend(array_idx, start, start + size)?;
+    let child_values = match MutableArrayData::try_new(child_data_refs, false, capacity) {
+        Ok(mut mutable_child) => {
+            for &(array_idx, row_idx) in indices {
+                let list = interleaved.arrays[array_idx];
+                let start = list.offsets()[row_idx].as_usize();
+                let size = list.sizes()[row_idx].as_usize();
+                if size > 0 {
+                    mutable_child.try_extend(array_idx, start, start + size)?;
+                }
+            }
+            make_array(mutable_child.freeze())
         }
-    }
+        // `MutableArrayData` concatenates dictionaries without merging them, which
+        // overflows the key type when their values together exceed it. `interleave`
+        // merges the values that are selected.
+        Err(ArrowError::DictionaryKeyOverflowError) => {
+            interleave_list_like_child(interleaved, indices, capacity)?
+        }
+        Err(e) => return Err(e),
+    };
 
     Ok(Arc::new(GenericListViewArray::<O>::new(
         field.clone(),
         offsets.into(),
         sizes.into(),
-        make_array(mutable_child.freeze()),
+        child_values,
         interleaved.nulls.clone(),
     )))
 }
@@ -2226,6 +2237,122 @@ mod tests {
         let indices: Vec<_> = (0..200).flat_map(|i| [(0, i), (1, i)]).collect();
 
         let err = interleave(&[&list_a, &list_b], &indices).unwrap_err();
+        assert!(matches!(err, ArrowError::DictionaryKeyOverflowError));
+    }
+
+    fn dictionary_strings(array: &dyn Array) -> Vec<String> {
+        array
+            .as_dictionary::<Int8Type>()
+            .downcast_dict::<StringArray>()
+            .unwrap()
+            .into_iter()
+            .map(|v| v.unwrap().to_string())
+            .collect()
+    }
+
+    /// An Int8 dictionary with one key and 128 values, the most Int8 keys can address.
+    /// Each call allocates its own values, so two dictionaries are not pointer-equal.
+    fn int8_dictionary_128_values() -> ArrayRef {
+        let values = StringArray::from_iter_values((0..128).map(|i| i.to_string()));
+        Arc::new(DictionaryArray::<Int8Type>::new(
+            Int8Array::from(vec![0]),
+            Arc::new(values),
+        ))
+    }
+
+    /// One list view row of size 1 per element of `values`.
+    fn single_element_list_views(field: FieldRef, values: ArrayRef) -> ListViewArray {
+        let len = values.len();
+        ListViewArray::new(
+            field,
+            (0..len as i32).collect::<Vec<_>>().into(),
+            vec![1; len].into(),
+            values,
+            None,
+        )
+    }
+
+    fn test_interleave_list_view_dictionary_overflow(indices: &[(usize, usize)]) {
+        // The two dictionaries hold 256 values together, more than Int8 keys can
+        // address, but the selected rows only reference one distinct value.
+        let field = Arc::new(Field::new_list_field(
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
+            true,
+        ));
+        let a = single_element_list_views(field.clone(), int8_dictionary_128_values());
+        let b = single_element_list_views(field, int8_dictionary_128_values());
+
+        let result = interleave(&[&a, &b], indices).unwrap();
+
+        let result = result.as_list_view::<i32>();
+        assert_eq!(result.len(), indices.len());
+        for i in 0..result.len() {
+            assert_eq!(dictionary_strings(result.value(i).as_ref()), ["0"]);
+        }
+    }
+
+    #[test]
+    fn test_list_view_dictionary_overflow_copy() {
+        // The selected rows are cheaper to copy than to concat the backing arrays
+        test_interleave_list_view_dictionary_overflow(&[(0, 0), (1, 0)]);
+    }
+
+    #[test]
+    fn test_list_view_dictionary_overflow_concat() {
+        // Repeated rows make concatenating the backing arrays cheaper than copying
+        test_interleave_list_view_dictionary_overflow(&[(0, 0), (0, 0), (1, 0), (1, 0)]);
+    }
+
+    #[test]
+    fn test_interleave_list_view_struct_dictionary_overflow() {
+        // same as the copy case, but with the dictionary nested inside a Struct child
+        let fields = Fields::from(vec![Field::new(
+            "d",
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
+            true,
+        )]);
+        let list_field = Arc::new(Field::new_list_field(
+            DataType::Struct(fields.clone()),
+            true,
+        ));
+        let view = || {
+            let child = StructArray::new(fields.clone(), vec![int8_dictionary_128_values()], None);
+            single_element_list_views(list_field.clone(), Arc::new(child))
+        };
+        let (a, b) = (view(), view());
+
+        let result = interleave(&[&a, &b], &[(0, 0), (1, 0)]).unwrap();
+
+        let result = result.as_list_view::<i32>();
+        assert_eq!(result.len(), 2);
+        for i in 0..result.len() {
+            let row = result.value(i);
+            assert_eq!(
+                dictionary_strings(row.as_struct().column(0).as_ref()),
+                ["0"]
+            );
+        }
+    }
+
+    #[test]
+    fn test_interleave_list_view_dictionary_overflow_returns_err() {
+        // dictionaries whose distinct values overflow the key type cannot be merged,
+        // which should surface an error not a panic
+        let field = Arc::new(Field::new_list_field(
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+            false,
+        ));
+        let view = |prefix: &str| {
+            let values = StringArray::from_iter_values((0..200).map(|i| format!("{prefix}{i}")));
+            let keys = UInt8Array::from_iter_values(0..200);
+            let dict = DictionaryArray::<UInt8Type>::new(keys, Arc::new(values));
+            single_element_list_views(field.clone(), Arc::new(dict))
+        };
+        let (a, b) = (view("a"), view("b"));
+
+        let indices: Vec<_> = (0..200).flat_map(|i| [(0, i), (1, i)]).collect();
+
+        let err = interleave(&[&a, &b], &indices).unwrap_err();
         assert!(matches!(err, ArrowError::DictionaryKeyOverflowError));
     }
 
