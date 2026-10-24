@@ -734,8 +734,9 @@ where
     let values = array.values_slice();
     let values = filter(values.as_ref(), &pred)?;
 
-    let run_ends = PrimitiveArray::<R>::try_new(new_run_ends.into(), None)?;
-    RunArray::try_new(&run_ends, &values)
+    let run_ends = RunEndBuffer::new(new_run_ends.into(), 0, count.as_usize());
+    // SAFETY: filtering preserves the value type and nullability, with one value per run.
+    Ok(unsafe { RunArray::new_unchecked(array.data_type().clone(), run_ends, values) })
 }
 
 /// Filter the packed bitmask `buffer` with `predicate`, choosing between the
