@@ -63,7 +63,9 @@ fn read_buffer(
     decompression_context: &mut DecompressionContext,
 ) -> Result<Buffer, ArrowError> {
     let start_offset = buf.offset() as usize;
-    let buf_data = slice_buffer(a_data, start_offset, buf.length() as usize)?;
+    let buf_data = a_data
+        .try_slice_with_length(start_offset, buf.length() as usize)
+        .map_err(|e| ArrowError::IpcError(e.to_string()))?;
     // corner case: empty buffer
     match (buf_data.is_empty(), compression_codec) {
         (true, _) | (_, None) => Ok(buf_data),
@@ -71,19 +73,6 @@ fn read_buffer(
             decompressor.decompress_to_buffer(&buf_data, decompression_context)
         }
     }
-}
-
-/// Slices `buffer` with [`Buffer::checked_slice_with_length`], returning an
-/// error if the range is out of bounds
-fn slice_buffer(buffer: &Buffer, offset: usize, length: usize) -> Result<Buffer, ArrowError> {
-    buffer
-        .checked_slice_with_length(offset, length)
-        .ok_or_else(|| {
-            ArrowError::IpcError(format!(
-                "Buffer slice out of bounds: offset {offset} length {length} buffer length {}",
-                buffer.len()
-            ))
-        })
 }
 
 impl RecordBatchDecoder<'_> {
@@ -215,12 +204,19 @@ impl RecordBatchDecoder<'_> {
                     self.next_buffer()?;
                 }
 
-                let type_ids: ScalarBuffer<i8> = slice_buffer(&self.next_buffer()?, 0, len)?.into();
+                let type_ids: ScalarBuffer<i8> = self
+                    .next_buffer()?
+                    .try_slice_with_length(0, len)
+                    .map_err(|e| ArrowError::IpcError(e.to_string()))?
+                    .into();
 
                 let value_offsets = match mode {
                     UnionMode::Dense => {
-                        let offsets: ScalarBuffer<i32> =
-                            slice_buffer(&self.next_buffer()?, 0, len * 4)?.into();
+                        let offsets: ScalarBuffer<i32> = self
+                            .next_buffer()?
+                            .try_slice_with_length(0, len * 4)
+                            .map_err(|e| ArrowError::IpcError(e.to_string()))?
+                            .into();
                         Some(offsets)
                     }
                     UnionMode::Sparse => None,

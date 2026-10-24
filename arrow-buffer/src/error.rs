@@ -87,3 +87,41 @@ impl std::fmt::Display for OverflowError {
 }
 
 impl std::error::Error for OverflowError {}
+
+/// A slice that does not fit in the buffer it is taken from.
+///
+/// Returned by [`Buffer::try_slice_with_length`](crate::Buffer::try_slice_with_length),
+/// the alternative to [`Buffer::slice_with_length`](crate::Buffer::slice_with_length)
+/// that does not panic.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SliceOutOfBoundsError {
+    offset: usize,
+    length: usize,
+    buffer_len: usize,
+}
+
+impl SliceOutOfBoundsError {
+    pub(crate) const fn new(offset: usize, length: usize, buffer_len: usize) -> Self {
+        Self {
+            offset,
+            length,
+            buffer_len,
+        }
+    }
+}
+
+impl std::fmt::Display for SliceOutOfBoundsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            offset,
+            length,
+            buffer_len,
+        } = self;
+        write!(
+            f,
+            "the offset of the new Buffer cannot exceed the existing length: slice offset={offset} length={length} selflen={buffer_len}"
+        )
+    }
+}
+
+impl std::error::Error for SliceOutOfBoundsError {}
