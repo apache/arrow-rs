@@ -103,11 +103,6 @@ where
                 current_selector = selectors.next();
             }
         } else {
-            if !(selector.skip || current_page_included) {
-                let start = page.offset as u64;
-                let end = start + page.compressed_page_size as u64;
-                ranges.push(start..end);
-            }
             current_selector = selectors.next()
         }
     }
