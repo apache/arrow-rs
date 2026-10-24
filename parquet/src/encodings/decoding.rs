@@ -880,9 +880,12 @@ where
                 // When min_delta == 0 there is nothing to do: last_value is
                 // unchanged and no bytes are consumed from the bit reader.
                 if min_delta != 0 {
-                    let total = min_delta.wrapping_mul(mini_block_to_skip as i64);
-                    let step = T::T::from_i64(total)
-                        .ok_or_else(|| general_err!("delta*n overflow in skip"))?;
+                    // Multiply in T's own (wrapping) width, matching get(). The i64
+                    // product min_delta * n can exceed T's range for valid data, which
+                    // from_i64 would wrongly reject as an overflow.
+                    let step_count = T::T::from_usize(mini_block_to_skip)
+                        .ok_or_else(|| general_err!("overflow computing skip count"))?;
+                    let step = self.min_delta.wrapping_mul(&step_count);
                     self.last_value = self.last_value.wrapping_add(&step);
                 }
                 // bit_width=0 payloads occupy zero bytes; no bit_reader advancement needed.
@@ -1817,6 +1820,34 @@ mod tests {
         let data: Vec<i64> = (0..128).map(|i| i * 100).collect();
         test_skip::<Int64Type>(data.clone(), Encoding::DELTA_BINARY_PACKED, 50);
         test_skip::<Int64Type>(data, Encoding::DELTA_BINARY_PACKED, 200);
+    }
+
+    fn large_step() -> Vec<i32> {
+        (0..40i64)
+            .map(|i| (-2_000_000_000i64 + i * 100_000_000) as i32)
+            .collect()
+    }
+
+    #[test]
+    fn repro_skip_bw0_large_step_i32_get() {
+        test_delta_bit_packed_decode::<Int32Type>(vec![large_step()]);
+    }
+
+    #[test]
+    fn repro_skip_bw0_large_step_i32_skip() {
+        test_skip::<Int32Type>(large_step(), Encoding::DELTA_BINARY_PACKED, 30);
+    }
+
+    #[test]
+    fn repro_skip_bw0_wrapping_i32_get() {
+        let data: Vec<i32> = (0..8).map(|i| if i % 2 == 0 { i32::MIN } else { 0 }).collect();
+        test_delta_bit_packed_decode::<Int32Type>(vec![data]);
+    }
+
+    #[test]
+    fn repro_skip_bw0_wrapping_i32_skip() {
+        let data: Vec<i32> = (0..8).map(|i| if i % 2 == 0 { i32::MIN } else { 0 }).collect();
+        test_skip::<Int32Type>(data, Encoding::DELTA_BINARY_PACKED, 4);
     }
 
     #[test]
