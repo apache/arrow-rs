@@ -205,7 +205,7 @@ pub struct ColumnValueEncoderImpl<T: DataType> {
     max_value: Option<T::T>,
     nan_count: Option<u64>,
     bloom_filter: Option<Sbbf>,
-    bloom_filter_target_fpp: f64,
+    bloom_filter_target_fpp: Option<f64>,
     variable_length_bytes: Option<i64>,
     geo_stats_accumulator: Option<Box<dyn GeoStatsAccumulator>>,
 }
@@ -261,7 +261,9 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
 
     fn flush_bloom_filter(&mut self) -> Option<Sbbf> {
         let mut sbbf = self.bloom_filter.take()?;
-        sbbf.fold_to_target_fpp(self.bloom_filter_target_fpp);
+        if let Some(target_fpp) = self.bloom_filter_target_fpp {
+            sbbf.fold_to_target_fpp(target_fpp);
+        }
         Some(sbbf)
     }
 
@@ -455,16 +457,16 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
 }
 
 /// Creates a bloom filter sized for the column's configured NDV, returning the filter
-/// and the target FPP for folding.
+/// and the target FPP for folding, or `None` when folding is disabled.
 pub(crate) fn create_bloom_filter(
     column_props: &ResolvedColumnProperties,
-) -> Result<(Option<Sbbf>, f64)> {
+) -> Result<(Option<Sbbf>, Option<f64>)> {
     match column_props.bloom_filter_properties.as_ref() {
         Some(bf_props) => Ok((
             Some(Sbbf::new_with_ndv_fpp(bf_props.ndv(), bf_props.fpp())?),
-            bf_props.fpp(),
+            bf_props.folding_enabled().then_some(bf_props.fpp()),
         )),
-        None => Ok((None, 0.0)),
+        None => Ok((None, None)),
     }
 }
 

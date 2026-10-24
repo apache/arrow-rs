@@ -3440,6 +3440,84 @@ mod tests {
         );
     }
 
+    #[test]
+    fn bloom_filter_folding_can_be_disabled_per_column() {
+        use crate::bloom_filter::Sbbf;
+        use crate::file::properties::BloomFilterProperties;
+
+        for dictionary_enabled in [false, true] {
+            let arrays: Vec<ArrayRef> = vec![
+                Arc::new(Int32Array::from_iter_values(0..100)),
+                Arc::new(StringArray::from_iter_values(
+                    (0..100).map(|i| i.to_string()),
+                )),
+            ];
+            for array in arrays {
+                let schema = Arc::new(Schema::new(vec![
+                    Field::new("folded", array.data_type().clone(), false),
+                    Field::new("retained", array.data_type().clone(), false),
+                ]));
+                let batch =
+                    RecordBatch::try_new(schema.clone(), vec![array.clone(), array]).unwrap();
+                let bloom_props = |folding_enabled| {
+                    BloomFilterProperties::builder()
+                        .with_max_ndv(1000)
+                        .with_fpp(0.01)
+                        .with_folding_enabled(folding_enabled)
+                        .build()
+                };
+                let props = WriterProperties::builder()
+                    .set_dictionary_enabled(dictionary_enabled)
+                    .set_bloom_filter_properties(bloom_props(true))
+                    .set_column_bloom_filter_properties(
+                        ColumnPath::from("retained"),
+                        bloom_props(false),
+                    )
+                    .build();
+                let mut buf = Vec::new();
+                let mut writer = ArrowWriter::try_new(&mut buf, schema, Some(props)).unwrap();
+                writer.write(&batch).unwrap();
+                writer.close().unwrap();
+                let options = ReadOptionsBuilder::new()
+                    .with_reader_properties(
+                        ReaderProperties::builder()
+                            .set_read_bloom_filter(true)
+                            .build(),
+                    )
+                    .build();
+                let reader =
+                    SerializedFileReader::new_with_options(Bytes::from(buf), options).unwrap();
+                let row_group = reader.get_row_group(0).unwrap();
+                let folded = row_group.get_column_bloom_filter(0).unwrap();
+                let retained = row_group.get_column_bloom_filter(1).unwrap();
+                let mut expected = Sbbf::new_with_ndv_fpp(1000, 0.01).unwrap();
+                for i in 0..100 {
+                    match batch.column(0).data_type() {
+                        DataType::Int32 => {
+                            assert!(folded.check(&i));
+                            assert!(retained.check(&i));
+                            expected.insert(&i);
+                        }
+                        DataType::Utf8 => {
+                            let value = i.to_string();
+                            assert!(folded.check(value.as_str()));
+                            assert!(retained.check(value.as_str()));
+                            expected.insert(value.as_str());
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                let serialize = |sbbf: &Sbbf| {
+                    let mut bytes = Vec::new();
+                    sbbf.write(&mut bytes).unwrap();
+                    bytes
+                };
+                assert_eq!(serialize(retained), serialize(&expected));
+                assert!(serialize(folded).len() < serialize(retained).len());
+            }
+        }
+    }
+
     fn write_with_bloom_filter(array: ArrayRef, dictionary_page_size_limit: usize) -> Bytes {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "col",
