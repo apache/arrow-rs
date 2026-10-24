@@ -160,8 +160,8 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
 
     // Null density: 0, 10%
     for null_density in [0.0, 0.1] {
-        // Selectivity: 0.1%, 1%, 10%, 80%
-        for selectivity in [0.001, 0.01, 0.1, 0.8] {
+        // Selectivity: 0.1%, 0.5%, 1%, 10%, 80%
+        for selectivity in [0.001, 0.005, 0.01, 0.1, 0.8] {
             FilterBenchmarkBuilder {
                 c,
                 name: "primitive",

@@ -801,7 +801,15 @@ impl BatchCoalescer {
         let new_arrays = self
             .in_progress_arrays
             .iter_mut()
-            .map(|array| array.finish())
+            .zip(self.schema.fields())
+            .map(|(array, field)| {
+                array.finish().map_err(|e| {
+                    ArrowError::ComputeError(format!(
+                        "Failed to concatenate column '{}': {e}",
+                        field.name()
+                    ))
+                })
+            })
             .collect::<Result<Vec<_>, ArrowError>>()?;
 
         for (array, field) in new_arrays.iter().zip(self.schema.fields().iter()) {
@@ -819,7 +827,7 @@ impl BatchCoalescer {
         Ok(())
     }
 
-    /// Returns true if there is any buffered data
+    /// Returns true if there are no buffered rows and no completed batches
     pub fn is_empty(&self) -> bool {
         self.buffered_rows == 0 && self.completed.is_empty()
     }
@@ -1055,11 +1063,11 @@ mod tests {
     use crate::take::take_record_batch;
     use arrow_array::builder::StringViewBuilder;
     use arrow_array::cast::AsArray;
-    use arrow_array::types::Int32Type;
+    use arrow_array::types::{Int32Type, UInt8Type};
     use arrow_array::{
-        BinaryViewArray, FixedSizeBinaryArray, Int32Array, Int64Array, RecordBatchOptions,
-        StringArray, StringViewArray, TimestampNanosecondArray, UInt32Array, UInt64Array,
-        make_array, record_batch,
+        BinaryViewArray, DictionaryArray, FixedSizeBinaryArray, Int32Array, Int64Array,
+        RecordBatchOptions, StringArray, StringViewArray, TimestampNanosecondArray, UInt8Array,
+        UInt32Array, UInt64Array, make_array, record_batch,
     };
     use arrow_buffer::BooleanBufferBuilder;
     use arrow_schema::{DataType, Field, Schema};
@@ -1098,6 +1106,52 @@ mod tests {
             .with_batch_size(21)
             .with_expected_output_sizes(vec![])
             .run();
+    }
+
+    #[test]
+    fn test_coalesce_error_includes_column_name() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new(
+                "b",
+                DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+                false,
+            ),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from_iter_values(std::iter::repeat_n("a", 256))),
+                Arc::new(DictionaryArray::<UInt8Type>::new(
+                    UInt8Array::from_iter_values(0..=u8::MAX),
+                    Arc::new(StringArray::from_iter_values(
+                        (0..=u8::MAX).map(|i| i.to_string()),
+                    )),
+                )),
+            ],
+        )
+        .unwrap();
+        let overflow = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec!["a"])),
+                Arc::new(DictionaryArray::<UInt8Type>::new(
+                    UInt8Array::from(vec![0]),
+                    Arc::new(StringArray::from(vec!["overflow"])),
+                )),
+            ],
+        )
+        .unwrap();
+
+        let mut coalescer = BatchCoalescer::new(schema, 258);
+        coalescer.push_batch(batch).unwrap();
+        coalescer.push_batch(overflow).unwrap();
+        let err = coalescer.finish_buffered_batch().unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Compute error: Failed to concatenate column 'b': Dictionary key bigger than the key type"
+        );
     }
 
     #[test]
