@@ -21,7 +21,19 @@ use arrow::error::{ArrowError, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// The metadata key of an extension type name
+const EXTENSION_TYPE_NAME_KEY: &str = "ARROW:extension:name";
+
 /// Parse a `Field` definition from a JSON representation.
+///
+/// The optional `metadata` of a field's `dictionary` holds the metadata of the
+/// dictionary value type, for example its extension type. [`DataType::Dictionary`]
+/// cannot carry metadata for its value type (see
+/// <https://github.com/apache/arrow-rs/issues/7982>), so it is mapped to the
+/// metadata of the returned [`Field`] in the same way as the arrow-ipc readers
+/// map `DictionaryEncoding.custom_metadata`: it is copied into the field's
+/// metadata, without replacing keys already present there, unless the field
+/// has its own `ARROW:extension:name`, in which case it is dropped.
 pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
     use serde_json::Value;
     match *json {
@@ -49,64 +61,9 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
             };
 
             // Referenced example file: testing/data/arrow-ipc-stream/integration/1.0.0-littleendian/generated_custom_metadata.json.gz
-            let metadata = match map.get("metadata") {
-                Some(Value::Array(values)) => {
-                    let mut res: HashMap<String, String> = HashMap::default();
-                    for value in values {
-                        match value.as_object() {
-                            Some(map) => {
-                                if map.len() != 2 {
-                                    return Err(ArrowError::ParseError(
-                                        "Field 'metadata' must have exact two entries for each key-value map".to_string(),
-                                    ));
-                                }
-                                if let (Some(k), Some(v)) = (map.get("key"), map.get("value")) {
-                                    if let (Some(k_str), Some(v_str)) = (k.as_str(), v.as_str()) {
-                                        res.insert(
-                                            k_str.to_string().clone(),
-                                            v_str.to_string().clone(),
-                                        );
-                                    } else {
-                                        return Err(ArrowError::ParseError(
-                                            "Field 'metadata' must have map value of string type"
-                                                .to_string(),
-                                        ));
-                                    }
-                                } else {
-                                    return Err(ArrowError::ParseError("Field 'metadata' lacks map keys named \"key\" or \"value\"".to_string()));
-                                }
-                            }
-                            _ => {
-                                return Err(ArrowError::ParseError(
-                                    "Field 'metadata' contains non-object key-value pair"
-                                        .to_string(),
-                                ));
-                            }
-                        }
-                    }
-                    res
-                }
-                // We also support map format, because Schema's metadata supports this.
-                // See https://github.com/apache/arrow/pull/5907
-                Some(Value::Object(values)) => {
-                    let mut res: HashMap<String, String> = HashMap::default();
-                    for (k, v) in values {
-                        if let Some(str_value) = v.as_str() {
-                            res.insert(k.clone(), str_value.to_string().clone());
-                        } else {
-                            return Err(ArrowError::ParseError(format!(
-                                "Field 'metadata' contains non-string value for key {k}"
-                            )));
-                        }
-                    }
-                    res
-                }
-                Some(_) => {
-                    return Err(ArrowError::ParseError(
-                        "Field `metadata` is not json array".to_string(),
-                    ));
-                }
-                _ => HashMap::default(),
+            let mut metadata = match map.get("metadata") {
+                Some(metadata) => metadata_from_json(metadata, "metadata")?,
+                None => HashMap::default(),
             };
 
             // if data_type is a struct or list, get its children
@@ -278,6 +235,16 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
                             ));
                         }
                     };
+                    // metadata for the dictionary value type, see above
+                    if let Some(value_metadata) = dictionary.get("metadata") {
+                        let value_metadata =
+                            metadata_from_json(value_metadata, "dictionary.metadata")?;
+                        if !metadata.contains_key(EXTENSION_TYPE_NAME_KEY) {
+                            for (k, v) in value_metadata {
+                                metadata.entry(k).or_insert(v);
+                            }
+                        }
+                    }
                     DataType::Dictionary(Box::new(index_type), Box::new(data_type))
                 }
                 _ => data_type,
@@ -291,6 +258,69 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
         _ => Err(ArrowError::ParseError(
             "Invalid json value type for field".to_string(),
         )),
+    }
+}
+
+/// Parse the key-value metadata in the field attribute `attribute`.
+///
+/// The metadata is a list of `{"key": ..., "value": ...}` objects. A map from
+/// keys to values is also accepted, because Schema's metadata supports this.
+/// See <https://github.com/apache/arrow/pull/5907>
+fn metadata_from_json(
+    json: &serde_json::Value,
+    attribute: &str,
+) -> Result<HashMap<String, String>> {
+    use serde_json::Value;
+    match json {
+        Value::Array(values) => {
+            let mut res: HashMap<String, String> = HashMap::default();
+            for value in values {
+                match value.as_object() {
+                    Some(map) => {
+                        if map.len() != 2 {
+                            return Err(ArrowError::ParseError(format!(
+                                "Field '{attribute}' must have exact two entries for each key-value map"
+                            )));
+                        }
+                        if let (Some(k), Some(v)) = (map.get("key"), map.get("value")) {
+                            if let (Some(k_str), Some(v_str)) = (k.as_str(), v.as_str()) {
+                                res.insert(k_str.to_string(), v_str.to_string());
+                            } else {
+                                return Err(ArrowError::ParseError(format!(
+                                    "Field '{attribute}' must have map value of string type"
+                                )));
+                            }
+                        } else {
+                            return Err(ArrowError::ParseError(format!(
+                                "Field '{attribute}' lacks map keys named \"key\" or \"value\""
+                            )));
+                        }
+                    }
+                    _ => {
+                        return Err(ArrowError::ParseError(format!(
+                            "Field '{attribute}' contains non-object key-value pair"
+                        )));
+                    }
+                }
+            }
+            Ok(res)
+        }
+        Value::Object(values) => {
+            let mut res: HashMap<String, String> = HashMap::default();
+            for (k, v) in values {
+                if let Some(str_value) = v.as_str() {
+                    res.insert(k.clone(), str_value.to_string());
+                } else {
+                    return Err(ArrowError::ParseError(format!(
+                        "Field '{attribute}' contains non-string value for key {k}"
+                    )));
+                }
+            }
+            Ok(res)
+        }
+        _ => Err(ArrowError::ParseError(format!(
+            "Field `{attribute}` is not json array"
+        ))),
     }
 }
 
@@ -615,5 +645,133 @@ mod tests {
         );
 
         assert_eq!(expected, dt);
+    }
+
+    /// JSON of a dictionary-encoded `fixedsizebinary(16)` field, with the given
+    /// `dictionary.metadata` and field `metadata` attributes (if any)
+    fn uuid_dictionary_field_json(
+        dictionary_metadata: Option<&str>,
+        metadata: Option<&str>,
+    ) -> Value {
+        let mut json = serde_json::json!({
+            "name": "uuids",
+            "nullable": true,
+            "type": {"name": "fixedsizebinary", "byteWidth": 16},
+            "children": [],
+            "dictionary": {
+                "id": 0,
+                "indexType": {"name": "int", "isSigned": true, "bitWidth": 32},
+                "isOrdered": false
+            }
+        });
+        if let Some(dictionary_metadata) = dictionary_metadata {
+            json["dictionary"]["metadata"] = serde_json::from_str(dictionary_metadata).unwrap();
+        }
+        if let Some(metadata) = metadata {
+            json["metadata"] = serde_json::from_str(metadata).unwrap();
+        }
+        json
+    }
+
+    fn uuid_dictionary_type() -> DataType {
+        DataType::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(DataType::FixedSizeBinary(16)),
+        )
+    }
+
+    /// Read a dictionary field with the given `dictionary.metadata` and field
+    /// `metadata` (as `[{"key": ..., "value": ...}]` lists)
+    fn read_uuid_dictionary_field(
+        dictionary_metadata: Option<&[(&str, &str)]>,
+        metadata: Option<&[(&str, &str)]>,
+    ) -> Field {
+        let to_json = |pairs: &[(&str, &str)]| {
+            let pairs = pairs
+                .iter()
+                .map(|(k, v)| serde_json::json!({"key": k, "value": v}))
+                .collect::<Vec<_>>();
+            serde_json::to_string(&pairs).unwrap()
+        };
+        let json = uuid_dictionary_field_json(
+            dictionary_metadata.map(to_json).as_deref(),
+            metadata.map(to_json).as_deref(),
+        );
+        let field = field_from_json(&json).unwrap();
+        assert_eq!(field.data_type(), &uuid_dictionary_type());
+        field
+    }
+
+    #[test]
+    fn parse_dictionary_value_metadata_from_json() {
+        let name = EXTENSION_TYPE_NAME_KEY;
+        let ext_metadata = "ARROW:extension:metadata";
+        let expected = |pairs: &[(&str, &str)]| {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect::<HashMap<_, _>>()
+        };
+
+        // copied to the field metadata
+        let field = read_uuid_dictionary_field(Some(&[(name, "arrow.uuid")]), None);
+        assert_eq!(field.metadata(), &expected(&[(name, "arrow.uuid")]));
+
+        // without replacing the keys of the field metadata
+        let field = read_uuid_dictionary_field(
+            Some(&[
+                (name, "arrow.uuid"),
+                (ext_metadata, "value"),
+                ("k", "value"),
+            ]),
+            Some(&[(ext_metadata, "field"), ("k", "field")]),
+        );
+        assert_eq!(
+            field.metadata(),
+            &expected(&[
+                (name, "arrow.uuid"),
+                (ext_metadata, "field"),
+                ("k", "field")
+            ])
+        );
+
+        // dropped if the field has its own extension type
+        let field = read_uuid_dictionary_field(
+            Some(&[(name, "arrow.uuid"), ("k", "value")]),
+            Some(&[(name, "example.uuid_dictionary")]),
+        );
+        assert_eq!(
+            field.metadata(),
+            &expected(&[(name, "example.uuid_dictionary")])
+        );
+
+        // empty
+        let field = read_uuid_dictionary_field(Some(&[]), Some(&[("k", "field")]));
+        assert_eq!(
+            field,
+            read_uuid_dictionary_field(None, Some(&[("k", "field")]))
+        );
+    }
+
+    #[test]
+    fn parse_invalid_dictionary_value_metadata_from_json() {
+        for (metadata, error) in [
+            (
+                r#""arrow.uuid""#,
+                "Field `dictionary.metadata` is not json array",
+            ),
+            (
+                r#"[{"key": "ARROW:extension:name"}]"#,
+                "Field 'dictionary.metadata' must have exact two entries for each key-value map",
+            ),
+            (
+                r#"[{"key": "ARROW:extension:name", "value": 1}]"#,
+                "Field 'dictionary.metadata' must have map value of string type",
+            ),
+        ] {
+            let value = uuid_dictionary_field_json(Some(metadata), None);
+            let err = field_from_json(&value).unwrap_err();
+            assert_eq!(err.to_string(), format!("Parser error: {error}"));
+        }
     }
 }

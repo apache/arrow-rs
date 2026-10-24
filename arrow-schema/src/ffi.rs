@@ -34,6 +34,7 @@
 //! assert_eq!(schema, back);
 //! ```
 
+use crate::extension::EXTENSION_TYPE_NAME_KEY;
 use crate::{
     ArrowError, DataType, Field, FieldRef, IntervalUnit, Schema, TimeUnit, UnionFields, UnionMode,
 };
@@ -716,14 +717,41 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
     }
 }
 
+/// Import a [`Field`] from an [`FFI_ArrowSchema`]
+///
+/// # Dictionary value type metadata
+///
+/// The metadata of the `dictionary` of a dictionary-encoded schema describes
+/// the dictionary *value* type, for example the extension type of a dictionary
+/// whose values are an extension type. [`DataType::Dictionary`] cannot carry
+/// metadata for its value type (see
+/// <https://github.com/apache/arrow-rs/issues/7982>), so until it can it is
+/// mapped to the metadata of the [`Field`], as the arrow-ipc readers map the
+/// metadata of the dictionary value type in IPC schemas:
+///
+/// * If the schema's own metadata has no `ARROW:extension:name`, the metadata
+///   of its `dictionary` is copied into the field's metadata. Keys already
+///   present in the schema's own metadata take precedence.
+/// * Otherwise the metadata of its `dictionary` is dropped.
+///
+/// Exporting a [`Field`] writes all its metadata to the exported schema itself,
+/// not to its `dictionary`.
 impl TryFrom<&FFI_ArrowSchema> for Field {
     type Error = ArrowError;
 
     fn try_from(c_schema: &FFI_ArrowSchema) -> Result<Self, ArrowError> {
         let dtype = DataType::try_from(c_schema)?;
+        let mut metadata = c_schema.metadata()?;
+        if let Some(dict_schema) = c_schema.dictionary()
+            && !metadata.contains_key(EXTENSION_TYPE_NAME_KEY)
+        {
+            for (k, v) in dict_schema.metadata()? {
+                metadata.entry(k).or_insert(v);
+            }
+        }
         let field = Field::new(c_schema.name().unwrap_or(""), dtype, c_schema.nullable())
             .with_dict_is_ordered(c_schema.dictionary_ordered())
-            .with_metadata(c_schema.metadata()?);
+            .with_metadata(metadata);
         Ok(field)
     }
 }
@@ -1165,6 +1193,118 @@ mod tests {
             let field = Field::try_from(&schema).unwrap();
             assert_eq!(field.metadata(), &metadata);
         }
+    }
+
+    /// Build a nullable schema `name` of a dictionary of `fixed_size_binary(16)`
+    /// with int32 indices, with the given metadata on the schema and on its
+    /// dictionary.
+    fn uuid_dictionary_schema(
+        name: &str,
+        value_metadata: &[(&str, &str)],
+        metadata: &[(&str, &str)],
+    ) -> FFI_ArrowSchema {
+        // SAFETY: the schemas were constructed by this crate via try_new
+        unsafe {
+            let dictionary = FFI_ArrowSchema::try_new("w:16", vec![], None)
+                .unwrap()
+                .with_metadata(value_metadata.iter().copied())
+                .unwrap();
+            FFI_ArrowSchema::try_new("i", vec![], Some(dictionary))
+                .unwrap()
+                .with_name(name)
+                .unwrap()
+                .with_flags(Flags::NULLABLE)
+                .unwrap()
+                .with_metadata(metadata.iter().copied())
+                .unwrap()
+        }
+    }
+
+    /// The field imported from [`uuid_dictionary_schema`] with `metadata`
+    fn uuid_dictionary_field(name: &str, metadata: &[(&str, &str)]) -> Field {
+        let data_type = DataType::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(DataType::FixedSizeBinary(16)),
+        );
+        Field::new(name, data_type, true).with_metadata(
+            metadata
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect::<HashMap<_, _>>(),
+        )
+    }
+
+    #[test]
+    fn test_import_dictionary_value_metadata() {
+        const NAME: &str = EXTENSION_TYPE_NAME_KEY;
+        const METADATA: &str = crate::extension::EXTENSION_TYPE_METADATA_KEY;
+        let import = |value_metadata, metadata| {
+            Field::try_from(&uuid_dictionary_schema("uuids", value_metadata, metadata)).unwrap()
+        };
+
+        // copied to the field
+        assert_eq!(
+            import(&[(NAME, "arrow.uuid"), (METADATA, "")], &[]),
+            uuid_dictionary_field("uuids", &[(NAME, "arrow.uuid"), (METADATA, "")])
+        );
+
+        // without replacing the keys of the field's own metadata
+        assert_eq!(
+            import(
+                &[(NAME, "arrow.uuid"), (METADATA, "value"), ("k", "value")],
+                &[(METADATA, "field"), ("k", "field")]
+            ),
+            uuid_dictionary_field(
+                "uuids",
+                &[(NAME, "arrow.uuid"), (METADATA, "field"), ("k", "field")]
+            )
+        );
+
+        // dropped if the field has its own extension type
+        assert_eq!(
+            import(
+                &[(NAME, "arrow.uuid"), ("k", "value")],
+                &[(NAME, "example.uuid_dictionary")]
+            ),
+            uuid_dictionary_field("uuids", &[(NAME, "example.uuid_dictionary")])
+        );
+    }
+
+    #[test]
+    fn test_import_nested_dictionary_value_metadata() {
+        let value_metadata = [(EXTENSION_TYPE_NAME_KEY, "arrow.uuid")];
+        let list = FFI_ArrowSchema::try_new(
+            "+l",
+            vec![uuid_dictionary_schema("item", &value_metadata, &[])],
+            None,
+        )
+        .unwrap()
+        .with_name("list")
+        .unwrap();
+        let r#struct = FFI_ArrowSchema::try_new(
+            "+s",
+            vec![uuid_dictionary_schema("child", &value_metadata, &[])],
+            None,
+        )
+        .unwrap()
+        .with_name("struct")
+        .unwrap();
+        let c_schema = FFI_ArrowSchema::try_new("+s", vec![list, r#struct], None).unwrap();
+
+        let schema = Schema::try_from(&c_schema).unwrap();
+        let expected = Schema::new(vec![
+            Field::new_list(
+                "list",
+                uuid_dictionary_field("item", &value_metadata),
+                false,
+            ),
+            Field::new_struct(
+                "struct",
+                vec![uuid_dictionary_field("child", &value_metadata)],
+                false,
+            ),
+        ]);
+        assert_eq!(schema, expected);
     }
 
     #[test]
