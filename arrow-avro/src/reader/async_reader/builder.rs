@@ -58,7 +58,7 @@ impl<R> ReaderBuilder<R> {
     }
 
     /// Specify a byte range to read from the Avro file.
-    /// If this is provided, the reader will read all the blocks within the specified range,
+    /// If this is provided, the reader will read the blocks whose sync marker starts within the range,
     /// if the range ends mid-block, it will attempt to fetch the remaining bytes to complete the block,
     /// but no further blocks will be read.
     /// If this is omitted, the full file will be read.
@@ -264,9 +264,8 @@ impl<R: AsyncFileReader> ReaderBuilder<R> {
             None => 0..self.file_size,
         };
 
-        // Determine if there is actually data to fetch, note that we subtract the header len from range.start,
-        // so we need to check if range.end == header_len to see if there's no data after the header
-        let reader_state = if range.start == range.end || header_len == range.end {
+        // Determine if there is actually data to fetch
+        let reader_state = if range.start == range.end {
             ReaderState::Finished
         } else {
             ReaderState::Idle {
