@@ -1162,7 +1162,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Memory pointer is not aligned with the specified scalar type")]
+    #[should_panic(expected = "buffer is not aligned for i32 (requires 4-byte alignment)")]
     // Different error messages, so skip for now
     // https://github.com/apache/arrow-rs/issues/1545
     #[cfg(not(feature = "force_validate"))]
@@ -1178,7 +1178,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Memory pointer is not aligned with the specified scalar type")]
+    #[should_panic(expected = "buffer is not aligned for i32 (requires 4-byte alignment)")]
     // Different error messages, so skip for now
     // https://github.com/apache/arrow-rs/issues/1545
     #[cfg(not(feature = "force_validate"))]
