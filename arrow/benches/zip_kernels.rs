@@ -191,7 +191,19 @@ fn mask_cases(len: usize) -> Vec<(&'static str, Vec<BooleanArray>)> {
     ]
 }
 
-fn bench_zip_on_input_generator(c: &mut Criterion, input_generator: &impl InputGenerator) {
+/// Which input combinations to run for a type.
+#[derive(PartialEq)]
+enum Scenarios {
+    All,
+    /// Only an array against a scalar
+    ScalarSide,
+}
+
+fn bench_zip_on_input_generator(
+    c: &mut Criterion,
+    input_generator: &impl InputGenerator,
+    scenarios: Scenarios,
+) {
     const ARRAY_LEN: usize = 8192;
 
     let mut group =
@@ -213,18 +225,20 @@ fn bench_zip_on_input_generator(c: &mut Criterion, input_generator: &impl InputG
 
     let masks = mask_cases(ARRAY_LEN);
 
-    // Benchmarks for different scalar combinations
-    for (description, truthy, falsy) in &[
-        ("null_vs_non_null_scalar", &null_scalar, &non_null_scalar_1),
-        ("non_nulls_scalars", &non_null_scalar_1, &non_null_scalar_2),
-    ] {
-        bench_zip_input_on_all_masks(
-            description,
-            &mut group,
-            &masks,
-            &[Scalar::new(truthy)],
-            &[Scalar::new(falsy)],
-        );
+    if scenarios == Scenarios::All {
+        // Benchmarks for different scalar combinations
+        for (description, truthy, falsy) in &[
+            ("null_vs_non_null_scalar", &null_scalar, &non_null_scalar_1),
+            ("non_nulls_scalars", &non_null_scalar_1, &non_null_scalar_2),
+        ] {
+            bench_zip_input_on_all_masks(
+                description,
+                &mut group,
+                &masks,
+                &[Scalar::new(truthy)],
+                &[Scalar::new(falsy)],
+            );
+        }
     }
 
     bench_zip_input_on_all_masks(
@@ -244,12 +258,22 @@ fn bench_zip_on_input_generator(c: &mut Criterion, input_generator: &impl InputG
     );
 
     bench_zip_input_on_all_masks(
-        "array_vs_array",
+        "array_vs_null_scalar",
         &mut group,
         &masks,
         &arrays_1_10pct_nulls,
-        &arrays_2_10pct_nulls,
+        &[Scalar::new(null_scalar.clone())],
     );
+
+    if scenarios == Scenarios::All {
+        bench_zip_input_on_all_masks(
+            "array_vs_array",
+            &mut group,
+            &masks,
+            &arrays_1_10pct_nulls,
+            &arrays_2_10pct_nulls,
+        );
+    }
 
     group.finish();
 }
@@ -288,6 +312,16 @@ fn add_benchmark(c: &mut Criterion) {
             description: "i32".to_string(),
             _marker: std::marker::PhantomData,
         },
+        Scenarios::All,
+    );
+
+    bench_zip_on_input_generator(
+        c,
+        &GeneratePrimitive::<Decimal128Type> {
+            description: "decimal128".to_string(),
+            _marker: std::marker::PhantomData,
+        },
+        Scenarios::ScalarSide,
     );
 
     bench_zip_on_input_generator(
@@ -297,6 +331,7 @@ fn add_benchmark(c: &mut Criterion) {
             range_length: 3..20,
             _marker: std::marker::PhantomData,
         },
+        Scenarios::All,
     );
 
     bench_zip_on_input_generator(
@@ -306,6 +341,7 @@ fn add_benchmark(c: &mut Criterion) {
             range: 3..20,
             _marker: std::marker::PhantomData,
         },
+        Scenarios::All,
     );
 }
 
