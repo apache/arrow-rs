@@ -64,7 +64,7 @@ macro_rules! ree_map {
 ///   ┌─────────────────┐  ┌─────────┐       ┌─────────────────┐
 /// │ │        A        │  │    2    │ │     │        A        │
 ///   ├─────────────────┤  ├─────────┤       ├─────────────────┤
-/// │ │        D        │  │    3    │ │     │        A        │    run length of 'A' = runs_ends[0] - 0 = 2
+/// │ │        D        │  │    3    │ │     │        A        │    run length of 'A' = run_ends[0] - 0 = 2
 ///   ├─────────────────┤  ├─────────┤       ├─────────────────┤
 /// │ │        B        │  │    6    │ │     │        D        │    run length of 'D' = run_ends[1] - run_ends[0] = 1
 ///   └─────────────────┘  └─────────┘       ├─────────────────┤
@@ -73,11 +73,61 @@ macro_rules! ree_map {
 /// └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┘     │        B        │
 ///                                          ├─────────────────┤
 ///                RunArray                  │        B        │    run length of 'B' = run_ends[2] - run_ends[1] = 3
-///               length = 3                 └─────────────────┘
+///          offset = 0, len = 6             └─────────────────┘
 ///
 ///                                             Logical array
 ///                                                Contents
 /// ```
+///
+/// # `offset` and `len`
+///
+/// The [`Array::len`] and [`Array::offset`] for a `RunArray` refer to the
+/// **logical** length, not the `run_ends` and `values` child arrays. In the
+/// example above the `RunArray` has length `6` even though `run_ends` and
+/// `values` each contain `3` elements.
+///
+/// The values in `run_ends` represent indexes of the *unsliced* logical array.
+/// This allows zero-copy [`RunArray::slice`]: `run_ends` and `values` are left
+/// untouched and only `offset` and `len` are adjusted.
+///
+/// A [`RunArray`] must satisfy the following invariants:
+///
+/// * every run end is greater than zero and `run_ends` is strictly increasing
+/// * `run_ends` has no null values
+/// * `run_ends` and `values` have the same length
+/// * if `len > 0`, the last run end is greater than or equal to `offset + len`.
+///
+/// The example below shows the same array as above after calling `slice(1, 3)`
+///
+/// ```text
+/// ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┐
+///   ┌─────────────────┐  ┌─────────┐       ┌ ─ ─ ─ ─ ─ ─ ─ ─ ┐
+/// │ │        A        │  │    2    │ │              A             logical index 0: before offset, not visible
+///   ├─────────────────┤  ├─────────┤       ┌─────────────────┐ ◄── offset = 1
+/// │ │        D        │  │    3    │ │     │        A        │    logical index 1 < run_ends[0] = 2, so 'A'
+///   ├─────────────────┤  ├─────────┤       ├─────────────────┤
+/// │ │        B        │  │    6    │ │     │        D        │    logical index 2 < run_ends[1] = 3, so 'D'
+///   └─────────────────┘  └─────────┘       ├─────────────────┤
+/// │        values          run_ends  │     │        B        │    logical index 3 < run_ends[2] = 6, so 'B'
+///                                          └─────────────────┘ ◄── offset + len = 4
+/// └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┘              B             logical index 4: after offset + len, not visible
+///                                          ├ ─ ─ ─ ─ ─ ─ ─ ─ ┤
+///                RunArray                           B             logical index 5: after offset + len, not visible
+///          offset = 1, len = 3             └ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+///
+///                                             Logical array
+///                                                Contents
+/// ```
+///
+/// # Sliced child arrays
+///
+/// [`RunArray::slice`] doesn't slice child arrays, but a `RunArray` may be
+/// built (for example from [`ArrayData`]) from child arrays that are already
+/// sliced. In that case each child's own `offset` and `len` are respected,
+/// independently of the logical `offset` and `len` of the `RunArray`:
+///
+/// * Run `i` ends at `run_ends.value(i)`, the `i`th (logical) element
+/// * The value of run `i` is `values.value(i)`, the `i`th (logical) element
 ///
 /// [run-end encoded values]: https://arrow.apache.org/docs/format/Columnar.html#run-end-encoded-layout
 /// [run-length encoding (RLE)]: https://en.wikipedia.org/wiki/Run-length_encoding
@@ -110,11 +160,18 @@ impl<R: RunEndIndexType> RunArray<R> {
 
     /// Attempts to create a [`RunArray`] using the given `run_ends` and `values`.
     ///
+    /// The resulting array is unsliced: its logical offset is `0` and its logical
+    /// length is the last value of `run_ends` (or `0` if `run_ends` is empty).
+    ///
     /// # Errors
+    ///
+    /// Returns an error if the [`RunArray` invariants] are not satisfied:
     ///
     /// - If `run_ends` and `values` have different lengths
     /// - If `run_ends` has any null values
     /// - If `run_ends` doesn't consist of strictly increasing positive integers
+    ///
+    /// [`RunArray` invariants]: RunArray#offset-and-len
     pub fn try_new(run_ends: &PrimitiveArray<R>, values: &dyn Array) -> Result<Self, ArrowError> {
         // 1. run_ends and values must have the same (physical) length.
         if run_ends.len() != values.len() {
@@ -182,7 +239,10 @@ impl<R: RunEndIndexType> RunArray<R> {
     ///
     /// # Safety
     ///
-    /// Safe if [`Self::try_new`] would not error
+    /// Safe if [`Self::try_new`] would not error, that is if `run_ends` and
+    /// `values` satisfy the [`RunArray` invariants]
+    ///
+    /// [`RunArray` invariants]: RunArray#offset-and-len
     pub unsafe fn new_unchecked(
         data_type: DataType,
         run_ends: RunEndBuffer<R::Native>,
@@ -405,6 +465,22 @@ impl<R: RunEndIndexType> RunArray<R> {
     }
 }
 
+/// Converts an [`ArrayData`] into a [`RunArray`].
+///
+/// The `len` and `offset` of `data` become the logical length and offset of the
+/// [`RunArray`]; see the [`RunArray`] documentation for how they relate to the
+/// run ends.
+///
+/// The `offset` and `len` of the `run_ends` child are respected: only the `len`
+/// elements starting at `offset` are used as run ends. See [Sliced child
+/// arrays].
+///
+/// [Sliced child arrays]: RunArray#sliced-child-arrays
+///
+/// # Panics
+///
+/// Panics if `data` is not a [`DataType::RunEndEncoded`] array with a `run_ends`
+/// child of type `R`, or does not have exactly two children.
 impl<R: RunEndIndexType> From<ArrayData> for RunArray<R> {
     // The method assumes the caller already validated the data using `ArrayData::validate_data()`
     fn from(data: ArrayData) -> Self {

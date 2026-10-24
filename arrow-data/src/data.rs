@@ -1321,6 +1321,9 @@ impl ArrayData {
                 }
             }
             DataType::RunEndEncoded(run_ends_field, values_field) => {
+                // See the `RunArray` invariants for the rules enforced here and
+                // in `check_run_ends`:
+                // https://docs.rs/arrow/latest/arrow/array/struct.RunArray.html#offset-and-len
                 self.validate_num_child_data(2)?;
                 let run_ends_data = self.get_valid_child_data(0, run_ends_field.data_type())?;
                 let values_data = self.get_valid_child_data(1, values_field.data_type())?;
@@ -1836,7 +1839,11 @@ impl ArrayData {
         })
     }
 
-    /// Validates that each value in run_ends array is positive and strictly increasing.
+    /// Validates that each value in run_ends array is positive and strictly
+    /// increasing, and that the last value covers the parent's `offset + len`
+    /// (when the parent is non-empty), as required by the [`RunArray` invariants].
+    ///
+    /// [`RunArray` invariants]: https://docs.rs/arrow/latest/arrow/array/struct.RunArray.html#offset-and-len
     fn check_run_ends<T>(
         &self,
         parent_len: usize,
