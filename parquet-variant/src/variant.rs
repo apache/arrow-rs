@@ -38,6 +38,8 @@ mod decimal;
 mod list;
 mod metadata;
 mod object;
+#[doc(hidden)]
+pub mod view;
 
 const MAX_SHORT_STRING_BYTES: usize = 0x3F;
 
@@ -392,7 +394,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     }
 
     // The actual constructor, which only performs shallow (constant-time) validation.
-    fn try_new_with_metadata_and_shallow_validation(
+    pub(crate) fn try_new_with_metadata_and_shallow_validation(
         metadata: VariantMetadata<'m>,
         value: &'v [u8],
     ) -> Result<Self, ArrowError> {

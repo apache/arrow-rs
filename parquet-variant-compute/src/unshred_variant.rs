@@ -627,12 +627,14 @@ struct StructUnshredVariantBuilder<'a> {
     value: Option<&'a ArrayRef>,
     typed_value: &'a arrow::array::StructArray,
     field_unshredders: IndexMap<&'a str, Option<UnshredVariantRowBuilder<'a>>>,
+    /// The names of `field_unshredders` as bytes, sorted.
+    sorted_field_names: Vec<&'a [u8]>,
 }
 
 impl<'a> StructUnshredVariantBuilder<'a> {
     fn try_new(value: Option<&'a ArrayRef>, typed_value: &'a StructArray) -> Result<Self> {
         // Create unshredders for each field in constructor
-        let mut field_unshredders = IndexMap::new();
+        let mut field_unshredders: IndexMap<&str, _> = IndexMap::new();
         for (field, field_array) in typed_value.fields().iter().zip(typed_value.columns()) {
             // Factory returns None for None/None case -- these are missing fields we should skip
             let Some(field_array) = field_array.as_struct_opt() else {
@@ -645,10 +647,16 @@ impl<'a> StructUnshredVariantBuilder<'a> {
             field_unshredders.insert(field.name().as_ref(), field_unshredder);
         }
 
+        let mut sorted_field_names: Vec<_> = field_unshredders
+            .keys()
+            .map(|name| name.as_bytes())
+            .collect();
+        sorted_field_names.sort_unstable();
         Ok(Self {
             value,
             typed_value,
             field_unshredders,
+            sorted_field_names,
         })
     }
 
@@ -679,14 +687,18 @@ impl<'a> StructUnshredVariantBuilder<'a> {
                 ));
             };
 
-            for entry in object.iter_try() {
-                let (field_name, field_value) = entry?;
-                if self.field_unshredders.contains_key(field_name) {
+            // The leftover fields keep their field ids and encoded bytes, because the output uses
+            // the same metadata dictionary.
+            let object = object.view();
+            for i in 0..object.len() {
+                let field_name = object.field_name(i)?;
+                if self.sorted_field_names.binary_search(&field_name).is_ok() {
                     return Err(ArrowError::InvalidArgumentError(format!(
-                        "Field '{field_name}' appears in both typed_value and value",
+                        "Field '{}' appears in both typed_value and value",
+                        String::from_utf8_lossy(field_name),
                     )));
                 }
-                object_builder.insert_bytes(field_name, field_value);
+                object_builder.insert_encoded(object.field_id(i)?, object.field(i)?.bytes()?)?;
             }
         }
 
