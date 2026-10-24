@@ -29,6 +29,10 @@ use arrow::datatypes::*;
 use arrow::util::bench_util::*;
 use arrow_select::merge::merge;
 
+/// Each benchmark cycles through this many arrays and random masks, one per
+/// iteration, so that the branch predictor cannot learn a mask.
+const NUM_INPUTS: usize = 64;
+
 trait InputGenerator {
     fn name(&self) -> &str;
 
@@ -155,26 +159,38 @@ fn create_clustered_array(len: usize, true_density: f64, run: f64, seed: u64) ->
         .collect()
 }
 
-fn mask_cases(len: usize) -> Vec<(&'static str, BooleanArray)> {
+/// Returns the masks for each mask case: `NUM_INPUTS` of each random case, and
+/// one of each constant case.
+fn mask_cases(len: usize) -> Vec<(&'static str, Vec<BooleanArray>)> {
+    let random = |null_density, true_density| -> Vec<BooleanArray> {
+        (0..NUM_INPUTS as u64)
+            .map(|seed| create_boolean_array_with_seed(len, null_density, true_density, seed))
+            .collect()
+    };
     vec![
-        ("all_true", create_boolean_array(len, 0.0, 1.0)),
-        ("99pct_true", create_boolean_array(len, 0.0, 0.99)),
-        ("90pct_true", create_boolean_array(len, 0.0, 0.9)),
-        ("50pct_true", create_boolean_array(len, 0.0, 0.5)),
-        ("10pct_true", create_boolean_array(len, 0.0, 0.1)),
-        ("1pct_true", create_boolean_array(len, 0.0, 0.01)),
-        ("all_false", create_boolean_array(len, 0.0, 0.0)),
-        ("50pct_nulls", create_boolean_array(len, 0.5, 0.5)),
+        ("all_true", vec![create_boolean_array(len, 0.0, 1.0)]),
+        ("99pct_true", random(0.0, 0.99)),
+        ("90pct_true", random(0.0, 0.9)),
+        ("50pct_true", random(0.0, 0.5)),
+        ("10pct_true", random(0.0, 0.1)),
+        ("1pct_true", random(0.0, 0.01)),
+        ("all_false", vec![create_boolean_array(len, 0.0, 0.0)]),
+        ("50pct_nulls", random(0.5, 0.5)),
     ]
 }
 
-fn run_mask_cases(len: usize) -> Vec<(&'static str, BooleanArray)> {
+fn run_mask_cases(len: usize) -> Vec<(&'static str, Vec<BooleanArray>)> {
     [
         ("runs_of_64_50pct_true", 0.5, 64.0),
         ("runs_of_512_10pct_true", 0.1, 512.0),
     ]
     .into_iter()
-    .map(|(name, density, run)| (name, create_clustered_array(len, density, run, 7)))
+    .map(|(name, density, run)| {
+        let masks = (0..NUM_INPUTS as u64)
+            .map(|seed| create_clustered_array(len, density, run, seed))
+            .collect();
+        (name, masks)
+    })
     .collect()
 }
 
@@ -207,9 +223,14 @@ fn bench_merge_on_input_generator(
         .unwrap();
 
     // For simplicity, we generate arrays with length ARRAY_LEN. Not all input values will be used.
-    let array_1_10pct_nulls = input_generator.generate_array(42, ARRAY_LEN, 0.1);
-    let array_2_10pct_nulls = input_generator.generate_array(18, ARRAY_LEN, 0.1);
-    let array_no_nulls = input_generator.generate_array(42, ARRAY_LEN, 0.0);
+    let arrays = |first_seed: u64, null_percentage: f32| -> Vec<ArrayRef> {
+        (0..NUM_INPUTS as u64)
+            .map(|i| input_generator.generate_array(first_seed + i, ARRAY_LEN, null_percentage))
+            .collect()
+    };
+    let arrays_1_10pct_nulls = arrays(42, 0.1);
+    let arrays_2_10pct_nulls = arrays(42 + NUM_INPUTS as u64, 0.1);
+    let arrays_no_nulls = arrays(42, 0.0);
 
     let masks = mask_cases(ARRAY_LEN);
     // Runs only matter where one side is a scalar: they decide between
@@ -224,16 +245,16 @@ fn bench_merge_on_input_generator(
         "array_vs_non_null_scalar",
         &mut group,
         &scalar_side_masks,
-        &array_1_10pct_nulls,
-        &Scalar::new(non_null_scalar_1.clone()),
+        &arrays_1_10pct_nulls,
+        &[Scalar::new(non_null_scalar_1.clone())],
     );
 
     bench_merge_input_on_all_masks(
         "array_no_nulls_vs_non_null_scalar",
         &mut group,
         &scalar_side_masks,
-        &array_no_nulls,
-        &Scalar::new(non_null_scalar_1.clone()),
+        &arrays_no_nulls,
+        &[Scalar::new(non_null_scalar_1.clone())],
     );
 
     // CASE WHEN ... THEN array END: the ELSE side is NULL.
@@ -241,16 +262,16 @@ fn bench_merge_on_input_generator(
         "array_vs_null_scalar",
         &mut group,
         &scalar_side_masks,
-        &array_1_10pct_nulls,
-        &Scalar::new(null_scalar.clone()),
+        &arrays_1_10pct_nulls,
+        &[Scalar::new(null_scalar.clone())],
     );
 
     bench_merge_input_on_all_masks(
         "non_null_scalar_vs_array",
         &mut group,
         &scalar_side_masks,
-        &Scalar::new(non_null_scalar_1.clone()),
-        &array_1_10pct_nulls,
+        &[Scalar::new(non_null_scalar_1.clone())],
+        &arrays_1_10pct_nulls,
     );
 
     if scenarios == Scenarios::ScalarSide {
@@ -267,8 +288,8 @@ fn bench_merge_on_input_generator(
             description,
             &mut group,
             &masks,
-            &Scalar::new(truthy),
-            &Scalar::new(falsy),
+            &[Scalar::new(truthy)],
+            &[Scalar::new(falsy)],
         );
     }
 
@@ -276,24 +297,36 @@ fn bench_merge_on_input_generator(
         "array_vs_array",
         &mut group,
         &masks,
-        &array_1_10pct_nulls,
-        &array_2_10pct_nulls,
+        &arrays_1_10pct_nulls,
+        &arrays_2_10pct_nulls,
     );
 
     group.finish();
 }
 
+/// Benchmarks `merge` for each mask case. Each iteration takes the next of the
+/// case's masks, of `truthy` and of `falsy`, cycling through each list on its
+/// own, so a one-element list stays the same.
 fn bench_merge_input_on_all_masks(
     description: &str,
     group: &mut BenchmarkGroup<WallTime>,
-    masks: &[(&str, BooleanArray)],
-    truthy: &impl Datum,
-    falsy: &impl Datum,
+    mask_cases: &[(&str, Vec<BooleanArray>)],
+    truthy: &[impl Datum],
+    falsy: &[impl Datum],
 ) {
-    for (mask_description, mask) in masks {
+    for (mask_description, masks) in mask_cases {
         let id = BenchmarkId::new(description, mask_description);
-        group.bench_with_input(id, mask, |b, mask| {
-            b.iter(|| hint::black_box(merge(mask, truthy, falsy)))
+        let mut masks = masks.iter().cycle();
+        let mut truthy = truthy.iter().cycle();
+        let mut falsy = falsy.iter().cycle();
+        group.bench_function(id, |b| {
+            b.iter(|| {
+                hint::black_box(merge(
+                    masks.next().unwrap(),
+                    truthy.next().unwrap(),
+                    falsy.next().unwrap(),
+                ))
+            })
         });
     }
 }
