@@ -23,10 +23,14 @@ use arrow::util::bench_util::*;
 use arrow::array::*;
 use arrow::compute::filter;
 use arrow::compute::{and, is_not_null};
-use arrow::datatypes::{Field, Float32Type, Int32Type, Int64Type, Schema, UInt8Type};
+use arrow::datatypes::{
+    DataType, Field, Fields, Float32Type, Int32Type, Int64Type, Schema, UInt8Type,
+};
 
 use arrow_array::types::Decimal128Type;
+use arrow_buffer::{NullBuffer, OffsetBuffer};
 use criterion::{Criterion, criterion_group, criterion_main};
+use rand::{RngExt, SeedableRng, rngs::StdRng};
 use std::hint;
 
 fn bench_filter(data_array: &dyn Array, filter_array: &BooleanArray) {
@@ -35,6 +39,54 @@ fn bench_filter(data_array: &dyn Array, filter_array: &BooleanArray) {
 
 fn bench_built_filter(array: &dyn Array, filter: &FilterPredicate) {
     hint::black_box(filter.filter(array).unwrap());
+}
+
+/// Creates a `Struct<x: Int64, y: Utf8>` array of `len` rows
+fn create_xy_struct_array(len: usize) -> StructArray {
+    let fields = Fields::from(vec![
+        Field::new("x", DataType::Int64, true),
+        Field::new("y", DataType::Utf8, true),
+    ]);
+    let x = create_primitive_array::<Int64Type>(len, 0.1);
+    let y = create_string_array_with_max_len::<i32>(len, 0.1, 16);
+    StructArray::new(fields, vec![Arc::new(x), Arc::new(y)], None)
+}
+
+/// Creates a `List<Struct<x: Int64, y: Utf8>>` array of `size` rows, each
+/// with a random number of elements in `0..=max_list_size`
+fn create_struct_list_array(size: usize, null_density: f32, max_list_size: usize) -> ListArray {
+    let mut rng = StdRng::seed_from_u64(42);
+    let lengths: Vec<usize> = (0..size)
+        .map(|_| rng.random_range(0..=max_list_size))
+        .collect();
+    let values = create_xy_struct_array(lengths.iter().sum());
+    let offsets = OffsetBuffer::<i32>::from_lengths(lengths);
+    let nulls = (null_density > 0.0)
+        .then(|| NullBuffer::from_iter((0..size).map(|_| rng.random::<f32>() >= null_density)));
+    let field = Arc::new(Field::new_list_field(values.data_type().clone(), true));
+    ListArray::new(field, offsets, Arc::new(values), nulls)
+}
+
+/// Creates a `FixedSizeList<Struct<x: Int64, y: Utf8>>` array of `size` rows
+fn create_struct_fixed_size_list_array(size: usize, list_size: i32) -> FixedSizeListArray {
+    let values = create_xy_struct_array(size * list_size as usize);
+    let field = Arc::new(Field::new_list_field(values.data_type().clone(), true));
+    FixedSizeListArray::new(field, list_size, Arc::new(values), None)
+}
+
+/// Creates the `Struct<a..h: Int64, items: List<Struct<x: Int64, y: Utf8>>>`
+/// array from <https://github.com/apache/datafusion/issues/26581>
+fn create_struct_with_list_array(size: usize, max_list_size: usize) -> StructArray {
+    let mut fields = vec![];
+    let mut columns: Vec<ArrayRef> = vec![];
+    for name in ["a", "b", "c", "d", "e", "f", "g", "h"] {
+        fields.push(Field::new(name, DataType::Int64, true));
+        columns.push(Arc::new(create_primitive_array::<Int64Type>(size, 0.1)));
+    }
+    let items = create_struct_list_array(size, 0.1, max_list_size);
+    fields.push(Field::new("items", items.data_type().clone(), true));
+    columns.push(Arc::new(items));
+    StructArray::new(Fields::from(fields), columns, None)
 }
 
 fn add_benchmark(c: &mut Criterion) {
@@ -336,6 +388,53 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("filter run array low selectivity (kept 1/1024)", |b| {
         b.iter(|| bench_built_filter(&data_array, &sparse_filter))
     });
+
+    let mut add_benchmark_for_nested = |name: &str, data_array: &dyn Array| {
+        c.bench_function(&format!("filter {name} (kept 1/2)"), |b| {
+            b.iter(|| bench_filter(data_array, &filter_array))
+        });
+        c.bench_function(
+            &format!("filter {name} high selectivity (kept 1023/1024)"),
+            |b| b.iter(|| bench_filter(data_array, &dense_filter_array)),
+        );
+        c.bench_function(
+            &format!("filter {name} low selectivity (kept 1/1024)"),
+            |b| b.iter(|| bench_filter(data_array, &sparse_filter_array)),
+        );
+
+        c.bench_function(&format!("filter context {name} (kept 1/2)"), |b| {
+            b.iter(|| bench_built_filter(data_array, &filter))
+        });
+        c.bench_function(
+            &format!("filter context {name} high selectivity (kept 1023/1024)"),
+            |b| b.iter(|| bench_built_filter(data_array, &dense_filter)),
+        );
+        c.bench_function(
+            &format!("filter context {name} low selectivity (kept 1/1024)"),
+            |b| b.iter(|| bench_built_filter(data_array, &sparse_filter)),
+        );
+    };
+
+    let data_array = create_primitive_list_array::<i32, Int32Type>(size, 0.1, 0.1, 16);
+    add_benchmark_for_nested("list<i32> w NULLs", &data_array);
+
+    let data_array = create_struct_list_array(size, 0.1, 16);
+    add_benchmark_for_nested("list<struct<i64, utf8>> w NULLs", &data_array);
+
+    let data_array = create_struct_with_list_array(size, 64);
+    add_benchmark_for_nested(
+        "struct<8 x i64, list<struct<i64, utf8>>> w NULLs",
+        &data_array,
+    );
+
+    let data_array = create_primitive_fixed_size_list_array::<Int32Type>(size, 0.1, 0.1, 8);
+    add_benchmark_for_nested("fixed_size_list<i32> w NULLs", &data_array);
+
+    let data_array = create_struct_fixed_size_list_array(size, 8);
+    add_benchmark_for_nested("fixed_size_list<struct<i64, utf8>>", &data_array);
+
+    let data_array = create_string_map_array::<Int64Type>(size, 0.1, 16, 8);
+    add_benchmark_for_nested("map<utf8, i64> w NULLs", &data_array);
 }
 
 criterion_group!(benches, add_benchmark);
