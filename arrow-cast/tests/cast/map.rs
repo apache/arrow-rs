@@ -58,7 +58,7 @@ fn test_cast_map_dont_allow_change_of_order() {
 
     let new_array_result = cast(&array, &new_type);
     assert!(!can_cast_types(array.data_type(), &new_type));
-    let Err(ArrowError::CastError(t)) = new_array_result else {
+    let Err(ArrowError::NotYetImplemented(t)) = new_array_result else {
         panic!();
     };
     assert_eq!(
@@ -105,7 +105,7 @@ fn test_cast_map_dont_allow_when_container_cant_cast() {
 
     let new_array_result = cast(&array, &new_type);
     assert!(!can_cast_types(array.data_type(), &new_type));
-    let Err(ArrowError::CastError(t)) = new_array_result else {
+    let Err(ArrowError::NotYetImplemented(t)) = new_array_result else {
         panic!();
     };
     assert_eq!(
