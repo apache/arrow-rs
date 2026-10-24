@@ -31,22 +31,25 @@ use std::cmp::min;
 use std::sync::Arc;
 
 /// Returns the precision and scale of the result of a multiplication of two decimal types,
-/// and the divisor for fixed point multiplication.
+/// and the divisor for fixed point multiplication, if it fits in `i256`.
 fn get_fixed_point_info(
     left: (u8, i8),
     right: (u8, i8),
     required_scale: i8,
-) -> Result<(u8, i8, i256), ArrowError> {
-    let product_scale = left.1 + right.1;
+) -> Result<(u8, i16, Option<i256>), ArrowError> {
+    let product_scale = i16::from(left.1) + i16::from(right.1);
     let precision = min(left.0 + right.0 + 1, DECIMAL128_MAX_PRECISION);
 
-    if required_scale > product_scale {
+    if i16::from(required_scale) > product_scale {
         return Err(ArrowError::ComputeError(format!(
             "Required scale {required_scale} is greater than product scale {product_scale}",
         )));
     }
 
-    let divisor = i256::from_i128(10).pow_wrapping((product_scale - required_scale) as u32);
+    let scale_reduction = product_scale - i16::from(required_scale);
+    // Every i128 product has magnitude at most 2^254, less than half of 10^77.
+    let divisor =
+        (scale_reduction <= 76).then(|| i256::from_i128(10).pow_wrapping(scale_reduction as u32));
 
     Ok((precision, product_scale, divisor))
 }
@@ -108,10 +111,15 @@ pub fn multiply_fixed_point_checked(
         required_scale,
     )?;
 
-    if required_scale == product_scale {
+    if i16::from(required_scale) == product_scale {
         return try_binary::<_, _, _, Decimal128Type>(left, right, |a, b| a.mul_checked(b))?
             .with_precision_and_scale(precision, required_scale);
     }
+
+    let Some(divisor) = divisor else {
+        return try_binary::<_, _, _, Decimal128Type>(left, right, |_, _| Ok(0))?
+            .with_precision_and_scale(precision, required_scale);
+    };
 
     let round = divide_and_round(divisor);
     let product = try_binary::<_, _, _, Decimal128Type>(left, right, |a, b| {
@@ -153,10 +161,15 @@ pub fn multiply_fixed_point(
         required_scale,
     )?;
 
-    if required_scale == product_scale {
+    if i16::from(required_scale) == product_scale {
         return binary(left, right, |a, b| a.mul_wrapping(b))?
             .with_precision_and_scale(precision, required_scale);
     }
+
+    let Some(divisor) = divisor else {
+        return binary::<_, _, _, Decimal128Type>(left, right, |_, _| 0)?
+            .with_precision_and_scale(precision, required_scale);
+    };
 
     let round = divide_and_round(divisor);
     let product = binary::<_, _, _, Decimal128Type>(left, right, |a, b| {
@@ -384,5 +397,112 @@ mod tests {
             assert_eq!(multiply_fixed_point(&a, &b, 0).unwrap(), expected);
             assert_eq!(multiply_fixed_point_checked(&a, &b, 0).unwrap(), expected);
         }
+    }
+
+    fn assert_large_scale_reduction(right_scale: i8, scale: i8, precision: u8) {
+        let a = Decimal128Array::from(vec![Some(0), Some(5), Some(5), None, Some(1)])
+            .with_precision_and_scale(1, 0)
+            .unwrap();
+        let b = Decimal128Array::from(vec![Some(0), Some(5), Some(-5), Some(1), None])
+            .with_precision_and_scale(if right_scale == 0 { 1 } else { 38 }, right_scale)
+            .unwrap();
+        let expected = Decimal128Array::from(vec![Some(0), Some(0), Some(0), None, None])
+            .with_precision_and_scale(precision, scale)
+            .unwrap();
+        for len in [5, 3, 0] {
+            let (a, b, expected) = (a.slice(0, len), b.slice(0, len), expected.slice(0, len));
+            assert_eq!(multiply_fixed_point(&a, &b, scale).unwrap(), expected);
+            assert_eq!(
+                multiply_fixed_point_checked(&a, &b, scale).unwrap(),
+                expected
+            );
+            assert_eq!(
+                multiply_fixed_point_dyn(&a, &b, scale).unwrap().as_ref(),
+                &expected
+            );
+        }
+        assert!(multiply_fixed_point(&a, &b.slice(0, 4), scale).is_err());
+        assert!(multiply_fixed_point_checked(&a, &b.slice(0, 4), scale).is_err());
+        assert!(multiply_fixed_point_dyn(&a, &b.slice(0, 4), scale).is_err());
+    }
+
+    #[test]
+    fn test_decimal_multiply_fixed_point_large_scale_reduction_77() {
+        assert_large_scale_reduction(0, -77, 3);
+    }
+
+    #[test]
+    fn test_decimal_multiply_fixed_point_large_scale_reduction_128() {
+        assert_large_scale_reduction(38, -90, 38);
+    }
+
+    #[test]
+    fn test_decimal_multiply_fixed_point_scale_reduction_76() {
+        let m = 10_i128.pow(38) - 1;
+        let a = Decimal128Array::from(vec![m, m])
+            .with_precision_and_scale(38, 0)
+            .unwrap();
+        let b = Decimal128Array::from(vec![m, -m])
+            .with_precision_and_scale(38, 0)
+            .unwrap();
+        let expected = Decimal128Array::from(vec![1, -1])
+            .with_precision_and_scale(38, -76)
+            .unwrap();
+        assert_eq!(multiply_fixed_point(&a, &b, -76).unwrap(), expected);
+        assert_eq!(multiply_fixed_point_checked(&a, &b, -76).unwrap(), expected);
+        assert_eq!(
+            multiply_fixed_point_dyn(&a, &b, -76).unwrap().as_ref(),
+            &expected
+        );
+    }
+
+    #[test]
+    fn test_decimal_multiply_fixed_point_negative_product_scale() {
+        for (left_scale, right_scale) in [(-128, -1), (-128, -128)] {
+            let a = Decimal128Array::from(vec![2])
+                .with_precision_and_scale(1, left_scale)
+                .unwrap();
+            let b = Decimal128Array::from(vec![3])
+                .with_precision_and_scale(1, right_scale)
+                .unwrap();
+            let product_scale = i16::from(left_scale) + i16::from(right_scale);
+            for result in [
+                multiply_fixed_point(&a, &b, -128),
+                multiply_fixed_point_checked(&a, &b, -128),
+            ] {
+                assert_eq!(
+                    result.unwrap_err().to_string(),
+                    format!(
+                        "Compute error: Required scale -128 is greater than product scale {product_scale}"
+                    )
+                );
+            }
+            assert_eq!(
+                multiply_fixed_point_dyn(&a, &b, -128)
+                    .unwrap_err()
+                    .to_string(),
+                format!(
+                    "Compute error: Required scale -128 is greater than product scale {product_scale}"
+                )
+            );
+        }
+        let a = Decimal128Array::from(vec![2])
+            .with_precision_and_scale(1, -64)
+            .unwrap();
+        let b = Decimal128Array::from(vec![3])
+            .with_precision_and_scale(1, -64)
+            .unwrap();
+        let expected = Decimal128Array::from(vec![6])
+            .with_precision_and_scale(3, -128)
+            .unwrap();
+        assert_eq!(multiply_fixed_point(&a, &b, -128).unwrap(), expected);
+        assert_eq!(
+            multiply_fixed_point_checked(&a, &b, -128).unwrap(),
+            expected
+        );
+        assert_eq!(
+            multiply_fixed_point_dyn(&a, &b, -128).unwrap().as_ref(),
+            &expected
+        );
     }
 }
