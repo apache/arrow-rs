@@ -1309,11 +1309,7 @@ fn test_interval_day_time_aligned_to_4() {
     let mut mutable = MutableArrayData::new(vec![&b], true, 3);
     mutable.try_extend(0, 0, 2).unwrap();
     mutable.try_extend_nulls(1).unwrap();
-    let result = arrow_array::make_array(mutable.freeze());
-    let result = result
-        .as_any()
-        .downcast_ref::<arrow_array::IntervalDayTimeArray>()
-        .unwrap();
+    let result = &arrow_array::IntervalDayTimeArray::from(mutable.freeze());
 
     let expected = arrow_array::IntervalDayTimeArray::from(vec![
         Some(arrow_buffer::IntervalDayTime::new(1, 2)),
