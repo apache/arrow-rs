@@ -144,6 +144,14 @@ unsafe impl GlobalAlloc for TrackingAllocator {
         }
         new_ptr
     }
+
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        let ptr = unsafe { self.inner.alloc_zeroed(layout) };
+        if !ptr.is_null() {
+            add_live_bytes(layout.size());
+        }
+        ptr
+    }
 }
 
 /// Run `f` and return the peak *additional* live heap (bytes) observed on this
