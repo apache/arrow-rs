@@ -2704,16 +2704,18 @@ mod tests {
 
     #[test]
     fn test_fixed_size_list_validate_nulls_skips_expansion_without_child_nulls() {
-        // A huge element size with a buffer-less child must not cause the parent
-        // null buffer to be expanded to `len * element_len` bits during validation
+        // A huge element size with a non-nullable, buffer-less child (an empty struct
+        // without a null buffer) must not cause the parent null buffer to be expanded
+        // to `len * element_len` bits during validation
         let size = 1 << 30;
         let len = 4;
-        let child = ArrayData::builder(DataType::Null)
+        let child_type = DataType::Struct(Fields::empty());
+        let child = ArrayData::builder(child_type.clone())
             .len(len * size as usize)
             .build()
             .unwrap();
         let data = ArrayData::builder(DataType::FixedSizeList(
-            Arc::new(Field::new("item", DataType::Null, false)),
+            Arc::new(Field::new("item", child_type, false)),
             size,
         ))
         .len(len)
