@@ -1533,11 +1533,17 @@ impl ArrayData {
                 let child = &self.child_data[0];
                 if !field.is_nullable() {
                     let element_len = *len as usize;
-                    let child_nulls = child.nulls().map(|nulls| {
-                        nulls.slice(self.offset * element_len, self.len * element_len)
-                    });
-                    let expanded = self.nulls.as_ref().map(|nulls| nulls.expand(element_len));
-                    self.validate_non_nullable(expanded.as_ref(), child, child_nulls.as_ref())?;
+                    let child_nulls = child
+                        .nulls()
+                        .map(|nulls| nulls.slice(self.offset * element_len, self.len * element_len))
+                        .filter(|nulls| nulls.null_count() > 0);
+                    // Only expand the parent null buffer when the child actually contains
+                    // nulls: expanding allocates `len * element_len` bits, which can be
+                    // huge for a large `element_len` and is never needed otherwise
+                    if let Some(child_nulls) = child_nulls {
+                        let expanded = self.nulls.as_ref().map(|nulls| nulls.expand(element_len));
+                        self.validate_non_nullable(expanded.as_ref(), child, Some(&child_nulls))?;
+                    }
                 }
             }
             DataType::Struct(fields) => {
@@ -2694,6 +2700,29 @@ mod tests {
         assert!(build(2, 1, 2).is_err());
         assert!(build(3, 0, 2).is_ok());
         assert!(build(1, 2, 0).is_ok());
+    }
+
+    #[test]
+    fn test_fixed_size_list_validate_nulls_skips_expansion_without_child_nulls() {
+        // A huge element size with a buffer-less child must not cause the parent
+        // null buffer to be expanded to `len * element_len` bits during validation
+        let size = 1 << 30;
+        let len = 4;
+        let child = ArrayData::builder(DataType::Null)
+            .len(len * size as usize)
+            .build()
+            .unwrap();
+        let data = ArrayData::builder(DataType::FixedSizeList(
+            Arc::new(Field::new("item", DataType::Null, false)),
+            size,
+        ))
+        .len(len)
+        .nulls(Some(NullBuffer::from(vec![true, false, true, false])))
+        .add_child_data(child)
+        .build()
+        .unwrap();
+        data.validate_nulls().unwrap();
+        data.validate_full().unwrap();
     }
 
     #[test]
