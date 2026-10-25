@@ -2962,6 +2962,142 @@ mod tests {
         Ok(())
     }
 
+    /// Decodes `batch` from a single-object stream split in two at every position, passing
+    /// the unconsumed bytes again with the rest, and checks each result against decoding
+    /// the whole stream at once (<https://github.com/apache/arrow-rs/issues/11736>).
+    fn assert_decode_at_every_split(
+        batch: &RecordBatch,
+        projection: Option<Vec<usize>>,
+    ) -> Result<(), AvroError> {
+        let mut encoder =
+            WriterBuilder::new(batch.schema().as_ref().clone()).build_encoder::<AvroSoeFormat>()?;
+        encoder.encode(batch)?;
+        let stream: Vec<u8> = encoder.flush().iter().flat_map(|r| r.to_vec()).collect();
+        let new_decoder = || -> Result<crate::reader::Decoder, AvroError> {
+            let mut store = SchemaStore::new();
+            store.register(AvroSchema::try_from(batch.schema().as_ref())?)?;
+            let builder = ReaderBuilder::new().with_writer_schema_store(store);
+            Ok(match projection.clone() {
+                Some(p) => builder.with_projection(p),
+                None => builder,
+            }
+            .build_decoder()?)
+        };
+        let mut decoder = new_decoder()?;
+        assert_eq!(decoder.decode(&stream)?, stream.len());
+        let expected = decoder.flush()?.expect("decoded batch");
+        assert_eq!(expected.num_rows(), batch.num_rows());
+        for split in 1..stream.len() {
+            let mut decoder = new_decoder()?;
+            let mut buf = stream[..split].to_vec();
+            let n = decoder.decode(&buf)?;
+            buf.drain(..n);
+            buf.extend_from_slice(&stream[split..]);
+            while !buf.is_empty() {
+                let n = decoder.decode(&buf)?;
+                assert_ne!(n, 0, "split at {split}: stuck with {} bytes", buf.len());
+                buf.drain(..n);
+            }
+            assert_eq!(
+                decoder.flush()?.as_ref(),
+                Some(&expected),
+                "split at {split}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_decoder_record_split_across_chunks() -> Result<(), AvroError> {
+        use arrow_array::builder::{Int64Builder, MapBuilder, StringBuilder};
+        let tags =
+            |rows: &[&[&str]]| {
+                let mut b = ListBuilder::new(StringBuilder::new())
+                    .with_field(Arc::new(Field::new("item", DataType::Utf8, false)));
+                for row in rows {
+                    for s in *row {
+                        b.values().append_value(s);
+                    }
+                    b.append(true);
+                }
+                Arc::new(b.finish()) as ArrayRef
+            };
+        let rows: &[&[&str]] = &[
+            &["r0-alpha", "r0-bravo", "r0-charlie"],
+            &["r1-delta", "r1-echo"],
+        ];
+        let mut attrs = MapBuilder::new(None, StringBuilder::new(), Int64Builder::new());
+        for (k, v) in [("k1", Some(1)), ("k2", None)] {
+            attrs.keys().append_value(k);
+            attrs.values().append_option(v);
+        }
+        attrs.append(true).unwrap();
+        attrs.keys().append_value("k3");
+        attrs.values().append_value(300);
+        attrs.append(true).unwrap();
+        let attrs = Arc::new(attrs.finish()) as ArrayRef;
+        let point = Arc::new(StructArray::from(vec![
+            (
+                Arc::new(Field::new("x", DataType::Float64, false)),
+                Arc::new(arrow_array::Float64Array::from(vec![1.5, -2.5])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("y", DataType::Int32, true)),
+                Arc::new(Int32Array::from(vec![None, Some(7)])) as ArrayRef,
+            ),
+        ])) as ArrayRef;
+        let amount = Arc::new(
+            arrow_array::Decimal128Array::from(vec![Some(12345), None])
+                .with_precision_and_scale(10, 2)?,
+        ) as ArrayRef;
+        let union_fields = arrow_schema::UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("s", DataType::Utf8, false),
+                Field::new("i", DataType::Int32, false),
+            ],
+        )?;
+        let either = Arc::new(UnionArray::try_new(
+            union_fields,
+            vec![1_i8, 0].into(),
+            Some(vec![0_i32, 0].into()),
+            vec![
+                Arc::new(StringArray::from(vec!["union-str"])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![-70_000])) as ArrayRef,
+            ],
+        )?) as ArrayRef;
+        let flag = Arc::new(BooleanArray::from(vec![true, false])) as ArrayRef;
+        let digest = Arc::new(arrow_array::FixedSizeBinaryArray::try_from_iter(
+            [b"abcd", b"wxyz"].into_iter(),
+        )?) as ArrayRef;
+        let id = Arc::new(Int32Array::from(vec![1, 200_000])) as ArrayRef;
+        let name = Arc::new(StringArray::from(vec![Some("ann"), None])) as ArrayRef;
+
+        // The shapes from the issue: a list or a map as the only field, then a list after an int.
+        let one = |name: &str, array: &ArrayRef| {
+            let schema = Schema::new(vec![Field::new(name, array.data_type().clone(), false)]);
+            RecordBatch::try_new(Arc::new(schema), vec![array.clone()])
+        };
+        assert_decode_at_every_split(&one("tags", &tags(rows))?, None)?;
+        assert_decode_at_every_split(&one("attrs", &attrs)?, None)?;
+        let all = RecordBatch::try_from_iter_with_nullable(vec![
+            ("id", id, false),
+            ("tags", tags(rows), false),
+            ("name", name, true),
+            ("attrs", attrs, false),
+            ("point", point, false),
+            ("amount", amount, true),
+            ("either", either, false),
+            ("flag", flag, false),
+            ("digest", digest, false),
+        ])?;
+        assert_decode_at_every_split(&all.project(&[0, 1])?, None)?;
+        // Every field kind above, nullable ones included, and with fields skipped by a projection.
+        assert_decode_at_every_split(&all, None)?;
+        assert_decode_at_every_split(&all, Some(vec![1, 4]))?;
+        Ok(())
+    }
+
     #[test]
     fn test_row_writer_roundtrip_decoder_confluent_wire_format_id() -> Result<(), AvroError> {
         let (schema, batch, avro_schema) = make_real_avro_schema_and_batch()?;

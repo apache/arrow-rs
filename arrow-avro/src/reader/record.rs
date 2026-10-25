@@ -152,6 +152,9 @@ impl RecordDecoder {
     }
 
     /// Decode `count` records from `buf`
+    ///
+    /// On error, call [`Self::rollback`] before decoding the same records again, e.g. once
+    /// more bytes of a record split across chunks have arrived.
     pub(crate) fn decode(&mut self, buf: &[u8], count: usize) -> Result<usize, AvroError> {
         let mut cursor = AvroCursor::new(buf);
         match self.projector.as_mut() {
@@ -170,6 +173,14 @@ impl RecordDecoder {
         }
         self.row_count += count;
         Ok(cursor.position())
+    }
+
+    /// Drops whatever a failed [`Self::decode`] appended to the field decoders.
+    #[cold]
+    pub(crate) fn rollback(&mut self) {
+        for field in &mut self.fields {
+            field.truncate(self.row_count);
+        }
     }
 
     /// Flush the decoded records into a [`RecordBatch`]
@@ -782,6 +793,108 @@ impl Decoder {
             Self::Nullable(nullable) => nullable.pending_nulls += count,
         }
         Ok(())
+    }
+
+    /// Drop everything appended after the first `rows` values, including the parts a failed
+    /// decode wrote before it stopped, so the value can be decoded again from its start.
+    fn truncate(&mut self, rows: usize) {
+        match self {
+            Self::Null(size) => *size = rows.min(*size),
+            Self::Boolean(values) => values.truncate(rows),
+            Self::Int32(values) | Self::Date32(values) | Self::TimeMillis(values) => {
+                values.truncate(rows)
+            }
+            Self::Int64(values)
+            | Self::Int32ToInt64(values)
+            | Self::TimeMicros(values)
+            | Self::TimestampMillis(_, values)
+            | Self::TimestampMicros(_, values)
+            | Self::TimestampNanos(_, values) => values.truncate(rows),
+            #[cfg(feature = "avro_custom_types")]
+            Self::DurationSecond(values)
+            | Self::DurationMillisecond(values)
+            | Self::DurationMicrosecond(values)
+            | Self::DurationNanosecond(values)
+            | Self::Date64(values)
+            | Self::TimeNanos(values)
+            | Self::TimestampSecs(_, values) => values.truncate(rows),
+            #[cfg(feature = "avro_custom_types")]
+            Self::Int8(values) => values.truncate(rows),
+            #[cfg(feature = "avro_custom_types")]
+            Self::Int16(values) => values.truncate(rows),
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt8(values) => values.truncate(rows),
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt16(values) | Self::Float16(values) => values.truncate(rows),
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt32(values) => values.truncate(rows),
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt64(values) => values.truncate(rows),
+            #[cfg(feature = "avro_custom_types")]
+            Self::Time32Secs(values) | Self::IntervalYearMonth(values) => values.truncate(rows),
+            #[cfg(feature = "avro_custom_types")]
+            Self::IntervalDayTime(values) => values.truncate(rows),
+            #[cfg(feature = "avro_custom_types")]
+            Self::IntervalMonthDayNano(values) => values.truncate(rows),
+            Self::Float32(values) | Self::Int32ToFloat32(values) | Self::Int64ToFloat32(values) => {
+                values.truncate(rows)
+            }
+            Self::Float64(values)
+            | Self::Int32ToFloat64(values)
+            | Self::Int64ToFloat64(values)
+            | Self::Float32ToFloat64(values) => values.truncate(rows),
+            Self::Binary(offsets, values)
+            | Self::String(offsets, values)
+            | Self::StringView(offsets, values)
+            | Self::BytesToString(offsets, values)
+            | Self::StringToBytes(offsets, values) => {
+                values.truncate(truncate_offsets(offsets, rows))
+            }
+            Self::Array(_, offsets, items) => items.truncate(truncate_offsets(offsets, rows)),
+            Self::Record {
+                decoders,
+                row_count,
+                ..
+            } => {
+                for child in decoders.iter_mut() {
+                    child.truncate(rows);
+                }
+                *row_count = rows.min(*row_count);
+            }
+            Self::Map(_, key_offsets, offsets, keys, values) => {
+                let entries = truncate_offsets(offsets, rows);
+                keys.truncate(truncate_offsets(key_offsets, entries));
+                values.truncate(entries);
+            }
+            Self::Fixed(width, values) => values.truncate(rows * *width as usize),
+            Self::Enum(values, _, _) => values.truncate(rows),
+            Self::Duration(builder) => builder.truncate(rows),
+            Self::Uuid(values) => values.truncate(rows * 16),
+            #[cfg(feature = "small_decimals")]
+            Self::Decimal32(_, _, _, builder) => builder.truncate(rows),
+            #[cfg(feature = "small_decimals")]
+            Self::Decimal64(_, _, _, builder) => builder.truncate(rows),
+            Self::Decimal128(_, _, _, builder) => builder.truncate(rows),
+            Self::Decimal256(_, _, _, builder) => builder.truncate(rows),
+            #[cfg(feature = "avro_custom_types")]
+            Self::RunEndEncoded(_, len, inner) => {
+                inner.truncate(rows);
+                *len = rows.min(*len);
+            }
+            Self::Union(union) => union.truncate(rows),
+            Self::Nullable(nullable) => {
+                // Values hold one entry per row up to the pending nulls, plus whatever a
+                // failed decode of the next value appended.
+                let materialized = nullable.validity.len();
+                if rows <= materialized {
+                    nullable.validity.truncate(rows);
+                    nullable.pending_nulls = 0;
+                } else {
+                    nullable.pending_nulls = nullable.pending_nulls.min(rows - materialized);
+                }
+                nullable.values.truncate(rows.min(materialized));
+            }
+        }
     }
 
     /// Append a single default literal into the decoder's buffers
@@ -2256,6 +2369,24 @@ impl UnionDecoder {
         }
     }
 
+    fn truncate(&mut self, rows: usize) {
+        if let UnionReadPlan::ToSingle { target, .. } = &mut self.plan {
+            return target.truncate(rows);
+        }
+        let branches = &mut self.branches;
+        // Only the dropped rows are counted back, so this costs nothing per kept row.
+        for type_id in branches.type_ids.iter().skip(rows) {
+            if let Some(idx) = branches.reader_type_codes.iter().position(|c| c == type_id) {
+                branches.counts[idx] -= 1;
+            }
+        }
+        branches.type_ids.truncate(rows);
+        branches.offsets.truncate(rows);
+        for (decoder, &count) in branches.decoders.iter_mut().zip(&branches.counts) {
+            decoder.truncate(count as usize);
+        }
+    }
+
     fn flush(&mut self, nulls: Option<NullBuffer>) -> Result<ArrayRef, AvroError> {
         if let UnionReadPlan::ToSingle { target, .. } = &mut self.plan {
             return target.flush(nulls);
@@ -2460,6 +2591,13 @@ fn flush_values<T>(values: &mut Vec<T>) -> Vec<T> {
 #[inline]
 fn flush_offsets(offsets: &mut OffsetBufferBuilder<i32>) -> OffsetBuffer<i32> {
     std::mem::replace(offsets, OffsetBufferBuilder::new(DEFAULT_CAPACITY)).finish()
+}
+
+/// Truncates `offsets` to its first `len` entries, returning where their values end.
+#[inline]
+fn truncate_offsets(offsets: &mut OffsetBufferBuilder<i32>, len: usize) -> usize {
+    offsets.truncate(len);
+    offsets[offsets.len() - 1] as usize
 }
 
 #[inline]
