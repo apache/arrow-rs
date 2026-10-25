@@ -33,13 +33,16 @@ use crate::geospatial::statistics::GeospatialStatistics;
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::num_required_bits;
 use crate::util::prefix::common_prefix_length;
-use arrow_array::types::ByteArrayType;
+use arrow_array::cast::AsArray;
+use arrow_array::types::{ArrowDictionaryKeyType, ByteArrayType};
 use arrow_array::{
-    Array, ArrayAccessor, BinaryArray, BinaryViewArray, DictionaryArray, FixedSizeBinaryArray,
-    GenericByteArray, LargeBinaryArray, LargeStringArray, StringArray, StringViewArray,
+    Array, ArrayAccessor, ArrayRef, BinaryArray, BinaryViewArray, DictionaryArray,
+    FixedSizeBinaryArray, GenericByteArray, LargeBinaryArray, LargeStringArray, StringArray,
+    StringViewArray, TypedDictionaryArray,
 };
 use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_schema::DataType;
+use std::sync::{Arc, Weak};
 
 macro_rules! downcast_dict_impl {
     ($array:ident, $key:ident, $val:ident, $op:expr $(, $arg:expr)*) => {{
@@ -68,6 +71,31 @@ macro_rules! downcast_dict_op {
     };
 }
 
+macro_rules! downcast_dict_values_op {
+    ($key_type:expr, $value_type:expr, $array:ident, $op:expr $(, $arg:expr)*) => {
+        match $value_type.as_ref() {
+            DataType::Utf8 => downcast_dict_op!($key_type, StringArray, $array, $op$(, $arg)*),
+            DataType::LargeUtf8 => {
+                downcast_dict_op!($key_type, LargeStringArray, $array, $op$(, $arg)*)
+            }
+            DataType::Utf8View => {
+                downcast_dict_op!($key_type, StringViewArray, $array, $op$(, $arg)*)
+            }
+            DataType::Binary => downcast_dict_op!($key_type, BinaryArray, $array, $op$(, $arg)*),
+            DataType::LargeBinary => {
+                downcast_dict_op!($key_type, LargeBinaryArray, $array, $op$(, $arg)*)
+            }
+            DataType::BinaryView => {
+                downcast_dict_op!($key_type, BinaryViewArray, $array, $op$(, $arg)*)
+            }
+            DataType::FixedSizeBinary(_) => {
+                downcast_dict_op!($key_type, FixedSizeBinaryArray, $array, $op$(, $arg)*)
+            }
+            d => unreachable!("cannot downcast {} dictionary value to byte array", d),
+        }
+    };
+}
+
 macro_rules! downcast_op {
     ($data_type:expr, $array:ident, $op:expr $(, $arg:expr)*) => {
         match $data_type {
@@ -85,26 +113,9 @@ macro_rules! downcast_op {
             DataType::BinaryView => {
                 $op($array.as_any().downcast_ref::<BinaryViewArray>().unwrap()$(, $arg)*)
             }
-            DataType::Dictionary(key, value) => match value.as_ref() {
-                DataType::Utf8 => downcast_dict_op!(key, StringArray, $array, $op$(, $arg)*),
-                DataType::LargeUtf8 => {
-                    downcast_dict_op!(key, LargeStringArray, $array, $op$(, $arg)*)
-                }
-                DataType::Utf8View => {
-                    downcast_dict_op!(key, StringViewArray, $array, $op$(, $arg)*)
-                }
-                DataType::Binary => downcast_dict_op!(key, BinaryArray, $array, $op$(, $arg)*),
-                DataType::LargeBinary => {
-                    downcast_dict_op!(key, LargeBinaryArray, $array, $op$(, $arg)*)
-                }
-                DataType::BinaryView => {
-                    downcast_dict_op!(key, BinaryViewArray, $array, $op$(, $arg)*)
-                }
-                DataType::FixedSizeBinary(_) => {
-                    downcast_dict_op!(key, FixedSizeBinaryArray, $array, $op$(, $arg)*)
-                }
-                d => unreachable!("cannot downcast {} dictionary value to byte array", d),
-            },
+            DataType::Dictionary(key, value) => {
+                downcast_dict_values_op!(key, value, $array, $op$(, $arg)*)
+            }
             d => unreachable!("cannot downcast {} to byte array", d),
         }
     };
@@ -577,6 +588,28 @@ struct DictEncoder {
     interner: ByteArrayInterner,
     indices: Vec<u64>,
     variable_length_bytes: i64,
+    /// The interned index of each value of the last arrow dictionary encoded
+    dictionary_cache: Option<DictionaryCache>,
+}
+
+/// The interned index of each value of an arrow dictionary, so each value is hashed once
+/// rather than once per row that references it
+#[derive(Debug)]
+struct DictionaryCache {
+    /// The dictionary's values, to identify the dictionary in later batches. A weak reference,
+    /// so the values aren't kept alive, while their allocation can't be reused by another
+    /// dictionary
+    values: Weak<dyn Array>,
+    /// The interned index of each value, or [`DictionaryCache::NOT_INTERNED`]
+    interned: Vec<u64>,
+}
+
+impl DictionaryCache {
+    const NOT_INTERNED: u64 = u64::MAX;
+
+    fn is_for(&self, dictionary: &ArrayRef) -> bool {
+        std::ptr::addr_eq(self.values.as_ptr(), Arc::as_ptr(dictionary))
+    }
 }
 
 impl DictEncoder {
@@ -598,13 +631,71 @@ impl DictEncoder {
         Ok(())
     }
 
+    /// Whether to encode the rows of an arrow dictionary with `dictionary` as its values and
+    /// `num_rows` rows with [`Self::encode_dictionary`]
+    fn use_dictionary_cache(&self, dictionary: &ArrayRef, num_rows: usize) -> bool {
+        // A new cache has a slot per dictionary value, which only pays off if the values are
+        // referenced by enough rows
+        dictionary.len() <= num_rows
+            || self
+                .dictionary_cache
+                .as_ref()
+                .is_some_and(|cache| cache.is_for(dictionary))
+    }
+
+    /// Encode the rows of an arrow dictionary at `indices` to the in-progress page
+    fn encode_dictionary<'a, K, V>(
+        &mut self,
+        values: TypedDictionaryArray<'a, K, V>,
+        indices: &[usize],
+        dictionary: &ArrayRef,
+    ) -> Result<()>
+    where
+        K: ArrowDictionaryKeyType,
+        &'a V: ArrayAccessor,
+        <&'a V as ArrayAccessor>::Item: AsRef<[u8]>,
+    {
+        let cache = match &mut self.dictionary_cache {
+            Some(cache) if cache.is_for(dictionary) => cache,
+            cache => cache.insert(DictionaryCache {
+                values: Arc::downgrade(dictionary),
+                interned: vec![DictionaryCache::NOT_INTERNED; dictionary.len()],
+            }),
+        };
+
+        let keys = values.keys().values();
+        let dictionary_values = values.values();
+        self.indices.reserve(indices.len());
+        for &idx in indices {
+            let key = keys[idx].as_usize();
+            let value = dictionary_values.value(key);
+            let value = value.as_ref();
+            let mut interned = cache.interned[key];
+            if interned == DictionaryCache::NOT_INTERNED {
+                interned = self.interner.intern(value)?;
+                cache.interned[key] = interned;
+            }
+            self.indices.push(interned);
+            self.variable_length_bytes += value.len() as i64;
+        }
+
+        Ok(())
+    }
+
     fn bit_width(&self) -> u8 {
         let length = self.interner.num_unique_values();
         num_required_bits(length.saturating_sub(1) as u64)
     }
 
     fn estimated_memory_size(&self) -> usize {
-        self.interner.estimated_memory_size() + self.indices.capacity() * std::mem::size_of::<u64>()
+        let dictionary_cache_size = self
+            .dictionary_cache
+            .as_ref()
+            .map(|cache| cache.interned.capacity() * std::mem::size_of::<u64>())
+            .unwrap_or_default();
+        self.interner.estimated_memory_size()
+            + self.indices.capacity() * std::mem::size_of::<u64>()
+            + dictionary_cache_size
     }
 
     fn estimated_data_page_size(&self) -> usize {
@@ -725,6 +816,25 @@ impl ColumnValueEncoder for ByteArrayEncoder {
     }
 
     fn write_gather(&mut self, values: &Self::Values, indices: &[usize]) -> Result<()> {
+        if let DataType::Dictionary(key, value) = values.data_type() {
+            let dictionary = values.as_any_dictionary().values();
+            if self
+                .dict_encoder
+                .as_ref()
+                .is_some_and(|encoder| encoder.use_dictionary_cache(dictionary, values.len()))
+            {
+                return downcast_dict_values_op!(
+                    key,
+                    value,
+                    values,
+                    encode_dictionary,
+                    indices,
+                    dictionary,
+                    self
+                );
+            }
+        }
+
         downcast_op!(
             values.data_type(),
             values,
@@ -911,6 +1021,56 @@ where
     T::Item: Copy + Ord + AsRef<[u8]>,
     I: ExactSizeIterator<Item = usize> + Clone,
 {
+    update_statistics(values, indices.clone(), encoder);
+
+    // While a dictionary is in use the filter is populated from its distinct values in
+    // `flush_dict_page`, so each value is hashed once rather than once per row.
+    match &mut encoder.dict_encoder {
+        Some(dict_encoder) => dict_encoder.encode(values, indices),
+        None => {
+            if let Some(bloom_filter) = &mut encoder.bloom_filter {
+                for idx in indices.clone() {
+                    bloom_filter.insert(values.value(idx).as_ref());
+                }
+            }
+            encoder.fallback.encode(values, indices);
+
+            Ok(())
+        }
+    }
+}
+
+/// Encodes the rows of an arrow dictionary at `indices` to `encoder`, which must have a
+/// dictionary encoder
+///
+/// This is a free function so it can be used with `downcast_dict_values_op!`
+fn encode_dictionary<'a, K, V>(
+    values: TypedDictionaryArray<'a, K, V>,
+    indices: &[usize],
+    dictionary: &ArrayRef,
+    encoder: &mut ByteArrayEncoder,
+) -> Result<()>
+where
+    K: ArrowDictionaryKeyType,
+    V: Sync + Send,
+    &'a V: ArrayAccessor,
+    <&'a V as ArrayAccessor>::Item: Copy + Ord + Default + AsRef<[u8]>,
+{
+    update_statistics(values, indices.iter().copied(), encoder);
+    encoder
+        .dict_encoder
+        .as_mut()
+        .expect("dictionary encoder")
+        .encode_dictionary(values, indices, dictionary)
+}
+
+/// Updates the statistics of `encoder` with the values at `indices`
+fn update_statistics<T, I>(values: T, indices: I, encoder: &mut ByteArrayEncoder)
+where
+    T: ArrayAccessor + Copy,
+    T::Item: Copy + Ord + AsRef<[u8]>,
+    I: ExactSizeIterator<Item = usize> + Clone,
+{
     if encoder.statistics_enabled != EnabledStatistics::None {
         if let Some(accumulator) = encoder.geo_stats_accumulator.as_mut() {
             update_geo_stats_accumulator(accumulator.as_mut(), values, indices.clone());
@@ -938,22 +1098,6 @@ where
             {
                 encoder.max_value = Some(max.to_vec().into());
             }
-        }
-    }
-
-    // While a dictionary is in use the filter is populated from its distinct values in
-    // `flush_dict_page`, so each value is hashed once rather than once per row.
-    match &mut encoder.dict_encoder {
-        Some(dict_encoder) => dict_encoder.encode(values, indices),
-        None => {
-            if let Some(bloom_filter) = &mut encoder.bloom_filter {
-                for idx in indices.clone() {
-                    bloom_filter.insert(values.value(idx).as_ref());
-                }
-            }
-            encoder.fallback.encode(values, indices);
-
-            Ok(())
         }
     }
 }
