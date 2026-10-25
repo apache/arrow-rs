@@ -311,7 +311,6 @@ struct Entry {
     /// if len =< [`SHORT_VALUE_LEN`]: the data inlined
     /// if len > [`SHORT_VALUE_LEN`], the offset of where the data starts
     offset_or_inline: OffsetOrInlineView,
-    /// value stored by the entry
     index_in_dict: u64,
 }
 
