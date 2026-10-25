@@ -17,9 +17,6 @@
 
 //! Converts an Arrow IPC stream to an Arrow IPC file.
 
-// The unused_crate_dependencies lint does not work well for crates defining additional examples/bin targets
-#![allow(unused_crate_dependencies)]
-
 use std::io;
 
 use arrow::error::Result;

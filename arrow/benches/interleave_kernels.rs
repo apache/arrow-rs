@@ -26,7 +26,7 @@ use rand::RngExt;
 use arrow::datatypes::*;
 use arrow::util::test_util::seedable_rng;
 use arrow::{array::*, util::bench_util::*};
-use arrow_buffer::ScalarBuffer;
+use arrow_buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_select::interleave::interleave;
 use std::hint;
 use std::sync::Arc;
@@ -69,6 +69,8 @@ fn bench_values(c: &mut Criterion, name: &str, len: usize, values: &[&dyn Array]
 fn add_benchmark(c: &mut Criterion) {
     let i32 = create_primitive_array::<Int32Type>(1024, 0.);
     let i32_opt = create_primitive_array::<Int32Type>(1024, 0.5);
+    let boolean = create_boolean_array(1024, 0.0, 0.5);
+    let boolean_opt = create_boolean_array(1024, 0.1, 0.5);
     let string = create_string_array_with_len::<i32>(1024, 0., 20);
     let string_opt = create_string_array_with_len::<i32>(1024, 0.5, 20);
     let values = create_string_array_with_len::<i32>(10, 0.0, 20);
@@ -163,6 +165,8 @@ fn add_benchmark(c: &mut Criterion) {
     let ree_dict = RunArray::<Int32Type>::try_new(&ree_run_ends, &dict_for_ree).unwrap();
 
     let cases: &[(&str, &dyn Array)] = &[
+        ("bool(0.0)", &boolean),
+        ("bool(0.1)", &boolean_opt),
         ("i32(0.0)", &i32),
         ("i32(0.5)", &i32_opt),
         ("str(20, 0.0)", &string),
@@ -218,5 +222,78 @@ fn add_benchmark(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, add_benchmark);
+// Alternate sources so parent rows cannot coalesce, while each selected list
+// contributes a contiguous range of 15 children. Compare struct children with
+// the existing primitive-copy path, with and without nulls.
+// Both variants use sliced inputs.
+fn bench_list_ranges(c: &mut Criterion) {
+    const ROWS: usize = 4096;
+    const SOURCES: usize = 6;
+    let indices: Vec<_> = (0..ROWS).map(|i| (i % SOURCES, i / SOURCES)).collect();
+    for nullable in [false, true] {
+        for primitive in [false, true] {
+            let arrays: Vec<ArrayRef> = (0..SOURCES)
+                .map(|source| {
+                    let rows = ROWS.div_ceil(SOURCES) + 3;
+                    let offsets = OffsetBuffer::<i32>::from_lengths(std::iter::repeat_n(15, rows));
+                    let len = *offsets.as_ref().last().unwrap() as usize;
+                    let nulls = |len, period| {
+                        (nullable && source % 3 != 0).then(|| {
+                            NullBuffer::from_iter((0..len).map(|i| (i + source) % period != 0))
+                        })
+                    };
+                    let ints = Int64Array::new(
+                        (0..len + 6)
+                            .map(|i| (i + source) as i64)
+                            .collect::<Vec<_>>()
+                            .into(),
+                        nulls(len + 6, 5),
+                    )
+                    .slice(1, len + 5);
+                    let values: ArrayRef = if primitive {
+                        Arc::new(ints.slice(5, len))
+                    } else {
+                        let floats = Float64Array::new(
+                            (0..len + 8)
+                                .map(|i| (i + source) as f64 * 0.25)
+                                .collect::<Vec<_>>()
+                                .into(),
+                            nulls(len + 8, 3),
+                        )
+                        .slice(3, len + 5);
+                        Arc::new(
+                            StructArray::new(
+                                vec![
+                                    Field::new("a", DataType::Int64, true),
+                                    Field::new("b", DataType::Float64, true),
+                                ]
+                                .into(),
+                                vec![Arc::new(ints), Arc::new(floats)],
+                                nulls(len + 5, 7),
+                            )
+                            .slice(5, len),
+                        )
+                    };
+                    Arc::new(
+                        ListArray::new(
+                            Arc::new(Field::new_list_field(values.data_type().clone(), true)),
+                            offsets,
+                            values,
+                            nulls(rows, 11),
+                        )
+                        .slice(3, rows - 3),
+                    ) as ArrayRef
+                })
+                .collect();
+            let values: Vec<_> = arrays.iter().map(|a| a.as_ref()).collect();
+            let child = if primitive { "primitive" } else { "struct" };
+            let validity = if nullable { "nulls" } else { "no_nulls" };
+            c.bench_function(&format!("list_ranges/{child}/15/{validity}"), |b| {
+                b.iter(|| hint::black_box(interleave(&values, &indices).unwrap()))
+            });
+        }
+    }
+}
+
+criterion_group!(benches, add_benchmark, bench_list_ranges);
 criterion_main!(benches);
