@@ -24,7 +24,11 @@ on:
   push:
     # Forks need CI on feature branches as well as main. The selector job
     # ignores upstream feature-branch pushes, which are tested by their PRs.
-    branches-ignore: [asf-site]
+    branches-ignore:
+      - asf-site
+      # Merge queue commits are validated by the merge_group event, not push.
+      # A skipped Required Checks job on a queue-branch push can satisfy the gate early.
+      - 'gh-readonly-queue/**'
   workflow_dispatch:
 
 concurrency:
