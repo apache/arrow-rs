@@ -1,3 +1,7 @@
+> [!IMPORTANT]
+>
+> Fork PRs to `main` require [enabling CI in your fork](https://github.com/apache/arrow-rs/blob/main/CONTRIBUTING.md#pull-requests-from-forks).
+
 # Which issue does this PR close?
 
 <!--
