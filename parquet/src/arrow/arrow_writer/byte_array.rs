@@ -361,10 +361,14 @@ impl OffsetOrInlineView {
 
     #[inline]
     fn new_non_inlined(offset: u64) -> Self {
-        assert_eq!(
+        // `offset` is a position in the dictionary page `Vec`, whose length is at
+        // most `isize::MAX`, so it always fits in 63 bits and can't collide with
+        // `INLINE_FLAG`
+        // also, having the inline flag set for non-inlined values would mean the dictionary page is at least 9 exabytes.
+        debug_assert_eq!(
             offset & Self::INLINE_FLAG,
             0,
-            "offset must not have the inlined flag set, we don't support this large of a byte array"
+            "dictionary page offset must fit in 63 bits"
         );
         let non_inlined_value = offset;
         Self(non_inlined_value)
@@ -417,12 +421,12 @@ impl ByteArrayInterner {
                 }
 
                 // If the value is not inlined compare it
-                if let Some(offset) = header.offset_or_inline.maybe_non_inlined_value() {
-                    self.is_at(offset, value)
-                } else {
+                let Some(offset) = header.offset_or_inline.maybe_non_inlined_value() else {
                     // that value is inline, so it must be different
-                    false
-                }
+                    return false;
+                };
+
+                self.is_at(offset, value)
             });
 
             (entry, None)
