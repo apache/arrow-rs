@@ -17,7 +17,7 @@
 
 use crate::ArrayData;
 use crate::data::count_nulls;
-use crate::equal::equal_values;
+use crate::equal::equal_range;
 use arrow_buffer::ArrowNativeType;
 use num_integer::Integer;
 
@@ -66,8 +66,7 @@ pub(super) fn list_view_equal<T: ArrowNativeType + Integer>(
             let rhs_offset = rhs_offset.to_usize().unwrap();
             let size = size.to_usize().unwrap();
 
-            // Check if offsets are valid for the given range
-            if !equal_values(lhs_data, rhs_data, lhs_offset, rhs_offset, size) {
+            if !equal_range(lhs_data, rhs_data, lhs_offset, rhs_offset, size) {
                 return false;
             }
         }
@@ -77,10 +76,10 @@ pub(super) fn list_view_equal<T: ArrowNativeType + Integer>(
         let rhs_nulls = rhs.nulls().unwrap().slice(rhs_start, len);
 
         // Check values for equality, with null checking
-        for (index, ((&lhs_offset, &rhs_offset), &size)) in lhs_range_offsets
+        for (index, ((&lhs_offset, &rhs_offset), (&lhs_size, &rhs_size))) in lhs_range_offsets
             .iter()
             .zip(rhs_range_offsets)
-            .zip(lhs_range_sizes)
+            .zip(lhs_range_sizes.iter().zip(rhs_range_sizes))
             .enumerate()
         {
             let lhs_is_null = lhs_nulls.is_null(index);
@@ -90,12 +89,20 @@ pub(super) fn list_view_equal<T: ArrowNativeType + Integer>(
                 return false;
             }
 
+            // Null rows are equal whatever their sizes and values
+            if lhs_is_null {
+                continue;
+            }
+
+            if lhs_size != rhs_size {
+                return false;
+            }
+
             let lhs_offset = lhs_offset.to_usize().unwrap();
             let rhs_offset = rhs_offset.to_usize().unwrap();
-            let size = size.to_usize().unwrap();
+            let size = lhs_size.to_usize().unwrap();
 
-            // Check if values match in the range
-            if !lhs_is_null && !equal_values(lhs_data, rhs_data, lhs_offset, rhs_offset, size) {
+            if !equal_range(lhs_data, rhs_data, lhs_offset, rhs_offset, size) {
                 return false;
             }
         }

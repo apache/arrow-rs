@@ -11,6 +11,9 @@ parquet_derive/test/dependency/*
 .gitattributes
 **.gitignore
 .gitmodules
+.gitmodules-commits
+AGENTS.md
+CLAUDE.md
 Cargo.lock
 filtered_rat.txt
 rat.txt

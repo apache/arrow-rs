@@ -18,16 +18,14 @@
 # workspace wide tests
 name: rust
 
-concurrency:
-  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
-  cancel-in-progress: true
-
-# trigger for all PRs and changes to main
+# Triggered by ci.yml, which owns event routing and concurrency.
 on:
-  push:
-    branches:
-      - main
-  pull_request:
+  workflow_call:
+    inputs:
+      lint-only:
+        description: Run only formatting and unused dependency checks
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -36,6 +34,7 @@ jobs:
   # Check workspace wide compile and test with default features for
   # mac
   macos:
+    if: ${{ !inputs.lint-only }}
     name: Test on Mac
     runs-on: macos-latest
     steps:
@@ -59,6 +58,7 @@ jobs:
   # Check workspace wide compile and test with default features for
   # windows
   windows:
+    if: ${{ !inputs.lint-only }}
     name: Test on Windows
     runs-on: windows-latest
     steps:
@@ -90,19 +90,40 @@ jobs:
   # Run cargo fmt for all crates
   lint:
     name: Lint (cargo fmt)
-    runs-on: ubuntu-latest
-    container:
-      image: amd64/rust
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: ./.github/actions/setup-rustup
       - name: Setup rustfmt
         run: rustup component add rustfmt
       - name: Format workspace
         run: cargo fmt --all -- --check
 
+  unused-dependencies:
+    name: Check unused dependencies
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-rustup
+      - name: Install cargo-shear
+        id: install-shear
+        uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177  # v2.87.30
+        with:
+          tool: cargo-shear
+      - name: Check workspace dependencies
+        run: cargo shear --deny-warnings
+      - name: Check arrow-pyarrow-testing dependencies
+        # Report excluded crates even when an earlier scan finds issues.
+        if: ${{ !cancelled() && steps.install-shear.outcome == 'success' }}
+        run: cargo shear --deny-warnings arrow-pyarrow-testing
+      - name: Check arrow-pyarrow-integration-testing dependencies
+        if: ${{ !cancelled() && steps.install-shear.outcome == 'success' }}
+        run: cargo shear --deny-warnings arrow-pyarrow-integration-testing
+
   msrv:
+    if: ${{ !inputs.lint-only }}
     name: Verify MSRV (Minimum Supported Rust Version)
     runs-on: ubuntu-latest
     container:
@@ -112,7 +133,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv
-        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3  # v2.87.16
+        uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177  # v2.87.30
         with:
           tool: cargo-msrv
       - name: Check all packages

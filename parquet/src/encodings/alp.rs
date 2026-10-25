@@ -245,9 +245,7 @@ impl<Exact: AlpExact> ForInfo<Exact> {
 /// unsigned wrapping arithmetic: this avoids signed overflow when a vector's
 /// range exceeds the signed maximum, and unpacking needs no sign extension.
 /// Signed interpretation is applied later during decimal reconstruction.
-pub(crate) trait AlpExact:
-    Copy + std::fmt::Debug + PartialEq + BitPacking + Default
-{
+pub trait AlpExact: Copy + std::fmt::Debug + PartialEq + BitPacking + Default {
     const WIDTH: usize;
     type Signed: BitPacking + Copy + Ord + std::fmt::Debug + Send;
     fn from_le_slice(slice: &[u8]) -> Self;
@@ -406,9 +404,7 @@ pub(crate) const ALP_NEG_POW10_F64: [f64; 19] = [
 /// float side of the codec, the decimal scaling and rounding that turn floats
 /// into exact integers and back, while [`AlpExact`] owns the integer side, the
 /// FOR and bit-packing arithmetic on those encoded values.
-pub(crate) trait AlpFloat:
-    Copy + Default + PartialEq + std::ops::Mul<Output = Self>
-{
+pub trait AlpFloat: Copy + Default + PartialEq + std::ops::Mul<Output = Self> {
     type Exact: AlpExact + FromBytes;
     type Scale: Copy + Send;
 

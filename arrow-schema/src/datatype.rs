@@ -415,6 +415,11 @@ pub enum DataType {
     /// has two children: key type and the second the value type. The names of the
     /// child fields may be respectively "entries", "key", and "value", but this is
     /// not enforced.
+    ///
+    /// # Requirements
+    /// - The entries [`Field`] (first argument) must be non-nullable.
+    /// - The entries field must be a [`DataType::Struct`] with exactly 2 children.
+    /// - The first child (key) must be non-nullable.
     Map(FieldRef, bool),
     /// A run-end encoding (REE) is a variation of run-length encoding (RLE). These
     /// encodings are well-suited for representing data containing sequences of the
@@ -427,6 +432,10 @@ pub enum DataType {
     ///
     /// These child arrays are prescribed the standard names of "run_ends" and "values"
     /// respectively.
+    ///
+    /// # Requirements
+    /// - The run_ends [`Field`] (first argument) must be non-nullable and of type
+    ///   [`DataType::Int16`], [`DataType::Int32`], or [`DataType::Int64`].
     RunEndEncoded(FieldRef, FieldRef),
 }
 

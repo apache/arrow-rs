@@ -165,7 +165,7 @@
 
 mod records;
 
-use arrow_array::builder::{NullBuilder, PrimitiveBuilder};
+use arrow_array::builder::{NullBuilder, PrimitiveBuilder, StringDictionaryBuilder};
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_cast::parse::{Parser, parse_decimal, string_to_datetime};
@@ -349,6 +349,98 @@ impl Format {
     pub fn with_truncated_rows(mut self, allow: bool) -> Self {
         self.truncated_rows = allow;
         self
+    }
+
+    /// Infer format settings from the CSV records in `reader`
+    ///
+    /// This currently infers whether the first record is a header. Up to
+    /// `max_records` records after the first record are inspected; if `None`, all
+    /// records are read. Detection is conservative and returns no header when the
+    /// sampled records do not provide type evidence. Returns the updated format
+    /// and the number of records read, including the first header candidate.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use arrow_csv::reader::Format;
+    /// use std::io::Cursor;
+    ///
+    /// let csv = "name,count\nalice,1\nbob,2\n";
+    /// let (format, format_records_read) =
+    ///     Format::default().infer_format(Cursor::new(csv), Some(10))?;
+    /// let (schema, records_read) = format.infer_schema(Cursor::new(csv), None)?;
+    ///
+    /// assert_eq!(schema.field(0).name(), "name");
+    /// assert_eq!(format_records_read, 3);
+    /// assert_eq!(records_read, 2);
+    /// # Ok::<_, arrow_schema::ArrowError>(())
+    /// ```
+    pub fn infer_format<R: Read>(
+        mut self,
+        reader: R,
+        max_records: Option<usize>,
+    ) -> Result<(Self, usize), ArrowError> {
+        let (header, records_read) = self.infer_header(reader, max_records)?;
+        self.header = header;
+        Ok((self, records_read))
+    }
+
+    /// Infer whether the first CSV record is a header
+    ///
+    /// Inspects up to `max_records` records after the first record. Returns `true`
+    /// when a value in the first record is text while the remaining values in the
+    /// same column have a consistent non-text type.
+    fn infer_header<R: Read>(
+        &self,
+        reader: R,
+        max_records: Option<usize>,
+    ) -> Result<(bool, usize), ArrowError> {
+        let mut format = self.clone();
+        format.header = false;
+        let mut csv_reader = format.build_reader(reader);
+
+        let mut first_record = StringRecord::new();
+        if !csv_reader
+            .read_record(&mut first_record)
+            .map_err(map_csv_error)?
+        {
+            return Ok((false, 0));
+        }
+
+        let mut first_types = vec![InferredDataType::default(); first_record.len()];
+        for (value, inferred) in first_record.iter().zip(&mut first_types) {
+            if !self.null_regex.is_null(value) {
+                inferred.update(value);
+            }
+        }
+
+        let mut column_types = vec![InferredDataType::default(); first_record.len()];
+        let mut record = StringRecord::new();
+        let mut records_count = 0;
+        let max_records = max_records.unwrap_or(usize::MAX);
+        while records_count < max_records
+            && csv_reader.read_record(&mut record).map_err(map_csv_error)?
+        {
+            records_count += 1;
+            for (value, inferred) in record.iter().zip(&mut column_types) {
+                if !self.null_regex.is_null(value) {
+                    inferred.update(value);
+                }
+            }
+        }
+
+        let has_header = first_types
+            .iter()
+            .zip(&column_types)
+            .zip(first_record.iter())
+            .any(|((first, rest), value)| {
+                // Numeric-looking values (e.g. +1) are not header evidence, even
+                // when ordinary schema inference conservatively treats them as text.
+                first.get() == DataType::Utf8
+                    && value.parse::<f64>().is_err()
+                    && !matches!(rest.get(), DataType::Utf8 | DataType::Null)
+            });
+        Ok((has_header, records_count + 1))
     }
 
     /// Infer schema of CSV records from the provided `reader`
@@ -941,70 +1033,20 @@ fn parse(
                     if value_type.as_ref() == &DataType::Utf8 =>
                 {
                     match key_type.as_ref() {
-                        DataType::Int8 => Ok(Arc::new(
-                            rows.iter()
-                                .map(|row| {
-                                    let s = row.get(i);
-                                    (!null_regex.is_null(s)).then_some(s)
-                                })
-                                .collect::<DictionaryArray<Int8Type>>(),
-                        ) as ArrayRef),
-                        DataType::Int16 => Ok(Arc::new(
-                            rows.iter()
-                                .map(|row| {
-                                    let s = row.get(i);
-                                    (!null_regex.is_null(s)).then_some(s)
-                                })
-                                .collect::<DictionaryArray<Int16Type>>(),
-                        ) as ArrayRef),
-                        DataType::Int32 => Ok(Arc::new(
-                            rows.iter()
-                                .map(|row| {
-                                    let s = row.get(i);
-                                    (!null_regex.is_null(s)).then_some(s)
-                                })
-                                .collect::<DictionaryArray<Int32Type>>(),
-                        ) as ArrayRef),
-                        DataType::Int64 => Ok(Arc::new(
-                            rows.iter()
-                                .map(|row| {
-                                    let s = row.get(i);
-                                    (!null_regex.is_null(s)).then_some(s)
-                                })
-                                .collect::<DictionaryArray<Int64Type>>(),
-                        ) as ArrayRef),
-                        DataType::UInt8 => Ok(Arc::new(
-                            rows.iter()
-                                .map(|row| {
-                                    let s = row.get(i);
-                                    (!null_regex.is_null(s)).then_some(s)
-                                })
-                                .collect::<DictionaryArray<UInt8Type>>(),
-                        ) as ArrayRef),
-                        DataType::UInt16 => Ok(Arc::new(
-                            rows.iter()
-                                .map(|row| {
-                                    let s = row.get(i);
-                                    (!null_regex.is_null(s)).then_some(s)
-                                })
-                                .collect::<DictionaryArray<UInt16Type>>(),
-                        ) as ArrayRef),
-                        DataType::UInt32 => Ok(Arc::new(
-                            rows.iter()
-                                .map(|row| {
-                                    let s = row.get(i);
-                                    (!null_regex.is_null(s)).then_some(s)
-                                })
-                                .collect::<DictionaryArray<UInt32Type>>(),
-                        ) as ArrayRef),
-                        DataType::UInt64 => Ok(Arc::new(
-                            rows.iter()
-                                .map(|row| {
-                                    let s = row.get(i);
-                                    (!null_regex.is_null(s)).then_some(s)
-                                })
-                                .collect::<DictionaryArray<UInt64Type>>(),
-                        ) as ArrayRef),
+                        DataType::Int8 => build_dictionary_array::<Int8Type>(rows, i, null_regex),
+                        DataType::Int16 => build_dictionary_array::<Int16Type>(rows, i, null_regex),
+                        DataType::Int32 => build_dictionary_array::<Int32Type>(rows, i, null_regex),
+                        DataType::Int64 => build_dictionary_array::<Int64Type>(rows, i, null_regex),
+                        DataType::UInt8 => build_dictionary_array::<UInt8Type>(rows, i, null_regex),
+                        DataType::UInt16 => {
+                            build_dictionary_array::<UInt16Type>(rows, i, null_regex)
+                        }
+                        DataType::UInt32 => {
+                            build_dictionary_array::<UInt32Type>(rows, i, null_regex)
+                        }
+                        DataType::UInt64 => {
+                            build_dictionary_array::<UInt64Type>(rows, i, null_regex)
+                        }
                         _ => Err(ArrowError::ParseError(format!(
                             "Unsupported dictionary key type {key_type}"
                         ))),
@@ -1188,6 +1230,24 @@ fn build_boolean_array(
         })
         .collect::<Result<BooleanArray, _>>()
         .map(|e| Arc::new(e) as ArrayRef)
+}
+
+// parses a specific column (col_idx) into an Arrow dictionary array of strings.
+fn build_dictionary_array<K: ArrowDictionaryKeyType>(
+    rows: &StringRecords<'_>,
+    col_idx: usize,
+    null_regex: &NullRegex,
+) -> Result<ArrayRef, ArrowError> {
+    let mut builder = StringDictionaryBuilder::<K>::with_capacity(rows.len(), 256, 1024);
+    for row in rows.iter() {
+        let s = row.get(col_idx);
+        if null_regex.is_null(s) {
+            builder.append_null();
+        } else {
+            builder.append(s)?;
+        }
+    }
+    Ok(Arc::new(builder.finish()))
 }
 
 /// Builder for CSV [`Reader`]s
@@ -1635,6 +1695,110 @@ mod tests {
     }
 
     #[test]
+    fn test_infer_format_with_typed_columns() {
+        let csv = "name,count,active\nalice,1,true\nbob,2,false\n";
+
+        let (format, format_records_read) = Format::default()
+            .infer_format(Cursor::new(csv), None)
+            .unwrap();
+        let (schema, records_read) = format.infer_schema(Cursor::new(csv), None).unwrap();
+
+        assert_eq!(schema.field(0).name(), "name");
+        assert_eq!(schema.field(1).name(), "count");
+        assert_eq!(schema.field(2).name(), "active");
+        assert_eq!(format_records_read, 3);
+        assert_eq!(records_read, 2);
+    }
+
+    #[test]
+    fn test_infer_format_without_header() {
+        let csv = "1,true\n2,false\n";
+
+        let (format, format_records_read) = Format::default()
+            .infer_format(Cursor::new(csv), None)
+            .unwrap();
+        let (schema, records_read) = format.infer_schema(Cursor::new(csv), None).unwrap();
+
+        assert_eq!(schema.field(0).name(), "column_1");
+        assert_eq!(schema.field(1).name(), "column_2");
+        assert_eq!(format_records_read, 2);
+        assert_eq!(records_read, 2);
+    }
+
+    #[test]
+    fn test_infer_format_returns_no_header_when_ambiguous() {
+        for csv in ["name,count\n", "alice,london\nbob,paris\n"] {
+            let (format, _) = Format::default()
+                .infer_format(Cursor::new(csv), None)
+                .unwrap();
+            let (schema, _) = format.infer_schema(Cursor::new(csv), None).unwrap();
+            assert_eq!(schema.field(0).name(), "column_1", "CSV: {csv:?}");
+        }
+
+        let (format, format_records_read) = Format::default()
+            .infer_format(Cursor::new(""), None)
+            .unwrap();
+        let (schema, records_read) = format.infer_schema(Cursor::new(""), None).unwrap();
+        assert!(schema.fields().is_empty());
+        assert_eq!(format_records_read, 0);
+        assert_eq!(records_read, 0);
+    }
+
+    #[test]
+    fn test_infer_format_honors_format_options() {
+        let csv = "name;count\nalice;1\nbob;2\n";
+        let (format, _) = Format::default()
+            .with_delimiter(b';')
+            .infer_format(Cursor::new(csv), None)
+            .unwrap();
+        let (schema, records_read) = format.infer_schema(Cursor::new(csv), None).unwrap();
+
+        assert_eq!(schema.field(0).name(), "name");
+        assert_eq!(schema.field(1).name(), "count");
+        assert_eq!(records_read, 2);
+    }
+
+    #[test]
+    fn test_infer_format_respects_max_records() {
+        let csv = "name,count\nalice,1\nbob,unknown\n";
+        let infer = |max_records| {
+            let (format, records_read) = Format::default()
+                .infer_format(Cursor::new(csv), max_records)
+                .unwrap();
+            let (schema, _) = format.infer_schema(Cursor::new(csv), None).unwrap();
+            (schema.field(0).name().clone(), records_read)
+        };
+
+        assert_eq!(infer(Some(1)), ("name".to_string(), 2));
+        assert_eq!(infer(None), ("column_1".to_string(), 3));
+        assert_eq!(infer(Some(0)), ("column_1".to_string(), 1));
+    }
+
+    #[test]
+    fn test_infer_format_numeric_text_is_not_header() {
+        for csv in [
+            "+1\n2\n3\n",
+            "+1.5\n2.5\n3.5\n",
+            "+1e3\n2e3\n3e3\n",
+            "9223372036854775808\n2\n3\n",
+        ] {
+            let (format, records_read) = Format::default()
+                .infer_format(Cursor::new(csv), None)
+                .unwrap();
+            let (schema, schema_records_read) =
+                format.infer_schema(Cursor::new(csv), None).unwrap();
+            let (ordinary_schema, _) = Format::default()
+                .infer_schema(Cursor::new(csv), None)
+                .unwrap();
+
+            assert_eq!(schema.field(0).name(), "column_1", "CSV: {csv:?}");
+            assert_eq!(schema, ordinary_schema, "CSV: {csv:?}");
+            assert_eq!(records_read, 3);
+            assert_eq!(schema_records_read, 3);
+        }
+    }
+
+    #[test]
     #[cfg_attr(miri, ignore)] // Takes too long
     fn test_csv_with_schema_inference() {
         let mut file = File::open("test/data/uk_cities_with_headers.csv").unwrap();
@@ -1870,6 +2034,27 @@ mod tests {
         assert_eq!(strings.value(0), "Elgin, Scotland, the UK");
         assert_eq!(strings.value(4), "Eastbourne, East Sussex, UK");
         assert_eq!(strings.value(29), "Uckfield, East Sussex, UK");
+    }
+
+    #[test]
+    fn test_csv_dictionary_key_overflow() {
+        let schema = Arc::new(Schema::new(vec![Field::new_dictionary(
+            "c",
+            DataType::Int8,
+            DataType::Utf8,
+            false,
+        )]));
+        let read = |distinct: usize| {
+            let rows = (0..distinct).map(|i| format!("v{i}")).collect::<Vec<_>>();
+            let mut reader = ReaderBuilder::new(schema.clone())
+                .build(Cursor::new(rows.join("\n")))
+                .unwrap();
+            reader.next().unwrap()
+        };
+
+        assert_eq!(read(128).unwrap().num_rows(), 128);
+        let err = read(129).unwrap_err();
+        assert!(matches!(err, ArrowError::DictionaryKeyOverflowError));
     }
 
     #[test]

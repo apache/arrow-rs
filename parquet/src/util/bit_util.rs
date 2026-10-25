@@ -806,6 +806,34 @@ impl BitWriter {
 /// MAX_VLQ_BYTE_LEN = 5 for i32, and MAX_VLQ_BYTE_LEN = 10 for i64
 pub const MAX_VLQ_BYTE_LEN: usize = 10;
 
+/// Counts set bits directly over byte slices, including unaligned endpoints.
+fn count_set_bits(bytes: &[u8], range: std::ops::Range<usize>) -> usize {
+    assert!(range.start <= range.end);
+    if range.start == range.end {
+        return 0;
+    }
+    let data = &bytes[range.start / 8..range.end.div_ceil(8)];
+    let (words, tail) = data.as_chunks::<8>();
+    let mut count = words
+        .iter()
+        .map(|word| u64::from_le_bytes(*word).count_ones() as usize)
+        .sum::<usize>();
+    if !tail.is_empty() {
+        let word = match data.last_chunk::<8>() {
+            Some(word) => u64::from_le_bytes(*word) >> ((8 - tail.len()) * 8),
+            None => read_num_bytes::<u64>(tail.len(), tail),
+        };
+        count += word.count_ones() as usize;
+    }
+    if !range.start.is_multiple_of(8) {
+        count -= (data[0] & ((1 << (range.start % 8)) - 1)).count_ones() as usize;
+    }
+    if !range.end.is_multiple_of(8) {
+        count -= (data[data.len() - 1] >> (range.end % 8)).count_ones() as usize;
+    }
+    count
+}
+
 /// Reads bit packed values from an in-memory buffer.
 ///
 /// `BitReader` is the dual of [`BitWriter`] and reads values that are either
@@ -1037,6 +1065,60 @@ impl BitReader {
         values_to_read
     }
 
+    /// Skips packed values, returning the number equal to `value` and the number
+    /// skipped. As with `get_batch`, `num_bits` must fit in `T`.
+    pub(crate) fn skip_and_count<T: BitPacking + Copy + PartialEq>(
+        &mut self,
+        num_values: usize,
+        num_bits: usize,
+        value: T,
+    ) -> (usize, usize) {
+        assert!(num_bits <= T::BIT_CAPACITY);
+        let zero = T::from_u64(0);
+        if num_bits == 0 {
+            return (if value == zero { num_values } else { 0 }, num_values);
+        }
+        if num_bits == 1 {
+            let (ones, skipped) = self.skip_and_count_ones(num_values);
+            let matching = if value == T::from_u64(1) {
+                ones
+            } else if value == zero {
+                skipped - ones
+            } else {
+                0
+            };
+            return (matching, skipped);
+        }
+        // Reuse the existing unpacker for wider fields instead of maintaining
+        // a separate packed-field equality algorithm.
+        let mut buffer = [zero; 128];
+        let mut skipped = 0;
+        let mut matching = 0;
+        while skipped < num_values {
+            let to_read = (num_values - skipped).min(buffer.len());
+            let read = self.get_batch(&mut buffer[..to_read], num_bits);
+            if read == 0 {
+                break;
+            }
+            matching += buffer[..read].iter().filter(|&&v| v == value).count();
+            skipped += read;
+        }
+        // Keep subsequent batch reads byte-aligned whenever possible.
+        self.skip(0, 1);
+        (matching, skipped)
+    }
+
+    /// Skips up to `num_bits` bits, returning the number of set bits and bits skipped.
+    /// Counts packed bits directly without expanding them into individual values.
+    pub(crate) fn skip_and_count_ones(&mut self, num_bits: usize) -> (usize, usize) {
+        let start = self.byte_offset * 8 + self.bit_offset;
+        let skipped = self.skip(num_bits, 1);
+        (
+            count_set_bits(&self.buffer, start..start + skipped),
+            skipped,
+        )
+    }
+
     /// Reads up to `num_bytes` bytes from the stream, appending them to `buf`,
     /// and returns the number of bytes actually appended.
     ///
@@ -1158,44 +1240,6 @@ impl From<Vec<u8>> for BitReader {
     }
 }
 
-/// Parallel bit extract: for each set bit in `mask`, extract the
-/// corresponding bit from `value` and pack them contiguously into the low
-/// bits of the return value.
-///
-/// Equivalent to the x86 BMI2 `PEXT` instruction. When compiled with the
-/// `bmi2` target feature enabled (for example `-C target-cpu=x86-64-v3`)
-/// this lowers to the hardware `pext` instruction; otherwise it falls back
-/// to a portable scalar loop.
-///
-/// Replace with `value.compress(mask)` when `uint_gather_scatter_bits`
-/// is stabilised: <https://github.com/rust-lang/rust/issues/149069>
-#[cfg_attr(all(not(feature = "arrow"), not(test)), expect(dead_code))]
-#[inline]
-pub(crate) fn compress(value: u64, mask: u64) -> u64 {
-    #[cfg(all(target_arch = "x86_64", target_feature = "bmi2"))]
-    {
-        // SAFETY: the `bmi2` target feature is statically enabled for this
-        // build, so the `pext` instruction is guaranteed to be available.
-        unsafe { std::arch::x86_64::_pext_u64(value, mask) }
-    }
-
-    #[cfg(not(all(target_arch = "x86_64", target_feature = "bmi2")))]
-    {
-        let mut mask = mask;
-        let mut result: u64 = 0;
-        let mut dest_bit: u64 = 1;
-        while mask != 0 {
-            let lowest = mask & mask.wrapping_neg();
-            if value & lowest != 0 {
-                result |= dest_bit;
-            }
-            dest_bit <<= 1;
-            mask ^= lowest;
-        }
-        result
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1203,44 +1247,6 @@ mod tests {
     use crate::util::test_common::rand_gen::random_numbers;
     use rand::distr::{Distribution, StandardUniform};
     use std::fmt::Debug;
-
-    #[test]
-    fn test_compress() {
-        // Reference: gather the `mask`-selected bits of `value` into
-        // contiguous low bits, least-significant first.
-        fn reference(value: u64, mut mask: u64) -> u64 {
-            let mut result = 0u64;
-            let mut dest = 0u32;
-            while mask != 0 {
-                let lowest = mask & mask.wrapping_neg();
-                result |= (((value & lowest) != 0) as u64) << dest;
-                dest += 1;
-                mask ^= lowest;
-            }
-            result
-        }
-
-        // Hand-picked edge cases.
-        assert_eq!(compress(0b1010, 0b1111), 0b1010);
-        assert_eq!(compress(0b1010, 0b1010), 0b11);
-        assert_eq!(compress(0b1010, 0b0101), 0);
-        assert_eq!(compress(u64::MAX, 0), 0);
-        assert_eq!(compress(0, u64::MAX), 0);
-        assert_eq!(compress(u64::MAX, u64::MAX), u64::MAX);
-
-        // Randomised cross-check against the reference. On a `bmi2` build
-        // this validates the hardware `pext` path; otherwise it exercises
-        // the portable fallback.
-        let values = random_numbers::<u64>(1024);
-        let masks = random_numbers::<u64>(1024);
-        for (&value, &mask) in values.iter().zip(masks.iter()) {
-            assert_eq!(
-                compress(value, mask),
-                reference(value, mask),
-                "value={value:#x} mask={mask:#x}"
-            );
-        }
-    }
 
     #[test]
     fn test_ceil() {
@@ -1297,6 +1303,114 @@ mod tests {
         assert_eq!(bit_reader.get_value::<i32>(4), Some(0));
         let skipped = bit_reader.skip(1, 1);
         assert_eq!(skipped, 0);
+    }
+
+    #[test]
+    fn test_bit_reader_skip_and_count() {
+        for width in 1..=64 {
+            let max = trailing_bits(u64::MAX, width);
+            let values: Vec<u64> = (0..128)
+                .map(|i| match i % 3 {
+                    0 => 0,
+                    1 => max,
+                    _ => i & max,
+                })
+                .collect();
+            let mut writer = BitWriter::new(1024);
+            for &value in &values {
+                writer.put_value(value, width);
+            }
+            let data = Bytes::from(writer.consume());
+            for value in [0, max, max / 2] {
+                for prefix in [0, 1, 7, 31, 63, 64, 65, 127, 128] {
+                    for requested in [0, 1, 7, 32, 63, 64, 65, usize::MAX] {
+                        let mut reader = BitReader::new(data.clone());
+                        let mut before = vec![0_u64; prefix];
+                        assert_eq!(reader.get_batch(&mut before, width), prefix);
+                        let skipped = requested.min(values.len() - prefix);
+                        let count = values[prefix..prefix + skipped]
+                            .iter()
+                            .filter(|&&v| v == value)
+                            .count();
+                        assert_eq!(
+                            reader.skip_and_count(requested, width, value),
+                            (count, skipped)
+                        );
+                        let mut rest = vec![0_u64; values.len() - prefix - skipped];
+                        assert_eq!(reader.get_batch(&mut rest, width), rest.len());
+                        assert_eq!(rest, values[prefix + skipped..]);
+                    }
+                }
+            }
+        }
+        let mut reader = BitReader::new(Bytes::new());
+        assert_eq!(
+            reader.skip_and_count(usize::MAX, 0, 0),
+            (usize::MAX, usize::MAX)
+        );
+        assert_eq!(reader.skip_and_count(123, 0, 1), (0, 123));
+    }
+
+    #[test]
+    fn test_bit_reader_count_unaligned() {
+        let data = Bytes::from((0..19).map(|i| (i * 73 + 19) as u8).collect::<Vec<_>>());
+        for width in [1, 2, 3, 4, 5, 8, 16, 32, 64] {
+            for prefix in 0..=data.len() * 8 {
+                let mut reference = BitReader::new(data.clone());
+                reference.skip(prefix, 1);
+                let mut values = vec![0_u64; (data.len() * 8 - prefix) / width];
+                assert_eq!(reference.get_batch(&mut values, width), values.len());
+                for value in [0, values.first().copied().unwrap_or(0)] {
+                    for requested in [0, 1, 7, usize::MAX] {
+                        let mut reader = BitReader::new(data.clone());
+                        reader.skip(prefix, 1);
+                        let skipped = requested.min(values.len());
+                        let matching = values[..skipped].iter().filter(|&&v| v == value).count();
+                        assert_eq!(
+                            reader.skip_and_count(requested, width, value),
+                            (matching, skipped)
+                        );
+                        let mut rest = vec![0_u64; values.len() - skipped];
+                        assert_eq!(reader.get_batch(&mut rest, width), rest.len());
+                        assert_eq!(rest, values[skipped..]);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_bit_reader_skip_and_count_ones() {
+        let bits: Vec<u8> = (0..152).map(|i| u8::from(i % 3 == 1)).collect();
+        let mut writer = BitWriter::new(19);
+        for &bit in &bits {
+            writer.put_value(bit as u64, 1);
+        }
+        let data = Bytes::from(writer.consume());
+        for prefix in [0, 1, 7, 8, 31, 63, 64, 65, 151, 152] {
+            for requested in [0, 1, 7, 63, 64, 65, 130, usize::MAX] {
+                let mut reader = BitReader::new(data.clone());
+                let first = prefix.min(64);
+                reader.get_value::<u64>(first).unwrap();
+                if prefix > first {
+                    assert_eq!(reader.skip(prefix - first, 1), prefix - first);
+                }
+                let skipped = requested.min(bits.len() - prefix);
+                let count = bits[prefix..prefix + skipped]
+                    .iter()
+                    .map(|&b| b as usize)
+                    .sum();
+                assert_eq!(reader.skip_and_count_ones(requested), (count, skipped));
+                let mut remaining = vec![0; bits.len() - prefix - skipped];
+                assert_eq!(reader.get_batch(&mut remaining, 1), remaining.len());
+                assert_eq!(remaining, bits[prefix + skipped..]);
+                assert_eq!(reader.skip_and_count_ones(1), (0, 0));
+            }
+        }
+        assert_eq!(
+            BitReader::new(Bytes::new()).skip_and_count_ones(usize::MAX),
+            (0, 0)
+        );
     }
 
     #[test]

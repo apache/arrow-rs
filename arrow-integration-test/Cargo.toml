@@ -19,7 +19,6 @@
 name = "arrow-integration-test"
 version = { workspace = true }
 description = "Support for the Apache Arrow JSON test data format"
-homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
 license = { workspace = true }
