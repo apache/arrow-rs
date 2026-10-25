@@ -39,7 +39,6 @@ use arrow_array::{
 };
 use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_schema::DataType;
-use std::fmt::Debug;
 
 macro_rules! downcast_dict_impl {
     ($array:ident, $key:ident, $val:ident, $op:expr $(, $arg:expr)*) => {{
