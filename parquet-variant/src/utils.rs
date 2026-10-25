@@ -234,9 +234,7 @@ pub(crate) fn parse_path(s: &str) -> Result<Vec<VariantPathElement<'_>>, ArrowEr
 fn parse_in_bracket(s: &str, i: usize) -> Result<(VariantPathElement<'_>, usize), ArrowError> {
     let start = i + 1; // skip '['
 
-    // Allocated on the first escape; until then the content borrows from `s`
     let mut unescaped: Option<String> = None;
-    // Start of the run of literal chars not yet copied into `unescaped`
     let mut run_start = start;
     let mut chars = s[start..].char_indices();
     let mut end = None;
