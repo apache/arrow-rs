@@ -400,13 +400,20 @@ impl ByteArrayInterner {
         let (found_entry, inline) = if let Some(inline) = maybe_inline_value(value) {
             // is value is already present in the set?
             let entry = self.map.find(hash, |header| {
-                // compare value if hashes match
-                if header.hash != hash {
-                    return false;
-                }
                 // value is stored inline so no need to consult buffer
                 // (this is the "small string optimization")
-                inline == header.offset_or_inline
+                //
+                // no need to compare the hashes since the hash is a function of the value which is compared here
+                let is_same = inline == header.offset_or_inline;
+
+                if is_same {
+                    debug_assert_eq!(
+                        header.hash, hash,
+                        "hashes must match if the values are the same"
+                    );
+                }
+
+                is_same
             });
 
             (entry, Some(inline))
@@ -523,6 +530,11 @@ impl ByteArrayInterner {
     }
 }
 
+/// Iterates the values of a [`ByteArrayInterner`]'s dictionary page
+///
+/// `values` must be a page built by [`ByteArrayInterner::insert`], which is a
+/// sequence of values each preceded by its exact length as a `u32`, and
+/// `current_index` must start at 0, so it is always at the start of a value
 struct ByteArrayInternerIterator<'a> {
     values: &'a [u8],
     current_index: usize,
@@ -536,7 +548,8 @@ impl<'a> Iterator for ByteArrayInternerIterator<'a> {
             return None;
         }
 
-        // SAFETY: We are ensuring that we don't go out of bounds
+        // SAFETY: `current_index` is at the start of a value and is not past
+        // the end of the page, so the value's 4-byte length prefix is in bounds
         let len_bytes = unsafe {
             self.values
                 .get_unchecked(self.current_index..self.current_index + 4)
@@ -546,7 +559,9 @@ impl<'a> Iterator for ByteArrayInternerIterator<'a> {
         let start = self.current_index + 4;
         let end = start + len;
 
-        // SAFETY: We are ensuring that we don't go out of bounds
+        // SAFETY: `insert` writes exactly `len` bytes after the prefix, and
+        // rejects values whose length does not fit in a `u32`, so the prefix is
+        // never truncated and `start..end` is within the page
         let value = unsafe { self.values.get_unchecked(start..end) };
 
         self.current_index = end;
