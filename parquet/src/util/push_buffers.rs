@@ -70,12 +70,7 @@ pub struct PushBuffers {
     /// lookup cannot stop at the nearest buffer. `max_len` tells the lookup
     /// when no earlier buffer can reach the requested range, so it checks one
     /// or two buffers, not all of them. See [`Self::find`].
-    max_len: u64,
-    /// The number of ranges in `ranges` with the length `max_len`. `max_len`
-    /// can decrease only when this count goes to zero. Thus, a release does
-    /// not scan all ranges to update `max_len` while other ranges of that
-    /// length remain.
-    max_len_count: usize,
+    max_len: MaxLen,
     /// The sum of the lengths of `ranges`, kept up to date so that
     /// [`Self::buffered_bytes`] does not scan all ranges.
     buffered_bytes: u64,
@@ -117,8 +112,7 @@ impl PushBuffers {
             file_len,
             ranges: VecDeque::new(),
             buffers: VecDeque::new(),
-            max_len: 0,
-            max_len_count: 0,
+            max_len: MaxLen::default(),
             buffered_bytes: 0,
         }
     }
@@ -172,11 +166,7 @@ impl PushBuffers {
         // Insert after all buffers that start at or before `range.start`.
         // Thus, ranges pushed in file order go at the end.
         let idx = self.ranges.partition_point(|r| r.start <= range.start);
-        match expected.cmp(&self.max_len) {
-            Ordering::Greater => (self.max_len, self.max_len_count) = (expected, 1),
-            Ordering::Equal => self.max_len_count += 1,
-            Ordering::Less => {}
-        }
+        self.max_len.add(expected);
         self.buffered_bytes += expected;
         self.ranges.insert(idx, range);
         self.buffers.insert(idx, buffer);
@@ -224,7 +214,7 @@ impl PushBuffers {
             .range(..candidates)
             .enumerate()
             .rev()
-            .take_while(|(_, r)| r.start.saturating_add(self.max_len) >= end)
+            .take_while(|(_, r)| r.start.saturating_add(self.max_len.get()) >= end)
             .find(|(_, r)| r.end >= end)
             .map(|(idx, _)| idx)
     }
@@ -289,9 +279,7 @@ impl PushBuffers {
             if remove.next_if_eq(&idx).is_some() {
                 let len = self.ranges[idx].end.saturating_sub(self.ranges[idx].start);
                 self.buffered_bytes -= len;
-                if len == self.max_len {
-                    self.max_len_count -= 1;
-                }
+                self.max_len.remove(len);
             } else {
                 self.ranges.swap(kept, idx);
                 self.buffers.swap(kept, idx);
@@ -301,27 +289,8 @@ impl PushBuffers {
         self.ranges.drain(kept..=last);
         self.buffers.drain(kept..=last);
         // `max_len` changes only when no buffer of that length remains.
-        if self.max_len_count == 0 {
-            self.update_max_len();
-        }
-    }
-
-    /// Set `max_len` to the maximum length of the remaining ranges, and
-    /// `max_len_count` to the number of ranges of that length.
-    ///
-    /// A `max_len` that is too large is still correct, lookups only scan
-    /// further. This update is for performance: a large buffer that was
-    /// removed must not slow down later lookups.
-    #[cfg(feature = "arrow")]
-    fn update_max_len(&mut self) {
-        (self.max_len, self.max_len_count) = (0, 0);
-        for len in self.ranges.iter().map(|r| r.end.saturating_sub(r.start)) {
-            match len.cmp(&self.max_len) {
-                Ordering::Greater => (self.max_len, self.max_len_count) = (len, 1),
-                Ordering::Equal => self.max_len_count += 1,
-                Ordering::Less => {}
-            }
-        }
+        self.max_len
+            .rescan_if_stale(self.ranges.iter().map(|r| r.end.saturating_sub(r.start)));
     }
 
     /// Remove all buffered bytes in `ranges`.
@@ -363,7 +332,7 @@ impl PushBuffers {
         let mut overlapping = vec![];
         let mut visited = 0;
         for r in &release {
-            let max_len = self.max_len;
+            let max_len = self.max_len.get();
             let first = self
                 .ranges
                 .partition_point(|b| b.start.saturating_add(max_len) <= r.start);
@@ -389,9 +358,7 @@ impl PushBuffers {
             let (range, buffer) = (&mut self.ranges[idx], &mut self.buffers[idx]);
             let whole = range.clone();
             // Each kept part is shorter than `whole`.
-            if whole.end - whole.start == self.max_len {
-                self.max_len_count -= 1;
-            }
+            self.max_len.remove(whole.end - whole.start);
             let offset = |pos: u64| (pos - whole.start) as usize;
             // The parts of `whole` between the released ranges.
             let first = release.partition_point(|r| r.end <= whole.start);
@@ -460,10 +427,9 @@ impl PushBuffers {
         }
         // `max_len` changes only when no buffer of that length remains. Only
         // then pay for the pass over all buffers, which keeps `max_len` exact
-        // (see `update_max_len`).
-        if self.max_len_count == 0 {
-            self.update_max_len();
-        }
+        // (see `MaxLen::rescan_if_stale`).
+        self.max_len
+            .rescan_if_stale(self.ranges.iter().map(|r| r.end.saturating_sub(r.start)));
     }
 
     /// Remove all buffered bytes outside `keep`.
@@ -486,8 +452,7 @@ impl PushBuffers {
     pub(crate) fn clear_all_ranges(&mut self) {
         self.ranges.clear();
         self.buffers.clear();
-        self.max_len = 0;
-        self.max_len_count = 0;
+        self.max_len = MaxLen::default();
         self.buffered_bytes = 0;
     }
 
@@ -511,10 +476,10 @@ impl PushBuffers {
             .map(|r| r.end.saturating_sub(r.start))
             .max();
         let max_len = max_len.unwrap_or(0);
-        assert_eq!(self.max_len, max_len);
+        assert_eq!(self.max_len.len, max_len);
         let is_longest = |r: &&Range<u64>| r.end.saturating_sub(r.start) == max_len;
         assert_eq!(
-            self.max_len_count,
+            self.max_len.count,
             self.ranges.iter().filter(is_longest).count()
         );
         assert!(
@@ -594,6 +559,63 @@ impl ChunkReader for PushBuffers {
         // Signal that we need more data
         let requested_end = start + length as u64;
         Err(ParquetError::NeedMoreDataRange(start..requested_end))
+    }
+}
+
+/// The length of the longest buffered range, and the number of ranges of
+/// that length.
+///
+/// The two values change together, so only the methods of this type change
+/// them. The length can decrease only when the count goes to zero. Thus, a
+/// release does not scan all ranges while other ranges of that length remain.
+#[derive(Debug, Default, Clone, Copy)]
+struct MaxLen {
+    len: u64,
+    count: usize,
+}
+
+impl MaxLen {
+    /// The length of the longest range. It can be too large until the next
+    /// call to [`Self::rescan_if_stale`]. A length that is too large is still
+    /// correct, lookups only scan further.
+    #[inline]
+    fn get(&self) -> u64 {
+        self.len
+    }
+
+    /// Record a new range of length `len`.
+    #[inline]
+    fn add(&mut self, len: u64) {
+        match len.cmp(&self.len) {
+            Ordering::Greater => (self.len, self.count) = (len, 1),
+            Ordering::Equal => self.count += 1,
+            Ordering::Less => {}
+        }
+    }
+
+    /// Record that a range of length `len` was removed. Call
+    /// [`Self::rescan_if_stale`] after the removals.
+    #[cfg(feature = "arrow")]
+    #[inline]
+    fn remove(&mut self, len: u64) {
+        if len == self.len {
+            self.count -= 1;
+        }
+    }
+
+    /// If no range of the current length remains, set the length from the
+    /// lengths of the remaining ranges in `lens`.
+    ///
+    /// This update is for performance: a large buffer that was removed must
+    /// not slow down later lookups. The pass over `lens` occurs only when the
+    /// last range of the longest length is removed.
+    #[cfg(feature = "arrow")]
+    #[inline]
+    fn rescan_if_stale(&mut self, lens: impl IntoIterator<Item = u64>) {
+        if self.count == 0 {
+            *self = Self::default();
+            lens.into_iter().for_each(|len| self.add(len));
+        }
     }
 }
 
