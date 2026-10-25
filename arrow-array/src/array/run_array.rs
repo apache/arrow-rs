@@ -426,9 +426,9 @@ impl<R: RunEndIndexType> From<ArrayData> for RunArray<R> {
         // deconstruct the run ends child array
         let (
             run_end_data_type,
-            _run_end_len,
+            run_end_len,
             _run_end_nulls,
-            _run_end_offset,
+            run_end_offset,
             run_end_buffers,
             _run_end_child_data,
         ) = run_end_child.into_parts();
@@ -436,7 +436,7 @@ impl<R: RunEndIndexType> From<ArrayData> for RunArray<R> {
         let [run_end_buffer]: [arrow_buffer::Buffer; 1] = run_end_buffers
             .try_into()
             .expect("Run ends should have exactly one buffer");
-        let scalar = ScalarBuffer::from(run_end_buffer);
+        let scalar = ScalarBuffer::new(run_end_buffer, run_end_offset, run_end_len);
         let run_ends = unsafe { RunEndBuffer::new_unchecked(scalar, offset, len) };
 
         let values = make_array(values_child);
@@ -870,6 +870,7 @@ mod tests {
     use rand::seq::SliceRandom;
 
     use super::*;
+    use crate::Float32Array;
     use crate::Int64Array;
     use crate::builder::PrimitiveRunBuilder;
     use crate::cast::AsArray;
@@ -1570,5 +1571,41 @@ mod tests {
         let created_from_parts =
             unsafe { RunArray::<Int32Type>::new_unchecked(dt, buffer, values) };
         assert_eq!(array, created_from_parts);
+    }
+
+    #[test]
+    fn test_from_array_data_offset() {
+        let dt = DataType::RunEndEncoded(
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Float32,
+                true,
+            )),
+        );
+
+        let runs = ArrayData::builder(DataType::Int32)
+            .len(2)
+            .offset(2)
+            .add_buffer(vec![-10_i32, -20, 1_i32, 4, 0, 100].into())
+            .build()
+            .unwrap();
+        let values = Float32Array::from(vec![1.5, 2.5]);
+
+        let data = ArrayDataBuilder::new(dt)
+            .len(3)
+            .child_data(vec![runs, values.to_data()])
+            .build()
+            .unwrap();
+        let array = RunArray::<Int32Type>::from(data);
+        let array = array.downcast::<Float32Array>().unwrap();
+
+        assert_eq!(array.value(0), 1.5);
+        assert_eq!(array.value(1), 2.5);
+        assert_eq!(array.value(2), 2.5);
     }
 }

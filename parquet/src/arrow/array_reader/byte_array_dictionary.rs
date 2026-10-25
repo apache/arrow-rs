@@ -280,6 +280,8 @@ enum MaybeDictionaryDecoder {
         /// This is a maximum as the null count is not always known, e.g. value data from
         /// a v1 data page
         max_remaining_values: usize,
+        /// Validated bit width of decoded dictionary keys.
+        bit_width: u8,
     },
     Fallback(ByteArrayDecoder),
     Fixed(FixedByteArrayDecoder),
@@ -401,6 +403,7 @@ where
                 MaybeDictionaryDecoder::Dict {
                     decoder,
                     max_remaining_values: num_values.unwrap_or(num_levels),
+                    bit_width,
                 }
             }
             _ if self.flba_column_descr.is_some() => {
@@ -433,6 +436,7 @@ where
             MaybeDictionaryDecoder::Dict {
                 decoder,
                 max_remaining_values,
+                bit_width,
             } => {
                 let len = num_values.min(*max_remaining_values);
 
@@ -447,11 +451,9 @@ where
                     return Ok(0); // All data must be NULL
                 }
 
-                match out.as_keys(dict) {
+                match out.as_keys_with_bit_width(dict, Some(*bit_width)) {
                     Some(keys) => {
                         // Happy path - can just copy keys
-                        // Keys will be validated on conversion to arrow
-
                         // TODO: Push vec into decoder (#5177)
                         let start = keys.len();
                         keys.resize(start + len, K::default());
@@ -492,6 +494,7 @@ where
             MaybeDictionaryDecoder::Dict {
                 decoder,
                 max_remaining_values,
+                bit_width: _,
             } => {
                 let num_values = num_values.min(*max_remaining_values);
                 *max_remaining_values -= num_values;
@@ -961,6 +964,22 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "Parquet error: Invalid or corrupted RLE bit width 33. Max allowed is 32"
+        );
+    }
+
+    #[test]
+    fn test_dictionary_decoder_rejects_rle_value_exceeding_bit_width() {
+        let column_desc = utf8_column();
+        let mut decoder = DictionaryDecoder::<i32, i32>::new(&column_desc);
+
+        // Bit width 1, run length 1, value 0xff.
+        let data = Bytes::from_static(&[1, 2, 0xff]);
+        let err = decoder
+            .set_data(Encoding::RLE_DICTIONARY, data, 1, Some(1))
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Invalid or corrupted RLE value 255 exceeds bit width 1"
         );
     }
 }
