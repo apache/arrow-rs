@@ -394,7 +394,7 @@ struct ByteArrayInterner {
 }
 
 impl ByteArrayInterner {
-    fn intern(&mut self, value: &[u8]) -> u64 {
+    fn intern(&mut self, value: &[u8]) -> Result<u64> {
         let hash = self.state.hash_one(value);
 
         // value is "small" - can be inlined
@@ -433,7 +433,7 @@ impl ByteArrayInterner {
         };
 
         if let Some(entry) = found_entry {
-            return entry.index_in_dict;
+            return Ok(entry.index_in_dict);
         }
 
         // if no existing entry, make a new one
@@ -457,9 +457,37 @@ impl ByteArrayInterner {
     }
 
     /// Appends `value` to the dictionary, in the empty slot at `pos`
-    fn insert(&mut self, value: &[u8], hash: u64, inline: Option<OffsetOrInlineView>) -> u64 {
+    fn insert(
+        &mut self,
+        value: &[u8],
+        hash: u64,
+        inline: Option<OffsetOrInlineView>,
+    ) -> Result<u64> {
         // If inline provided it should inlined
         debug_assert!(inline.is_none_or(|i| i.is_inlined()));
+
+        // The dictionary page is PLAIN encoded, where each value is prefixed by
+        // its length as a 4-byte little endian integer so we need to reject that since we use unsafe access later
+        //
+        // From the parquet-format spec:
+        // > Encoding PLAIN:
+        // > [...] For the byte array type, it encodes the length as a 4-byte little
+        // > endian integer, followed by the bytes.
+        // >
+        // > Dictionary Encoding:
+        // > [...] Dictionary page format: the entries in the dictionary using the plain encoding.
+        // >
+        //
+        // Reference:
+        // - Plain encoding: https://github.com/apache/parquet-format/blob/53b8bd8576827080d4382fa457003f45b41cda6e/Encodings.md?plain=1#L72-L73
+        // - Plain dictionary encoding: https://github.com/apache/parquet-format/blob/53b8bd8576827080d4382fa457003f45b41cda6e/Encodings.md?plain=1#L83
+        if value.len() > u32::MAX as usize {
+            return Err(ParquetError::General(format!(
+                "Byte array value is too large to be written in dictionary: {} bytes",
+                value.len()
+            )));
+        }
+
         let key = self.num_unique_values as u64;
         let len = value.len();
 
@@ -478,7 +506,7 @@ impl ByteArrayInterner {
         self.map
             .insert_unique(hash, new_header, |header| header.hash);
 
-        key
+        Ok(key)
     }
 
     fn estimated_memory_size(&self) -> usize {
@@ -535,7 +563,7 @@ struct DictEncoder {
 
 impl DictEncoder {
     /// Encode `values` to the in-progress page
-    fn encode<T>(&mut self, values: T, indices: impl ExactSizeIterator<Item = usize>)
+    fn encode<T>(&mut self, values: T, indices: impl ExactSizeIterator<Item = usize>) -> Result<()>
     where
         T: ArrayAccessor + Copy,
         T::Item: AsRef<[u8]>,
@@ -544,10 +572,12 @@ impl DictEncoder {
 
         for idx in indices {
             let value = values.value(idx);
-            let interned = self.interner.intern(value.as_ref());
+            let interned = self.interner.intern(value.as_ref())?;
             self.indices.push(interned);
             self.variable_length_bytes += value.as_ref().len() as i64;
         }
+
+        Ok(())
     }
 
     fn bit_width(&self) -> u8 {
@@ -679,8 +709,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
             encode,
             indices.iter().copied(),
             self
-        );
-        Ok(())
+        )
     }
 
     fn count_values_within_byte_budget_gather(
@@ -854,7 +883,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
 /// Encodes the provided `values` and `indices` to `encoder`
 ///
 /// This is a free function so it can be used with `downcast_op!`
-fn encode<T, I>(values: T, indices: I, encoder: &mut ByteArrayEncoder)
+fn encode<T, I>(values: T, indices: I, encoder: &mut ByteArrayEncoder) -> Result<()>
 where
     T: ArrayAccessor + Copy,
     T::Item: Copy + Ord + AsRef<[u8]>,
@@ -890,7 +919,9 @@ where
                     bloom_filter.insert(values.value(idx).as_ref());
                 }
             }
-            encoder.fallback.encode(values, indices)
+            encoder.fallback.encode(values, indices);
+
+            Ok(())
         }
     }
 }
