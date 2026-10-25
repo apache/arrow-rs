@@ -261,6 +261,9 @@ fn criterion_benchmark(c: &mut Criterion) {
 fn make_page_index_column(data_type: &DataType, rows: usize) -> ArrayRef {
     let valid = |i: usize| !i.is_multiple_of(7);
     match data_type {
+        Int32 => Arc::new(Int32Array::from_iter(
+            (0..rows).map(|i| valid(i).then_some(i as i32 * 3)),
+        )),
         Int64 => Arc::new(Int64Array::from_iter(
             (0..rows).map(|i| valid(i).then_some(i as i64 * 3)),
         )),
@@ -308,11 +311,12 @@ fn create_page_index_file(
     buffer
 }
 
-/// Measures getting page statistics from the stored column index bytes by
-/// building `ColumnIndexMetaData` and converting it to Arrow arrays.
+/// Measures getting page statistics from the stored column index bytes, either
+/// by building `ColumnIndexMetaData` and converting it to Arrow arrays, or by
+/// decoding the bytes directly with `data_page_statistics_from_bytes`.
 fn page_index_benchmark(c: &mut Criterion) {
     let row_groups = 20;
-    let data_types = [Int64, Utf8, Utf8View, Decimal128(20, 2)];
+    let data_types = [Int32, Int64, Utf8, Utf8View, Decimal128(20, 2)];
     // 10 rows per page, so 100 or 500 pages per row group: 2000 or 10000 pages
     let rows_per_group_options = [1000, 5000];
 
@@ -376,6 +380,20 @@ fn page_index_benchmark(c: &mut Criterion) {
                     .unwrap();
             })
         });
+        // only INT32 columns can be read straight from the bytes
+        if physical_type == parquet::basic::Type::INT32 {
+            group.bench_function("from bytes", |b| {
+                b.iter(|| {
+                    let _ = converter
+                        .data_page_statistics_from_bytes(
+                            column_indexes
+                                .iter()
+                                .map(|(num_pages, bytes)| (*num_pages, Some(*bytes))),
+                        )
+                        .unwrap();
+                })
+            });
+        }
         group.finish();
     }
 }
