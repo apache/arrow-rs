@@ -73,6 +73,7 @@ impl<'a> From<&'a BooleanBuffer> for SlicesIterator<'a> {
 impl Iterator for SlicesIterator<'_> {
     type Item = (usize, usize);
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         self.0.next()
     }

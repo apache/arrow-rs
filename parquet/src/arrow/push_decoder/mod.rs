@@ -35,6 +35,7 @@ use bytes::Bytes;
 use reader_builder::{RowGroupReaderBuilder, RowGroupReaderBuilderParts};
 use remaining::{RemainingRowGroups, RemainingRowGroupsParts};
 use scan_plan::RowBudget;
+pub use scan_plan::{PageKind, PlannedRange, ScanPlan};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -551,7 +552,16 @@ impl ParquetPushDecoder {
 
     /// Push data into the decoder for processing
     ///
-    /// This should correspond to the data ranges requested by the decoder
+    /// This should correspond to the data ranges requested by the decoder.
+    ///
+    /// If you fetch data before the decoder requests it, for example with
+    /// [`Self::scan_plan`], keep it in your own cache and push exactly the
+    /// ranges in each [`DecodeResult::NeedsData`]:
+    ///
+    /// * The decoder does not use a requested range that is split over two
+    ///   pushed buffers.
+    /// * The decoder releases a pushed buffer only if its range is equal to a
+    ///   requested range. Other pushed data stays buffered.
     pub fn push_ranges(
         &mut self,
         ranges: Vec<Range<u64>>,
@@ -627,6 +637,12 @@ impl ParquetPushDecoder {
     /// based on filtering and other criteria.
     pub fn peek_next_row_group(&self) -> Result<Option<usize>, ParquetError> {
         self.state.peek_next_row_group()
+    }
+
+    /// Returns the byte ranges that this decoder may still read, in the order
+    /// that decoding needs them. See [`ScanPlan`].
+    pub fn scan_plan(&self) -> ScanPlan {
+        self.state.scan_plan()
     }
 
     /// Decompose this decoder back into a [`ParquetPushDecoderBuilder`] for the
@@ -925,6 +941,20 @@ impl ParquetDecoderState {
         }
     }
 
+    /// See [`ParquetPushDecoder::scan_plan`].
+    fn scan_plan(&self) -> ScanPlan {
+        match self {
+            ParquetDecoderState::ReadingRowGroup {
+                remaining_row_groups,
+            }
+            | ParquetDecoderState::DecodingRowGroup {
+                remaining_row_groups,
+                ..
+            } => remaining_row_groups.scan_plan(),
+            ParquetDecoderState::Finished => ScanPlan::empty(),
+        }
+    }
+
     fn row_groups_remaining(&self) -> usize {
         match self {
             ParquetDecoderState::ReadingRowGroup {
@@ -997,6 +1027,7 @@ mod test {
     };
     use crate::arrow::{ArrowWriter, ProjectionMask};
     use crate::errors::ParquetError;
+    use crate::file::metadata::page_index::PageIndexBuilder;
     use crate::file::metadata::{PageIndexPolicy, ParquetMetaDataPushDecoder};
     use crate::file::properties::WriterProperties;
     use arrow::compute::kernels::cmp::{gt, lt};
@@ -3093,6 +3124,46 @@ mod test {
             panic!("Expected metadata to be decoded successfully");
         };
         Arc::new(metadata)
+    }
+
+    /// An offset index whose last page is longer than the column chunk gives
+    /// an error, not a panic.
+    #[test]
+    fn test_decoder_offset_index_page_past_column_chunk() {
+        let metadata = Arc::unwrap_or_clone(test_file_parquet_metadata_with_offset_index());
+        let num_columns = metadata.row_group(0).num_columns();
+        let mut page_index = PageIndexBuilder::new(metadata.num_row_groups(), num_columns);
+        for row_group in 0..metadata.num_row_groups() {
+            let row_group_index = metadata.page_index_for_row_group(row_group);
+            for column in 0..num_columns {
+                let mut offset_index = row_group_index.offset_index(column).unwrap().clone();
+                if (row_group, column) == (0, 0) {
+                    let last = offset_index.page_locations.last_mut().unwrap();
+                    last.compressed_page_size += 1;
+                }
+                page_index.put_offset_index(offset_index, row_group, column);
+            }
+        }
+        let metadata = metadata
+            .into_builder()
+            .set_page_index(Some(Arc::new(page_index.build())))
+            .build();
+
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(Arc::new(metadata))
+            .unwrap()
+            .with_row_groups(vec![0])
+            .build()
+            .unwrap();
+        let ranges = expect_needs_data(decoder.try_decode());
+        push_ranges_to_decoder(&mut decoder, ranges);
+        let err = loop {
+            match decoder.try_decode() {
+                Ok(DecodeResult::Data(_)) => {}
+                Ok(other) => panic!("expected an error, got {other:?}"),
+                Err(e) => break e.to_string(),
+            }
+        };
+        assert!(err.contains("has 126 bytes, expected 127"), "{err}");
     }
 
     /// return the metadata for the test file, including the offset index

@@ -17,9 +17,6 @@
 
 //! Converts between the Arrow IPC file format and the integration test JSON format.
 
-// The unused_crate_dependencies lint does not work well for crates defining additional examples/bin targets
-#![allow(unused_crate_dependencies)]
-
 use arrow::error::{ArrowError, Result};
 use arrow::ipc::reader::FileReader;
 use arrow::ipc::writer::FileWriter;

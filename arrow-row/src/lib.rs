@@ -2475,7 +2475,7 @@ unsafe fn decode_column(
             if let Some(ref mut offsets_vec) = offsets {
                 let mut count = vec![0i32; converters.len()];
                 for type_id in &type_ids {
-                    let field_idx = *type_id as usize;
+                    let field_idx = type_id_to_field_idx[*type_id as usize];
                     offsets_vec.push(count[field_idx]);
 
                     count[field_idx] += 1;
@@ -5716,6 +5716,39 @@ mod tests {
         for i in 0..union_array.len() {
             assert_eq!(union_array.type_id(i), back_union.type_id(i));
         }
+    }
+
+    #[test]
+    fn test_dense_union_type_ids_not_below_field_count() {
+        // [1, "a", 3, "b"] with type ids that are not field indexes
+        let union_fields = [
+            (2, Arc::new(Field::new("int", DataType::Int32, false))),
+            (7, Arc::new(Field::new("str", DataType::Utf8, false))),
+        ]
+        .into_iter()
+        .collect();
+
+        let union_array: ArrayRef = Arc::new(
+            UnionArray::try_new(
+                union_fields,
+                vec![2, 7, 2, 7].into(),
+                Some(vec![0, 0, 1, 1].into()),
+                vec![
+                    Arc::new(Int32Array::from(vec![1, 3])) as ArrayRef,
+                    Arc::new(StringArray::from(vec!["a", "b"])),
+                ],
+            )
+            .unwrap(),
+        );
+
+        let converter =
+            RowConverter::new(vec![SortField::new(union_array.data_type().clone())]).unwrap();
+        let rows = converter
+            .convert_columns(std::slice::from_ref(&union_array))
+            .unwrap();
+        let back = converter.convert_rows(&rows).unwrap();
+
+        assert_eq!(back[0].to_data(), union_array.to_data());
     }
 
     #[test]

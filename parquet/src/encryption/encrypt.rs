@@ -26,13 +26,20 @@ use crate::parquet_thrift::{ThriftCompactOutputProtocol, WriteThrift};
 use crate::schema::types::{ColumnDescPtr, SchemaDescriptor};
 use ring::rand::{SecureRandom, SystemRandom};
 use std::collections::{HashMap, HashSet};
+use std::fmt::Formatter;
 use std::io::Write;
 use std::sync::Arc;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 struct EncryptionKey {
     key: Vec<u8>,
     key_metadata: Option<Vec<u8>>,
+}
+
+impl std::fmt::Debug for EncryptionKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "EncryptionKey {{ }}")
+    }
 }
 
 impl EncryptionKey {
@@ -132,6 +139,15 @@ impl FileEncryptionProperties {
             }
         }
         (column_names, keys, meta)
+    }
+
+    /// Returns the retrieval metadata for the named column's encryption key.
+    ///
+    /// Returns `None` if the column has no explicitly configured encryption key
+    /// or its key has no metadata. Metadata is not inherited from the footer key.
+    /// Explicitly configured empty metadata is returned as `Some(&[])`.
+    pub fn column_key_metadata(&self, column_name: &str) -> Option<&[u8]> {
+        self.column_keys.get(column_name)?.key_metadata.as_deref()
     }
 
     /// AAD prefix string uniquely identifies the file and prevents file swapping
@@ -433,5 +449,64 @@ pub(crate) fn get_column_crypto_metadata(
                     key_metadata: encryption_key.key_metadata.clone(),
                 })
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FileEncryptionProperties;
+
+    #[test]
+    fn test_column_key_metadata_preserves_associations() {
+        let columns = [
+            ("first", Some(b"first-key-id".as_slice())),
+            ("second", None),
+            ("third", Some(b"third-key-id".as_slice())),
+        ];
+        for indices in [[0, 1, 2], [2, 1, 0]] {
+            let mut builder = FileEncryptionProperties::builder(b"0123456789012345".to_vec());
+            for index in indices {
+                let (name, metadata) = columns[index];
+                let key = vec![index as u8; 16];
+                builder = match metadata {
+                    Some(metadata) => {
+                        builder.with_column_key_and_metadata(name, key, metadata.to_vec())
+                    }
+                    None => builder.with_column_key(name, key),
+                };
+            }
+            let properties = builder.build().unwrap();
+
+            for (name, metadata) in columns {
+                assert_eq!(properties.column_key_metadata(name), metadata);
+            }
+            assert_eq!(properties.column_key_metadata("missing"), None);
+        }
+    }
+
+    #[test]
+    fn test_column_key_metadata_preserves_empty_metadata() {
+        let properties = FileEncryptionProperties::builder(b"0123456789012345".to_vec())
+            .with_footer_key_metadata(b"footer-key-id".to_vec())
+            .with_column_key_and_metadata("empty", b"1234567890123450".to_vec(), Vec::new())
+            .with_column_key("absent", b"1234567890123451".to_vec())
+            .build()
+            .unwrap();
+
+        assert_eq!(properties.column_key_metadata("empty"), Some([].as_slice()));
+        assert_eq!(properties.column_key_metadata("absent"), None);
+        assert_eq!(properties.column_key_metadata("missing"), None);
+        assert_eq!(properties.footer_key_metadata().unwrap(), b"footer-key-id");
+    }
+
+    #[test]
+    fn test_column_key_metadata_does_not_inherit_footer_metadata() {
+        let properties = FileEncryptionProperties::builder(b"0123456789012345".to_vec())
+            .with_footer_key_metadata(b"footer-key-id".to_vec())
+            .build()
+            .unwrap();
+
+        assert_eq!(properties.column_key_metadata("column"), None);
+        assert_eq!(properties.footer_key_metadata().unwrap(), b"footer-key-id");
     }
 }

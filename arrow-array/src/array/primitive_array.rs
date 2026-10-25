@@ -930,7 +930,9 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         F: Fn(T::Native) -> O::Native,
     {
         let nulls = self.nulls().cloned();
-        let values = self.values().into_iter().map(|v| op(*v));
+        // `move` puts `op`'s captures in the iterator rather than behind a reference, so the
+        // loop doesn't reload them for each value when `collect` isn't inlined
+        let values = self.values().into_iter().map(move |v| op(*v));
         let buffer: Vec<_> = values.collect();
         PrimitiveArray::new(buffer.into(), nulls)
     }
