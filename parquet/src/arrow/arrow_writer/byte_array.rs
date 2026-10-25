@@ -387,9 +387,6 @@ struct ByteArrayInterner {
     map: hashbrown::hash_table::HashTable<Entry>,
     /// Encoded dictionary page: each value prefixed by its length as a `u32`
     page: Vec<u8>,
-
-    /// Number of distinct values
-    num_unique_values: usize,
 }
 
 impl ByteArrayInterner {
@@ -455,6 +452,10 @@ impl ByteArrayInterner {
         existing == value
     }
 
+    fn num_unique_values(&self) -> usize {
+        self.map.len()
+    }
+
     /// Appends `value` to the dictionary, in the empty slot at `pos`
     fn insert(
         &mut self,
@@ -487,14 +488,13 @@ impl ByteArrayInterner {
             )));
         }
 
-        let key = self.num_unique_values as u64;
+        let key = self.num_unique_values() as u64;
         let len = value.len();
 
         self.page.reserve(4 + value.len());
         self.page.extend_from_slice(&(len as u32).to_le_bytes());
         let offset = self.page.len() as u64;
         self.page.extend_from_slice(value);
-        self.num_unique_values += 1;
 
         // Make the new entry
         let new_header = Entry {
@@ -580,7 +580,7 @@ impl DictEncoder {
     }
 
     fn bit_width(&self) -> u8 {
-        let length = self.interner.num_unique_values;
+        let length = self.interner.num_unique_values();
         num_required_bits(length.saturating_sub(1) as u64)
     }
 
@@ -598,7 +598,7 @@ impl DictEncoder {
     }
 
     fn flush_dict_page(self) -> DictionaryPage {
-        let unique_values = self.interner.num_unique_values;
+        let unique_values = self.interner.num_unique_values();
         let bytes = self.interner.page;
 
         DictionaryPage {
