@@ -1778,6 +1778,43 @@ mod tests_from_ffi {
         Ok(())
     }
 
+    /// Unlike bytes, the values of lists and maps are a child array imported with its
+    /// own length, so the lone offset of an empty slice stays within it.
+    #[test]
+    fn test_empty_slice_of_lists() -> Result<()> {
+        use crate::builder::{
+            Int32Builder, LargeListBuilder, ListBuilder, MapBuilder, StringBuilder,
+        };
+
+        let mut list = ListBuilder::new(Int32Builder::new());
+        list.append_value([Some(1), Some(2)]);
+        list.append_value([Some(3)]);
+        let mut large_list = LargeListBuilder::new(Int32Builder::new());
+        large_list.append_value([Some(1), Some(2)]);
+        large_list.append_value([Some(3)]);
+        let mut map = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+        for (k, v) in [("a", 1), ("b", 2)] {
+            map.keys().append_value(k);
+            map.values().append_value(v);
+            map.append(true).unwrap();
+        }
+        let arrays: [ArrayRef; 3] = [
+            Arc::new(list.finish()),
+            Arc::new(large_list.finish()),
+            Arc::new(map.finish()),
+        ];
+        for array in arrays {
+            let data = array.slice(1, 0).to_data();
+            let (array, schema) = to_ffi(&data)?;
+            let imported = unsafe { from_ffi(array, &schema) }?;
+
+            imported.validate_full()?;
+            assert_eq!(imported, data);
+        }
+
+        Ok(())
+    }
+
     fn roundtrip_string_array(array: StringArray) -> StringArray {
         let data = array.into_data();
 
