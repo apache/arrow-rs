@@ -24,7 +24,7 @@ use arrow::row::{RowConverter, SortField};
 use arrow::util::bench_util::{
     create_boolean_array, create_boolean_array_with_seed, create_dict_from_values,
     create_f64_array_with_seed, create_primitive_array, create_primitive_array_with_seed,
-    create_primitive_run_array, create_string_array_with_len,
+    create_primitive_run_array, create_sparse_dict_from_values, create_string_array_with_len,
     create_string_array_with_len_range_and_prefix_and_seed, create_string_dict_array,
     create_string_view_array_with_len, create_string_view_array_with_max_len,
 };
@@ -281,6 +281,13 @@ fn row_bench(c: &mut Criterion) {
     let dict = create_dict_from_values::<Int32Type>(4096, 0., &values);
     let cols = vec![Arc::new(dict) as ArrayRef];
     do_bench(c, "4096 string_dictionary_low_cardinality(100, 0)", cols);
+
+    // A large dictionary whose rows reference only a small range of its
+    // values, as reported in https://github.com/apache/arrow-rs/issues/11901
+    let values = create_string_array_with_len::<i32>(1_000_000, 0., 10);
+    let dict = create_sparse_dict_from_values::<Int32Type>(4096, 0., &values, 0..1024);
+    let cols = vec![Arc::new(dict) as ArrayRef];
+    do_bench(c, "4096 string_dictionary_sparse_keys(1M values)", cols);
 
     let cols = vec![
         Arc::new(create_string_array_with_len::<i32>(4096, 0.5, 20)) as ArrayRef,

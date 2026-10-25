@@ -167,6 +167,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(missing_docs)]
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::iter::Map;
 use std::slice::Windows;
@@ -183,6 +184,7 @@ use crate::fixed::{decode_bool, decode_fixed_size_binary, decode_primitive};
 use crate::list::{compute_lengths_fixed_size_list, encode_fixed_size_list};
 use crate::variable::{decode_binary, decode_string};
 use arrow_array::types::{Int16Type, Int32Type, Int64Type};
+use arrow_data::transform::MutableArrayData;
 
 mod fixed;
 mod list;
@@ -775,9 +777,23 @@ impl Codec {
         match self {
             Codec::Stateless => Ok(Encoder::Stateless),
             Codec::Dictionary(converter, nulls) => {
-                let values = array.as_any_dictionary().values().clone();
+                let dictionary = array.as_any_dictionary();
+                let values = dictionary.values().clone();
+                // Encoding a dictionary costs time proportional to its values,
+                // so when they outnumber the rows, gather only the referenced
+                // values and remap each row's key onto them.
+                let (values, remap) = match values.len() > dictionary.len() {
+                    true => downcast_dictionary_array! {
+                        array => {
+                            let (remap, unique) = dictionary_remap(array);
+                            (gather_values(&values, &unique)?, Some(remap))
+                        }
+                        _ => unreachable!(),
+                    },
+                    false => (values, None),
+                };
                 let rows = converter.convert_columns(&[values])?;
-                Ok(Encoder::Dictionary(rows, nulls.row()))
+                Ok(Encoder::Dictionary(rows, remap, nulls.row()))
             }
             Codec::Struct(converter, null) => {
                 let v = as_struct_array(array);
@@ -909,8 +925,14 @@ impl Codec {
 enum Encoder<'a> {
     /// No additional encoder state is necessary
     Stateless,
-    /// The encoding of the child array and the encoding of a null row
-    Dictionary(Rows, Row<'a>),
+    /// The encoding of the dictionary's values, an optional map from each array
+    /// row to its value's position in that encoding, and the encoding of a null
+    /// row
+    ///
+    /// The map is present only when the values were compacted to the referenced
+    /// subset before encoding: `Some(map)` maps `map[row]` to a row of `Rows`,
+    /// while `None` means the raw dictionary key indexes `Rows` directly.
+    Dictionary(Rows, Option<Vec<usize>>, Row<'a>),
     /// The row encoding of the child arrays and the encoding of a null row
     ///
     /// It is necessary to encode to a temporary [`Rows`] to avoid serializing
@@ -1880,12 +1902,14 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
                     _ => unimplemented!("unsupported data type: {}", array.data_type()),
                 }
             }
-            Encoder::Dictionary(values, null) => {
+            Encoder::Dictionary(values, remap, null) => {
                 downcast_dictionary_array! {
                     array => {
                         tracker.push_variable(
-                            array.keys().iter().map(|v| match v {
-                                Some(k) => values.row_len(k.as_usize()),
+                            array.keys().iter().enumerate().map(|(idx, v)| match v {
+                                Some(k) => values.row_len(
+                                    remap.as_ref().map_or_else(|| k.as_usize(), |r| r[idx]),
+                                ),
                                 None => null.data.len(),
                             })
                         )
@@ -2115,9 +2139,14 @@ fn encode_column(
                 _ => unimplemented!("unsupported data type: {}", column.data_type()),
             }
         }
-        Encoder::Dictionary(values, nulls) => {
+        Encoder::Dictionary(values, remap, nulls) => {
             downcast_dictionary_array! {
-                column => encode_dictionary_values(data, offsets, column, values, nulls),
+                column => match remap.as_deref() {
+                    Some(remap) => {
+                        encode_dictionary_remapped(data, offsets, column, values, remap, nulls)
+                    }
+                    None => encode_dictionary_values(data, offsets, column, values, nulls),
+                },
                 _ => unreachable!()
             }
         }
@@ -2260,6 +2289,70 @@ pub fn encode_dictionary_values<K: ArrowDictionaryKeyType>(
         data[*offset..end_offset].copy_from_slice(row);
         *offset = end_offset;
     }
+}
+
+/// Encodes a dictionary whose values were compacted to the referenced subset.
+/// `remap` maps each array row to its value's position in `values`; the entry
+/// for a null key is never read.
+fn encode_dictionary_remapped<K: ArrowDictionaryKeyType>(
+    data: &mut [u8],
+    offsets: &mut [usize],
+    column: &DictionaryArray<K>,
+    values: &Rows,
+    remap: &[usize],
+    null: &Row<'_>,
+) {
+    for (idx, (offset, k)) in offsets.iter_mut().skip(1).zip(column.keys()).enumerate() {
+        let row = match k {
+            Some(_) => values.row(remap[idx]).data,
+            None => null.data,
+        };
+        let end_offset = *offset + row.len();
+        data[*offset..end_offset].copy_from_slice(row);
+        *offset = end_offset;
+    }
+}
+
+/// Maps each row of `array` to the position of its key in a compacted values
+/// array, and lists the original key at each such position to gather with
+/// [`gather_values`].
+///
+/// Keys are assigned positions in first-seen order; null keys get a
+/// placeholder entry that is never read because their null mask short-circuits
+/// encode.
+fn dictionary_remap<K: ArrowDictionaryKeyType>(
+    array: &DictionaryArray<K>,
+) -> (Vec<usize>, Vec<usize>) {
+    let mut index_of_key: HashMap<usize, usize> = HashMap::new();
+    let mut unique = Vec::new();
+    let remap = array
+        .keys()
+        .iter()
+        .map(|k| match k {
+            Some(k) => {
+                let key = k.as_usize();
+                let next = unique.len();
+                let idx = *index_of_key.entry(key).or_insert(next);
+                if idx == next {
+                    unique.push(key);
+                }
+                idx
+            }
+            None => 0,
+        })
+        .collect();
+    (remap, unique)
+}
+
+/// Gathers `values[index]` for each index of `indices`, preserving order and
+/// nulls the way `take` does but without adding an `arrow-select` dependency.
+fn gather_values(values: &ArrayRef, indices: &[usize]) -> Result<ArrayRef, ArrowError> {
+    let data = values.to_data();
+    let mut mutable = MutableArrayData::new(vec![&data], true, indices.len());
+    for &index in indices {
+        mutable.try_extend(0, index, index + 1)?;
+    }
+    Ok(make_array(mutable.freeze()))
 }
 
 macro_rules! decode_primitive_helper {
@@ -3293,6 +3386,78 @@ mod tests {
         assert_eq!(rows.row(3), rows.row(4));
         assert_eq!(rows.row(4), rows.row(5));
         assert!(rows.row(3) < rows.row(0));
+    }
+
+    /// A dictionary with far more values than rows should only encode the
+    /// referenced values (#11901). Rows are compared against the same logical
+    /// array with a small dictionary, which takes the un-compacted path.
+    #[test]
+    fn test_dictionary_value_compaction() {
+        // 10_000 values, only keys 3, 7 and 9_999 referenced by 6 rows
+        let values = StringArray::from_iter_values((0..10_000).map(|i| i.to_string()));
+        let keys = Int32Array::from_iter([Some(3), Some(7), None, Some(3), Some(9_999), Some(7)]);
+        let data_type = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let data = keys
+            .into_data()
+            .into_builder()
+            .data_type(data_type.clone())
+            .child_data(vec![values.into_data()])
+            .build()
+            .unwrap();
+        let large = Arc::new(DictionaryArray::<Int32Type>::from(data)) as ArrayRef;
+
+        // Same logical array backed by a 3-value dictionary
+        let small = Arc::new(DictionaryArray::<Int32Type>::from_iter([
+            Some("3"),
+            Some("7"),
+            None,
+            Some("3"),
+            Some("9999"),
+            Some("7"),
+        ])) as ArrayRef;
+
+        let converter = RowConverter::new(vec![SortField::new(data_type)]).unwrap();
+        let large_rows = converter.convert_columns(&[large]).unwrap();
+        let small_rows = converter.convert_columns(&[Arc::clone(&small)]).unwrap();
+
+        // Compaction must not change the encoded bytes
+        for i in 0..small.len() {
+            assert_eq!(large_rows.row(i), small_rows.row(i));
+        }
+
+        let cols = converter.convert_rows(&large_rows).unwrap();
+        dictionary_eq(&cols[0], &small);
+    }
+
+    /// Compaction must respect the slice of the dictionary array, not just
+    /// its length, and a dictionary no larger than its rows must keep taking
+    /// the direct path.
+    #[test]
+    fn test_dictionary_value_compaction_sliced() {
+        let values = Int32Array::from_iter_values(0..1_000);
+        let keys = Int32Array::from_iter_values([10, 20, 30, 40, 900, 950, 990, 5]);
+        let data_type = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Int32));
+        let data = keys
+            .into_data()
+            .into_builder()
+            .data_type(data_type.clone())
+            .child_data(vec![values.into_data()])
+            .build()
+            .unwrap();
+        let dict = DictionaryArray::<Int32Type>::from(data);
+
+        let converter = RowConverter::new(vec![SortField::new(data_type)]).unwrap();
+
+        // Slicing to the last 2 rows leaves 2 keys into 1_000 values
+        let sliced = Arc::new(dict.slice(6, 2)) as ArrayRef;
+        let mut expected = PrimitiveDictionaryBuilder::<Int32Type, Int32Type>::new();
+        expected.append(990).unwrap();
+        expected.append(5).unwrap();
+        let expected = Arc::new(expected.finish()) as ArrayRef;
+        let rows = converter.convert_columns(&[sliced]).unwrap();
+        let expected_rows = converter.convert_columns(&[expected]).unwrap();
+        assert_eq!(rows.row(0), expected_rows.row(0));
+        assert_eq!(rows.row(1), expected_rows.row(1));
     }
 
     #[test]
