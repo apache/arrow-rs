@@ -34,11 +34,13 @@ use std::sync::Arc;
 mod byte_view;
 mod fixed_size_binary;
 mod generic;
+mod offsets;
 mod primitive;
 
 use byte_view::InProgressByteViewArray;
 use fixed_size_binary::InProgressFixedSizeBinaryArray;
 use generic::GenericInProgressArray;
+use offsets::OffsetCapacity;
 use primitive::InProgressPrimitiveArray;
 
 fn has_sparse_filter_copy(data_type: &DataType) -> bool {
@@ -145,18 +147,20 @@ fn should_use_sparse_filter_copy(filter_len: usize, selected_count: usize) -> bo
 ///
 /// 1. Output rows are produced in the same order as the input rows
 ///
-/// 2. The output is a sequence of batches, with all but the last being at exactly
-///    `target_batch_size` rows.
+/// 2. Output batches normally contain `target_batch_size` rows. They may be
+///    smaller to keep variable-width or nested offsets representable. Layouts
+///    whose offset growth cannot be checked are sliced without coalescing.
 #[derive(Debug)]
 pub struct BatchCoalescer {
     /// The input schema
     schema: SchemaRef,
     /// The target batch size (and thus size for views allocation). This is a
-    /// hard limit: the output batch will be exactly `target_batch_size`,
-    /// rather than possibly being slightly above.
+    /// row limit when coalescing. Offset capacity can cause an earlier flush.
     target_batch_size: usize,
     /// In-progress arrays
     in_progress_arrays: Vec<Box<dyn InProgressArray>>,
+    /// Offset capacity of the slices buffered in all columns.
+    offset_capacity: OffsetCapacity,
     /// True if some column still needs the materialized filter path.
     has_non_specialized_filter_columns: bool,
     /// Buffered row count. Always less than `batch_size`
@@ -172,7 +176,7 @@ impl BatchCoalescer {
     ///
     /// # Arguments
     /// - `schema` - the schema of the output batches
-    /// - `target_batch_size` - the number of rows in each output batch.
+    /// - `target_batch_size` - the desired number of rows in each output batch.
     ///   Typical values are `4096` or `8192` rows.
     ///
     pub fn new(schema: SchemaRef, target_batch_size: usize) -> Self {
@@ -187,6 +191,7 @@ impl BatchCoalescer {
             .collect::<Vec<_>>();
 
         Self {
+            offset_capacity: OffsetCapacity::new(&schema),
             schema,
             target_batch_size,
             in_progress_arrays,
@@ -389,8 +394,9 @@ impl BatchCoalescer {
     /// When buffered data plus incoming rows reach `target_batch_size` ,
     /// completed batches are generated eagerly and can be retrieved via
     /// [`Self::next_completed_batch()`].
-    /// Output batches contain exactly `target_batch_size` rows, so the tail of
-    /// the input batch may remain buffered.
+    /// Output batches normally contain `target_batch_size` rows, so the tail of
+    /// the input batch may remain buffered. Offset limits can cause an earlier
+    /// flush, preserving all rows in smaller batches.
     /// Remaining partial data either waits for future input batches or can be
     /// materialized immediately by calling [`Self::finish_buffered_batch()`].
     ///
@@ -563,53 +569,49 @@ impl BatchCoalescer {
             // while allowing some controlled growth beyond the limit
         }
 
-        let (_schema, arrays, mut num_rows) = batch.into_parts();
-
         // Validate column count matches the expected schema
-        if arrays.len() != self.in_progress_arrays.len() {
+        if batch.num_columns() != self.in_progress_arrays.len() {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Batch has {} columns but BatchCoalescer expects {}",
-                arrays.len(),
+                batch.num_columns(),
                 self.in_progress_arrays.len()
             )));
         }
+
+        // Preserve layouts whose concatenated offsets cannot be checked.
+        if !self.offset_capacity.is_supported() {
+            self.finish_buffered_batch()?;
+            for start in (0..batch_size).step_by(self.target_batch_size) {
+                let len = self.target_batch_size.min(batch_size - start);
+                self.completed.push_back(batch.slice(start, len));
+            }
+            return Ok(());
+        }
+
         self.in_progress_arrays
             .iter_mut()
-            .zip(arrays)
+            .zip(batch.columns())
             .for_each(|(in_progress, array)| {
-                in_progress.set_source(Some(array));
+                in_progress.set_source(Some(Arc::clone(array)));
             });
 
-        // If pushing this batch would exceed the target batch size,
-        // finish the current batch and start a new one
         let mut offset = 0;
-        while num_rows > (self.target_batch_size - self.buffered_rows) {
-            let remaining_rows = self.target_batch_size - self.buffered_rows;
-            debug_assert!(remaining_rows > 0);
-
-            // Copy remaining_rows from each array
-            for in_progress in &mut self.in_progress_arrays {
-                in_progress.copy_rows(offset, remaining_rows)?;
+        while offset < batch_size {
+            let len = (self.target_batch_size - self.buffered_rows).min(batch_size - offset);
+            // Check every column before modifying any builder. A failed append
+            // leaves the counters unchanged; flush and reconsider this slice.
+            if !self.offset_capacity.try_append(&batch, offset, len) {
+                self.finish_buffered_batch()?;
+                continue;
             }
-
-            self.buffered_rows += remaining_rows;
-            offset += remaining_rows;
-            num_rows -= remaining_rows;
-
-            self.finish_buffered_batch()?;
-        }
-
-        // Add any the remaining rows to the buffer
-        self.buffered_rows += num_rows;
-        if num_rows > 0 {
             for in_progress in &mut self.in_progress_arrays {
-                in_progress.copy_rows(offset, num_rows)?;
+                in_progress.copy_rows(offset, len)?;
             }
-        }
-
-        // If we have reached the target batch size, finalize the buffered batch
-        if self.buffered_rows >= self.target_batch_size {
-            self.finish_buffered_batch()?;
+            self.buffered_rows += len;
+            offset += len;
+            if self.buffered_rows == self.target_batch_size {
+                self.finish_buffered_batch()?;
+            }
         }
 
         // clear in progress sources (to allow the memory to be freed)
@@ -661,6 +663,7 @@ impl BatchCoalescer {
         };
 
         self.buffered_rows = 0;
+        self.offset_capacity.reset();
         self.completed.push_back(batch);
         Ok(())
     }
@@ -682,7 +685,8 @@ impl BatchCoalescer {
 
     /// Returns the number of bytes used by this data structure.
     pub fn size(&self) -> usize {
-        self.in_progress_arrays.capacity() * size_of::<Box<dyn InProgressArray>>()
+        self.offset_capacity.size()
+            + self.in_progress_arrays.capacity() * size_of::<Box<dyn InProgressArray>>()
             + self
                 .in_progress_arrays
                 .iter()
