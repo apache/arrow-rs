@@ -74,21 +74,6 @@ fn create_struct_fixed_size_list_array(size: usize, list_size: i32) -> FixedSize
     FixedSizeListArray::new(field, list_size, Arc::new(values), None)
 }
 
-/// Creates the `Struct<a..h: Int64, items: List<Struct<x: Int64, y: Utf8>>>`
-/// array from <https://github.com/apache/datafusion/issues/26581>
-fn create_struct_with_list_array(size: usize, max_list_size: usize) -> StructArray {
-    let mut fields = vec![];
-    let mut columns: Vec<ArrayRef> = vec![];
-    for name in ["a", "b", "c", "d", "e", "f", "g", "h"] {
-        fields.push(Field::new(name, DataType::Int64, true));
-        columns.push(Arc::new(create_primitive_array::<Int64Type>(size, 0.1)));
-    }
-    let items = create_struct_list_array(size, 0.1, max_list_size);
-    fields.push(Field::new("items", items.data_type().clone(), true));
-    columns.push(Arc::new(items));
-    StructArray::new(Fields::from(fields), columns, None)
-}
-
 fn add_benchmark(c: &mut Criterion) {
     let size = 65536;
     let filter_array = create_boolean_array(size, 0.0, 0.5);
@@ -420,12 +405,6 @@ fn add_benchmark(c: &mut Criterion) {
 
     let data_array = create_struct_list_array(size, 0.1, 16);
     add_benchmark_for_nested("list<struct<i64, utf8>> w NULLs", &data_array);
-
-    let data_array = create_struct_with_list_array(size, 64);
-    add_benchmark_for_nested(
-        "struct<8 x i64, list<struct<i64, utf8>>> w NULLs",
-        &data_array,
-    );
 
     let data_array = create_primitive_fixed_size_list_array::<Int32Type>(size, 0.1, 0.1, 8);
     add_benchmark_for_nested("fixed_size_list<i32> w NULLs", &data_array);
