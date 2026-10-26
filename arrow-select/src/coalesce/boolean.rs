@@ -16,138 +16,12 @@
 // under the License.
 
 use super::InProgressArray;
-use crate::filter::FilterPredicate;
+use crate::filter::{FilterPredicate, filter_bits_compress, filter_bits_compress_pair};
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, BooleanArray};
-use arrow_buffer::bit_chunk_iterator::BitChunks;
-use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder, NullBufferBuilder, bit_util};
+use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder, NullBufferBuilder};
 use arrow_schema::ArrowError;
 use std::sync::Arc;
-
-/// Joins compressed bit fragments into complete output words.
-#[derive(Default)]
-struct WordPacker {
-    /// Bits waiting to be appended.
-    pending_bits: u64,
-    /// Number of populated low bits in `pending_bits`.
-    pending_len: u32,
-}
-
-impl WordPacker {
-    fn push(&mut self, compressed_bits: u64, bit_count: u32) -> Option<u64> {
-        self.pending_bits |= compressed_bits << self.pending_len;
-        let total_len = self.pending_len + bit_count;
-        if total_len < 64 {
-            self.pending_len = total_len;
-            return None;
-        }
-
-        let complete_word = self.pending_bits;
-        // Keep bits that crossed the word boundary. Split the shift to avoid
-        // shifting by 64 when `pending_len == 0`.
-        self.pending_bits = (compressed_bits >> 1) >> (63 - self.pending_len);
-        self.pending_len = total_len - 64;
-        Some(complete_word)
-    }
-
-    fn finish(self) -> Option<(u64, usize)> {
-        (self.pending_len != 0).then_some((self.pending_bits, self.pending_len as usize))
-    }
-}
-
-fn copy_filter_words_without_nulls(
-    output_values: &mut BooleanBufferBuilder,
-    source_value_chunks: &BitChunks<'_>,
-    filter_chunks: &BitChunks<'_>,
-) -> usize {
-    let mut value_packer = WordPacker::default();
-    let mut selected_count = 0;
-
-    // Check the mask first so sparse filters skip reading most source words.
-    for (index, filter_mask) in filter_chunks.iter().enumerate() {
-        let selected_in_word = filter_mask.count_ones();
-        if selected_in_word == 0 {
-            continue;
-        }
-
-        let compressed_values = bit_util::compress(source_value_chunks.chunk(index), filter_mask);
-        if let Some(complete_word) = value_packer.push(compressed_values, selected_in_word) {
-            output_values.append_word(complete_word, 64);
-        }
-        selected_count += selected_in_word as usize;
-    }
-
-    let filter_mask = filter_chunks.remainder_bits();
-    let selected_in_word = filter_mask.count_ones();
-    if selected_in_word != 0 {
-        let compressed_values =
-            bit_util::compress(source_value_chunks.remainder_bits(), filter_mask);
-        if let Some(complete_word) = value_packer.push(compressed_values, selected_in_word) {
-            output_values.append_word(complete_word, 64);
-        }
-        selected_count += selected_in_word as usize;
-    }
-
-    if let Some((pending_bits, pending_len)) = value_packer.finish() {
-        output_values.append_word(pending_bits, pending_len);
-    }
-    selected_count
-}
-
-fn copy_filter_words_with_nulls(
-    output_values: &mut BooleanBufferBuilder,
-    output_validity: &mut NullBufferBuilder,
-    source_value_chunks: &BitChunks<'_>,
-    source_validity_chunks: &BitChunks<'_>,
-    filter_chunks: &BitChunks<'_>,
-) -> usize {
-    let mut value_packer = WordPacker::default();
-    let mut validity_packer = WordPacker::default();
-    let mut selected_count = 0;
-
-    // Check the mask first so sparse filters skip reading most source words.
-    for (index, filter_mask) in filter_chunks.iter().enumerate() {
-        let selected_in_word = filter_mask.count_ones();
-        if selected_in_word == 0 {
-            continue;
-        }
-
-        let compressed_values = bit_util::compress(source_value_chunks.chunk(index), filter_mask);
-        if let Some(complete_word) = value_packer.push(compressed_values, selected_in_word) {
-            output_values.append_word(complete_word, 64);
-        }
-        let compressed_validity =
-            bit_util::compress(source_validity_chunks.chunk(index), filter_mask);
-        if let Some(complete_word) = validity_packer.push(compressed_validity, selected_in_word) {
-            output_validity.append_word(complete_word, 64);
-        }
-        selected_count += selected_in_word as usize;
-    }
-
-    let filter_mask = filter_chunks.remainder_bits();
-    let selected_in_word = filter_mask.count_ones();
-    if selected_in_word != 0 {
-        let compressed_values =
-            bit_util::compress(source_value_chunks.remainder_bits(), filter_mask);
-        if let Some(complete_word) = value_packer.push(compressed_values, selected_in_word) {
-            output_values.append_word(complete_word, 64);
-        }
-        let compressed_validity =
-            bit_util::compress(source_validity_chunks.remainder_bits(), filter_mask);
-        if let Some(complete_word) = validity_packer.push(compressed_validity, selected_in_word) {
-            output_validity.append_word(complete_word, 64);
-        }
-        selected_count += selected_in_word as usize;
-    }
-
-    if let Some((pending_bits, pending_len)) = value_packer.finish() {
-        output_values.append_word(pending_bits, pending_len);
-    }
-    if let Some((pending_bits, pending_len)) = validity_packer.finish() {
-        output_validity.append_word(pending_bits, pending_len);
-    }
-    selected_count
-}
 
 #[derive(Debug)]
 pub(crate) struct InProgressBooleanArray {
@@ -212,48 +86,26 @@ impl InProgressArray for InProgressBooleanArray {
         }
 
         let source = source.as_boolean();
-        // Read values and mask in aligned words even when the source is sliced.
-        let filter_chunks = filter.filter_mask().bit_chunks();
-        let source_values = source.values();
-        let source_value_chunks = BitChunks::new(
-            source_values.values(),
-            source_values.offset(),
-            filter.filter_len(),
-        );
-        // Ignore present-but-all-valid buffers to avoid allocating output validity
-        // for data with no actual nulls.
-        let source_validity_chunks =
-            source
-                .nulls()
-                .filter(|nulls| nulls.null_count() != 0)
-                .map(|nulls| {
-                    let nulls = nulls.inner();
-                    BitChunks::new(nulls.values(), nulls.offset(), filter.filter_len())
-                });
-
         let output_values = self
             .values
             .get_or_insert_with(|| BooleanBufferBuilder::new(self.batch_size));
-
-        // Branch once here so non-null inputs avoid validity work in the chunk loop.
-        let selected_count = if let Some(source_validity_chunks) = &source_validity_chunks {
-            copy_filter_words_with_nulls(
-                output_values,
-                &mut self.nulls,
-                &source_value_chunks,
-                source_validity_chunks,
-                &filter_chunks,
-            )
-        } else {
-            let selected_count = copy_filter_words_without_nulls(
-                output_values,
-                &source_value_chunks,
-                &filter_chunks,
+        // Treat all-valid sources as non-null to keep output validity lazy.
+        if let Some(source_nulls) = source.nulls().filter(|nulls| nulls.null_count() != 0) {
+            filter_bits_compress_pair(
+                source.values(),
+                source_nulls.inner(),
+                filter,
+                |values, validity, count| {
+                    output_values.append_word(values, count);
+                    self.nulls.append_word(validity, count);
+                },
             );
-            self.nulls.append_n_non_nulls(selected_count);
-            selected_count
-        };
-        debug_assert_eq!(selected_count, filter.count());
+        } else {
+            filter_bits_compress(source.values(), filter, |values, count| {
+                output_values.append_word(values, count)
+            });
+            self.nulls.append_n_non_nulls(filter.count());
+        }
         Ok(())
     }
 
@@ -405,6 +257,16 @@ mod tests {
         let sliced_filter = sliced_filter.slice(FILTER_OFFSET, FILTER_LEN);
         assert_eq!(sliced_filter.values().offset(), FILTER_OFFSET);
         filters.push(("sliced filter", sliced_filter));
+
+        let shorter_filter = (0_usize..197)
+            .map(|index| index.is_multiple_of(17))
+            .collect();
+        filters.push(("shorter than source", shorter_filter));
+
+        let aligned_filter = (0_usize..256)
+            .map(|index| index.is_multiple_of(19))
+            .collect();
+        filters.push(("empty remainder", aligned_filter));
 
         let mut filter_values = vec![false; FILTER_LEN];
         for index in [1, 65, 129, 268] {
