@@ -1904,16 +1904,24 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
             }
             Encoder::Dictionary(values, remap, null) => {
                 downcast_dictionary_array! {
-                    array => {
-                        tracker.push_variable(
-                            array.keys().iter().enumerate().map(|(idx, v)| match v {
-                                Some(k) => values.row_len(
-                                    remap.as_ref().map_or_else(|| k.as_usize(), |r| r[idx]),
-                                ),
-                                None => null.data.len(),
-                            })
-                        )
-                    }
+                    array => match remap.as_deref() {
+                        Some(remap) => {
+                            tracker.push_variable(
+                                array.keys().iter().zip(remap).map(|(v, &k)| match v {
+                                    Some(_) => values.row_len(k),
+                                    None => null.data.len(),
+                                })
+                            )
+                        }
+                        None => {
+                            tracker.push_variable(
+                                array.keys().iter().map(|v| match v {
+                                    Some(k) => values.row_len(k.as_usize()),
+                                    None => null.data.len(),
+                                })
+                            )
+                        }
+                    },
                     _ => unreachable!(),
                 }
             }
@@ -2302,9 +2310,9 @@ fn encode_dictionary_remapped<K: ArrowDictionaryKeyType>(
     remap: &[usize],
     null: &Row<'_>,
 ) {
-    for (idx, (offset, k)) in offsets.iter_mut().skip(1).zip(column.keys()).enumerate() {
+    for ((offset, k), &remapped) in offsets.iter_mut().skip(1).zip(column.keys()).zip(remap) {
         let row = match k {
-            Some(_) => values.row(remap[idx]).data,
+            Some(_) => values.row(remapped).data,
             None => null.data,
         };
         let end_offset = *offset + row.len();
