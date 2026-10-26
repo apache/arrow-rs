@@ -1289,9 +1289,12 @@ impl ArrayData {
 
                 let len_plus_offset =
                     checked_len_plus_offset(&self.data_type, self.len, self.offset)?;
-                let expected_values_len = len_plus_offset
-                    .checked_mul(list_size)
-                    .expect("integer overflow computing expected number of expected values in FixedListSize");
+                let expected_values_len = len_plus_offset.checked_mul(list_size).ok_or_else(|| {
+                    ArrowError::InvalidArgumentError(format!(
+                        "Integer overflow computing expected number of values in {}: length + offset ({}) multiplied by list size ({}) exceeds usize",
+                        self.data_type, len_plus_offset, list_size
+                    ))
+                })?;
 
                 if values_data.len < expected_values_len {
                     return Err(ArrowError::InvalidArgumentError(format!(
@@ -2723,6 +2726,62 @@ mod tests {
             .unwrap_err()
             .to_string();
             assert!(err.contains("Values length 4 is less than"));
+        }
+    }
+
+    #[test]
+    fn test_fixed_size_list_validation_child_len_mul_overflow() {
+        // Empty child and no parent null buffer: huge logical lengths allocate nothing.
+        let child = ArrayData::builder(DataType::Int32)
+            .len(0)
+            .add_buffer(Buffer::from_slice_ref([0i32; 0]))
+            .build()
+            .unwrap();
+        let list_size = 2i32;
+        let data_type = DataType::FixedSizeList(
+            Arc::new(Field::new("item", DataType::Int32, true)),
+            list_size,
+        );
+        // `(len + offset) * list_size` overflows; the addition itself does not.
+        let len_plus_offset = (usize::MAX / 2) + 1;
+        let overflow_cases = [(len_plus_offset, 0usize), (usize::MAX / 2, 1)];
+
+        for (len, offset) in overflow_cases {
+            let err = ArrayData::builder(data_type.clone())
+                .len(len)
+                .offset(offset)
+                .add_child_data(child.clone())
+                .build()
+                .unwrap_err();
+
+            match err {
+                ArrowError::InvalidArgumentError(msg) => assert_eq!(
+                    msg,
+                    format!(
+                        "Integer overflow computing expected number of values in {data_type}: length + offset ({len_plus_offset}) multiplied by list size ({list_size}) exceeds usize"
+                    )
+                ),
+                other => panic!("unexpected error type {other}"),
+            }
+        }
+
+        // Same product is representable here, so validation reports a short child.
+        let err = ArrayData::builder(data_type.clone())
+            .len(usize::MAX / 2)
+            .offset(0)
+            .add_child_data(child)
+            .build()
+            .unwrap_err();
+
+        match err {
+            ArrowError::InvalidArgumentError(msg) => assert_eq!(
+                msg,
+                format!(
+                    "Values length 0 is less than the length + offset ({}) multiplied by the value size ({list_size}) for {data_type}",
+                    usize::MAX / 2
+                )
+            ),
+            other => panic!("unexpected error type {other}"),
         }
     }
 
