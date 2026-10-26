@@ -1947,30 +1947,21 @@ pub fn cast_with_options(
             array.as_primitive::<TimestampNanosecondType>(),
             cast_options,
         ),
-        (Timestamp(TimeUnit::Second, _), Date64) => Ok(Arc::new(match cast_options.safe {
-            true => {
-                // change error to None
-                array
-                    .as_primitive::<TimestampSecondType>()
-                    .unary_opt::<_, Date64Type>(|x| x.checked_mul(MILLISECONDS))
-            }
-            false => array
-                .as_primitive::<TimestampSecondType>()
-                .try_unary::<_, Date64Type, _>(|x| x.mul_checked(MILLISECONDS))?,
-        })),
-        (Timestamp(TimeUnit::Millisecond, _), Date64) => {
-            cast_reinterpret_arrays::<TimestampMillisecondType, Date64Type>(array)
+        (Timestamp(TimeUnit::Second, _), Date64) => {
+            timestamp_to_date64(array.as_primitive::<TimestampSecondType>(), cast_options)
         }
-        (Timestamp(TimeUnit::Microsecond, _), Date64) => Ok(Arc::new(
-            array
-                .as_primitive::<TimestampMicrosecondType>()
-                .unary::<_, Date64Type>(|x| x / (MICROSECONDS / MILLISECONDS)),
-        )),
-        (Timestamp(TimeUnit::Nanosecond, _), Date64) => Ok(Arc::new(
-            array
-                .as_primitive::<TimestampNanosecondType>()
-                .unary::<_, Date64Type>(|x| x / (NANOSECONDS / MILLISECONDS)),
-        )),
+        (Timestamp(TimeUnit::Millisecond, _), Date64) => timestamp_to_date64(
+            array.as_primitive::<TimestampMillisecondType>(),
+            cast_options,
+        ),
+        (Timestamp(TimeUnit::Microsecond, _), Date64) => timestamp_to_date64(
+            array.as_primitive::<TimestampMicrosecondType>(),
+            cast_options,
+        ),
+        (Timestamp(TimeUnit::Nanosecond, _), Date64) => timestamp_to_date64(
+            array.as_primitive::<TimestampNanosecondType>(),
+            cast_options,
+        ),
         (Timestamp(TimeUnit::Second, _), Time32(_) | Time64(_)) => {
             cast_timestamp_to_time::<TimestampSecondType>(array, to_type, cast_options)
         }
@@ -4728,6 +4719,7 @@ mod tests {
             Some("123"),
             Some("-123"),
             Some("86374"),
+            Some("-40000"),
             None,
         ])) as ArrayRef;
 
@@ -4736,8 +4728,13 @@ mod tests {
             format_options: FormatOptions::default(),
         };
         let res = cast_with_options(&str, &DataType::Int16, &options).expect("should cast to i16");
-        let expected =
-            Arc::new(Int16Array::from(vec![Some(123), Some(-123), None, None])) as ArrayRef;
+        let expected = Arc::new(Int16Array::from(vec![
+            Some(123),
+            Some(-123),
+            None,
+            None,
+            None,
+        ])) as ArrayRef;
         assert_eq!(&res, &expected);
     }
 
@@ -5707,15 +5704,15 @@ mod tests {
             TimestampMillisecondArray::from(vec![Some(864000000005), Some(1545696000001), None]);
         let b = cast(&array, &DataType::Date64).unwrap();
         let c = b.as_primitive::<Date64Type>();
-        assert_eq!(864000000005, c.value(0));
-        assert_eq!(1545696000001, c.value(1));
+        assert_eq!(864000000000, c.value(0));
+        assert_eq!(1545696000000, c.value(1));
         assert!(c.is_null(2));
 
         let array = TimestampSecondArray::from(vec![Some(864000000005), Some(1545696000001)]);
         let b = cast(&array, &DataType::Date64).unwrap();
         let c = b.as_primitive::<Date64Type>();
-        assert_eq!(864000000005000, c.value(0));
-        assert_eq!(1545696000001000, c.value(1));
+        assert_eq!(864000000000000, c.value(0));
+        assert_eq!(1545696000000000, c.value(1));
 
         // test overflow, safe cast
         let array = TimestampSecondArray::from(vec![Some(i64::MAX)]);
@@ -5729,6 +5726,55 @@ mod tests {
         };
         let b = cast_with_options(&array, &DataType::Date64, &options);
         assert!(b.is_err());
+    }
+
+    #[test]
+    fn test_cast_timestamp_to_date64_whole_days() {
+        // 2024-05-01T10:30:00, 1970-01-01T00:00:00, and one millisecond before the epoch
+        let millis: [i64; 3] = [1_714_559_400_000, 0, -1];
+        let expected = Date64Array::from(vec![1_714_521_600_000, 0, -MILLISECONDS_IN_DAY]);
+        let arrays: [ArrayRef; 4] = [
+            Arc::new(TimestampSecondArray::from(
+                millis.map(|x| x.div_euclid(1_000)).to_vec(),
+            )),
+            Arc::new(TimestampMillisecondArray::from(millis.to_vec())),
+            Arc::new(TimestampMicrosecondArray::from(
+                millis.map(|x| x * 1_000).to_vec(),
+            )),
+            Arc::new(TimestampNanosecondArray::from(
+                millis.map(|x| x * 1_000_000).to_vec(),
+            )),
+        ];
+        for array in arrays {
+            let actual = cast(&array, &DataType::Date64).unwrap();
+            let actual = actual.as_primitive::<Date64Type>();
+            // The second timestamp array rounds -1ms down to -1s, which is still the
+            // day before the epoch.
+            assert_eq!(actual, &expected, "{}", array.data_type());
+        }
+
+        // With a timezone the date is the local date, as for Date32.
+        // 1970-01-01T00:00:01Z and 1970-01-01T20:00:00Z are 1969-12-31 and 1970-01-01 in -05:00.
+        let array = TimestampSecondArray::from(vec![1, 72_000]).with_timezone("-05:00");
+        let date64 = cast(&array, &DataType::Date64).unwrap();
+        assert_eq!(
+            date64.as_primitive::<Date64Type>(),
+            &Date64Array::from(vec![-MILLISECONDS_IN_DAY, 0])
+        );
+        let date32 = cast(&array, &DataType::Date32).unwrap();
+        assert_eq!(
+            cast(&date32, &DataType::Date64).unwrap().as_ref(),
+            date64.as_ref()
+        );
+
+        // Flooring i64::MIN milliseconds to a whole day overflows.
+        let array = TimestampMillisecondArray::from(vec![i64::MIN]);
+        assert!(cast(&array, &DataType::Date64).unwrap().is_null(0));
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        assert!(cast_with_options(&array, &DataType::Date64, &options).is_err());
     }
 
     #[test]
