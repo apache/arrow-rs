@@ -548,7 +548,6 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
 
     /// Skip boolean list or set payloads after reading their header.
     #[cold]
-    #[inline(never)]
     fn skip_bool_list(&mut self, size: i32, depth: i8) -> ThriftProtocolResult<()> {
         if size > 0 && depth == 0 {
             return Err(ThriftProtocolError::SkipDepth(FieldType::BooleanTrue));
