@@ -37,4 +37,10 @@ jobs:
       - name: Run audit check
         # ubuntu-slim has no Rust toolchain to dispatch `cargo audit`, so
         # call the binary directly.
-        run: cargo-audit audit
+        # tonic 0.14 pins zstd 0.13, but its compression codec doesn't use the
+        # APIs affected by these advisories. Remove these once tonic updates.
+        run: |
+          cargo-audit audit \
+            --ignore RUSTSEC-2026-0391 \
+            --ignore RUSTSEC-2026-0398 \
+            --ignore RUSTSEC-2026-0403
