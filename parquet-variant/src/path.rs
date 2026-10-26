@@ -352,6 +352,11 @@ mod tests {
         let path = VariantPath::try_from(r"['\\é\]ü\'x']").unwrap();
         let expected = VariantPath::from_iter([VariantPathElement::field(r"\é]ü'x")]);
         assert_eq!(path, expected);
+
+        // Adjacent escapes consume whole Unicode characters before the next literal span.
+        let path = VariantPath::try_from(r"['\é\]\𐀀\\tail']").unwrap();
+        let expected = VariantPath::from_iter([VariantPathElement::field("é]𐀀\\tail")]);
+        assert_eq!(path, expected);
     }
 
     #[test]
@@ -397,6 +402,10 @@ mod tests {
 
         // Trailing backslash in bracket
         let err = VariantPath::try_from("foo.bar[fdafa\\").unwrap_err();
+        assert_eq!(err.to_string(), "Parser error: Unclosed '[' at byte 7");
+
+        // A run of adjacent escapes also rejects a trailing backslash.
+        let err = VariantPath::try_from("foo.bar['\\a\\").unwrap_err();
         assert_eq!(err.to_string(), "Parser error: Unclosed '[' at byte 7");
 
         // No '[' before ']'
