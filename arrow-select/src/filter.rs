@@ -530,6 +530,11 @@ impl FilterPredicate {
         self.filter.len()
     }
 
+    /// Returns the normalized filter mask, with nulls replaced by `false`.
+    pub(crate) fn filter_mask(&self) -> &BooleanBuffer {
+        self.filter.values()
+    }
+
     /// Return a [`FilterSelection`] for iterating over the rows selected by
     /// this [`FilterPredicate`].
     pub(crate) fn selection(&self) -> FilterSelection<'_> {
