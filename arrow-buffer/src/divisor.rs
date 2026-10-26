@@ -16,10 +16,8 @@
 // under the License.
 
 /// Whether a saturating add on `u32` lanes is one instruction: `uqadd` on aarch64, and `pminud`
-/// from SSE4.1 on x86. Without it, [`DivisorU32::new`] picks [`DivisorU32::AddIndicator`] instead
-/// of [`DivisorU32::Down`]. The split follows mightsleep's review of
-/// https://github.com/apache/arrow-rs/pull/11467 and their benchmark in
-/// https://gist.github.com/mightsleep/be4cb9ad20d4721ab66727fb08e2399f
+/// from SSE4.1 on x86. Without it, the saturating increment of [`DivisorU32::Down`] costs more
+/// than the add and halve of [`DivisorU32::AddIndicator`]
 const CHEAP_SATURATION: bool = cfg!(any(
     target_arch = "aarch64",
     all(
@@ -36,8 +34,8 @@ macro_rules! divisor_enum {
         /// [`Self::new`] precomputes a shift and a mask when the magnitude of the divisor is a
         /// power of two, and otherwise a multiplier with the method in
         /// [Granlund and Montgomery, "Division by Invariant Integers using Multiplication" (1994)](https://gmplib.org/~tege/divcnst-pldi94.pdf),
-        /// so that each division is a high multiply, shifts and additions. Each variant is the
-        /// cheapest form that is exact for every dividend.
+        /// so that each division is a high multiply, shifts and additions. [`Self::new`] picks the
+        /// variant from the divisor and the target.
         ///
         /// To divide many values, match on the variant once, before the loop, and call the
         /// variant's methods in the loop. They don't branch on the divisor, so the loop doesn't
@@ -83,7 +81,9 @@ macro_rules! divisor_enum {
 }
 
 /// A divisor with an N-bit multiplier, which computes the quotient as `MULUH(m, n') >> shift`
-/// for `n'` from `$body`
+/// for `n'` from `$body`. `Up` and `Down` differ only in `n'`, and the macro keeps them from
+/// duplicating the rest. `|n| ...` looks like a closure but is macro syntax for the expression,
+/// because a `const fn` can't call a closure
 macro_rules! n_bit_divisor {
     ($(#[$doc:meta])* $name:ident, $enum:ident, $t:ty, $wide:ty, |$n:ident| $body:expr, $example:expr) => {
         $(#[$doc])*
@@ -137,10 +137,14 @@ macro_rules! unsigned_divisor {
             ///
             /// With `p = floor(log2(divisor))`, it picks [`Self::Up`] when the rounded-up
             /// multiplier `floor(2^(N+p) / divisor) + 1` satisfies theorem 4.2 of
-            /// [Granlund and Montgomery, "Division by Invariant Integers using Multiplication" (1994)](https://gmplib.org/~tege/divcnst-pldi94.pdf),
-            /// otherwise [`Self::AddIndicator`]. Checking one `p` is enough, because a multiplier
-            /// that is exact for a smaller `p` is also exact for this one, see
+            /// [Granlund and Montgomery, "Division by Invariant Integers using Multiplication" (1994)](https://gmplib.org/~tege/divcnst-pldi94.pdf).
+            /// Checking one `p` is enough, because a multiplier that is exact for a smaller `p` is
+            /// also exact for this one, see
             /// [ridiculous_fish, "Labor of Division (Episode I)"](https://ridiculousfish.com/blog/posts/labor-of-division-episode-i.html).
+            $(
+                #[doc = concat!("Otherwise it picks [`Self::Down`] (a [`", stringify!($down), "`]) on aarch64 and on x86 with SSE4.1, where a saturating add is one instruction.")]
+            )?
+            /// It picks [`Self::AddIndicator`] for any divisor the other variants don't cover.
             ///
             /// # Example
             /// ```
@@ -179,7 +183,7 @@ macro_rules! unsigned_divisor {
                         }));
                     }
                 )?
-                Some(Self::AddIndicator($add::new(divisor)))
+                Some(Self::AddIndicator($add::new(divisor, p, pow, down)))
             }
         }
 
@@ -221,7 +225,6 @@ macro_rules! unsigned_divisor {
             /// It computes `MULUH(m, n) >> shift`, the case of figure 4.2 of
             /// [Granlund and Montgomery, "Division by Invariant Integers using Multiplication" (1994)](https://gmplib.org/~tege/divcnst-pldi94.pdf)
             /// where the multiplier fits in N bits, without figure 4.1's add and halve.
-            /// About 69% of divisors have one.
             $up,
             $name,
             $t,
@@ -234,6 +237,10 @@ macro_rules! unsigned_divisor {
         ///
         /// It uses the `N + 1`-bit multiplier from figure 4.1 of
         /// [Granlund and Montgomery, "Division by Invariant Integers using Multiplication" (1994)](https://gmplib.org/~tege/divcnst-pldi94.pdf).
+        $(
+            #[doc = ""]
+            #[doc = concat!("[`", stringify!($name), "::new`] returns it only on targets without [`", stringify!($down), "`], so the example checks nothing on aarch64 and on x86 with SSE4.1.")]
+        )?
         #[derive(Debug, Clone, Copy)]
         pub struct $add {
             divisor: $t,
@@ -244,17 +251,22 @@ macro_rules! unsigned_divisor {
         }
 
         impl $add {
-            /// `divisor` must be at least 3 and not a power of two
-            const fn new(divisor: $t) -> Self {
-                // ceil(log2(divisor)), which is at least 2 because divisor >= 3. So figure 4.1's
-                // `sh1 = min(l, 1)` is always 1 and `sh2 = max(l - 1, 0)` is `l - 1`
-                let l = <$t>::BITS - (divisor - 1).leading_zeros();
-                // 2^l - divisor < divisor, so the multiplier fits in the narrow type
-                let numerator = ((1 << l) - divisor as $wide) << <$t>::BITS;
+            /// `divisor` must be at least 3 and not a power of two, `p` is `floor(log2(divisor))`,
+            /// `pow` is `2^(N+p)` and `down` is `pow / divisor`
+            const fn new(divisor: $t, p: u32, pow: $wide, down: $wide) -> Self {
+                // Figure 4.1 uses `l = ceil(log2(divisor)) = p + 1`, so `sh1` is 1, `sh2` is `p`
+                // and `m' = floor(2^(N+l) / divisor) - 2^N + 1`. `2^(N+l)` is `2 * pow`, and
+                // `floor(2a / d) = 2 * floor(a / d) + (2 * (a mod d) >= d)`, so `new` gets the
+                // quotient from `down` and its remainder instead of a second wide division, which
+                // is a call to `__udivti3` for `u64`. The public domain reference code linked from
+                // "Labor of Division (Episode III)" doubles the quotient and remainder the same
+                // way. `2^l > divisor`, so `m'` fits in N bits
+                let below = pow - down * divisor as $wide;
+                let carry = (2 * below >= divisor as $wide) as $wide;
                 Self {
                     divisor,
-                    multiplier: (numerator / divisor as $wide + 1) as $t,
-                    shift: l - 1,
+                    multiplier: (2 * down + carry + 1 - (pow >> p)) as $t,
+                    shift: p,
                 }
             }
 
@@ -447,7 +459,7 @@ macro_rules! signed_divisor {
                 let q = ((n + high) >> self.shift) - (n >> (<$t>::BITS - 1));
                 let sign = self.divisor >> (<$t>::BITS - 1);
                 // The remainder doesn't depend on the sign of the divisor, as section 3.1 of
-                // Lemire, Kaser and Kurz, "Faster Remainder by Direct Computation" (2019),
+                // Lemire, Kaser and Kurz, "Faster Remainder by Direct Computation",
                 // https://arxiv.org/abs/1902.01961, states, so it uses `q` before the sign fix
                 // and `|divisor|`. `divisor` is never `MIN`, whose magnitude is a power of two
                 let magnitude = (self.divisor ^ sign) - sign;
@@ -498,6 +510,9 @@ n_bit_divisor!(
     /// The increment saturates, so `u32::MAX` gives the quotient of `u32::MAX - 1`. The two are
     /// equal unless the divisor divides `2^N - 1`, and those divisors always have an exact
     /// rounded-up multiplier, as the post proves, so they never use this type.
+    ///
+    /// [`DivisorU32::new`] returns it only on aarch64 and on x86 with SSE4.1, so the example
+    /// checks nothing on other targets.
     DownDivisorU32,
     DivisorU32,
     u32,
@@ -711,7 +726,9 @@ mod tests {
         divisors.extend((0..2000).map(|_| rng.random::<u32>() >> rng.random_range(0..32)));
         divisors.retain(|d| *d >= 3 && !d.is_power_of_two());
         for d in divisors {
-            let divisor = AddIndicatorDivisorU32::new(d);
+            let p = u32::BITS - 1 - d.leading_zeros();
+            let pow = 1u64 << (u32::BITS + p);
+            let divisor = AddIndicatorDivisorU32::new(d, p, pow, pow / d as u64);
             let top = u32::MAX / d * d;
             let values = [
                 0,
