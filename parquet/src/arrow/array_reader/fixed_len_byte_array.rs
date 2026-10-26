@@ -159,19 +159,18 @@ fn decimal_from_be<T: ArrowPrimitiveType, const W: usize, const N: usize>(
 }
 
 /// Converts the values of a [`FixedSizeBinaryArray`] to the decimal type `$t`, with a
-/// loop specialized to the value width when it is one of `$width`.
+/// loop specialized to the value width when it is at most `$size`, the size of `$native`.
 macro_rules! decimal_array {
-    ($binary:expr, $t:ty, $native:ty, [$($width:literal)+]) => {{
+    ($binary:expr, $t:ty, $native:ty, $size:literal) => {{
         let binary = &$binary;
-        match binary.value_length() {
-            $($width => decimal_from_be::<$t, $width, { size_of::<$native>() }>(
-                binary,
-                <$native>::from_be_bytes,
-            ),)+
-            _ => PrimitiveArray::<$t>::from_unary(binary, |b: &[u8]| {
-                <$native>::from_be_bytes(sign_extend_be(b))
-            }),
-        }
+        seq_macro::seq!(W in 1..=$size {
+            match binary.value_length() {
+                #(W => decimal_from_be::<$t, W, $size>(binary, <$native>::from_be_bytes),)*
+                _ => PrimitiveArray::<$t>::from_unary(binary, |b: &[u8]| {
+                    <$native>::from_be_bytes(sign_extend_be(b))
+                }),
+            }
+        })
     }};
 }
 
@@ -239,30 +238,19 @@ impl ArrayReader for FixedLenByteArrayReader {
         // the inner loop (see docs for `PrimitiveArray::from_unary`).
         let array: ArrayRef = match &self.data_type {
             ArrowType::Decimal32(p, s) => {
-                let array = decimal_array!(binary, Decimal32Type, i32, [1 2 3 4]);
+                let array = decimal_array!(binary, Decimal32Type, i32, 4);
                 Arc::new(array.with_precision_and_scale(*p, *s)?) as ArrayRef
             }
             ArrowType::Decimal64(p, s) => {
-                let array = decimal_array!(binary, Decimal64Type, i64, [1 2 3 4 5 6 7 8]);
+                let array = decimal_array!(binary, Decimal64Type, i64, 8);
                 Arc::new(array.with_precision_and_scale(*p, *s)?) as ArrayRef
             }
             ArrowType::Decimal128(p, s) => {
-                let array = decimal_array!(
-                    binary,
-                    Decimal128Type,
-                    i128,
-                    [1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16]
-                );
+                let array = decimal_array!(binary, Decimal128Type, i128, 16);
                 Arc::new(array.with_precision_and_scale(*p, *s)?) as ArrayRef
             }
             ArrowType::Decimal256(p, s) => {
-                let array = decimal_array!(
-                    binary,
-                    Decimal256Type,
-                    i256,
-                    [1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16
-                     17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32]
-                );
+                let array = decimal_array!(binary, Decimal256Type, i256, 32);
                 Arc::new(array.with_precision_and_scale(*p, *s)?) as ArrayRef
             }
             ArrowType::Interval(unit) => {
@@ -707,13 +695,13 @@ mod tests {
         assert_eq!(&written.slice(6, 1), &read[2]);
     }
 
-    /// Writes `values` as an optional `FIXED_LEN_BYTE_ARRAY` column of `DECIMAL(precision, 0)`
+    /// Writes `values` as an optional `FIXED_LEN_BYTE_ARRAY` column of `DECIMAL(precision, scale)`
     /// with the minimal width for `precision`.
-    fn write_decimal_column(precision: u8, values: &[Option<i256>]) -> Bytes {
+    fn write_decimal_column(precision: u8, scale: i8, values: &[Option<i256>]) -> Bytes {
         let width = crate::arrow::schema::decimal_length_from_precision(precision);
         let schema = crate::schema::parser::parse_message_type(&format!(
             "message test {{\
-             OPTIONAL FIXED_LEN_BYTE_ARRAY ({width}) d (DECIMAL({precision}, 0)); }}"
+             OPTIONAL FIXED_LEN_BYTE_ARRAY ({width}) d (DECIMAL({precision}, {scale})); }}"
         ))
         .unwrap();
         let mut buffer = Vec::new();
@@ -741,6 +729,7 @@ mod tests {
     fn test_read_decimal_of_every_width() {
         let ten = i256::from_i128(10);
         for precision in 1..=76u8 {
+            let scale = precision.div_ceil(2) as i8;
             let max = (0..precision)
                 .fold(i256::ONE, |acc, _| acc.wrapping_mul(ten))
                 .wrapping_sub(i256::ONE);
@@ -755,12 +744,12 @@ mod tests {
                 Some(i256::from_i128(-7)),
             ];
             let data_types = [
-                (9, ArrowType::Decimal32(precision, 0)),
-                (18, ArrowType::Decimal64(precision, 0)),
-                (38, ArrowType::Decimal128(precision, 0)),
-                (76, ArrowType::Decimal256(precision, 0)),
+                (9, ArrowType::Decimal32(precision, scale)),
+                (18, ArrowType::Decimal64(precision, scale)),
+                (38, ArrowType::Decimal128(precision, scale)),
+                (76, ArrowType::Decimal256(precision, scale)),
             ];
-            let file = write_decimal_column(precision, &values);
+            let file = write_decimal_column(precision, scale, &values);
             for (_, data_type) in data_types
                 .iter()
                 .filter(|(max_precision, _)| precision <= *max_precision)
@@ -780,9 +769,9 @@ mod tests {
                 let read = arrow::compute::concat(&columns).unwrap();
                 assert_eq!(read.data_type(), data_type);
                 let read =
-                    arrow::compute::cast(&read, &ArrowType::Decimal256(precision, 0)).unwrap();
+                    arrow::compute::cast(&read, &ArrowType::Decimal256(precision, scale)).unwrap();
                 let expected = Decimal256Array::from_iter(values)
-                    .with_precision_and_scale(precision, 0)
+                    .with_precision_and_scale(precision, scale)
                     .unwrap();
                 assert_eq!(
                     read.as_ref(),
