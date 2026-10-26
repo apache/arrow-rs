@@ -384,7 +384,13 @@ pub(crate) fn get_data_type(
             let fsb = field
                 .type_as_fixed_size_binary()
                 .ok_or_else(|| type_err("fixed size binary"))?;
-            DataType::FixedSizeBinary(fsb.byteWidth())
+            let byte_width = fsb.byteWidth();
+            if byte_width < 0 {
+                return Err(ArrowError::ParseError(format!(
+                    "FixedSizeBinary byte width must be non-negative, got {byte_width}"
+                )));
+            }
+            DataType::FixedSizeBinary(byte_width)
         }
         crate::Type::FloatingPoint => {
             let float = field
@@ -577,7 +583,7 @@ pub(crate) fn get_data_type(
             }
 
             let fields = match union.typeIds() {
-                None => UnionFields::from_fields(fields),
+                None => UnionFields::try_from_fields(fields)?,
                 Some(ids) => UnionFields::try_new(ids.iter().map(|i| i as i8), fields)?,
             };
 
@@ -1153,6 +1159,22 @@ mod tests {
     }
 
     #[test]
+    fn try_fb_to_schema_negative_fixed_size_binary_width_is_err() {
+        let mut fbb = FlatBufferBuilder::new();
+        let fsb =
+            crate::FixedSizeBinary::create(&mut fbb, &crate::FixedSizeBinaryArgs { byteWidth: -1 });
+        let field = crate::Field::create(
+            &mut fbb,
+            &crate::FieldArgs {
+                type_type: crate::Type::FixedSizeBinary,
+                type_: Some(fsb.as_union_value()),
+                ..Default::default()
+            },
+        );
+        assert_single_field_schema_is_err(fbb, field);
+    }
+
+    #[test]
     fn try_fb_to_schema_type_none_is_err() {
         let mut fbb = FlatBufferBuilder::new();
         let name = fbb.create_string("f");
@@ -1162,6 +1184,32 @@ mod tests {
             // type_type left as the union default (Type::NONE).
             b.finish()
         };
+        assert_single_field_schema_is_err(fbb, field);
+    }
+
+    #[test]
+    fn try_fb_to_schema_union_without_type_ids_too_many_fields_is_err() {
+        let mut fbb = FlatBufferBuilder::new();
+        let null = crate::Null::create(&mut fbb, &crate::NullArgs::default());
+        let child = crate::Field::create(
+            &mut fbb,
+            &crate::FieldArgs {
+                type_type: crate::Type::Null,
+                type_: Some(null.as_union_value()),
+                ..Default::default()
+            },
+        );
+        let children = fbb.create_vector(&[child; 129]);
+        let union = crate::Union::create(&mut fbb, &crate::UnionArgs::default());
+        let field = crate::Field::create(
+            &mut fbb,
+            &crate::FieldArgs {
+                type_type: crate::Type::Union,
+                type_: Some(union.as_union_value()),
+                children: Some(children),
+                ..Default::default()
+            },
+        );
         assert_single_field_schema_is_err(fbb, field);
     }
 
