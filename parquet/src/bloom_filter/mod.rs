@@ -724,6 +724,9 @@ impl Sbbf {
             self.0[i] = merged;
         }
         self.0.truncate(new_len);
+        // `truncate` keeps the capacity; release it so filters retained until the file is closed
+        // (e.g. `BloomFilterPosition::End`) only hold their folded size.
+        self.0.shrink_to_fit();
     }
 
     /// Reads a Sbff from Thrift encoded bytes
@@ -907,8 +910,10 @@ mod tests {
         assert_eq!(sbbf.num_blocks(), 32);
         sbbf.fold_n(1);
         assert_eq!(sbbf.num_blocks(), 16);
+        assert_eq!(sbbf.0.capacity(), 16);
         sbbf.fold_n(1);
         assert_eq!(sbbf.num_blocks(), 8);
+        assert_eq!(sbbf.0.capacity(), 8);
     }
 
     #[test]
