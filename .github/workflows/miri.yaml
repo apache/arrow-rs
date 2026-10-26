@@ -17,9 +17,13 @@
 
 name: miri
 
-# Triggered by ci.yml, which owns event routing and concurrency.
+# Run daily and on demand, including before cutting a release candidate.
+# Keep Miri out of the merge queue to reduce runner time:
+# https://github.com/apache/arrow-rs/issues/11548
 on:
-  workflow_call:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -42,7 +46,7 @@ jobs:
           rustup override set nightly
           cargo miri setup
       - name: Set up nextest
-        uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7  # v2.87.23
+        uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177  # v2.87.30
         with:
           tool: nextest
       - name: Run Miri Checks

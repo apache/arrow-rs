@@ -17,9 +17,6 @@
 
 //! Converts an Arrow IPC file to an Arrow IPC stream.
 
-// The unused_crate_dependencies lint does not work well for crates defining additional examples/bin targets
-#![allow(unused_crate_dependencies)]
-
 use arrow::error::Result;
 use arrow::ipc::reader::FileReader;
 use arrow::ipc::writer::StreamWriter;
