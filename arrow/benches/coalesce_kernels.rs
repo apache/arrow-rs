@@ -160,8 +160,8 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
 
     // Null density: 0, 10%
     for null_density in [0.0, 0.1] {
-        // Selectivity: 0.1%, 1%, 10%, 80%
-        for selectivity in [0.001, 0.01, 0.1, 0.8] {
+        // Selectivity: 0.1%, 0.5%, 1%, 10%, 80%
+        for selectivity in [0.001, 0.005, 0.01, 0.1, 0.8] {
             FilterBenchmarkBuilder {
                 c,
                 name: "primitive",
@@ -169,6 +169,7 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
                 num_output_batches: 50,
                 null_density,
                 selectivity,
+                min_string_len: 0,
                 max_string_len: 30,
                 schema: &primitive_schema,
             }
@@ -181,6 +182,7 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
                 num_output_batches: 50,
                 null_density,
                 selectivity,
+                min_string_len: 0,
                 max_string_len: 30,
                 schema: &single_schema,
             }
@@ -193,7 +195,22 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
                 num_output_batches: 50,
                 null_density,
                 selectivity,
+                min_string_len: 0,
                 max_string_len: 8,
+                schema: &single_schema,
+            }
+            .build();
+
+            // Model strings that are all stored out of line, such as UUIDs
+            FilterBenchmarkBuilder {
+                c,
+                name: "single_utf8view (string_len=13..40)",
+                batch_size,
+                num_output_batches: 50,
+                null_density,
+                selectivity,
+                min_string_len: 13,
+                max_string_len: 40,
                 schema: &single_schema,
             }
             .build();
@@ -205,6 +222,7 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
                 num_output_batches: 50,
                 null_density,
                 selectivity,
+                min_string_len: 0,
                 max_string_len: 30,
                 schema: &single_binaryview_schema,
             }
@@ -217,6 +235,7 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
                 num_output_batches: 50,
                 null_density,
                 selectivity,
+                min_string_len: 0,
                 max_string_len: 8,
                 schema: &single_binaryview_schema,
             }
@@ -229,6 +248,7 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
                 num_output_batches: 50,
                 null_density,
                 selectivity,
+                min_string_len: 0,
                 max_string_len: 30,
                 schema: &single_utf8_schema,
             }
@@ -241,6 +261,7 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
                 num_output_batches: 50,
                 null_density,
                 selectivity,
+                min_string_len: 0,
                 max_string_len: 30,
                 schema: &single_binary_schema,
             }
@@ -254,6 +275,7 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
                 num_output_batches: 20,
                 null_density,
                 selectivity,
+                min_string_len: 0,
                 max_string_len: 20,
                 schema: &mixed_utf8view_schema,
             }
@@ -266,6 +288,7 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
                 num_output_batches: 20,
                 null_density,
                 selectivity,
+                min_string_len: 0,
                 max_string_len: 8,
                 schema: &mixed_utf8view_schema,
             }
@@ -279,6 +302,7 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
                 num_output_batches: 20,
                 null_density,
                 selectivity,
+                min_string_len: 0,
                 max_string_len: 128,
                 schema: &mixed_utf8view_schema,
             }
@@ -291,6 +315,7 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
                 num_output_batches: 20,
                 null_density,
                 selectivity,
+                min_string_len: 0,
                 max_string_len: 20,
                 schema: &mixed_binaryview_schema,
             }
@@ -303,6 +328,7 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
                 num_output_batches: 20,
                 null_density,
                 selectivity,
+                min_string_len: 0,
                 max_string_len: 8,
                 schema: &mixed_binaryview_schema,
             }
@@ -315,6 +341,7 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
                 num_output_batches: 20,
                 null_density,
                 selectivity,
+                min_string_len: 0,
                 max_string_len: 128,
                 schema: &mixed_binaryview_schema,
             }
@@ -327,6 +354,7 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
                 num_output_batches: 20,
                 null_density,
                 selectivity,
+                min_string_len: 0,
                 max_string_len: 30,
                 schema: &mixed_utf8_schema,
             }
@@ -339,6 +367,7 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
                 num_output_batches: 10,
                 null_density,
                 selectivity,
+                min_string_len: 0,
                 max_string_len: 30,
                 schema: &mixed_dict_schema,
             }
@@ -351,6 +380,7 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
                 num_output_batches: 25,
                 null_density,
                 selectivity,
+                min_string_len: 0,
                 max_string_len: 30,
                 schema: &single_dictionary_schema,
             }
@@ -363,6 +393,7 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
                 num_output_batches: 50,
                 null_density,
                 selectivity,
+                min_string_len: 0,
                 max_string_len: 16,
                 schema: &single_fsb16_schema,
             }
@@ -375,6 +406,7 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
                 num_output_batches: 50,
                 null_density,
                 selectivity,
+                min_string_len: 0,
                 max_string_len: 32,
                 schema: &single_fsb32_schema,
             }
@@ -387,6 +419,7 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
                 num_output_batches: 50,
                 null_density,
                 selectivity,
+                min_string_len: 0,
                 max_string_len: 0,
                 schema: &single_boolean_schema,
             }
@@ -399,6 +432,7 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
                 num_output_batches: 25,
                 null_density,
                 selectivity,
+                min_string_len: 0,
                 max_string_len: 0,
                 schema: &single_run_end_schema,
             }
@@ -411,6 +445,7 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
                 num_output_batches: 50,
                 null_density,
                 selectivity,
+                min_string_len: 0,
                 max_string_len: 0,
                 schema: &single_fsl4_schema,
             }
@@ -423,6 +458,7 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
                 num_output_batches: 50,
                 null_density,
                 selectivity,
+                min_string_len: 0,
                 max_string_len: 0,
                 schema: &single_list_schema,
             }
@@ -743,6 +779,8 @@ struct FilterBenchmarkBuilder<'a> {
     null_density: f32,
     /// between 0.0 .. 1.0, percent of rows that should be kept by the filter
     selectivity: f32,
+    /// The minimum length of strings in the data stream
+    min_string_len: usize,
     /// The maximum length of strings in the data stream
     ///
     /// For StringViewArray, strings <= 12 bytes are stored inline, longer
@@ -762,6 +800,7 @@ impl FilterBenchmarkBuilder<'_> {
             num_output_batches,
             null_density,
             selectivity,
+            min_string_len,
             max_string_len,
             schema,
         } = self;
@@ -775,6 +814,7 @@ impl FilterBenchmarkBuilder<'_> {
         let data = DataStreamBuilder::new(Arc::clone(schema))
             .with_batch_size(batch_size)
             .with_null_density(null_density)
+            .with_min_string_len(min_string_len)
             .with_max_string_len(max_string_len)
             .build();
 
@@ -1317,6 +1357,7 @@ struct DataStreamBuilder {
     batch_size: usize,
     null_density: f32,
     num_batches: usize,    // number of unique batches to create
+    min_string_len: usize, // minimum length of strings in the data stream
     max_string_len: usize, // maximum length of strings in the data stream
 }
 
@@ -1327,6 +1368,7 @@ impl DataStreamBuilder {
             batch_size: 8192,
             null_density: 0.0,
             num_batches: 10,
+            min_string_len: 0,
             max_string_len: 30,
         }
     }
@@ -1341,6 +1383,11 @@ impl DataStreamBuilder {
     fn with_null_density(mut self, null_density: f32) -> Self {
         assert!((0.0..=1.0).contains(&null_density));
         self.null_density = null_density;
+        self
+    }
+
+    fn with_min_string_len(mut self, min_string_len: usize) -> Self {
+        self.min_string_len = min_string_len;
         self
     }
 
@@ -1368,6 +1415,7 @@ impl DataStreamBuilder {
             batch_size,
             null_density: _,
             num_batches: _,
+            min_string_len: _,
             max_string_len: _,
         } = self;
 
@@ -1408,23 +1456,22 @@ impl DataStreamBuilder {
             >(
                 self.batch_size,
                 self.null_density,
-                0,
+                self.min_string_len,
                 self.max_string_len,
                 b"",
                 seed,
             )),
-            DataType::Utf8View => {
-                Arc::new(create_string_view_array_with_max_len(
-                    self.batch_size,
-                    self.null_density,
-                    self.max_string_len,
-                )) // TODO seed
-            }
+            DataType::Utf8View => Arc::new(create_string_view_array_with_len_range_and_seed(
+                self.batch_size,
+                self.null_density,
+                self.min_string_len..self.max_string_len,
+                seed,
+            )),
             DataType::BinaryView => Arc::new(BinaryViewArray::from_iter(
                 create_binary_array_with_len_range_and_prefix_and_seed::<i32>(
                     self.batch_size,
                     self.null_density,
-                    0,
+                    self.min_string_len,
                     self.max_string_len,
                     b"",
                     seed,
