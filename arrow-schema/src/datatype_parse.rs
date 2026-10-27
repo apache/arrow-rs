@@ -867,8 +867,6 @@ impl<'a> Tokenizer<'a> {
         // reset temp space
         self.word.clear();
 
-        let mut is_escaped = false;
-
         loop {
             match self.next_char() {
                 None => {
@@ -877,29 +875,16 @@ impl<'a> Tokenizer<'a> {
                         self.word
                     )));
                 }
-                Some(c) => match c {
-                    '\\' => {
-                        is_escaped = true;
-                        self.word.push(c);
-                    }
-                    c if c == quote => {
-                        if is_escaped {
-                            self.word.push(c);
-                            is_escaped = false;
-                        } else {
-                            break;
-                        }
-                    }
-                    c => {
-                        self.word.push(c);
-                    }
-                },
+                Some(c) if c == quote => break,
+                Some('\\') => {
+                    let c = self.parse_escape()?;
+                    self.word.push(c);
+                }
+                Some(c) => self.word.push(c),
             }
         }
 
-        let val: String = self.word.parse().map_err(|err| {
-            ArrowError::ParseError(format!("Failed to parse string: \"{}\": {err}", self.word))
-        })?;
+        let val = self.word.clone();
 
         if val.is_empty() {
             // Using empty strings as field names is just asking for trouble
@@ -909,6 +894,47 @@ impl<'a> Tokenizer<'a> {
         match quote_type {
             QuoteType::Double => Ok(Token::DoubleQuotedString(val)),
             QuoteType::Single => Ok(Token::SingleQuotedString(val)),
+        }
+    }
+
+    /// Decodes an escape emitted by Rust debug formatting.
+    fn parse_escape(&mut self) -> ArrowResult<char> {
+        match self.next_char() {
+            Some('\\') => Ok('\\'),
+            Some('"') => Ok('"'),
+            Some('\'') => Ok('\''),
+            Some('n') => Ok('\n'),
+            Some('r') => Ok('\r'),
+            Some('t') => Ok('\t'),
+            Some('0') => Ok('\0'),
+            Some('u') => self.parse_unicode_escape(),
+            Some(c) => Err(make_error(
+                self.val,
+                &format!("invalid escape sequence: \\{c}"),
+            )),
+            None => Err(make_error(self.val, "unterminated escape sequence")),
+        }
+    }
+
+    fn parse_unicode_escape(&mut self) -> ArrowResult<char> {
+        if self.next_char() != Some('{') {
+            return Err(make_error(self.val, "expected '{' after \\u"));
+        }
+
+        let mut value = 0;
+        let mut digits = 0;
+        loop {
+            match self.next_char() {
+                Some('}') if digits != 0 => {
+                    return char::from_u32(value)
+                        .ok_or_else(|| make_error(self.val, "invalid Unicode scalar value"));
+                }
+                Some(c) if c.is_ascii_hexdigit() && digits < 6 => {
+                    value = value * 16 + c.to_digit(16).unwrap();
+                    digits += 1;
+                }
+                _ => return Err(make_error(self.val, "invalid Unicode escape")),
+            }
         }
     }
 }
@@ -1046,6 +1072,74 @@ impl Display for Token {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn test_escaped_strings_round_trip() {
+        for name in [
+            "a\"b",
+            "a'b",
+            "a\\b",
+            "trailing\\",
+            "\\\"",
+            "\\\\\"",
+            "line\nbreak",
+            "tab\treturn\r",
+            "nul\0",
+            "control\u{7f}",
+            "unicode\u{200d}é",
+            r"\n",
+            r"trailing\\",
+            "\u{1}\u{8}\u{b}\u{c}\u{1b}",
+        ] {
+            let field = Arc::new(Field::new(name, DataType::Int32, true));
+            for data_type in [
+                DataType::Struct(vec![field.clone()].into()),
+                DataType::List(field.clone()),
+                DataType::LargeList(field.clone()),
+                DataType::ListView(field.clone()),
+                DataType::LargeListView(field.clone()),
+                DataType::FixedSizeList(field, 2),
+                DataType::Timestamp(TimeUnit::Second, Some(name.into())),
+            ] {
+                round_trip(data_type);
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_quoted_escapes() {
+        for (input, expected) in [
+            (r#""a\"b""#, "a\"b"),
+            (r"'a\'b'", "a'b"),
+            (r#""a\\b""#, "a\\b"),
+            (r#""\n\r\t\0""#, "\n\r\t\0"),
+            (r#""\u{1f980}""#, "🦀"),
+            (r#""\u{000061}""#, "a"),
+            (r#""\u{10ffff}""#, "\u{10ffff}"),
+        ] {
+            let token = Tokenizer::new(input).next().unwrap().unwrap();
+            assert!(
+                matches!(token, Token::DoubleQuotedString(s) | Token::SingleQuotedString(s) if s == expected)
+            );
+        }
+    }
+
+    #[test]
+    fn test_invalid_quoted_escapes() {
+        for input in [
+            r#""\q""#,
+            r#""trailing\"#,
+            r#""\u{}""#,
+            r#""\u{xyz}""#,
+            r#""\u{d800}""#,
+            r#""\u{110000}""#,
+            r#""\u{0000000}""#,
+            r#""\u1234""#,
+            r#""\u{1234""#,
+        ] {
+            assert!(Tokenizer::new(input).next().unwrap().is_err(), "{input}");
+        }
+    }
 
     #[test]
     fn test_parse_data_type() {
