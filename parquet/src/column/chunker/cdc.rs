@@ -1191,7 +1191,7 @@ mod arrow_tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // large enough to hit CDC chunk boundaries
     fn cdc_int32_row_count_limit_does_not_emit_empty_pages() {
         let values: Vec<i32> = (0..8_192).map(|i| i % 97).collect();
         let col = Arc::new(Int32Array::from(values)) as ArrayRef;
