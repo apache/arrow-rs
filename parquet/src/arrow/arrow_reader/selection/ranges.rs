@@ -110,8 +110,8 @@ where
     ranges
 }
 
-/// Grows each selected run to the batch boundaries containing it, merging the
-/// runs that overlap as a result.
+/// Grows each selected run to the batch boundaries containing it, merging
+/// overlapping or adjacent ranges.
 #[inline]
 pub(super) fn expand_to_batch_boundaries_from_selectors<I>(
     selectors: I,
@@ -121,46 +121,31 @@ pub(super) fn expand_to_batch_boundaries_from_selectors<I>(
 where
     I: IntoIterator<Item = RowSelector>,
 {
-    let mut expanded_ranges = Vec::new();
+    let mut ranges: Vec<Range<usize>> = Vec::new();
     let mut row_offset = 0;
 
+    // Selectors advance in row order, so expanded ranges can be merged as we go.
     for selector in selectors {
-        if !selector.skip {
-            let start = row_offset;
-            let end = row_offset + selector.row_count;
-
-            // Expand start to batch boundary
-            let expanded_start = (start / batch_size) * batch_size;
-            // Expand end to batch boundary
-            let expanded_end = end.div_ceil(batch_size) * batch_size;
-            let expanded_end = expanded_end.min(total_rows);
-
-            expanded_ranges.push(expanded_start..expanded_end);
-        }
+        let row_start = row_offset;
         row_offset += selector.row_count;
-    }
+        if selector.skip {
+            continue;
+        }
 
-    // Sort ranges by start position
-    expanded_ranges.sort_by_key(|range| range.start);
+        // Round the start down and the end up to cover complete batches.
+        let batch_start = (row_start / batch_size) * batch_size;
+        let batch_end = row_offset.next_multiple_of(batch_size).min(total_rows);
 
-    // Merge overlapping or consecutive ranges
-    let mut merged_ranges: Vec<Range<usize>> = Vec::new();
-    for range in expanded_ranges {
-        if let Some(last) = merged_ranges.last_mut() {
-            if range.start <= last.end {
-                // Overlapping or consecutive - merge them
-                last.end = last.end.max(range.end);
-            } else {
-                // No overlap - add new range
-                merged_ranges.push(range);
-            }
-        } else {
-            // First range
-            merged_ranges.push(range);
+        // Ends are non-decreasing because selectors advance in row order.
+        match ranges.last_mut() {
+            // The ranges overlap or touch, so extend the last range.
+            Some(last) if batch_start <= last.end => last.end = batch_end,
+            // There is a gap, or this is the first selected range.
+            _ => ranges.push(batch_start..batch_end),
         }
     }
 
-    RowSelection::from_consecutive_ranges(merged_ranges.into_iter(), total_rows)
+    RowSelection::from_consecutive_ranges(ranges.into_iter(), total_rows)
 }
 
 #[cfg(test)]
