@@ -33,6 +33,35 @@ use parquet_variant::{
 };
 use std::collections::HashMap;
 
+struct PresentNull<B>(B);
+
+impl<B: VariantBuilderExt> VariantBuilderExt for PresentNull<B> {
+    type State<'a>
+        = B::State<'a>
+    where
+        Self: 'a;
+
+    fn append_null(&mut self) {
+        self.0.append_value(Variant::Null);
+    }
+
+    fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>) {
+        self.0.append_value(value);
+    }
+
+    fn try_new_list(
+        &mut self,
+    ) -> Result<parquet_variant::ListBuilder<'_, Self::State<'_>>, ArrowError> {
+        self.0.try_new_list()
+    }
+
+    fn try_new_object(
+        &mut self,
+    ) -> Result<parquet_variant::ObjectBuilder<'_, Self::State<'_>>, ArrowError> {
+        self.0.try_new_object()
+    }
+}
+
 // ============================================================================
 // Row-oriented builders for efficient Arrow-to-Variant conversion
 // ============================================================================
@@ -597,7 +626,8 @@ impl<'a> StructArrowToVariantBuilder<'a> {
 
             // Process each field
             for (field_name, row_builder) in &mut self.field_builders {
-                let mut field_builder = ObjectFieldBuilder::new(field_name, &mut obj_builder);
+                let mut field_builder =
+                    PresentNull(ObjectFieldBuilder::new(field_name, &mut obj_builder));
                 row_builder.append_row(&mut field_builder, index)?;
             }
 
@@ -655,7 +685,7 @@ impl<'a> MapArrowToVariantBuilder<'a> {
         // Add each key-value pair (loop does nothing for empty maps - correct!)
         for kv_index in start..end {
             let key = self.key_strings.value(kv_index);
-            let mut field_builder = ObjectFieldBuilder::new(key, &mut object_builder);
+            let mut field_builder = PresentNull(ObjectFieldBuilder::new(key, &mut object_builder));
             self.values_builder
                 .append_row(&mut field_builder, kv_index)?;
         }
@@ -974,18 +1004,18 @@ mod tests {
             Some(Variant::from("Alice"))
         );
 
-        // Check second row - should have name field but not id (null field omitted)
+        // Check second row - null id remains present
         let second_variant = variant_array.value(1);
-        assert_eq!(second_variant.get_object_field("id"), None); // null field omitted
+        assert_eq!(second_variant.get_object_field("id"), Some(Variant::Null));
         assert_eq!(
             second_variant.get_object_field("name"),
             Some(Variant::from("Bob"))
         );
 
-        // Check third row - should have id field but not name (null field omitted)
+        // Check third row - null name remains present
         let third_variant = variant_array.value(2);
         assert_eq!(third_variant.get_object_field("id"), Some(Variant::from(3)));
-        assert_eq!(third_variant.get_object_field("name"), None); // null field omitted
+        assert_eq!(third_variant.get_object_field("name"), Some(Variant::Null));
     }
 
     #[test]

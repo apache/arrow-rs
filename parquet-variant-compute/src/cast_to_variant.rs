@@ -1695,17 +1695,120 @@ mod tests {
         assert_eq!(obj2.get("id"), Some(Variant::from(1002i64)));
         assert_eq!(obj2.get("age"), Some(Variant::from(30i32)));
 
-        // Check third row: {"age": 35} (id is null, so omitted)
+        // Check third row: {"id": null, "age": 35}
         let variant3 = result.value(2);
         let obj3 = variant3.as_object().unwrap();
-        assert_eq!(obj3.get("id"), None);
+        assert_eq!(obj3.get("id"), Some(Variant::Null));
         assert_eq!(obj3.get("age"), Some(Variant::from(35i32)));
 
-        // Check fourth row: {"id": 1003} (age is null, so omitted)
+        // Check fourth row: {"id": 1003, "age": null}
         let variant4 = result.value(3);
         let obj4 = variant4.as_object().unwrap();
         assert_eq!(obj4.get("id"), Some(Variant::from(1003i64)));
-        assert_eq!(obj4.get("age"), None);
+        assert_eq!(obj4.get("age"), Some(Variant::Null));
+    }
+
+    fn cast_with_safe(input: &dyn Array, safe: bool) -> VariantArray {
+        cast_to_variant_with_options(
+            input,
+            &CastOptions {
+                safe,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn test_cast_to_variant_encoded_member_null() {
+        use arrow::array::RunArray;
+        let dictionary = DictionaryArray::<Int32Type>::try_new(
+            Int32Array::from(vec![Some(0), Some(1), None]),
+            Arc::new(Int32Array::from(vec![Some(5), None])),
+        )
+        .unwrap();
+        let union = UnionArray::try_new(
+            UnionFields::from_fields(vec![Field::new("value", DataType::Int32, true)]),
+            vec![0_i8, 0].into(),
+            None,
+            vec![Arc::new(Int32Array::from(vec![Some(1), None]))],
+        )
+        .unwrap();
+        let run_ends = Int32Array::from(vec![1, 2]);
+        let values = Int32Array::from(vec![Some(1), None]);
+        let run = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+        for (child, first) in [
+            (Arc::new(dictionary) as ArrayRef, 5),
+            (Arc::new(union) as ArrayRef, 1),
+            (Arc::new(run) as ArrayRef, 1),
+        ] {
+            let field = Field::new("a", child.data_type().clone(), true);
+            let input = StructArray::new(vec![field].into(), vec![child], None);
+            for safe in [false, true] {
+                let output = cast_with_safe(&input, safe);
+                assert_eq!(output.len(), input.len());
+                for i in 0..output.len() {
+                    output.value(i).with_full_validation().unwrap();
+                    assert_eq!(
+                        output.value(i).as_object().unwrap().get("a"),
+                        Some(if i == 0 {
+                            Variant::from(first)
+                        } else {
+                            Variant::Null
+                        })
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_cast_to_variant_safe_failed_member_is_null() {
+        let child = TimestampSecondArray::from(vec![Some(i64::MAX)]);
+        let input = StructArray::new(
+            vec![Field::new("a", child.data_type().clone(), true)].into(),
+            vec![Arc::new(child)],
+            None,
+        );
+        assert!(cast_to_variant(&input).is_err());
+        let output = cast_with_safe(&input, true);
+        assert_eq!(
+            output.value(0).as_object().unwrap().get("a"),
+            Some(Variant::Null)
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_map_present_null() {
+        let fields = Fields::from(vec![
+            Field::new("key", DataType::Utf8, false),
+            Field::new("value", DataType::Int32, true),
+        ]);
+        let entries = StructArray::new(
+            fields.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["a"])),
+                Arc::new(Int32Array::from(vec![None])),
+            ],
+            None,
+        );
+        let field = Arc::new(Field::new("entries", DataType::Struct(fields), false));
+        let input = MapArray::try_new(
+            field,
+            OffsetBuffer::new(vec![0, 1, 1, 1].into()),
+            entries,
+            Some(NullBuffer::from(vec![true, true, false])),
+            false,
+        )
+        .unwrap();
+        for safe in [false, true] {
+            let output = cast_with_safe(&input, safe);
+            let present = output.value(0);
+            assert_eq!(present.as_object().unwrap().get("a"), Some(Variant::Null));
+            let empty = output.value(1);
+            assert_eq!(empty.as_object().unwrap().get("a"), None);
+            assert!(output.is_null(2));
+        }
     }
 
     #[test]
