@@ -182,7 +182,7 @@ pub struct BatchCoalescer {
     in_progress_arrays: Vec<Box<dyn InProgressArray>>,
     /// True if some column still needs the materialized filter path.
     has_non_specialized_filter_columns: bool,
-    /// True if the schema requires the stricter byte-array density threshold.
+    /// True if the schema contains a variable-width byte-array column.
     has_byte_array_columns: bool,
     /// Buffered row count. Always less than `batch_size`
     buffered_rows: usize,

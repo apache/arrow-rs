@@ -64,14 +64,15 @@ where
         Ok(new_len)
     }
 
-    fn ensure_capacity(&mut self, source: &GenericByteArray<T>) {
+    fn ensure_capacity(&mut self, source: &GenericByteArray<T>, rows: usize) {
         if self.direct.offsets_slice().len() == 1 && !source.is_empty() {
             let offsets = source.value_offsets();
             let bytes = offsets[source.len()].as_usize() - offsets[0].as_usize();
-            let estimated = bytes.saturating_mul(self.batch_size) / source.len();
+            let rows = rows.min(self.batch_size);
+            let estimated = bytes.saturating_mul(rows) / source.len();
             // Later slices may contain slightly larger values than this first sample.
             let capacity = estimated.saturating_add(estimated / 8);
-            self.direct = GenericByteBuilder::with_capacity(self.batch_size, capacity);
+            self.direct = GenericByteBuilder::with_capacity(rows, capacity);
         }
     }
 
@@ -79,8 +80,9 @@ where
         &mut self,
         source: &GenericByteArray<T>,
         indices: FilterIndices<'_>,
+        count: usize,
     ) -> Result<(), ArrowError> {
-        self.ensure_capacity(source);
+        self.ensure_capacity(source, count);
         indices.try_for_each(|idx| {
             if source.is_null(idx) {
                 self.direct.append_null();
@@ -113,7 +115,7 @@ where
             )
         })?;
         let source = source.as_bytes::<T>().slice(offset, len);
-        self.ensure_capacity(&source);
+        self.ensure_capacity(&source, len);
         self.direct.append_array(&source)
     }
 
@@ -128,7 +130,7 @@ where
             // extra allocation of a filtered byte array. Dense contiguous selections use
             // the filter kernel below, which copies their ranges in bulk.
             FilterSelection::Indices(indices) => {
-                self.append_filter_indices(source.as_bytes::<T>(), indices)
+                self.append_filter_indices(source.as_bytes::<T>(), indices, filter.count())
             }
             FilterSelection::Slices(_) | FilterSelection::All { .. } => {
                 let filtered = filter.filter(source.as_ref())?;
