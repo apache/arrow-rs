@@ -91,17 +91,19 @@ Planned Release Schedule
 
 | Approximate Date | Version    | Notes                                   |
 | ---------------- | ---------- | --------------------------------------- |
-| July 2026        | [`59.2.0`] | Minor, NO breaking API changes          |
-| August 2026      | [`60.0.0`] | Major, potentially breaking API changes |
-| September 2026   | [`60.1.0`] | Minor, NO breaking API changes          |
-| October 2026     | [`60.2.0`] | Minor, NO breaking API changes          |
-| November 2026    | [`61.0.0`] | Major, potentially breaking API changes |
+| October 2026     | [`60.1.0`] | Minor, NO breaking API changes          |
+| November 2026    | [`60.2.0`] | Minor, NO breaking API changes          |
+| December 2026    | [`61.0.0`] | Major, potentially breaking API changes |
+| January 2027     | [`61.1.0`] | Minor, NO breaking API changes          |
+| February 2027    | [`61.2.0`] | Minor, NO breaking API changes          |
+| March 2027       | [`62.0.0`] | Major, potentially breaking API changes |
 
-[`59.2.0`]: https://github.com/apache/arrow-rs/issues/9879
-[`60.0.0`]: https://github.com/apache/arrow-rs/issues/9880
 [`60.1.0`]: https://github.com/apache/arrow-rs/issues/10525
 [`60.2.0`]: https://github.com/apache/arrow-rs/issues/10526
 [`61.0.0`]: https://github.com/apache/arrow-rs/issues/10527
+[`61.1.0`]: https://github.com/apache/arrow-rs/issues/11886
+[`61.2.0`]: https://github.com/apache/arrow-rs/issues/11887
+[`62.0.0`]: https://github.com/apache/arrow-rs/issues/11888
 [ticket #5368]: https://github.com/apache/arrow-rs/issues/5368
 [semantic versioning]: https://semver.org/
 
@@ -110,6 +112,13 @@ Planned Release Schedule
 arrow-rs and parquet are built and tested with stable Rust, and will keep a rolling MSRV (minimum supported Rust version) that can only be updated in major releases on an as needed basis (e.g. project dependencies bump their MSRV or a particular Rust feature is useful for us etc.). The new MSRV if selected will be at least 6 months old. The minor releases are guaranteed to have the same MSRV.
 
 Note: If a Rust hotfix is released for the current MSRV, the MSRV will be updated to the specific minor version that includes all applicable hotfixes preceding other policies.
+
+### Platform Support
+
+Only little-endian platforms are officially supported and tested in CI.
+Big-endian platforms are not tested in CI and may not work correctly.
+Fixes for big-endian platforms are welcome and handled on a best-effort basis,
+but compatibility is not guaranteed.
 
 ### Guidelines for `panic` vs `Result`
 

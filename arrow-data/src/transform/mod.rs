@@ -23,7 +23,9 @@
 use super::{ArrayData, ArrayDataBuilder, ByteView, data::new_buffers};
 use crate::bit_mask::set_bits;
 use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
-use arrow_buffer::{ArrowNativeType, Buffer, IntervalMonthDayNano, MutableBuffer, bit_util, i256};
+use arrow_buffer::{
+    ArrowNativeType, Buffer, IntervalDayTime, IntervalMonthDayNano, MutableBuffer, bit_util, i256,
+};
 use arrow_schema::{ArrowError, DataType, IntervalUnit, UnionMode};
 use half::f16;
 use num_integer::Integer;
@@ -156,7 +158,7 @@ pub struct MutableArrayData<'a> {
 
     /// Variadic data buffers referenced by views.
     ///
-    /// Note this this is not stored in `_MutableArrayData` because these values
+    /// Note this is not stored in `_MutableArrayData` because these values
     /// are constant and only needed at the end, when freezing
     /// [_MutableArrayData]
     variadic_data_buffers: Vec<Buffer>,
@@ -259,8 +261,11 @@ fn build_extend(array: &ArrayData) -> Extend<'_> {
         DataType::Date64
         | DataType::Time64(_)
         | DataType::Timestamp(_, _)
-        | DataType::Duration(_)
-        | DataType::Interval(IntervalUnit::DayTime) => primitive::build_extend::<i64>(array),
+        | DataType::Duration(_) => primitive::build_extend::<i64>(array),
+        // `IntervalDayTime` is two `i32`s, so its buffers need only be 4-byte aligned
+        DataType::Interval(IntervalUnit::DayTime) => {
+            primitive::build_extend::<IntervalDayTime>(array)
+        }
         DataType::Interval(IntervalUnit::MonthDayNano) => {
             primitive::build_extend::<IntervalMonthDayNano>(array)
         }
@@ -308,8 +313,8 @@ fn build_extend_nulls(data_type: &DataType) -> ExtendNulls {
         DataType::Date64
         | DataType::Time64(_)
         | DataType::Timestamp(_, _)
-        | DataType::Duration(_)
-        | DataType::Interval(IntervalUnit::DayTime) => primitive::extend_nulls::<i64>,
+        | DataType::Duration(_) => primitive::extend_nulls::<i64>,
+        DataType::Interval(IntervalUnit::DayTime) => primitive::extend_nulls::<IntervalDayTime>,
         DataType::Interval(IntervalUnit::MonthDayNano) => {
             primitive::extend_nulls::<IntervalMonthDayNano>
         }
@@ -843,6 +848,12 @@ impl<'a> MutableArrayData<'a> {
             ));
         }
 
+        if len == 0 {
+            return Ok(());
+        }
+
+        (self.extend_nulls)(&mut self.data, len)?;
+
         self.data.len += len;
         let bit_len = bit_util::ceil(self.data.len, 8);
         let nulls = self.data.null_buffer();
@@ -850,7 +861,6 @@ impl<'a> MutableArrayData<'a> {
             .try_resize(bit_len, 0)
             .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
         self.data.null_count += len;
-        (self.extend_nulls)(&mut self.data, len)?;
         Ok(())
     }
 
@@ -1017,6 +1027,105 @@ mod test {
         let mut mutable = MutableArrayData::new(vec![&array], true, 3);
         mutable.try_extend_nulls(1).unwrap();
         assert_eq!(mutable.len(), 1);
+    }
+
+    #[test]
+    fn test_try_extend_nulls_empty_union() {
+        use arrow_schema::{UnionFields, UnionMode};
+
+        for mode in [UnionMode::Sparse, UnionMode::Dense] {
+            let mut builder = ArrayData::builder(DataType::Union(UnionFields::empty(), mode))
+                .len(0)
+                .add_buffer(Buffer::from_vec(Vec::<i8>::new()));
+
+            if mode == UnionMode::Dense {
+                builder = builder.add_buffer(Buffer::from_vec(Vec::<i32>::new()));
+            }
+
+            let source = builder.build().unwrap();
+            let mut mutable = MutableArrayData::new(vec![&source], true, 0);
+
+            mutable.try_extend_nulls(0).unwrap();
+            assert_eq!(mutable.len(), 0);
+
+            let err = mutable.try_extend_nulls(1).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                "Invalid argument error: Cannot extend a union with no fields with nulls"
+            );
+            assert_eq!(mutable.len(), 0);
+        }
+    }
+
+    #[test]
+    fn test_try_extend_nulls_union_uses_nullable_field() {
+        use arrow_schema::{Field, UnionFields};
+
+        let fields = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("non_nullable", DataType::Int32, false),
+                Field::new("nullable", DataType::Int32, true),
+            ],
+        )
+        .unwrap();
+
+        for mode in [UnionMode::Sparse, UnionMode::Dense] {
+            let mut builder = ArrayData::builder(DataType::Union(fields.clone(), mode))
+                .len(0)
+                .add_buffer(Buffer::from_vec(Vec::<i8>::new()));
+
+            if mode == UnionMode::Dense {
+                builder = builder.add_buffer(Buffer::from_vec(Vec::<i32>::new()));
+            }
+
+            let source = builder
+                .child_data(vec![
+                    ArrayData::new_empty(&DataType::Int32),
+                    ArrayData::new_empty(&DataType::Int32),
+                ])
+                .build()
+                .unwrap();
+            let mut mutable = MutableArrayData::new(vec![&source], true, 1);
+
+            mutable.try_extend_nulls(1).unwrap();
+            let result = mutable.freeze();
+
+            assert_eq!(result.buffer::<i8>(0), &[1]);
+            assert_eq!(result.child_data()[1].null_count(), 1);
+            assert_eq!(result.child_data()[1].len(), 1);
+            if mode == UnionMode::Dense {
+                assert_eq!(result.buffer::<i32>(1), &[0]);
+                assert_eq!(result.child_data()[0].len(), 0);
+            } else {
+                assert_eq!(result.child_data()[0].len(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn test_try_extend_nulls_union_without_nullable_fields() {
+        use arrow_schema::{Field, UnionFields};
+
+        let fields = UnionFields::try_new(
+            vec![0],
+            vec![Field::new("non_nullable", DataType::Int32, false)],
+        )
+        .unwrap();
+        let source = ArrayData::builder(DataType::Union(fields, UnionMode::Sparse))
+            .len(0)
+            .add_buffer(Buffer::from_vec(Vec::<i8>::new()))
+            .child_data(vec![ArrayData::new_empty(&DataType::Int32)])
+            .build()
+            .unwrap();
+        let mut mutable = MutableArrayData::new(vec![&source], true, 0);
+
+        let err = mutable.try_extend_nulls(1).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Cannot extend a union with no nullable fields with nulls"
+        );
+        assert_eq!(mutable.len(), 0);
     }
 
     #[test]

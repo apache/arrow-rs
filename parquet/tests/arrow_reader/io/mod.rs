@@ -53,10 +53,11 @@ use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ArrowWriter, ProjectionMask};
 use parquet::data_type::AsBytes;
 use parquet::file::FOOTER_SIZE;
+use parquet::file::metadata::PageIndexPolicy;
 #[cfg(feature = "async")]
 use parquet::file::metadata::ParquetMetaDataReader;
+use parquet::file::metadata::page_index::PageIndexProvider;
 use parquet::file::metadata::{FooterTail, ParquetMetaData};
-use parquet::file::metadata::{PageIndex, PageIndexPolicy};
 use parquet::file::page_index::offset_index::PageLocation;
 use parquet::file::properties::WriterProperties;
 use parquet::schema::types::SchemaDescriptor;
@@ -131,7 +132,9 @@ impl AsyncFileReader for TestReader {
         if let Some(options) = options {
             metadata_reader = metadata_reader
                 .with_column_index_policy(options.column_index_policy())
-                .with_offset_index_policy(options.offset_index_policy());
+                .with_offset_index_policy(options.offset_index_policy())
+                .with_column_index_mask(options.column_index_mask().clone())
+                .with_offset_index_mask(options.offset_index_mask().clone());
         }
 
         self.metadata = Some(Arc::new(
@@ -263,7 +266,8 @@ impl TestParquetFile {
 
         let page_index = parquet_metadata
             .page_index()
-            .expect("Parquet metadata should have a page index");
+            .expect("Parquet metadata should have a page index")
+            .as_ref();
 
         let row_groups = TestRowGroups::new(&parquet_metadata, page_index);
 
@@ -342,7 +346,7 @@ struct TestRowGroups {
 }
 
 impl TestRowGroups {
-    fn new(parquet_metadata: &ParquetMetaData, page_index: &PageIndex) -> Self {
+    fn new(parquet_metadata: &ParquetMetaData, page_index: &dyn PageIndexProvider) -> Self {
         let row_groups = parquet_metadata
             .row_groups()
             .iter()

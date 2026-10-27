@@ -960,8 +960,16 @@ impl Codec {
                     _ => unreachable!(),
                 };
                 DataType::RunEndEncoded(
-                    Arc::new(Field::new("run_ends", run_ends_dt, false)),
-                    Arc::new(Field::new("values", values.codec().data_type(), true)),
+                    Arc::new(Field::new(
+                        Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                        run_ends_dt,
+                        false,
+                    )),
+                    Arc::new(Field::new(
+                        Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                        values.codec().data_type(),
+                        true,
+                    )),
                 )
             }
             #[cfg(feature = "avro_custom_types")]
@@ -1228,7 +1236,10 @@ struct Resolver<'a> {
 
 impl<'a> Resolver<'a> {
     fn register(&mut self, name: &'a str, namespace: Option<&'a str>, schema: AvroDataType) {
-        self.map.insert((namespace.unwrap_or(""), name), schema);
+        let (namespace, name) = name
+            .rsplit_once('.')
+            .unwrap_or_else(|| (namespace.unwrap_or(""), name));
+        self.map.insert((namespace, name), schema);
     }
 
     fn resolve(&self, name: &str, namespace: Option<&'a str>) -> Result<AvroDataType, ArrowError> {
@@ -1239,6 +1250,23 @@ impl<'a> Resolver<'a> {
             .get(&(namespace, name))
             .ok_or_else(|| ArrowError::ParseError(format!("Failed to resolve {namespace}.{name}")))
             .cloned()
+    }
+}
+
+/// Returns the namespace of a named type.
+///
+/// A name containing a dot is a full name, so its namespace is taken from the name and both
+/// the `namespace` attribute and the enclosing namespace are ignored.
+///
+/// See <https://avro.apache.org/docs/1.11.1/specification/#names>
+fn named_type_namespace<'a>(
+    name: &'a str,
+    namespace: Option<&'a str>,
+    enclosing_ns: Option<&'a str>,
+) -> Option<&'a str> {
+    match name.rsplit_once('.') {
+        Some((ns, _)) => Some(ns),
+        None => namespace.or(enclosing_ns),
     }
 }
 
@@ -1494,7 +1522,7 @@ impl<'a> Maker<'a> {
             }
             Schema::Complex(c) => match c {
                 ComplexType::Record(r) => {
-                    let namespace = r.namespace.or(namespace);
+                    let namespace = named_type_namespace(r.name, r.namespace, namespace);
                     let mut metadata = r.attributes.field_metadata();
                     let fields = r
                         .fields
@@ -1532,7 +1560,7 @@ impl<'a> Maker<'a> {
                     let size = f.size.try_into().map_err(|e| {
                         ArrowError::ParseError(format!("Overflow converting size to i32: {e}"))
                     })?;
-                    let namespace = f.namespace.or(namespace);
+                    let namespace = named_type_namespace(f.name, f.namespace, namespace);
                     let mut metadata = f.attributes.field_metadata();
                     metadata.insert(AVRO_NAME_METADATA_KEY.to_string(), f.name.to_string());
                     if let Some(ns) = namespace {
@@ -1622,7 +1650,7 @@ impl<'a> Maker<'a> {
                     Ok(field)
                 }
                 ComplexType::Enum(e) => {
-                    let namespace = e.namespace.or(namespace);
+                    let namespace = named_type_namespace(e.name, e.namespace, namespace);
                     let symbols = e
                         .symbols
                         .iter()
@@ -2216,7 +2244,7 @@ impl<'a> Maker<'a> {
             mapping: Arc::from(mapping),
             default_index,
         }));
-        let reader_ns = reader_enum.namespace.or(namespace);
+        let reader_ns = named_type_namespace(reader_enum.name, reader_enum.namespace, namespace);
         self.resolver
             .register(reader_enum.name, reader_ns, dt.clone());
         Ok(dt)
@@ -2264,8 +2292,10 @@ impl<'a> Maker<'a> {
             reader_record.namespace,
             &reader_record.aliases,
         )?;
-        let writer_ns = writer_record.namespace.or(namespace);
-        let reader_ns = reader_record.namespace.or(namespace);
+        let writer_ns =
+            named_type_namespace(writer_record.name, writer_record.namespace, namespace);
+        let reader_ns =
+            named_type_namespace(reader_record.name, reader_record.namespace, namespace);
         let mut reader_md = reader_record.attributes.field_metadata();
         reader_md.insert(
             AVRO_NAME_METADATA_KEY.to_string(),
@@ -3274,6 +3304,58 @@ mod tests {
         } else {
             panic!("Top-level schema is not a struct");
         }
+    }
+
+    #[test]
+    fn test_named_type_reuse_with_full_name() {
+        // A name containing a dot is a full name, and types nested in a record
+        // with a full name inherit the namespace from that name.
+        let schema_str = r#"
+        {
+          "type": "record",
+          "name": "record_ns.Record",
+          "fields": [
+            {
+              "name": "status",
+              "type": {
+                "type": "enum",
+                "name": "enum_ns.Status",
+                "symbols": ["ACTIVE", "INACTIVE"]
+              }
+            },
+            { "name": "backupStatus", "type": "enum_ns.Status" },
+            {
+              "name": "nested",
+              "type": {
+                "type": "record",
+                "name": "Nested",
+                "fields": [{ "name": "nested_int", "type": "int" }]
+              }
+            },
+            { "name": "nestedAgain", "type": "record_ns.Nested" }
+          ]
+        }
+        "#;
+
+        let schema: Schema = serde_json::from_str(schema_str).unwrap();
+
+        let mut maker = Maker::new(false, false, Tz::default());
+        let avro_data_type = maker.make_data_type(&schema, None, None).unwrap();
+
+        let Codec::Struct(fields) = avro_data_type.codec() else {
+            panic!("Top-level schema is not a struct");
+        };
+        assert_eq!(fields.len(), 4);
+        assert!(matches!(fields[1].data_type().codec(), Codec::Enum(_)));
+        assert_eq!(
+            fields[1].data_type().codec().data_type(),
+            fields[0].data_type().codec().data_type()
+        );
+        assert!(matches!(fields[3].data_type().codec(), Codec::Struct(_)));
+        assert_eq!(
+            fields[3].data_type().codec().data_type(),
+            fields[2].data_type().codec().data_type()
+        );
     }
 
     #[test]

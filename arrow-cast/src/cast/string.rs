@@ -18,6 +18,18 @@
 use crate::cast::*;
 use arrow_buffer::NullBuffer;
 
+pub(crate) fn cast_bool_to_string<A>(array: &dyn Array) -> Result<ArrayRef, ArrowError>
+where
+    A: Array + FromIterator<Option<&'static str>> + 'static,
+{
+    let array: A = array
+        .as_boolean()
+        .iter()
+        .map(|v| v.map(|b| if b { "true" } else { "false" }))
+        .collect();
+    Ok(Arc::new(array))
+}
+
 pub(crate) fn value_to_string<O: OffsetSizeTrait>(
     array: &dyn Array,
     options: &CastOptions,
@@ -357,9 +369,11 @@ pub(crate) fn cast_binary_to_string<O: OffsetSizeTrait>(
         Ok(a) => Ok(Arc::new(a)),
         Err(e) => match cast_options.safe {
             true => {
-                // Fallback to slow method to convert invalid sequences to nulls
-                let mut builder =
-                    GenericStringBuilder::<O>::with_capacity(array.len(), array.value_data().len());
+                // Fallback to slow method to convert invalid sequences to nulls.
+                // Reserve only the bytes the offsets span, not the whole values buffer.
+                let offsets = array.offsets();
+                let data_len = (offsets.last() - offsets.first()).as_usize();
+                let mut builder = GenericStringBuilder::<O>::with_capacity(array.len(), data_len);
 
                 extend_valid_utf8(&mut builder, array.iter());
                 Ok(Arc::new(builder.finish()))

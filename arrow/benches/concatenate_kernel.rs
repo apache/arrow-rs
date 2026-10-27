@@ -144,17 +144,41 @@ fn add_benchmark(c: &mut Criterion) {
         });
     }
 
-    // String view arrays
+    // String view arrays. Each iteration concatenates the next 10 of
+    // `NUM_VIEW_INPUTS` arrays, so the CPU can't learn the order of inline and
+    // out-of-line strings, or of nulls, in the input.
+    const NUM_VIEW_INPUTS: usize = 32;
     for null_density in [0.0, 0.2] {
-        // Any strings less than 12 characters are stored as prefix only, so specially
-        // benchmark cases that have different mixes of lengths.
-        for (name, str_len) in [("all_inline", 12), ("", 20), ("", 128)] {
-            let array = create_string_view_array_with_len(8192, null_density, str_len, false);
-            let arrays = (0..10).map(|_| &array as &dyn Array).collect::<Vec<_>>();
-            let id = format!(
-                "concat utf8_view {name} max_str_len={str_len} null_density={null_density}"
-            );
-            c.bench_function(&id, |b| b.iter(|| bench_concat_arrays(&arrays)));
+        // Strings of 12 bytes or fewer are stored inline in the view, so the
+        // cases cover all inline, all out of line, and a mix of the two.
+        for (name, lengths) in [
+            ("all_inline str_len=12", 12..13),
+            ("str_len=20", 20..21),
+            ("str_len=128", 128..129),
+            ("mixed str_len=3..20", 3..20),
+        ] {
+            let inputs = (0..NUM_VIEW_INPUTS as u64)
+                .map(|seed| {
+                    create_string_view_array_with_len_range_and_seed(
+                        8192,
+                        null_density,
+                        lengths.clone(),
+                        seed,
+                    )
+                })
+                .collect::<Vec<_>>();
+            let mut next = inputs.iter().cycle();
+            let id = format!("concat utf8_view {name} null_density={null_density}");
+            c.bench_function(&id, |b| {
+                b.iter(|| {
+                    let arrays = next
+                        .by_ref()
+                        .take(10)
+                        .map(|a| a as &dyn Array)
+                        .collect::<Vec<_>>();
+                    bench_concat_arrays(&arrays)
+                })
+            });
         }
     }
 
@@ -191,6 +215,27 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("concat fixed size lists", |b| {
         b.iter(|| bench_concat(&v1, &v2))
     });
+
+    // A column assembled from one-row arrays, as ScalarValue::iter_to_array in DataFusion does
+    {
+        let input = (0..1024)
+            .map(|_| create_primitive_fixed_size_list_array::<Float32Type>(1, 0.0, 0.0, 3))
+            .collect::<Vec<_>>();
+        let arrays: Vec<_> = input.iter().map(|arr| arr as &dyn Array).collect();
+        c.bench_function("concat 1024 arrays fixed size list f32x3 1", |b| {
+            b.iter(|| bench_concat_arrays(&arrays))
+        });
+    }
+
+    {
+        // Slices, as the generator's fixed seed would give every one-row array the same validity
+        let input = create_primitive_fixed_size_list_array::<Float32Type>(1024, 0.2, 0.0, 3);
+        let slices = (0..1024).map(|i| input.slice(i, 1)).collect::<Vec<_>>();
+        let arrays: Vec<_> = slices.iter().map(|arr| arr as &dyn Array).collect();
+        c.bench_function("concat 1024 arrays fixed size list f32x3 nulls 1", |b| {
+            b.iter(|| bench_concat_arrays(&arrays))
+        });
+    }
 
     {
         let batch_size = 1024;
@@ -234,6 +279,21 @@ fn add_benchmark(c: &mut Criterion) {
             &format!("concat struct with int32 and dicts size={batch_size} count={batch_count}"),
             |b| b.iter(|| bench_concat_arrays(&array_refs)),
         );
+    }
+
+    // (name, logical_len, physical_len, num_arrays)
+    for (name, logical, physical, n) in [
+        ("small logical=32 physical=4 x4", 32usize, 4usize, 4usize),
+        ("logical=1024 physical=128 x8", 1024, 128, 8),
+        ("logical=8192 physical=1024 x10", 8192, 1024, 10),
+    ] {
+        let arrays: Vec<RunArray<Int32Type>> = (0..n)
+            .map(|_| create_primitive_run_array::<Int32Type, Int32Type>(logical, physical))
+            .collect();
+        let array_refs: Vec<&dyn Array> = arrays.iter().map(|a| a as &dyn Array).collect();
+        c.bench_function(&format!("concat run_end i32 {name}"), |b| {
+            b.iter(|| bench_concat_arrays(&array_refs))
+        });
     }
 }
 

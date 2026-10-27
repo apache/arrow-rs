@@ -24,7 +24,7 @@
 //!   used for storing xdbc server metadata.
 //! - [`GetXdbcTypeInfoBuilder`] - a builder for constructing [`CommandGetXdbcTypeInfo`] responses.
 //!
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use arrow_array::builder::{BooleanBuilder, Int32Builder, ListBuilder, StringBuilder};
 use arrow_array::{ArrayRef, Int32Array, ListArray, RecordBatch, Scalar};
@@ -32,7 +32,6 @@ use arrow_ord::cmp::eq;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use arrow_select::filter::filter_record_batch;
 use arrow_select::take::take;
-use once_cell::sync::Lazy;
 
 use super::lexsort_to_indices;
 use crate::error::*;
@@ -119,7 +118,7 @@ impl XdbcTypeInfoData {
 /// use arrow_flight::sql::{Nullable, Searchable, XdbcDataType};
 /// use arrow_flight::sql::metadata::{XdbcTypeInfo, XdbcTypeInfoDataBuilder};
 /// // Create the list of metadata describing the server. Since this would not change at
-/// // runtime, using once_cell::Lazy or similar patterns to construct the list is a common approach.
+/// // runtime, using LazyLock or similar patterns to construct the list is a common approach.
 /// let mut builder = XdbcTypeInfoDataBuilder::new();
 /// builder.append(XdbcTypeInfo {
 ///     type_name: "INTEGER".into(),
@@ -321,7 +320,7 @@ impl GetXdbcTypeInfoBuilder<'_> {
 }
 
 /// The schema for GetXdbcTypeInfo
-static GET_XDBC_INFO_SCHEMA: Lazy<SchemaRef> = Lazy::new(|| {
+static GET_XDBC_INFO_SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
     Arc::new(Schema::new(vec![
         Field::new("type_name", DataType::Utf8, false),
         Field::new("data_type", DataType::Int32, false),

@@ -474,7 +474,7 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
     ///
     /// [binary]: https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#binary-encoding
     fn skip_binary(&mut self) -> ThriftProtocolResult<()> {
-        let len = self.read_vlq()? as usize;
+        let len = usize::try_from(self.read_vlq()?)?;
         self.skip_bytes(len)
     }
 
@@ -528,29 +528,61 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
             // see https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#list-and-set
             FieldType::List | FieldType::Set => {
                 let list_ident = self.read_list_begin()?;
-                let element_type = FieldType::from(list_ident.element_type);
-                for _ in 0..list_ident.size {
-                    self.skip_till_depth(element_type, depth - 1)?;
+                if list_ident.element_type == ElementType::Bool {
+                    self.skip_bool_list(list_ident.size, depth - 1)
+                } else {
+                    let field_type = list_ident.element_type.into();
+                    for _ in 0..list_ident.size {
+                        self.skip_till_depth(field_type, depth - 1)?;
+                    }
+                    Ok(())
                 }
-                Ok(())
             }
             // see https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#map
-            FieldType::Map => {
-                let size = i32::try_from(self.read_vlq()?)?;
-                if size > 0 {
-                    let kv = self.read_byte()?;
-                    let key_type = FieldType::from(ElementType::try_from(kv >> 4)?);
-                    let val_type = FieldType::from(ElementType::try_from(kv & 0xf)?);
-                    for _ in 0..size {
-                        self.skip_till_depth(key_type, depth - 1)?;
-                        self.skip_till_depth(val_type, depth - 1)?;
-                    }
-                }
-                Ok(())
-            }
+            FieldType::Map => self.skip_map(depth),
             // see https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#universal-unique-identifier-encoding
             FieldType::Uuid => self.skip_bytes(16),
             FieldType::Stop => Err(ThriftProtocolError::SkipUnsupportedType(field_type)),
+        }
+    }
+
+    /// Skip boolean list or set payloads after reading their header.
+    #[cold]
+    fn skip_bool_list(&mut self, size: i32, depth: i8) -> ThriftProtocolResult<()> {
+        if size > 0 && depth == 0 {
+            return Err(ThriftProtocolError::SkipDepth(FieldType::BooleanTrue));
+        }
+        self.skip_bytes(size as usize)
+    }
+
+    /// Skip maps, which are not used by the current Parquet metadata schema.
+    #[cold]
+    fn skip_map(&mut self, depth: i8) -> ThriftProtocolResult<()> {
+        let size = i32::try_from(self.read_vlq()?)?;
+        if size > 0 {
+            let kv = self.read_byte()?;
+            let key_type = ElementType::try_from(kv >> 4)?;
+            let val_type = ElementType::try_from(kv & 0xf)?;
+            for _ in 0..size {
+                self.skip_element_till_depth(key_type, depth - 1)?;
+                self.skip_element_till_depth(val_type, depth - 1)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Collection booleans have a payload byte, unlike inline struct fields.
+    fn skip_element_till_depth(
+        &mut self,
+        element_type: ElementType,
+        depth: i8,
+    ) -> ThriftProtocolResult<()> {
+        if depth == 0 {
+            return Err(ThriftProtocolError::SkipDepth(element_type.into()));
+        }
+        match element_type {
+            ElementType::Bool => self.skip_bytes(1),
+            other => self.skip_till_depth(other.into(), depth),
         }
     }
 }
@@ -646,10 +678,13 @@ impl<'a, R: Read> ThriftCompactInputProtocol<'a> for ThriftReadInputProtocol<R> 
     }
 
     fn skip_bytes(&mut self, n: usize) -> ThriftProtocolResult<()> {
-        std::io::copy(
+        let skipped = std::io::copy(
             &mut self.reader.by_ref().take(n as u64),
             &mut std::io::sink(),
         )?;
+        if skipped != n as u64 {
+            return Err(ThriftProtocolError::Eof);
+        }
         Ok(())
     }
 
@@ -734,18 +769,7 @@ where
     let list_ident = prot.read_list_begin()?;
     validate_list_type(T::ELEMENT_TYPE, &list_ident)?;
     let size = list_ident.size as usize;
-    // Each list element occupies at least one byte on the wire. Bound the
-    // declared count by remaining input before reserving, so a malformed
-    // header cannot abort the process with a huge allocation.
-    if let Some(remaining) = prot.remaining_bytes()
-        && size > remaining
-    {
-        return Err(general_err!(
-            "Thrift list size {} exceeds remaining input length {}",
-            size,
-            remaining
-        ));
-    }
+    check_list_size(prot.remaining_bytes(), size)?;
     let mut res = Vec::with_capacity(size);
     for _ in 0..list_ident.size {
         let val = T::read_thrift(prot)?;
@@ -760,6 +784,22 @@ pub(crate) fn validate_list_type(expected: ElementType, got: &ListIdentifier) ->
             "Expected list element type of {:?} but got {:?}",
             expected,
             got.element_type
+        ));
+    }
+    Ok(())
+}
+
+/// Reject a declared list size that cannot fit the remaining input. Each list
+/// element is at least one byte on the wire, so a size past the remaining
+/// bytes is a malformed header; bounding it before reserving stops a huge
+/// allocation. `remaining` is `None` when the protocol is not backed by a
+/// finite buffer, in which case there is nothing to check against.
+pub(crate) fn check_list_size(remaining: Option<usize>, size: usize) -> Result<()> {
+    if let Some(remaining) = remaining
+        && size > remaining
+    {
+        return Err(general_err!(
+            "Thrift list size {size} exceeds remaining input length {remaining}"
         ));
     }
     Ok(())
@@ -1223,6 +1263,34 @@ pub(crate) mod tests {
         let mut prot = ThriftSliceInputProtocol::new(&data);
         let result = prot.read_list_begin();
         assert!(result.is_err(), "expected error, got {result:?}");
+    }
+
+    // Unknown fields must leave the following known field aligned.
+    crate::thrift_struct! {
+        struct KnownField {
+            2: required i32 value;
+        }
+    }
+
+    #[test]
+    fn test_skip_boolean_collections_before_known_field() {
+        for collection_type in [FieldType::List, FieldType::Set] {
+            // False then true must not be mistaken for inline field headers.
+            // Known field 2 follows with i32(42).
+            let data = [0x10 | collection_type as u8, 0x22, 2, 1, 0x15, 84, 0];
+            let mut protocol = ThriftSliceInputProtocol::new(&data);
+            assert_eq!(KnownField::read_thrift(&mut protocol).unwrap().value, 42);
+            assert!(protocol.as_slice().is_empty());
+        }
+    }
+
+    #[test]
+    fn test_skip_map_before_known_field() {
+        // Unknown field 1: map<bool, i32> with two entries. Known field 2: i32(42).
+        let data = [0x1b, 2, 0x25, 1, 14, 2, 16, 0x15, 84, 0];
+        let mut protocol = ThriftSliceInputProtocol::new(&data);
+        assert_eq!(KnownField::read_thrift(&mut protocol).unwrap().value, 42);
+        assert!(protocol.as_slice().is_empty());
     }
 
     #[test]

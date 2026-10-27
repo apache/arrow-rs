@@ -34,15 +34,15 @@
 //!
 //! This module exposes three layers of the API surface, from highest to lowest-level:
 //!
-//! * [`ReaderBuilder`](crate::reader::ReaderBuilder): configures how Avro is read (batch size, strict union handling,
+//! * [`ReaderBuilder`]: configures how Avro is read (batch size, strict union handling,
 //!   string representation, reader schema, etc.) and produces either:
 //!   * a `Reader` for **Avro Object Container Files (OCF)** read from any `BufRead`, or
 //!   * a low-level `Decoder` for **unframed Avro datums**, **single‑object encoded** Avro
 //!     bytes, and Confluent **Schema Registry** framed messages.
-//! * [`Reader`](crate::reader::Reader): a convenient, synchronous iterator over `RecordBatch` decoded from an OCF
+//! * [`Reader`]: a convenient, synchronous iterator over `RecordBatch` decoded from an OCF
 //!   input. Implements [`Iterator<Item = Result<RecordBatch, ArrowError>>`] and
 //!   `RecordBatchReader`.
-//! * [`Decoder`](crate::reader::Decoder): a push‑based row decoder that consumes unframed or
+//! * [`Decoder`]: a push‑based row decoder that consumes unframed or
 //!   framed Avro bytes and yields ready `RecordBatch` values when batches fill. This is suitable
 //!   for integrating with async byte streams, network protocols, or other custom data sources.
 //!
@@ -55,7 +55,7 @@
 //! * **Unframed binary datums**: Bare Avro records without an OCF header, schema fingerprint,
 //!   or schema-registry prefix. Register the known writer schema in a `SchemaStore`, select it
 //!   with [`ReaderBuilder::with_active_fingerprint`](crate::reader::ReaderBuilder::with_active_fingerprint),
-//!   configure [`DecoderMode::UnframedDatum`](crate::reader::DecoderMode::UnframedDatum) with
+//!   configure [`DecoderMode::UnframedDatum`] with
 //!   [`ReaderBuilder::with_decoder_mode`](crate::reader::ReaderBuilder::with_decoder_mode), and
 //!   call [`Decoder::decode`](crate::reader::Decoder::decode) once per record. This supports bare
 //!   Kafka messages and consecutive records in one buffer.
@@ -1548,6 +1548,28 @@ mod test {
         let schema = reader.schema();
         let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
         arrow::compute::concat_batches(&schema, &batches).unwrap()
+    }
+
+    #[test]
+    fn test_utf8_view_keeps_nulls_of_nullable_strings() {
+        let schema = Schema::new(vec![Field::new("s", DataType::Utf8, true)]);
+        let values = vec![Some("a"), None, Some(""), None, Some("b")];
+        let col: ArrayRef = Arc::new(StringArray::from(values.clone()));
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![col]).unwrap();
+        let mut writer = AvroWriter::new(Vec::<u8>::new(), schema).unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+        let bytes = writer.into_inner();
+
+        let reader = ReaderBuilder::new()
+            .with_utf8_view(true)
+            .build(Cursor::new(bytes))
+            .unwrap();
+        let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(batches.len(), 1);
+        let col = batches[0].column(0).as_string_view();
+        assert_eq!(col.null_count(), 2);
+        assert_eq!(col, &StringViewArray::from(values));
     }
 
     #[test]

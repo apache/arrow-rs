@@ -162,6 +162,14 @@ impl Field {
     ///
     /// See [Arrow Spec](https://github.com/apache/arrow/blob/b19c4761b558ade94ae05743062d92aacedef10e/format/Schema.fbs#L127-L138))
     pub const MAP_VALUE_FIELD_DEFAULT_NAME: &'static str = "value";
+    /// Default field name for the run-ends field for RunEndEncoded
+    ///
+    /// See [Arrow Spec](https://arrow.apache.org/docs/format/Columnar.html#run-end-encoded-layout)
+    pub const REE_RUN_ENDS_FIELD_DEFAULT_NAME: &'static str = "run_ends";
+    /// Default field name for the values field for RunEndEncoded
+    ///
+    /// See [Arrow Spec](https://arrow.apache.org/docs/format/Columnar.html#run-end-encoded-layout)
+    pub const REE_VALUES_FIELD_DEFAULT_NAME: &'static str = "values";
 
     /// Creates a new field with the given name, data type, and nullability
     ///
@@ -813,9 +821,15 @@ impl Field {
                     )));
                 }
             },
-            DataType::Union(nested_fields, _) => match &from.data_type {
-                DataType::Union(from_nested_fields, _) => {
-                    nested_fields.try_merge(from_nested_fields)?
+            DataType::Union(nested_fields, mode) => match &from.data_type {
+                DataType::Union(from_nested_fields, from_mode) => {
+                    if mode != from_mode {
+                        return Err(ArrowError::SchemaError(format!(
+                            "Fail to merge schema field '{}' because the from union mode = {:?} does not match {:?}",
+                            self.name, from_mode, mode
+                        )));
+                    }
+                    nested_fields.try_merge(from_nested_fields)?;
                 }
                 DataType::Null => {
                     self.nullable = true;
@@ -1073,6 +1087,46 @@ mod test {
             nullable: true,
         }
         "#);
+    }
+
+    #[test]
+    fn test_merge_union_modes() {
+        for mode in [UnionMode::Sparse, UnionMode::Dense] {
+            let mut field = Field::new_union(
+                "u",
+                [0],
+                [Field::new("number", DataType::Int32, false)],
+                mode,
+            );
+            let other_mode = match mode {
+                UnionMode::Sparse => UnionMode::Dense,
+                UnionMode::Dense => UnionMode::Sparse,
+            };
+            let incompatible = Field::new_union(
+                "u",
+                [0],
+                [Field::new("number", DataType::Int32, false)],
+                other_mode,
+            );
+            assert!(matches!(
+                field.try_merge(&incompatible),
+                Err(ArrowError::SchemaError(_))
+            ));
+
+            let compatible =
+                Field::new_union("u", [1], [Field::new("text", DataType::Utf8, false)], mode);
+            field.try_merge(&compatible).unwrap();
+            let expected = Field::new_union(
+                "u",
+                [0, 1],
+                [
+                    Field::new("number", DataType::Int32, false),
+                    Field::new("text", DataType::Utf8, false),
+                ],
+                mode,
+            );
+            assert_eq!(field, expected);
+        }
     }
 
     #[test]

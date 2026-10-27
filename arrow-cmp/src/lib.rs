@@ -28,6 +28,13 @@
 //! dependency (`arrow-ord` already depends on `arrow-select`) or force every
 //! downstream user of `arrow-array` to compile the comparator machinery whether
 //! they need it or not.
+//!
+//! # Platform Support
+//!
+//! Only little-endian platforms are officially supported and tested in CI.
+//! Big-endian platforms are not tested in CI and may not work correctly.
+//! Fixes for big-endian platforms are welcome and handled on a best-effort basis,
+//! but compatibility is not guaranteed.
 
 #![deny(rustdoc::broken_intra_doc_links)]
 #![warn(missing_docs)]
@@ -213,6 +220,25 @@ fn compare_dict<K: ArrowDictionaryKeyType>(
 ) -> Result<DynComparator, ArrowError> {
     let left = left.as_dictionary::<K>();
     let right = right.as_dictionary::<K>();
+    let value_dtype = left.values().data_type();
+    if value_dtype == right.values().data_type() {
+        match value_dtype {
+            DataType::Utf8 => return Ok(compare_dict_bytes::<K, Utf8Type>(left, right, opts)),
+            DataType::LargeUtf8 => {
+                return Ok(compare_dict_bytes::<K, LargeUtf8Type>(left, right, opts));
+            }
+            DataType::Binary => {
+                return Ok(compare_dict_bytes::<K, BinaryType>(left, right, opts));
+            }
+            DataType::LargeBinary => {
+                return Ok(compare_dict_bytes::<K, LargeBinaryType>(left, right, opts));
+            }
+            DataType::FixedSizeBinary(_) => {
+                return Ok(compare_dict_fixed_size_binary::<K>(left, right, opts));
+            }
+            _ => {}
+        }
+    }
 
     let c_opts = child_opts(opts);
     let cmp = make_comparator(left.values().as_ref(), right.values().as_ref(), c_opts)?;
@@ -225,6 +251,56 @@ fn compare_dict<K: ArrowDictionaryKeyType>(
         cmp(l, r)
     });
     Ok(f)
+}
+
+fn compare_dict_bytes<K: ArrowDictionaryKeyType, T: ByteArrayType>(
+    left: &DictionaryArray<K>,
+    right: &DictionaryArray<K>,
+    opts: SortOptions,
+) -> DynComparator {
+    let left_values = left.values().as_bytes::<T>().clone();
+    let right_values = right.values().as_bytes::<T>().clone();
+    let left_keys = left.keys().values().clone();
+    let right_keys = right.keys().values().clone();
+    compare(left, right, opts, move |left_row, right_row| {
+        let left_key = left_keys[left_row].as_usize();
+        let right_key = right_keys[right_row].as_usize();
+        debug_assert!(left_key < left_values.len() && right_key < right_values.len());
+        // SAFETY: `compare` calls this only for rows that are valid on both sides, and
+        // `DictionaryArray` guarantees that every valid key indexes into its values.
+        let (left_bytes, right_bytes): (&[u8], &[u8]) = unsafe {
+            (
+                left_values.value_unchecked(left_key).as_ref(),
+                right_values.value_unchecked(right_key).as_ref(),
+            )
+        };
+        left_bytes.cmp(right_bytes)
+    })
+}
+
+fn compare_dict_fixed_size_binary<K: ArrowDictionaryKeyType>(
+    left: &DictionaryArray<K>,
+    right: &DictionaryArray<K>,
+    opts: SortOptions,
+) -> DynComparator {
+    let left_values = left.values().as_fixed_size_binary().clone();
+    let right_values = right.values().as_fixed_size_binary().clone();
+    let left_keys = left.keys().values().clone();
+    let right_keys = right.keys().values().clone();
+    compare(left, right, opts, move |left_row, right_row| {
+        let left_key = left_keys[left_row].as_usize();
+        let right_key = right_keys[right_row].as_usize();
+        debug_assert!(left_key < left_values.len() && right_key < right_values.len());
+        // SAFETY: `compare` calls this only for rows that are valid on both sides, and
+        // `DictionaryArray` guarantees that every valid key indexes into its values.
+        let (left_bytes, right_bytes) = unsafe {
+            (
+                left_values.value_unchecked(left_key),
+                right_values.value_unchecked(right_key),
+            )
+        };
+        left_bytes.cmp(right_bytes)
+    })
 }
 
 fn compare_list<O: OffsetSizeTrait>(
@@ -789,6 +865,259 @@ mod tests {
         assert_eq!(Ordering::Less, cmp(0, 0));
         assert_eq!(Ordering::Equal, cmp(0, 3));
         assert_eq!(Ordering::Greater, cmp(1, 3));
+    }
+
+    #[test]
+    fn dict_fixed_size_binary_fast_path_derefs_values_both_directions() {
+        let shared_keys = || Int32Array::from(vec![0_i32, 1]);
+        let left_values =
+            FixedSizeBinaryArray::try_from_iter([b"zz".as_ref(), b"aa".as_ref()].into_iter())
+                .unwrap();
+        let right_values =
+            FixedSizeBinaryArray::try_from_iter([b"aa".as_ref(), b"zz".as_ref()].into_iter())
+                .unwrap();
+        let left = DictionaryArray::<Int32Type>::new(shared_keys(), Arc::new(left_values));
+        let right = DictionaryArray::<Int32Type>::new(shared_keys(), Arc::new(right_values));
+
+        let ascending = make_comparator(&left, &right, SortOptions::default()).unwrap();
+        assert_eq!(ascending(0, 0), Ordering::Greater);
+        assert_eq!(ascending(1, 1), Ordering::Less);
+
+        let descending = make_comparator(
+            &left,
+            &right,
+            SortOptions {
+                descending: true,
+                nulls_first: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(descending(0, 0), Ordering::Less);
+        assert_eq!(descending(1, 1), Ordering::Greater);
+    }
+
+    fn dict_bytes_fast_path_derefs_values_both_directions_impl<T: ByteArrayType>() {
+        let shared_keys = || Int32Array::from(vec![0_i32, 1]);
+        let left_values =
+            GenericByteArray::<T>::new(OffsetBuffer::from_lengths([1, 1]), b"za".into(), None);
+        let right_values =
+            GenericByteArray::<T>::new(OffsetBuffer::from_lengths([1, 1]), b"az".into(), None);
+        let left = DictionaryArray::<Int32Type>::new(shared_keys(), Arc::new(left_values));
+        let right = DictionaryArray::<Int32Type>::new(shared_keys(), Arc::new(right_values));
+
+        let ascending = make_comparator(&left, &right, SortOptions::default()).unwrap();
+        assert_eq!(ascending(0, 0), Ordering::Greater);
+        assert_eq!(ascending(1, 1), Ordering::Less);
+
+        let descending = make_comparator(
+            &left,
+            &right,
+            SortOptions {
+                descending: true,
+                nulls_first: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(descending(0, 0), Ordering::Less);
+        assert_eq!(descending(1, 1), Ordering::Greater);
+    }
+
+    #[test]
+    fn dict_bytes_fast_path_derefs_values_both_directions() {
+        dict_bytes_fast_path_derefs_values_both_directions_impl::<Utf8Type>();
+        dict_bytes_fast_path_derefs_values_both_directions_impl::<LargeUtf8Type>();
+        dict_bytes_fast_path_derefs_values_both_directions_impl::<BinaryType>();
+        dict_bytes_fast_path_derefs_values_both_directions_impl::<LargeBinaryType>();
+    }
+
+    fn dict_bytes_handles_key_and_value_nulls_impl<T: ByteArrayType>() {
+        // Left carries a logical null via a null KEY at row 1.
+        let left_keys = Int32Array::from(vec![Some(0_i32), None, Some(1)]);
+        let left_values = GenericByteArray::<T>::new(
+            OffsetBuffer::from_lengths([5, 6]),
+            b"applebanana".into(),
+            None,
+        );
+        let left = DictionaryArray::<Int32Type>::new(left_keys, Arc::new(left_values));
+
+        // Right carries a logical null via a null VALUE referenced at row 1.
+        let right_keys = Int32Array::from(vec![Some(0_i32), Some(1), Some(0)]);
+        let right_values = GenericByteArray::<T>::new(
+            OffsetBuffer::from_lengths([5, 0]),
+            b"apple".into(),
+            Some(NullBuffer::from(vec![true, false])),
+        );
+        let right = DictionaryArray::<Int32Type>::new(right_keys, Arc::new(right_values));
+
+        let cmp = make_comparator(&left, &right, SortOptions::default()).unwrap();
+        assert_eq!(cmp(0, 0), Ordering::Equal); // apple vs apple
+        assert_eq!(cmp(1, 0), Ordering::Less); // null-key < apple (nulls_first)
+        assert_eq!(cmp(0, 1), Ordering::Greater); // apple > null-value (nulls_first)
+        assert_eq!(cmp(1, 1), Ordering::Equal); // null-key vs null-value
+    }
+
+    #[test]
+    fn dict_bytes_handles_key_and_value_nulls() {
+        dict_bytes_handles_key_and_value_nulls_impl::<Utf8Type>();
+        dict_bytes_handles_key_and_value_nulls_impl::<LargeUtf8Type>();
+        dict_bytes_handles_key_and_value_nulls_impl::<BinaryType>();
+        dict_bytes_handles_key_and_value_nulls_impl::<LargeBinaryType>();
+    }
+
+    fn dict_bytes_sort_options_with_nulls_impl<T: ByteArrayType>() {
+        // row 1 is null on both sides (null key on left, null value on right)
+        let null_row_on_left = Int32Array::from(vec![Some(0_i32), None, Some(1)]);
+        let left_values = GenericByteArray::<T>::new(
+            OffsetBuffer::from_lengths([5, 6]),
+            b"applebanana".into(),
+            None,
+        );
+        let left = DictionaryArray::<Int32Type>::new(null_row_on_left, Arc::new(left_values));
+
+        let keys_pointing_at_null = Int32Array::from(vec![Some(0_i32), Some(1), Some(0)]);
+        let right_values = GenericByteArray::<T>::new(
+            OffsetBuffer::from_lengths([6, 0]),
+            b"cherry".into(),
+            Some(NullBuffer::from(vec![true, false])),
+        );
+        let right =
+            DictionaryArray::<Int32Type>::new(keys_pointing_at_null, Arc::new(right_values));
+
+        let asc_nulls_last = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let desc_nulls_first = SortOptions {
+            descending: true,
+            nulls_first: true,
+        };
+        let desc_nulls_last = SortOptions {
+            descending: true,
+            nulls_first: false,
+        };
+
+        let cmp = make_comparator(&left, &right, asc_nulls_last).unwrap();
+        assert_eq!(cmp(0, 0), Ordering::Less); // apple < cherry
+        assert_eq!(cmp(1, 0), Ordering::Greater); // null > cherry (nulls last)
+        assert_eq!(cmp(0, 1), Ordering::Less); // apple < null (nulls last)
+        assert_eq!(cmp(1, 1), Ordering::Equal);
+
+        let cmp = make_comparator(&left, &right, desc_nulls_first).unwrap();
+        assert_eq!(cmp(0, 0), Ordering::Greater); // apple vs cherry reversed
+        assert_eq!(cmp(1, 0), Ordering::Less); // null < cherry (nulls first, unaffected by desc)
+        assert_eq!(cmp(0, 1), Ordering::Greater); // apple > null (nulls first)
+        assert_eq!(cmp(1, 1), Ordering::Equal);
+
+        let cmp = make_comparator(&left, &right, desc_nulls_last).unwrap();
+        assert_eq!(cmp(0, 0), Ordering::Greater); // apple vs cherry reversed
+        assert_eq!(cmp(1, 0), Ordering::Greater); // null > cherry (nulls last)
+        assert_eq!(cmp(0, 1), Ordering::Less); // apple < null (nulls last)
+        assert_eq!(cmp(1, 1), Ordering::Equal);
+    }
+
+    #[test]
+    fn dict_bytes_sort_options_with_nulls() {
+        dict_bytes_sort_options_with_nulls_impl::<Utf8Type>();
+        dict_bytes_sort_options_with_nulls_impl::<LargeUtf8Type>();
+        dict_bytes_sort_options_with_nulls_impl::<BinaryType>();
+        dict_bytes_sort_options_with_nulls_impl::<LargeBinaryType>();
+    }
+
+    fn dict_bytes_fast_path_panics_on_out_of_bounds_row_impl<T: ByteArrayType>() {
+        let two_row_keys = Int32Array::from(vec![0_i32, 1]);
+        let values =
+            GenericByteArray::<T>::new(OffsetBuffer::from_lengths([1, 1]), b"ab".into(), None);
+        let dict = DictionaryArray::<Int32Type>::new(two_row_keys, Arc::new(values));
+
+        let cmp = make_comparator(&dict, &dict, SortOptions::default()).unwrap();
+        cmp(2, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "index out of bounds")]
+    fn dict_utf8_fast_path_panics_on_out_of_bounds_row() {
+        dict_bytes_fast_path_panics_on_out_of_bounds_row_impl::<Utf8Type>();
+    }
+
+    #[test]
+    #[should_panic(expected = "index out of bounds")]
+    fn dict_large_utf8_fast_path_panics_on_out_of_bounds_row() {
+        dict_bytes_fast_path_panics_on_out_of_bounds_row_impl::<LargeUtf8Type>();
+    }
+
+    #[test]
+    #[should_panic(expected = "index out of bounds")]
+    fn dict_binary_fast_path_panics_on_out_of_bounds_row() {
+        dict_bytes_fast_path_panics_on_out_of_bounds_row_impl::<BinaryType>();
+    }
+
+    #[test]
+    #[should_panic(expected = "index out of bounds")]
+    fn dict_large_binary_fast_path_panics_on_out_of_bounds_row() {
+        dict_bytes_fast_path_panics_on_out_of_bounds_row_impl::<LargeBinaryType>();
+    }
+
+    #[test]
+    #[should_panic(expected = "index out of bounds")]
+    fn dict_fixed_size_binary_fast_path_panics_on_out_of_bounds_row() {
+        let two_row_keys = Int32Array::from(vec![0_i32, 1]);
+        let values = Arc::new(
+            FixedSizeBinaryArray::try_from_iter([b"aa".as_ref(), b"bb".as_ref()].into_iter())
+                .unwrap(),
+        );
+        let dict = DictionaryArray::<Int32Type>::new(two_row_keys, values);
+
+        let cmp = make_comparator(&dict, &dict, SortOptions::default()).unwrap();
+        cmp(2, 0);
+    }
+
+    #[test]
+    fn dict_fixed_size_binary_sort_options_with_nulls() {
+        let null_row_on_left = Int32Array::from(vec![Some(0_i32), None, Some(1)]);
+        let left_values =
+            FixedSizeBinaryArray::try_from_iter([b"aa".as_ref(), b"bb".as_ref()].into_iter())
+                .unwrap();
+        let left = DictionaryArray::<Int32Type>::new(null_row_on_left, Arc::new(left_values));
+
+        let keys_pointing_at_null = Int32Array::from(vec![Some(0_i32), Some(1), Some(0)]);
+        let right_values = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+            [Some(b"cc".as_ref()), None].into_iter(),
+            2,
+        )
+        .unwrap();
+        let right =
+            DictionaryArray::<Int32Type>::new(keys_pointing_at_null, Arc::new(right_values));
+
+        let asc_nulls_last = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let desc_nulls_first = SortOptions {
+            descending: true,
+            nulls_first: true,
+        };
+        let desc_nulls_last = SortOptions {
+            descending: true,
+            nulls_first: false,
+        };
+
+        let cmp = make_comparator(&left, &right, asc_nulls_last).unwrap();
+        assert_eq!(cmp(0, 0), Ordering::Less); // "aa" < "cc"
+        assert_eq!(cmp(1, 0), Ordering::Greater); // null > "cc" (nulls last)
+        assert_eq!(cmp(0, 1), Ordering::Less); // "aa" < null (nulls last)
+        assert_eq!(cmp(1, 1), Ordering::Equal);
+
+        let cmp = make_comparator(&left, &right, desc_nulls_first).unwrap();
+        assert_eq!(cmp(0, 0), Ordering::Greater); // "aa" vs "cc" reversed
+        assert_eq!(cmp(1, 0), Ordering::Less); // null < "cc" (nulls first)
+        assert_eq!(cmp(0, 1), Ordering::Greater); // "aa" > null (nulls first)
+        assert_eq!(cmp(1, 1), Ordering::Equal);
+
+        let cmp = make_comparator(&left, &right, desc_nulls_last).unwrap();
+        assert_eq!(cmp(0, 0), Ordering::Greater); // "aa" vs "cc" reversed
+        assert_eq!(cmp(1, 0), Ordering::Greater); // null > "cc" (nulls last)
+        assert_eq!(cmp(0, 1), Ordering::Less); // "aa" < null (nulls last)
+        assert_eq!(cmp(1, 1), Ordering::Equal);
     }
 
     #[test]

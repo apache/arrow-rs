@@ -415,6 +415,11 @@ pub enum DataType {
     /// has two children: key type and the second the value type. The names of the
     /// child fields may be respectively "entries", "key", and "value", but this is
     /// not enforced.
+    ///
+    /// # Requirements
+    /// - The entries [`Field`] (first argument) must be non-nullable.
+    /// - The entries field must be a [`DataType::Struct`] with exactly 2 children.
+    /// - The first child (key) must be non-nullable.
     Map(FieldRef, bool),
     /// A run-end encoding (REE) is a variation of run-length encoding (RLE). These
     /// encodings are well-suited for representing data containing sequences of the
@@ -427,6 +432,10 @@ pub enum DataType {
     ///
     /// These child arrays are prescribed the standard names of "run_ends" and "values"
     /// respectively.
+    ///
+    /// # Requirements
+    /// - The run_ends [`Field`] (first argument) must be non-nullable and of type
+    ///   [`DataType::Int16`], [`DataType::Int32`], or [`DataType::Int64`].
     RunEndEncoded(FieldRef, FieldRef),
 }
 
@@ -827,9 +836,11 @@ impl DataType {
             (DataType::Struct(f1), DataType::Struct(f2)) => f1.contains(f2),
             (DataType::Union(f1, s1), DataType::Union(f2, s2)) => {
                 s1 == s2
-                    && f1
-                        .iter()
-                        .all(|f1| f2.iter().any(|f2| f1.0 == f2.0 && f1.1.contains(f2.1)))
+                    && f2.iter().all(|(other_id, other_field)| {
+                        f1.iter().any(|(self_id, self_field)| {
+                            self_id == other_id && self_field.contains(other_field)
+                        })
+                    })
             }
             (DataType::Dictionary(k1, v1), DataType::Dictionary(k2, v2)) => {
                 k1.contains(k2) && v1.contains(v2)
@@ -903,6 +914,67 @@ pub const DECIMAL_DEFAULT_SCALE: i8 = 10;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_union_contains_subset() {
+        for mode in [UnionMode::Sparse, UnionMode::Dense] {
+            let number = Field::new("number", DataType::Int32, false);
+            let text = Field::new("text", DataType::Utf8, false);
+            let superset = DataType::Union(
+                UnionFields::try_new([0, 1], [number.clone(), text.clone()]).unwrap(),
+                mode,
+            );
+            let subset =
+                DataType::Union(UnionFields::try_new([0], [number.clone()]).unwrap(), mode);
+            let reordered =
+                DataType::Union(UnionFields::try_new([1, 0], [text, number]).unwrap(), mode);
+            let empty = DataType::Union(UnionFields::empty(), mode);
+
+            assert!(superset.contains(&subset));
+            assert!(!subset.contains(&superset));
+            assert!(superset.contains(&superset));
+            assert!(superset.contains(&reordered));
+            assert!(reordered.contains(&superset));
+            assert!(superset.contains(&empty));
+            assert!(!empty.contains(&superset));
+            assert!(empty.contains(&empty));
+        }
+    }
+
+    #[test]
+    fn test_union_contains_field_compatibility() {
+        for mode in [UnionMode::Sparse, UnionMode::Dense] {
+            let field = Field::new("number", DataType::Int32, false);
+            let union = DataType::Union(UnionFields::try_new([0], [field.clone()]).unwrap(), mode);
+            let nullable = DataType::Union(
+                UnionFields::try_new([0], [field.clone().with_nullable(true)]).unwrap(),
+                mode,
+            );
+            assert!(nullable.contains(&union));
+            assert!(!union.contains(&nullable));
+
+            let different_id =
+                DataType::Union(UnionFields::try_new([1], [field.clone()]).unwrap(), mode);
+            assert!(!union.contains(&different_id));
+            assert!(!different_id.contains(&union));
+
+            let different_type = DataType::Union(
+                UnionFields::try_new([0], [field.clone().with_data_type(DataType::Utf8)]).unwrap(),
+                mode,
+            );
+            assert!(!union.contains(&different_type));
+            assert!(!different_type.contains(&union));
+
+            let other_mode = match mode {
+                UnionMode::Sparse => UnionMode::Dense,
+                UnionMode::Dense => UnionMode::Sparse,
+            };
+            let different_mode =
+                DataType::Union(UnionFields::try_new([0], [field]).unwrap(), other_mode);
+            assert!(!union.contains(&different_mode));
+            assert!(!different_mode.contains(&union));
+        }
+    }
 
     #[test]
     #[cfg(feature = "serde")]

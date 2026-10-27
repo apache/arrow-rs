@@ -507,7 +507,7 @@ fn get_all_types() -> Vec<DataType> {
         Int8,
         Int16,
         Int32,
-        UInt64,
+        Int64,
         UInt8,
         UInt16,
         UInt32,

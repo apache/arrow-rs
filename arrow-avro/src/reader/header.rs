@@ -84,7 +84,7 @@ impl Header {
     /// Returns an iterator over the meta keys in this header
     pub fn metadata(&self) -> impl Iterator<Item = (&[u8], &[u8])> {
         let mut last = 0;
-        self.meta_offsets.chunks_exact(2).map(move |w| {
+        self.meta_offsets.as_chunks::<2>().0.iter().map(move |w| {
             let start = last;
             last = w[1];
             (&self.meta_buf[start..w[0]], &self.meta_buf[w[0]..w[1]])

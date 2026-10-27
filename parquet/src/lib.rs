@@ -137,6 +137,13 @@
 //! [Dremel]: https://research.google/pubs/pub36632/
 //! [Logical Types]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md
 //! [object_store]: https://docs.rs/object_store/latest/object_store/
+//!
+//! # Platform Support
+//!
+//! Only little-endian platforms are officially supported and tested in CI.
+//! Big-endian platforms are not tested in CI and may not work correctly.
+//! Fixes for big-endian platforms are welcome and handled on a best-effort basis,
+//! but compatibility is not guaranteed.
 
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/apache/parquet-format/25f05e73d8cd7f5c83532ce51cb4f4de8ba5f2a2/logo/parquet-logos_1.svg",
@@ -144,29 +151,6 @@
 )]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(missing_docs)]
-/// Defines a an item with an experimental public API
-///
-/// The module will not be documented, and will only be public if the
-/// experimental feature flag is enabled
-///
-/// Experimental components have no stability guarantees
-#[cfg(feature = "experimental")]
-macro_rules! experimental {
-    ($(#[$meta:meta])* $vis:vis mod $module:ident) => {
-        #[doc(hidden)]
-        $(#[$meta])*
-        pub mod $module;
-    }
-}
-
-#[cfg(not(feature = "experimental"))]
-macro_rules! experimental {
-    ($(#[$meta:meta])* $vis:vis mod $module:ident) => {
-        $(#[$meta])*
-        $vis mod $module;
-    }
-}
-
 #[cfg(all(
     feature = "flate2",
     not(any(feature = "flate2-zlib-rs", feature = "flate2-rust_backend"))
@@ -189,19 +173,36 @@ use std::ops::Range;
 #[doc(hidden)]
 pub use self::encodings::{decoding, encoding};
 
-experimental!(#[macro_use] mod util);
+// Keep these module declarations explicit: rustfmt does not discover modules declared by macros.
+// See https://github.com/rust-lang/rustfmt/issues/3253
+#[cfg(feature = "experimental")]
+#[doc(hidden)]
+#[macro_use]
+pub mod util;
+#[cfg(not(feature = "experimental"))]
+#[macro_use]
+mod util;
 
 pub use util::utf8;
 
 #[cfg(feature = "arrow")]
 pub mod arrow;
-pub mod column;
-experimental!(mod compression);
-experimental!(mod encodings);
 pub mod bloom_filter;
+pub mod column;
+#[cfg(feature = "experimental")]
+#[doc(hidden)]
+pub mod compression;
+#[cfg(not(feature = "experimental"))]
+mod compression;
+#[cfg(feature = "experimental")]
+#[doc(hidden)]
+pub mod encodings;
+#[cfg(not(feature = "experimental"))]
+mod encodings;
 
 #[cfg(feature = "encryption")]
-experimental!(pub mod encryption);
+#[cfg_attr(feature = "experimental", doc(hidden))]
+pub mod encryption;
 
 pub mod file;
 pub mod record;
@@ -225,6 +226,7 @@ pub enum DecodeResult<T: Debug> {
     Finished,
 }
 
+#[cfg_attr(feature = "experimental", doc(hidden))]
+pub mod geospatial;
 #[cfg(feature = "variant_experimental")]
 pub mod variant;
-experimental!(pub mod geospatial);

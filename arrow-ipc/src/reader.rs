@@ -63,7 +63,9 @@ fn read_buffer(
     decompression_context: &mut DecompressionContext,
 ) -> Result<Buffer, ArrowError> {
     let start_offset = buf.offset() as usize;
-    let buf_data = a_data.slice_with_length(start_offset, buf.length() as usize);
+    let buf_data = a_data
+        .try_slice_with_length(start_offset, buf.length() as usize)
+        .map_err(|e| ArrowError::IpcError(e.to_string()))?;
     // corner case: empty buffer
     match (buf_data.is_empty(), compression_codec) {
         (true, _) | (_, None) => Ok(buf_data),
@@ -72,6 +74,7 @@ fn read_buffer(
         }
     }
 }
+
 impl RecordBatchDecoder<'_> {
     /// Coordinates reading arrays based on data types.
     ///
@@ -201,13 +204,19 @@ impl RecordBatchDecoder<'_> {
                     self.next_buffer()?;
                 }
 
-                let type_ids: ScalarBuffer<i8> =
-                    self.next_buffer()?.slice_with_length(0, len).into();
+                let type_ids: ScalarBuffer<i8> = self
+                    .next_buffer()?
+                    .try_slice_with_length(0, len)
+                    .map_err(|e| ArrowError::IpcError(e.to_string()))?
+                    .into();
 
                 let value_offsets = match mode {
                     UnionMode::Dense => {
-                        let offsets: ScalarBuffer<i32> =
-                            self.next_buffer()?.slice_with_length(0, len * 4).into();
+                        let offsets: ScalarBuffer<i32> = self
+                            .next_buffer()?
+                            .try_slice_with_length(0, len * 4)
+                            .map_err(|e| ArrowError::IpcError(e.to_string()))?
+                            .into();
                         Some(offsets)
                     }
                     UnionMode::Sparse => None,
@@ -369,6 +378,17 @@ impl RecordBatchDecoder<'_> {
         let skip_validation = self.skip_validation.get();
 
         let nulls = if null_count > 0 {
+            if !skip_validation {
+                // Check before constructing the BooleanBuffer, which would otherwise panic.
+                let needed_len = len.div_ceil(8);
+                if null_buffer.len() < needed_len {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "null_bit_buffer size too small. got {} needed {}",
+                        null_buffer.len(),
+                        needed_len
+                    )));
+                }
+            }
             let validity_buffer = BooleanBuffer::new(null_buffer, 0, len);
             let null_buffer = if skip_validation {
                 // safety: flag can only be set via unsafe code
@@ -923,9 +943,14 @@ fn get_dictionary_values(
             let value = value_type.as_ref().clone();
             let schema = Schema::new(vec![Field::new("", value, true)]);
             // Read a single column
+            let Some(data) = batch.data() else {
+                return Err(ArrowError::ParseError(
+                    "Dictionary batch is missing its data".to_string(),
+                ));
+            };
             let record_batch = RecordBatchDecoder::try_new(
                 buf,
-                batch.data().unwrap(),
+                data,
                 Arc::new(schema),
                 dictionaries_by_id,
                 metadata,
@@ -2045,8 +2070,16 @@ mod tests {
         let struct_data_type = DataType::Struct(struct_fields);
 
         let run_encoded_data_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Int16, false)),
-            Arc::new(Field::new("values", DataType::Int32, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int16,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                true,
+            )),
         );
 
         // define schema
@@ -2198,6 +2231,50 @@ mod tests {
     }
 
     #[test]
+    fn test_invalid_dictionary_batch_without_data() {
+        use crate::r#gen::Message::*;
+        use flatbuffers::FlatBufferBuilder;
+
+        let schema = Schema::new(vec![Field::new(
+            "col",
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
+            true,
+        )]);
+
+        // DictionaryBatch.data is optional in the flatbuffer grammar and
+        // required by the format
+        let mut fbb = FlatBufferBuilder::new();
+        let batch_offset = DictionaryBatch::create(
+            &mut fbb,
+            &DictionaryBatchArgs {
+                id: 0,
+                data: None,
+                isDelta: false,
+            },
+        );
+        fbb.finish_minimal(batch_offset);
+        let batch_bytes = fbb.finished_data().to_vec();
+        let batch = flatbuffers::root::<DictionaryBatch>(&batch_bytes).unwrap();
+
+        let data_buffer = Buffer::from(vec![0u8; 0]);
+        let mut dictionaries: HashMap<i64, ArrayRef> = HashMap::new();
+
+        let err = read_dictionary(
+            &data_buffer,
+            batch,
+            &schema,
+            &mut dictionaries,
+            &MetadataVersion::V5,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Parser error: Dictionary batch is missing its data"
+        );
+    }
+
+    #[test]
     fn test_missing_buffer_metadata_error() {
         use crate::r#gen::Message::*;
         use flatbuffers::FlatBufferBuilder;
@@ -2243,6 +2320,88 @@ mod tests {
                 assert_eq!(msg, "Buffer count mismatched with metadata");
             }
             other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_read_record_batch_buffer_out_of_bounds() {
+        use crate::r#gen::Message::*;
+        use flatbuffers::FlatBufferBuilder;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Int32, false)]));
+        let body = Buffer::from(vec![0u8; 8]);
+        let mut fbb = FlatBufferBuilder::new();
+        let nodes = fbb.create_vector(&[FieldNode::new(2, 0)]);
+        // Empty validity buffer followed by two Int32 values whose range exceeds the body.
+        let buffers = fbb.create_vector(&[crate::Buffer::new(0, 0), crate::Buffer::new(4, 8)]);
+        let batch = RecordBatch::create(
+            &mut fbb,
+            &RecordBatchArgs {
+                length: 2,
+                nodes: Some(nodes),
+                buffers: Some(buffers),
+                ..Default::default()
+            },
+        );
+        fbb.finish_minimal(batch);
+        let batch = flatbuffers::root::<RecordBatch>(fbb.finished_data()).unwrap();
+
+        read_record_batch(
+            &body,
+            batch,
+            schema,
+            &HashMap::new(),
+            None,
+            &MetadataVersion::V5,
+        )
+        .expect_err("invalid IPC buffer range must return an error");
+    }
+
+    #[test]
+    fn test_union_short_buffers() {
+        use crate::r#gen::Message::*;
+
+        let fields = UnionFields::from_fields([Field::new("child", DataType::Null, true)]);
+        // All buffer ranges fit in the body. Only the union length is inconsistent:
+        // sparse has one type id for two rows, dense has one offset for two rows
+        let cases = [
+            (UnionMode::Sparse, vec![crate::Buffer::new(0, 1)]),
+            (
+                UnionMode::Dense,
+                vec![crate::Buffer::new(0, 2), crate::Buffer::new(8, 4)],
+            ),
+        ];
+        for (mode, buffers) in cases {
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "union",
+                DataType::Union(fields.clone(), mode),
+                false,
+            )]));
+
+            let mut fbb = flatbuffers::FlatBufferBuilder::new();
+            let nodes = fbb.create_vector(&[FieldNode::new(2, 0), FieldNode::new(2, 2)]);
+            let buffers = fbb.create_vector(&buffers);
+            let batch = RecordBatch::create(
+                &mut fbb,
+                &RecordBatchArgs {
+                    length: 2,
+                    nodes: Some(nodes),
+                    buffers: Some(buffers),
+                    ..Default::default()
+                },
+            );
+            fbb.finish_minimal(batch);
+            let batch = flatbuffers::root::<RecordBatch>(fbb.finished_data()).unwrap();
+
+            read_record_batch(
+                &Buffer::from(vec![0u8; 16]),
+                batch,
+                schema,
+                &HashMap::new(),
+                None,
+                &MetadataVersion::V5,
+            )
+            .expect_err("a short union buffer should return an error");
         }
     }
 
@@ -3535,6 +3694,54 @@ mod tests {
         let roundtrip_batch = reader.next().unwrap().unwrap();
 
         assert_eq!(batch, roundtrip_batch);
+    }
+
+    #[test]
+    fn test_stream_reader_rejects_short_validity_buffer() {
+        // Reproduce #7124: serialize an Int32Array with too few validity bits.
+        let data = ArrayDataBuilder::new(DataType::Int32)
+            .len(8000)
+            .add_buffer(ScalarBuffer::<i32>::from_iter(0..8000).into())
+            .nulls(Some(NullBuffer::from(&[true, false, true, false])));
+        let array: ArrayRef = unsafe { Arc::new(Int32Array::from(data.build_unchecked())) };
+        let batch = RecordBatch::try_from_iter([("a", array)]).unwrap();
+
+        let mut stream = Vec::new();
+        let mut writer =
+            crate::writer::StreamWriter::try_new(&mut stream, &batch.schema()).unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+
+        let mut reader = StreamReader::try_new(Cursor::new(stream), None).unwrap();
+        let err = reader.next().unwrap().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: null_bit_buffer size too small. got 1 needed 1000"
+        );
+    }
+
+    #[test]
+    fn test_stream_reader_rejects_short_struct_validity_buffer() {
+        // Serialize a StructArray with too few validity bits.
+        let fields = Fields::from(vec![Field::new("b", DataType::Int32, false)]);
+        let child: ArrayRef = Arc::new(Int32Array::from_iter_values(0..8000));
+        let nulls = NullBuffer::from(&[true, false, true, false]);
+        let array: ArrayRef =
+            unsafe { Arc::new(StructArray::new_unchecked(fields, vec![child], Some(nulls))) };
+        let batch = RecordBatch::try_from_iter([("a", array)]).unwrap();
+
+        let mut stream = Vec::new();
+        let mut writer =
+            crate::writer::StreamWriter::try_new(&mut stream, &batch.schema()).unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+
+        let mut reader = StreamReader::try_new(Cursor::new(stream), None).unwrap();
+        let err = reader.next().unwrap().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: null_bit_buffer size too small. got 1 needed 1000"
+        );
     }
 
     #[test]

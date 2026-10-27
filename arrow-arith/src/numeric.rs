@@ -28,7 +28,7 @@ use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, IntervalDayTime, IntervalMonthDayNano};
 use arrow_schema::{ArrowError, DataType, IntervalUnit, TimeUnit};
-use num_traits::ToPrimitive;
+use num_traits::{CheckedMul, ToPrimitive};
 
 use crate::arity::{binary, try_binary};
 
@@ -982,8 +982,7 @@ fn scaled_div<T: DecimalType>(
     let dividend = abs_checked::<T>(l)?;
     let divisor = abs_checked::<T>(r)?;
 
-    let mut quotient = dividend.div_checked(divisor)?;
-    let mut remainder = dividend.mod_checked(divisor)?;
+    let (mut quotient, mut remainder) = dividend.div_rem_checked(divisor)?;
     for _ in 0..mul_pow {
         // `remainder * 10` overflows for divisors near `T::Native::MAX`, so add the remainder
         // ten times and take the divisor off whenever the running sum reaches it.
@@ -1026,7 +1025,10 @@ fn decimal_op<T: DecimalType>(
     l_s: bool,
     r: &dyn Array,
     r_s: bool,
-) -> Result<ArrayRef, ArrowError> {
+) -> Result<ArrayRef, ArrowError>
+where
+    T::Native: CheckedMul,
+{
     let l = l.as_primitive::<T>();
     let r = r.as_primitive::<T>();
 
@@ -1042,14 +1044,13 @@ fn decimal_op<T: DecimalType>(
     // https://cwiki.apache.org/confluence/download/attachments/27362075/Hive_Decimal_Precision_Scale_Support.pdf
     let array: PrimitiveArray<T> = match op {
         Op::Add | Op::AddWrapping | Op::Sub | Op::SubWrapping => {
+            let (p1, s1, p2, s2) = (*p1 as i16, *s1 as i16, *p2 as i16, *s2 as i16);
             // max(s1, s2)
-            let result_scale = *s1.max(s2);
+            let result_scale = s1.max(s2);
 
             // max(s1, s2) + max(p1-s1, p2-s2) + 1
             let result_precision =
-                (result_scale.saturating_add((*p1 as i8 - s1).max(*p2 as i8 - s2)) as u8)
-                    .saturating_add(1)
-                    .min(T::MAX_PRECISION);
+                (result_scale + (p1 - s1).max(p2 - s2) + 1).min(T::MAX_PRECISION as i16) as u8;
 
             let l_mul = T::Native::usize_as(10).pow_checked((result_scale - s1) as _)?;
             let r_mul = T::Native::usize_as(10).pow_checked((result_scale - s2) as _)?;
@@ -1082,12 +1083,12 @@ fn decimal_op<T: DecimalType>(
                 }
                 _ => unreachable!(),
             }
-            .with_precision_and_scale(result_precision, result_scale)?
+            .with_precision_and_scale(result_precision, result_scale as i8)?
         }
         Op::Mul | Op::MulWrapping => {
             let result_precision = p1.saturating_add(p2 + 1).min(T::MAX_PRECISION);
-            let result_scale = s1.saturating_add(*s2);
-            if result_scale > T::MAX_SCALE {
+            let result_scale = *s1 as i16 + *s2 as i16;
+            if result_scale > T::MAX_SCALE as i16 {
                 // SQL standard says that if the resulting scale of a multiply operation goes
                 // beyond the maximum, rounding is not acceptable and thus an error occurs
                 return Err(ArrowError::InvalidArgumentError(format!(
@@ -1097,6 +1098,14 @@ fn decimal_op<T: DecimalType>(
                     T::MAX_SCALE
                 )));
             }
+            let result_scale = i8::try_from(result_scale).map_err(|_| {
+                ArrowError::InvalidArgumentError(format!(
+                    "Output scale of {} {op} {} would be less than min scale of {}",
+                    l.data_type(),
+                    r.data_type(),
+                    i8::MIN
+                ))
+            })?;
 
             try_op!(l, l_s, r, r_s, l.mul_checked(r))
                 .with_precision_and_scale(result_precision, result_scale)?
@@ -1109,7 +1118,10 @@ fn decimal_op<T: DecimalType>(
             let mul_pow = result_scale - s1 + s2;
 
             // p1 - s1 + s2 + result_scale
-            let result_precision = (mul_pow.saturating_add(*p1 as i8) as u8).min(T::MAX_PRECISION);
+            // Precision must be positive and at least the output scale.
+            let result_precision = (mul_pow as i16 + *p1 as i16)
+                .clamp(result_scale.max(1) as i16, T::MAX_PRECISION as i16)
+                as u8;
 
             let (l_mul, r_mul) = match mul_pow.cmp(&0) {
                 Ordering::Greater => (
@@ -1128,24 +1140,24 @@ fn decimal_op<T: DecimalType>(
                 l_s,
                 r,
                 r_s,
-                match l.mul_checked(l_mul) {
-                    Ok(scaled) => scaled.div_checked(r.mul_checked(r_mul)?),
-                    Err(_) => scaled_div::<T>(l, r, mul_pow),
+                match l.checked_mul(&l_mul) {
+                    Some(scaled) => scaled.div_checked(r.mul_checked(r_mul)?),
+                    None => scaled_div::<T>(l, r, mul_pow),
                 }
             )
             .with_precision_and_scale(result_precision, result_scale)?
         }
 
         Op::Rem => {
+            let (p1, s1, p2, s2) = (*p1 as i16, *s1 as i16, *p2 as i16, *s2 as i16);
             // max(s1, s2)
-            let result_scale = *s1.max(s2);
+            let result_scale = s1.max(s2);
             // min(p1-s1, p2 -s2) + max( s1,s2 )
             let result_precision =
-                (result_scale.saturating_add((*p1 as i8 - s1).min(*p2 as i8 - s2)) as u8)
-                    .min(T::MAX_PRECISION);
+                (result_scale + (p1 - s1).min(p2 - s2)).min(T::MAX_PRECISION as i16) as u8;
 
-            let l_mul = T::Native::usize_as(10).pow_wrapping((result_scale - s1) as _);
-            let r_mul = T::Native::usize_as(10).pow_wrapping((result_scale - s2) as _);
+            let l_mul = T::Native::usize_as(10).pow_checked((result_scale - s1) as _)?;
+            let r_mul = T::Native::usize_as(10).pow_checked((result_scale - s2) as _)?;
 
             try_op!(
                 l,
@@ -1154,7 +1166,7 @@ fn decimal_op<T: DecimalType>(
                 r_s,
                 l.mul_checked(l_mul)?.mod_checked(r.mul_checked(r_mul)?)
             )
-            .with_precision_and_scale(result_precision, result_scale)?
+            .with_precision_and_scale(result_precision, result_scale as i8)?
         }
     };
 
@@ -1532,6 +1544,216 @@ mod tests {
         assert_eq!(err, "Divide by zero error");
         let err = rem(&a, &b).unwrap_err().to_string();
         assert_eq!(err, "Divide by zero error");
+    }
+
+    #[test]
+    fn test_decimal256_add_sub_negative_scale_metadata() {
+        let a = Decimal256Array::from(vec![Some(i256::ONE), Some(i256::MINUS_ONE), None])
+            .with_precision_and_scale(76, -52)
+            .unwrap();
+        let b = Decimal256Array::from(vec![i256::from_i128(2), i256::ONE, i256::ONE])
+            .with_precision_and_scale(76, -52)
+            .unwrap();
+        let expected =
+            Decimal256Array::from(vec![Some(i256::from_i128(3)), Some(i256::ZERO), None])
+                .with_precision_and_scale(76, -52)
+                .unwrap();
+        assert_eq!(add(&a, &b).unwrap().as_ref(), &expected);
+
+        let expected =
+            Decimal256Array::from(vec![Some(i256::MINUS_ONE), Some(i256::from_i128(-2)), None])
+                .with_precision_and_scale(76, -52)
+                .unwrap();
+        assert_eq!(sub(&a, &b).unwrap().as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_decimal256_add_sub_minimum_scale() {
+        let a = Decimal256Array::from(vec![i256::ONE])
+            .with_precision_and_scale(20, i8::MIN)
+            .unwrap();
+        let b = Decimal256Array::from(vec![i256::from_i128(2)])
+            .with_precision_and_scale(20, i8::MIN)
+            .unwrap();
+        let expected = Decimal256Array::from(vec![i256::from_i128(3)])
+            .with_precision_and_scale(21, i8::MIN)
+            .unwrap();
+        assert_eq!(add(&a, &b).unwrap().as_ref(), &expected);
+
+        let expected = Decimal256Array::from(vec![i256::MINUS_ONE])
+            .with_precision_and_scale(21, i8::MIN)
+            .unwrap();
+        assert_eq!(sub(&a, &b).unwrap().as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_decimal256_remainder_negative_scale_metadata() {
+        let a = Decimal256Array::from(vec![Some(i256::ONE), Some(i256::MINUS_ONE), None])
+            .with_precision_and_scale(76, -52)
+            .unwrap();
+        let b = Decimal256Array::from(vec![i256::from_i128(2), i256::ONE, i256::ONE])
+            .with_precision_and_scale(76, -52)
+            .unwrap();
+        let expected = Decimal256Array::from(vec![Some(i256::ONE), Some(i256::ZERO), None])
+            .with_precision_and_scale(76, -52)
+            .unwrap();
+        assert_eq!(rem(&a, &b).unwrap().as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_decimal256_adjacent_minimum_scales() {
+        let a = Decimal256Array::from(vec![i256::ONE])
+            .with_precision_and_scale(20, i8::MIN)
+            .unwrap();
+        let b = Decimal256Array::from(vec![i256::from_i128(2)])
+            .with_precision_and_scale(20, i8::MIN + 1)
+            .unwrap();
+        let expected = Decimal256Array::from(vec![i256::from_i128(12)])
+            .with_precision_and_scale(22, -127)
+            .unwrap();
+        assert_eq!(add(&a, &b).unwrap().as_ref(), &expected);
+
+        let expected = Decimal256Array::from(vec![i256::from_i128(8)])
+            .with_precision_and_scale(22, -127)
+            .unwrap();
+        assert_eq!(sub(&a, &b).unwrap().as_ref(), &expected);
+
+        let expected = Decimal256Array::from(vec![i256::ZERO])
+            .with_precision_and_scale(20, -127)
+            .unwrap();
+        assert_eq!(rem(&a, &b).unwrap().as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_decimal256_extreme_scale_difference_overflow() {
+        let a = Decimal256Array::from(vec![i256::ONE])
+            .with_precision_and_scale(20, i8::MIN)
+            .unwrap();
+        let b = Decimal256Array::from(vec![i256::from_i128(2)])
+            .with_precision_and_scale(76, 76)
+            .unwrap();
+        let expected = "Arithmetic overflow: Overflow happened on: 10 ^ 204";
+        assert_eq!(add(&a, &b).unwrap_err().to_string(), expected);
+        assert_eq!(sub(&a, &b).unwrap_err().to_string(), expected);
+        assert_eq!(rem(&a, &b).unwrap_err().to_string(), expected);
+    }
+
+    #[test]
+    fn test_decimal256_multiply_minimum_scale() {
+        let a = Decimal256Array::from(vec![i256::ONE])
+            .with_precision_and_scale(76, -64)
+            .unwrap();
+        let expected = Decimal256Array::from(vec![i256::ONE])
+            .with_precision_and_scale(76, i8::MIN)
+            .unwrap();
+        assert_eq!(mul(&a, &a).unwrap().as_ref(), &expected);
+
+        let b = a.clone().with_precision_and_scale(76, -65).unwrap();
+        assert_eq!(
+            mul(&a, &b).unwrap_err().to_string(),
+            "Invalid argument error: Output scale of Decimal256(76, -64) * Decimal256(76, -65) would be less than min scale of -128"
+        );
+    }
+
+    #[test]
+    fn test_decimal_div_precision_at_least_scale() {
+        fn check<T: DecimalType>()
+        where
+            T::Native: From<i32>,
+        {
+            let a: PrimitiveArray<T> = [Some(1), Some(-1), Some(0), None]
+                .into_iter()
+                .map(|v| v.map(T::Native::from))
+                .collect();
+            let a = a.with_precision_and_scale(1, 1).unwrap();
+            for (scale, coefficient) in [(0, 10000), (-1, 1000), (-4, 1), (-5, 0), (-6, 0)] {
+                let b = PrimitiveArray::<T>::from_iter_values(
+                    [1, 1, 1, 0].into_iter().map(T::Native::from),
+                )
+                .with_precision_and_scale(1, scale)
+                .unwrap();
+                let expected: PrimitiveArray<T> =
+                    [Some(coefficient), Some(-coefficient), Some(0), None]
+                        .into_iter()
+                        .map(|v| v.map(T::Native::from))
+                        .collect();
+                let expected = expected.with_precision_and_scale(5, 5).unwrap();
+                assert_eq!(div(&a, &b).unwrap().as_ref(), &expected);
+            }
+        }
+        check::<Decimal32Type>();
+        check::<Decimal64Type>();
+        check::<Decimal128Type>();
+        check::<Decimal256Type>();
+    }
+
+    #[test]
+    fn test_decimal_div_precision_at_least_one() {
+        fn check<T: DecimalType>()
+        where
+            T::Native: From<i32>,
+        {
+            for scale in [-4, -5] {
+                let a: PrimitiveArray<T> = [Some(1), Some(-1), Some(0), None]
+                    .into_iter()
+                    .map(|v| v.map(T::Native::from))
+                    .collect();
+                let a = a.with_precision_and_scale(1, scale).unwrap();
+                for (divisor_scale, coefficient) in [(-4, 1), (-5, 0), (-6, 0)] {
+                    let b = PrimitiveArray::<T>::from_iter_values(
+                        [1, 1, 1, 0].into_iter().map(T::Native::from),
+                    )
+                    .with_precision_and_scale(1, divisor_scale)
+                    .unwrap();
+                    let expected: PrimitiveArray<T> =
+                        [Some(coefficient), Some(-coefficient), Some(0), None]
+                            .into_iter()
+                            .map(|v| v.map(T::Native::from))
+                            .collect();
+                    let expected = expected.with_precision_and_scale(1, scale + 4).unwrap();
+                    assert_eq!(div(&a, &b).unwrap().as_ref(), &expected);
+                }
+            }
+        }
+        check::<Decimal32Type>();
+        check::<Decimal64Type>();
+        check::<Decimal128Type>();
+        check::<Decimal256Type>();
+    }
+
+    #[test]
+    fn test_decimal_div_scaling_overflow_boundary() {
+        // `div` scales `l` by 10^6, which overflows just past `MAX / 10^6` and `MIN / 10^6`.
+        // Dividing by 10^6 returns each value, on either side of the boundary.
+        fn check<T: DecimalType>() {
+            let one = T::Native::ONE;
+            let pow = T::Native::usize_as(1_000_000);
+            let max = T::Native::MAX_TOTAL_ORDER.div_wrapping(pow);
+            let min = T::Native::MIN_TOTAL_ORDER.div_wrapping(pow);
+            let values = [
+                max,
+                max.add_wrapping(one),
+                min,
+                min.sub_wrapping(one),
+                T::Native::MAX_TOTAL_ORDER,
+                T::Native::MIN_TOTAL_ORDER.add_wrapping(one),
+            ];
+            let a = PrimitiveArray::<T>::from_iter_values(values)
+                .with_precision_and_scale(T::MAX_PRECISION, 2)
+                .unwrap();
+            for (divisor, negate) in [(pow, false), (pow.neg_wrapping(), true)] {
+                let b = PrimitiveArray::<T>::from_iter_values([divisor])
+                    .with_precision_and_scale(T::MAX_PRECISION, 2)
+                    .unwrap();
+                let result = div(&a, &Scalar::new(b)).unwrap();
+                let expected = values.map(|v| if negate { v.neg_wrapping() } else { v });
+                assert_eq!(result.as_primitive::<T>().values().as_ref(), expected);
+            }
+        }
+        check::<Decimal32Type>();
+        check::<Decimal64Type>();
+        check::<Decimal128Type>();
+        check::<Decimal256Type>();
     }
 
     #[test]
@@ -2639,5 +2861,30 @@ mod tests {
     fn test_date_month_day_nano_operations() {
         test_month_day_nano_ops!(Date32Type, date_to_days);
         test_month_day_nano_ops!(Date64Type, date_to_millis);
+    }
+
+    #[test]
+    fn test_date_sub_interval_min_months() {
+        // Subtracting i32::MIN months requires negating i32::MIN, which
+        // overflows i32: the date kernels must return the Date arithmetic
+        // overflow error instead of panicking in debug builds
+        // https://github.com/apache/arrow-rs/issues/11600
+        let dates: [ArrayRef; 2] = [
+            Arc::new(Date32Array::from(vec![0])),
+            Arc::new(Date64Array::from(vec![0])),
+        ];
+        let year_month = IntervalYearMonthArray::from(vec![i32::MIN]);
+        let month_day_nano =
+            IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNano::new(i32::MIN, 0, 0)]);
+        for dates in &dates {
+            assert_eq!(
+                sub(dates, &year_month).unwrap_err().to_string(),
+                "Compute error: Date arithmetic overflow: 0 - -2147483648 months"
+            );
+            assert_eq!(
+                sub(dates, &month_day_nano).unwrap_err().to_string(),
+                "Compute error: Date arithmetic overflow: 0 - IntervalMonthDayNano { months: -2147483648, days: 0, nanoseconds: 0 }"
+            );
+        }
     }
 }

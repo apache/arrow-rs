@@ -1,0 +1,174 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+name: CI
+
+on:
+  pull_request:
+  merge_group:
+    types: [checks_requested]
+  push:
+    # Forks need CI on feature branches as well as main. The selector job
+    # ignores upstream feature-branch pushes, which are tested by their PRs.
+    branches-ignore:
+      - asf-site
+      # Merge queue commits are validated by the merge_group event, not push.
+      # A skipped Required Checks job on a queue-branch push can satisfy the gate early.
+      - 'gh-readonly-queue/**'
+  workflow_dispatch:
+
+concurrency:
+  # Fork pushes and manual runs share a branch group so newer runs replace both.
+  group: ${{ github.repository }}-${{ github.repository != 'apache/arrow-rs' && github.event_name == 'workflow_dispatch' && 'push' || github.event_name }}-${{ github.event.pull_request.number || (github.repository != 'apache/arrow-rs' && github.ref) || github.sha }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Select and validate CI suites
+    if: github.event_name != 'push' || github.repository != 'apache/arrow-rs' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-slim
+    outputs:
+      suites: ${{ steps.select.outputs.suites }}
+      cache-refresh-only: ${{ steps.select.outputs.cache-refresh-only }}
+      fork-pr: ${{ steps.select.outputs.fork-pr }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # PR routing uses the merge base, including changes from all commits.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Install CI configuration dependency
+        run: |
+          for attempt in 1 2 3; do
+            python3 -m pip install PyYAML==6.0.3 && break
+            if [ "$attempt" -eq 3 ]; then exit 1; fi
+            sleep 5
+          done
+      - name: Validate CI configuration and routing
+        run: python3 .github/ci/scripts/check-ci-config.py
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: '24'
+      - name: Test fork CI status bridge
+        run: node --test .github/ci/scripts/test-fork-ci-status.cjs
+      - name: Select suites
+        id: select
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: python3 .github/ci/scripts/compute-changes.py
+
+  arrow:
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.suites), 'arrow')
+    uses: ./.github/workflows/arrow.yml
+
+  arrow-flight:
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.suites), 'arrow-flight')
+    uses: ./.github/workflows/arrow_flight.yml
+
+  parquet:
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.suites), 'parquet')
+    uses: ./.github/workflows/parquet.yml
+    with:
+      cache-refresh-only: ${{ needs.changes.outputs.cache-refresh-only == 'true' }}
+
+  integration:
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.suites), 'integration')
+    uses: ./.github/workflows/integration.yml
+    with:
+      cache-refresh-only: ${{ needs.changes.outputs.cache-refresh-only == 'true' }}
+
+  audit:
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.suites), 'audit')
+    uses: ./.github/workflows/audit.yml
+
+  dev:
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.suites), 'dev')
+    uses: ./.github/workflows/dev.yml
+
+  rust:
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.suites), 'rust')
+    uses: ./.github/workflows/rust.yml
+    with:
+      lint-only: ${{ needs.changes.outputs.fork-pr == 'true' }}
+
+  docs:
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.suites), 'docs')
+    # Only the deploy job in docs.yml requests write access, on push to main.
+    permissions:
+      contents: write
+    uses: ./.github/workflows/docs.yml
+
+  required-checks:
+    # Like datafusion-comet: one stable check name even when a reusable
+    # workflow is skipped (its individual check names would be different).
+    name: Required Checks
+    if: always() && (github.event_name != 'push' || github.repository != 'apache/arrow-rs' || github.ref == 'refs/heads/main')
+    permissions: {}
+    needs:
+      - changes
+      - arrow
+      - arrow-flight
+      - parquet
+      - integration
+      - audit
+      - dev
+      - rust
+      - docs
+    runs-on: ubuntu-slim
+    steps:
+      - name: Summarize suite results
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: echo "$NEEDS"
+      - name: Link to fork CI
+        if: needs.changes.outputs.fork-pr == 'true'
+        env:
+          FORK_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          {
+            printf 'Full test results: [CI on %s](https://github.com/%s/actions/workflows/ci.yml).\n\n' "$FORK_REPOSITORY" "$FORK_REPOSITORY"
+            printf 'Look for commit `%s`. Enable Actions in your fork and push your branch if no run exists.\n\n' "$PR_HEAD_SHA"
+            printf 'This upstream PR run checks formatting and contributor hygiene. The merge queue runs the required CI checks before merge.\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+      # Fork PRs to main only run lightweight checks here. The informational
+      # CI (fork) check is separate; the merge queue runs the required suites here.
+      # A failed/cancelled selector or suite must still block merging.
+      # Miri runs separately to reduce runner time:
+      # https://github.com/apache/arrow-rs/issues/11548
+      - name: Fail if any suite failed or was cancelled
+        if: needs.changes.result != 'success' || contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: |
+          echo "::error::One or more CI suites did not succeed. See the results above."
+          exit 1

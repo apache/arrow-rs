@@ -17,7 +17,7 @@
 
 //! Implements the `nullif` function for Arrow arrays.
 
-use arrow_array::{Array, ArrayRef, BooleanArray, make_array};
+use arrow_array::{Array, ArrayRef, BooleanArray, UInt64Array, make_array};
 use arrow_buffer::buffer::bitwise_bin_op_helper;
 use arrow_buffer::{BooleanBuffer, NullBuffer, bitwise_unary_op_helper};
 use arrow_schema::{ArrowError, DataType};
@@ -42,18 +42,40 @@ use arrow_schema::{ArrowError, DataType};
 /// assert_eq!(nulled.as_primitive(), &Int32Array::from(vec![None, None, Some(1), Some(9)]));
 /// ```
 pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowError> {
-    let left_data = left.to_data();
-
-    if left_data.len() != right.len() {
+    if left.len() != right.len() {
         return Err(ArrowError::ComputeError(
             "Cannot perform comparison operation on arrays of different length".to_string(),
         ));
     }
-    let len = left_data.len();
+    let len = left.len();
 
-    if len == 0 || left_data.data_type() == &DataType::Null {
-        return Ok(make_array(left_data));
+    if len == 0 || left.data_type() == &DataType::Null {
+        return Ok(make_array(left.to_data()));
     }
+
+    // Compute right_values & right_bitmap. True bits are positions that should
+    // become null; nulls in `right` do not introduce nulls.
+    let should_null = match right.nulls() {
+        Some(nulls) => right.values() & nulls.inner(),
+        None => right.values().clone(),
+    };
+
+    // REE & Union have cases where they technically shouldn't be allowed to hold
+    // nulls based on nullability of their children
+    match left.data_type() {
+        DataType::RunEndEncoded(_, values) => {
+            if !values.is_nullable() && should_null.has_true() {
+                return Err(ArrowError::ComputeError(
+                    "Cannot introduce nulls into a RunEndEncoded array with a non-nullable values field".into(),
+                ));
+            }
+            return nullif_take(left, &should_null);
+        }
+        DataType::Union(_, _) => return nullif_take(left, &should_null),
+        _ => {}
+    }
+
+    let left_data = left.to_data();
 
     // left=0 (null)   right=null       output bitmap=null
     // left=0          right=1          output bitmap=null
@@ -64,13 +86,7 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
     // Thus: result = left null bitmap & (!right_values | !right_bitmap)
     //              OR left null bitmap & !(right_values & right_bitmap)
 
-    // Compute right_values & right_bitmap
-    let right = match right.nulls() {
-        Some(nulls) => right.values() & nulls.inner(),
-        None => right.values().clone(),
-    };
-
-    // Compute left null bitmap & !right
+    // Compute left null bitmap & !should_null
 
     let (combined, null_count) = match left_data.nulls() {
         Some(left) => {
@@ -78,8 +94,8 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
             let b = bitwise_bin_op_helper(
                 left.buffer(),
                 left.offset(),
-                right.inner(),
-                right.offset(),
+                should_null.inner(),
+                should_null.offset(),
                 len,
                 |l, r| {
                     let t = l & !r;
@@ -91,11 +107,12 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
         }
         None => {
             let mut null_count = 0;
-            let buffer = bitwise_unary_op_helper(right.inner(), right.offset(), len, |b| {
-                let t = !b;
-                null_count += t.count_zeros() as usize;
-                t
-            });
+            let buffer =
+                bitwise_unary_op_helper(should_null.inner(), should_null.offset(), len, |b| {
+                    let t = !b;
+                    null_count += t.count_zeros() as usize;
+                    t
+                });
             (buffer, null_count)
         }
     };
@@ -111,17 +128,34 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
     Ok(make_array(unsafe { data.build_unchecked() }))
 }
 
+/// Applies `nullif` to arrays that represent logical nulls in their children.
+fn nullif_take(left: &dyn Array, should_null: &BooleanBuffer) -> Result<ArrayRef, ArrowError> {
+    let indices = UInt64Array::from_iter((0..left.len()).map(|index| {
+        if should_null.value(index) {
+            None
+        } else {
+            Some(index as u64)
+        }
+    }));
+    crate::take::take(left, &indices, None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use arrow_array::builder::{BooleanBuilder, Int32Builder, StructBuilder};
     use arrow_array::cast::AsArray;
+    use arrow_array::types::Int16Type;
     use arrow_array::types::Int32Type;
-    use arrow_array::{Int32Array, NullArray, StringArray, StructArray};
+    use arrow_array::{
+        Int16Array, Int32Array, NullArray, RunArray, StringArray, StructArray, UnionArray,
+    };
+    use arrow_buffer::{RunEndBuffer, ScalarBuffer};
     use arrow_data::ArrayData;
-    use arrow_schema::{Field, Fields};
+    use arrow_schema::{Field, Fields, UnionFields, UnionMode};
     use rand::prelude::StdRng;
     use rand::{RngExt, SeedableRng};
+    use std::sync::Arc;
 
     #[test]
     fn test_nullif_int_array() {
@@ -164,10 +198,121 @@ mod tests {
     }
 
     #[test]
+    fn test_nullif_run_end_encoded() {
+        let values = Int32Array::from(vec![10, 20]);
+        let ree = RunArray::<Int16Type>::try_new(&Int16Array::from(vec![1, 2]), &values).unwrap();
+        let mask = BooleanArray::from(vec![Some(false), Some(true)]);
+
+        let result = nullif(&ree, &mask).unwrap();
+        let result = result.as_run::<Int16Type>();
+        assert_eq!(result.logical_null_count(), 1);
+        assert_eq!(
+            result
+                .values()
+                .as_primitive::<Int32Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(10), None]
+        );
+    }
+
+    #[test]
+    fn test_nullif_run_end_encoded_mask_nulls() {
+        let values = Int32Array::from(vec![10, 20, 30]);
+        let ree =
+            RunArray::<Int16Type>::try_new(&Int16Array::from(vec![1, 2, 3]), &values).unwrap();
+        let mask = BooleanArray::from(vec![Some(true), Some(false), None, Some(true)]);
+        let mask = mask.slice(1, 3); // Some(false), None, Some(true)
+
+        let result = nullif(&ree, &mask).unwrap();
+        let result = result.as_run::<Int16Type>();
+        assert_eq!(result.logical_null_count(), 1);
+        assert_eq!(
+            result
+                .values()
+                .as_primitive::<Int32Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(10), Some(20), None]
+        );
+    }
+
+    #[test]
+    fn test_nullif_run_end_encoded_non_nullable_values() {
+        let ree = unsafe {
+            RunArray::<Int16Type>::new_unchecked(
+                DataType::RunEndEncoded(
+                    Arc::new(Field::new("run_ends", DataType::Int16, false)),
+                    Arc::new(Field::new("values", DataType::Int32, false)),
+                ),
+                RunEndBuffer::new(vec![1_i16, 2].into(), 0, 2),
+                Arc::new(Int32Array::from(vec![10, 20])),
+            )
+        };
+        let mask = BooleanArray::from(vec![Some(false), Some(true)]);
+
+        let error = nullif(&ree, &mask).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Compute error: Cannot introduce nulls into a RunEndEncoded array with a non-nullable values field"
+        );
+    }
+
+    #[test]
+    fn test_nullif_union() {
+        let fields =
+            UnionFields::try_new(vec![0], vec![Field::new("i", DataType::Int32, true)]).unwrap();
+        let union = UnionArray::try_new(
+            fields,
+            ScalarBuffer::from(vec![0_i8, 0]),
+            Some(ScalarBuffer::from(vec![0_i32, 1])),
+            vec![Arc::new(Int32Array::from(vec![10, 20]))],
+        )
+        .unwrap();
+        let mask = BooleanArray::from(vec![Some(false), Some(true)]);
+
+        let result = nullif(&union, &mask).unwrap();
+        let result = result.as_union();
+        assert_eq!(result.logical_null_count(), 1);
+        assert_eq!(result.type_ids(), &ScalarBuffer::from(vec![0_i8, 0]));
+        assert_eq!(
+            result
+                .child(0)
+                .as_primitive::<Int32Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(10), None]
+        );
+        assert!(matches!(
+            result.data_type(),
+            DataType::Union(_, UnionMode::Dense)
+        ));
+    }
+
+    #[test]
+    fn test_nullif_union_without_nullable_child() {
+        let fields =
+            UnionFields::try_new(vec![0], vec![Field::new("i", DataType::Int32, false)]).unwrap();
+        let union = UnionArray::try_new(
+            fields,
+            ScalarBuffer::from(vec![0_i8, 0]),
+            None,
+            vec![Arc::new(Int32Array::from(vec![10, 20]))],
+        )
+        .unwrap();
+        let mask = BooleanArray::from(vec![Some(false), Some(true)]);
+
+        let error = nullif(&union, &mask).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Compute error: Cannot take null indices from a union with no field that can represent nulls"
+        );
+    }
+
+    #[test]
     fn test_nullif_int_array_offset() {
         let a = Int32Array::from(vec![None, Some(15), Some(8), Some(1), Some(9)]);
         let a = a.slice(1, 3); // Some(15), Some(8), Some(1)
-        let a = a.as_any().downcast_ref::<Int32Array>().unwrap();
         let comp = BooleanArray::from(vec![
             Some(false),
             Some(false),
@@ -178,8 +323,7 @@ mod tests {
             None,
         ]);
         let comp = comp.slice(2, 3); // Some(false), None, Some(true)
-        let comp = comp.as_any().downcast_ref::<BooleanArray>().unwrap();
-        let res = nullif(a, comp).unwrap();
+        let res = nullif(&a, &comp).unwrap();
 
         let expected = Int32Array::from(vec![
             Some(15), // False => keep it
@@ -262,9 +406,8 @@ mod tests {
             None,
         ]);
         let comp = comp.slice(2, 3); // Some(false), None, Some(true)
-        let comp = comp.as_any().downcast_ref::<BooleanArray>().unwrap();
-        let res = nullif(&a, comp).unwrap();
-        let res = res.as_any().downcast_ref::<Int32Array>().unwrap();
+        let res = nullif(&a, &comp).unwrap();
+        let res = res.as_primitive::<Int32Type>();
 
         let expected = Int32Array::from(vec![
             Some(15), // False => keep it
@@ -311,9 +454,8 @@ mod tests {
             None,
         ]);
         let comp = comp.slice(18, 3); // Some(false), None, Some(true)
-        let comp = comp.as_any().downcast_ref::<BooleanArray>().unwrap();
-        let res = nullif(&a, comp).unwrap();
-        let res = res.as_any().downcast_ref::<Int32Array>().unwrap();
+        let res = nullif(&a, &comp).unwrap();
+        let res = res.as_primitive::<Int32Type>();
 
         let expected = Int32Array::from(vec![
             Some(15), // False => keep it
@@ -344,9 +486,8 @@ mod tests {
             None,
         ]);
         let comp = comp.slice(2, 3); // Some(false), None, Some(true)
-        let comp = comp.as_any().downcast_ref::<BooleanArray>().unwrap();
-        let res = nullif(&a, comp).unwrap();
-        let res = res.as_any().downcast_ref::<BooleanArray>().unwrap();
+        let res = nullif(&a, &comp).unwrap();
+        let res = res.as_boolean();
 
         let expected = BooleanArray::from(vec![
             Some(true),  // False => keep it
@@ -436,9 +577,8 @@ mod tests {
             None,
         ]);
         let comp = comp.slice(2, 5); // Some(false), None, Some(true), Some(false), None
-        let comp = comp.as_any().downcast_ref::<BooleanArray>().unwrap();
-        let res = nullif(&struct_array, comp).unwrap();
-        let res = res.as_any().downcast_ref::<StructArray>().unwrap();
+        let res = nullif(&struct_array, &comp).unwrap();
+        let res = res.as_struct();
 
         let expected = create_foo_struct(vec![
             // Some(false) -> keep
@@ -578,31 +718,13 @@ mod tests {
 
     /// Returns a new BooleanArray with no null buffer
     fn remove_null_buffer(array: &BooleanArray) -> BooleanArray {
-        make_array(
-            array
-                .into_data()
-                .into_builder()
-                .nulls(None)
-                .build()
-                .unwrap(),
-        )
-        .as_boolean()
-        .clone()
+        BooleanArray::new(array.values().clone(), None)
     }
 
     /// Returns a new BooleanArray with a null buffer where all values are valid
     fn remove_null_values(array: &BooleanArray) -> BooleanArray {
         let len = array.len();
         let new_nulls = NullBuffer::from_iter(std::iter::repeat_n(true, len));
-        make_array(
-            array
-                .into_data()
-                .into_builder()
-                .nulls(Some(new_nulls))
-                .build()
-                .unwrap(),
-        )
-        .as_boolean()
-        .clone()
+        BooleanArray::new(array.values().clone(), Some(new_nulls))
     }
 }

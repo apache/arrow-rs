@@ -157,6 +157,10 @@ impl FixedSizeBinaryBuilder {
     pub fn validity_slice(&self) -> Option<&[u8]> {
         self.null_buffer_builder.as_slice()
     }
+    ///  Returns the total memory capacity in bytes currently
+    pub fn capacity(&self) -> usize {
+        self.values_builder.capacity() + self.null_buffer_builder.allocated_size() + 4 // i32 
+    }
 }
 
 impl ArrayBuilder for FixedSizeBinaryBuilder {
