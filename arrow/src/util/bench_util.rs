@@ -198,16 +198,7 @@ where
 /// Intended for use as the `indices` argument to take kernels. `null_density`
 /// controls the fraction of null indices.
 pub fn create_random_index(size: usize, null_density: f32, max_value: usize) -> UInt32Array {
-    let mut rng = seedable_rng();
-    let mut builder = UInt32Builder::with_capacity(size);
-    for _ in 0..size {
-        if rng.random::<f32>() < null_density {
-            builder.append_null();
-        } else {
-            builder.append_value(rng.random_range::<u32, _>(0u32..max_value as u32));
-        }
-    }
-    builder.finish()
+    create_primitive_array_range::<UInt32Type>(size, null_density, 0..max_value as u32)
 }
 
 /// Creates a random (but fixed-seeded) [`Decimal128Array`] with values drawn
@@ -830,23 +821,7 @@ pub fn create_binary_array_with_len_range_and_prefix_and_seed<Offset: OffsetSize
 
 /// Creates an random (but fixed-seeded) array of a given size and null density
 pub fn create_fsb_array(size: usize, null_density: f32, value_len: usize) -> FixedSizeBinaryArray {
-    let rng = &mut seedable_rng();
-
-    FixedSizeBinaryArray::try_from_sparse_iter_with_size(
-        (0..size).map(|_| {
-            if rng.random::<f32>() < null_density {
-                None
-            } else {
-                let value = rng
-                    .sample_iter::<u8, _>(StandardUniform)
-                    .take(value_len)
-                    .collect::<Vec<u8>>();
-                Some(value)
-            }
-        }),
-        value_len as i32,
-    )
-    .unwrap()
+    create_fsb_array_with_seed(size, null_density, value_len, 42)
 }
 
 /// Creates a random [`FixedSizeBinaryArray`] of a given size and null density
