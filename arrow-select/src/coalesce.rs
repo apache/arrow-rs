@@ -34,6 +34,7 @@ use std::sync::Arc;
 mod boolean;
 mod byte;
 mod byte_view;
+mod dictionary;
 mod fixed_size_binary;
 mod generic;
 mod list;
@@ -42,6 +43,7 @@ mod primitive;
 use boolean::InProgressBooleanArray;
 use byte::InProgressByteArray;
 use byte_view::InProgressByteViewArray;
+use dictionary::create_in_progress_dictionary;
 use fixed_size_binary::InProgressFixedSizeBinaryArray;
 use generic::GenericInProgressArray;
 use list::InProgressListArray;
@@ -61,6 +63,14 @@ fn has_sparse_filter_copy(data_type: &DataType) -> bool {
                 | DataType::BinaryView
                 | DataType::List(_)
                 | DataType::LargeList(_)
+        )
+        || matches!(
+            data_type,
+            DataType::Dictionary(_, value)
+            if matches!(
+                value.as_ref(),
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary
+            )
         )
 }
 
@@ -837,6 +847,9 @@ fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn 
         DataType::Binary => Box::new(InProgressByteArray::<GenericBinaryType<i32>>::new(batch_size)),
         DataType::LargeBinary => {
             Box::new(InProgressByteArray::<GenericBinaryType<i64>>::new(batch_size))
+        }
+        DataType::Dictionary(key, value) => {
+            create_in_progress_dictionary(key, value, batch_size)
         }
         DataType::FixedSizeBinary(size) => {
             Box::new(InProgressFixedSizeBinaryArray::new(*size, batch_size))
@@ -1866,6 +1879,11 @@ mod tests {
             Field::new(
                 "large_list",
                 DataType::new_large_list(DataType::Utf8, true),
+                true,
+            ),
+            Field::new(
+                "dictionary",
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
                 true,
             ),
         ]));
