@@ -138,57 +138,7 @@ pub(super) fn intersect_row_selections(
     left: &[RowSelector],
     right: &[RowSelector],
 ) -> RowSelection {
-    let mut l_iter = left.iter().copied().peekable();
-    let mut r_iter = right.iter().copied().peekable();
-
-    let iter = std::iter::from_fn(move || {
-        loop {
-            let l = l_iter.peek_mut();
-            let r = r_iter.peek_mut();
-
-            match (l, r) {
-                (Some(a), _) if a.row_count == 0 => {
-                    l_iter.next().unwrap();
-                }
-                (_, Some(b)) if b.row_count == 0 => {
-                    r_iter.next().unwrap();
-                }
-                (Some(l), Some(r)) => {
-                    return match (l.skip, r.skip) {
-                        // Keep both ranges
-                        (false, false) => {
-                            if l.row_count < r.row_count {
-                                r.row_count -= l.row_count;
-                                l_iter.next()
-                            } else {
-                                l.row_count -= r.row_count;
-                                r_iter.next()
-                            }
-                        }
-                        // skip at least one
-                        _ => {
-                            if l.row_count < r.row_count {
-                                let skip = l.row_count;
-                                r.row_count -= l.row_count;
-                                l_iter.next();
-                                Some(RowSelector::skip(skip))
-                            } else {
-                                let skip = r.row_count;
-                                l.row_count -= skip;
-                                r_iter.next();
-                                Some(RowSelector::skip(skip))
-                            }
-                        }
-                    };
-                }
-                (Some(_), None) => return l_iter.next(),
-                (None, Some(_)) => return r_iter.next(),
-                (None, None) => return None,
-            }
-        }
-    });
-
-    iter.collect()
+    combine_row_selections(left, right, |l, r| l || r)
 }
 
 /// Combine two lists of `RowSelector` return the union of them
@@ -200,6 +150,15 @@ pub(super) fn intersect_row_selections(
 ///
 /// This can be removed from here once RowSelection::union is in parquet::arrow
 pub(super) fn union_row_selections(left: &[RowSelector], right: &[RowSelector]) -> RowSelection {
+    combine_row_selections(left, right, |l, r| l && r)
+}
+
+/// Combines overlapping selector runs, passing the longer side's tail through unchanged.
+fn combine_row_selections(
+    left: &[RowSelector],
+    right: &[RowSelector],
+    combine_skip: impl Fn(bool, bool) -> bool,
+) -> RowSelection {
     let mut l_iter = left.iter().copied().peekable();
     let mut r_iter = right.iter().copied().peekable();
 
@@ -216,56 +175,18 @@ pub(super) fn union_row_selections(left: &[RowSelector], right: &[RowSelector]) 
                     r_iter.next().unwrap();
                 }
                 (Some(l), Some(r)) => {
-                    return match (l.skip, r.skip) {
-                        // Skip both ranges
-                        (true, true) => {
-                            if l.row_count < r.row_count {
-                                let skip = l.row_count;
-                                r.row_count -= l.row_count;
-                                l_iter.next();
-                                Some(RowSelector::skip(skip))
-                            } else {
-                                let skip = r.row_count;
-                                l.row_count -= skip;
-                                r_iter.next();
-                                Some(RowSelector::skip(skip))
-                            }
-                        }
-                        // Keep rows from left
-                        (false, true) => {
-                            if l.row_count < r.row_count {
-                                r.row_count -= l.row_count;
-                                l_iter.next()
-                            } else {
-                                let r_row_count = r.row_count;
-                                l.row_count -= r_row_count;
-                                r_iter.next();
-                                Some(RowSelector::select(r_row_count))
-                            }
-                        }
-                        // Keep rows from right
-                        (true, false) => {
-                            if l.row_count < r.row_count {
-                                let l_row_count = l.row_count;
-                                r.row_count -= l_row_count;
-                                l_iter.next();
-                                Some(RowSelector::select(l_row_count))
-                            } else {
-                                l.row_count -= r.row_count;
-                                r_iter.next()
-                            }
-                        }
-                        // Keep at least one
-                        _ => {
-                            if l.row_count < r.row_count {
-                                r.row_count -= l.row_count;
-                                l_iter.next()
-                            } else {
-                                l.row_count -= r.row_count;
-                                r_iter.next()
-                            }
-                        }
-                    };
+                    let skip = combine_skip(l.skip, r.skip);
+                    let row_count = l.row_count.min(r.row_count);
+
+                    if l.row_count < r.row_count {
+                        r.row_count -= row_count;
+                        l_iter.next();
+                    } else {
+                        l.row_count -= row_count;
+                        r_iter.next();
+                    }
+
+                    return Some(RowSelector { row_count, skip });
                 }
                 (Some(_), None) => return l_iter.next(),
                 (None, Some(_)) => return r_iter.next(),
