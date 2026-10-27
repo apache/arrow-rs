@@ -60,6 +60,8 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
         None => right.values().clone(),
     };
 
+    // REE & Union have cases where they technically shouldn't be allowed to hold
+    // nulls based on nullability of their children
     match left.data_type() {
         DataType::RunEndEncoded(_, values) => {
             if !values.is_nullable() && should_null.has_true() {
@@ -202,10 +204,7 @@ mod tests {
         let mask = BooleanArray::from(vec![Some(false), Some(true)]);
 
         let result = nullif(&ree, &mask).unwrap();
-        let result = result
-            .as_any()
-            .downcast_ref::<RunArray<Int16Type>>()
-            .unwrap();
+        let result = result.as_run::<Int16Type>();
         assert_eq!(result.logical_null_count(), 1);
         assert_eq!(
             result
@@ -224,13 +223,9 @@ mod tests {
             RunArray::<Int16Type>::try_new(&Int16Array::from(vec![1, 2, 3]), &values).unwrap();
         let mask = BooleanArray::from(vec![Some(true), Some(false), None, Some(true)]);
         let mask = mask.slice(1, 3); // Some(false), None, Some(true)
-        let mask = mask.as_any().downcast_ref::<BooleanArray>().unwrap();
 
-        let result = nullif(&ree, mask).unwrap();
-        let result = result
-            .as_any()
-            .downcast_ref::<RunArray<Int16Type>>()
-            .unwrap();
+        let result = nullif(&ree, &mask).unwrap();
+        let result = result.as_run::<Int16Type>();
         assert_eq!(result.logical_null_count(), 1);
         assert_eq!(
             result
@@ -277,7 +272,7 @@ mod tests {
         let mask = BooleanArray::from(vec![Some(false), Some(true)]);
 
         let result = nullif(&union, &mask).unwrap();
-        let result = result.as_any().downcast_ref::<UnionArray>().unwrap();
+        let result = result.as_union();
         assert_eq!(result.logical_null_count(), 1);
         assert_eq!(result.type_ids(), &ScalarBuffer::from(vec![0_i8, 0]));
         assert_eq!(
@@ -310,7 +305,7 @@ mod tests {
         let error = nullif(&union, &mask).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Compute error: Cannot take null indices from a union with no nullable fields"
+            "Compute error: Cannot take null indices from a union with no field that can represent nulls"
         );
     }
 
@@ -318,7 +313,6 @@ mod tests {
     fn test_nullif_int_array_offset() {
         let a = Int32Array::from(vec![None, Some(15), Some(8), Some(1), Some(9)]);
         let a = a.slice(1, 3); // Some(15), Some(8), Some(1)
-        let a = a.as_any().downcast_ref::<Int32Array>().unwrap();
         let comp = BooleanArray::from(vec![
             Some(false),
             Some(false),
@@ -329,8 +323,7 @@ mod tests {
             None,
         ]);
         let comp = comp.slice(2, 3); // Some(false), None, Some(true)
-        let comp = comp.as_any().downcast_ref::<BooleanArray>().unwrap();
-        let res = nullif(a, comp).unwrap();
+        let res = nullif(&a, &comp).unwrap();
 
         let expected = Int32Array::from(vec![
             Some(15), // False => keep it
@@ -413,9 +406,8 @@ mod tests {
             None,
         ]);
         let comp = comp.slice(2, 3); // Some(false), None, Some(true)
-        let comp = comp.as_any().downcast_ref::<BooleanArray>().unwrap();
-        let res = nullif(&a, comp).unwrap();
-        let res = res.as_any().downcast_ref::<Int32Array>().unwrap();
+        let res = nullif(&a, &comp).unwrap();
+        let res = res.as_primitive::<Int32Type>();
 
         let expected = Int32Array::from(vec![
             Some(15), // False => keep it
@@ -462,9 +454,8 @@ mod tests {
             None,
         ]);
         let comp = comp.slice(18, 3); // Some(false), None, Some(true)
-        let comp = comp.as_any().downcast_ref::<BooleanArray>().unwrap();
-        let res = nullif(&a, comp).unwrap();
-        let res = res.as_any().downcast_ref::<Int32Array>().unwrap();
+        let res = nullif(&a, &comp).unwrap();
+        let res = res.as_primitive::<Int32Type>();
 
         let expected = Int32Array::from(vec![
             Some(15), // False => keep it
@@ -495,9 +486,8 @@ mod tests {
             None,
         ]);
         let comp = comp.slice(2, 3); // Some(false), None, Some(true)
-        let comp = comp.as_any().downcast_ref::<BooleanArray>().unwrap();
-        let res = nullif(&a, comp).unwrap();
-        let res = res.as_any().downcast_ref::<BooleanArray>().unwrap();
+        let res = nullif(&a, &comp).unwrap();
+        let res = res.as_boolean();
 
         let expected = BooleanArray::from(vec![
             Some(true),  // False => keep it
@@ -587,9 +577,8 @@ mod tests {
             None,
         ]);
         let comp = comp.slice(2, 5); // Some(false), None, Some(true), Some(false), None
-        let comp = comp.as_any().downcast_ref::<BooleanArray>().unwrap();
-        let res = nullif(&struct_array, comp).unwrap();
-        let res = res.as_any().downcast_ref::<StructArray>().unwrap();
+        let res = nullif(&struct_array, &comp).unwrap();
+        let res = res.as_struct();
 
         let expected = create_foo_struct(vec![
             // Some(false) -> keep
