@@ -316,17 +316,36 @@ impl StreamDecoder {
     }
 }
 
-/// Pull-based, zero-copy IPC stream reader over an owned in-memory [`Buffer`].
+/// Pull-based IPC stream reader over an owned in-memory [`Buffer`], with
+/// zero-copy decoding where possible.
 ///
 /// Where [`StreamReader`](crate::reader::StreamReader) reads from an arbitrary
 /// `R: Read` and copies each message body into a fresh allocation, this reader
-/// takes a fully-materialized [`Buffer`] and yields [`RecordBatch`]es whose
-/// column [`Buffer`]s alias the input — no per-message memcpy. Use this when
-/// the entire IPC stream is already in memory (HTTP body, mmap, byte slice,
-/// shared-memory segment, `bytes::Bytes` from object storage, …).
+/// takes a fully materialized [`Buffer`] and decodes message bodies directly
+/// from it. Use this when the entire IPC stream is already in memory, such as
+/// an HTTP body, a memory-mapped file, a shared-memory segment, or
+/// [`bytes::Bytes`] from object storage.
 ///
 /// For a streaming push-based interface that handles partial buffers (e.g. a
 /// chunked byte stream from object storage), use [`StreamDecoder`] directly.
+///
+/// # Buffer sharing
+///
+/// Uncompressed, properly aligned column buffers can alias the input allocation.
+/// Misaligned buffers are copied into aligned allocations, and compressed buffers
+/// require allocations for decompression. Zero-copy decoding therefore depends
+/// on both the input alignment and how the stream was encoded.
+///
+/// Decoding still allocates schema and array metadata and validates array data;
+/// sharing buffers does not skip validation. Keeping a decoded batch with shared
+/// buffers alive also retains the input allocation, even after this reader is dropped.
+///
+/// # Errors
+///
+/// Errors encountered while decoding the schema, leading dictionaries, or the
+/// first record batch may be returned by the constructor. Later decoding errors
+/// are returned as iterator items. Stop reading after an error; the reader does
+/// not guarantee that it can resume decoding or that the next call returns `None`.
 ///
 /// # Example
 ///
@@ -374,10 +393,15 @@ impl BufferStreamReader {
     /// leading dictionary messages) so [`schema`](Self::schema) is cheap
     /// and infallible afterwards.
     ///
+    /// This may also decode the first record batch, which is retained and
+    /// returned by the first call to [`next`](Iterator::next).
+    /// See [buffer sharing](Self#buffer-sharing) for when decoding can avoid copies.
+    ///
     /// # Errors
     ///
     /// Returns an error if `buffer` does not start with a valid IPC stream
-    /// schema message.
+    /// schema message, or if decoding the leading dictionaries or first record
+    /// batch fails during construction.
     pub fn try_new(buffer: Buffer) -> Result<Self, ArrowError> {
         let mut decoder = StreamDecoder::new();
         let mut working = buffer;
@@ -412,8 +436,15 @@ impl BufferStreamReader {
         })
     }
 
-    /// Create a new reader from a [`bytes::Bytes`] (cheap zero-copy
-    /// conversion via the existing `impl From<bytes::Bytes> for Buffer`).
+    /// Create a new reader from an owned [`bytes::Bytes`].
+    ///
+    /// Conversion to [`Buffer`] shares the existing allocation without copying.
+    /// Decoding may still allocate for alignment or decompression, as described
+    /// in [buffer sharing](Self#buffer-sharing).
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`try_new`](Self::try_new).
     pub fn try_new_from_bytes(bytes: bytes::Bytes) -> Result<Self, ArrowError> {
         Self::try_new(Buffer::from(bytes))
     }
@@ -423,8 +454,12 @@ impl BufferStreamReader {
         &self.schema
     }
 
-    /// Returns `true` if the stream's EOS marker has been consumed and no
-    /// further batches will be produced.
+    /// Returns `true` once the reader has consumed the EOS marker or observed
+    /// that the input has been exhausted.
+    ///
+    /// This can also be `true` after reporting a truncated message, so it does
+    /// not imply that decoding succeeded. A decoding error does not always set
+    /// this flag; callers should stop reading after any error.
     pub fn is_finished(&self) -> bool {
         self.finished || self.decoder.is_finished()
     }
