@@ -445,6 +445,7 @@ mod tests {
         );
     }
 
+    #[expect(clippy::float_cmp_const)]
     mod float {
         use super::*;
 

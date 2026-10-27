@@ -505,6 +505,29 @@ mod tests {
     }
 
     #[test]
+    fn test_string_array_invalid_bytes_outside_offsets() {
+        // Only the bytes that the offsets span need to be valid UTF-8, as in a
+        // slice of a larger array
+        let values = Buffer::from_slice_ref(b"\xFFa\xC3\xA9\xFF");
+        let offsets = OffsetBuffer::new(vec![1, 2, 4].into());
+        let string = StringArray::try_new(offsets, values.clone(), None).unwrap();
+        assert_eq!(string, StringArray::from(vec!["a", "é"]));
+
+        let offsets = OffsetBuffer::new(vec![1, 3, 4].into());
+        let err = StringArray::try_new(offsets, values, None).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Split UTF-8 codepoint at offset 3"
+        );
+
+        // An empty value whose offset is inside a character, in a values buffer
+        // that is valid UTF-8 as a whole. ArrayData validation must agree.
+        let offsets = OffsetBuffer::new(vec![1, 1].into());
+        let string = StringArray::try_new(offsets, Buffer::from_slice_ref("é"), None).unwrap();
+        string.to_data().validate_full().unwrap();
+    }
+
+    #[test]
     fn test_empty_offsets() {
         let string = StringArray::from(
             ArrayData::builder(DataType::Utf8)

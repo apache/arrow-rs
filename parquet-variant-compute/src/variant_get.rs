@@ -517,9 +517,7 @@ mod test {
     use std::sync::Arc;
 
     use super::{GetOptions, requested_field_is_shredded, variant_get};
-    use crate::variant_array::{
-        ShreddedVariantFieldArray, StructArrayBuilder, all_null_value_column,
-    };
+    use crate::variant_array::{ShreddedVariantFieldArray, all_null_value_column};
     use crate::{
         ShreddedSchemaBuilder, VariantArray, VariantArrayBuilder, cast_to_variant, json_to_variant,
         shred_variant,
@@ -531,8 +529,8 @@ mod test {
         Int64Array, Int64Builder, LargeBinaryArray, LargeListArray, LargeListViewArray,
         LargeStringArray, ListArray, ListBuilder, ListViewArray, MapBuilder, NullArray,
         NullBuilder, StringArray, StringBuilder, StringViewArray, StructArray,
-        Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
-        UnionArray,
+        StructArrayAssembler, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+        Time64NanosecondArray, UnionArray,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow::compute::{CastOptions, cast};
@@ -3797,10 +3795,11 @@ mod test {
             false, // row 2: outer field NULL
             false, // row 3: top-level NULL
         ]);
-        let outer_typed_value = StructArrayBuilder::new()
+        let outer_typed_value = StructArrayAssembler::new()
             .with_field("inner", ArrayRef::from(inner), false)
             .with_nulls(outer_typed_value_nulls)
-            .build();
+            .build()
+            .unwrap();
 
         let outer =
             ShreddedVariantFieldArray::perfectly_shredded(Arc::new(outer_typed_value) as ArrayRef);
@@ -3811,10 +3810,11 @@ mod test {
             false, // row 2: outer field NULL
             false, // row 3: top-level NULL
         ]);
-        let typed_value = StructArrayBuilder::new()
+        let typed_value = StructArrayAssembler::new()
             .with_field("outer", ArrayRef::from(outer), false)
             .with_nulls(typed_value_nulls)
-            .build();
+            .build()
+            .unwrap();
 
         // Build final VariantArray with top-level nulls
         let metadata_array =
@@ -3884,9 +3884,10 @@ mod test {
         ) as ArrayRef);
 
         // Create main typed_value struct (only contains shredded fields)
-        let typed_value_struct = StructArrayBuilder::new()
+        let typed_value_struct = StructArrayAssembler::new()
             .with_field("x", ArrayRef::from(x_field_shredded), false)
-            .build();
+            .build()
+            .unwrap();
 
         // Build VariantArray with both value and typed_value (PartiallyShredded)
         // Top-level null is encoded in the main StructArray's null mask
@@ -3993,10 +3994,19 @@ mod test {
     #[test]
     fn get_decimal32_precision_overflow_safe() {
         // Exceed Decimal32 after scaling and rounding
-        let variant_array: ArrayRef = ArrayRef::from(VariantArray::from_iter([
-            Some(VariantDecimal4::try_new(VariantDecimal4::MAX_UNSCALED_VALUE, 0).unwrap()),
+        let variant_array = ArrayRef::from(VariantArray::from_iter([
+            Some(Variant::from(
+                VariantDecimal4::try_new(VariantDecimal4::MAX_UNSCALED_VALUE, 0).unwrap(),
+            )),
             // integer value round up overflows
-            Some(VariantDecimal4::try_new(VariantDecimal4::MAX_UNSCALED_VALUE, 9).unwrap()),
+            Some(Variant::from(
+                VariantDecimal4::try_new(VariantDecimal4::MAX_UNSCALED_VALUE, 9).unwrap(),
+            )),
+            // Float inputs that exceed precision directly or after rounding to 1.00.
+            Some(Variant::Float(1.1)),
+            Some(Variant::Double(1.1)),
+            Some(Variant::Float(0.999)),
+            Some(Variant::Double(0.999)),
         ]));
 
         let field = Field::new("result", DataType::Decimal32(2, 2), true);
@@ -4004,31 +4014,36 @@ mod test {
         let result = variant_get(&variant_array, options).unwrap();
         let result = result.as_any().downcast_ref::<Decimal32Array>().unwrap();
 
-        assert!(result.is_null(0));
-        assert!(result.is_null(1)); // should overflow because 1.00 does not fit into precision (2)
+        assert_eq!(result.null_count(), 6); // Even 1.00 exceeds precision 2.
     }
 
     #[test]
     fn get_decimal32_precision_overflow_unsafe_errors() {
-        let variant_array: ArrayRef = ArrayRef::from(VariantArray::from_iter([Some(
-            VariantDecimal4::try_new(VariantDecimal4::MAX_UNSCALED_VALUE, 0).unwrap(),
-        )]));
-
-        let field = Field::new("result", DataType::Decimal32(9, 2), true);
-        let cast_options = CastOptions {
-            safe: false,
-            ..Default::default()
-        };
-        let options = GetOptions::new()
-            .with_as_type(Some(FieldRef::from(field)))
-            .with_cast_options(cast_options);
-        let err = variant_get(&variant_array, options).unwrap_err();
-
-        assert!(
-            err.to_string().contains(
-                "Failed to cast to Decimal32(precision=9, scale=2) from variant Decimal4"
-            )
-        );
+        for (value, kind) in [
+            (
+                VariantDecimal4::try_new(VariantDecimal4::MAX_UNSCALED_VALUE, 0)
+                    .unwrap()
+                    .into(),
+                "Decimal4",
+            ),
+            (Variant::Float(1.1), "Float"),
+            (Variant::Double(1.1), "Double"),
+            (Variant::Float(0.999), "Float"),
+            (Variant::Double(0.999), "Double"),
+        ] {
+            let variant_array = ArrayRef::from(VariantArray::from_iter([Some(value)]));
+            let field = Field::new("result", DataType::Decimal32(2, 2), true);
+            let options = GetOptions::new()
+                .with_as_type(Some(FieldRef::from(field)))
+                .with_cast_options(CastOptions {
+                    safe: false,
+                    ..Default::default()
+                });
+            let err = variant_get(&variant_array, options).unwrap_err();
+            assert!(err.to_string().contains(&format!(
+                "Failed to cast to Decimal32(precision=2, scale=2) from variant {kind}"
+            )));
+        }
     }
 
     #[test]
@@ -5011,6 +5026,36 @@ mod test {
         assert_eq!(values.value(0), 1);
         assert!(values.is_null(1));
         assert_eq!(values.value(2), 3);
+    }
+
+    #[test]
+    fn test_variant_get_list_like_null_element_in_non_nullable_item() {
+        let item_field = Arc::new(Field::new("item", Int64, false));
+        let data_types = [
+            (DataType::List(item_field.clone()), "ListArray"),
+            (DataType::LargeList(item_field.clone()), "LargeListArray"),
+            (DataType::ListView(item_field.clone()), "ListViewArray"),
+            (DataType::LargeListView(item_field), "LargeListViewArray"),
+        ];
+        // A null element, and an element that a safe cast turns into null
+        for json in ["[1, null, 3]", r#"[1, "two", 3]"#] {
+            let string_array: ArrayRef = Arc::new(StringArray::from(vec![json]));
+            let variant_array = ArrayRef::from(json_to_variant(&string_array).unwrap());
+            for (data_type, array_name) in &data_types {
+                let options = GetOptions::new().with_as_type(Some(FieldRef::from(Field::new(
+                    "result",
+                    data_type.clone(),
+                    true,
+                ))));
+                let err = variant_get(&variant_array, options).unwrap_err();
+                assert_eq!(
+                    err.to_string(),
+                    format!(
+                        "Invalid argument error: Non-nullable field of {array_name} \"item\" cannot contain nulls"
+                    )
+                );
+            }
+        }
     }
 
     #[test]

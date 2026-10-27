@@ -17,8 +17,10 @@
 
 use arrow::array::{
     Array, ArrayRef, BinaryViewArray, BinaryViewBuilder, Int32Array, StringArray, StructArray,
+    StructArrayAssembler,
 };
 use arrow::buffer::Buffer;
+use arrow::compute::{CastOptions, cast};
 use arrow_schema::{DataType, Field, FieldRef, Fields};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime};
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
@@ -28,6 +30,7 @@ use parquet_variant::{
 };
 use parquet_variant_compute::{
     GetOptions, VariantArray, VariantArrayBuilder, json_to_variant, shred_variant, variant_get,
+    variant_to_json,
 };
 use parquet_variant_json::append_json;
 use rand::RngExt;
@@ -40,7 +43,7 @@ use std::sync::Arc;
 
 const VARIANT_GET_UNSHREDDED_OBJECT_ROWS: usize = 262_144;
 const VARIANT_ARRAY_BUILD_ROWS: usize = 262_144;
-const SHRED_VARIANT_OBJECT_ROWS: usize = 8_192;
+const VARIANT_BATCH_ROWS: usize = 8_192;
 
 fn variant_array_builder_build_bench(c: &mut Criterion) {
     c.bench_function("variant_array_builder_build_262k_small_values", |b| {
@@ -163,6 +166,96 @@ fn benchmark_batch_json_string_to_variant(c: &mut Criterion) {
             let _ = json_to_variant(&array_ref).unwrap();
         });
     });
+
+    let large_array = format!(
+        "[{}]",
+        (0..1024)
+            .map(|number| number.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let large_string = format!(r#"{{"payload":"{}","id":42}}"#, "x".repeat(8192));
+    let duplicate_large = format!(r#"{{"a":"{}","a":0}}"#, "x".repeat(100_000));
+    for (name, json) in [
+        ("int32", r#"{"id":123456789}"#),
+        (
+            "fixed_point_decimals",
+            r#"{"small":1.23,"medium":999999999.0,"large":0.9999999999999999999}"#,
+        ),
+        (
+            "escaped_strings",
+            r#"{"line":"one\ntwo","quote":"\"value\"","unicode":"\u2764"}"#,
+        ),
+        ("large_array_1024", large_array.as_str()),
+        ("large_string_8k", large_string.as_str()),
+        ("duplicate_key_100k", duplicate_large.as_str()),
+    ] {
+        let rows = (1_048_576 / json.len()).clamp(1, 8_000);
+        let array_ref: ArrayRef = Arc::new(StringArray::from_iter_values(std::iter::repeat_n(
+            json, rows,
+        )));
+        let id = format!(
+            "batch_json_string_to_variant {name} ({} bytes per document, {rows} rows)",
+            json.len()
+        );
+        c.bench_function(&id, |b| {
+            b.iter(|| std::hint::black_box(json_to_variant(&array_ref).unwrap()));
+        });
+    }
+}
+
+pub fn variant_to_json_primitive_bench(c: &mut Criterion) {
+    let primitive = create_primitive_variant_array(VARIANT_BATCH_ROWS);
+    let input = ArrayRef::from(primitive.clone());
+
+    // Little JSON writing makes per-row binary column dispatch visible.
+    c.bench_function("variant_to_json_primitive", |b| {
+        b.iter(|| variant_to_json(&input).unwrap())
+    });
+
+    // Read the same integers from typed_value rather than binary Variant values.
+    let shredded = shred_variant(&primitive, &DataType::Int64).unwrap();
+    let input = ArrayRef::from(shredded);
+    c.bench_function("variant_to_json_shredded_primitive", |b| {
+        b.iter(|| variant_to_json(&input).unwrap())
+    });
+}
+
+pub fn variant_to_json_bench(c: &mut Criterion) {
+    // Object iteration resolves metadata field names and recursively writes scalar values.
+    let objects = create_object_variant_array(VARIANT_BATCH_ROWS);
+    let input = ArrayRef::from(objects.clone());
+    c.bench_function("variant_to_json_object", |b| {
+        b.iter(|| variant_to_json(&input).unwrap())
+    });
+
+    // Same documents and BinaryView values, with dictionary lookup or run-end lookup added.
+    let (dictionary, ree) = create_encoded_metadata_variant_arrays(&objects);
+    for (name, input) in [
+        ("variant_to_json_dictionary_metadata", dictionary),
+        ("variant_to_json_ree_metadata", ree),
+    ] {
+        c.bench_function(name, |b| b.iter(|| variant_to_json(&input).unwrap()));
+    }
+
+    // Wide objects exercise field-name lookup and JSON key serialization for every field.
+    let json: ArrayRef = Arc::new(StringArray::from_iter_values(random_structure(
+        VARIANT_BATCH_ROWS,
+        200,
+    )));
+    let input = ArrayRef::from(json_to_variant(&json).unwrap());
+    c.bench_function("variant_to_json_wide_object", |b| {
+        b.iter(|| variant_to_json(&input).unwrap())
+    });
+
+    // Lists recurse through elements without metadata field-name lookups.
+    let json: ArrayRef = Arc::new(StringArray::from_iter_values(json_repeated_list(
+        VARIANT_BATCH_ROWS,
+    )));
+    let input = ArrayRef::from(json_to_variant(&json).unwrap());
+    c.bench_function("variant_to_json_list", |b| {
+        b.iter(|| variant_to_json(&input).unwrap())
+    });
 }
 
 pub fn variant_get_bench(c: &mut Criterion) {
@@ -177,6 +270,55 @@ pub fn variant_get_bench(c: &mut Criterion) {
 
     c.bench_function("variant_get_primitive", |b| {
         b.iter(|| variant_get(&input.clone(), options.clone()))
+    });
+}
+
+pub fn variant_get_list_index_bench(c: &mut Criterion) {
+    let mut builder = VariantArrayBuilder::new(8192);
+    for i in 0..8192 {
+        let mut list = builder.new_list();
+        // Alternate empty lists with two-element lists to exercise missing and present indexes.
+        if i % 2 != 0 {
+            list.append_value(Variant::Int64(i));
+            list.append_value(Variant::Int64(i + 1));
+        }
+        list.finish();
+    }
+    let variant_array = builder.build();
+    let list_type = DataType::List(Arc::new(Field::new("item", DataType::Int64, true)));
+    let shredded = shred_variant(&variant_array, &list_type).unwrap();
+    let options = GetOptions::new_with_path(VariantPath::from(0));
+
+    let input = ArrayRef::from(variant_array);
+    c.bench_function("variant_get_list_index_unshredded", |b| {
+        b.iter(|| variant_get(&input, options.clone()).unwrap())
+    });
+
+    let input = ArrayRef::from(shredded);
+    c.bench_function("variant_get_list_index_shredded", |b| {
+        b.iter(|| variant_get(&input, options.clone()).unwrap())
+    });
+}
+
+pub fn variant_get_list_index_all_oob_int64_bench(c: &mut Criterion) {
+    let mut builder = VariantArrayBuilder::new(64);
+    for _ in 0..64 {
+        let mut list = builder.new_list();
+        list.append_value(Variant::Int64(1));
+        list.finish();
+    }
+    let variant_array = builder.build();
+    let list_type = DataType::List(Arc::new(Field::new("item", DataType::Int64, true)));
+    let input = ArrayRef::from(shred_variant(&variant_array, &list_type).unwrap());
+    let options = GetOptions::new_with_path(VariantPath::from(9))
+        .with_as_type(Some(Arc::new(Field::new("value", DataType::Int64, true))));
+    let result = variant_get(&input, options.clone()).unwrap();
+    assert_eq!(result.data_type(), &DataType::Int64);
+    assert_eq!(result.len(), 64);
+    assert_eq!(result.null_count(), 64);
+
+    c.bench_function("variant_get_list_index_all_oob_int64_64_rows", |b| {
+        b.iter(|| variant_get(&input, options.clone()).unwrap())
     });
 }
 
@@ -213,6 +355,69 @@ pub fn variant_get_unshredded_object_path_bench(c: &mut Criterion) {
     });
 }
 
+pub fn variant_get_object_path_metadata_bench(c: &mut Criterion) {
+    let size = VARIANT_BATCH_ROWS;
+    let num_fields = 300;
+    let field = Arc::new(Field::new("typed_value", DataType::Int32, true));
+    let path = VariantPath::from(vec![VariantPathElement::field("attr.140")]);
+    let options = GetOptions::new_with_path(path).with_as_type(Some(field));
+    let mut group = c.benchmark_group("variant_get_object_path_metadata");
+
+    // Alternate two overlapping key sets, always including the lookup target.
+    let json_templates = [0, 1].map(|offset| {
+        Value::Object(
+            (0..num_fields)
+                .map(|index| {
+                    if index == num_fields / 2 {
+                        ("attr.140".to_string(), Value::from(140))
+                    } else {
+                        (format!("attr.{index:03}.{offset}"), Value::from(index))
+                    }
+                })
+                .collect(),
+        )
+    });
+    for case in [
+        "json_to_variant",
+        "variant_array_builder",
+        "per_row_metadata",
+    ] {
+        // Fixture construction is outside the timed loop. The producer cases follow their
+        // output layouts, including any future dictionary sharing.
+        let input = match case {
+            "json_to_variant" => {
+                let json_strings = json_templates.each_ref().map(Value::to_string);
+                let json: ArrayRef = Arc::new(StringArray::from_iter_values(
+                    json_strings.iter().cycle().take(size),
+                ));
+                ArrayRef::from(json_to_variant(&json).unwrap())
+            }
+            "variant_array_builder" => {
+                let mut builder = VariantArrayBuilder::new(size);
+                for json in json_templates.iter().cycle().take(size) {
+                    let mut object = builder.new_object();
+                    // Reverse insertion order produces an unsorted metadata dictionary.
+                    for (name, value) in json.as_object().unwrap().iter().rev() {
+                        object.insert(name, value.as_i64().unwrap());
+                    }
+                    object.finish();
+                }
+                ArrayRef::from(builder.build())
+            }
+            _ => ArrayRef::from(create_per_row_metadata_variant_array(&json_templates, size)),
+        };
+        let result = variant_get(&input, options.clone()).unwrap();
+        let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(result.len(), size);
+        assert!(result.iter().all(|value| value == Some(140)));
+
+        group.bench_function(case, |b| {
+            b.iter(|| variant_get(&input, options.clone()).unwrap())
+        });
+    }
+    group.finish();
+}
+
 /// Shreds objects whose fields only partially match the requested shredding schema.
 ///
 /// Every field that is *not* covered by the schema is copied into the leftover `value` column,
@@ -220,7 +425,7 @@ pub fn variant_get_unshredded_object_path_bench(c: &mut Criterion) {
 /// dictionary. The source array's dictionary holds 300 field names, so the cost of that name
 /// lookup is visible.
 pub fn shred_variant_partial_object_bench(c: &mut Criterion) {
-    let variant_array = create_unshredded_object_variant_array(SHRED_VARIANT_OBJECT_ROWS);
+    let variant_array = create_unshredded_object_variant_array(VARIANT_BATCH_ROWS);
 
     // The source objects have 15 fields (`attr.000`, `attr.020`, ... `attr.280`). Shred the first
     // 5 of them, leaving the other 10 to be written to the leftover `value` column.
@@ -245,7 +450,7 @@ pub fn shred_variant_partial_object_bench(c: &mut Criterion) {
 /// Same as [`shred_variant_partial_object_bench`], but no field of the source objects is covered
 /// by the shredding schema, so all 15 fields per row take the leftover `value` column path.
 pub fn shred_variant_unmatched_object_bench(c: &mut Criterion) {
-    let variant_array = create_unshredded_object_variant_array(SHRED_VARIANT_OBJECT_ROWS);
+    let variant_array = create_unshredded_object_variant_array(VARIANT_BATCH_ROWS);
 
     let shredded_fields = (0..5)
         .map(|index| {
@@ -471,15 +676,208 @@ pub fn variant_get_binary_from_string_bench(c: &mut Criterion) {
     );
 }
 
+pub fn variant_get_decimal_from_int_bench(c: &mut Criterion) {
+    let int32 = |rng: &mut StdRng| Variant::Int32(rng.random_range(-1_000_000..1_000_000));
+    let int64 = |rng: &mut StdRng| Variant::Int64(rng.random_range(-1_000_000..1_000_000));
+    bench_variant_get_decimal(
+        c,
+        "int32_to_decimal32(9,0)_valid",
+        int32,
+        DataType::Decimal32(9, 0),
+        &[true, false],
+    );
+    bench_variant_get_decimal(
+        c,
+        "int64_to_decimal128(38,2)_scale_up",
+        int64,
+        DataType::Decimal128(38, 2),
+        &[true, false],
+    );
+    bench_variant_get_decimal(
+        c,
+        "int64_to_decimal256(76,-1)_scale_down",
+        int64,
+        DataType::Decimal256(76, -1),
+        &[true],
+    );
+    bench_variant_get_decimal(
+        c,
+        "int64_to_decimal32(9,-20)_all_zero",
+        int64,
+        DataType::Decimal32(9, -20),
+        &[true],
+    );
+
+    let wide = |rng: &mut StdRng| Variant::Int64(rng.random_range(5_000_000_000..5_000_100_000));
+    bench_variant_get_decimal(
+        c,
+        "int64_to_decimal32(9,-1)_scale_before_narrowing",
+        wide,
+        DataType::Decimal32(9, -1),
+        &[true],
+    );
+    let overflow = |rng: &mut StdRng| Variant::Int32(rng.random_range(100_000_000..1_000_000_000));
+    bench_variant_get_decimal(
+        c,
+        "int32_to_decimal32(8,0)_precision_overflow",
+        overflow,
+        DataType::Decimal32(8, 0),
+        &[true],
+    );
+}
+
+pub fn variant_get_decimal_from_float_bench(c: &mut Criterion) {
+    let float = |rng: &mut StdRng| Variant::Float(rng.random_range(-9999.0..9999.0));
+    let double = |rng: &mut StdRng| Variant::Double(rng.random_range(-9999.0..9999.0));
+    bench_variant_get_decimal(
+        c,
+        "float_to_decimal32(7,2)_valid",
+        float,
+        DataType::Decimal32(7, 2),
+        &[true, false],
+    );
+    bench_variant_get_decimal(
+        c,
+        "double_to_decimal128(20,3)_valid",
+        double,
+        DataType::Decimal128(20, 3),
+        &[true, false],
+    );
+    bench_variant_get_decimal(
+        c,
+        "double_to_decimal256(40,-2)_scale_down",
+        double,
+        DataType::Decimal256(40, -2),
+        &[true],
+    );
+
+    // Include direct and rounding-induced precision overflow for both source types.
+    // Before #11302 these return out-of-precision values instead of nulls. Keep
+    // the fixture usable on both revisions so the cost of the fix can be measured.
+    let samples = [1000.0, -1000.0, 999.75, -999.75];
+    bench_variant_get_decimal(
+        c,
+        "float_to_decimal64(3,0)_precision_overflow",
+        |rng| Variant::Float(samples[rng.random_range(0..samples.len())] as f32),
+        DataType::Decimal64(3, 0),
+        &[true],
+    );
+    bench_variant_get_decimal(
+        c,
+        "double_to_decimal64(3,0)_precision_overflow",
+        |rng| Variant::Double(samples[rng.random_range(0..samples.len())]),
+        DataType::Decimal64(3, 0),
+        &[true],
+    );
+
+    let samples = [f64::NAN, f64::INFINITY, f64::NEG_INFINITY];
+    bench_variant_get_decimal(
+        c,
+        "double_to_decimal128(20,3)_non_finite",
+        |rng| Variant::Double(samples[rng.random_range(0..samples.len())]),
+        DataType::Decimal128(20, 3),
+        &[true],
+    );
+}
+
+pub fn variant_get_decimal_from_string_bench(c: &mut Criterion) {
+    let samples = ["123.45", "-67.89", "0"];
+    bench_variant_get_decimal(
+        c,
+        "short_string_to_decimal32(7,2)_valid",
+        |rng| Variant::from(samples[rng.random_range(0..samples.len())]),
+        DataType::Decimal32(7, 2),
+        &[true, false],
+    );
+
+    // Exceed the 63-byte short-string limit while keeping the values in range.
+    let samples = [
+        "0000000000000000000000000000000000000000000000000000000000000000123.45",
+        "-000000000000000000000000000000000000000000000000000000000000000067.89",
+    ];
+    bench_variant_get_decimal(
+        c,
+        "string_to_decimal128(38,3)_long",
+        |rng| Variant::from(samples[rng.random_range(0..samples.len())]),
+        DataType::Decimal128(38, 3),
+        &[true, false],
+    );
+    let samples = [
+        "1234567890123456789012345678901234567890.12",
+        "-1234567890123456789012345678901234567890.12",
+    ];
+    bench_variant_get_decimal(
+        c,
+        "short_string_to_decimal256(76,2)_wide",
+        |rng| Variant::from(samples[rng.random_range(0..samples.len())]),
+        DataType::Decimal256(76, 2),
+        &[true],
+    );
+
+    let samples = ["12345.67", "-6789.01", "0"];
+    bench_variant_get_decimal(
+        c,
+        "short_string_to_decimal256(40,-2)_scale_down",
+        |rng| Variant::from(samples[rng.random_range(0..samples.len())]),
+        DataType::Decimal256(40, -2),
+        &[true],
+    );
+}
+
+fn bench_variant_get_decimal(
+    c: &mut Criterion,
+    name: &str,
+    value: impl Fn(&mut StdRng) -> Variant<'static, 'static>,
+    target: DataType,
+    modes: &[bool],
+) {
+    for &safe in modes {
+        let options = GetOptions::new()
+            .with_as_type(Some(Arc::new(Field::new(
+                "typed_value",
+                target.clone(),
+                true,
+            ))))
+            .with_cast_options(CastOptions {
+                safe,
+                ..Default::default()
+            });
+        let mode = if safe { "safe" } else { "strict" };
+        bench_variant_get(
+            c,
+            &format!("variant_get_decimal_{name}_8192_{mode}"),
+            |rng, array_size| {
+                // Unshredded input exercises Variant's scalar conversion. Keep
+                // the requested source type and make every tenth row null.
+                let mut builder = VariantArrayBuilder::new(array_size);
+                for i in 0..array_size {
+                    if i % 10 == 0 {
+                        builder.append_null();
+                    } else {
+                        builder.append_variant(value(rng));
+                    }
+                }
+                builder.build()
+            },
+            options,
+        );
+    }
+}
+
 criterion_group!(
     benches,
     variant_get_bench,
+    variant_get_list_index_bench,
+    variant_get_list_index_all_oob_int64_bench,
     variant_get_shredded_utf8_bench,
     variant_get_unshredded_object_path_bench,
+    variant_get_object_path_metadata_bench,
     shred_variant_partial_object_bench,
     shred_variant_unmatched_object_bench,
     variant_array_builder_build_bench,
     benchmark_batch_json_string_to_variant,
+    variant_to_json_bench,
+    variant_to_json_primitive_bench,
     variant_get_utf8_from_unshredded_string_bench,
     variant_get_binary_from_unshredded_binary_bench,
     variant_get_utf8_from_int_bench,
@@ -492,6 +890,9 @@ criterion_group!(
     variant_get_utf8_from_list_bench,
     variant_get_utf8_from_map_in_list_bench,
     variant_get_binary_from_string_bench,
+    variant_get_decimal_from_int_bench,
+    variant_get_decimal_from_float_bench,
+    variant_get_decimal_from_string_bench,
 );
 
 criterion_main!(benches);
@@ -510,6 +911,45 @@ fn create_primitive_variant_array(size: usize) -> VariantArray {
     }
 
     variant_builder.build()
+}
+
+/// Reuses the person generator, alternating schemas in runs of 64 rows for metadata encoding.
+fn create_object_variant_array(size: usize) -> VariantArray {
+    let json = json_repeated_struct(size).enumerate().map(|(i, json)| {
+        if i / 64 % 2 == 0 {
+            json
+        } else {
+            json.replace("\"age\":", "\"years\":")
+        }
+    });
+    let input: ArrayRef = Arc::new(StringArray::from_iter_values(json));
+    json_to_variant(&input).unwrap()
+}
+
+/// Encodes the two metadata dictionaries from `create_object_variant_array` while
+/// preserving BinaryView storage and the value column. Run-end encoding uses 64-row runs.
+fn create_encoded_metadata_variant_arrays(objects: &VariantArray) -> (ArrayRef, ArrayRef) {
+    let metadata = objects.metadata_column();
+    let dictionary_type =
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::BinaryView));
+    let dictionary = cast(metadata, &dictionary_type).unwrap();
+
+    let ree_type = DataType::RunEndEncoded(
+        Arc::new(Field::new("run_ends", DataType::Int32, false)),
+        Arc::new(Field::new("values", DataType::BinaryView, false)),
+    );
+    let ree = cast(metadata, &ree_type).unwrap();
+
+    let with_metadata = |metadata: ArrayRef| -> ArrayRef {
+        Arc::new(
+            StructArrayAssembler::new()
+                .with_field("metadata", metadata, false)
+                .with_field("value", objects.value_column().clone(), false)
+                .build()
+                .unwrap(),
+        )
+    };
+    (with_metadata(dictionary), with_metadata(ree))
 }
 
 /// Creates a `VariantArray` where the values are already shredded as UTF8.
@@ -539,6 +979,32 @@ fn create_shredded_utf8_variant_array(size: usize) -> VariantArray {
 
     VariantArray::try_new(struct_array_ref.as_ref())
         .expect("created struct should be a valid shredded variant")
+}
+
+/// Keeps metadata unshared even if `json_to_variant` or `VariantArrayBuilder` starts sharing it.
+/// `BinaryViewArray::from_iter_values` copies each row's metadata into its own byte range.
+fn create_per_row_metadata_variant_array(json_templates: &[Value], size: usize) -> VariantArray {
+    let templates = json_templates
+        .iter()
+        .map(|json| {
+            let mut builder = VariantBuilder::new();
+            append_json(json, &mut builder).unwrap();
+            builder.finish()
+        })
+        .collect::<Vec<_>>();
+    let rows = templates.iter().cycle().take(size);
+    let metadata = BinaryViewArray::from_iter_values(rows.clone().map(|(metadata, _)| metadata));
+    let value = BinaryViewArray::from_iter_values(rows.map(|(_, value)| value));
+    assert_ne!(
+        metadata.value(0).as_ptr(),
+        metadata.value(templates.len()).as_ptr()
+    );
+    let input = StructArrayAssembler::new()
+        .with_field("metadata", Arc::new(metadata), false)
+        .with_field("value", Arc::new(value), false)
+        .build()
+        .unwrap();
+    VariantArray::try_new(&input).unwrap()
 }
 
 fn create_unshredded_object_variant_array(size: usize) -> VariantArray {
