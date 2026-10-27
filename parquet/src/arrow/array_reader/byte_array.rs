@@ -827,6 +827,10 @@ mod tests {
         assert_eq!(decoder.read(&mut output, 1).unwrap(), 0);
     }
 
+    // The checked_offset unit tests cover arithmetic; this also verifies that
+    // read rejects a real overflow before changing output or decoder state.
+    // Keep this regression available for manual runs without requiring an
+    // allocation of about 2 GiB in routine CI.
     #[test]
     #[ignore = "allocates about 2 GiB; run --ignored --test-threads=1"]
     fn test_delta_length_offset_overflow_preserves_state() {
