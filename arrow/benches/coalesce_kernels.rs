@@ -160,8 +160,8 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
 
     // Null density: 0, 10%
     for null_density in [0.0, 0.1] {
-        // Selectivity: 0.1%, 1%, 10%, 80%
-        for selectivity in [0.001, 0.01, 0.1, 0.8] {
+        // Selectivity: 0.1%, 0.5%, 1%, 10%, 80%
+        for selectivity in [0.001, 0.005, 0.01, 0.1, 0.8] {
             FilterBenchmarkBuilder {
                 c,
                 name: "primitive",
@@ -1447,10 +1447,17 @@ impl DataStreamBuilder {
                 )
                 .with_timezone(Arc::clone(tz)),
             ),
-            DataType::Utf8 => Arc::new(create_string_array::<i32>(
-                self.batch_size,
-                self.null_density,
-            )), // TODO seed
+            // Strings of 0 to 399 bytes; `max_string_len` doesn't apply
+            DataType::Utf8 => Arc::new(
+                create_string_array_with_len_range_and_prefix_and_seed::<i32>(
+                    self.batch_size,
+                    self.null_density,
+                    0,
+                    399,
+                    "",
+                    seed,
+                ),
+            ),
             DataType::Binary => Arc::new(create_binary_array_with_len_range_and_prefix_and_seed::<
                 i32,
             >(
@@ -1482,11 +1489,18 @@ impl DataStreamBuilder {
                 if key_type.as_ref() == &DataType::Int32
                     && value_type.as_ref() == &DataType::Utf8 =>
             {
-                Arc::new(create_string_dict_array::<Int32Type>(
-                    self.batch_size,
-                    self.null_density,
-                    self.max_string_len,
-                )) // TODO seed
+                Arc::new(
+                    create_string_array_with_len_range_and_prefix_and_seed::<i32>(
+                        self.batch_size,
+                        self.null_density,
+                        self.max_string_len,
+                        self.max_string_len,
+                        "",
+                        seed,
+                    )
+                    .iter()
+                    .collect::<DictionaryArray<Int32Type>>(),
+                )
             }
             DataType::FixedSizeBinary(size) => Arc::new(create_fixed_size_binary_array(
                 self.batch_size,
