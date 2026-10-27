@@ -21,6 +21,78 @@
 
 # Changelog
 
+## [59.3.2](https://github.com/apache/arrow-rs/tree/59.3.2) - (2026-10-26)
+
+[Full Changelog](https://github.com/apache/arrow-rs/compare/59.3.1...59.3.2)
+
+### Bug fixes
+- [59_maintenance] Write empty validity buffers for arrays without nulls in IPC writer by @alamb in [#11820](https://github.com/apache/arrow-rs/pull/11820)
+- [59_maintenance] fix(arrow-buffer): prevent use-after-free in Buffer::shrink_to_fit when MemoryReservation::resize panics by @alamb in [#11787](https://github.com/apache/arrow-rs/pull/11787)
+- [59_maintenance] fix(parquet): skip miniblocks wider than 64 values instead of erroring by @Jefffrey in [#11754](https://github.com/apache/arrow-rs/pull/11754)
+- [59_maintenance] fix: account for offsets in runarrays when using extend for MutableArrayData by @Jefffrey in [#11671](https://github.com/apache/arrow-rs/pull/11671)
+- [59_maintenance] fix: account for offset when building RunArray from ArrayData by @alamb in [#11739](https://github.com/apache/arrow-rs/pull/11739)
+- [59_maintenance] fix: use correct length in runarray validation by @alamb in [#11740](https://github.com/apache/arrow-rs/pull/11740)
+- [59_maintenance] fix: account for arraydata offset when comparing runarrays by @Jefffrey in [#11673](https://github.com/apache/arrow-rs/pull/11673)
+- [59_maintenance] fix(arrow-schema): validate `UnionFields` when deserializing by @Jefffrey in [#11672](https://github.com/apache/arrow-rs/pull/11672)
+- [59_maintenance] fix: implement `ArrayData::validate_values` for union types by @Jefffrey in [#11678](https://github.com/apache/arrow-rs/pull/11678)
+- [59_maintenance] Fix sliced sparse union ArrayData conversion by @Jefffrey in [#11679](https://github.com/apache/arrow-rs/pull/11679)
+- [59_maintenance] fix(arrow-data): account for FixedSizeList parent offset in MutableArrayData by @Jefffrey in [#11683](https://github.com/apache/arrow-rs/pull/11683)
+- [59_maintenance] fix: `UnionFields::from_iter` should validate input by @Jefffrey in [#11670](https://github.com/apache/arrow-rs/pull/11670)
+- [59_maintenance] fix(arrow-array): use the field's type id in dense union logical_nulls by @Jefffrey in [#11680](https://github.com/apache/arrow-rs/pull/11680)
+- [59_maintenance] Parquet: list the dictionary page first in page_encoding_stats by @Jefffrey in [#11699](https://github.com/apache/arrow-rs/pull/11699)
+- [59_maintenance] fix(arrow-data): check view nulls at the right index in `ArrayData` equality by @Jefffrey in [#11675](https://github.com/apache/arrow-rs/pull/11675)
+
+## [58.4.1](https://github.com/apache/arrow-rs/tree/58.4.1) - (2026-10-26)
+
+[Full Changelog](https://github.com/apache/arrow-rs/compare/58.4.0...58.4.1)
+
+### Bug fixes
+- [58_maintenance] Write empty validity buffers for arrays without nulls in IPC writer by @mailmindlin in [#11817](https://github.com/apache/arrow-rs/pull/11817)
+- [58_maintenance] fix: account for offsets in runarrays when using extend for MutableArrayData by @Jefffrey in [#11761](https://github.com/apache/arrow-rs/pull/11761)
+- [58_maintenance] fix(arrow-schema): validate `UnionFields` when deserializing by @Jefffrey in [#11760](https://github.com/apache/arrow-rs/pull/11760)
+- [58_maintenance] fix: implement `ArrayData::validate_values` for union types by @Jefffrey in [#11762](https://github.com/apache/arrow-rs/pull/11762)
+- [58_maintenance] fix(arrow-data): check view nulls at the right index in `ArrayData` equality by @Jefffrey in [#11758](https://github.com/apache/arrow-rs/pull/11758)
+- [58_maintenance] fix(arrow-array): avoid returning corrupt array in `GenericByteArray::into_builder` by @Jefffrey in [#11707](https://github.com/apache/arrow-rs/pull/11707)
+- [58_maintenance] fix(arrow-buffer): prevent use-after-free in Buffer::shrink_to_fit when MemoryReservation::resize panics by @alamb in [#11785](https://github.com/apache/arrow-rs/pull/11785)
+- [58_maintenance] fix: account for arraydata offset when comparing runarrays by @Jefffrey in [#11755](https://github.com/apache/arrow-rs/pull/11755)
+- [58_maintenance] fix(arrow-data): account for FixedSizeList parent offset in MutableArrayData by @Jefffrey in [#11756](https://github.com/apache/arrow-rs/pull/11756)
+- [58_maintenance] fix: use correct length in runarray validation by @Jefffrey in [#11767](https://github.com/apache/arrow-rs/pull/11767)
+- [58_maintenance] fix: account for offset when building RunArray from ArrayData by @Jefffrey in [#11766](https://github.com/apache/arrow-rs/pull/11766)
+- [58_maintenance] fix: `UnionFields::from_iter` should validate input by @Jefffrey in [#11763](https://github.com/apache/arrow-rs/pull/11763)
+- [58_maintenance] Fix sliced sparse union ArrayData conversion by @Jefffrey in [#11759](https://github.com/apache/arrow-rs/pull/11759)
+- [58_maintenance] fix(arrow-array): use the field's type id in dense union logical_nulls by @Jefffrey in [#11757](https://github.com/apache/arrow-rs/pull/11757)
+- [58_maintenance] fix(arrow-array): `PrimitiveRunBuilder` was buggy after `finish` by @Jefffrey in [#11704](https://github.com/apache/arrow-rs/pull/11704)
+- [58_maintenance] fix(arrow-data): fix gaps in ListView equality by @Jefffrey in [#11703](https://github.com/apache/arrow-rs/pull/11703)
+- [58_maintenance] fix(arrow-array): preserve type params in `PrimitiveArray::into_builder` by @Jefffrey in [#11765](https://github.com/apache/arrow-rs/pull/11765)
+- [58_maintenance] fix: `Buffer::into_mutable` return error instead of panic for converting owned sliced when not start at 0 and fix returned Mutable length by @Jefffrey in [#11706](https://github.com/apache/arrow-rs/pull/11706)
+- [58_maintenance] fix: finish methods in `PrimitiveDictionaryBuilder` discard type params by @Jefffrey in [#11705](https://github.com/apache/arrow-rs/pull/11705)
+
+### Miscellaneous
+- [58_maintenance] Upgrade legacy Thrift dependency to 0.23 by @beinan in [#11365](https://github.com/apache/arrow-rs/pull/11365)
+
+## [57.3.2](https://github.com/apache/arrow-rs/tree/57.3.2) - (2026-10-26)
+
+[Full Changelog](https://github.com/apache/arrow-rs/compare/57.3.1...57.3.2)
+
+### Bug fixes
+- [57_maintenance] fix: implement `ArrayData::validate_values` for union types by @Jefffrey in [#11814](https://github.com/apache/arrow-rs/pull/11814)
+- [57_maintenance] fix(arrow-array): avoid returning corrupt array in `GenericByteArray::into_builder` by @Jefffrey in [#11816](https://github.com/apache/arrow-rs/pull/11816)
+- [57_maintenance] fix: account for offsets in runarrays when using extend for MutableArrayData by @Jefffrey in [#11815](https://github.com/apache/arrow-rs/pull/11815)
+- [57_maintenance] fix(arrow-schema): validate `UnionFields` when deserializing by @Jefffrey in [#11813](https://github.com/apache/arrow-rs/pull/11813)
+- [57_maintenance] Fix sliced sparse union ArrayData conversion by @Jefffrey in [#11812](https://github.com/apache/arrow-rs/pull/11812)
+- [57_maintenance] fix(arrow-data): account for FixedSizeList parent offset in MutableArrayData by @Jefffrey in [#11809](https://github.com/apache/arrow-rs/pull/11809)
+- [57_maintenance] fix(arrow-array): preserve type params in `PrimitiveArray::into_builder` by @Jefffrey in [#11807](https://github.com/apache/arrow-rs/pull/11807)
+- [57_maintenance] fix: use correct length in runarray validation by @Jefffrey in [#11801](https://github.com/apache/arrow-rs/pull/11801)
+- [57_maintenance] fix(arrow-data): check view nulls at the right index in `ArrayData` equality by @Jefffrey in [#11811](https://github.com/apache/arrow-rs/pull/11811)
+- [57_maintenance] fix: account for offset when building RunArray from ArrayData by @Jefffrey in [#11800](https://github.com/apache/arrow-rs/pull/11800)
+- [57_maintenance] fix: `Buffer::into_mutable` return error instead of panic for converting owned sliced when not start at 0 and fix returned Mutable length by @Jefffrey in [#11806](https://github.com/apache/arrow-rs/pull/11806)
+- [57_maintenance] fix(arrow-array): `PrimitiveRunBuilder` was buggy after `finish` by @Jefffrey in [#11804](https://github.com/apache/arrow-rs/pull/11804)
+- [57_maintenance] fix(arrow-data): fix gaps in ListView equality by @Jefffrey in [#11802](https://github.com/apache/arrow-rs/pull/11802)
+- [57_maintenance] fix(arrow-array): use the field's type id in dense union logical_nulls by @Jefffrey in [#11810](https://github.com/apache/arrow-rs/pull/11810)
+- [57_maintenance] fix: finish methods in `PrimitiveDictionaryBuilder` discard type params by @Jefffrey in [#11805](https://github.com/apache/arrow-rs/pull/11805)
+- [57_maintenance] fix(arrow-buffer): prevent use-after-free in Buffer::shrink_to_fit when MemoryReservation::resize panics by @alamb in [#11786](https://github.com/apache/arrow-rs/pull/11786)
+- [57_maintenance] fix: `UnionFields::from_iter` should validate input by @alamb in [#11726](https://github.com/apache/arrow-rs/pull/11726)
+
 ## [60.0.0](https://github.com/apache/arrow-rs/tree/60.0.0) - (2026-09-10)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/59.2.0...60.0.0)
