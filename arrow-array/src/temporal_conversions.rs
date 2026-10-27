@@ -21,6 +21,7 @@ use crate::ArrowPrimitiveType;
 use crate::timezone::Tz;
 use arrow_schema::{DataType, TimeUnit};
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Timelike, Utc};
+use std::mem::ManuallyDrop;
 
 /// Number of seconds in a day
 pub const SECONDS_IN_DAY: i64 = 86_400;
@@ -241,7 +242,10 @@ pub fn duration_ns_to_duration(v: i64) -> Duration {
 
 /// Converts an [`ArrowPrimitiveType`] to [`NaiveDateTime`]
 pub fn as_datetime<T: ArrowPrimitiveType>(v: i64) -> Option<NaiveDateTime> {
-    as_datetime_with_data_type(&T::DATA_TYPE, v)
+    // Dropping the `DATA_TYPE` temporary calls `DataType`'s drop glue, which
+    // LLVM doesn't inline, on every value. A const owns no heap memory, so
+    // skipping the drop leaks nothing.
+    as_datetime_with_data_type(&ManuallyDrop::new(T::DATA_TYPE), v)
 }
 
 /// Converts a value of the given [`DataType`] to [`NaiveDateTime`]
@@ -269,7 +273,8 @@ pub(crate) fn as_datetime_with_data_type(data_type: &DataType, v: i64) -> Option
 
 /// Converts an [`ArrowPrimitiveType`] to [`DateTime<Tz>`]
 pub fn as_datetime_with_timezone<T: ArrowPrimitiveType>(v: i64, tz: Tz) -> Option<DateTime<Tz>> {
-    as_datetime_with_timezone_and_data_type(&T::DATA_TYPE, v, tz)
+    // See `as_datetime` for why the temporary is not dropped
+    as_datetime_with_timezone_and_data_type(&ManuallyDrop::new(T::DATA_TYPE), v, tz)
 }
 
 /// Converts a value of the given [`DataType`] to [`DateTime<Tz>`]
@@ -293,7 +298,8 @@ pub fn as_date<T: ArrowPrimitiveType>(v: i64) -> Option<NaiveDate> {
 
 /// Converts an [`ArrowPrimitiveType`] to [`NaiveTime`]
 pub fn as_time<T: ArrowPrimitiveType>(v: i64) -> Option<NaiveTime> {
-    as_time_with_data_type(&T::DATA_TYPE, v)
+    // See `as_datetime` for why the temporary is not dropped
+    as_time_with_data_type(&ManuallyDrop::new(T::DATA_TYPE), v)
 }
 
 /// Converts a value of the given [`DataType`] to [`NaiveTime`]
@@ -327,7 +333,8 @@ pub(crate) fn as_time_with_data_type(data_type: &DataType, v: i64) -> Option<Nai
 
 /// Converts an [`ArrowPrimitiveType`] to [`Duration`]
 pub fn as_duration<T: ArrowPrimitiveType>(v: i64) -> Option<Duration> {
-    match T::DATA_TYPE {
+    // See `as_datetime` for why the temporary is not dropped
+    match &*ManuallyDrop::new(T::DATA_TYPE) {
         DataType::Duration(unit) => match unit {
             TimeUnit::Second => try_duration_s_to_duration(v),
             TimeUnit::Millisecond => try_duration_ms_to_duration(v),

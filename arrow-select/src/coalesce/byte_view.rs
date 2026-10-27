@@ -194,8 +194,12 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
             self.size_of_completed_buffers_from_current_source += buffers_size;
         }
 
-        let starting_buffer: u32 = self.completed.len().try_into().expect("too many buffers");
+        let starting_buffer = self.completed.len() as u32;
         self.completed.extend_from_slice(buffers);
+        assert!(
+            u32::try_from(self.completed.len()).is_ok(),
+            "too many buffers"
+        );
 
         if starting_buffer == 0 {
             // If there are no buffers, we can just use the views as is
@@ -203,12 +207,19 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
         } else {
             // If there are buffers, we need to update the buffer index
             let updated_views = views.iter().map(|v| {
-                let mut byte_view = ByteView::from(*v);
-                if byte_view.length > MAX_INLINE_VIEW_LEN {
-                    // Small views (<=12 bytes) are inlined, so only need to update large views
-                    byte_view.buffer_index += starting_buffer;
-                }
-                byte_view.as_u128()
+                // A view of a string of 12 bytes or fewer stores the string
+                // inline and has no buffer index, so adding 0 leaves it
+                // unchanged.
+                let offset = if *v as u32 > MAX_INLINE_VIEW_LEN {
+                    starting_buffer
+                } else {
+                    0
+                };
+                // The buffer index is bits 64 to 95 of a view. Adding
+                // `starting_buffer` gives the string's buffer index in the
+                // output, which fits in 32 bits, so the sum never carries into
+                // bit 96.
+                v + ((offset as u128) << 64)
             });
 
             self.views.extend(updated_views);
@@ -369,14 +380,22 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
                 (false, 0)
             } else {
                 let ideal_buffer_size = s.total_buffer_bytes_used();
-                // We don't use get_buffer_memory_size here, because gc is for the contents of the
-                // data buffers, not views and nulls.
-                let actual_buffer_size =
-                    s.data_buffers().iter().map(|b| b.capacity()).sum::<usize>();
                 // copying strings is expensive, so only do it if the array is
                 // sparse (uses at least 2x the memory it needs)
-                let need_gc =
-                    ideal_buffer_size != 0 && actual_buffer_size > (ideal_buffer_size * 2);
+                let need_gc = if ideal_buffer_size != 0 {
+                    let mut is_sparse = false;
+                    let mut curr_buffer_size = 0;
+                    for buffer in s.data_buffers().iter() {
+                        curr_buffer_size += buffer.capacity();
+                        if curr_buffer_size > ideal_buffer_size * 2 {
+                            is_sparse = true;
+                            break;
+                        }
+                    }
+                    is_sparse
+                } else {
+                    false
+                };
                 (need_gc, ideal_buffer_size)
             };
 
