@@ -83,6 +83,7 @@ impl TimestampParser {
     }
 
     /// Parses a time of any of forms
+    /// - `09:26`
     /// - `09:26:56`
     /// - `09:26:56.123`
     /// - `09:26:56.123456`
@@ -135,6 +136,16 @@ impl TimestampParser {
                 let time = time(hour, minute, second, 0)?;
                 Some((time, 17))
             }
+            // 09:26
+            m if m & 0b111111 == 0b011011
+                && self.test(13, b':')
+                && !self.test(16, b':')
+                && !self.test(16, b'.') =>
+            {
+                let hour = self.digits[11] * 10 + self.digits[12];
+                let minute = self.digits[14] * 10 + self.digits[15];
+                Some((time(hour, minute, 0, 0)?, 16))
+            }
             _ => None,
         }
     }
@@ -149,6 +160,7 @@ impl TimestampParser {
 /// Examples of accepted inputs:
 /// * `1997-01-31T09:26:56.123Z`        # RCF3339
 /// * `1997-01-31T09:26:56.123-05:00`   # RCF3339
+/// * `1997-01-31T09:26Z`               # ISO8601 without seconds
 /// * `1997-01-31 09:26:56.123-05:00`   # close to RCF3339 but with a space rather than T
 /// * `2023-01-01 04:05:06.789 -08`     # close to RCF3339, no fractional seconds or time separator
 /// * `1997-01-31T09:26:56.123`         # close to RCF3339 but no timezone offset specified
@@ -1946,6 +1958,20 @@ mod tests {
     }
 
     #[test]
+    fn string_to_timestamp_without_seconds() {
+        let cases = [
+            ("2025-08-14T00:00Z", (2025, 8, 14, 0, 0)),
+            ("2025-08-14T09:26", (2025, 8, 14, 9, 26)),
+            ("2025-08-14 09:26+05:30", (2025, 8, 14, 3, 56)),
+            ("2025-08-14t23:59-08:00", (2025, 8, 15, 7, 59)),
+        ];
+        for (case, (y, m, d, h, min)) in cases {
+            let expected = Utc.with_ymd_and_hms(y, m, d, h, min, 0).unwrap();
+            assert_eq!(string_to_datetime(&Utc, case).unwrap(), expected)
+        }
+    }
+
+    #[test]
     fn string_to_timestamp_invalid() {
         // Test parsing invalid formats
         let cases = [
@@ -1968,6 +1994,10 @@ mod tests {
             ("1997-01-31T092656.123Z", "error parsing time"),
             ("1997-01-10T12:00:06.", "error parsing time"),
             ("1997-01-10T12:00:06. ", "error parsing time"),
+            ("1997-01-10T09:2Z", "error parsing time"),
+            ("1997-01-10T09:26:Z", "error parsing time"),
+            ("1997-01-10T09:26.5Z", "error parsing time"),
+            ("1997-01-10T09:61Z", "error parsing time"),
         ];
 
         for (s, ctx) in cases {
@@ -2060,11 +2090,13 @@ mod tests {
             "2020-12-1",
             "1690-2-5",
             "2020-09-08 01:02:03",
+            "2020-09-08 01:02",
         ];
         for case in cases {
             let v = date32_to_datetime(Date32Type::parse(case).unwrap()).unwrap();
             let expected = NaiveDate::parse_from_str(case, "%Y-%m-%d")
                 .or_else(|_| NaiveDate::parse_from_str(case, "%Y-%m-%d %H:%M:%S"))
+                .or_else(|_| NaiveDate::parse_from_str(case, "%Y-%m-%d %H:%M"))
                 .unwrap();
             assert_eq!(v.date(), expected);
         }
@@ -2078,7 +2110,6 @@ mod tests {
             "2020--04-03",
             "2020--",
             "2020-09-08 01",
-            "2020-09-08 01:02",
             "2020-09-08 01-02-03",
             "2020-9-8 01:02:03",
             "2020-09-08 1:2:3",
@@ -3629,6 +3660,48 @@ mod tests {
         assert_eq!(Float64Type::parse("+"), None);
         assert_eq!(TimestampNanosecondType::parse(""), None);
         assert_eq!(Date32Type::parse(""), None);
+    }
+
+    #[test]
+    fn test_parse_integer_bounds() {
+        // The all-nines cases have as many digits as a bound but lie past it. atoi 3.1.0
+        // parsed -99999 as i16 without an overflow check (#11591).
+        macro_rules! check {
+            ($t:ty) => {{
+                type Native = <$t as ArrowPrimitiveType>::Native;
+                let (min, max) = (i128::from(Native::MIN), i128::from(Native::MAX));
+                let nines = 10_i128.pow(max.ilog10() + 1) - 1;
+                for v in [
+                    min,
+                    max,
+                    min - 1,
+                    max + 1,
+                    -nines,
+                    nines,
+                    -nines - 1,
+                    nines + 1,
+                ] {
+                    let expected = Native::try_from(v).ok();
+                    // The leading space takes the path that trims before parsing
+                    for s in [v.to_string(), format!(" {v}")] {
+                        assert_eq!(
+                            <$t>::parse(&s),
+                            expected,
+                            "{s:?} as {}",
+                            <$t as ArrowPrimitiveType>::DATA_TYPE
+                        );
+                    }
+                }
+            }};
+        }
+        check!(Int8Type);
+        check!(Int16Type);
+        check!(Int32Type);
+        check!(Int64Type);
+        check!(UInt8Type);
+        check!(UInt16Type);
+        check!(UInt32Type);
+        check!(UInt64Type);
     }
 
     #[test]

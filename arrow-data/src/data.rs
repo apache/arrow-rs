@@ -1289,9 +1289,12 @@ impl ArrayData {
 
                 let len_plus_offset =
                     checked_len_plus_offset(&self.data_type, self.len, self.offset)?;
-                let expected_values_len = len_plus_offset
-                    .checked_mul(list_size)
-                    .expect("integer overflow computing expected number of expected values in FixedListSize");
+                let expected_values_len = len_plus_offset.checked_mul(list_size).ok_or_else(|| {
+                    ArrowError::InvalidArgumentError(format!(
+                        "Integer overflow computing expected number of values in {}: length + offset ({}) multiplied by list size ({}) exceeds usize",
+                        self.data_type, len_plus_offset, list_size
+                    ))
+                })?;
 
                 if values_data.len < expected_values_len {
                     return Err(ArrowError::InvalidArgumentError(format!(
@@ -1675,11 +1678,19 @@ impl ArrayData {
                 }
             }
             DataType::RunEndEncoded(run_ends, _values) => {
+                let len_plus_offset =
+                    checked_len_plus_offset(&self.data_type, self.len, self.offset)?;
                 let run_ends_data = self.child_at(0)?;
                 match run_ends.data_type() {
-                    DataType::Int16 => run_ends_data.check_run_ends::<i16>(),
-                    DataType::Int32 => run_ends_data.check_run_ends::<i32>(),
-                    DataType::Int64 => run_ends_data.check_run_ends::<i64>(),
+                    DataType::Int16 => {
+                        run_ends_data.check_run_ends::<i16>(self.len, len_plus_offset)
+                    }
+                    DataType::Int32 => {
+                        run_ends_data.check_run_ends::<i32>(self.len, len_plus_offset)
+                    }
+                    DataType::Int64 => {
+                        run_ends_data.check_run_ends::<i64>(self.len, len_plus_offset)
+                    }
                     data_type => Err(ArrowError::InvalidArgumentError(format!(
                         "Run end type must be Int16, Int32 or Int64, got {data_type}"
                     ))),
@@ -1829,7 +1840,11 @@ impl ArrayData {
     }
 
     /// Validates that each value in run_ends array is positive and strictly increasing.
-    fn check_run_ends<T>(&self) -> Result<(), ArrowError>
+    fn check_run_ends<T>(
+        &self,
+        parent_len: usize,
+        parent_len_plus_offset: usize,
+    ) -> Result<(), ArrowError>
     where
         T: ArrowNativeType + TryInto<i64> + num_traits::Num + std::fmt::Display,
     {
@@ -1856,10 +1871,9 @@ impl ArrayData {
             Ok(())
         })?;
 
-        let len_plus_offset = checked_len_plus_offset(&self.data_type, self.len, self.offset)?;
-        if prev_value.as_usize() < len_plus_offset {
+        if parent_len > 0 && prev_value.as_usize() < parent_len_plus_offset {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "The offset + length of array should be less or equal to last value in the run_ends array. The last value of run_ends array is {prev_value} and offset + length of array is {len_plus_offset}."
+                "The offset + length of array should be less or equal to last value in the run_ends array. The last value of run_ends array is {prev_value} and offset + length of array is {parent_len_plus_offset}."
             )));
         }
         Ok(())
@@ -2709,6 +2723,62 @@ mod tests {
     }
 
     #[test]
+    fn test_fixed_size_list_validation_child_len_mul_overflow() {
+        // Empty child and no parent null buffer: huge logical lengths allocate nothing.
+        let child = ArrayData::builder(DataType::Int32)
+            .len(0)
+            .add_buffer(Buffer::from_slice_ref([0i32; 0]))
+            .build()
+            .unwrap();
+        let list_size = 2i32;
+        let data_type = DataType::FixedSizeList(
+            Arc::new(Field::new("item", DataType::Int32, true)),
+            list_size,
+        );
+        // `(len + offset) * list_size` overflows; the addition itself does not.
+        let len_plus_offset = (usize::MAX / 2) + 1;
+        let overflow_cases = [(len_plus_offset, 0usize), (usize::MAX / 2, 1)];
+
+        for (len, offset) in overflow_cases {
+            let err = ArrayData::builder(data_type.clone())
+                .len(len)
+                .offset(offset)
+                .add_child_data(child.clone())
+                .build()
+                .unwrap_err();
+
+            match err {
+                ArrowError::InvalidArgumentError(msg) => assert_eq!(
+                    msg,
+                    format!(
+                        "Integer overflow computing expected number of values in {data_type}: length + offset ({len_plus_offset}) multiplied by list size ({list_size}) exceeds usize"
+                    )
+                ),
+                other => panic!("unexpected error type {other}"),
+            }
+        }
+
+        // Same product is representable here, so validation reports a short child.
+        let err = ArrayData::builder(data_type.clone())
+            .len(usize::MAX / 2)
+            .offset(0)
+            .add_child_data(child)
+            .build()
+            .unwrap_err();
+
+        match err {
+            ArrowError::InvalidArgumentError(msg) => assert_eq!(
+                msg,
+                format!(
+                    "Values length 0 is less than the length + offset ({}) multiplied by the value size ({list_size}) for {data_type}",
+                    usize::MAX / 2
+                )
+            ),
+            other => panic!("unexpected error type {other}"),
+        }
+    }
+
+    #[test]
     fn test_struct_equal_accounts_for_parent_offset() {
         let data_type =
             DataType::Struct(Fields::from(vec![Field::new("x", DataType::Int32, false)]));
@@ -2758,6 +2828,70 @@ mod tests {
         let output = mutable.freeze();
 
         assert_eq!(output.child_data()[0].buffer::<i32>(0), &[1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_extend_fixed_size_list_accounts_for_parent_offset() {
+        let field = Arc::new(Field::new("item", DataType::Int32, false));
+        let child = ArrayData::builder(DataType::Int32)
+            .len(6)
+            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5]))
+            .build()
+            .unwrap();
+
+        let data = ArrayData::builder(DataType::FixedSizeList(field, 2))
+            .len(2)
+            .offset(1)
+            .add_child_data(child)
+            .build()
+            .unwrap();
+
+        let mut mutable = MutableArrayData::new(vec![&data], false, data.len());
+        mutable.try_extend(0, 0, data.len()).unwrap();
+        let output = mutable.freeze();
+
+        assert_eq!(output.child_data()[0].buffer::<i32>(0), &[2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn test_extend_sparse_union_accounts_for_parent_offset() {
+        let fields = UnionFields::try_new(
+            [0, 1],
+            [
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Int32, false),
+            ],
+        )
+        .unwrap();
+        let child_a = ArrayData::builder(DataType::Int32)
+            .len(3)
+            .add_buffer(Buffer::from_slice_ref([10, 20, 30]))
+            .build()
+            .unwrap();
+        let child_b = ArrayData::builder(DataType::Int32)
+            .len(3)
+            .add_buffer(Buffer::from_slice_ref([100, 200, 300]))
+            .build()
+            .unwrap();
+
+        // The children are left whole, as `ArrayData::slice` and C Data
+        // Interface producers leave them for a sparse union
+        let data = ArrayData::builder(DataType::Union(fields, UnionMode::Sparse))
+            .len(2)
+            .offset(1)
+            .add_buffer(Buffer::from_slice_ref([0i8, 1, 0]))
+            .add_child_data(child_a)
+            .add_child_data(child_b)
+            .build()
+            .unwrap();
+
+        let mut mutable = MutableArrayData::new(vec![&data], false, data.len());
+        mutable.try_extend(0, 0, data.len()).unwrap();
+        let output = mutable.freeze();
+
+        assert_eq!(output.buffer::<i8>(0), &[1, 0]);
+        assert_eq!(output.child_data()[0].buffer::<i32>(0), &[20, 30]);
+        assert_eq!(output.child_data()[1].buffer::<i32>(0), &[200, 300]);
     }
 
     #[test]
@@ -3504,6 +3638,99 @@ mod tests {
             err.to_string(),
             "Invalid argument error: Run end type must be Int16, Int32 or Int64, got Utf8"
         );
+    }
+
+    /// Returns a `RunEndEncoded<Int32, Float32>` data type and run ends / values
+    /// children whose runs end at `[1, 3]`, i.e. a logical length of 3.
+    fn run_array_test_children() -> (DataType, Vec<ArrayData>) {
+        let dt = DataType::RunEndEncoded(
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Float32,
+                true,
+            )),
+        );
+
+        let runs = ArrayData::builder(DataType::Int32)
+            .len(2)
+            .add_buffer(vec![1_i32, 3].into())
+            .build()
+            .unwrap();
+        let values = ArrayData::builder(DataType::Float32)
+            .len(2)
+            .add_buffer(vec![1.5_f32, 2.5].into())
+            .build()
+            .unwrap();
+
+        (dt, vec![runs, values])
+    }
+
+    #[test]
+    fn test_run_array_validates_last_run() {
+        let (dt, children) = run_array_test_children();
+
+        let err = ArrayDataBuilder::new(dt)
+            .len(4)
+            .offset(0)
+            .child_data(children)
+            .build()
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: The offset + length of array should be less or equal to last value in the run_ends array. The last value of run_ends array is 3 and offset + length of array is 4."
+        );
+    }
+
+    #[test]
+    fn test_run_array_empty_validates() {
+        let (dt, children) = run_array_test_children();
+
+        let data = ArrayDataBuilder::new(dt)
+            .len(0)
+            .offset(4)
+            .child_data(children)
+            .build()
+            .unwrap();
+        assert_eq!(data.len(), 0);
+    }
+
+    /// The parent's offset must be included when checking the last run end:
+    /// offset 2 + length 2 = 4 exceeds the last run end of 3.
+    #[test]
+    fn test_run_array_validates_last_run_with_offset() {
+        let (dt, children) = run_array_test_children();
+
+        let err = ArrayDataBuilder::new(dt)
+            .len(2)
+            .offset(2)
+            .child_data(children)
+            .build()
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: The offset + length of array should be less or equal to last value in the run_ends array. The last value of run_ends array is 3 and offset + length of array is 4."
+        );
+    }
+
+    /// A slice that stays within the last run end is valid:
+    /// offset 1 + length 2 = 3 equals the last run end of 3.
+    #[test]
+    fn test_run_array_sliced_validates() {
+        let (dt, children) = run_array_test_children();
+
+        let data = ArrayDataBuilder::new(dt)
+            .len(2)
+            .offset(1)
+            .child_data(children)
+            .build()
+            .unwrap();
+        assert_eq!(data.len(), 2);
+        assert_eq!(data.offset(), 1);
     }
 
     /// `validate_values` must report missing children rather than index out of bounds.
