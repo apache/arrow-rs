@@ -64,5 +64,13 @@ harness = false
 name = "mutable_buffer_repeat_slice"
 harness = false
 
+[[bench]]
+name = "mutable_buffer_extend"
+harness = false
+
+[[bench]]
+name = "null_buffer_builder"
+harness = false
+
 [lints]
 workspace = true
