@@ -1409,6 +1409,14 @@ mod tests {
     use num_traits::Signed;
     use rand::{RngExt, SeedableRng, rng, rngs::StdRng};
 
+    const F32_FRACTION_BITS: u32 = 23;
+    const F32_SIGNIFICAND_BITS: u32 = F32_FRACTION_BITS + 1;
+    const F32_EXPONENT_BIAS: u32 = 127;
+    const F32_MIN_INTEGER_MIDPOINT_EXPONENT: u32 = F32_SIGNIFICAND_BITS;
+    const F32_MAX_FINITE_EXPONENT: u32 = 127;
+    const F32_SIGN_MASK: u32 = 1 << 31;
+    const F32_FRACTION_MASK: u32 = (1 << F32_FRACTION_BITS) - 1;
+
     #[test]
     fn test_signed_cmp() {
         let a = i256::from_parts(i128::MAX as u128, 12);
@@ -1988,42 +1996,54 @@ mod tests {
     }
 
     #[test]
-    fn test_i256_to_f32_positive_midpoint() {
-        let value = (1_i128 << 53) + (1_i128 << 29) + 1;
-        assert_eq!(
-            i256::from_i128(value).to_f32().unwrap().to_bits(),
-            (value as f32).to_bits()
-        );
+    fn test_i256_to_f32_signed_midpoint_rounding() {
+        // Near 2^53, binary32 spacing is 2^(53 - 23) = 2^30, so 2^29 is the midpoint.
+        // Binary64 spacing is two, so its first ties-to-even conversion drops +1. The
+        // binary32 tie then selects the even lower value; direct conversion selects the upper.
+        let witness = (1_i128 << 53) + (1_i128 << 29) + 1;
+        for (value, expected_bits) in [(witness, 0x5a000001), (-witness, 0xda000001)] {
+            let actual_bits = i256::from_i128(value).to_f32().unwrap().to_bits();
+            assert_eq!(actual_bits, expected_bits, "i256 {value}");
+            assert_eq!(
+                actual_bits,
+                (value as f32).to_bits(),
+                "i128 cast cross-check for {value}"
+            );
+        }
     }
 
     #[test]
-    fn test_i256_to_f32_negative_midpoint() {
-        let value = -((1_i128 << 53) + (1_i128 << 29) + 1);
-        assert_eq!(
-            i256::from_i128(value).to_f32().unwrap().to_bits(),
-            (value as f32).to_bits()
-        );
-    }
-
-    #[test]
-    fn test_i256_to_f32_midpoints() {
-        for exponent in 24_u32..=127 {
-            let step = i256::ONE << (exponent - 23);
-            for fraction in [0, 1, 0x7fffff] {
-                let lower = (i256::ONE << exponent) + step * i256::from_i128(i128::from(fraction));
-                let midpoint = lower + (step >> 1_u32);
-                let lower_bits = ((exponent + 127) << 23) | fraction;
-                for offset in [-1, 0, 1] {
-                    let value: i256 = midpoint + i256::from(offset);
-                    let round_up = offset > 0 || (offset == 0 && fraction & 1 == 1);
-                    let expected = lower_bits + u32::from(round_up);
-                    assert_eq!(value.to_f32().unwrap().to_bits(), expected, "{value}");
-                    assert_eq!(
-                        (-value).to_f32().unwrap().to_bits(),
-                        expected | 0x80000000,
-                        "{}",
-                        -value
-                    );
+    fn test_i256_to_f32_midpoint_boundaries() {
+        // At exponent 24 the spacing is two and the midpoint is integral.
+        // Lower exponents have fractional midpoints.
+        // The fraction low bit sets parity; exact ties choose the even significand.
+        // Fractions zero and one test both parities; all ones tests a carry.
+        // At exponent 127, that carry produces infinity.
+        for exponent in F32_MIN_INTEGER_MIDPOINT_EXPONENT..=F32_MAX_FINITE_EXPONENT {
+            let spacing = i256::ONE << (exponent - F32_FRACTION_BITS);
+            let midpoint_offset = spacing >> 1_u32;
+            for (lower_fraction, case) in [
+                (0_u32, "even lower significand"),
+                (1, "odd lower significand"),
+                (F32_FRACTION_MASK, "carry to next exponent"),
+            ] {
+                let lower =
+                    (i256::ONE << exponent) + spacing * i256::from_i128(i128::from(lower_fraction));
+                let midpoint = lower + midpoint_offset;
+                let lower_bits =
+                    ((exponent + F32_EXPONENT_BIAS) << F32_FRACTION_BITS) | lower_fraction;
+                for offset in [-1_i64, 0, 1] {
+                    let magnitude = midpoint + i256::from(offset);
+                    let tie_rounds_up = offset == 0 && lower_fraction & 1 == 1;
+                    let rounds_up = offset > 0 || tie_rounds_up;
+                    let expected = lower_bits + u32::from(rounds_up);
+                    for (value, sign_mask) in [(magnitude, 0), (-magnitude, F32_SIGN_MASK)] {
+                        assert_eq!(
+                            value.to_f32().unwrap().to_bits(),
+                            expected | sign_mask,
+                            "{case}, exponent {exponent}, offset {offset}, value {value}"
+                        );
+                    }
                 }
             }
         }
@@ -2031,7 +2051,10 @@ mod tests {
 
     #[test]
     fn test_i256_to_f32_extrema() {
-        let largest_finite = (i256::ONE << 128_u32) - (i256::ONE << 104_u32);
+        // The finite limit is (2^24 - 1) * 2^(127 - 23) = 2^128 - 2^104.
+        let largest_finite_significand = (i256::ONE << F32_SIGNIFICAND_BITS) - i256::ONE;
+        let largest_finite =
+            largest_finite_significand << (F32_MAX_FINITE_EXPONENT - F32_FRACTION_BITS);
         for (value, expected) in [
             (i256::ZERO, 0.0),
             (i256::ONE, 1.0),
@@ -2059,12 +2082,11 @@ mod tests {
 
     #[test]
     fn test_i256_to_f32_full_range() {
-        let mut state = 42_u128;
+        let mut rng = StdRng::seed_from_u64(42);
         for shift in 0..256_u32 {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
-            let low = state;
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
-            let value = i256::from_parts(low, state as i128) >> shift;
+            let low = u128::from(rng.random::<u64>()) | (u128::from(rng.random::<u64>()) << 64);
+            let high = u128::from(rng.random::<u64>()) | (u128::from(rng.random::<u64>()) << 64);
+            let value = i256::from_parts(low, high as i128) >> shift;
             let expected = value.to_string().parse::<f32>().unwrap();
             assert_eq!(
                 value.to_f32().unwrap().to_bits(),
