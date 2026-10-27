@@ -224,6 +224,10 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     /// Appends an array to the builder.
     /// This will flush any in-progress block and append the data buffers
     /// and add the (adapted) views.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the builder would hold more than `u32::MAX` data buffers
     pub fn append_array(&mut self, array: &GenericByteViewArray<T>) {
         self.flush_in_progress();
         // keep original views if this array is the first to be added or if there are no data buffers (all inline views)
@@ -231,18 +235,28 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         let starting_buffer = self.completed.len() as u32;
 
         self.completed.extend(array.data_buffers().iter().cloned());
+        assert!(
+            u32::try_from(self.completed.len()).is_ok(),
+            "Too many blocks"
+        );
 
         if keep_views {
             self.views_buffer.extend_from_slice(array.views());
         } else {
             self.views_buffer.extend(array.views().iter().map(|v| {
-                let mut byte_view = ByteView::from(*v);
-                if byte_view.length > MAX_INLINE_VIEW_LEN {
-                    // Small views (<=12 bytes) are inlined, so only need to update large views
-                    byte_view.buffer_index += starting_buffer;
-                }
-
-                byte_view.as_u128()
+                // A view of a string of 12 bytes or fewer stores the string
+                // inline and has no buffer index, so adding 0 leaves it
+                // unchanged.
+                let offset = if *v as u32 > MAX_INLINE_VIEW_LEN {
+                    starting_buffer
+                } else {
+                    0
+                };
+                // The buffer index is bits 64 to 95 of a view. Adding
+                // `starting_buffer` gives the string's buffer index in the
+                // builder, which fits in 32 bits, so the sum never carries
+                // into bit 96.
+                v + ((offset as u128) << 64)
             }));
         }
 
