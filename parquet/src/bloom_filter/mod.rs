@@ -112,6 +112,8 @@
 //! [sbbf-paper]: https://arxiv.org/pdf/2101.01719
 //! [bf-formulae]: http://tfk.mit.edu/pdf/bloom.pdf
 
+#[cfg(all(feature = "arrow", feature = "async"))]
+use crate::arrow::async_reader::AsyncFileReader;
 use crate::basic::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
 use crate::data_type::AsBytes;
 use crate::errors::{ParquetError, Result};
@@ -520,6 +522,82 @@ impl Sbbf {
         Ok(Some(Self::new(&bitset)))
     }
 
+    /// Read a Bloom filter asynchronously from existing column-chunk metadata.
+    ///
+    /// The metadata and reader must refer to the same file.
+    ///
+    /// A missing Bloom filter offset returns `None` without performing I/O. Invalid
+    /// metadata, malformed filters, and read failures return an error.
+    ///
+    /// When the total filter length is present, one range is fetched. Otherwise,
+    /// this may perform additional fetches.
+    #[cfg(all(feature = "arrow", feature = "async"))]
+    pub async fn read_from_column_chunk_async<R: AsyncFileReader + ?Sized>(
+        column_metadata: &ColumnChunkMetaData,
+        reader: &mut R,
+    ) -> Result<Option<Self>> {
+        let Some(offset) = column_metadata.bloom_filter_offset() else {
+            return Ok(None);
+        };
+        let offset =
+            u64::try_from(offset).map_err(|_| general_err!("Bloom filter offset is invalid"))?;
+        let length = column_metadata
+            .bloom_filter_length()
+            .map(|length| {
+                usize::try_from(length)
+                    .ok()
+                    .filter(|length| *length > 0)
+                    .ok_or_else(|| general_err!("Bloom filter length is invalid"))
+            })
+            .transpose()?;
+        let buffer = read_bloom_filter_bytes_async(
+            reader,
+            offset,
+            length.unwrap_or(SBBF_HEADER_SIZE_ESTIMATE),
+        )
+        .await?;
+        let (header, header_length) = read_bloom_filter_header_and_length(buffer.clone())?;
+
+        // The following matches are present to force an explicit decision
+        // if supported variants change.
+        match header.algorithm {
+            BloomFilterAlgorithm::BLOCK => {}
+        }
+        match header.hash {
+            BloomFilterHash::XXHASH => {}
+        }
+        match header.compression {
+            BloomFilterCompression::UNCOMPRESSED => {}
+        }
+
+        let bitset_length = usize::try_from(header.num_bytes)
+            .map_err(|_| general_err!("Bloom filter bitset length is invalid"))?;
+        if bitset_length < BITSET_MIN_LENGTH || !bitset_length.is_multiple_of(32) {
+            return Err(general_err!(
+                "Bloom filter bitset length must be a positive multiple of 32"
+            ));
+        }
+        let bitset_offset = offset
+            .checked_add(header_length)
+            .ok_or_else(|| general_err!("Bloom filter offset overflow"))?;
+        let bitset = if let Some(length) = length {
+            let header_length = usize::try_from(header_length)
+                .map_err(|_| general_err!("Bloom filter header length is invalid"))?;
+            let total = header_length
+                .checked_add(bitset_length)
+                .ok_or_else(|| general_err!("Bloom filter length overflow"))?;
+            if total != length {
+                return Err(general_err!(
+                    "Bloom filter length does not match its header"
+                ));
+            }
+            buffer.slice(header_length..total)
+        } else {
+            read_bloom_filter_bytes_async(reader, bitset_offset, bitset_length).await?
+        };
+        Ok(Some(Self::new(&bitset)))
+    }
+
     /// Map a 64-bit hash to a block index in `[0, num_blocks)`.
     ///
     /// Uses the "multiply-and-shift" trick (a fast alternative to modulo):
@@ -778,6 +856,25 @@ impl Sbbf {
     }
 }
 
+#[cfg(all(feature = "arrow", feature = "async"))]
+async fn read_bloom_filter_bytes_async<R: AsyncFileReader + ?Sized>(
+    reader: &mut R,
+    offset: u64,
+    length: usize,
+) -> Result<Bytes> {
+    let end = offset
+        .checked_add(length as u64)
+        .ok_or_else(|| general_err!("Bloom filter read range overflow"))?;
+    let bytes = reader.get_bytes(offset..end).await?;
+    if bytes.len() != length {
+        return Err(general_err!(
+            "Bloom filter read length mismatch: expected {length} bytes, got {}",
+            bytes.len()
+        ));
+    }
+    Ok(bytes)
+}
+
 // per spec we use xxHash with seed=0
 const SEED: u64 = 0;
 
@@ -789,6 +886,21 @@ fn hash_as_bytes<A: AsBytes + ?Sized>(value: &A) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(all(feature = "arrow", feature = "async"))]
+    #[tokio::test]
+    async fn test_async_bloom_filter_range_overflow_before_io() {
+        let mut reader = std::io::Cursor::new(Vec::<u8>::new());
+        let error = read_bloom_filter_bytes_async(&mut reader, u64::MAX, 1)
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Bloom filter read range overflow")
+        );
+        assert_eq!(reader.position(), 0);
+    }
 
     #[test]
     fn test_hash_bytes() {
