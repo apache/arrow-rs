@@ -20,7 +20,7 @@
 use crate::array::*;
 use crate::datatypes::*;
 use crate::util::test_util::seedable_rng;
-use arrow_buffer::{Buffer, IntervalMonthDayNano, NullBuffer};
+use arrow_buffer::{Buffer, IntervalMonthDayNano, NullBuffer, i256};
 use arrow_schema::Field;
 use half::f16;
 use rand::RngExt;
@@ -191,6 +191,54 @@ where
             }
         })
         .collect()
+}
+
+/// Creates a random (but fixed-seeded) [`UInt32Array`] of indices in `0..max_value`.
+///
+/// Intended for use as the `indices` argument to take kernels. `null_density`
+/// controls the fraction of null indices.
+pub fn create_random_index(size: usize, null_density: f32, max_value: usize) -> UInt32Array {
+    let mut rng = seedable_rng();
+    let mut builder = UInt32Builder::with_capacity(size);
+    for _ in 0..size {
+        if rng.random::<f32>() < null_density {
+            builder.append_null();
+        } else {
+            builder.append_value(rng.random_range::<u32, _>(0u32..max_value as u32));
+        }
+    }
+    builder.finish()
+}
+
+/// Creates a random (but fixed-seeded) [`Decimal128Array`] with values drawn
+/// from `0..1_000_000_000`.
+pub fn create_decimal128_array(size: usize, precision: u8, scale: i8) -> Decimal128Array {
+    let mut rng = seedable_rng();
+    let mut builder = Decimal128Builder::with_capacity(size);
+    for _ in 0..size {
+        builder.append_value(rng.random_range::<i128, _>(0..1_000_000_000));
+    }
+    builder
+        .finish()
+        .with_precision_and_scale(precision, scale)
+        .unwrap()
+}
+
+/// Creates a random (but fixed-seeded) [`Decimal256Array`] with values drawn
+/// from `0..1_000_000_000` (sign-extended into i256).
+pub fn create_decimal256_array(size: usize, precision: u8, scale: i8) -> Decimal256Array {
+    let mut rng = seedable_rng();
+    let mut builder = Decimal256Builder::with_capacity(size);
+    let mut bytes = [0; 32];
+    for _ in 0..size {
+        let num = rng.random_range::<i128, _>(0..1_000_000_000);
+        bytes[0..16].clone_from_slice(&num.to_le_bytes());
+        builder.append_value(i256::from_le_bytes(bytes));
+    }
+    builder
+        .finish()
+        .with_precision_and_scale(precision, scale)
+        .unwrap()
 }
 
 /// Creates a random (but fixed-seeded) string array of a given size and null density.
@@ -783,6 +831,33 @@ pub fn create_binary_array_with_len_range_and_prefix_and_seed<Offset: OffsetSize
 /// Creates an random (but fixed-seeded) array of a given size and null density
 pub fn create_fsb_array(size: usize, null_density: f32, value_len: usize) -> FixedSizeBinaryArray {
     let rng = &mut seedable_rng();
+
+    FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+        (0..size).map(|_| {
+            if rng.random::<f32>() < null_density {
+                None
+            } else {
+                let value = rng
+                    .sample_iter::<u8, _>(StandardUniform)
+                    .take(value_len)
+                    .collect::<Vec<u8>>();
+                Some(value)
+            }
+        }),
+        value_len as i32,
+    )
+    .unwrap()
+}
+
+/// Creates a random [`FixedSizeBinaryArray`] of a given size and null density
+/// generated using the provided seed.
+pub fn create_fsb_array_with_seed(
+    size: usize,
+    null_density: f32,
+    value_len: usize,
+    seed: u64,
+) -> FixedSizeBinaryArray {
+    let rng = &mut StdRng::seed_from_u64(seed);
 
     FixedSizeBinaryArray::try_from_sparse_iter_with_size(
         (0..size).map(|_| {
