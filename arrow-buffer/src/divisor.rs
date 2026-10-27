@@ -15,9 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-/// Whether a saturating add on `u32` lanes is one instruction: `uqadd` on aarch64, and `pminud`
-/// from SSE4.1 on x86. Without it, the saturating increment of [`DivisorU32::Down`] costs more
-/// than the add and halve of [`DivisorU32::AddIndicator`]
+/// Whether a saturating increment on `u32` lanes is cheap: one `uqadd` on aarch64, and `pminud`
+/// from SSE4.1 and a subtract on x86. Baseline x86-64 has no unsigned 32-bit min and emulates it
+/// with compares, so there the saturating increment of [`DivisorU32::Down`] costs more than the
+/// add and halve of [`DivisorU32::AddIndicator`]
 const CHEAP_SATURATION: bool = cfg!(any(
     target_arch = "aarch64",
     all(
@@ -32,10 +33,8 @@ macro_rules! divisor_enum {
         ///
         /// Division by a divisor that is only known at run time needs a divide instruction.
         /// [`Self::new`] precomputes a shift and a mask when the magnitude of the divisor is a
-        /// power of two, and otherwise a multiplier with the method in
-        /// [Granlund and Montgomery, "Division by Invariant Integers using Multiplication" (1994)](https://gmplib.org/~tege/divcnst-pldi94.pdf),
-        /// so that each division is a high multiply, shifts and additions. [`Self::new`] picks the
-        /// variant from the divisor and the target.
+        /// power of two, and otherwise a multiplier, so that each division is a high multiply,
+        /// shifts and additions. [`Self::new`] picks the variant from the divisor and the target.
         ///
         /// To divide many values, match on the variant once, before the loop, and call the
         /// variant's methods in the loop. They don't branch on the divisor, so the loop doesn't
@@ -142,7 +141,7 @@ macro_rules! unsigned_divisor {
             /// also exact for this one, see
             /// [ridiculous_fish, "Labor of Division (Episode I)"](https://ridiculousfish.com/blog/posts/labor-of-division-episode-i.html).
             $(
-                #[doc = concat!("Otherwise it picks [`Self::Down`] (a [`", stringify!($down), "`]) on aarch64 and on x86 with SSE4.1, where a saturating add is one instruction.")]
+                #[doc = concat!("Otherwise it picks [`Self::Down`] (a [`", stringify!($down), "`]) on aarch64 and on x86 with SSE4.1, where a saturating increment takes one or two vector instructions.")]
             )?
             /// It picks [`Self::AddIndicator`] for any divisor the other variants don't cover.
             ///
@@ -222,9 +221,9 @@ macro_rules! unsigned_divisor {
         n_bit_divisor!(
             #[doc = concat!("A `", stringify!($t), "` divisor whose rounded-up multiplier is exact in N bits, see [`", stringify!($name), "`]")]
             ///
-            /// It computes `MULUH(m, n) >> shift`, the case of figure 4.2 of
+            /// It computes `MULUH(m, n) >> shift`, where `m` satisfies theorem 4.2 of
             /// [Granlund and Montgomery, "Division by Invariant Integers using Multiplication" (1994)](https://gmplib.org/~tege/divcnst-pldi94.pdf)
-            /// where the multiplier fits in N bits, without figure 4.1's add and halve.
+            /// with `l = shift` and fits in N bits, so it needs no add and halve as in figure 4.1.
             $up,
             $name,
             $t,
@@ -258,9 +257,7 @@ macro_rules! unsigned_divisor {
                 // and `m' = floor(2^(N+l) / divisor) - 2^N + 1`. `2^(N+l)` is `2 * pow`, and
                 // `floor(2a / d) = 2 * floor(a / d) + (2 * (a mod d) >= d)`, so `new` gets the
                 // quotient from `down` and its remainder instead of a second wide division, which
-                // is a call to `__udivti3` for `u64`. The public domain reference code linked from
-                // "Labor of Division (Episode III)" doubles the quotient and remainder the same
-                // way. `2^l > divisor`, so `m'` fits in N bits
+                // is a call to `__udivti3` for `u64`. `2^l < 2 * divisor`, so `m'` fits in N bits
                 let below = pow - down * divisor as $wide;
                 let carry = (2 * below >= divisor as $wide) as $wide;
                 Self {
@@ -691,7 +688,14 @@ mod tests {
                     .into_iter()
                     .filter(|d| *d > 1 && !d.is_power_of_two())
                 {
-                    assert!(matches!($divisor::new(d).unwrap(), $divisor::Up(_)), "{d}");
+                    let divisor = $divisor::new(d).unwrap();
+                    assert!(matches!(divisor, $divisor::Up(_)), "{d}");
+                    // `Down` would be wrong for these divisors at `MAX`, so check the values too.
+                    // `d` divides `MAX`, so `MAX` is the end of the last quotient step
+                    let max = <$t>::MAX;
+                    for n in [0, 1, d - 1, d, d.wrapping_add(1), max, max - 1, max - d] {
+                        assert_eq!(divisor.wrapping_div_rem(n), (n / d, n % d), "{n} / {d}");
+                    }
                 }
             }
         };
