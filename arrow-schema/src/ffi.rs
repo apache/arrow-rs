@@ -184,16 +184,36 @@ impl FFI_ArrowSchema {
         Ok(this)
     }
 
-    /// Set the name of the schema
+    /// Set the name of the schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `name` contains an interior nul byte, or if the schema
+    /// does not use this crate's original release callback. Empty schemas and
+    /// schemas with a replaced release callback cannot be renamed.
     pub fn with_name(mut self, name: &str) -> Result<Self, ArrowError> {
-        self.name = CString::new(name)
-            .map_err(|e| {
-                ArrowError::CDataInterface(format!(
-                    "Null byte at position {} not allowed in name",
-                    e.nul_position()
-                ))
-            })?
-            .into_raw();
+        if !self.release.is_some_and(|release| {
+            std::ptr::fn_addr_eq(
+                release,
+                release_schema as unsafe extern "C" fn(*mut FFI_ArrowSchema),
+            )
+        }) {
+            return Err(ArrowError::CDataInterface(
+                "Cannot set name on a schema with a foreign or missing release callback".to_owned(),
+            ));
+        }
+
+        let name = CString::new(name).map_err(|e| {
+            ArrowError::CDataInterface(format!(
+                "Null byte at position {} not allowed in name",
+                e.nul_position()
+            ))
+        })?;
+        let old_name = std::mem::replace(&mut self.name, name.into_raw());
+        if !old_name.is_null() {
+            // SAFETY: our release callback owns names allocated by CString::into_raw.
+            drop(unsafe { CString::from_raw(old_name.cast_mut()) });
+        }
         Ok(self)
     }
 
@@ -940,7 +960,33 @@ impl TryFrom<Schema> for FFI_ArrowSchema {
 mod tests {
     use super::*;
     use crate::Fields;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::ptr;
+    use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
+
+    struct NameTrackingAllocator;
+
+    static TRACKED_NAME: AtomicPtr<u8> = AtomicPtr::new(ptr::null_mut());
+    static RELEASED_NAMES: AtomicUsize = AtomicUsize::new(0);
+
+    #[global_allocator]
+    static ALLOCATOR: NameTrackingAllocator = NameTrackingAllocator;
+
+    unsafe impl GlobalAlloc for NameTrackingAllocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            unsafe { System.alloc(layout) }
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            if TRACKED_NAME
+                .compare_exchange(ptr, ptr::null_mut(), Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                RELEASED_NAMES.fetch_add(1, Ordering::Relaxed);
+            }
+            unsafe { System.dealloc(ptr, layout) };
+        }
+    }
 
     fn round_trip_type(dtype: DataType) {
         let c_schema = FFI_ArrowSchema::try_from(&dtype).unwrap();
@@ -1171,6 +1217,54 @@ mod tests {
     fn test_name_with_null_byte() {
         let schema = FFI_ArrowSchema::try_new("i", vec![], None).unwrap();
         assert!(schema.with_name("ab\0cd").is_err());
+    }
+
+    #[test]
+    fn test_replacing_name_releases_previous_allocation() {
+        let schema = FFI_ArrowSchema::try_from(&DataType::Int32)
+            .unwrap()
+            .with_name("first")
+            .unwrap();
+        TRACKED_NAME.store(
+            schema.name().unwrap().as_ptr().cast_mut(),
+            Ordering::Relaxed,
+        );
+
+        let schema = schema.with_name("second").unwrap();
+        assert_eq!(schema.name(), Some("second"));
+        assert_eq!(RELEASED_NAMES.load(Ordering::Relaxed), 1);
+
+        TRACKED_NAME.store(
+            schema.name().unwrap().as_ptr().cast_mut(),
+            Ordering::Relaxed,
+        );
+        drop(schema);
+        assert_eq!(RELEASED_NAMES.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn test_with_name_rejects_empty_schema() {
+        assert!(FFI_ArrowSchema::empty().with_name("name").is_err());
+    }
+
+    #[test]
+    fn test_with_name_rejects_foreign_schema() {
+        unsafe extern "C" fn release_foreign_schema(schema: *mut FFI_ArrowSchema) {
+            let schema = unsafe { &mut *schema };
+            let released = unsafe { Box::from_raw(schema.private_data.cast::<Arc<AtomicBool>>()) };
+            released.store(true, Ordering::SeqCst);
+            schema.release = None;
+        }
+
+        let released = Arc::new(AtomicBool::new(false));
+        let mut schema = FFI_ArrowSchema::empty();
+        schema.format = c"i".as_ptr();
+        schema.name = c"borrowed name".as_ptr();
+        schema.release = Some(release_foreign_schema);
+        schema.private_data = Box::into_raw(Box::new(released.clone())).cast();
+
+        assert!(schema.with_name("new name").is_err());
+        assert!(released.load(Ordering::SeqCst));
     }
 
     #[test]
