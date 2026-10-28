@@ -26,26 +26,6 @@ use std::{cmp::Ordering, mem};
 
 // @generated
 
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-pub const ENUM_MIN_SPARSE_MATRIX_COMPRESSED_AXIS: i16 = 0;
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-pub const ENUM_MAX_SPARSE_MATRIX_COMPRESSED_AXIS: i16 = 1;
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-#[allow(non_camel_case_types)]
-pub const ENUM_VALUES_SPARSE_MATRIX_COMPRESSED_AXIS: [SparseMatrixCompressedAxis; 2] = [
-    SparseMatrixCompressedAxis::Row,
-    SparseMatrixCompressedAxis::Column,
-];
-
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
 pub struct SparseMatrixCompressedAxis(pub i16);
@@ -120,27 +100,6 @@ impl<'a> flatbuffers::Verifiable for SparseMatrixCompressedAxis {
 }
 
 impl flatbuffers::SimpleToVerifyInSlice for SparseMatrixCompressedAxis {}
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-pub const ENUM_MIN_SPARSE_TENSOR_INDEX: u8 = 0;
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-pub const ENUM_MAX_SPARSE_TENSOR_INDEX: u8 = 3;
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-#[allow(non_camel_case_types)]
-pub const ENUM_VALUES_SPARSE_TENSOR_INDEX: [SparseTensorIndex; 4] = [
-    SparseTensorIndex::NONE,
-    SparseTensorIndex::SparseTensorIndexCOO,
-    SparseTensorIndex::SparseMatrixIndexCSX,
-    SparseTensorIndex::SparseTensorIndexCSF,
-];
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]

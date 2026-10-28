@@ -400,125 +400,6 @@ impl FixedSizeBinaryArray {
 
     /// Create an array from an iterable argument of sparse byte slices.
     /// Sparsity means that items returned by the iterator are optional, i.e input argument can
-    /// contain `None` items.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use arrow_array::FixedSizeBinaryArray;
-    /// let input_arg = vec![
-    ///     None,
-    ///     Some(vec![7, 8]),
-    ///     Some(vec![9, 10]),
-    ///     None,
-    ///     Some(vec![13, 14]),
-    ///     None,
-    /// ];
-    /// let array = FixedSizeBinaryArray::try_from_sparse_iter(input_arg.into_iter()).unwrap();
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns error if argument has length zero, or sizes of nested slices don't match.
-    #[deprecated(
-        since = "28.0.0",
-        note = "This function will fail if the iterator produces only None values; prefer `try_from_sparse_iter_with_size`"
-    )]
-    pub fn try_from_sparse_iter<T, U>(mut iter: T) -> Result<Self, ArrowError>
-    where
-        T: Iterator<Item = Option<U>>,
-        U: AsRef<[u8]>,
-    {
-        let mut len = 0;
-        let mut value_size = None;
-        let mut byte = 0;
-
-        let iter_size_hint = iter.size_hint().0;
-        let mut null_buf = MutableBuffer::new(bit_util::ceil(iter_size_hint, 8));
-        let mut buffer = MutableBuffer::new(0);
-
-        let mut prepend = 0;
-        iter.try_for_each(|item| -> Result<(), ArrowError> {
-            // extend null bitmask by one byte per each 8 items
-            if byte == 0 {
-                null_buf.push(0u8);
-                byte = 8;
-            }
-            byte -= 1;
-
-            if let Some(slice) = item {
-                let slice = slice.as_ref();
-                if let Some(size) = value_size {
-                    if size != slice.len() {
-                        return Err(ArrowError::InvalidArgumentError(format!(
-                            "Nested array size mismatch: one is {}, and the other is {}",
-                            size,
-                            slice.len()
-                        )));
-                    }
-                } else {
-                    let len = slice.len();
-                    value_size = Some(len);
-                    // Now that we know how large each element is we can reserve
-                    // sufficient capacity in the underlying mutable buffer for
-                    // the data.
-                    if let Some(capacity) = iter_size_hint.checked_mul(len) {
-                        buffer
-                            .try_reserve(capacity)
-                            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
-                    }
-                    let prepend_zeros = slice.len().checked_mul(prepend).ok_or_else(|| {
-                        ArrowError::InvalidArgumentError(format!(
-                            "FixedSizeBinaryArray error: value size {} * prepend {prepend} exceeds usize",
-                            slice.len()
-                        ))
-                    })?;
-                    buffer
-                        .try_extend_zeros(prepend_zeros)
-                        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
-                }
-                bit_util::set_bit(null_buf.as_slice_mut(), len);
-                buffer
-                    .try_extend_from_slice(slice)
-                    .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
-            } else if let Some(size) = value_size {
-                buffer
-                    .try_extend_zeros(size)
-                    .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
-            } else {
-                prepend += 1;
-            }
-
-            len += 1;
-
-            Ok(())
-        })?;
-
-        if len == 0 {
-            return Err(ArrowError::InvalidArgumentError(
-                "Input iterable argument has no data".to_owned(),
-            ));
-        }
-
-        let nulls = NullBuffer::from_unsliced_buffer(null_buf, len);
-
-        let value_size = value_size.unwrap_or(0);
-        let value_length = value_size.try_into().map_err(|_| {
-            ArrowError::InvalidArgumentError(format!(
-                "FixedSizeBinaryArray value length exceeds i32, got {value_size}"
-            ))
-        })?;
-        Ok(Self {
-            data_type: DataType::FixedSizeBinary(value_length),
-            value_data: buffer.into(),
-            nulls,
-            value_size,
-            len,
-        })
-    }
-
-    /// Create an array from an iterable argument of sparse byte slices.
-    /// Sparsity means that items returned by the iterator are optional, i.e input argument can
     /// contain `None` items. In cases where the iterator returns only `None` values, this
     /// also takes a `value_length` parameter to ensure that a valid
     /// [`FixedSizeBinaryArray`] is still created.
@@ -775,8 +656,22 @@ impl TryFrom<Vec<Option<&[u8]>>> for FixedSizeBinaryArray {
     type Error = ArrowError;
 
     fn try_from(v: Vec<Option<&[u8]>>) -> Result<Self, Self::Error> {
-        #[expect(deprecated)]
-        Self::try_from_sparse_iter(v.into_iter())
+        if v.is_empty() {
+            return Err(ArrowError::InvalidArgumentError(
+                "Input iterable argument has no data".to_owned(),
+            ));
+        }
+
+        let value_size = v
+            .iter()
+            .find_map(|value| value.map(|value| value.len()))
+            .unwrap_or_default();
+        let value_length = value_size.try_into().map_err(|_| {
+            ArrowError::InvalidArgumentError(format!(
+                "FixedSizeBinaryArray value length exceeds i32, got {value_size}"
+            ))
+        })?;
+        Self::try_from_sparse_iter_with_size(v.into_iter(), value_length)
     }
 }
 
@@ -1081,36 +976,6 @@ mod tests {
     }
 
     #[test]
-    fn test_all_none_fixed_size_binary_array_from_sparse_iter() {
-        let none_option: Option<[u8; 32]> = None;
-        let input_arg = vec![none_option, none_option, none_option];
-        #[expect(deprecated)]
-        let arr = FixedSizeBinaryArray::try_from_sparse_iter(input_arg.into_iter()).unwrap();
-        assert_eq!(0, arr.value_length());
-        assert_eq!(3, arr.len())
-    }
-
-    #[test]
-    fn test_fixed_size_binary_array_from_sparse_iter() {
-        let input_arg = vec![
-            None,
-            Some(vec![7, 8]),
-            Some(vec![9, 10]),
-            None,
-            Some(vec![13, 14]),
-        ];
-        #[expect(deprecated)]
-        let arr = FixedSizeBinaryArray::try_from_sparse_iter(input_arg.iter().cloned()).unwrap();
-        assert_eq!(2, arr.value_length());
-        assert_eq!(5, arr.len());
-
-        let arr =
-            FixedSizeBinaryArray::try_from_sparse_iter_with_size(input_arg.into_iter(), 2).unwrap();
-        assert_eq!(2, arr.value_length());
-        assert_eq!(5, arr.len());
-    }
-
-    #[test]
     fn test_fixed_size_binary_array_from_sparse_iter_with_size_all_none() {
         let input_arg = vec![None, None, None, None, None] as Vec<Option<Vec<u8>>>;
 
@@ -1163,6 +1028,9 @@ mod tests {
         assert!(array.is_null(2));
         assert!(!array.is_null(3));
         assert!(!array.is_null(4));
+
+        let empty = Vec::<Option<&[u8]>>::new();
+        assert!(FixedSizeBinaryArray::try_from(empty).is_err());
     }
 
     #[test]
@@ -1186,6 +1054,10 @@ mod tests {
             .into_data()
             .validate_full()
             .expect("All null array has valid array data");
+
+        let array = FixedSizeBinaryArray::try_from(vec![None::<&[u8]>]).unwrap();
+        assert_eq!(array.value_length(), 0);
+        assert_eq!(array.null_count(), 1);
     }
 
     #[test]
