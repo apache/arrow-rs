@@ -10084,6 +10084,145 @@ mod test {
         assert_eq!(seconds.value(0), 100);
     }
 
+    // A union branch given by name (TypeName::Ref) must resolve to the reader branch
+    // with the same full name, not to the first reader branch that parses.
+    //
+    // Writer and reader schema are identical:
+    // ```text
+    // Root {
+    //   minValue: ["null", Bw { value: bytes }, Sw { value: string }],  <- inline definitions
+    //   maxValue: ["null", "Bw", "Sw"],                                 <- by-name references
+    //   tail:     long
+    // }
+    // ```
+    // A by-name branch that resolves to reader branch 0 (`null`) skips the value bytes,
+    // so `tail` and every later row are read from the wrong offset.
+    #[test]
+    fn test_union_ref_branches_resolve_by_name() {
+        use apache_avro::{Schema as ApacheSchema, Writer as ApacheWriter, types::Value};
+        use arrow_array::types::Int64Type;
+        let schema_json = r#"{
+            "type": "record", "name": "Root",
+            "fields": [
+                {"name": "minValue", "type": ["null",
+                    {"type": "record", "name": "Bw", "fields": [{"name": "value", "type": "bytes"}]},
+                    {"type": "record", "name": "Sw", "fields": [{"name": "value", "type": "string"}]}
+                ]},
+                {"name": "maxValue", "type": ["null", "Bw", "Sw"]},
+                {"name": "tail", "type": "long"}
+            ]
+        }"#;
+        let schema = ApacheSchema::parse_str(schema_json).expect("valid schema");
+        let bw = |v: &[u8]| {
+            Value::Union(
+                1,
+                Box::new(Value::Record(vec![(
+                    "value".into(),
+                    Value::Bytes(v.to_vec()),
+                )])),
+            )
+        };
+        let sw = |v: &str| {
+            Value::Union(
+                2,
+                Box::new(Value::Record(vec![(
+                    "value".into(),
+                    Value::String(v.to_string()),
+                )])),
+            )
+        };
+        let null = || Value::Union(0, Box::new(Value::Null));
+        let rows = vec![
+            (bw(b"a"), bw(b"zz"), 1i64),
+            (sw("a"), sw("zz"), 2),
+            (null(), null(), 3),
+            (bw(b"b"), sw("yy"), 4),
+            (sw("b"), bw(b"yy"), 5),
+        ];
+        let mut bytes = Vec::new();
+        {
+            let mut writer = ApacheWriter::new(&schema, &mut bytes).unwrap();
+            for (min, max, tail) in rows {
+                let row = Value::Record(vec![
+                    ("minValue".into(), min),
+                    ("maxValue".into(), max),
+                    ("tail".into(), Value::Long(tail)),
+                ]);
+                writer.append_value_ref(&row).expect("append row");
+            }
+            writer.flush().expect("flush");
+        }
+
+        // (type_id, payload) per row of a union column; payload is the `value` field of
+        // the Bw (bytes) or Sw (string) branch, rendered as a string.
+        fn union_values(col: &ArrayRef) -> Vec<(i8, Option<String>)> {
+            let union = col.as_any().downcast_ref::<UnionArray>().unwrap();
+            (0..union.len())
+                .map(|i| {
+                    let type_id = union.type_id(i);
+                    let value = union.value(i);
+                    let payload = value.as_struct_opt().map(|s| {
+                        let v = s.column(0);
+                        match v.data_type() {
+                            DataType::Binary => {
+                                String::from_utf8(v.as_binary::<i32>().value(0).to_vec()).unwrap()
+                            }
+                            _ => v.as_string::<i32>().value(0).to_string(),
+                        }
+                    });
+                    (type_id, payload)
+                })
+                .collect()
+        }
+        let s = |v: &str| Some(v.to_string());
+        let expected_min = vec![
+            (1, s("a")),
+            (2, s("a")),
+            (0, None),
+            (1, s("b")),
+            (2, s("b")),
+        ];
+        let expected_max = vec![
+            (1, s("zz")),
+            (2, s("zz")),
+            (0, None),
+            (2, s("yy")),
+            (1, s("yy")),
+        ];
+
+        for reader_schema in [None, Some(AvroSchema::new(schema_json.to_string()))] {
+            let label = if reader_schema.is_some() {
+                "reader schema == writer schema"
+            } else {
+                "writer schema only"
+            };
+            let mut builder = ReaderBuilder::new();
+            if let Some(rs) = reader_schema {
+                builder = builder.with_reader_schema(rs);
+            }
+            let mut reader = builder
+                .build(Cursor::new(bytes.clone()))
+                .expect("reader should build");
+            let batch = reader
+                .next()
+                .expect("should have a batch")
+                .unwrap_or_else(|e| panic!("{label}: decode failed: {e}"));
+            assert_eq!(batch.num_rows(), 5, "{label}");
+            assert_eq!(
+                union_values(batch.column(0)),
+                expected_min,
+                "{label}: minValue"
+            );
+            assert_eq!(
+                union_values(batch.column(1)),
+                expected_max,
+                "{label}: maxValue"
+            );
+            let tail = batch.column(2).as_primitive::<Int64Type>();
+            assert_eq!(tail.values().as_ref(), &[1, 2, 3, 4, 5], "{label}: tail");
+        }
+    }
+
     /// Builds a `Decoder` for a single Confluent-framed writer schema registered under `id`.
     fn confluent_decoder(id: u32, writer_schema: AvroSchema) -> Decoder {
         let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::Id);
