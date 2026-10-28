@@ -32,9 +32,13 @@ pub(crate) struct VariantMetadataHeader {
     offset_size: OffsetSizeBytes,
 }
 
-// According to the spec this is currently always = 1, and so we store this const for validation
-// purposes and to make that visible.
-const CORRECT_VERSION_VALUE: u8 = 1;
+/// The version of the Variant specification implemented by this crate.
+///
+/// The spec currently defines only version 1. It appears in two places on
+/// disk: the 4-bit version field of every metadata header, and the
+/// `specification_version` of the Parquet `VARIANT` logical type annotation.
+/// Both must carry this value.
+pub const VARIANT_SPEC_VERSION: u8 = 1;
 
 // The metadata header occupies one byte; use a named constant for readability
 const NUM_HEADER_BYTES: u32 = 1;
@@ -68,9 +72,9 @@ impl VariantMetadataHeader {
     /// - The actual number of bytes, offset_size, is offset_size_minus_one + 1
     pub(crate) fn try_new(header_byte: u8) -> Result<Self, ArrowError> {
         let version = header_byte & 0x0F; // First four bits
-        if version != CORRECT_VERSION_VALUE {
+        if version != VARIANT_SPEC_VERSION {
             let err_msg = format!(
-                "The version bytes in the header is not {CORRECT_VERSION_VALUE}, got {version:b}",
+                "The version bytes in the header is not {VARIANT_SPEC_VERSION}, got {version:b}",
             );
             return Err(ArrowError::InvalidArgumentError(err_msg));
         }
@@ -170,7 +174,7 @@ pub const EMPTY_VARIANT_METADATA_BYTES: &[u8] = &[1, 0, 0];
 pub const EMPTY_VARIANT_METADATA: VariantMetadata = VariantMetadata {
     bytes: EMPTY_VARIANT_METADATA_BYTES,
     header: VariantMetadataHeader {
-        version: CORRECT_VERSION_VALUE,
+        version: VARIANT_SPEC_VERSION,
         is_sorted: false,
         offset_size: OffsetSizeBytes::One,
     },
