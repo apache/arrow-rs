@@ -23,7 +23,7 @@
 use crate::filter::{FilterBuilder, FilterPredicate, FilterSelection};
 use crate::interleave::interleave_record_batch;
 use crate::take::take_record_batch;
-use arrow_array::types::{BinaryViewType, StringViewType};
+use arrow_array::types::{BinaryViewType, GenericBinaryType, GenericStringType, StringViewType};
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, downcast_primitive};
 use arrow_schema::{ArrowError, DataType, SchemaRef};
 use std::collections::VecDeque;
@@ -32,6 +32,7 @@ use std::sync::Arc;
 // https://github.com/apache/datafusion/blob/9d2f04996604e709ee440b65f41e7b882f50b788/datafusion/physical-plan/src/coalesce/mod.rs#L26-L25
 
 mod boolean;
+mod byte;
 mod byte_view;
 mod fixed_size_binary;
 mod generic;
@@ -39,6 +40,7 @@ mod list;
 mod primitive;
 
 use boolean::InProgressBooleanArray;
+use byte::InProgressByteArray;
 use byte_view::InProgressByteViewArray;
 use fixed_size_binary::InProgressFixedSizeBinaryArray;
 use generic::GenericInProgressArray;
@@ -50,6 +52,11 @@ fn has_sparse_filter_copy(data_type: &DataType) -> bool {
         || matches!(
             data_type,
             DataType::Boolean
+                | DataType::Utf8
+                | DataType::LargeUtf8
+                | DataType::Binary
+                | DataType::LargeBinary
+                // Unlike offset-based byte arrays, views can reuse their backing buffers.
                 | DataType::Utf8View
                 | DataType::BinaryView
                 | DataType::List(_)
@@ -66,6 +73,14 @@ const SPARSE_FILTER_COPY_MAX_SELECTIVITY_DENOMINATOR: usize = 16;
 
 fn should_use_sparse_filter_copy(filter_len: usize, selected_count: usize) -> bool {
     selected_count <= filter_len / SPARSE_FILTER_COPY_MAX_SELECTIVITY_DENOMINATOR
+}
+
+// Variable-width byte arrays only outperform the materialized filter kernel at
+// very low selection densities.
+const BYTE_ARRAY_DIRECT_COPY_MAX_SELECTIVITY_DENOMINATOR: usize = 1024;
+
+fn should_use_byte_array_direct_copy(filter_len: usize, selected_count: usize) -> bool {
+    selected_count <= filter_len / BYTE_ARRAY_DIRECT_COPY_MAX_SELECTIVITY_DENOMINATOR
 }
 
 /// Concatenate multiple [`RecordBatch`]es
@@ -171,6 +186,8 @@ pub struct BatchCoalescer {
     in_progress_arrays: Vec<Box<dyn InProgressArray>>,
     /// True if some column still needs the materialized filter path.
     has_non_specialized_filter_columns: bool,
+    /// True if the schema contains a variable-width byte-array column.
+    has_byte_array_columns: bool,
     /// Buffered row count. Always less than `batch_size`
     buffered_rows: usize,
     /// Completed batches
@@ -192,6 +209,12 @@ impl BatchCoalescer {
             .fields()
             .iter()
             .any(|field| !has_sparse_filter_copy(field.data_type()));
+        let has_byte_array_columns = schema.fields().iter().any(|field| {
+            matches!(
+                field.data_type(),
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary
+            )
+        });
         let in_progress_arrays = schema
             .fields()
             .iter()
@@ -203,6 +226,7 @@ impl BatchCoalescer {
             target_batch_size,
             in_progress_arrays,
             has_non_specialized_filter_columns,
+            has_byte_array_columns,
             // We will for sure store at least one completed batch
             completed: VecDeque::with_capacity(1),
             buffered_rows: 0,
@@ -762,6 +786,8 @@ impl BatchCoalescer {
         let should_materialize_filter = exceeds_coalesce_limit
             || self.has_non_specialized_filter_columns
             || does_not_fit_buffer
+            || (self.has_byte_array_columns
+                && !should_use_byte_array_direct_copy(filter_len, selected_count))
             || !should_use_sparse_filter_copy(filter_len, selected_count);
 
         if should_materialize_filter {
@@ -804,6 +830,14 @@ fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn 
             Box::new(InProgressByteViewArray::<BinaryViewType>::new(batch_size))
         }
         DataType::Boolean => Box::new(InProgressBooleanArray::new(batch_size)),
+        DataType::Utf8 => Box::new(InProgressByteArray::<GenericStringType<i32>>::new(batch_size)),
+        DataType::LargeUtf8 => {
+            Box::new(InProgressByteArray::<GenericStringType<i64>>::new(batch_size))
+        }
+        DataType::Binary => Box::new(InProgressByteArray::<GenericBinaryType<i32>>::new(batch_size)),
+        DataType::LargeBinary => {
+            Box::new(InProgressByteArray::<GenericBinaryType<i64>>::new(batch_size))
+        }
         DataType::FixedSizeBinary(size) => {
             Box::new(InProgressFixedSizeBinaryArray::new(*size, batch_size))
         }
@@ -1837,10 +1871,12 @@ mod tests {
         ]));
         let coalescer = BatchCoalescer::new(supported, 100);
         assert!(!coalescer.has_non_specialized_filter_columns);
+        assert!(!coalescer.has_byte_array_columns);
 
         let utf8 = Arc::new(Schema::new(vec![Field::new("utf8", DataType::Utf8, true)]));
         let coalescer = BatchCoalescer::new(utf8, 100);
-        assert!(coalescer.has_non_specialized_filter_columns);
+        assert!(!coalescer.has_non_specialized_filter_columns);
+        assert!(coalescer.has_byte_array_columns);
 
         let boolean = Arc::new(Schema::new(vec![Field::new(
             "boolean",
@@ -1849,6 +1885,42 @@ mod tests {
         )]));
         let coalescer = BatchCoalescer::new(boolean, 100);
         assert!(!coalescer.has_non_specialized_filter_columns);
+    }
+
+    fn sparse_filter_byte_array_input() -> (RecordBatch, BooleanArray) {
+        let mut strings = vec![Some("padding"); 4096];
+        strings[..4].copy_from_slice(&[Some("zero"), None, Some("two"), Some("three")]);
+        let batch = RecordBatch::try_from_iter([(
+            "bytes",
+            Arc::new(StringArray::from(strings)) as ArrayRef,
+        )])
+        .unwrap();
+        let filter = BooleanArray::from_iter((0..batch.num_rows()).map(|idx| Some(idx < 4)));
+        (batch, filter)
+    }
+
+    #[test]
+    fn test_sparse_filter_byte_array_direct_copy() {
+        let (batch, filter) = sparse_filter_byte_array_input();
+        assert!(should_use_byte_array_direct_copy(batch.num_rows(), 4));
+
+        let fallback_filter =
+            BooleanArray::from_iter((0..batch.num_rows()).map(|idx| Some(idx < 5)));
+        assert!(!should_use_byte_array_direct_copy(batch.num_rows(), 5));
+        let mut coalescer = BatchCoalescer::new(batch.schema(), 6);
+        coalescer
+            .push_batch_with_filter(batch.clone(), &fallback_filter)
+            .unwrap();
+        coalescer.finish_buffered_batch().unwrap();
+        let expected = filter_record_batch(&batch, &fallback_filter).unwrap();
+        assert_eq!(coalescer.next_completed_batch().unwrap(), expected);
+
+        Test::new("coalesce_sparse_filter_utf8_direct_copy")
+            .with_batch(batch)
+            .with_filter(filter)
+            .with_batch_size(4)
+            .with_expected_output_sizes([4])
+            .run();
     }
 
     #[derive(Debug, Clone, PartialEq)]
