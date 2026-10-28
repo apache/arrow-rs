@@ -624,7 +624,6 @@ impl UnionFields {
     ///
     /// See [`Field::try_merge`]
     pub(crate) fn try_merge(&mut self, other: &Self) -> Result<(), ArrowError> {
-        // TODO: This currently may produce duplicate type IDs (#3982)
         let mut output: Vec<_> = self.iter().map(|(id, f)| (id, f.clone())).collect();
         for (field_type_id, from_field) in other.iter() {
             let mut is_new_field = true;
@@ -647,13 +646,18 @@ impl UnionFields {
             }
 
             if is_new_field {
+                if let Some((_, self_field)) = output.iter().find(|(id, _)| *id == field_type_id) {
+                    return Err(ArrowError::SchemaError(format!(
+                        "Fail to merge schema field '{}' because type id {} is already used by field '{}'",
+                        from_field.name(),
+                        field_type_id,
+                        self_field.name()
+                    )));
+                }
                 output.push((field_type_id, from_field.clone()))
             }
         }
-        // TODO: see above comment; can we remove the need to go through try_new
-        //       and just validate in this function ourselves?
-        let (type_ids, fields): (Vec<i8>, Vec<FieldRef>) = output.into_iter().unzip();
-        *self = Self::try_new(type_ids, fields)?;
+        *self = Self(output.into());
         Ok(())
     }
 }
