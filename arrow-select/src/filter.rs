@@ -938,6 +938,7 @@ fn collect_filter_bits_compress(buffer: &BooleanBuffer, predicate: &FilterPredic
     let ptr = out.as_mut_ptr();
     let mut idx = 0;
     filter_bits_compress(buffer, predicate, |word, _| {
+        debug_assert!(idx <= predicate.count / 64);
         // SAFETY: `count` is the number of set bits in the filter, so at most
         // `count / 64 + 1` words are emitted and the output has room
         unsafe { ptr.add(idx).write(word) };
