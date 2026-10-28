@@ -821,9 +821,15 @@ impl Field {
                     )));
                 }
             },
-            DataType::Union(nested_fields, _) => match &from.data_type {
-                DataType::Union(from_nested_fields, _) => {
-                    nested_fields.try_merge(from_nested_fields)?
+            DataType::Union(nested_fields, mode) => match &from.data_type {
+                DataType::Union(from_nested_fields, from_mode) => {
+                    if mode != from_mode {
+                        return Err(ArrowError::SchemaError(format!(
+                            "Fail to merge schema field '{}' because the from union mode = {:?} does not match {:?}",
+                            self.name, from_mode, mode
+                        )));
+                    }
+                    nested_fields.try_merge(from_nested_fields)?;
                 }
                 DataType::Null => {
                     self.nullable = true;
@@ -1081,6 +1087,46 @@ mod test {
             nullable: true,
         }
         "#);
+    }
+
+    #[test]
+    fn test_merge_union_modes() {
+        for mode in [UnionMode::Sparse, UnionMode::Dense] {
+            let mut field = Field::new_union(
+                "u",
+                [0],
+                [Field::new("number", DataType::Int32, false)],
+                mode,
+            );
+            let other_mode = match mode {
+                UnionMode::Sparse => UnionMode::Dense,
+                UnionMode::Dense => UnionMode::Sparse,
+            };
+            let incompatible = Field::new_union(
+                "u",
+                [0],
+                [Field::new("number", DataType::Int32, false)],
+                other_mode,
+            );
+            assert!(matches!(
+                field.try_merge(&incompatible),
+                Err(ArrowError::SchemaError(_))
+            ));
+
+            let compatible =
+                Field::new_union("u", [1], [Field::new("text", DataType::Utf8, false)], mode);
+            field.try_merge(&compatible).unwrap();
+            let expected = Field::new_union(
+                "u",
+                [0, 1],
+                [
+                    Field::new("number", DataType::Int32, false),
+                    Field::new("text", DataType::Utf8, false),
+                ],
+                mode,
+            );
+            assert_eq!(field, expected);
+        }
     }
 
     #[test]
