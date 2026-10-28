@@ -1275,24 +1275,35 @@ fn set_bit_range(bytes: &mut [u8], start: usize, end: usize) {
 /// Computes the offsets of the rows selected by `predicate` from a list-like
 /// array with the given value `offsets`, along with a [`FilterPredicate`]
 /// selecting the child values of those rows.
+///
+/// The child predicate applies to the child values starting at the index
+/// returned as the third element of the tuple. That index is zero unless the
+/// selected child values form a single run, which is rebased to start at zero
+/// so that its strategy is [`IterationStrategy::All`] and the child values
+/// can be sliced instead of filtered.
 fn filter_offsets<O: OffsetSizeTrait>(
     offsets: &[O],
     predicate: &FilterPredicate,
-) -> (OffsetBuffer<O>, FilterPredicate) {
+) -> (OffsetBuffer<O>, FilterPredicate, usize) {
     let mut dst_offsets = Vec::with_capacity(predicate.count + 1);
     dst_offsets.push(O::usize_as(0));
-    let mut cur_offset = 0;
+    let mut cur_offset: usize = 0;
     // The selected rows are contiguous ranges of child values, typically
     // much longer than the rows, so the child values are filtered by slices
     let mut child_slices: Vec<(usize, usize)> = Vec::new();
 
     let mut extend = |start: usize, end: usize| {
-        for idx in start..end {
-            cur_offset += offsets[idx + 1].as_usize() - offsets[idx].as_usize();
-            dst_offsets.push(O::usize_as(cur_offset));
-        }
         let value_start = offsets[start].as_usize();
         let value_end = offsets[end].as_usize();
+        // Shift the offsets of the run of rows so that it starts at
+        // `cur_offset`, which vectorizes better than summing the lengths.
+        let shift = offsets[start] - O::usize_as(cur_offset);
+        dst_offsets.extend(
+            offsets[start + 1..=end]
+                .iter()
+                .map(|&offset| offset - shift),
+        );
+        cur_offset += value_end - value_start;
         match child_slices.last_mut() {
             _ if value_start == value_end => {}
             Some((_, last_end)) if *last_end == value_start => *last_end = value_end,
@@ -1300,15 +1311,35 @@ fn filter_offsets<O: OffsetSizeTrait>(
         }
     };
 
-    match predicate.selection() {
-        FilterSelection::Slices(slices) => slices.for_each(|(start, end)| extend(start, end)),
-        FilterSelection::Indices(indices) => indices.for_each(|idx| extend(idx, idx + 1)),
-        FilterSelection::All { .. } | FilterSelection::None => unreachable!(),
+    // Runs of rows are runs of child values, so walk the rows by slices even
+    // when the predicate selects them by index, unless they are few enough
+    // that the precomputed indices beat scanning the whole mask
+    match &predicate.strategy {
+        IterationStrategy::Slices(slices) => {
+            slices.iter().for_each(|&(start, end)| extend(start, end))
+        }
+        IterationStrategy::Indices(indices) if predicate.count <= predicate.filter.len() / 64 => {
+            indices.iter().for_each(|&idx| extend(idx, idx + 1))
+        }
+        IterationStrategy::All | IterationStrategy::None => unreachable!(),
+        _ => SlicesIterator::new(&predicate.filter).for_each(|(start, end)| extend(start, end)),
+    }
+
+    // Rebase a single run of child values to start at zero. Slicing to a
+    // shorter length recounts the nulls of every descendant, so only do this
+    // when the run can then be sliced without filtering
+    let base = match child_slices.as_slice() {
+        [(start, _)] => *start,
+        _ => 0,
+    };
+    for (start, end) in &mut child_slices {
+        *start -= base;
+        *end -= base;
     }
 
     // Some kernels, such as `filter_run_end_array`, read the mask rather than
-    // the slices, so build both. Only the selected ranges are written into the zeroed mask, which is
-    // cheap when they are sparse.
+    // the slices, so build both. Only the selected ranges are written into the
+    // zeroed mask, which is cheap when they are sparse.
     let mask_len = child_slices.last().map_or(0, |(_, end)| *end);
     let mut mask = MutableBuffer::from_len_zeroed(bit_util::ceil(mask_len, 8));
     for (start, end) in &child_slices {
@@ -1331,7 +1362,7 @@ fn filter_offsets<O: OffsetSizeTrait>(
     // `cur_offset`, so it is monotonically non-decreasing. Its values are
     // bounded by the span of the source `offsets`, so they fit in `O`.
     let offsets = unsafe { OffsetBuffer::new_unchecked(dst_offsets.into()) };
-    (offsets, child_predicate)
+    (offsets, child_predicate, base)
 }
 
 /// `filter` implementation for lists
@@ -1339,8 +1370,11 @@ fn filter_list<O: OffsetSizeTrait>(
     array: &GenericListArray<O>,
     predicate: &FilterPredicate,
 ) -> Result<GenericListArray<O>, ArrowError> {
-    let (offsets, child_predicate) = filter_offsets(array.value_offsets(), predicate);
-    let values = filter_array(array.values(), &child_predicate)?;
+    let (offsets, child_predicate, base) = filter_offsets(array.value_offsets(), predicate);
+    let values = match child_predicate.strategy {
+        IterationStrategy::All => array.values().slice(base, child_predicate.count),
+        _ => filter_array(array.values(), &child_predicate)?,
+    };
 
     let field = match array.data_type() {
         DataType::List(field) | DataType::LargeList(field) => field.clone(),
@@ -2054,6 +2088,29 @@ mod tests {
     fn test_filter_list() {
         test_case_filter_list::<i32>();
         test_case_filter_list::<i64>();
+    }
+
+    #[test]
+    fn test_filter_list_selection_shapes() {
+        // Long enough for sparse precomputed indices, and with some empty
+        // lists so that runs of rows can have no child values
+        let list = ListArray::from_iter_primitive::<Int32Type, _, _>(
+            (0..256).map(|i| Some((0..i % 4).map(Some).collect::<Vec<_>>())),
+        );
+        let predicates = [
+            // Few rows, selected by precomputed indices when optimized
+            BooleanArray::from_iter((0..256).map(|i| Some(i == 5 || i == 200))),
+            // A single run of child values, sliced rather than filtered
+            BooleanArray::from_iter((0..256).map(|i| Some((100..140).contains(&i)))),
+            // A single row with no child values
+            BooleanArray::from_iter((0..256).map(|i| Some(i == 4))),
+            // Two runs
+            BooleanArray::from_iter((0..256).map(|i| Some(i < 30 || (200..220).contains(&i)))),
+        ];
+        for predicate in &predicates {
+            assert_filter_matches_take(&list, predicate);
+            assert_filter_matches_take(&list.slice(3, 250), &predicate.slice(0, 250));
+        }
     }
 
     /// Generates a `Struct<a: Int32, items: List<Struct<x: Int32, y: Utf8>>>`
