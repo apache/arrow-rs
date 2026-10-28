@@ -121,7 +121,6 @@ impl<K: ArrowDictionaryKeyType, T: ByteArrayType> InProgressDictionaryArray<K, T
             return Ok(None);
         }
         if let Some(direct) = self.direct.as_ref()
-            && !direct.keys.is_empty()
             && !Arc::ptr_eq(&direct.values, &values)
         {
             let array = Arc::new(self.take_direct()?.unwrap()) as ArrayRef;
@@ -146,9 +145,6 @@ impl<K: ArrowDictionaryKeyType, T: ByteArrayType> InProgressDictionaryArray<K, T
         let Some(mut direct) = self.direct.take() else {
             return Ok(None);
         };
-        if direct.keys.is_empty() {
-            return Ok(None);
-        }
         let nulls = direct.nulls.finish();
         let keys = PrimitiveArray::<K>::try_new(ScalarBuffer::from(direct.keys), nulls)?;
         Ok(Some(DictionaryArray::try_new(keys, direct.values)?))
@@ -173,6 +169,9 @@ impl<K: ArrowDictionaryKeyType, T: ByteArrayType> InProgressArray
                 "Internal Error: InProgressDictionaryArray: source not set".to_string(),
             )
         })?);
+        if len == 0 {
+            return Ok(());
+        }
         let dictionary = source.as_dictionary::<K>();
         let values = Arc::clone(dictionary.values());
         let keys = dictionary.keys();
@@ -283,6 +282,20 @@ mod tests {
     use arrow_array::{
         BinaryArray, BooleanArray, Int32Array, RecordBatch, StringArray, UInt8Array,
     };
+
+    #[test]
+    fn empty_copy_does_not_initialize_direct_state() {
+        let mut in_progress = InProgressDictionaryArray::<Int32Type, Utf8Type>::new(8);
+        let source = Arc::new(DictionaryArray::<Int32Type>::new(
+            Int32Array::from(Vec::<i32>::new()),
+            Arc::new(StringArray::from(vec!["unused"])),
+        ));
+        in_progress.set_source(Some(source));
+
+        in_progress.copy_rows(0, 0).unwrap();
+
+        assert!(in_progress.direct.is_none());
+    }
 
     #[test]
     fn coalesces_shared_and_distinct_mappings() {
