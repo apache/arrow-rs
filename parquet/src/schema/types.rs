@@ -1532,7 +1532,18 @@ fn schema_from_array_helper(
         Some(n) => {
             let repetition = element.repetition_type;
 
-            let mut fields = Vec::with_capacity(usize::try_from(n)?);
+            // Each child consumes at least one schema element, so num_children cannot
+            // exceed the number of elements remaining after the current one.
+            let n_children = usize::try_from(n)?;
+            let remaining = num_elements - index - 1;
+            if n_children > remaining {
+                return Err(general_err!(
+                    "Number of children exceeds remaining schema elements, num_children = {}, remaining = {}",
+                    n_children,
+                    remaining
+                ));
+            }
+            let mut fields = Vec::with_capacity(n_children);
             let mut next_index = index + 1;
             for _ in 0..n {
                 let child_result = schema_from_array_helper(elements, num_elements, next_index)?;
@@ -2840,5 +2851,60 @@ mod tests {
         }];
         let result = parquet_schema_from_array(elements);
         assert!(result.unwrap_err().to_string().contains("Integer overflow"));
+    }
+
+    #[test]
+    fn test_parquet_schema_from_array_rejects_num_children_exceeding_remaining() {
+        // Root group claiming i32::MAX children with no further elements.
+        let elements = vec![SchemaElement {
+            r#type: None,
+            type_length: None,
+            repetition_type: Some(Repetition::REQUIRED),
+            name: "schema",
+            num_children: Some(i32::MAX),
+            converted_type: None,
+            scale: None,
+            precision: None,
+            field_id: None,
+            logical_type: None,
+        }];
+        let result = parquet_schema_from_array(elements);
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Parquet error: Number of children exceeds remaining schema elements, num_children = 2147483647, remaining = 0"
+        );
+
+        // Root declares 2 children but only 1 element follows.
+        let elements = vec![
+            SchemaElement {
+                r#type: None,
+                type_length: None,
+                repetition_type: Some(Repetition::REQUIRED),
+                name: "schema",
+                num_children: Some(2),
+                converted_type: None,
+                scale: None,
+                precision: None,
+                field_id: None,
+                logical_type: None,
+            },
+            SchemaElement {
+                r#type: Some(PhysicalType::INT32),
+                type_length: None,
+                repetition_type: Some(Repetition::REQUIRED),
+                name: "field",
+                num_children: None,
+                converted_type: None,
+                scale: None,
+                precision: None,
+                field_id: None,
+                logical_type: None,
+            },
+        ];
+        let result = parquet_schema_from_array(elements);
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Parquet error: Number of children exceeds remaining schema elements, num_children = 2, remaining = 1"
+        );
     }
 }
