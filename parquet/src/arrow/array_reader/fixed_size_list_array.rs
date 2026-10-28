@@ -152,11 +152,17 @@ impl ArrayReader for FixedSizeListArrayReader {
             .iter()
             .filter(|&&d| d >= self.def_level)
             .count();
+        let expected_items = items_count
+            .checked_mul(self.fixed_size)
+            .ok_or_else(|| general_err!("Fixed-size list child length overflow"))?;
+        let output_items = list_len
+            .checked_mul(self.fixed_size)
+            .ok_or_else(|| general_err!("Fixed-size list child length overflow"))?;
 
-        if child_array.len() != items_count * self.fixed_size {
+        if child_array.len() != expected_items {
             return Err(general_err!(
                 "Fixed-size list child mismatch: expected {} entries but got {}",
-                items_count * self.fixed_size,
+                expected_items,
                 child_array.len()
             ));
         }
@@ -167,7 +173,8 @@ impl ArrayReader for FixedSizeListArrayReader {
             child_array.to_data()
         } else {
             let data = child_array.to_data();
-            let mut builder = MutableArrayData::new(vec![&data], true, list_len * self.fixed_size);
+            let mut builder = MutableArrayData::try_new(vec![&data], true, output_items)
+                .map_err(|e| general_err!("{}", e))?;
             let mut src_idx = 0;
             for &d in &boundary_defs {
                 if d >= self.def_level {
@@ -184,7 +191,7 @@ impl ArrayReader for FixedSizeListArrayReader {
             builder.freeze()
         };
 
-        debug_assert_eq!(child_data.len(), list_len * self.fixed_size);
+        debug_assert_eq!(child_data.len(), output_items);
 
         let mut list_builder = ArrayData::builder(self.get_data_type().clone())
             .len(list_len)

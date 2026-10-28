@@ -142,7 +142,15 @@ where
 {
     let array = array.as_list::<OffsetSize>();
 
-    let cap = array.len() * size as usize;
+    let size_usize = usize::try_from(size).map_err(|_| {
+        ArrowError::CastError(format!(
+            "Cannot cast to FixedSizeList({size}): size must be non-negative"
+        ))
+    })?;
+    let cap = array
+        .len()
+        .checked_mul(size_usize)
+        .ok_or_else(|| ArrowError::MemoryError("fixed-size list capacity overflow".into()))?;
 
     let mut null_builder = NullBufferBuilder::new(array.len());
     if let Some(nulls) = array.nulls().filter(|b| b.null_count() > 0) {
@@ -155,7 +163,7 @@ where
     let nullable = cast_options.safe || array.null_count() != 0;
     // Nulls in FixedSizeListArray take up space and so we must pad the values
     let values = array.values().to_data();
-    let mut mutable = MutableArrayData::new(vec![&values], nullable, cap);
+    let mut mutable = MutableArrayData::try_new(vec![&values], nullable, cap)?;
     let first_pos = array.offsets()[0].as_usize();
     // The end position in values of the last incorrectly-sized list slice,
     // or None if no padding has been needed (including for empty slices).
@@ -166,7 +174,7 @@ where
         let end_pos = w[1].as_usize();
         let len = end_pos - start_pos;
 
-        if len != size as usize {
+        if len != size_usize {
             if cast_options.safe || array.is_null(idx) {
                 let copy_start = last_pos.unwrap_or(first_pos);
                 if copy_start != start_pos {
@@ -177,7 +185,7 @@ where
                 }
                 // Pad this slice with nulls
                 mutable
-                    .try_extend_nulls(size as _)
+                    .try_extend_nulls(size_usize)
                     .map_err(|e| ArrowError::CastError(e.to_string()))?;
                 null_builder.set_bit(idx, false);
                 // Set last_pos to the end of this slice's values
@@ -236,18 +244,26 @@ pub(crate) fn cast_list_view_to_fixed_size_list<O: OffsetSizeTrait>(
 
     let nullable = cast_options.safe || array.null_count() != 0;
     let values = array.values().to_data();
-    let cap = array.len() * size as usize;
-    let mut mutable = MutableArrayData::new(vec![&values], nullable, cap);
+    let size_usize = usize::try_from(size).map_err(|_| {
+        ArrowError::CastError(format!(
+            "Cannot cast to FixedSizeList({size}): size must be non-negative"
+        ))
+    })?;
+    let cap = array
+        .len()
+        .checked_mul(size_usize)
+        .ok_or_else(|| ArrowError::MemoryError("fixed-size list capacity overflow".into()))?;
+    let mut mutable = MutableArrayData::try_new(vec![&values], nullable, cap)?;
 
     for idx in 0..array.len() {
         let offset = array.value_offset(idx).as_usize();
         let len = array.value_size(idx).as_usize();
 
-        if len != size as usize {
+        if len != size_usize {
             // Nulls in FixedSizeListArray take up space and so we must pad the values
             if cast_options.safe || array.is_null(idx) {
                 mutable
-                    .try_extend_nulls(size as _)
+                    .try_extend_nulls(size_usize)
                     .map_err(|e| ArrowError::CastError(e.to_string()))?;
                 null_builder.set_bit(idx, false);
             } else {

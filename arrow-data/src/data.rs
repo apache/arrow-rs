@@ -61,16 +61,27 @@ pub(crate) fn count_nulls(
     }
 }
 
-/// creates 2 [`MutableBuffer`]s with a given `capacity` (in slots).
+/// Creates 2 [`MutableBuffer`]s with a given `capacity` (in slots).
 #[inline]
-pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuffer; 2] {
-    let empty_buffer = MutableBuffer::new(0);
-    match data_type {
-        DataType::Null => [empty_buffer, MutableBuffer::new(0)],
+pub(crate) fn new_buffers(
+    data_type: &DataType,
+    capacity: usize,
+) -> Result<[MutableBuffer; 2], ArrowError> {
+    let new_buffer = |len| {
+        MutableBuffer::try_with_capacity(len).map_err(|e| ArrowError::MemoryError(e.to_string()))
+    };
+    let sized_buffer = |width: usize| {
+        let len = capacity
+            .checked_mul(width)
+            .ok_or_else(|| ArrowError::MemoryError("buffer size overflow".into()))?;
+        new_buffer(len)
+    };
+
+    Ok(match data_type {
+        DataType::Null => [MutableBuffer::default(), MutableBuffer::default()],
         DataType::Boolean => {
             let bytes = bit_util::ceil(capacity, 8);
-            let buffer = MutableBuffer::new(bytes);
-            [buffer, empty_buffer]
+            [new_buffer(bytes)?, MutableBuffer::default()]
         }
         DataType::UInt8
         | DataType::UInt16
@@ -94,69 +105,93 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
         | DataType::Duration(_)
         | DataType::Timestamp(_, _)
         | DataType::Interval(_) => [
-            MutableBuffer::new(capacity * data_type.primitive_width().unwrap()),
-            empty_buffer,
+            sized_buffer(data_type.primitive_width().unwrap())?,
+            MutableBuffer::default(),
         ],
         DataType::Utf8 | DataType::Binary => {
-            let mut buffer = MutableBuffer::new((1 + capacity) * mem::size_of::<i32>());
+            let offset_capacity = capacity
+                .checked_add(1)
+                .and_then(|len| len.checked_mul(mem::size_of::<i32>()))
+                .ok_or_else(|| ArrowError::MemoryError("offset buffer size overflow".into()))?;
+            let mut buffer = new_buffer(offset_capacity)?;
             // safety: `unsafe` code assumes that this buffer is initialized with one element
-            buffer.push(0i32);
-            [buffer, MutableBuffer::new(capacity * mem::size_of::<u8>())]
+            buffer
+                .try_extend_from_slice(&[0i32])
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+            [buffer, sized_buffer(mem::size_of::<u8>())?]
         }
         DataType::LargeUtf8 | DataType::LargeBinary => {
-            let mut buffer = MutableBuffer::new((1 + capacity) * mem::size_of::<i64>());
+            let offset_capacity = capacity
+                .checked_add(1)
+                .and_then(|len| len.checked_mul(mem::size_of::<i64>()))
+                .ok_or_else(|| ArrowError::MemoryError("offset buffer size overflow".into()))?;
+            let mut buffer = new_buffer(offset_capacity)?;
             // safety: `unsafe` code assumes that this buffer is initialized with one element
-            buffer.push(0i64);
-            [buffer, MutableBuffer::new(capacity * mem::size_of::<u8>())]
+            buffer
+                .try_extend_from_slice(&[0i64])
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+            [buffer, sized_buffer(mem::size_of::<u8>())?]
         }
         DataType::BinaryView | DataType::Utf8View => [
-            MutableBuffer::new(capacity * mem::size_of::<u128>()),
-            empty_buffer,
+            sized_buffer(mem::size_of::<u128>())?,
+            MutableBuffer::default(),
         ],
         DataType::List(_) | DataType::Map(_, _) => {
             // offset buffer always starts with a zero
-            let mut buffer = MutableBuffer::new((1 + capacity) * mem::size_of::<i32>());
-            buffer.push(0i32);
-            [buffer, empty_buffer]
+            let offset_capacity = capacity
+                .checked_add(1)
+                .and_then(|len| len.checked_mul(mem::size_of::<i32>()))
+                .ok_or_else(|| ArrowError::MemoryError("offset buffer size overflow".into()))?;
+            let mut buffer = new_buffer(offset_capacity)?;
+            buffer
+                .try_extend_from_slice(&[0i32])
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+            [buffer, MutableBuffer::default()]
         }
         DataType::ListView(_) => [
-            MutableBuffer::new(capacity * mem::size_of::<i32>()),
-            MutableBuffer::new(capacity * mem::size_of::<i32>()),
+            sized_buffer(mem::size_of::<i32>())?,
+            sized_buffer(mem::size_of::<i32>())?,
         ],
         DataType::LargeList(_) => {
             // offset buffer always starts with a zero
-            let mut buffer = MutableBuffer::new((1 + capacity) * mem::size_of::<i64>());
-            buffer.push(0i64);
-            [buffer, empty_buffer]
+            let offset_capacity = capacity
+                .checked_add(1)
+                .and_then(|len| len.checked_mul(mem::size_of::<i64>()))
+                .ok_or_else(|| ArrowError::MemoryError("offset buffer size overflow".into()))?;
+            let mut buffer = new_buffer(offset_capacity)?;
+            buffer
+                .try_extend_from_slice(&[0i64])
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+            [buffer, MutableBuffer::default()]
         }
         DataType::LargeListView(_) => [
-            MutableBuffer::new(capacity * mem::size_of::<i64>()),
-            MutableBuffer::new(capacity * mem::size_of::<i64>()),
+            sized_buffer(mem::size_of::<i64>())?,
+            sized_buffer(mem::size_of::<i64>())?,
         ],
         DataType::FixedSizeBinary(size) => {
             if *size < 0 {
                 panic!("cannot construct buffers from FixedSizeBinary({size})");
             }
-            [MutableBuffer::new(capacity * *size as usize), empty_buffer]
+            [sized_buffer(*size as usize)?, MutableBuffer::default()]
         }
         DataType::Dictionary(k, _) => [
-            MutableBuffer::new(capacity * k.primitive_width().unwrap()),
-            empty_buffer,
+            sized_buffer(k.primitive_width().unwrap())?,
+            MutableBuffer::default(),
         ],
         DataType::FixedSizeList(_, _) | DataType::Struct(_) | DataType::RunEndEncoded(_, _) => {
-            [empty_buffer, MutableBuffer::new(0)]
+            [MutableBuffer::default(), MutableBuffer::default()]
         }
         DataType::Union(_, mode) => {
-            let type_ids = MutableBuffer::new(capacity * mem::size_of::<i8>());
+            let type_ids = sized_buffer(mem::size_of::<i8>())?;
             match mode {
-                UnionMode::Sparse => [type_ids, empty_buffer],
+                UnionMode::Sparse => [type_ids, MutableBuffer::default()],
                 UnionMode::Dense => {
-                    let offsets = MutableBuffer::new(capacity * mem::size_of::<i32>());
+                    let offsets = sized_buffer(mem::size_of::<i32>())?;
                     [type_ids, offsets]
                 }
             }
         }
-    }
+    })
 }
 
 /// A generic representation of Arrow array data which encapsulates common attributes

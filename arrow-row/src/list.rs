@@ -220,7 +220,7 @@ pub(crate) unsafe fn decode<ListLikeImpl: GenericListArrayOrMap>(
     }
     ListLikeImpl::Offset::from_usize(offset).expect("overflow");
 
-    let nulls = crate::variable::decode_nulls_sentinel(rows, opts);
+    let nulls = crate::variable::decode_nulls_sentinel(rows, opts)?;
 
     let mut values_offsets = Vec::with_capacity(offset);
     let mut values_bytes = Vec::with_capacity(values_bytes);
@@ -389,7 +389,7 @@ pub unsafe fn decode_fixed_size_list(
     };
 
     let num_rows = rows.len();
-    let nulls = fixed::decode_nulls(rows);
+    let nulls = fixed::try_decode_nulls(rows)?;
 
     let null_element_encoded =
         converter.convert_columns(&[new_null_array(element_field.data_type(), 1)])?;
@@ -557,11 +557,12 @@ pub unsafe fn decode_list_view<O: OffsetSizeTrait>(
 
     let null_sentinel = null_sentinel(opts);
     let mut null_count = 0;
-    let nulls = MutableBuffer::collect_bool(rows.len(), |x| {
+    let nulls = MutableBuffer::try_collect_bool(rows.len(), |x| {
         let valid = rows[x][0] != null_sentinel;
         null_count += !valid as usize;
         valid
-    });
+    })
+    .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
     let mut values_offsets_vec = Vec::with_capacity(child_count);
     let mut values_bytes = Vec::with_capacity(values_bytes);

@@ -179,7 +179,7 @@ use arrow_buffer::{ArrowNativeType, Buffer, OffsetBuffer, ScalarBuffer};
 use arrow_schema::*;
 use variable::{decode_binary_view, decode_string_view};
 
-use crate::fixed::{decode_bool, decode_fixed_size_binary, decode_primitive};
+use crate::fixed::{try_decode_bool, try_decode_fixed_size_binary, try_decode_primitive};
 use crate::list::{compute_lengths_fixed_size_list, encode_fixed_size_list};
 use crate::variable::{decode_binary, decode_string};
 use arrow_array::types::{Int16Type, Int32Type, Int64Type};
@@ -2264,7 +2264,7 @@ pub fn encode_dictionary_values<K: ArrowDictionaryKeyType>(
 
 macro_rules! decode_primitive_helper {
     ($t:ty, $rows:ident, $data_type:ident, $options:ident) => {
-        Arc::new(decode_primitive::<$t>($rows, $data_type, $options))
+        Arc::new(try_decode_primitive::<$t>($rows, $data_type, $options)?)
     };
 }
 
@@ -2290,13 +2290,13 @@ unsafe fn decode_column(
                     variable::decode_null_value(rows, options);
                     Arc::new(NullArray::new(rows.len()))
                 }
-                DataType::Boolean => Arc::new(decode_bool(rows, options)),
-                DataType::Binary => Arc::new(decode_binary::<i32>(rows, options)),
-                DataType::LargeBinary => Arc::new(decode_binary::<i64>(rows, options)),
+                DataType::Boolean => Arc::new(try_decode_bool(rows, options)?),
+                DataType::Binary => Arc::new(decode_binary::<i32>(rows, options)?),
+                DataType::LargeBinary => Arc::new(decode_binary::<i64>(rows, options)?),
                 DataType::BinaryView => Arc::new(decode_binary_view(rows, options)?),
-                DataType::FixedSizeBinary(size) => Arc::new(decode_fixed_size_binary(rows, size, options)),
-                DataType::Utf8 => Arc::new(unsafe{ decode_string::<i32>(rows, options, validate_utf8) }),
-                DataType::LargeUtf8 => Arc::new(unsafe { decode_string::<i64>(rows, options, validate_utf8) }),
+                DataType::FixedSizeBinary(size) => Arc::new(try_decode_fixed_size_binary(rows, size, options)?),
+                DataType::Utf8 => Arc::new(unsafe{ decode_string::<i32>(rows, options, validate_utf8) }?),
+                DataType::LargeUtf8 => Arc::new(unsafe { decode_string::<i64>(rows, options, validate_utf8) }?),
                 DataType::Utf8View => Arc::new(unsafe { decode_string_view(rows, options, validate_utf8) }?),
                 _ => return Err(ArrowError::NotYetImplemented(format!("unsupported data type: {data_type}" )))
             }
@@ -2306,7 +2306,7 @@ unsafe fn decode_column(
             cols.into_iter().next().unwrap()
         }
         Codec::Struct(converter, _) => {
-            let nulls = fixed::decode_nulls(rows);
+            let nulls = fixed::try_decode_nulls(rows)?;
             rows.iter_mut().for_each(|row| *row = &row[1..]);
             let children = unsafe { converter.convert_raw(rows, validate_utf8) }?;
 

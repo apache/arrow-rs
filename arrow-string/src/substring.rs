@@ -404,7 +404,8 @@ where
         })?;
 
     // concatenate substrings into a buffer
-    let mut new_values = MutableBuffer::new(new_offsets.last().unwrap().as_usize());
+    let mut new_values = MutableBuffer::try_with_capacity(new_offsets.last().unwrap().as_usize())
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
     new_starts_ends
         .iter()
@@ -455,8 +456,9 @@ fn fixed_size_binary_substring(
     let data = array.value_data();
     let capacity = num_of_elements
         .checked_mul(new_len)
-        .expect("capacity overflow");
-    let mut new_values = MutableBuffer::new(capacity);
+        .ok_or_else(|| ArrowError::MemoryError("substring output size overflow".into()))?;
+    let mut new_values = MutableBuffer::try_with_capacity(capacity)
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
     (0..num_of_elements)
         .map(|idx| {
             let offset = idx * array.value_size();

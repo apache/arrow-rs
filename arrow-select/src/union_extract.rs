@@ -141,7 +141,7 @@ fn extract_sparse(
     {
         Ok(Arc::clone(target))
     } else {
-        match eq_scalar(union_array.type_ids(), target_type_id) {
+        match eq_scalar(union_array.type_ids(), target_type_id)? {
             // case 2: all type ids equals our target, and since unions doesn't have a null mask, the result array is exactly the same as our target
             BoolValue::Scalar(true) => Ok(Arc::clone(target)),
             // case 3: none type_id matches our target, the result is a null array
@@ -240,7 +240,7 @@ fn extract_dense(
         // case 4: every type id matches our target
         Ok(extract_dense_all_selected(union_array, target, offsets)?)
     } else {
-        match eq_scalar(union_array.type_ids(), target_type_id) {
+        match eq_scalar(union_array.type_ids(), target_type_id)? {
             // case 4C: all type ids matches our target.
             // Non empty sibling without any selected value may happen after slicing the parent union,
             // since only type_ids and offsets are sliced, not the children
@@ -331,7 +331,7 @@ enum BoolValue {
     Buffer(BooleanBuffer),
 }
 
-fn eq_scalar(type_ids: &[i8], target: i8) -> BoolValue {
+fn eq_scalar(type_ids: &[i8], target: i8) -> Result<BoolValue, ArrowError> {
     eq_scalar_inner(EQ_SCALAR_CHUNK_SIZE, type_ids, target)
 }
 
@@ -344,16 +344,20 @@ fn count_first_run(chunk_size: usize, type_ids: &[i8], mut f: impl FnMut(i8) -> 
 }
 
 // This is like MutableBuffer::collect_bool(type_ids.len(), |i| type_ids[i] == target) with fast paths for all true or all false values.
-fn eq_scalar_inner(chunk_size: usize, type_ids: &[i8], target: i8) -> BoolValue {
+fn eq_scalar_inner(
+    chunk_size: usize,
+    type_ids: &[i8],
+    target: i8,
+) -> Result<BoolValue, ArrowError> {
     let true_bits = count_first_run(chunk_size, type_ids, |v| v == target);
 
     let (set_bits, val) = if true_bits == type_ids.len() {
-        return BoolValue::Scalar(true);
+        return Ok(BoolValue::Scalar(true));
     } else if true_bits == 0 {
         let false_bits = count_first_run(chunk_size, type_ids, |v| v != target);
 
         if false_bits == type_ids.len() {
-            return BoolValue::Scalar(false);
+            return Ok(BoolValue::Scalar(false));
         }
         (false_bits, false)
     } else {
@@ -363,8 +367,9 @@ fn eq_scalar_inner(chunk_size: usize, type_ids: &[i8], target: i8) -> BoolValue 
     // restrict to chunk boundaries
     let set_bits = set_bits - set_bits % 64;
 
-    let mut buffer =
-        MutableBuffer::new(bit_util::ceil(type_ids.len(), 8)).with_bitset(set_bits / 8, val);
+    let mut buffer = MutableBuffer::try_with_capacity(bit_util::ceil(type_ids.len(), 8))
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?
+        .with_bitset(set_bits / 8, val);
 
     buffer.extend(type_ids[set_bits..].chunks(64).map(|chunk| {
         chunk
@@ -376,7 +381,11 @@ fn eq_scalar_inner(chunk_size: usize, type_ids: &[i8], target: i8) -> BoolValue 
             })
     }));
 
-    BoolValue::Buffer(BooleanBuffer::new(buffer.into(), 0, type_ids.len()))
+    Ok(BoolValue::Buffer(BooleanBuffer::new(
+        buffer.into(),
+        0,
+        type_ids.len(),
+    )))
 }
 
 const IS_SEQUENTIAL_CHUNK_SIZE: usize = 64;
@@ -444,7 +453,7 @@ mod tests {
         const EQ_SCALAR_CHUNK_SIZE: usize = 3;
 
         fn eq_scalar(type_ids: &[i8], target: i8) -> BoolValue {
-            eq_scalar_inner(EQ_SCALAR_CHUNK_SIZE, type_ids, target)
+            eq_scalar_inner(EQ_SCALAR_CHUNK_SIZE, type_ids, target).unwrap()
         }
 
         fn cross_check(left: &[i8], right: i8) -> BooleanBuffer {

@@ -285,21 +285,21 @@ fn interleave_dictionaries<K: ArrowDictionaryKeyType>(
         };
     }
 
-    let masks: Vec<_> = dictionaries
+    let masks: Result<Vec<_>, ArrowError> = dictionaries
         .iter()
         .enumerate()
         .map(|(a_idx, dictionary)| {
-            let mut key_mask = BooleanBufferBuilder::new_from_buffer(
-                MutableBuffer::new_null(dictionary.len()),
-                dictionary.len(),
-            );
+            let buffer = MutableBuffer::try_from_len_zeroed(bit_util::ceil(dictionary.len(), 8))
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+            let mut key_mask = BooleanBufferBuilder::new_from_buffer(buffer, dictionary.len());
 
             for (_, key_idx) in indices.iter().filter(|(a, _)| *a == a_idx) {
                 key_mask.set_bit(*key_idx, true);
             }
-            key_mask.finish()
+            Ok(key_mask.finish())
         })
         .collect();
+    let masks = masks?;
 
     let merged = merge_dictionary_values(&dictionaries, Some(&masks))?;
 
@@ -433,7 +433,7 @@ fn interleave_list_like_primitive_child<L: ListLikeArray, T: ArrowPrimitiveType>
     indices: &[(usize, usize)],
     capacity: usize,
     data_type: &DataType,
-) -> ArrayRef {
+) -> Result<ArrayRef, ArrowError> {
     let child_arrays: Vec<&PrimitiveArray<T>> = interleaved
         .arrays
         .iter()
@@ -456,7 +456,8 @@ fn interleave_list_like_primitive_child<L: ListLikeArray, T: ArrowPrimitiveType>
     // - Sources without nulls: set the bit range to all 1s directly.
     let nulls = if has_child_nulls {
         let null_byte_len = bit_util::ceil(capacity, 8);
-        let mut output_null_buf = MutableBuffer::from_len_zeroed(null_byte_len);
+        let mut output_null_buf = MutableBuffer::try_from_len_zeroed(null_byte_len)
+            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
         let mut offset_write = 0;
         let mut output_null_count = 0usize;
@@ -495,7 +496,9 @@ fn interleave_list_like_primitive_child<L: ListLikeArray, T: ArrowPrimitiveType>
         None
     };
 
-    Arc::new(PrimitiveArray::<T>::new(values.into(), nulls).with_data_type(data_type.clone()))
+    Ok(Arc::new(
+        PrimitiveArray::<T>::new(values.into(), nulls).with_data_type(data_type.clone()),
+    ))
 }
 
 /// Interleave child values for non-primitive child types, shared by List and FixedSizeList.
@@ -546,7 +549,7 @@ fn interleave_list<O: OffsetSizeTrait>(
                 indices,
                 capacity,
                 field.data_type(),
-            )
+            )?
         };
     }
 
@@ -574,7 +577,10 @@ fn interleave_fixed_size_list(
     size: i32,
 ) -> Result<ArrayRef, ArrowError> {
     let interleaved = Interleave::<'_, FixedSizeListArray>::new(values, indices);
-    let capacity = indices.len() * size as usize;
+    let capacity = indices
+        .len()
+        .checked_mul(size as usize)
+        .ok_or_else(|| ArrowError::MemoryError("interleave output size overflow".into()))?;
 
     macro_rules! fsl_primitive_helper {
         ($t:ty) => {
@@ -583,7 +589,7 @@ fn interleave_fixed_size_list(
                 indices,
                 capacity,
                 field.data_type(),
-            )
+            )?
         };
     }
 
@@ -749,7 +755,9 @@ fn interleave_list_view_copy<O: OffsetSizeTrait>(
             O::from_usize(capacity).ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?,
         );
         sizes.push(O::from_usize(size).ok_or_else(|| ArrowError::OffsetOverflowError(size))?);
-        capacity += size;
+        capacity = capacity
+            .checked_add(size)
+            .ok_or_else(|| ArrowError::MemoryError("interleaved child length overflow".into()))?;
     }
 
     let child_data: Vec<_> = interleaved
@@ -758,7 +766,7 @@ fn interleave_list_view_copy<O: OffsetSizeTrait>(
         .map(|list| list.values().to_data())
         .collect();
     let child_data_refs: Vec<_> = child_data.iter().collect();
-    let mut mutable_child = MutableArrayData::new(child_data_refs, false, capacity);
+    let mut mutable_child = MutableArrayData::try_new(child_data_refs, false, capacity)?;
     for &(array_idx, row_idx) in indices {
         let list = interleaved.arrays[array_idx];
         let start = list.offsets()[row_idx].as_usize();

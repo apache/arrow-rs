@@ -390,7 +390,11 @@ where
     O: ArrowPrimitiveType,
     F: Fn(A::Item, B::Item) -> Result<O::Native, ArrowError>,
 {
-    let mut buffer = MutableBuffer::new(len * O::Native::get_byte_width());
+    let capacity = len
+        .checked_mul(O::Native::get_byte_width())
+        .ok_or_else(|| ArrowError::MemoryError("binary output size overflow".to_string()))?;
+    let mut buffer = MutableBuffer::try_with_capacity(capacity)
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
     for idx in 0..len {
         unsafe {
             buffer.push_unchecked(op(a.value_unchecked(idx), b.value_unchecked(idx))?);

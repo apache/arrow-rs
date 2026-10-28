@@ -21,7 +21,7 @@ use arrow_array::{ArrowPrimitiveType, BooleanArray, FixedSizeBinaryArray};
 use arrow_buffer::{
     BooleanBuffer, IntervalDayTime, IntervalMonthDayNano, MutableBuffer, NullBuffer, bit_util, i256,
 };
-use arrow_schema::{DataType, SortOptions};
+use arrow_schema::{ArrowError, DataType, SortOptions};
 use half::f16;
 
 pub trait FromSlice {
@@ -356,7 +356,15 @@ fn split_off<'a>(src: &mut &'a [u8], len: usize) -> &'a [u8] {
 }
 
 /// Decodes a `BooleanArray` from rows
+#[expect(dead_code, reason = "Preserve the existing infallible decoder API")]
 pub fn decode_bool(rows: &mut [&[u8]], options: SortOptions) -> BooleanArray {
+    try_decode_bool(rows, options).unwrap()
+}
+
+pub(crate) fn try_decode_bool(
+    rows: &mut [&[u8]],
+    options: SortOptions,
+) -> Result<BooleanArray, ArrowError> {
     let true_val = match options.descending {
         true => !1,
         false => 1,
@@ -364,8 +372,11 @@ pub fn decode_bool(rows: &mut [&[u8]], options: SortOptions) -> BooleanArray {
 
     let len = rows.len();
 
-    let mut nulls = MutableBuffer::new(bit_util::ceil(len, 64) * 8);
-    let mut values = MutableBuffer::new(bit_util::ceil(len, 64) * 8);
+    let capacity = bit_util::ceil(len, 64) * 8;
+    let mut nulls = MutableBuffer::try_with_capacity(capacity)
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+    let mut values = MutableBuffer::try_with_capacity(capacity)
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
     let chunks = len / 64;
     let remainder = len % 64;
@@ -402,19 +413,30 @@ pub fn decode_bool(rows: &mut [&[u8]], options: SortOptions) -> BooleanArray {
     let nulls = NullBuffer::new(BooleanBuffer::new(nulls.into(), 0, len));
     let nulls = (nulls.null_count() > 0).then_some(nulls);
 
-    BooleanArray::new(BooleanBuffer::new(values.into(), 0, len), nulls)
+    Ok(BooleanArray::new(
+        BooleanBuffer::new(values.into(), 0, len),
+        nulls,
+    ))
 }
 
 /// Decodes a single byte from each row, interpreting `0x01` as a valid value
 /// and all other values as a null. Optionally returns `None` if there are no
 /// null values.
+#[expect(dead_code, reason = "Preserve the existing infallible decoder API")]
 pub fn decode_nulls(rows: &[&[u8]]) -> Option<NullBuffer> {
-    let nulls = BooleanBuffer::collect_bool(rows.len(), |idx| rows[idx][0] == 1);
+    try_decode_nulls(rows).unwrap()
+}
+
+pub(crate) fn try_decode_nulls(rows: &[&[u8]]) -> Result<Option<NullBuffer>, ArrowError> {
+    let nulls = MutableBuffer::try_collect_bool(rows.len(), |idx| rows[idx][0] == 1)
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+    let nulls = BooleanBuffer::new(nulls.into(), 0, rows.len());
     let nulls = NullBuffer::new(nulls);
-    (nulls.null_count() > 0).then_some(nulls)
+    Ok((nulls.null_count() > 0).then_some(nulls))
 }
 
 /// Decodes a `PrimitiveArray` from rows
+#[expect(dead_code, reason = "Preserve the existing infallible decoder API")]
 pub fn decode_primitive<T: ArrowPrimitiveType>(
     rows: &mut [&[u8]],
     data_type: DataType,
@@ -423,9 +445,20 @@ pub fn decode_primitive<T: ArrowPrimitiveType>(
 where
     T::Native: FixedLengthEncoding,
 {
+    try_decode_primitive(rows, data_type, options).unwrap()
+}
+
+pub(crate) fn try_decode_primitive<T: ArrowPrimitiveType>(
+    rows: &mut [&[u8]],
+    data_type: DataType,
+    options: SortOptions,
+) -> Result<PrimitiveArray<T>, ArrowError>
+where
+    T::Native: FixedLengthEncoding,
+{
     assert!(PrimitiveArray::<T>::is_compatible(&data_type));
 
-    let nulls = decode_nulls(rows);
+    let nulls = try_decode_nulls(rows)?;
     let values = rows
         .iter_mut()
         .map(|row| {
@@ -438,30 +471,45 @@ where
         })
         .collect::<Vec<_>>();
 
-    PrimitiveArray::new(values.into(), nulls).with_data_type(data_type)
+    Ok(PrimitiveArray::new(values.into(), nulls).with_data_type(data_type))
 }
 
 /// Decodes a `FixedLengthBinary` from rows
 ///
 /// # Panics:
 /// Panics if `size` is negative
+#[expect(dead_code, reason = "Preserve the existing infallible decoder API")]
 pub fn decode_fixed_size_binary(
     rows: &mut [&[u8]],
     size: i32,
     options: SortOptions,
 ) -> FixedSizeBinaryArray {
+    try_decode_fixed_size_binary(rows, size, options).unwrap()
+}
+
+pub(crate) fn try_decode_fixed_size_binary(
+    rows: &mut [&[u8]],
+    size: i32,
+    options: SortOptions,
+) -> Result<FixedSizeBinaryArray, ArrowError> {
     if size < 0 {
         panic!("cannot decode FixedSizeBinary({size})");
     }
     let num_rows = rows.len();
-    let mut values = MutableBuffer::new(size as usize * num_rows);
-    let nulls = decode_nulls(rows);
+    let capacity = (size as usize)
+        .checked_mul(num_rows)
+        .ok_or_else(|| ArrowError::MemoryError("decoded values size overflow".into()))?;
+    let mut values = MutableBuffer::try_with_capacity(capacity)
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+    let nulls = try_decode_nulls(rows)?;
 
     let encoded_len = size as usize + 1;
 
     for row in rows {
         let i = split_off(row, encoded_len);
-        values.extend_from_slice(&i[1..]);
+        values
+            .try_extend_from_slice(&i[1..])
+            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
     }
 
     if options.descending {
@@ -471,5 +519,5 @@ pub fn decode_fixed_size_binary(
     }
 
     // Need to set the length since when size is 0 and no nulls the length could not be determined by FixedSizeBinaryArray
-    FixedSizeBinaryArray::try_new_with_len(size, values.into(), nulls, num_rows).unwrap()
+    FixedSizeBinaryArray::try_new_with_len(size, values.into(), nulls, num_rows)
 }
