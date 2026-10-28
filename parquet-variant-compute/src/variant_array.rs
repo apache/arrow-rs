@@ -95,32 +95,223 @@ pub(crate) fn all_null_value_column(len: usize) -> ArrayRef {
 
 /// Validates that an array has a binary-like data type.
 pub(crate) fn validate_binary_array(array: &dyn Array, field_name: &str) -> Result<()> {
-    match array.data_type() {
-        DataType::Binary | DataType::LargeBinary | DataType::BinaryView => Ok(()),
-        _ => Err(ArrowError::InvalidArgumentError(format!(
+    if is_binary_data_type(array.data_type()) {
+        Ok(())
+    } else {
+        Err(ArrowError::InvalidArgumentError(format!(
             "VariantArray '{field_name}' field must be Binary, LargeBinary, or BinaryView, got {}",
             array.data_type()
-        ))),
+        )))
     }
 }
 
 /// Validates that a metadata array has binary-like logical values.
 fn validate_metadata_array(array: &dyn Array) -> Result<()> {
-    let is_binary = |data_type: &DataType| {
-        matches!(
-            data_type,
-            DataType::Binary | DataType::LargeBinary | DataType::BinaryView
-        )
-    };
-    match array.data_type() {
-        data_type if is_binary(data_type) => Ok(()),
-        DataType::Dictionary(_, values) if is_binary(values) => Ok(()),
-        DataType::RunEndEncoded(_, values) if is_binary(values.data_type()) => Ok(()),
-        _ => Err(ArrowError::InvalidArgumentError(format!(
+    if is_metadata_data_type(array.data_type()) {
+        Ok(())
+    } else {
+        Err(ArrowError::InvalidArgumentError(format!(
             "VariantArray 'metadata' field must be Binary, LargeBinary, BinaryView, or a Dictionary or RunEndEncoded array of one of those types, got {}",
             array.data_type()
-        ))),
+        )))
     }
+}
+
+fn is_binary_data_type(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Binary | DataType::LargeBinary | DataType::BinaryView
+    )
+}
+
+fn is_metadata_data_type(data_type: &DataType) -> bool {
+    match data_type {
+        data_type if is_binary_data_type(data_type) => true,
+        DataType::Dictionary(key, value) => {
+            key.is_dictionary_key_type() && is_binary_data_type(value)
+        }
+        DataType::RunEndEncoded(run_ends, values) => {
+            run_ends.data_type().is_run_ends_type() && is_binary_data_type(values.data_type())
+        }
+        _ => false,
+    }
+}
+
+fn invalid_variant_storage_type(data_type: &DataType, reason: &str) -> ArrowError {
+    ArrowError::InvalidArgumentError(format!(
+        "Invalid VariantType storage type: {reason} (got {data_type})"
+    ))
+}
+
+/// Validates the canonical Arrow storage layout for a Parquet Variant extension type.
+fn validate_variant_storage_type(data_type: &DataType) -> Result<()> {
+    let DataType::Struct(fields) = data_type else {
+        return Err(invalid_variant_storage_type(data_type, "expected a Struct"));
+    };
+
+    if fields
+        .iter()
+        .any(|field| !matches!(field.name().as_str(), "metadata" | "value" | "typed_value"))
+    {
+        return Err(invalid_variant_storage_type(
+            data_type,
+            "top-level fields must be named metadata, value, or typed_value",
+        ));
+    }
+
+    for name in ["metadata", "value", "typed_value"] {
+        if fields.iter().filter(|field| field.name() == name).count() > 1 {
+            return Err(invalid_variant_storage_type(
+                data_type,
+                &format!("field '{name}' must not be repeated"),
+            ));
+        }
+    }
+
+    let metadata = fields.iter().find(|field| field.name() == "metadata");
+    let Some(metadata) = metadata else {
+        return Err(invalid_variant_storage_type(
+            data_type,
+            "a metadata field is required",
+        ));
+    };
+    if metadata.is_nullable() || !is_metadata_data_type(metadata.data_type()) {
+        return Err(invalid_variant_storage_type(
+            data_type,
+            "metadata must be non-nullable and Binary, LargeBinary, BinaryView, or an encoded form of one of those types",
+        ));
+    }
+
+    let value = fields.iter().find(|field| field.name() == "value");
+    if let Some(value) = value
+        && !is_binary_data_type(value.data_type())
+    {
+        return Err(invalid_variant_storage_type(
+            data_type,
+            "value must be Binary, LargeBinary, or BinaryView",
+        ));
+    }
+
+    let typed_value = fields.iter().find(|field| field.name() == "typed_value");
+    if value.is_none() && typed_value.is_none() {
+        return Err(invalid_variant_storage_type(
+            data_type,
+            "at least one of value or typed_value is required",
+        ));
+    }
+    if let Some(typed_value) = typed_value {
+        validate_variant_typed_value(typed_value).map_err(|reason| {
+            invalid_variant_storage_type(data_type, &format!("invalid typed_value: {reason}"))
+        })?;
+    }
+
+    Ok(())
+}
+
+/// Validates a typed value column, including recursively shredded arrays and objects.
+fn validate_variant_typed_value(field: &Field) -> std::result::Result<(), String> {
+    use DataType::*;
+
+    match field.data_type() {
+        Boolean
+        | Int8
+        | Int16
+        | Int32
+        | Int64
+        | Float32
+        | Float64
+        | Date32
+        | Time64(TimeUnit::Microsecond)
+        | Binary
+        | LargeBinary
+        | BinaryView
+        | Utf8
+        | LargeUtf8
+        | Utf8View => Ok(()),
+        Decimal32(precision, scale)
+            if VariantDecimal4::is_valid_precision_and_scale(precision, scale) =>
+        {
+            Ok(())
+        }
+        Decimal64(precision, scale)
+            if VariantDecimal8::is_valid_precision_and_scale(precision, scale) =>
+        {
+            Ok(())
+        }
+        Decimal128(precision, scale)
+            if VariantDecimal16::is_valid_precision_and_scale(precision, scale) =>
+        {
+            Ok(())
+        }
+        Timestamp(TimeUnit::Microsecond | TimeUnit::Nanosecond, timezone)
+            if timezone
+                .as_ref()
+                .is_none_or(|timezone| timezone.as_ref() == "UTC") =>
+        {
+            Ok(())
+        }
+        FixedSizeBinary(16) if field.has_valid_extension_type::<UuidExtension>() => Ok(()),
+        Struct(fields) => validate_variant_object(fields),
+        List(element) | LargeList(element) | ListView(element) => {
+            if element.is_nullable() {
+                return Err("list elements must be non-nullable".to_string());
+            }
+            let Struct(fields) = element.data_type() else {
+                return Err("list elements must be a Struct".to_string());
+            };
+            validate_variant_shredded_fields(fields)
+        }
+        _ => Err(format!("unsupported type {}", field.data_type())),
+    }
+}
+
+/// Validates a shredded object: each key is a non-nullable field whose value has Variant parts.
+fn validate_variant_object(fields: &arrow_schema::Fields) -> std::result::Result<(), String> {
+    for field in fields {
+        if field.is_nullable() {
+            return Err(format!(
+                "object field '{}' must be non-nullable",
+                field.name()
+            ));
+        }
+        let DataType::Struct(parts) = field.data_type() else {
+            return Err(format!("object field '{}' must be a Struct", field.name()));
+        };
+        validate_variant_shredded_fields(parts)?;
+    }
+    Ok(())
+}
+
+/// Validates the value and optional typed value children of a shredded Variant field.
+fn validate_variant_shredded_fields(
+    fields: &arrow_schema::Fields,
+) -> std::result::Result<(), String> {
+    if fields
+        .iter()
+        .any(|field| !matches!(field.name().as_str(), "value" | "typed_value"))
+    {
+        return Err("shredded fields must be named value or typed_value".to_string());
+    }
+    for name in ["value", "typed_value"] {
+        if fields.iter().filter(|field| field.name() == name).count() > 1 {
+            return Err(format!("shredded field '{name}' must not be repeated"));
+        }
+    }
+
+    let value = fields.iter().find(|field| field.name() == "value");
+    let typed_value = fields.iter().find(|field| field.name() == "typed_value");
+    if value.is_none() && typed_value.is_none() {
+        return Err("at least one of value or typed_value is required".to_string());
+    }
+    if let Some(value) = value
+        && !is_binary_data_type(value.data_type())
+    {
+        return Err("value must be Binary, LargeBinary, or BinaryView".to_string());
+    }
+    if let Some(typed_value) = typed_value {
+        validate_variant_typed_value(typed_value)?;
+    }
+    Ok(())
 }
 
 /// Arrow Variant [`ExtensionType`].
@@ -149,13 +340,12 @@ impl ExtensionType for VariantType {
     }
 
     fn supports_data_type(&self, data_type: &DataType) -> Result<()> {
-        if matches!(data_type, DataType::Struct(_)) {
-            Ok(())
-        } else {
-            Err(ArrowError::InvalidArgumentError(format!(
+        if !matches!(data_type, DataType::Struct(_)) {
+            return Err(ArrowError::InvalidArgumentError(format!(
                 "VariantType only supports StructArray, got {data_type}"
-            )))
+            )));
         }
+        validate_variant_storage_type(data_type)
     }
 
     fn try_new(data_type: &DataType, _metadata: Self::Metadata) -> Result<Self> {
@@ -1376,6 +1566,178 @@ mod test {
     use arrow::buffer::{OffsetBuffer, ScalarBuffer};
     use arrow_schema::{Field, Fields};
     use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, ShortString};
+
+    #[test]
+    fn variant_type_rejects_unrelated_struct_fields() {
+        let invalid = DataType::Struct(Fields::from(vec![Field::new(
+            "unrelated",
+            DataType::Int32,
+            false,
+        )]));
+
+        assert!(VariantType::try_new(&invalid, "").is_err());
+        assert!(VariantType::validate(&invalid, "").is_err());
+    }
+
+    fn assert_variant_type_accepts(data_type: DataType) {
+        assert!(VariantType::try_new(&data_type, "").is_ok(), "{data_type}");
+        assert!(VariantType::validate(&data_type, "").is_ok(), "{data_type}");
+    }
+
+    fn assert_variant_type_rejects(data_type: DataType) {
+        assert!(VariantType::try_new(&data_type, "").is_err(), "{data_type}");
+        assert!(
+            VariantType::validate(&data_type, "").is_err(),
+            "{data_type}"
+        );
+    }
+
+    #[test]
+    fn variant_type_accepts_canonical_unshredded_and_shredded_layouts() {
+        // Canonical fields may appear in any order.
+        assert_variant_type_accepts(DataType::Struct(Fields::from(vec![
+            Field::new("value", DataType::LargeBinary, false),
+            Field::new("metadata", DataType::BinaryView, false),
+        ])));
+
+        // A metadata column may be dictionary encoded, and typed-only storage is permitted.
+        assert_variant_type_accepts(DataType::Struct(Fields::from(vec![
+            Field::new(
+                "metadata",
+                DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Binary)),
+                false,
+            ),
+            Field::new("typed_value", DataType::Int64, true),
+        ])));
+
+        // Run-end encoded metadata is another permitted representation.
+        assert_variant_type_accepts(DataType::Struct(Fields::from(vec![
+            Field::new(
+                "metadata",
+                DataType::RunEndEncoded(
+                    Arc::new(Field::new("run_ends", DataType::Int16, false)),
+                    Arc::new(Field::new("values", DataType::LargeBinary, false)),
+                ),
+                false,
+            ),
+            Field::new("typed_value", DataType::Decimal32(9, 2), true),
+        ])));
+
+        // Canonical primitive mappings include UUIDs only when tagged with the UUID extension.
+        assert_variant_type_accepts(DataType::Struct(Fields::from(vec![
+            Field::new("metadata", DataType::Binary, false),
+            Field::new("typed_value", DataType::FixedSizeBinary(16), true)
+                .with_extension_type(UuidExtension),
+        ])));
+
+        let list_item = Arc::new(Field::new(
+            "element",
+            DataType::Struct(Fields::from(vec![
+                Field::new("value", DataType::BinaryView, true),
+                Field::new("typed_value", DataType::Int64, true),
+            ])),
+            false,
+        ));
+        let nested_object = DataType::Struct(Fields::from(vec![
+            Field::new(
+                "name",
+                DataType::Struct(Fields::from(vec![Field::new(
+                    "typed_value",
+                    DataType::Utf8,
+                    true,
+                )])),
+                false,
+            ),
+            Field::new(
+                "children",
+                DataType::Struct(Fields::from(vec![Field::new(
+                    "typed_value",
+                    DataType::List(list_item),
+                    true,
+                )])),
+                false,
+            ),
+        ]));
+        assert_variant_type_accepts(DataType::Struct(Fields::from(vec![
+            Field::new("typed_value", nested_object, true),
+            Field::new("metadata", DataType::LargeBinary, false),
+            Field::new("value", DataType::Binary, true),
+        ])));
+    }
+
+    #[test]
+    fn variant_type_rejects_invalid_storage_fields_and_shredded_shapes() {
+        let metadata = || Field::new("metadata", DataType::Binary, false);
+        let value = || Field::new("value", DataType::Binary, true);
+
+        for invalid in [
+            DataType::Struct(Fields::from(vec![
+                Field::new("metadata", DataType::Int32, false),
+                value(),
+            ])),
+            DataType::Struct(Fields::from(vec![
+                Field::new("metadata", DataType::Binary, true),
+                value(),
+            ])),
+            DataType::Struct(Fields::from(vec![metadata()])),
+            DataType::Struct(Fields::from(vec![
+                metadata(),
+                Field::new("value", DataType::Int32, true),
+            ])),
+            DataType::Struct(Fields::from(vec![
+                metadata(),
+                value(),
+                Field::new("unrelated", DataType::Int32, false),
+            ])),
+        ] {
+            assert_variant_type_rejects(invalid);
+        }
+
+        for typed_value in [
+            Field::new("typed_value", DataType::Null, true),
+            Field::new("typed_value", DataType::UInt32, true),
+            Field::new("typed_value", DataType::Decimal32(10, 0), true),
+            Field::new(
+                "typed_value",
+                DataType::Timestamp(TimeUnit::Second, None),
+                true,
+            ),
+            Field::new("typed_value", DataType::FixedSizeBinary(16), true),
+        ] {
+            assert_variant_type_rejects(DataType::Struct(Fields::from(vec![
+                metadata(),
+                typed_value,
+            ])));
+        }
+
+        let nullable_object_field = DataType::Struct(Fields::from(vec![Field::new(
+            "name",
+            DataType::Struct(Fields::from(vec![Field::new(
+                "typed_value",
+                DataType::Utf8,
+                true,
+            )])),
+            true,
+        )]));
+        assert_variant_type_rejects(DataType::Struct(Fields::from(vec![
+            metadata(),
+            Field::new("typed_value", nullable_object_field, true),
+        ])));
+
+        let nullable_list_element = Arc::new(Field::new(
+            "element",
+            DataType::Struct(Fields::from(vec![Field::new(
+                "typed_value",
+                DataType::Int64,
+                true,
+            )])),
+            true,
+        ));
+        assert_variant_type_rejects(DataType::Struct(Fields::from(vec![
+            metadata(),
+            Field::new("typed_value", DataType::List(nullable_list_element), true),
+        ])));
+    }
 
     #[test]
     fn invalid_not_a_struct_array() {
