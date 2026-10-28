@@ -807,6 +807,40 @@ mod tests {
 
     use crate::util::test_common::rand_gen::random_bytes;
 
+    #[test]
+    fn test_zstd_reused_encoder_starts_independent_frame() {
+        use std::io::Write;
+
+        let mut context = zstd::zstd_safe::CCtx::create();
+        zstd::stream::write::Encoder::with_context(Vec::new(), &mut context)
+            .write_all(b"abandoned frame")
+            .unwrap();
+        let mut encoder = zstd::stream::write::Encoder::with_context(Vec::new(), &mut context);
+        encoder.write_all(b"independent frame").unwrap();
+        let compressed = encoder.finish().unwrap();
+        assert_eq!(
+            zstd::decode_all(&compressed[..]).unwrap(),
+            b"independent frame"
+        );
+    }
+
+    #[test]
+    fn test_zstd_reused_decoder_starts_independent_frame() {
+        use std::io::Read;
+
+        let previous = zstd::encode_all(&b"abandoned frame"[..], 1).unwrap();
+        let next = zstd::encode_all(&b"independent frame"[..], 1).unwrap();
+        let mut context = zstd::zstd_safe::DCtx::create();
+        zstd::stream::read::Decoder::with_context(&previous[..], &mut context)
+            .read_exact(&mut [0; 3])
+            .unwrap();
+        let mut output = Vec::new();
+        zstd::stream::read::Decoder::with_context(&next[..], &mut context)
+            .read_to_end(&mut output)
+            .unwrap();
+        assert_eq!(output, b"independent frame");
+    }
+
     fn test_roundtrip(c: CodecType, data: &[u8], uncompress_size: Option<usize>) {
         let codec_options = CodecOptionsBuilder::default()
             .set_backward_compatible_lz4(false)
