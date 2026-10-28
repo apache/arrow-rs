@@ -288,7 +288,7 @@ macro_rules! unsigned_divisor {
 }
 
 macro_rules! signed_divisor {
-    ($name:ident, $power_of_two:ident, $add:ident, $t:ty, $wide:ty) => {
+    ($name:ident, $power_of_two:ident, $add:ident, $t:ty, $u:ty, $wide:ty, $uwide:ty) => {
         divisor_enum!(
             $name,
             $t,
@@ -450,10 +450,14 @@ macro_rules! signed_divisor {
             /// ```
             #[inline]
             pub const fn wrapping_div_rem(self, n: $t) -> ($t, $t) {
-                // `MULSH(m', n)` in figure 5.1
-                let high = ((self.multiplier as $wide * n as $wide) >> <$t>::BITS) as $t;
-                // The shift rounds down, and subtracting the sign of `n` rounds toward zero instead
-                let q = ((n + high) >> self.shift) - (n >> (<$t>::BITS - 1));
+                // Signed high-product correction as in libdivide_mullhi_s64_vec512:
+                // https://github.com/ridiculousfish/libdivide/blob/master/libdivide.h#L2530-L2537
+                // Since m is negative, the -n correction cancels the original +n.
+                let high = (((self.multiplier as $u as $uwide) * (n as $u as $uwide))
+                    >> <$t>::BITS) as $t;
+                let t = high.wrapping_sub((n >> (<$t>::BITS - 1)) & self.multiplier);
+                // The shift rounds down; subtracting the sign rounds toward zero.
+                let q = (t >> self.shift) - (n >> (<$t>::BITS - 1));
                 let sign = self.divisor >> (<$t>::BITS - 1);
                 // The remainder doesn't depend on the sign of the divisor, as section 3.1 of
                 // Lemire, Kaser and Kurz, "Faster Remainder by Direct Computation",
@@ -488,14 +492,18 @@ signed_divisor!(
     PowerOfTwoDivisorI32,
     AddIndicatorDivisorI32,
     i32,
-    i64
+    u32,
+    i64,
+    u64
 );
 signed_divisor!(
     DivisorI64,
     PowerOfTwoDivisorI64,
     AddIndicatorDivisorI64,
     i64,
-    i128
+    u64,
+    i128,
+    u128
 );
 
 n_bit_divisor!(
