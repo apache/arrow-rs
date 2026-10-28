@@ -15,32 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use super::{RecordingReader, column, encode};
 use crate::io::TestReader;
 use arrow_array::{ArrayRef, Int32Array, RecordBatch, StringArray, StructArray};
 use arrow_schema::{DataType, Field};
 use bytes::Bytes;
-use futures::{
-    TryStreamExt,
-    future::{BoxFuture, ready},
-};
+use futures::TryStreamExt;
 use parquet::{
-    arrow::{
-        ArrowWriter, ParquetRecordBatchStreamBuilder, arrow_reader::ArrowReaderOptions,
-        async_reader::AsyncFileReader,
-    },
-    basic::Type as PhysicalType,
+    arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, async_reader::AsyncFileReader},
     bloom_filter::Sbbf,
-    errors::{ParquetError, Result},
     file::{
-        metadata::{ColumnChunkMetaData, ParquetMetaData},
-        properties::WriterProperties,
-        reader::FileReader,
-        serialized_reader::SerializedFileReader,
+        properties::WriterProperties, reader::FileReader, serialized_reader::SerializedFileReader,
     },
-    schema::types::{ColumnDescriptor, ColumnPath, Type},
 };
-use std::collections::VecDeque;
-use std::ops::Range;
 use std::sync::Arc;
 
 #[tokio::test]
@@ -166,72 +153,6 @@ async fn test_get_row_group_column_bloom_filter(data: Bytes, with_length: bool) 
     );
 }
 
-#[derive(Default)]
-struct RecordingReader {
-    responses: VecDeque<Result<Bytes>>,
-    requests: Vec<Range<u64>>,
-}
-
-impl RecordingReader {
-    fn new(responses: impl IntoIterator<Item = Bytes>) -> Self {
-        Self {
-            responses: responses.into_iter().map(Ok).collect(),
-            requests: Vec::new(),
-        }
-    }
-}
-
-impl AsyncFileReader for RecordingReader {
-    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
-        self.requests.push(range);
-        Box::pin(ready(self.responses.pop_front().expect("unexpected read")))
-    }
-
-    fn get_metadata<'a>(
-        &'a mut self,
-        _: Option<&'a ArrowReaderOptions>,
-    ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
-        panic!("Bloom reads must not load metadata")
-    }
-}
-
-fn column(offset: Option<i64>, length: Option<i32>) -> ColumnChunkMetaData {
-    let descriptor = Arc::new(ColumnDescriptor::new(
-        Arc::new(
-            Type::primitive_type_builder("value", PhysicalType::BYTE_ARRAY)
-                .build()
-                .unwrap(),
-        ),
-        0,
-        0,
-        ColumnPath::new(vec!["value".to_owned()]),
-    ));
-    ColumnChunkMetaData::builder(descriptor)
-        .set_bloom_filter_offset(offset)
-        .set_bloom_filter_length(length)
-        .build()
-        .unwrap()
-}
-
-fn encode(num_bytes: i32, bitset_length: usize) -> Bytes {
-    // Compact-Thrift zigzag varints for the sizes used by these malformed fixtures.
-    let encoded_size: &[u8] = match num_bytes {
-        -1 => &[0x01],
-        0 => &[0x00],
-        32 => &[0x40],
-        33 => &[0x42],
-        64 => &[0x80, 0x01],
-        _ => panic!("unsupported fixture size"),
-    };
-    let mut bytes = vec![0x15]; // Field 1: i32 numBytes.
-    bytes.extend_from_slice(encoded_size);
-    // Fields 2–4: BLOCK, XXHASH, UNCOMPRESSED (each a union containing an empty struct),
-    // followed by the header's STOP byte.
-    bytes.extend_from_slice(&[0x1c, 0x1c, 0, 0, 0x1c, 0x1c, 0, 0, 0x1c, 0x1c, 0, 0, 0]);
-    bytes.resize(bytes.len() + bitset_length, 0);
-    bytes.into()
-}
-
 #[tokio::test]
 async fn standalone_filter_reads_use_exact_ranges() {
     // Three blocks are valid even though the writer normally uses powers of two.
@@ -267,7 +188,7 @@ async fn standalone_filter_reads_use_exact_ranges() {
                 offset + header_length..offset + bytes.len() as u64,
             ]
         };
-        assert_eq!(reader.requests, expected);
+        assert_eq!(reader.requests(), expected);
     }
 }
 
@@ -293,7 +214,7 @@ async fn missing_and_invalid_locations_do_not_read() {
                 .is_err()
         );
     }
-    assert!(reader.requests.is_empty());
+    assert!(reader.requests().is_empty());
 }
 
 #[tokio::test]
@@ -314,7 +235,7 @@ async fn invalid_headers_and_bitsets_remain_errors() {
             .is_err(),
             "declared {declared}, actual {actual}"
         );
-        assert_eq!(reader.requests.len(), 1);
+        assert_eq!(reader.requests().len(), 1);
     }
     // Decode failures must remain errors, not be mistaken for an absent filter.
     let mut unsupported = encode(32, 32).to_vec();
@@ -349,6 +270,16 @@ async fn exact_responses_and_transport_errors_are_required() {
             .is_err()
         );
     }
+    // The header probe must also return exactly the requested bytes.
+    for prefix_length in [19, 21] {
+        let mut reader = RecordingReader::new([bytes.slice(..prefix_length)]);
+        assert!(
+            Sbbf::read_from_column_chunk_async(&column(Some(0), None), &mut reader)
+                .await
+                .is_err()
+        );
+        assert_eq!(reader.requests().len(), 1);
+    }
     // Without a total length, validate the separate bitset response against the header.
     for bitset_length in [31, 33] {
         let mut reader =
@@ -358,21 +289,18 @@ async fn exact_responses_and_transport_errors_are_required() {
                 .await
                 .is_err()
         );
-        assert_eq!(reader.requests.len(), 2);
+        assert_eq!(reader.requests().len(), 2);
     }
     // Propagate transport failures from either the header or bitset read.
     for failure_at in [0, 1] {
         let mut reader = RecordingReader::new([bytes.slice(..20)]);
-        reader.responses.insert(
-            failure_at,
-            Err(ParquetError::General("injected read failure".to_owned())),
-        );
+        reader.fail_at(failure_at);
         assert!(
             Sbbf::read_from_column_chunk_async(&column(Some(0), None), &mut reader)
                 .await
                 .is_err()
         );
-        assert_eq!(reader.requests.len(), failure_at + 1);
+        assert_eq!(reader.requests().len(), failure_at + 1);
     }
 }
 
@@ -389,6 +317,15 @@ async fn extended_headers_require_an_advertised_length() {
     bytes.push(0);
     bytes.extend_from_slice(&canonical[header_length..]);
     let bytes = Bytes::from(bytes);
+    assert_eq!(Sbbf::from_bytes(&bytes).unwrap().num_blocks(), 1);
+    let sync = RecordingReader::new([bytes.clone()]);
+    assert_eq!(
+        Sbbf::read_from_column_chunk(&column(Some(0), Some(bytes.len() as i32)), &sync)
+            .unwrap()
+            .unwrap()
+            .num_blocks(),
+        1
+    );
     // An advertised length lets the parser skip the complete unknown field.
     let mut known = RecordingReader::new([bytes.clone()]);
     assert!(
@@ -404,6 +341,6 @@ async fn extended_headers_require_an_advertised_length() {
             .await
             .is_err()
     );
-    assert_eq!(legacy.requests.len(), 1);
-    assert_eq!(legacy.requests[0], 0..20);
+    assert_eq!(legacy.requests().len(), 1);
+    assert_eq!(legacy.requests()[0], 0..20);
 }
