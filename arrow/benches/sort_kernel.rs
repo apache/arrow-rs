@@ -28,19 +28,6 @@ use arrow::{array::*, datatypes::Float32Type};
 use arrow_ord::rank::rank;
 use std::hint;
 
-fn create_f32_array(size: usize, with_nulls: bool) -> ArrayRef {
-    let null_density = if with_nulls { 0.5 } else { 0.0 };
-    let array = create_primitive_array::<Float32Type>(size, null_density);
-    Arc::new(array)
-}
-
-fn create_bool_array(size: usize, with_nulls: bool) -> ArrayRef {
-    let null_density = if with_nulls { 0.5 } else { 0.0 };
-    let true_density = 0.5;
-    let array = create_boolean_array(size, null_density, true_density);
-    Arc::new(array)
-}
-
 fn bench_sort(array: &dyn Array) {
     hint::black_box(sort(array, None).unwrap());
 }
@@ -89,13 +76,13 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_sort_to_indices(&arr, None))
     });
 
-    let arr = create_f32_array(2_usize.pow(12), false);
+    let arr: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2_usize.pow(12), 0.0));
     c.bench_function("sort f32 2^12", |b| b.iter(|| bench_sort(&arr)));
     c.bench_function("sort f32 to indices 2^12", |b| {
         b.iter(|| bench_sort_to_indices(&arr, None))
     });
 
-    let arr = create_f32_array(2usize.pow(12), true);
+    let arr: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(12), 0.5));
     c.bench_function("sort f32 nulls 2^12", |b| b.iter(|| bench_sort(&arr)));
     c.bench_function("sort f32 nulls to indices 2^12", |b| {
         b.iter(|| bench_sort_to_indices(&arr, None))
@@ -219,72 +206,72 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_sort_to_indices(&run_encoded_array, None))
     });
 
-    let arr_a = create_f32_array(2usize.pow(10), false);
-    let arr_b = create_f32_array(2usize.pow(10), false);
+    let arr_a: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(10), 0.0));
+    let arr_b: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(10), 0.0));
 
     c.bench_function("lexsort (f32, f32) 2^10", |b| {
         b.iter(|| bench_lexsort(&arr_a, &arr_b, None))
     });
 
-    let arr_a = create_f32_array(2usize.pow(12), false);
-    let arr_b = create_f32_array(2usize.pow(12), false);
+    let arr_a: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(12), 0.0));
+    let arr_b: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(12), 0.0));
 
     c.bench_function("lexsort (f32, f32) 2^12", |b| {
         b.iter(|| bench_lexsort(&arr_a, &arr_b, None))
     });
 
-    let arr_a = create_f32_array(2usize.pow(10), true);
-    let arr_b = create_f32_array(2usize.pow(10), true);
+    let arr_a: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(10), 0.5));
+    let arr_b: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(10), 0.5));
 
     c.bench_function("lexsort (f32, f32) nulls 2^10", |b| {
         b.iter(|| bench_lexsort(&arr_a, &arr_b, None))
     });
 
-    let arr_a = create_f32_array(2usize.pow(12), true);
-    let arr_b = create_f32_array(2usize.pow(12), true);
+    let arr_a: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(12), 0.5));
+    let arr_b: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(12), 0.5));
 
     c.bench_function("lexsort (f32, f32) nulls 2^12", |b| {
         b.iter(|| bench_lexsort(&arr_a, &arr_b, None))
     });
 
-    let arr_a = create_bool_array(2usize.pow(12), false);
-    let arr_b = create_bool_array(2usize.pow(12), false);
+    let arr_a: ArrayRef = Arc::new(create_boolean_array(2usize.pow(12), 0.0, 0.5));
+    let arr_b: ArrayRef = Arc::new(create_boolean_array(2usize.pow(12), 0.0, 0.5));
     c.bench_function("lexsort (bool, bool) 2^12", |b| {
         b.iter(|| bench_lexsort(&arr_a, &arr_b, None))
     });
 
-    let arr_a = create_bool_array(2usize.pow(12), true);
-    let arr_b = create_bool_array(2usize.pow(12), true);
+    let arr_a: ArrayRef = Arc::new(create_boolean_array(2usize.pow(12), 0.5, 0.5));
+    let arr_b: ArrayRef = Arc::new(create_boolean_array(2usize.pow(12), 0.5, 0.5));
     c.bench_function("lexsort (bool, bool) nulls 2^12", |b| {
         b.iter(|| bench_lexsort(&arr_a, &arr_b, None))
     });
 
-    let arr_a = create_f32_array(2usize.pow(12), false);
-    let arr_b = create_f32_array(2usize.pow(12), false);
+    let arr_a: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(12), 0.0));
+    let arr_b: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(12), 0.0));
     c.bench_function("lexsort (f32, f32) 2^12 limit 10", |b| {
         b.iter(|| bench_lexsort(&arr_a, &arr_b, Some(10)))
     });
 
-    let arr_a = create_f32_array(2usize.pow(12), false);
-    let arr_b = create_f32_array(2usize.pow(12), false);
+    let arr_a: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(12), 0.0));
+    let arr_b: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(12), 0.0));
     c.bench_function("lexsort (f32, f32) 2^12 limit 100", |b| {
         b.iter(|| bench_lexsort(&arr_a, &arr_b, Some(100)))
     });
 
-    let arr_a = create_f32_array(2usize.pow(12), false);
-    let arr_b = create_f32_array(2usize.pow(12), false);
+    let arr_a: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(12), 0.0));
+    let arr_b: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(12), 0.0));
     c.bench_function("lexsort (f32, f32) 2^12 limit 1000", |b| {
         b.iter(|| bench_lexsort(&arr_a, &arr_b, Some(1000)))
     });
 
-    let arr_a = create_f32_array(2usize.pow(12), false);
-    let arr_b = create_f32_array(2usize.pow(12), false);
+    let arr_a: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(12), 0.0));
+    let arr_b: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(12), 0.0));
     c.bench_function("lexsort (f32, f32) 2^12 limit 2^12", |b| {
         b.iter(|| bench_lexsort(&arr_a, &arr_b, Some(2usize.pow(12))))
     });
 
-    let arr_a = create_f32_array(2usize.pow(12), true);
-    let arr_b = create_f32_array(2usize.pow(12), true);
+    let arr_a: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(12), 0.5));
+    let arr_b: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(12), 0.5));
 
     c.bench_function("lexsort (f32, f32) nulls 2^12 limit 10", |b| {
         b.iter(|| bench_lexsort(&arr_a, &arr_b, Some(10)))
@@ -299,12 +286,12 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_lexsort(&arr_a, &arr_b, Some(2usize.pow(12))))
     });
 
-    let arr = create_f32_array(2usize.pow(12), false);
+    let arr: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(12), 0.0));
     c.bench_function("rank f32 2^12", |b| {
         b.iter(|| hint::black_box(rank(&arr, None).unwrap()))
     });
 
-    let arr = create_f32_array(2usize.pow(12), true);
+    let arr: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(12), 0.5));
     c.bench_function("rank f32 nulls 2^12", |b| {
         b.iter(|| hint::black_box(rank(&arr, None).unwrap()))
     });

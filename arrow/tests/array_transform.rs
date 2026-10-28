@@ -1292,3 +1292,29 @@ fn test_interval_month_day_nano_aligned_to_8() {
     // roundtripping through arraydata shouldnt panic
     MutableArrayData::new(vec![&b], false, 0);
 }
+
+#[test]
+fn test_interval_day_time_aligned_to_4() {
+    let ty = DataType::Interval(arrow_schema::IntervalUnit::DayTime);
+
+    // `IntervalDayTime` only requires 4-byte alignment, so this slice is valid
+    // even though it does not start on an 8-byte boundary
+    let buffer = Buffer::from_slice_ref([0i32, 1, 2, 3, 4]).slice(4);
+    let b = ArrayData::builder(ty)
+        .len(2)
+        .add_buffer(buffer)
+        .build()
+        .unwrap();
+
+    let mut mutable = MutableArrayData::new(vec![&b], true, 3);
+    mutable.try_extend(0, 0, 2).unwrap();
+    mutable.try_extend_nulls(1).unwrap();
+    let result = &arrow_array::IntervalDayTimeArray::from(mutable.freeze());
+
+    let expected = arrow_array::IntervalDayTimeArray::from(vec![
+        Some(arrow_buffer::IntervalDayTime::new(1, 2)),
+        Some(arrow_buffer::IntervalDayTime::new(3, 4)),
+        None,
+    ]);
+    assert_eq!(result, &expected);
+}

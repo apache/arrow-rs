@@ -19,7 +19,9 @@
 
 use crate::filter::{SlicesIterator, prep_null_mask_filter};
 use crate::zip::zip;
-use arrow_array::{Array, ArrayRef, BooleanArray, Datum, make_array, new_empty_array};
+use arrow_array::{
+    Array, ArrayRef, BooleanArray, Datum, make_array, new_empty_array, new_null_array,
+};
 use arrow_data::ArrayData;
 use arrow_data::transform::MutableArrayData;
 use arrow_schema::ArrowError;
@@ -144,7 +146,16 @@ pub fn merge_n(values: &[&dyn Array], indices: &[impl MergeIndex]) -> Result<Arr
     let data: Vec<ArrayData> = values.iter().map(|a| a.to_data()).collect();
     let data_refs = data.iter().collect();
 
-    let mut mutable = MutableArrayData::new(data_refs, true, indices.len());
+    let mut mutable = match MutableArrayData::try_new(data_refs, true, indices.len()) {
+        Ok(mutable) => mutable,
+        // `MutableArrayData` concatenates the dictionaries, which can overflow
+        // the key type even when their merged values fit, so let `interleave`
+        // merge them instead
+        Err(ArrowError::DictionaryKeyOverflowError) => {
+            return merge_n_with_interleave(values, indices);
+        }
+        Err(e) => return Err(e),
+    };
 
     // This loop extends the mutable array by taking slices from the partial results.
     //
@@ -180,6 +191,61 @@ pub fn merge_n(values: &[&dyn Array], indices: &[impl MergeIndex]) -> Result<Arr
     }
 
     Ok(make_array(mutable.freeze()))
+}
+
+/// [merge_n] through [interleave](crate::interleave::interleave), which merges
+/// dictionaries instead of concatenating them
+fn merge_n_with_interleave(
+    values: &[&dyn Array],
+    indices: &[impl MergeIndex],
+) -> Result<ArrayRef, ArrowError> {
+    // `interleave` has no null index, so null rows read from an extra
+    // single null array
+    let nulls = new_null_array(values[0].data_type(), 1);
+    let mut arrays = values.to_vec();
+    arrays.push(nulls.as_ref());
+
+    let mut take_offsets = vec![0; values.len()];
+    let interleave_indices: Vec<_> = indices
+        .iter()
+        .map(|ix| match ix.index() {
+            None => (values.len(), 0),
+            Some(index) => {
+                let offset = take_offsets[index];
+                take_offsets[index] += 1;
+                (index, offset)
+            }
+        })
+        .collect();
+    crate::interleave::interleave(&arrays, &interleave_indices)
+}
+
+/// [merge] through [interleave](crate::interleave::interleave), which merges
+/// dictionaries instead of concatenating them
+fn merge_with_interleave(
+    mask: &BooleanArray,
+    truthy: &dyn Array,
+    truthy_is_scalar: bool,
+    falsy: &dyn Array,
+    falsy_is_scalar: bool,
+) -> Result<ArrayRef, ArrowError> {
+    let mut truthy_offset = 0;
+    let mut falsy_offset = 0;
+    let indices: Vec<_> = (0..mask.len())
+        .map(|idx| {
+            // Nulls in the mask are treated as false
+            if mask.is_valid(idx) && mask.value(idx) {
+                let offset = if truthy_is_scalar { 0 } else { truthy_offset };
+                truthy_offset += 1;
+                (0, offset)
+            } else {
+                let offset = if falsy_is_scalar { 0 } else { falsy_offset };
+                falsy_offset += 1;
+                (1, offset)
+            }
+        })
+        .collect();
+    crate::interleave::interleave(&[truthy, falsy], &indices)
 }
 
 /// Merges two arrays in the order specified by a boolean mask.
@@ -244,7 +310,20 @@ pub fn merge(
     let falsy = falsy_array.to_data();
     let truthy = truthy_array.to_data();
 
-    let mut mutable = MutableArrayData::new(vec![&truthy, &falsy], false, mask.len());
+    let mut mutable = match MutableArrayData::try_new(vec![&truthy, &falsy], false, mask.len()) {
+        Ok(mutable) => mutable,
+        // See `merge_n`: let `interleave` merge the dictionaries
+        Err(ArrowError::DictionaryKeyOverflowError) => {
+            return merge_with_interleave(
+                mask,
+                truthy_array,
+                truthy_is_scalar,
+                falsy_array,
+                falsy_is_scalar,
+            );
+        }
+        Err(e) => return Err(e),
+    };
 
     // the SlicesIterator slices only the true values. So the gaps left by this iterator we need to
     // fill with falsy values
@@ -311,8 +390,13 @@ pub fn merge(
 mod tests {
     use crate::merge::{MergeIndex, merge, merge_n};
     use arrow_array::cast::AsArray;
-    use arrow_array::{Array, BooleanArray, Datum, Int32Array, Scalar, StringArray, UInt64Array};
+    use arrow_array::types::Int8Type;
+    use arrow_array::{
+        Array, ArrayRef, BooleanArray, Datum, DictionaryArray, Int8Array, Int32Array, Scalar,
+        StringArray, UInt64Array,
+    };
     use arrow_schema::ArrowError::InvalidArgumentError;
+    use std::sync::Arc;
 
     #[derive(PartialEq, Eq, Copy, Clone)]
     struct CompactMergeIndex {
@@ -614,5 +698,79 @@ mod tests {
         let merged = merge_n(&arrays, &indices);
 
         assert!(matches!(merged, Err(InvalidArgumentError { .. })));
+    }
+
+    /// Two dictionaries of 100 values, the same in both. Concatenating them
+    /// overflows Int8 keys, but the merged dictionary fits
+    fn overflowing_dictionary(keys: Vec<Option<i8>>) -> ArrayRef {
+        let values: Vec<String> = (0..100).map(|i| format!("v{i}")).collect();
+        Arc::new(
+            DictionaryArray::<Int8Type>::try_new(
+                Int8Array::from(keys),
+                Arc::new(StringArray::from(values)),
+            )
+            .unwrap(),
+        )
+    }
+
+    fn dictionary_strings(array: &dyn Array) -> Vec<Option<&str>> {
+        array
+            .as_dictionary::<Int8Type>()
+            .downcast_dict::<StringArray>()
+            .unwrap()
+            .into_iter()
+            .collect()
+    }
+
+    #[test]
+    fn test_merge_dictionaries_whose_combined_values_overflow_the_key_type() {
+        let mask = BooleanArray::from(vec![Some(true), Some(false), None, Some(true), Some(false)]);
+        let truthy = overflowing_dictionary(vec![Some(0), None, Some(2)]);
+        let falsy = overflowing_dictionary(vec![Some(10), Some(20), Some(30)]);
+        let truthy_scalar = Scalar::new(overflowing_dictionary(vec![Some(7)]));
+        let falsy_scalar = Scalar::new(overflowing_dictionary(vec![Some(5)]));
+
+        let check =
+            |truthy_datum: &dyn Datum, falsy_datum: &dyn Datum, expected: [Option<&str>; 5]| {
+                let merged = merge(&mask, truthy_datum, falsy_datum).unwrap();
+                assert_eq!(merged.data_type(), truthy.data_type());
+                assert_eq!(dictionary_strings(merged.as_ref()), expected);
+            };
+        check(
+            &truthy,
+            &falsy,
+            [Some("v0"), Some("v10"), Some("v20"), None, Some("v30")],
+        );
+        check(
+            &truthy,
+            &falsy_scalar,
+            [Some("v0"), Some("v5"), Some("v5"), None, Some("v5")],
+        );
+        check(
+            &truthy_scalar,
+            &falsy,
+            [
+                Some("v7"),
+                Some("v10"),
+                Some("v20"),
+                Some("v7"),
+                Some("v30"),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_merge_n_dictionaries_whose_combined_values_overflow_the_key_type() {
+        let a = overflowing_dictionary(vec![Some(0), Some(1)]);
+        let b = overflowing_dictionary(vec![Some(50), None]);
+        let indices = vec![Some(1), None, Some(0), Some(0), Some(1), None];
+
+        let merged = merge_n(&[a.as_ref(), b.as_ref()], &indices).unwrap();
+
+        assert_eq!(merged.data_type(), a.data_type());
+        assert_eq!(
+            dictionary_strings(merged.as_ref()),
+            [Some("v50"), None, Some("v0"), Some("v1"), None, None]
+        );
     }
 }
