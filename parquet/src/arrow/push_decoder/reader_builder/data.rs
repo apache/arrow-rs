@@ -39,7 +39,7 @@ pub(super) struct DataRequest {
     ranges: Vec<Range<u64>>,
     /// Optional page start offsets for each requested range. This is used
     /// to create the relevant InMemoryRowGroup
-    page_start_offsets: Option<Vec<Vec<u64>>>,
+    page_start_offsets: Option<Vec<Option<Vec<u64>>>>,
 }
 
 impl DataRequest {
@@ -235,5 +235,39 @@ impl<'a> DataRequestBuilder<'a> {
             ranges,
             page_start_offsets,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A zero-length requested range (for example, a column chunk with no
+    /// bytes) must never be in `NeedsData`. Before, the decoder requested it
+    /// again after each push, because an empty push is not stored, and did
+    /// not make progress.
+    #[test]
+    fn needed_ranges_never_contains_an_empty_range() {
+        let request = DataRequest {
+            column_chunks: vec![None, None],
+            ranges: vec![100..100, 200..210],
+            page_start_offsets: None,
+        };
+        let mut buffers = PushBuffers::new(1000);
+        assert_eq!(request.needed_ranges(&buffers), vec![200..210]);
+
+        // A caller that pushes the empty range anyway does not change this.
+        buffers.push_range(100..100, Bytes::new()).unwrap();
+        assert_eq!(request.needed_ranges(&buffers), vec![200..210]);
+
+        buffers
+            .push_range(200..210, Bytes::from_static(b"0123456789"))
+            .unwrap();
+        assert!(request.needed_ranges(&buffers).is_empty());
+        let chunks = request.get_chunks(&buffers).unwrap();
+        assert_eq!(
+            chunks,
+            vec![Bytes::new(), Bytes::from_static(b"0123456789")]
+        );
     }
 }

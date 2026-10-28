@@ -17,38 +17,13 @@
 
 name: miri
 
-concurrency:
-  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
-  cancel-in-progress: true
-
-# trigger for all PRs that touch certain files and changes to main
+# Run daily and on demand, including before cutting a release candidate.
+# Keep Miri out of the merge queue to reduce runner time:
+# https://github.com/apache/arrow-rs/issues/11548
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    paths:
-      - Cargo.toml
-      - Cargo.lock
-      - .github/**
-      - rust-toolchain.toml
-      - arrow/**
-      - arrow-arith/**
-      - arrow-array/**
-      - arrow-avro/**
-      - arrow-buffer/**
-      - arrow-cast/**
-      - arrow-csv/**
-      - arrow-data/**
-      - arrow-ipc/**
-      - arrow-json/**
-      - arrow-cmp/**
-      - arrow-ord/**
-      - arrow-row/**
-      - arrow-schema/**
-      - arrow-select/**
-      - arrow-string/**
-      - parquet/**
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -71,7 +46,7 @@ jobs:
           rustup override set nightly
           cargo miri setup
       - name: Set up nextest
-        uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375  # v2.87.12
+        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91  # v2.87.31
         with:
           tool: nextest
       - name: Run Miri Checks
@@ -79,3 +54,36 @@ jobs:
           RUST_BACKTRACE: full
           RUST_LOG: "trace"
         run: bash .github/workflows/miri.sh ${{ matrix.partition }} 12
+
+  report-failure:
+    name: Report daily Miri failure
+    needs: miri-checks
+    if: failure() && github.event_name == 'schedule' && github.repository == 'apache/arrow-rs'
+    runs-on: ubuntu-slim
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        with:
+          script: |
+            const title = 'Daily Miri checks failed';
+            const pages = github.paginate.iterator(github.rest.issues.listForRepo, {
+              ...context.repo, state: 'open', per_page: 100,
+            });
+            for await (const { data: issues } of pages) {
+              if (issues.some(issue => !issue.pull_request && issue.title === title)) {
+                return;
+              }
+            }
+            const repositoryUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}`;
+            await github.rest.issues.create({
+              ...context.repo,
+              title,
+              labels: ['development-process'],
+              body: [
+                `The daily Miri run failed: ${repositoryUrl}/actions/runs/${context.runId}`,
+                `Commit: ${context.sha}`,
+                `Check [subsequent runs](${repositoryUrl}/actions/workflows/miri.yaml) and close this issue once Miri passes again.`,
+                'Further failures will not create another alert while this issue is open.',
+              ].join('\n\n'),
+            });

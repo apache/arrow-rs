@@ -21,8 +21,9 @@
 //! [`filter`]: crate::filter::filter
 //! [`take`]: crate::take::take
 use crate::filter::{FilterBuilder, FilterPredicate, FilterSelection};
+use crate::interleave::interleave_record_batch;
 use crate::take::take_record_batch;
-use arrow_array::types::{BinaryViewType, StringViewType};
+use arrow_array::types::{BinaryViewType, GenericBinaryType, GenericStringType, StringViewType};
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, downcast_primitive};
 use arrow_schema::{ArrowError, DataType, SchemaRef};
 use std::collections::VecDeque;
@@ -30,16 +31,37 @@ use std::sync::Arc;
 // Originally From DataFusion's coalesce module:
 // https://github.com/apache/datafusion/blob/9d2f04996604e709ee440b65f41e7b882f50b788/datafusion/physical-plan/src/coalesce/mod.rs#L26-L25
 
+mod boolean;
+mod byte;
 mod byte_view;
+mod fixed_size_binary;
 mod generic;
+mod list;
 mod primitive;
 
+use boolean::InProgressBooleanArray;
+use byte::InProgressByteArray;
 use byte_view::InProgressByteViewArray;
+use fixed_size_binary::InProgressFixedSizeBinaryArray;
 use generic::GenericInProgressArray;
+use list::InProgressListArray;
 use primitive::InProgressPrimitiveArray;
 
 fn has_sparse_filter_copy(data_type: &DataType) -> bool {
-    data_type.is_primitive() || matches!(data_type, DataType::Utf8View | DataType::BinaryView)
+    data_type.is_primitive()
+        || matches!(
+            data_type,
+            DataType::Boolean
+                | DataType::Utf8
+                | DataType::LargeUtf8
+                | DataType::Binary
+                | DataType::LargeBinary
+                // Unlike offset-based byte arrays, views can reuse their backing buffers.
+                | DataType::Utf8View
+                | DataType::BinaryView
+                | DataType::List(_)
+                | DataType::LargeList(_)
+        )
 }
 
 /// Maximum selected row fraction for the fused sparse-filter copy path.
@@ -51,6 +73,14 @@ const SPARSE_FILTER_COPY_MAX_SELECTIVITY_DENOMINATOR: usize = 16;
 
 fn should_use_sparse_filter_copy(filter_len: usize, selected_count: usize) -> bool {
     selected_count <= filter_len / SPARSE_FILTER_COPY_MAX_SELECTIVITY_DENOMINATOR
+}
+
+// Variable-width byte arrays only outperform the materialized filter kernel at
+// very low selection densities.
+const BYTE_ARRAY_DIRECT_COPY_MAX_SELECTIVITY_DENOMINATOR: usize = 1024;
+
+fn should_use_byte_array_direct_copy(filter_len: usize, selected_count: usize) -> bool {
+    selected_count <= filter_len / BYTE_ARRAY_DIRECT_COPY_MAX_SELECTIVITY_DENOMINATOR
 }
 
 /// Concatenate multiple [`RecordBatch`]es
@@ -156,6 +186,8 @@ pub struct BatchCoalescer {
     in_progress_arrays: Vec<Box<dyn InProgressArray>>,
     /// True if some column still needs the materialized filter path.
     has_non_specialized_filter_columns: bool,
+    /// True if the schema contains a variable-width byte-array column.
+    has_byte_array_columns: bool,
     /// Buffered row count. Always less than `batch_size`
     buffered_rows: usize,
     /// Completed batches
@@ -177,6 +209,12 @@ impl BatchCoalescer {
             .fields()
             .iter()
             .any(|field| !has_sparse_filter_copy(field.data_type()));
+        let has_byte_array_columns = schema.fields().iter().any(|field| {
+            matches!(
+                field.data_type(),
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary
+            )
+        });
         let in_progress_arrays = schema
             .fields()
             .iter()
@@ -188,6 +226,7 @@ impl BatchCoalescer {
             target_batch_size,
             in_progress_arrays,
             has_non_specialized_filter_columns,
+            has_byte_array_columns,
             // We will for sure store at least one completed batch
             completed: VecDeque::with_capacity(1),
             buffered_rows: 0,
@@ -236,6 +275,10 @@ impl BatchCoalescer {
     /// This is semantically equivalent of calling [`Self::push_batch`]
     /// with the results from [`crate::filter::filter_record_batch`]
     ///
+    /// If the number of rows that `filter` selects is already known,
+    /// [`Self::push_batch_with_filter_builder`] with
+    /// [`FilterBuilder::with_count`] avoids counting them again.
+    ///
     /// # Example
     /// ```
     /// # use arrow_array::{record_batch, BooleanArray};
@@ -260,7 +303,45 @@ impl BatchCoalescer {
         batch: RecordBatch,
         filter: &BooleanArray,
     ) -> Result<(), ArrowError> {
-        self.push_batch_with_filtered_columns(batch, filter)
+        self.push_batch_with_filter_builder(batch, FilterBuilder::new(filter))
+    }
+
+    /// Push a batch into the Coalescer after applying the filter described by
+    /// `filter_builder`.
+    ///
+    /// This is [`Self::push_batch_with_filter`] for a [`FilterBuilder`] the
+    /// caller has already created. For example, callers that already know how
+    /// many rows the filter selects can provide that number with
+    /// [`FilterBuilder::with_count`] so that it is not counted again.
+    ///
+    /// Callers do not need to call [`FilterBuilder::optimize`]: like
+    /// [`Self::push_batch_with_filter`], this optimizes the filter when `batch`
+    /// has more than one column, or one column for which
+    /// [`FilterBuilder::is_optimize_beneficial`] returns true. A filter the
+    /// caller already optimized stays optimized.
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_array::{record_batch, BooleanArray};
+    /// # use arrow_select::coalesce::BatchCoalescer;
+    /// # use arrow_select::filter::FilterBuilder;
+    /// let batch = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
+    /// let filter = BooleanArray::from(vec![true, false, true]);
+    /// // SAFETY: the filter selects two rows
+    /// let filter_builder = unsafe { FilterBuilder::new(&filter).with_count(2) };
+    /// let mut coalescer = BatchCoalescer::new(batch.schema(), 1000);
+    /// coalescer.push_batch_with_filter_builder(batch, filter_builder).unwrap();
+    /// coalescer.finish_buffered_batch().unwrap();
+    /// let expected_batch = record_batch!(("a", Int32, [1, 3])).unwrap();
+    /// assert_eq!(coalescer.next_completed_batch().unwrap(), expected_batch);
+    /// ```
+    pub fn push_batch_with_filter_builder(
+        &mut self,
+        batch: RecordBatch,
+        filter_builder: FilterBuilder,
+    ) -> Result<(), ArrowError> {
+        let predicate = Self::filter_predicate_for_batch(&batch, filter_builder);
+        self.push_batch_with_filtered_columns(batch, &predicate)
     }
 
     /// Push a batch into the Coalescer after applying a set of indices
@@ -294,6 +375,49 @@ impl BatchCoalescer {
         // todo: optimize this to avoid materializing (copying the results of take indices to a new batch)
         let taken_batch = take_record_batch(&batch, indices)?;
         self.push_batch(taken_batch)
+    }
+
+    /// Push rows gathered from multiple `batches` into the Coalescer.
+    ///
+    /// Semantically equivalent to
+    /// [`interleave_record_batch`]`(batches, indices)` followed by
+    /// [`Self::push_batch`].
+    ///
+    /// `indices` are `(batch_idx, row_idx)` pairs identifying the source of
+    /// each output row.
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_array::record_batch;
+    /// # use arrow_select::coalesce::BatchCoalescer;
+    /// let batch1 = record_batch!(("a", Int32, [0, 1, 2])).unwrap();
+    /// let batch2 = record_batch!(("a", Int32, [3, 4, 5])).unwrap();
+    /// // (batch_idx, row_idx) pairs select rows across both batches
+    /// let indices = vec![(0, 0), (1, 2), (0, 2), (1, 0)];
+    /// // create a new Coalescer that targets creating 1000 row batches
+    /// let mut coalescer = BatchCoalescer::new(batch1.schema(), 1000);
+    /// coalescer.push_batch_interleaved(&[batch1, batch2], &indices).unwrap();
+    /// // finish and retrieve the created batch
+    /// coalescer.finish_buffered_batch().unwrap();
+    /// let completed_batch = coalescer.next_completed_batch().unwrap();
+    /// let expected_batch = record_batch!(("a", Int32, [0, 5, 2, 3])).unwrap();
+    /// assert_eq!(completed_batch, expected_batch);
+    /// ```
+    pub fn push_batch_interleaved(
+        &mut self,
+        batches: &[RecordBatch],
+        indices: &[(usize, usize)],
+    ) -> Result<(), ArrowError> {
+        if batches.is_empty() {
+            return Err(ArrowError::InvalidArgumentError(
+                "push_batch_interleaved requires at least one input batch".to_string(),
+            ));
+        }
+
+        // todo: optimize this to avoid materializing the intermediate RecordBatch
+        let refs: Vec<&RecordBatch> = batches.iter().collect();
+        let interleaved = interleave_record_batch(&refs, indices)?;
+        self.push_batch(interleaved)
     }
 
     /// Push all the rows from `batch` into the Coalescer
@@ -551,7 +675,15 @@ impl BatchCoalescer {
         let new_arrays = self
             .in_progress_arrays
             .iter_mut()
-            .map(|array| array.finish())
+            .zip(self.schema.fields())
+            .map(|(array, field)| {
+                array.finish().map_err(|e| {
+                    ArrowError::ComputeError(format!(
+                        "Failed to concatenate column '{}': {e}",
+                        field.name()
+                    ))
+                })
+            })
             .collect::<Result<Vec<_>, ArrowError>>()?;
 
         for (array, field) in new_arrays.iter().zip(self.schema.fields().iter()) {
@@ -569,7 +701,7 @@ impl BatchCoalescer {
         Ok(())
     }
 
-    /// Returns true if there is any buffered data
+    /// Returns true if there are no buffered rows and no completed batches
     pub fn is_empty(&self) -> bool {
         self.buffered_rows == 0 && self.completed.is_empty()
     }
@@ -604,10 +736,8 @@ impl BatchCoalescer {
 impl BatchCoalescer {
     fn filter_predicate_for_batch(
         batch: &RecordBatch,
-        filter: &BooleanArray,
-        selected_count: usize,
+        mut filter_builder: FilterBuilder,
     ) -> FilterPredicate {
-        let mut filter_builder = FilterBuilder::new_with_count(filter, selected_count);
         if batch.num_columns() > 1
             || (batch.num_columns() > 0
                 && FilterBuilder::is_optimize_beneficial(batch.schema_ref().field(0).data_type()))
@@ -620,9 +750,10 @@ impl BatchCoalescer {
     fn push_batch_with_filtered_columns(
         &mut self,
         batch: RecordBatch,
-        filter: &BooleanArray,
+        predicate: &FilterPredicate,
     ) -> Result<(), ArrowError> {
-        let filter_len = filter.len();
+        let filter_len = predicate.filter_len();
+        let selected_count = predicate.count();
         let batch_num_rows = batch.num_rows();
         let batch_num_columns = batch.num_columns();
 
@@ -632,7 +763,6 @@ impl BatchCoalescer {
             )));
         }
 
-        let selected_count = filter.true_count();
         if selected_count == 0 {
             return Ok(());
         }
@@ -656,20 +786,20 @@ impl BatchCoalescer {
         let should_materialize_filter = exceeds_coalesce_limit
             || self.has_non_specialized_filter_columns
             || does_not_fit_buffer
+            || (self.has_byte_array_columns
+                && !should_use_byte_array_direct_copy(filter_len, selected_count))
             || !should_use_sparse_filter_copy(filter_len, selected_count);
 
         if should_materialize_filter {
             // Use materialized filtering when sparse per-column copying is unavailable.
-            let predicate = Self::filter_predicate_for_batch(&batch, filter, selected_count);
             let filtered_batch = predicate.filter_record_batch(&batch)?;
             return self.push_batch(filtered_batch);
         }
 
-        let predicate = Self::filter_predicate_for_batch(&batch, filter, selected_count);
         let (_schema, arrays, _num_rows) = batch.into_parts();
 
         for (in_progress, array) in self.in_progress_arrays.iter_mut().zip(arrays) {
-            in_progress.copy_rows_by_filter_from(array, &predicate)?;
+            in_progress.copy_rows_by_filter_from(array, predicate)?;
         }
 
         self.buffered_rows += selected_count;
@@ -698,6 +828,21 @@ fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn 
         DataType::Utf8View => Box::new(InProgressByteViewArray::<StringViewType>::new(batch_size)),
         DataType::BinaryView => {
             Box::new(InProgressByteViewArray::<BinaryViewType>::new(batch_size))
+        }
+        DataType::Boolean => Box::new(InProgressBooleanArray::new(batch_size)),
+        DataType::Utf8 => Box::new(InProgressByteArray::<GenericStringType<i32>>::new(batch_size)),
+        DataType::LargeUtf8 => {
+            Box::new(InProgressByteArray::<GenericStringType<i64>>::new(batch_size))
+        }
+        DataType::Binary => Box::new(InProgressByteArray::<GenericBinaryType<i32>>::new(batch_size)),
+        DataType::LargeBinary => {
+            Box::new(InProgressByteArray::<GenericBinaryType<i64>>::new(batch_size))
+        }
+        DataType::FixedSizeBinary(size) => {
+            Box::new(InProgressFixedSizeBinaryArray::new(*size, batch_size))
+        }
+        DataType::List(_) | DataType::LargeList(_) => {
+            Box::new(InProgressListArray::new(data_type.clone()))
         }
         _ => Box::new(GenericInProgressArray::new()),
     }
@@ -780,10 +925,11 @@ mod tests {
     use crate::filter::filter_record_batch;
     use arrow_array::builder::StringViewBuilder;
     use arrow_array::cast::AsArray;
-    use arrow_array::types::Int32Type;
+    use arrow_array::types::{Int32Type, UInt8Type};
     use arrow_array::{
-        BinaryViewArray, Int32Array, Int64Array, RecordBatchOptions, StringArray, StringViewArray,
-        TimestampNanosecondArray, UInt32Array, UInt64Array, make_array,
+        BinaryViewArray, DictionaryArray, Int32Array, Int64Array, RecordBatchOptions, StringArray,
+        StringViewArray, TimestampNanosecondArray, UInt8Array, UInt32Array, UInt64Array,
+        make_array, record_batch,
     };
     use arrow_buffer::BooleanBufferBuilder;
     use arrow_schema::{DataType, Field, Schema};
@@ -822,6 +968,52 @@ mod tests {
             .with_batch_size(21)
             .with_expected_output_sizes(vec![])
             .run();
+    }
+
+    #[test]
+    fn test_coalesce_error_includes_column_name() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new(
+                "b",
+                DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+                false,
+            ),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from_iter_values(std::iter::repeat_n("a", 256))),
+                Arc::new(DictionaryArray::<UInt8Type>::new(
+                    UInt8Array::from_iter_values(0..=u8::MAX),
+                    Arc::new(StringArray::from_iter_values(
+                        (0..=u8::MAX).map(|i| i.to_string()),
+                    )),
+                )),
+            ],
+        )
+        .unwrap();
+        let overflow = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec!["a"])),
+                Arc::new(DictionaryArray::<UInt8Type>::new(
+                    UInt8Array::from(vec![0]),
+                    Arc::new(StringArray::from(vec!["overflow"])),
+                )),
+            ],
+        )
+        .unwrap();
+
+        let mut coalescer = BatchCoalescer::new(schema, 258);
+        coalescer.push_batch(batch).unwrap();
+        coalescer.push_batch(overflow).unwrap();
+        let err = coalescer.finish_buffered_batch().unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Compute error: Failed to concatenate column 'b': Dictionary key bigger than the key type"
+        );
     }
 
     #[test]
@@ -1018,6 +1210,29 @@ mod tests {
                 250, 250, 250, 250, 250, 250, 250, 250, 250, 250, 250, 179,
             ])
             .run();
+    }
+
+    #[test]
+    fn test_push_batch_with_filter_builder() {
+        let batch = record_batch!(("a", Int32, [1, 2, 3, 4])).unwrap();
+        // The null is not selected, so the filter selects two rows.
+        let filter = BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]);
+        let expected = record_batch!(("a", Int32, [1, 4])).unwrap();
+
+        // SAFETY: the count matches the filter.
+        let with_count = unsafe { FilterBuilder::new(&filter).with_count(2) };
+        // The coalescer does not optimize a single primitive column itself, so
+        // this covers a predicate that only the caller optimized.
+        let optimized = FilterBuilder::new(&filter).optimize();
+        for filter_builder in [with_count, optimized] {
+            let mut coalescer = BatchCoalescer::new(batch.schema(), 10);
+            coalescer
+                .push_batch_with_filter_builder(batch.clone(), filter_builder)
+                .unwrap();
+            coalescer.finish_buffered_batch().unwrap();
+            assert_eq!(coalescer.next_completed_batch().unwrap(), expected);
+            assert!(coalescer.next_completed_batch().is_none());
+        }
     }
 
     #[test]
@@ -1647,13 +1862,21 @@ mod tests {
             Field::new("primitive", DataType::UInt32, false),
             Field::new("utf8_view", DataType::Utf8View, true),
             Field::new("binary_view", DataType::BinaryView, true),
+            Field::new("list", DataType::new_list(DataType::Int32, true), true),
+            Field::new(
+                "large_list",
+                DataType::new_large_list(DataType::Utf8, true),
+                true,
+            ),
         ]));
         let coalescer = BatchCoalescer::new(supported, 100);
         assert!(!coalescer.has_non_specialized_filter_columns);
+        assert!(!coalescer.has_byte_array_columns);
 
         let utf8 = Arc::new(Schema::new(vec![Field::new("utf8", DataType::Utf8, true)]));
         let coalescer = BatchCoalescer::new(utf8, 100);
-        assert!(coalescer.has_non_specialized_filter_columns);
+        assert!(!coalescer.has_non_specialized_filter_columns);
+        assert!(coalescer.has_byte_array_columns);
 
         let boolean = Arc::new(Schema::new(vec![Field::new(
             "boolean",
@@ -1661,7 +1884,43 @@ mod tests {
             true,
         )]));
         let coalescer = BatchCoalescer::new(boolean, 100);
-        assert!(coalescer.has_non_specialized_filter_columns);
+        assert!(!coalescer.has_non_specialized_filter_columns);
+    }
+
+    fn sparse_filter_byte_array_input() -> (RecordBatch, BooleanArray) {
+        let mut strings = vec![Some("padding"); 4096];
+        strings[..4].copy_from_slice(&[Some("zero"), None, Some("two"), Some("three")]);
+        let batch = RecordBatch::try_from_iter([(
+            "bytes",
+            Arc::new(StringArray::from(strings)) as ArrayRef,
+        )])
+        .unwrap();
+        let filter = BooleanArray::from_iter((0..batch.num_rows()).map(|idx| Some(idx < 4)));
+        (batch, filter)
+    }
+
+    #[test]
+    fn test_sparse_filter_byte_array_direct_copy() {
+        let (batch, filter) = sparse_filter_byte_array_input();
+        assert!(should_use_byte_array_direct_copy(batch.num_rows(), 4));
+
+        let fallback_filter =
+            BooleanArray::from_iter((0..batch.num_rows()).map(|idx| Some(idx < 5)));
+        assert!(!should_use_byte_array_direct_copy(batch.num_rows(), 5));
+        let mut coalescer = BatchCoalescer::new(batch.schema(), 6);
+        coalescer
+            .push_batch_with_filter(batch.clone(), &fallback_filter)
+            .unwrap();
+        coalescer.finish_buffered_batch().unwrap();
+        let expected = filter_record_batch(&batch, &fallback_filter).unwrap();
+        assert_eq!(coalescer.next_completed_batch().unwrap(), expected);
+
+        Test::new("coalesce_sparse_filter_utf8_direct_copy")
+            .with_batch(batch)
+            .with_filter(filter)
+            .with_batch_size(4)
+            .with_expected_output_sizes([4])
+            .run();
     }
 
     #[derive(Debug, Clone, PartialEq)]
@@ -2659,6 +2918,57 @@ mod tests {
         let expected = uint32_batch_non_null(0..TOTAL_ROWS);
 
         assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn test_push_batch_interleaved() {
+        let batch1 = record_batch!(("a", Int32, [10, 11, 12])).unwrap();
+        let batch2 = record_batch!(("a", Int32, [20, 21, 22])).unwrap();
+        let indices = [(0, 0), (1, 2), (0, 2), (1, 0)];
+
+        let mut coalescer = BatchCoalescer::new(batch1.schema(), 1000);
+        coalescer
+            .push_batch_interleaved(&[batch1, batch2], &indices)
+            .unwrap();
+        coalescer.finish_buffered_batch().unwrap();
+
+        let expected = record_batch!(("a", Int32, [10, 22, 12, 20])).unwrap();
+        assert_eq!(coalescer.next_completed_batch().unwrap(), expected);
+    }
+
+    #[test]
+    fn test_push_batch_interleaved_matches_interleave_then_push() {
+        let batch1 = record_batch!(("a", Int32, [1, 2, 3, 4])).unwrap();
+        let batch2 = record_batch!(("a", Int32, [5, 6, 7])).unwrap();
+        let indices = [(1, 2), (0, 0), (1, 0), (0, 3), (1, 1)];
+
+        let mut via_method = BatchCoalescer::new(batch1.schema(), 1000);
+        via_method
+            .push_batch_interleaved(&[batch1.clone(), batch2.clone()], &indices)
+            .unwrap();
+        via_method.finish_buffered_batch().unwrap();
+
+        let mut via_manual = BatchCoalescer::new(batch1.schema(), 1000);
+        let interleaved = interleave_record_batch(&[&batch1, &batch2], &indices).unwrap();
+        via_manual.push_batch(interleaved).unwrap();
+        via_manual.finish_buffered_batch().unwrap();
+
+        assert_eq!(
+            via_method.next_completed_batch().unwrap(),
+            via_manual.next_completed_batch().unwrap()
+        );
+    }
+
+    #[test]
+    fn test_push_batch_interleaved_rejects_empty_batches() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let mut coalescer = BatchCoalescer::new(schema, 1000);
+
+        let err = coalescer.push_batch_interleaved(&[], &[]).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: push_batch_interleaved requires at least one input batch"
+        );
     }
 
     #[test]

@@ -83,6 +83,7 @@ impl TimestampParser {
     }
 
     /// Parses a time of any of forms
+    /// - `09:26`
     /// - `09:26:56`
     /// - `09:26:56.123`
     /// - `09:26:56.123456`
@@ -135,6 +136,16 @@ impl TimestampParser {
                 let time = time(hour, minute, second, 0)?;
                 Some((time, 17))
             }
+            // 09:26
+            m if m & 0b111111 == 0b011011
+                && self.test(13, b':')
+                && !self.test(16, b':')
+                && !self.test(16, b'.') =>
+            {
+                let hour = self.digits[11] * 10 + self.digits[12];
+                let minute = self.digits[14] * 10 + self.digits[15];
+                Some((time(hour, minute, 0, 0)?, 16))
+            }
             _ => None,
         }
     }
@@ -149,6 +160,7 @@ impl TimestampParser {
 /// Examples of accepted inputs:
 /// * `1997-01-31T09:26:56.123Z`        # RCF3339
 /// * `1997-01-31T09:26:56.123-05:00`   # RCF3339
+/// * `1997-01-31T09:26Z`               # ISO8601 without seconds
 /// * `1997-01-31 09:26:56.123-05:00`   # close to RCF3339 but with a space rather than T
 /// * `2023-01-01 04:05:06.789 -08`     # close to RCF3339, no fractional seconds or time separator
 /// * `1997-01-31T09:26:56.123`         # close to RCF3339 but no timezone offset specified
@@ -530,35 +542,65 @@ parser_primitive!(DurationSecondType);
 
 impl Parser for TimestampNanosecondType {
     fn parse(string: &str) -> Option<i64> {
-        string_to_timestamp_nanos(string).ok()
+        if let Ok(nanos) = string_to_timestamp_nanos(string) {
+            return Some(nanos);
+        }
+
+        let trimmed = trim_pre_and_post_whitespace(string);
+        string_to_timestamp_nanos(trimmed).ok()
     }
 }
 
 impl Parser for TimestampMicrosecondType {
     fn parse(string: &str) -> Option<i64> {
-        let nanos = string_to_timestamp_nanos(string).ok();
-        nanos.map(|x| x / 1000)
+        if let Ok(nanos) = string_to_timestamp_nanos(string) {
+            return Some(nanos / 1_000);
+        }
+
+        let trimmed = trim_pre_and_post_whitespace(string);
+        string_to_timestamp_nanos(trimmed).ok().map(|x| x / 1_000)
     }
 }
 
 impl Parser for TimestampMillisecondType {
     fn parse(string: &str) -> Option<i64> {
-        let nanos = string_to_timestamp_nanos(string).ok();
-        nanos.map(|x| x / 1_000_000)
+        if let Ok(nanos) = string_to_timestamp_nanos(string) {
+            return Some(nanos / 1_000_000);
+        }
+
+        let trimmed = trim_pre_and_post_whitespace(string);
+        string_to_timestamp_nanos(trimmed)
+            .ok()
+            .map(|x| x / 1_000_000)
     }
 }
 
 impl Parser for TimestampSecondType {
     fn parse(string: &str) -> Option<i64> {
-        let nanos = string_to_timestamp_nanos(string).ok();
-        nanos.map(|x| x / 1_000_000_000)
+        if let Ok(nanos) = string_to_timestamp_nanos(string) {
+            return Some(nanos / 1_000_000_000);
+        }
+
+        let trimmed = trim_pre_and_post_whitespace(string);
+        string_to_timestamp_nanos(trimmed)
+            .ok()
+            .map(|x| x / 1_000_000_000)
     }
 }
 
 impl Parser for Time64NanosecondType {
     // Will truncate any fractions of a nanosecond
     fn parse(string: &str) -> Option<Self::Native> {
-        string_to_time_nanoseconds(string)
+        let value = string_to_time_nanoseconds(string)
+            .ok()
+            .or_else(|| string.parse::<Self::Native>().ok());
+
+        if value.is_some() {
+            return value;
+        }
+
+        let trimmed = trim_pre_and_post_whitespace(string);
+        string_to_time_nanoseconds(trimmed)
             .ok()
             .or_else(|| string.parse::<Self::Native>().ok())
     }
@@ -572,9 +614,19 @@ impl Parser for Time64NanosecondType {
 impl Parser for Time64MicrosecondType {
     // Will truncate any fractions of a microsecond
     fn parse(string: &str) -> Option<Self::Native> {
-        string_to_time_nanoseconds(string)
+        let value = string_to_time_nanoseconds(string)
             .ok()
             .map(|nanos| nanos / 1_000)
+            .or_else(|| string.parse::<Self::Native>().ok());
+
+        if value.is_some() {
+            return value;
+        }
+
+        let trimmed = trim_pre_and_post_whitespace(string);
+        string_to_time_nanoseconds(trimmed)
+            .ok()
+            .map(|x| x / 1_000)
             .or_else(|| string.parse::<Self::Native>().ok())
     }
 
@@ -587,9 +639,19 @@ impl Parser for Time64MicrosecondType {
 impl Parser for Time32MillisecondType {
     // Will truncate any fractions of a millisecond
     fn parse(string: &str) -> Option<Self::Native> {
-        string_to_time_nanoseconds(string)
+        let value = string_to_time_nanoseconds(string)
             .ok()
             .map(|nanos| (nanos / 1_000_000) as i32)
+            .or_else(|| string.parse::<Self::Native>().ok());
+
+        if value.is_some() {
+            return value;
+        }
+
+        let trimmed = trim_pre_and_post_whitespace(string);
+        string_to_time_nanoseconds(trimmed)
+            .ok()
+            .map(|x| (x / 1_000_000) as i32)
             .or_else(|| string.parse::<Self::Native>().ok())
     }
 
@@ -602,9 +664,19 @@ impl Parser for Time32MillisecondType {
 impl Parser for Time32SecondType {
     // Will truncate any fractions of a second
     fn parse(string: &str) -> Option<Self::Native> {
-        string_to_time_nanoseconds(string)
+        let value = string_to_time_nanoseconds(string)
             .ok()
             .map(|nanos| (nanos / 1_000_000_000) as i32)
+            .or_else(|| string.parse::<Self::Native>().ok());
+
+        if value.is_some() {
+            return value;
+        }
+
+        let trimmed = trim_pre_and_post_whitespace(string);
+        string_to_time_nanoseconds(trimmed)
+            .ok()
+            .map(|x| (x / 1_000_000_000) as i32)
             .or_else(|| string.parse::<Self::Native>().ok())
     }
 
@@ -749,7 +821,12 @@ fn parse_date_to_days(string: &str) -> Option<i32> {
 
 impl Parser for Date32Type {
     fn parse(string: &str) -> Option<i32> {
-        parse_date_to_days(string)
+        if let Some(days) = parse_date_to_days(string) {
+            return Some(days);
+        }
+
+        let trimmed = trim_pre_and_post_whitespace(string);
+        parse_date_to_days(trimmed)
     }
 
     fn parse_formatted(string: &str, format: &str) -> Option<i32> {
@@ -1881,6 +1958,20 @@ mod tests {
     }
 
     #[test]
+    fn string_to_timestamp_without_seconds() {
+        let cases = [
+            ("2025-08-14T00:00Z", (2025, 8, 14, 0, 0)),
+            ("2025-08-14T09:26", (2025, 8, 14, 9, 26)),
+            ("2025-08-14 09:26+05:30", (2025, 8, 14, 3, 56)),
+            ("2025-08-14t23:59-08:00", (2025, 8, 15, 7, 59)),
+        ];
+        for (case, (y, m, d, h, min)) in cases {
+            let expected = Utc.with_ymd_and_hms(y, m, d, h, min, 0).unwrap();
+            assert_eq!(string_to_datetime(&Utc, case).unwrap(), expected)
+        }
+    }
+
+    #[test]
     fn string_to_timestamp_invalid() {
         // Test parsing invalid formats
         let cases = [
@@ -1903,6 +1994,10 @@ mod tests {
             ("1997-01-31T092656.123Z", "error parsing time"),
             ("1997-01-10T12:00:06.", "error parsing time"),
             ("1997-01-10T12:00:06. ", "error parsing time"),
+            ("1997-01-10T09:2Z", "error parsing time"),
+            ("1997-01-10T09:26:Z", "error parsing time"),
+            ("1997-01-10T09:26.5Z", "error parsing time"),
+            ("1997-01-10T09:61Z", "error parsing time"),
         ];
 
         for (s, ctx) in cases {
@@ -1995,11 +2090,13 @@ mod tests {
             "2020-12-1",
             "1690-2-5",
             "2020-09-08 01:02:03",
+            "2020-09-08 01:02",
         ];
         for case in cases {
             let v = date32_to_datetime(Date32Type::parse(case).unwrap()).unwrap();
             let expected = NaiveDate::parse_from_str(case, "%Y-%m-%d")
                 .or_else(|_| NaiveDate::parse_from_str(case, "%Y-%m-%d %H:%M:%S"))
+                .or_else(|_| NaiveDate::parse_from_str(case, "%Y-%m-%d %H:%M"))
                 .unwrap();
             assert_eq!(v.date(), expected);
         }
@@ -2013,7 +2110,6 @@ mod tests {
             "2020--04-03",
             "2020--",
             "2020-09-08 01",
-            "2020-09-08 01:02",
             "2020-09-08 01-02-03",
             "2020-9-8 01:02:03",
             "2020-09-08 1:2:3",
@@ -3567,6 +3663,48 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_integer_bounds() {
+        // The all-nines cases have as many digits as a bound but lie past it. atoi 3.1.0
+        // parsed -99999 as i16 without an overflow check (#11591).
+        macro_rules! check {
+            ($t:ty) => {{
+                type Native = <$t as ArrowPrimitiveType>::Native;
+                let (min, max) = (i128::from(Native::MIN), i128::from(Native::MAX));
+                let nines = 10_i128.pow(max.ilog10() + 1) - 1;
+                for v in [
+                    min,
+                    max,
+                    min - 1,
+                    max + 1,
+                    -nines,
+                    nines,
+                    -nines - 1,
+                    nines + 1,
+                ] {
+                    let expected = Native::try_from(v).ok();
+                    // The leading space takes the path that trims before parsing
+                    for s in [v.to_string(), format!(" {v}")] {
+                        assert_eq!(
+                            <$t>::parse(&s),
+                            expected,
+                            "{s:?} as {}",
+                            <$t as ArrowPrimitiveType>::DATA_TYPE
+                        );
+                    }
+                }
+            }};
+        }
+        check!(Int8Type);
+        check!(Int16Type);
+        check!(Int32Type);
+        check!(Int64Type);
+        check!(UInt8Type);
+        check!(UInt16Type);
+        check!(UInt32Type);
+        check!(UInt64Type);
+    }
+
+    #[test]
     fn test_parse_interval_month_day_nano_config() {
         let interval = parse_interval_month_day_nano_config(
             "1",
@@ -3622,5 +3760,94 @@ mod tests {
         assert_eq!(Int32Type::parse("-25!"), None);
         assert_eq!(Int32Type::parse("3j"), None);
         assert_eq!(Int32Type::parse("3"), Some(3));
+    }
+
+    #[test]
+    fn test_parse_temporal_with_surrounding_whitespace() {
+        let date = Date32Type::parse("2024-01-05");
+        assert_eq!(Date32Type::parse(" 2024-01-05 "), date);
+        assert_eq!(Date32Type::parse("\t2024-01-05\n"), date);
+
+        let timestamp = "2024-01-05T10:00:00";
+        let padded_timestamp = " 2024-01-05T10:00:00 ";
+
+        assert_eq!(
+            TimestampNanosecondType::parse(padded_timestamp),
+            TimestampNanosecondType::parse(timestamp)
+        );
+        assert_eq!(
+            TimestampMicrosecondType::parse(padded_timestamp),
+            TimestampMicrosecondType::parse(timestamp)
+        );
+        assert_eq!(
+            TimestampMillisecondType::parse(padded_timestamp),
+            TimestampMillisecondType::parse(timestamp)
+        );
+        assert_eq!(
+            TimestampSecondType::parse(padded_timestamp),
+            TimestampSecondType::parse(timestamp)
+        );
+        assert_eq!(
+            TimestampNanosecondType::parse("\t2024-01-05T10:00:00\n"),
+            TimestampNanosecondType::parse(timestamp)
+        );
+
+        // leet :)
+        let time = "13:37:00";
+        let padded_time = " 13:37:00 ";
+
+        assert_eq!(
+            Time64NanosecondType::parse(padded_time),
+            Time64NanosecondType::parse(time)
+        );
+        assert_eq!(
+            Time64MicrosecondType::parse(padded_time),
+            Time64MicrosecondType::parse(time)
+        );
+        assert_eq!(
+            Time64MicrosecondType::parse("\t13:37:00\n"),
+            Time64MicrosecondType::parse(time)
+        );
+    }
+
+    #[test]
+    fn test_parse_time_with_surrounding_ascii_whitespace() {
+        let time = "10:00:00";
+        let padded = " 10:00:00 ";
+        let ascii_whitespace = "\t10:00:00\n";
+
+        assert_eq!(
+            Time64NanosecondType::parse(padded),
+            Time64NanosecondType::parse(time)
+        );
+        assert_eq!(
+            Time64MicrosecondType::parse(padded),
+            Time64MicrosecondType::parse(time)
+        );
+        assert_eq!(
+            Time32MillisecondType::parse(padded),
+            Time32MillisecondType::parse(time)
+        );
+        assert_eq!(
+            Time32SecondType::parse(padded),
+            Time32SecondType::parse(time)
+        );
+
+        assert_eq!(
+            Time64NanosecondType::parse(ascii_whitespace),
+            Time64NanosecondType::parse(time)
+        );
+        assert_eq!(
+            Time64MicrosecondType::parse(ascii_whitespace),
+            Time64MicrosecondType::parse(time)
+        );
+        assert_eq!(
+            Time32MillisecondType::parse(ascii_whitespace),
+            Time32MillisecondType::parse(time)
+        );
+        assert_eq!(
+            Time32SecondType::parse(ascii_whitespace),
+            Time32SecondType::parse(time)
+        );
     }
 }

@@ -49,9 +49,10 @@ If you want to work on an issue which is not already assigned to someone else
 and there are no comment indicating that someone is already working on that
 issue then you can assign the issue to yourself by submitting a single word
 comment `take`. This will assign the issue to yourself. However, if you are
-unable to make progress you should unassign the issue by using the `unassign me`
-link at the top of the issue page (and ask for help if are stuck) so that
-someone else can get involved in the work.
+unable to make progress you should unassign the issue so that someone else can
+get involved in the work. You can do this either by using the `unassign me`
+link at the top of the issue page or by leaving a single word comment `untake`
+(and ask for help if you are stuck).
 
 If you plan to work on a new feature that doesn't have an existing ticket, it is
 a good idea to open a ticket to discuss the feature. Advanced discussion often
@@ -60,6 +61,35 @@ Arrow-rs before too much time is invested. It also often helps to discuss your
 ideas with the community to get feedback on implementation.
 
 [good-first-issue]: https://github.com/apache/arrow-rs/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22
+
+## Creating Pull Requests
+
+With coding agents, the number of open PRs now far exceeds our review capacity.
+To encourage submitters to curate and prepare a small number of high quality PRs,
+and to help reviewers focus on them, users without write access are limited to
+**3 open, non-draft PRs** at a time.
+
+When possible, we recommend splitting your contributions into multiple smaller
+focused PRs rather than large PRs, because they are more likely to be reviewed
+quickly and are easier to understand and review.
+
+### Pull Requests from Forks
+
+To reduce load on ASF's shared runners, pull requests from forks to `main`
+run CPU-intensive tests on your fork using your fork's GitHub runners, with
+lightweight checks upstream. To enable Actions in your fork:
+
+1. Open the **Actions** tab in your fork and enable workflows before pushing.
+2. Sync your fork and rebase your branch onto upstream `main` to include the
+   current CI workflows.
+3. Push your branch, or manually run `CI` from your fork's **Actions** tab.
+   View results and rerun failed jobs there; the PR's `CI (fork)` check may lag.
+
+Fork branch pushes and manual runs execute all regular suites, excluding Miri.
+The `CI (fork)` check links to the fork run and is informational. When your PR is
+approved and added to the merge queue, the final CI checks run using ASF's runners
+against the proposed merge with `main`. Same-repository and release-branch PRs
+retain upstream testing. Miri runs separately on a daily schedule and on demand.
 
 ## Developer's guide to Arrow Rust
 

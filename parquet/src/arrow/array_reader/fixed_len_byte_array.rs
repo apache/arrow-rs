@@ -16,19 +16,21 @@
 // under the License.
 
 use crate::arrow::array_reader::{ArrayReader, read_records, skip_records};
-use crate::arrow::buffer::bit_util::{iter_set_bits_rev, sign_extend_be};
+use crate::arrow::buffer::bit_util::{iter_set_bits_rev, sign_extend_be, sign_extend_be_fixed};
+use crate::arrow::buffer::offset_buffer::OffsetBuffer;
 use crate::arrow::decoder::{DeltaByteArrayDecoder, DictIndexDecoder};
 use crate::arrow::record_reader::GenericRecordReader;
 use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::arrow::schema::parquet_to_arrow_field;
 use crate::basic::{Encoding, Type};
 use crate::column::page::PageIterator;
-use crate::column::reader::decoder::ColumnValueDecoder;
+use crate::column::reader::decoder::{ColumnValueDecoder, normalize_fixed_len_byte_array_payload};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
+use arrow_array::types::{Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type};
 use arrow_array::{
-    ArrayRef, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
-    FixedSizeBinaryArray, Float16Array, IntervalDayTimeArray, IntervalYearMonthArray,
+    Array, ArrayRef, ArrowPrimitiveType, FixedSizeBinaryArray, Float16Array, IntervalDayTimeArray,
+    IntervalYearMonthArray, OffsetSizeTrait, PrimitiveArray,
 };
 use arrow_buffer::{Buffer, IntervalDayTime, i256};
 use arrow_data::ArrayDataBuilder;
@@ -142,6 +144,36 @@ struct FixedLenByteArrayReader {
     record_reader: GenericRecordReader<FixedLenByteArrayBuffer, ValueDecoder>,
 }
 
+/// Converts the big-endian two's complement values of `binary`, each `W` bytes wide,
+/// with `from_be`.
+fn decimal_from_be<T: ArrowPrimitiveType, const W: usize, const N: usize>(
+    binary: &FixedSizeBinaryArray,
+    from_be: impl Fn([u8; N]) -> T::Native,
+) -> PrimitiveArray<T> {
+    let (values, _) = binary.value_data()[..binary.len() * W].as_chunks::<W>();
+    let values: Vec<T::Native> = values
+        .iter()
+        .map(|b| from_be(sign_extend_be_fixed(b)))
+        .collect();
+    PrimitiveArray::new(values.into(), binary.nulls().cloned())
+}
+
+/// Converts the values of a [`FixedSizeBinaryArray`] to the decimal type `$t`, with a
+/// loop specialized to the value width when it is at most `$size`, the size of `$native`.
+macro_rules! decimal_array {
+    ($binary:expr, $t:ty, $native:ty, $size:literal) => {{
+        let binary = &$binary;
+        seq_macro::seq!(W in 1..=$size {
+            match binary.value_length() {
+                #(W => decimal_from_be::<$t, W, $size>(binary, <$native>::from_be_bytes),)*
+                _ => PrimitiveArray::<$t>::from_unary(binary, |b: &[u8]| {
+                    <$native>::from_be_bytes(sign_extend_be(b))
+                }),
+            }
+        })
+    }};
+}
+
 impl FixedLenByteArrayReader {
     fn new(
         pages: Box<dyn PageIterator>,
@@ -206,24 +238,20 @@ impl ArrayReader for FixedLenByteArrayReader {
         // the inner loop (see docs for `PrimitiveArray::from_unary`).
         let array: ArrayRef = match &self.data_type {
             ArrowType::Decimal32(p, s) => {
-                let f = |b: &[u8]| i32::from_be_bytes(sign_extend_be(b));
-                Arc::new(Decimal32Array::from_unary(&binary, f).with_precision_and_scale(*p, *s)?)
-                    as ArrayRef
+                let array = decimal_array!(binary, Decimal32Type, i32, 4);
+                Arc::new(array.with_precision_and_scale(*p, *s)?) as ArrayRef
             }
             ArrowType::Decimal64(p, s) => {
-                let f = |b: &[u8]| i64::from_be_bytes(sign_extend_be(b));
-                Arc::new(Decimal64Array::from_unary(&binary, f).with_precision_and_scale(*p, *s)?)
-                    as ArrayRef
+                let array = decimal_array!(binary, Decimal64Type, i64, 8);
+                Arc::new(array.with_precision_and_scale(*p, *s)?) as ArrayRef
             }
             ArrowType::Decimal128(p, s) => {
-                let f = |b: &[u8]| i128::from_be_bytes(sign_extend_be(b));
-                Arc::new(Decimal128Array::from_unary(&binary, f).with_precision_and_scale(*p, *s)?)
-                    as ArrayRef
+                let array = decimal_array!(binary, Decimal128Type, i128, 16);
+                Arc::new(array.with_precision_and_scale(*p, *s)?) as ArrayRef
             }
             ArrowType::Decimal256(p, s) => {
-                let f = |b: &[u8]| i256::from_be_bytes(sign_extend_be(b));
-                Arc::new(Decimal256Array::from_unary(&binary, f).with_precision_and_scale(*p, *s)?)
-                    as ArrayRef
+                let array = decimal_array!(binary, Decimal256Type, i256, 32);
+                Arc::new(array.with_precision_and_scale(*p, *s)?) as ArrayRef
             }
             ArrowType::Interval(unit) => {
                 // An interval is stored as 3x 32-bit unsigned integers storing months, days,
@@ -279,7 +307,7 @@ impl ArrayReader for FixedLenByteArrayReader {
 }
 
 #[derive(Default)]
-struct FixedLenByteArrayBuffer {
+pub(super) struct FixedLenByteArrayBuffer {
     buffer: Vec<u8>,
     /// The length of each element in bytes
     byte_length: Option<usize>,
@@ -379,10 +407,84 @@ impl ValuesBuffer for FixedLenByteArrayBuffer {
     }
 }
 
-struct ValueDecoder {
+pub(super) struct ValueDecoder {
     byte_length: usize,
     dict_page: Option<Bytes>,
     decoder: Option<Decoder>,
+}
+
+impl ValueDecoder {
+    pub(super) fn read_offsets<I: OffsetSizeTrait>(
+        &mut self,
+        out: &mut OffsetBuffer<I>,
+        num_values: usize,
+    ) -> Result<usize> {
+        let start = out.values.len();
+        let read = self.read_values(&mut out.values, num_values)?;
+        out.offsets.reserve(read);
+        for value in 1..=read {
+            out.offsets.push(
+                I::from_usize(start + value * self.byte_length)
+                    .ok_or_else(|| general_err!("index overflow decoding fixed byte array"))?,
+            );
+        }
+        Ok(read)
+    }
+
+    fn read_values(&mut self, out: &mut Vec<u8>, num_values: usize) -> Result<usize> {
+        if self.byte_length == 0 {
+            return Ok(num_values);
+        }
+
+        match self.decoder.as_mut().unwrap() {
+            Decoder::Plain { offset, buf } => {
+                let to_read =
+                    (num_values * self.byte_length).min(buf.len() - *offset) / self.byte_length;
+                let end_offset = *offset + to_read * self.byte_length;
+                out.extend_from_slice(&buf.as_ref()[*offset..end_offset]);
+                *offset = end_offset;
+                Ok(to_read)
+            }
+            Decoder::Dict { decoder } => {
+                let dict = self.dict_page.as_ref().unwrap();
+                if dict.is_empty() {
+                    return Ok(0);
+                }
+
+                decoder.read(num_values, |keys| {
+                    out.reserve(keys.len() * self.byte_length);
+                    for key in keys {
+                        let offset = *key as usize * self.byte_length;
+                        out.extend_from_slice(&dict.as_ref()[offset..offset + self.byte_length]);
+                    }
+                    Ok(())
+                })
+            }
+            Decoder::Delta { decoder } => {
+                let to_read = num_values.min(decoder.remaining());
+                out.reserve(to_read * self.byte_length);
+
+                decoder.read(to_read, |slice| {
+                    if slice.len() != self.byte_length {
+                        return Err(general_err!(
+                            "encountered array with incorrect length, got {} expected {}",
+                            slice.len(),
+                            self.byte_length
+                        ));
+                    }
+                    out.extend_from_slice(slice);
+                    Ok(())
+                })
+            }
+            Decoder::ByteStreamSplit { buf, offset } => {
+                let total_values = buf.len() / self.byte_length;
+                let to_read = num_values.min(total_values - *offset);
+                read_byte_stream_split(out, buf, *offset, to_read, self.byte_length);
+                *offset += to_read;
+                Ok(to_read)
+            }
+        }
+    }
 }
 
 impl ColumnValueDecoder for ValueDecoder {
@@ -412,14 +514,12 @@ impl ColumnValueDecoder for ValueDecoder {
                 encoding
             ));
         }
-        let expected_len = num_values as usize * self.byte_length;
-        if expected_len > buf.len() {
-            return Err(general_err!(
-                "too few bytes in dictionary page, expected {} got {}",
-                expected_len,
-                buf.len()
-            ));
-        }
+        let buf = normalize_fixed_len_byte_array_payload(
+            buf,
+            num_values as usize,
+            self.byte_length,
+            "dictionary page",
+        )?;
 
         self.dict_page = Some(buf);
         Ok(())
@@ -473,66 +573,14 @@ impl ColumnValueDecoder for ValueDecoder {
             }
         }
 
-        match self.decoder.as_mut().unwrap() {
-            Decoder::Plain { offset, buf } => {
-                let to_read =
-                    (num_values * self.byte_length).min(buf.len() - *offset) / self.byte_length;
-                let end_offset = *offset + to_read * self.byte_length;
-                out.buffer
-                    .extend_from_slice(&buf.as_ref()[*offset..end_offset]);
-                *offset = end_offset;
-                Ok(to_read)
-            }
-            Decoder::Dict { decoder } => {
-                let dict = self.dict_page.as_ref().unwrap();
-                // All data must be NULL
-                if dict.is_empty() {
-                    return Ok(0);
-                }
-
-                decoder.read(num_values, |keys| {
-                    out.buffer.reserve(keys.len() * self.byte_length);
-                    for key in keys {
-                        let offset = *key as usize * self.byte_length;
-                        let val = &dict.as_ref()[offset..offset + self.byte_length];
-                        out.buffer.extend_from_slice(val);
-                    }
-                    Ok(())
-                })
-            }
-            Decoder::Delta { decoder } => {
-                let to_read = num_values.min(decoder.remaining());
-                out.buffer.reserve(to_read * self.byte_length);
-
-                decoder.read(to_read, |slice| {
-                    if slice.len() != self.byte_length {
-                        return Err(general_err!(
-                            "encountered array with incorrect length, got {} expected {}",
-                            slice.len(),
-                            self.byte_length
-                        ));
-                    }
-                    out.buffer.extend_from_slice(slice);
-                    Ok(())
-                })
-            }
-            Decoder::ByteStreamSplit { buf, offset } => {
-                // we have n=`byte_length` streams of length `buf.len/byte_length`
-                // to read value i, we need the i'th byte from each of the streams
-                // so `offset` should be the value offset, not the byte offset
-                let total_values = buf.len() / self.byte_length;
-                let to_read = num_values.min(total_values - *offset);
-
-                // now read the n streams and reassemble values into the output buffer
-                read_byte_stream_split(&mut out.buffer, buf, *offset, to_read, self.byte_length);
-
-                *offset += to_read;
-                Ok(to_read)
-            }
-        }
+        self.read_values(&mut out.buffer, num_values)
     }
 
     fn skip_values(&mut self, num_values: usize) -> Result<usize> {
+        if self.byte_length == 0 {
+            return Ok(num_values);
+        }
+
         match self.decoder.as_mut().unwrap() {
             Decoder::Plain { offset, buf } => {
                 let to_read = num_values.min((buf.len() - *offset) / self.byte_length);
@@ -586,8 +634,12 @@ enum Decoder {
 mod tests {
     use super::*;
     use crate::arrow::ArrowWriter;
-    use crate::arrow::arrow_reader::ParquetRecordBatchReader;
-    use arrow::datatypes::Field;
+    use crate::arrow::arrow_reader::{
+        ArrowReaderOptions, ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder,
+    };
+    use crate::data_type::{FixedLenByteArray, FixedLenByteArrayType};
+    use crate::file::writer::SerializedFileWriter;
+    use arrow::datatypes::{Field, Schema};
     use arrow::error::Result as ArrowResult;
     use arrow_array::{Array, ListArray};
     use arrow_array::{Decimal256Array, RecordBatch};
@@ -641,5 +693,92 @@ mod tests {
         assert_eq!(&written.slice(0, 3), &read[0]);
         assert_eq!(&written.slice(3, 3), &read[1]);
         assert_eq!(&written.slice(6, 1), &read[2]);
+    }
+
+    /// Writes `values` as an optional `FIXED_LEN_BYTE_ARRAY` column of `DECIMAL(precision, scale)`
+    /// with the minimal width for `precision`.
+    fn write_decimal_column(precision: u8, scale: i8, values: &[Option<i256>]) -> Bytes {
+        let width = crate::arrow::schema::decimal_length_from_precision(precision);
+        let schema = crate::schema::parser::parse_message_type(&format!(
+            "message test {{\
+             OPTIONAL FIXED_LEN_BYTE_ARRAY ({width}) d (DECIMAL({precision}, {scale})); }}"
+        ))
+        .unwrap();
+        let mut buffer = Vec::new();
+        let mut writer =
+            SerializedFileWriter::new(&mut buffer, Arc::new(schema), Default::default()).unwrap();
+        let mut row_group = writer.next_row_group().unwrap();
+        let mut column = row_group.next_column().unwrap().unwrap();
+        let def_levels: Vec<i16> = values.iter().map(|v| v.is_some() as i16).collect();
+        let data: Vec<FixedLenByteArray> = values
+            .iter()
+            .flatten()
+            .map(|v| FixedLenByteArray::from(v.to_be_bytes()[32 - width..].to_vec()))
+            .collect();
+        column
+            .typed::<FixedLenByteArrayType>()
+            .write_batch(&data, Some(&def_levels), None)
+            .unwrap();
+        column.close().unwrap();
+        row_group.close().unwrap();
+        writer.close().unwrap();
+        Bytes::from(buffer)
+    }
+
+    #[test]
+    fn test_read_decimal_of_every_width() {
+        let ten = i256::from_i128(10);
+        for precision in 1..=76u8 {
+            let scale = precision.div_ceil(2) as i8;
+            let max = (0..precision)
+                .fold(i256::ONE, |acc, _| acc.wrapping_mul(ten))
+                .wrapping_sub(i256::ONE);
+            let values = [
+                Some(i256::ZERO),
+                Some(i256::ONE),
+                Some(i256::MINUS_ONE),
+                None,
+                Some(max),
+                Some(max.wrapping_neg()),
+                None,
+                Some(i256::from_i128(-7)),
+            ];
+            let data_types = [
+                (9, ArrowType::Decimal32(precision, scale)),
+                (18, ArrowType::Decimal64(precision, scale)),
+                (38, ArrowType::Decimal128(precision, scale)),
+                (76, ArrowType::Decimal256(precision, scale)),
+            ];
+            let file = write_decimal_column(precision, scale, &values);
+            for (_, data_type) in data_types
+                .iter()
+                .filter(|(max_precision, _)| precision <= *max_precision)
+            {
+                let schema = Arc::new(Schema::new(vec![Field::new("d", data_type.clone(), true)]));
+                let options = ArrowReaderOptions::new().with_schema(schema);
+                let batches =
+                    ParquetRecordBatchReaderBuilder::try_new_with_options(file.clone(), options)
+                        .unwrap()
+                        .with_batch_size(4)
+                        .build()
+                        .unwrap()
+                        .collect::<ArrowResult<Vec<_>>>()
+                        .unwrap();
+                let columns: Vec<&dyn Array> =
+                    batches.iter().map(|b| b.column(0).as_ref()).collect();
+                let read = arrow::compute::concat(&columns).unwrap();
+                assert_eq!(read.data_type(), data_type);
+                let read =
+                    arrow::compute::cast(&read, &ArrowType::Decimal256(precision, scale)).unwrap();
+                let expected = Decimal256Array::from_iter(values)
+                    .with_precision_and_scale(precision, scale)
+                    .unwrap();
+                assert_eq!(
+                    read.as_ref(),
+                    &expected as &dyn Array,
+                    "precision {precision}, {data_type}"
+                );
+            }
+        }
     }
 }

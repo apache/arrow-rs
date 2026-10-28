@@ -17,13 +17,14 @@
 
 //! Module for shredding VariantArray with a given schema.
 
-use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
+use crate::type_conversion::VariantCastMode;
+use crate::variant_array::ShreddedVariantFieldArray;
 use crate::variant_to_arrow::{
     ArrayVariantToArrowRowBuilder, PrimitiveVariantToArrowRowBuilder,
     make_primitive_variant_to_arrow_row_builder,
 };
 use crate::{VariantArray, VariantValueArrayBuilder};
-use arrow::array::{ArrayRef, BinaryViewArray, NullBufferBuilder};
+use arrow::array::{ArrayRef, BinaryViewArray, NullBufferBuilder, StructArrayAssembler};
 use arrow::buffer::NullBuffer;
 use arrow::compute::CastOptions;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, TimeUnit};
@@ -87,7 +88,7 @@ pub(crate) fn shred_variant_with_options(
         cast_options,
         array.len(),
         NullValue::TopLevelVariant,
-        true,
+        VariantCastMode::Shred,
     )?;
     for i in 0..array.len() {
         if array.is_null(i) {
@@ -141,7 +142,7 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
     cast_options: &'a CastOptions,
     capacity: usize,
     null_value: NullValue,
-    shred: bool,
+    cast_mode: VariantCastMode,
 ) -> Result<VariantToShreddedVariantRowBuilder<'a>> {
     let builder = match data_type {
         DataType::Struct(fields) => {
@@ -150,15 +151,14 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
                 cast_options,
                 capacity,
                 null_value,
-                shred,
+                cast_mode,
             )?;
             VariantToShreddedVariantRowBuilder::Object(typed_value_builder)
         }
         DataType::List(_)
         | DataType::LargeList(_)
         | DataType::ListView(_)
-        | DataType::LargeListView(_)
-        | DataType::FixedSizeList(..) => {
+        | DataType::LargeListView(_) => {
             let typed_value_builder = VariantToShreddedArrayVariantRowBuilder::try_new(
                 data_type,
                 cast_options,
@@ -191,7 +191,7 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
         | DataType::FixedSizeBinary(16) // UUID
         => {
             let builder =
-                make_primitive_variant_to_arrow_row_builder(data_type, cast_options, capacity, shred)?;
+                make_primitive_variant_to_arrow_row_builder(data_type, cast_options, capacity, cast_mode)?;
             let typed_value_builder =
                 VariantToShreddedPrimitiveVariantRowBuilder::new(builder, capacity, null_value);
             VariantToShreddedVariantRowBuilder::Primitive(typed_value_builder)
@@ -330,7 +330,6 @@ impl<'a> VariantToShreddedArrayVariantRowBuilder<'a> {
                 self.nulls.append_non_null();
                 self.value_builder.append_null();
 
-                // NOTE: A `FixedSizeList` with incorrect size will hard fail during shredding.
                 self.typed_value_builder
                     .append_value(&Variant::List(list))?;
                 Ok(true)
@@ -370,7 +369,7 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
         cast_options: &'a CastOptions,
         capacity: usize,
         null_value: NullValue,
-        shred: bool,
+        cast_mode: VariantCastMode,
     ) -> Result<Self> {
         let typed_value_builders = fields.iter().map(|field| {
             let builder = make_variant_to_shredded_variant_arrow_row_builder(
@@ -378,7 +377,7 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
                 cast_options,
                 capacity,
                 NullValue::ObjectField,
-                shred,
+                cast_mode,
             )?;
             Ok((field.name().as_str(), builder))
         });
@@ -424,16 +423,23 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
         } = self;
         seen.fill(false);
         let mut builder = value_builder.builder_ext(value.metadata());
-        let mut object_builder = builder.try_new_object()?;
+        // Error on a repeated unshredded field instead of overwriting it
+        let mut object_builder = builder.try_new_object()?.with_validate_unique_fields(true);
         let mut partially_shredded = false;
         for (field_name, value) in obj.iter() {
             match typed_value_builders.get_full_mut(field_name) {
                 Some((index, _, typed_value_builder)) => {
+                    // A repeated field would append a second row to this builder
+                    if seen[index] {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "Duplicate field name: {field_name}"
+                        )));
+                    }
                     typed_value_builder.append_value(value)?;
                     seen[index] = true;
                 }
                 None => {
-                    object_builder.insert_bytes(field_name, value);
+                    object_builder.try_insert_bytes(field_name, value)?;
                     partially_shredded = true;
                 }
             }
@@ -461,7 +467,7 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
     }
 
     fn finish(mut self) -> Result<(BinaryViewArray, ArrayRef, Option<NullBuffer>)> {
-        let mut builder = StructArrayBuilder::new();
+        let mut builder = StructArrayAssembler::new();
         for (field_name, typed_value_builder) in self.typed_value_builders {
             let (value, typed_value, nulls) = typed_value_builder.finish()?;
             let array =
@@ -473,7 +479,7 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
         }
         Ok((
             self.value_builder.build()?,
-            Arc::new(builder.build()),
+            Arc::new(builder.build()?),
             self.nulls.finish(),
         ))
     }
@@ -738,9 +744,9 @@ mod tests {
     use crate::variant_array::{all_null_value_column, binary_array_value, variant_from_arrays_at};
     use arrow::array::{
         Array, BinaryViewArray, Decimal32Array, Decimal64Array, Decimal128Array,
-        FixedSizeBinaryArray, FixedSizeListArray, Float64Array, GenericListArray,
-        GenericListViewArray, Int64Array, LargeBinaryArray, LargeStringArray, ListArray,
-        ListLikeArray, OffsetSizeTrait, PrimitiveArray, StringArray, StructArray,
+        FixedSizeBinaryArray, Float64Array, GenericListArray, GenericListViewArray, Int64Array,
+        LargeBinaryArray, LargeStringArray, ListArray, ListLikeArray, OffsetSizeTrait,
+        PrimitiveArray, StringArray, StructArray,
     };
     use arrow::datatypes::{
         ArrowPrimitiveType, DataType, Field, Fields, Int64Type, TimeUnit, UnionFields, UnionMode,
@@ -1084,7 +1090,7 @@ mod tests {
                 &cast_options,
                 1,
                 mode,
-                true,
+                VariantCastMode::Shred,
             )
             .unwrap();
             primitive_builder.append_null().unwrap();
@@ -1115,7 +1121,7 @@ mod tests {
                 &cast_options,
                 1,
                 mode,
-                true,
+                VariantCastMode::Shred,
             )
             .unwrap();
             array_builder.append_null().unwrap();
@@ -1144,7 +1150,7 @@ mod tests {
                 &cast_options,
                 1,
                 mode,
-                true,
+                VariantCastMode::Shred,
             )
             .unwrap();
             object_builder.append_null().unwrap();
@@ -1174,7 +1180,7 @@ mod tests {
     fn test_already_shredded_input_error() {
         // Create a VariantArray that already has typed_value_field
         // First create a valid VariantArray, then extract its parts to construct a shredded one
-        let temp_array = VariantArray::from_iter(vec![Some(Variant::from("test"))]);
+        let temp_array = VariantArray::from_iter([Some("test")]);
         let metadata = temp_array.metadata_column().clone();
         let value = temp_array.value_column().clone();
         let typed_value = Arc::new(Int64Array::from(vec![42])) as ArrayRef;
@@ -1208,7 +1214,7 @@ mod tests {
     fn test_invalid_fixed_size_binary_shredding() {
         let mock_uuid_1 = Uuid::new_v4();
 
-        let input = VariantArray::from_iter([Some(Variant::from(mock_uuid_1)), None]);
+        let input = VariantArray::from_iter([Some(mock_uuid_1), None]);
 
         // shred_variant only supports FixedSizeBinary(16). Any other length will err.
         let err = shred_variant(&input, &DataType::FixedSizeBinary(17)).unwrap_err();
@@ -1500,7 +1506,7 @@ mod tests {
 
     #[test]
     fn test_invalid_shredded_types_rejected() {
-        let input = VariantArray::from_iter([Variant::from(42)]);
+        let input = VariantArray::from_iter([Some(42)]);
 
         let invalid_types = vec![
             DataType::UInt8,
@@ -1510,6 +1516,7 @@ mod tests {
             DataType::Time32(TimeUnit::Second),
             DataType::Time64(TimeUnit::Nanosecond),
             DataType::Timestamp(TimeUnit::Millisecond, None),
+            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int64, true)), 2),
             DataType::FixedSizeBinary(17),
             DataType::Union(
                 UnionFields::from_fields(vec![
@@ -1531,8 +1538,16 @@ mod tests {
             ),
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             DataType::RunEndEncoded(
-                Arc::new(Field::new("run_ends", DataType::Int32, false)),
-                Arc::new(Field::new("values", DataType::Utf8, true)),
+                Arc::new(Field::new(
+                    Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                    DataType::Int32,
+                    false,
+                )),
+                Arc::new(Field::new(
+                    Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                    DataType::Utf8,
+                    true,
+                )),
             ),
         ];
 
@@ -1683,85 +1698,6 @@ mod tests {
             &[Some(2), None, Some(0)],
             &[None, Some(Variant::from("fallback")), None],
             (&[Some(1), Some(2)], &[None, None]),
-        );
-    }
-
-    #[test]
-    fn test_array_shredding_as_fixed_size_list() {
-        let input = build_variant_array(vec![
-            VariantRow::List(vec![VariantValue::from(1i64), VariantValue::from(2i64)]),
-            VariantRow::Value(VariantValue::from("This should not be shredded")),
-            VariantRow::List(vec![VariantValue::from(3i64), VariantValue::from(4i64)]),
-        ]);
-
-        let list_schema =
-            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int64, true)), 2);
-        let result = shred_variant(&input, &list_schema).unwrap();
-        assert_eq!(result.len(), 3);
-
-        // The first row should be shredded, so the `value` field should be null and the
-        // `typed_value` field should contain the list
-        assert!(result.is_valid(0));
-        assert!(result.value_column().is_null(0));
-        assert!(result.typed_value_column().unwrap().is_valid(0));
-
-        // The second row should not be shredded because the provided schema for shredding did not
-        // match. Hence, the `value` field should contain the raw value and the `typed_value` field
-        // should be null.
-        assert!(result.is_valid(1));
-        assert!(result.value_column().is_valid(1));
-        assert!(result.typed_value_column().unwrap().is_null(1));
-
-        // The third row should be shredded, so the `value` field should be null and the
-        // `typed_value` field should contain the list
-        assert!(result.is_valid(2));
-        assert!(result.value_column().is_null(2));
-        assert!(result.typed_value_column().unwrap().is_valid(2));
-
-        let typed_value = result.typed_value_column().unwrap();
-        let fixed_size_list = typed_value
-            .as_any()
-            .downcast_ref::<FixedSizeListArray>()
-            .expect("Expected FixedSizeListArray");
-
-        // Verify that typed value is `FixedSizeList`.
-        assert_eq!(fixed_size_list.len(), 3);
-        assert_eq!(fixed_size_list.value_length(), 2);
-
-        // Verify that the first entry in the `FixedSizeList` contains the expected value.
-        let val0 = fixed_size_list.value(0);
-        let val0_struct = val0.as_any().downcast_ref::<StructArray>().unwrap();
-        let val0_typed = val0_struct.column_by_name("typed_value").unwrap();
-        let val0_ints = val0_typed.as_any().downcast_ref::<Int64Array>().unwrap();
-        assert_eq!(val0_ints.values(), &[1i64, 2i64]);
-
-        // Verify that second entry in the `FixedSizeList` cannot be shredded hence the value is
-        // invalid.
-        assert!(fixed_size_list.is_null(1));
-
-        // Verify that the third entry in the `FixedSizeList` contains the expected value.
-        let val2 = fixed_size_list.value(2);
-        let val2_struct = val2.as_any().downcast_ref::<StructArray>().unwrap();
-        let val2_typed = val2_struct.column_by_name("typed_value").unwrap();
-        let val2_ints = val2_typed.as_any().downcast_ref::<Int64Array>().unwrap();
-        assert_eq!(val2_ints.values(), &[3i64, 4i64]);
-    }
-
-    #[test]
-    fn test_array_shredding_as_fixed_size_list_wrong_size() {
-        let input = build_variant_array(vec![VariantRow::List(vec![
-            VariantValue::from(1i64),
-            VariantValue::from(2i64),
-            VariantValue::from(3i64),
-        ])]);
-        let list_schema =
-            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int64, true)), 2);
-
-        let err = shred_variant(&input, &list_schema).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("Expected fixed size list of size 2, got size 3"),
-            "got: {err}",
         );
     }
 
@@ -2420,6 +2356,39 @@ mod tests {
         let value_field3 = result3.value_column();
         assert!(value_field3.is_null(0)); // fully shredded, no remaining fields
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_object_with_duplicate_field_names_errors() -> Result<()> {
+        // Unsorted dictionaries ["a"] and ["a", "a"]; only an unsorted dictionary may repeat a name
+        let metadata_a: &[u8] = &[0x01, 1, 0, 1, b'a'];
+        let metadata_aa: &[u8] = &[0x01, 2, 0, 1, 2, b'a', b'a'];
+        // {"a": 0i8, "a": 1i8}, via field ids [0, 0] and [0, 1]
+        let same_ids: &[u8] = &[0x02, 2, 0, 0, 0, 2, 4, 0x0C, 0, 0x0C, 1];
+        let distinct_ids: &[u8] = &[0x02, 2, 0, 1, 0, 2, 4, 0x0C, 0, 0x0C, 1];
+
+        for (metadata, value) in [(metadata_a, same_ids), (metadata_aa, distinct_ids)] {
+            // Full validation rejects the duplicate, but shredding only validates shallowly
+            assert!(Variant::try_new(metadata, value).is_err());
+            let input = VariantArray::from_parts(
+                Arc::new(BinaryViewArray::from_iter_values([metadata])),
+                Arc::new(BinaryViewArray::from_iter_values([value])),
+                None,
+                None,
+            );
+            // The duplicate is either shredded ("a") or left unshredded ("b")
+            for path in ["a", "b"] {
+                let as_type = ShreddedSchemaBuilder::default()
+                    .with_path(path, &DataType::Int8)?
+                    .build();
+                let err = shred_variant(&input, &as_type).unwrap_err();
+                assert_eq!(
+                    err.to_string(),
+                    "Invalid argument error: Duplicate field name: a"
+                );
+            }
+        }
         Ok(())
     }
 
