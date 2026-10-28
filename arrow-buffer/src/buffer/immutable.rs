@@ -428,6 +428,9 @@ impl Buffer {
     ///
     /// This can be used to reuse / mutate the underlying data.
     ///
+    /// With the `pool` feature enabled, a successful conversion releases the buffer's
+    /// memory reservation. The returned `Vec` is not tracked by the memory pool.
+    ///
     /// # Errors
     ///
     /// Returns `Err(self)` if
@@ -650,6 +653,8 @@ impl<T: ArrowNativeType> FromIterator<T> for Buffer {
 #[cfg(test)]
 mod tests {
     use crate::i256;
+    #[cfg(feature = "pool")]
+    use crate::pool::{MemoryPool, TrackingMemoryPool};
     use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::thread;
 
@@ -932,8 +937,6 @@ mod tests {
     #[test]
     #[cfg(feature = "pool")]
     fn test_into_vec_releases_reservation() {
-        use crate::pool::{MemoryPool, TrackingMemoryPool};
-
         let pool = TrackingMemoryPool::default();
         let buffer = Buffer::from_vec(vec![1_u8, 2, 3]);
         buffer.claim(&pool);
