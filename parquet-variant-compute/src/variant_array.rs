@@ -213,11 +213,15 @@ fn validate_variant_typed_value(field: &Field) -> std::result::Result<(), String
     use DataType::*;
 
     match field.data_type() {
-        Boolean
+        Null
+        | Boolean
         | Int8
         | Int16
         | Int32
         | Int64
+        | UInt8
+        | UInt16
+        | UInt32
         | Float32
         | Float64
         | Date32
@@ -1594,6 +1598,18 @@ mod test {
 
     #[test]
     fn variant_type_accepts_canonical_unshredded_and_shredded_layouts() {
+        for typed_value in [
+            DataType::Null,
+            DataType::UInt8,
+            DataType::UInt16,
+            DataType::UInt32,
+        ] {
+            assert_variant_type_accepts(DataType::Struct(Fields::from(vec![
+                Field::new("metadata", DataType::Binary, false),
+                Field::new("typed_value", typed_value, true),
+            ])));
+        }
+
         // Canonical fields may appear in any order.
         assert_variant_type_accepts(DataType::Struct(Fields::from(vec![
             Field::new("value", DataType::LargeBinary, false),
@@ -1694,8 +1710,7 @@ mod test {
         }
 
         for typed_value in [
-            Field::new("typed_value", DataType::Null, true),
-            Field::new("typed_value", DataType::UInt32, true),
+            Field::new("typed_value", DataType::UInt64, true),
             Field::new("typed_value", DataType::Decimal32(10, 0), true),
             Field::new(
                 "typed_value",
