@@ -754,7 +754,9 @@ mod arrow_tests {
     use crate::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use crate::arrow::arrow_writer::ArrowWriter;
     use crate::column::writer::LevelDataRef;
-    use crate::file::properties::{CdcOptions, WriterProperties};
+    use crate::file::properties::{
+        CdcOptions, WriterProperties, WriterPropertiesBuilder, WriterVersion,
+    };
     use crate::file::reader::{FileReader, SerializedFileReader};
 
     // --- Constants matching C++ TestCDCSingleRowGroup ---
@@ -1132,6 +1134,71 @@ mod arrow_tests {
         }
 
         buf
+    }
+
+    /// Write a batch with common CDC settings and test-specific writer properties.
+    fn write_cdc_batch(batch: &RecordBatch, builder: WriterPropertiesBuilder) -> Vec<u8> {
+        let props = builder
+            .set_writer_version(WriterVersion::PARQUET_2_0)
+            .set_content_defined_chunking(Some(CdcOptions {
+                min_chunk_size: 8 * 1024,
+                max_chunk_size: 16 * 1024,
+                norm_level: 0,
+            }))
+            .build();
+
+        let mut buf = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+        writer.write(batch).unwrap();
+        writer.close().unwrap();
+        buf
+    }
+
+    fn assert_multiple_nonempty_data_pages(data: &[u8]) {
+        let info = get_column_info(data, 0);
+        let total: usize = info.iter().map(|c| c.page_lengths.len()).sum();
+        let empty = info
+            .iter()
+            .flat_map(|c| c.page_lengths.iter())
+            .filter(|&&n| n == 0)
+            .count();
+
+        assert!(
+            total > 1,
+            "CDC should produce multiple data pages, got {total}"
+        );
+        assert_eq!(empty, 0, "forced CDC page breaks must not emit empty pages");
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // large enough to hit CDC chunk boundaries
+    fn cdc_boolean_small_pages_does_not_panic() {
+        let num_rows = 32_768;
+        let values: Vec<bool> = (0..num_rows).map(|i| i % 7 == 0).collect();
+        let col = Arc::new(BooleanArray::from(values)) as ArrayRef;
+        let batch = RecordBatch::try_from_iter([("flag", col)]).unwrap();
+
+        let props = WriterProperties::builder().set_data_page_size_limit(1024);
+        let data = write_cdc_batch(&batch, props);
+        assert_multiple_nonempty_data_pages(&data);
+
+        let readback = read_batches(&data);
+        let rows: usize = readback.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(rows, num_rows);
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // large enough to hit CDC chunk boundaries
+    fn cdc_int32_row_count_limit_does_not_emit_empty_pages() {
+        let values: Vec<i32> = (0..8_192).map(|i| i % 97).collect();
+        let col = Arc::new(Int32Array::from(values)) as ArrayRef;
+        let batch = RecordBatch::try_from_iter([("a", col)]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(false)
+            .set_data_page_row_count_limit(128);
+        let data = write_cdc_batch(&batch, props);
+        assert_multiple_nonempty_data_pages(&data);
     }
 
     #[test]

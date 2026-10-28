@@ -1488,7 +1488,14 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
     /// Adds data page.
     /// Data page is either buffered in case of dictionary encoding or written directly.
+    ///
+    /// A call with nothing buffered is a no-op. Skip empty pages to preserve
+    /// strictly increasing first_row_index values in the OffsetIndex.
     pub(crate) fn add_data_page(&mut self) -> Result<()> {
+        if self.page_metrics.num_buffered_values == 0 {
+            return Ok(());
+        }
+
         // Extract encoded values
         let values_data = self.encoder.flush_data_page()?;
 
