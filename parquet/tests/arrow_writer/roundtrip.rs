@@ -62,7 +62,7 @@ use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
 use parquet::basic::{Encoding, Type as PhysicalType};
 use parquet::column::reader::ColumnReader;
 use parquet::errors::Result;
-use parquet::file::properties::WriterProperties;
+use parquet::file::properties::{CdcOptions, WriterProperties, WriterVersion};
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use tempfile::tempfile;
 
@@ -463,11 +463,13 @@ fn arrow_writer_list() {
     .build()
     .unwrap();
     let a = ListArray::from(a_list_data);
-    assert_eq!(a.null_count(), 1);
+    let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
+    assert_eq!(batch.column(0).null_count(), 1);
 
-    RoundTripTest::new(Arc::new(a))
-        .with_schema(Arc::new(schema))
+    RoundTripTest::new(batch.column(0).clone())
+        .with_schema(batch.schema())
         .run();
+    roundtrip(batch, None);
 }
 
 #[test]
@@ -590,11 +592,11 @@ fn arrow_writer_large_list_view() {
         true,
     )]);
 
-    //  [[1], [2, 3], null, [4, 5, 6], [7, 8, 9, 10]]
+    // [[1], [2, 3], null, [7, 8, 9, 10], [4, 5, 6]] — out-of-order offsets
     let a = LargeListViewArray::new(
         list_field,
-        vec![0i64, 1, 0, 3, 6].into(),
-        vec![1i64, 2, 0, 3, 4].into(),
+        vec![0i64, 1, 0, 6, 3].into(),
+        vec![1i64, 2, 0, 4, 3].into(),
         Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10])),
         Some(vec![true, true, false, true, true].into()),
     );
@@ -1454,8 +1456,8 @@ fn ree_float32() {
 
 #[test]
 fn ree_sliced() {
-    // A sliced (non-zero offset) REE array: verify that get_physical_index
-    // correctly accounts for the logical offset when expanding.
+    // A sliced (non-zero offset) REE array verifies that physical run
+    // selection correctly accounts for the logical offset.
     // Full array: run_ends [3, 5, 7] → [a,a,a, b,b, c,c]
     // After slice(2, 5) the logical view is [a, b, b, c, c].
     let full: ArrayRef = Arc::new(
@@ -1494,9 +1496,13 @@ fn arrow_writer_non_null() {
     let schema = Schema::new(vec![Field::new("a", ArrowDataType::Int32, false)]);
     let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
 
-    RoundTripTest::new(Arc::new(a))
-        .with_schema(Arc::new(schema))
+    let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
+
+    RoundTripTest::new(batch.column(0).clone())
+        .with_schema(batch.schema())
         .run();
+
+    roundtrip(batch, Some(SMALL_SIZE / 2));
 }
 
 #[test]
@@ -1519,8 +1525,20 @@ fn arrow_writer_binary() {
     assert_eq!(string_values.null_count(), 0);
     assert_eq!(binary_values.null_count(), 0);
 
-    RoundTripTest::new(Arc::new(string_values)).run();
-    RoundTripTest::new(Arc::new(binary_values)).run();
+    RoundTripTest::new(Arc::new(string_values.clone())).run();
+    RoundTripTest::new(Arc::new(binary_values.clone())).run();
+
+    let string_field = Field::new("a", ArrowDataType::Utf8, false);
+    let binary_field = Field::new("b", ArrowDataType::Binary, false);
+    let schema = Schema::new(vec![string_field, binary_field]);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(schema),
+        vec![Arc::new(string_values), Arc::new(binary_values)],
+    )
+    .unwrap();
+
+    roundtrip(batch, Some(SMALL_SIZE / 2));
 }
 
 #[test]
@@ -1539,14 +1557,36 @@ fn arrow_writer_binary_view() {
     let binary_view_values = BinaryViewArray::from_iter_values(raw_binary_values);
     let nullable_string_view_values = StringViewArray::from(nullable_string_values);
 
-    RoundTripTest::new(Arc::new(string_view_values)).run();
-    RoundTripTest::new(Arc::new(binary_view_values)).run();
-    RoundTripTest::new(Arc::new(nullable_string_view_values)).run();
+    RoundTripTest::new(Arc::new(string_view_values.clone())).run();
+    RoundTripTest::new(Arc::new(binary_view_values.clone())).run();
+    RoundTripTest::new(Arc::new(nullable_string_view_values.clone())).run();
+
+    let string_field = Field::new("a", ArrowDataType::Utf8View, false);
+    let binary_field = Field::new("b", ArrowDataType::BinaryView, false);
+    let nullable_string_field = Field::new("a", ArrowDataType::Utf8View, true);
+    let schema = Schema::new(vec![string_field, binary_field, nullable_string_field]);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(schema),
+        vec![
+            Arc::new(string_view_values),
+            Arc::new(binary_view_values),
+            Arc::new(nullable_string_view_values),
+        ],
+    )
+    .unwrap();
+
+    roundtrip(batch.clone(), Some(SMALL_SIZE / 2));
+    roundtrip(batch, None);
 }
 
 #[test]
 #[cfg_attr(miri, ignore)] // Takes too long
 fn arrow_writer_binary_view_long_value() {
+    let string_field = Field::new("a", ArrowDataType::Utf8View, false);
+    let binary_field = Field::new("b", ArrowDataType::BinaryView, false);
+    let schema = Schema::new(vec![string_field, binary_field]);
+
     // There is special case validation for long values (greater than 128)
     // 128 encodes as 0x80 0x00 0x00 0x00 in little endian, which should
     // trigger the long-string UTF-8 validation branch in the plain decoder.
@@ -1564,6 +1604,21 @@ fn arrow_writer_binary_view_long_value() {
     RoundTripTest::new(Arc::clone(&binary_view_values))
         .with_nullable(false)
         .run();
+
+    let batch = RecordBatch::try_new(
+        Arc::new(schema),
+        vec![string_view_values, binary_view_values],
+    )
+    .unwrap();
+
+    // Disable dictionary to exercise plain encoding paths in the reader.
+    for version in [WriterVersion::PARQUET_1_0, WriterVersion::PARQUET_2_0] {
+        let props = WriterProperties::builder()
+            .set_writer_version(version)
+            .set_dictionary_enabled(false)
+            .build();
+        roundtrip_opts(&batch, props);
+    }
 }
 
 fn get_decimal_batch(precision: u8, scale: i8) -> RecordBatch {
@@ -1991,9 +2046,21 @@ fn test_list_of_struct_roundtrip() {
     values.append(true);
     list_builder.append(true);
 
-    let array = Arc::new(list_builder.finish());
+    let array: ArrayRef = Arc::new(list_builder.finish());
 
-    RoundTripTest::new(array).run();
+    RoundTripTest::new(array.clone()).run();
+
+    let props = WriterProperties::builder()
+        .set_data_page_row_count_limit(2)
+        .set_content_defined_chunking(Some(CdcOptions::default()))
+        .build();
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "col",
+        array.data_type().clone(),
+        true,
+    )]));
+    let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
+    roundtrip_opts(&batch, props);
 }
 
 #[test]
