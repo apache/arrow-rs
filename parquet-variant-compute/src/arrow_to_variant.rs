@@ -366,9 +366,9 @@ macro_rules! define_row_builder {
                             // NOTE: The `?` macro expansion fails without the type annotation.
                             let Some(value): Option<$option_ty> = value else {
                                 return if self.options.safe {
-                                    // Overflow is encoded as Variant::Null,
-                                    // distinct from None indicating a missing value
-                                    builder.append_value(Variant::Null);
+                                    // Match Arrow's cast kernel: failed conversions are
+                                    // null in the output array, not Variant::Null.
+                                    builder.append_null();
                                     Ok(())
                                 } else {
                                     Err(ArrowError::ComputeError(format!(
@@ -1650,7 +1650,7 @@ mod tests {
         test_row_builder_basic_with_options(
             &decimal_array,
             vec![
-                Some(Variant::Null), // Overflow value becomes Variant::Null
+                None, // Overflow value becomes Arrow null
                 Some(Variant::from(VariantDecimal16::try_new(123, 3).unwrap())),
             ],
             CastOptions::default(),
