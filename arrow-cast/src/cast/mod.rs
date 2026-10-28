@@ -5629,6 +5629,46 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_fractional_calendar_units_to_duration() {
+        let array = StringArray::from(vec![
+            Some("0.5 months"),
+            Some("-0.5 months"),
+            Some("1.5 months"),
+            Some("0.5 years"),
+            Some("0.5 decades"),
+            Some("15 days"),
+            Some("0.5 days"),
+            Some("0.5 weeks"),
+        ]);
+        let to_type = DataType::Duration(TimeUnit::Second);
+
+        let casted = cast(&array, &to_type).unwrap();
+        assert_eq!(
+            casted.as_primitive::<DurationSecondType>(),
+            &DurationSecondArray::from(vec![
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(1_296_000),
+                Some(43_200),
+                Some(302_400)
+            ])
+        );
+
+        let options = CastOptions {
+            safe: false,
+            format_options: FormatOptions::default(),
+        };
+        let err = cast_with_options(&array, &to_type, &options).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Cast error: Cannot cast string '0.5 months' to value of Duration(s) type"
+        );
+    }
+
+    #[test]
     fn test_cast_large_string_and_view_to_duration() {
         let to_type = DataType::Duration(TimeUnit::Nanosecond);
         for array in [

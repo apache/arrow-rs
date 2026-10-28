@@ -155,13 +155,16 @@ where
         _ => unreachable!(),
     };
 
-    let interval = parse_interval_month_day_nano_config(string, IntervalParseConfig::new(unit))
-        .map_err(|_| {
-            ArrowError::CastError(format!(
-                "Cannot cast string '{string}' to value of {} type",
-                D::DATA_TYPE
-            ))
-        })?;
+    let interval = parse_interval_month_day_nano_config(
+        string,
+        IntervalParseConfig::new(unit).reject_fractional_calendar_units(),
+    )
+    .map_err(|_| {
+        ArrowError::CastError(format!(
+            "Cannot cast string '{string}' to value of {} type",
+            D::DATA_TYPE
+        ))
+    })?;
 
     if interval.months != 0 {
         return Err(ArrowError::ComputeError(
@@ -188,9 +191,11 @@ where
     O: OffsetSizeTrait,
 {
     let string_array = array.as_string::<O>();
-    parse_duration_iter::<D, _, _>(string_array.iter(), cast_options, || {
-        string_array.nulls().cloned()
-    })
+    parse_duration_iter::<D, _>(
+        string_array.iter(),
+        cast_options,
+        string_array.nulls().cloned(),
+    )
 }
 
 /// Casts string view arrays to a Duration type
@@ -202,20 +207,21 @@ where
     D: ArrowTemporalType<Native = i64> + Parser,
 {
     let string_view_array = array.as_string_view();
-    parse_duration_iter::<D, _, _>(string_view_array.iter(), cast_options, || {
-        string_view_array.nulls().cloned()
-    })
+    parse_duration_iter::<D, _>(
+        string_view_array.iter(),
+        cast_options,
+        string_view_array.nulls().cloned(),
+    )
 }
 
-fn parse_duration_iter<'a, D, I, F>(
+fn parse_duration_iter<'a, D, I>(
     iter: I,
     cast_options: &CastOptions,
-    nulls: F,
+    nulls: Option<NullBuffer>,
 ) -> Result<ArrayRef, ArrowError>
 where
     D: ArrowTemporalType<Native = i64> + Parser,
     I: Iterator<Item = Option<&'a str>>,
-    F: FnOnce() -> Option<NullBuffer>,
 {
     let array = if cast_options.safe {
         let iter = iter.map(|x| {
@@ -223,10 +229,6 @@ where
             parse_duration::<D>(v).ok()
         });
 
-        // Benefit:
-        //     20% performance improvement
-        // Soundness:
-        //     The iterator is trustedLen because it comes from an `StringArray`.
         unsafe { PrimitiveArray::<D>::from_trusted_len_iter(iter) }
     } else {
         let v = iter
@@ -235,7 +237,7 @@ where
                 None => Ok(D::Native::default()),
             })
             .collect::<Result<Vec<_>, ArrowError>>()?;
-        PrimitiveArray::try_new(v.into(), nulls())?
+        PrimitiveArray::try_new(v.into(), nulls)?
     };
 
     Ok(Arc::new(array) as ArrayRef)
