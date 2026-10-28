@@ -58,15 +58,18 @@ pub fn cast_to_variant_with_options(
     input: &dyn Array,
     options: &CastOptions,
 ) -> Result<VariantArray, ArrowError> {
+    // Validate the input type (and nested child types) before the empty /
+    // all-null fast path. Otherwise unsupported types such as Duration and
+    // Interval succeed when the batch has no non-null values, but fail when
+    // it does — making type acceptance depend on batch contents.
+    let mut row_builder = make_arrow_to_variant_row_builder(input.data_type(), input, options)?;
+
     // Fast path: any all-null input maps to an all-null VariantArray.
     if input.null_count() == input.len() {
         let mut array_builder = VariantArrayBuilder::new(input.len());
         array_builder.append_nulls(input.len());
         return Ok(array_builder.build());
     }
-
-    // Create row builder for the input array type
-    let mut row_builder = make_arrow_to_variant_row_builder(input.data_type(), input, options)?;
 
     // Create output array builder
     let mut array_builder = VariantArrayBuilder::new(input.len());
@@ -1152,6 +1155,55 @@ mod tests {
                     );
                 }
                 _ => panic!("Expected InvalidArgumentError"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_cast_to_variant_rejects_empty_and_all_null_duration_interval() {
+        use arrow::array::{new_empty_array, new_null_array};
+        use arrow_schema::{DataType, Field, IntervalUnit, TimeUnit};
+        use std::sync::Arc;
+
+        let unsupported = [
+            DataType::Duration(TimeUnit::Second),
+            DataType::Duration(TimeUnit::Millisecond),
+            DataType::Duration(TimeUnit::Microsecond),
+            DataType::Duration(TimeUnit::Nanosecond),
+            DataType::Interval(IntervalUnit::YearMonth),
+            DataType::Interval(IntervalUnit::DayTime),
+            DataType::Interval(IntervalUnit::MonthDayNano),
+        ];
+
+        for dt in unsupported {
+            for array in [new_empty_array(&dt), new_null_array(&dt, 1)] {
+                let result = cast_to_variant(array.as_ref());
+                assert!(
+                    result.is_err(),
+                    "expected error for empty/all-null {dt:?}, got {result:?}"
+                );
+                match result.unwrap_err() {
+                    ArrowError::InvalidArgumentError(msg) => {
+                        assert!(
+                            msg.contains(
+                                "Casting duration/interval types to Variant is not supported"
+                            ),
+                            "unexpected message for {dt:?}: {msg}"
+                        );
+                    }
+                    other => panic!("Expected InvalidArgumentError for {dt:?}, got {other:?}"),
+                }
+            }
+
+            // Nested: empty / all-null list of the unsupported type must also fail.
+            let child = Arc::new(Field::new("item", dt.clone(), true));
+            let list_type = DataType::List(child);
+            for array in [new_empty_array(&list_type), new_null_array(&list_type, 1)] {
+                let result = cast_to_variant(array.as_ref());
+                assert!(
+                    result.is_err(),
+                    "expected error for list of empty/all-null {dt:?}, got {result:?}"
+                );
             }
         }
     }
