@@ -36,6 +36,7 @@ mod byte;
 mod byte_view;
 mod fixed_size_binary;
 mod generic;
+mod list;
 mod primitive;
 
 use boolean::InProgressBooleanArray;
@@ -43,6 +44,7 @@ use byte::InProgressByteArray;
 use byte_view::InProgressByteViewArray;
 use fixed_size_binary::InProgressFixedSizeBinaryArray;
 use generic::GenericInProgressArray;
+use list::InProgressListArray;
 use primitive::InProgressPrimitiveArray;
 
 fn has_sparse_filter_copy(data_type: &DataType) -> bool {
@@ -57,6 +59,8 @@ fn has_sparse_filter_copy(data_type: &DataType) -> bool {
                 // Unlike offset-based byte arrays, views can reuse their backing buffers.
                 | DataType::Utf8View
                 | DataType::BinaryView
+                | DataType::List(_)
+                | DataType::LargeList(_)
         )
 }
 
@@ -836,6 +840,9 @@ fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn 
         }
         DataType::FixedSizeBinary(size) => {
             Box::new(InProgressFixedSizeBinaryArray::new(*size, batch_size))
+        }
+        DataType::List(_) | DataType::LargeList(_) => {
+            Box::new(InProgressListArray::new(data_type.clone()))
         }
         _ => Box::new(GenericInProgressArray::new()),
     }
@@ -1855,6 +1862,12 @@ mod tests {
             Field::new("primitive", DataType::UInt32, false),
             Field::new("utf8_view", DataType::Utf8View, true),
             Field::new("binary_view", DataType::BinaryView, true),
+            Field::new("list", DataType::new_list(DataType::Int32, true), true),
+            Field::new(
+                "large_list",
+                DataType::new_large_list(DataType::Utf8, true),
+                true,
+            ),
         ]));
         let coalescer = BatchCoalescer::new(supported, 100);
         assert!(!coalescer.has_non_specialized_filter_columns);
