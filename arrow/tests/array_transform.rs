@@ -1065,12 +1065,10 @@ fn test_extend_nulls_not_nullable() {
 fn test_string_view() {
     let a1 =
         StringViewArray::from(vec!["foo", "very long string over 12 bytes", "bar"]).into_data();
-    let a2 = StringViewArray::from_iter(vec![
-        Some("bar"),
-        None,
-        Some("long string also over 12 bytes"),
-    ])
-    .into_data();
+    // Strings of 12 bytes are stored in their views and strings of 13 bytes
+    // are not.
+    let a2 = StringViewArray::from_iter(vec![Some("twelve bytes"), None, Some("thirteen byte")])
+        .into_data();
 
     a1.validate_full().unwrap();
     a2.validate_full().unwrap();
@@ -1091,36 +1089,12 @@ fn test_string_view() {
     assert_eq!(
         v,
         vec![
-            Some("bar"),
+            Some("twelve bytes"),
             Some("very long string over 12 bytes"),
             Some("foo"),
-            Some("long string also over 12 bytes")
+            Some("thirteen byte")
         ]
     )
-}
-
-#[test]
-fn test_string_view_inline_boundary() {
-    // Strings of 12 bytes are stored in their views and strings of 13 bytes
-    // are not. The second array's strings follow the first array's data
-    // buffer in the output.
-    let a1 = StringViewArray::from(vec!["first array, not inline"]).into_data();
-    let a2 = StringViewArray::from(vec!["twelve bytes", "thirteen byte"]).into_data();
-
-    let mut mutable = MutableArrayData::new(vec![&a1, &a2], false, 3);
-    mutable.try_extend(1, 0, 2).unwrap();
-    mutable.try_extend(0, 0, 1).unwrap();
-
-    let array = StringViewArray::from(mutable.freeze());
-    array.to_data().validate_full().unwrap();
-    assert_eq!(
-        array.iter().collect::<Vec<_>>(),
-        vec![
-            Some("twelve bytes"),
-            Some("thirteen byte"),
-            Some("first array, not inline")
-        ]
-    );
 }
 
 #[test]
