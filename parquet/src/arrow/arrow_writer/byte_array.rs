@@ -195,22 +195,22 @@ impl FallbackEncoder {
         self.num_values += indices.len();
         match &mut self.encoder {
             FallbackEncoderImpl::Plain { buffer } => {
-                indices.iter().for_each(|&idx| {
+                for &idx in indices {
                     let value = values.value(idx);
                     let value = value.as_ref();
                     buffer.extend_from_slice((value.len() as u32).as_bytes());
                     buffer.extend_from_slice(value);
                     self.variable_length_bytes += value.len() as i64;
-                });
+                }
             }
             FallbackEncoderImpl::DeltaLength { buffer, lengths } => {
-                indices.iter().for_each(|&idx| {
+                for &idx in indices {
                     let value = values.value(idx);
                     let value = value.as_ref();
                     lengths.put(&[value.len() as i32]).unwrap();
                     buffer.extend_from_slice(value);
                     self.variable_length_bytes += value.len() as i64;
-                });
+                }
             }
             FallbackEncoderImpl::Delta {
                 buffer,
@@ -218,7 +218,7 @@ impl FallbackEncoder {
                 prefix_lengths,
                 suffix_lengths,
             } => {
-                indices.iter().for_each(|&idx| {
+                for &idx in indices {
                     let value = values.value(idx);
                     let value = value.as_ref();
 
@@ -232,7 +232,7 @@ impl FallbackEncoder {
                     prefix_lengths.put(&[prefix_length as i32]).unwrap();
                     suffix_lengths.put(&[suffix_length as i32]).unwrap();
                     self.variable_length_bytes += value.len() as i64;
-                });
+                }
             }
         }
     }
@@ -621,13 +621,14 @@ impl DictEncoder {
     {
         self.indices.reserve(indices.len());
 
-        indices.iter().try_for_each(|&idx| {
+        for &idx in indices {
             let value = values.value(idx);
             let interned = self.interner.intern(value.as_ref())?;
             self.indices.push(interned);
             self.variable_length_bytes += value.as_ref().len() as i64;
-            Ok(())
-        })
+        }
+
+        Ok(())
     }
 
     /// Whether to encode the rows of an arrow dictionary with `dictionary` as its values and
@@ -665,7 +666,7 @@ impl DictEncoder {
         let keys = values.keys().values();
         let dictionary_values = values.values();
         self.indices.reserve(indices.len());
-        indices.iter().try_for_each(|&idx| {
+        for &idx in indices {
             let key = keys[idx].as_usize();
 
             // Shadowed for lifetime reasons
@@ -679,8 +680,7 @@ impl DictEncoder {
             }
             self.indices.push(interned);
             self.variable_length_bytes += value.len() as i64;
-            Result::<_, ParquetError>::Ok(())
-        })?;
+        }
 
         Ok(())
     }
@@ -1025,9 +1025,9 @@ where
         Some(dict_encoder) => dict_encoder.encode(values, indices),
         None => {
             if let Some(bloom_filter) = &mut encoder.bloom_filter {
-                indices.iter().for_each(|&idx| {
+                for &idx in indices {
                     bloom_filter.insert(values.value(idx).as_ref());
-                });
+                }
             }
             encoder.fallback.encode(values, indices);
 
@@ -1217,7 +1217,7 @@ where
     let first_val = array.value(first_idx);
     let mut min = first_val;
     let mut max = first_val;
-    valid.iter().for_each(|&idx| {
+    for &idx in valid {
         let val = array.value(idx);
         if is_greater(is_decimal, min.as_ref(), val.as_ref()) {
             min = val;
@@ -1225,7 +1225,7 @@ where
         if is_greater(is_decimal, val.as_ref(), max.as_ref()) {
             max = val;
         }
-    });
+    }
     Some((min, max))
 }
 
@@ -1239,8 +1239,8 @@ where
         return;
     }
 
-    valid.iter().for_each(|&idx| {
+    for &idx in valid {
         let val = array.value(idx);
         bounder.update_wkb(val.as_ref());
-    });
+    }
 }
