@@ -17,7 +17,7 @@
 
 use crate::ArrayData;
 use crate::transform::_MutableArrayData;
-use arrow_buffer::ArrowNativeType;
+use arrow_buffer::{ArrowNativeType, ToByteSlice};
 use arrow_schema::ArrowError;
 use num_integer::Integer;
 use num_traits::CheckedAdd;
@@ -32,8 +32,14 @@ pub(super) fn build_extend<T: ArrowNativeType + Integer + CheckedAdd>(
             let mut new_offset = T::usize_as(mutable.child_data[0].len());
 
             for i in start..start + len {
-                mutable.buffer1.push(new_offset);
-                mutable.buffer2.push(sizes[i]);
+                mutable
+                    .buffer1
+                    .try_extend_from_slice(&[new_offset])
+                    .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+                mutable
+                    .buffer2
+                    .try_extend_from_slice(&[sizes[i]])
+                    .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
                 new_offset = new_offset.checked_add(&sizes[i]).ok_or_else(|| {
                     ArrowError::InvalidArgumentError(
                         "offset overflow: data exceeds the capacity of the offset type. \
@@ -46,7 +52,11 @@ pub(super) fn build_extend<T: ArrowNativeType + Integer + CheckedAdd>(
                 let size = sizes[i].as_usize();
                 if size > 0 {
                     let child_start = offsets[i].as_usize();
-                    mutable.child_data[0].try_extend(index, child_start, child_start + size)?;
+                    mutable.child_data[0].try_extend_in_transaction(
+                        index,
+                        child_start,
+                        child_start + size,
+                    )?;
                 }
             }
             Ok(())
@@ -62,7 +72,11 @@ pub(super) fn extend_nulls<T: ArrowNativeType>(
     let sizes_buffer = &mut mutable.buffer2;
 
     // We push 0 as a placeholder for NULL values in both the offsets and sizes
-    (0..len).for_each(|_| offset_buffer.push(T::default()));
-    (0..len).for_each(|_| sizes_buffer.push(T::default()));
+    offset_buffer
+        .try_repeat_slice_n_times(T::default().to_byte_slice(), len)
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+    sizes_buffer
+        .try_repeat_slice_n_times(T::default().to_byte_slice(), len)
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
     Ok(())
 }
