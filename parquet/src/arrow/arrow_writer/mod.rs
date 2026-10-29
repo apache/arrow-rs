@@ -1476,7 +1476,7 @@ impl ArrowRowGroupWriterFactory {
     /// Schema-planning errors are deferred until [`Self::create_column_writers`] is called.
     /// Use [`Self::try_new`] to return these errors during construction instead.
     #[deprecated(
-        since = "60.1.0",
+        since = "60.2.0",
         note = "Use ArrowRowGroupWriterFactory::try_new instead. This method will be removed in 61.0.0."
     )]
     pub fn new<W: Write + Send>(
