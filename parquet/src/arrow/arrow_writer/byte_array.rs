@@ -187,7 +187,7 @@ impl FallbackEncoder {
     }
 
     /// Encode `values` to the in-progress page
-    fn encode<T>(&mut self, values: T, indices: impl ExactSizeIterator<Item = usize>)
+    fn encode<T>(&mut self, values: T, indices: &[usize])
     where
         T: ArrayAccessor + Copy,
         T::Item: AsRef<[u8]>,
@@ -195,22 +195,22 @@ impl FallbackEncoder {
         self.num_values += indices.len();
         match &mut self.encoder {
             FallbackEncoderImpl::Plain { buffer } => {
-                for idx in indices {
+                indices.iter().for_each(|&idx| {
                     let value = values.value(idx);
                     let value = value.as_ref();
                     buffer.extend_from_slice((value.len() as u32).as_bytes());
                     buffer.extend_from_slice(value);
                     self.variable_length_bytes += value.len() as i64;
-                }
+                });
             }
             FallbackEncoderImpl::DeltaLength { buffer, lengths } => {
-                for idx in indices {
+                indices.iter().for_each(|&idx| {
                     let value = values.value(idx);
                     let value = value.as_ref();
                     lengths.put(&[value.len() as i32]).unwrap();
                     buffer.extend_from_slice(value);
                     self.variable_length_bytes += value.len() as i64;
-                }
+                });
             }
             FallbackEncoderImpl::Delta {
                 buffer,
@@ -218,7 +218,7 @@ impl FallbackEncoder {
                 prefix_lengths,
                 suffix_lengths,
             } => {
-                for idx in indices {
+                indices.iter().for_each(|&idx| {
                     let value = values.value(idx);
                     let value = value.as_ref();
 
@@ -232,7 +232,7 @@ impl FallbackEncoder {
                     prefix_lengths.put(&[prefix_length as i32]).unwrap();
                     suffix_lengths.put(&[suffix_length as i32]).unwrap();
                     self.variable_length_bytes += value.len() as i64;
-                }
+                });
             }
         }
     }
@@ -339,7 +339,7 @@ struct Entry {
 ///   | 1 bit unset  | offset in dict {63 bits}                   |
 ///   +--------------+--------------------------------------------+
 ///
-/// the inline view contain it's length to avoid having another field for length in the entry
+/// the inline view contain its length to avoid having another field for length in the entry
 /// since if the hashes are the same, most probably the length will be the same, so we can do the indirection check
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct OffsetOrInlineView(u64);
@@ -531,7 +531,7 @@ impl ByteArrayInterner {
     }
 
     fn estimated_memory_size(&self) -> usize {
-        self.page.capacity() * std::mem::size_of::<u8>() + self.map.allocation_size()
+        self.page.capacity() * size_of::<u8>() + self.map.allocation_size()
     }
 
     fn iter(&self) -> impl Iterator<Item = &[u8]> {
@@ -614,21 +614,20 @@ impl DictionaryCache {
 
 impl DictEncoder {
     /// Encode `values` to the in-progress page
-    fn encode<T>(&mut self, values: T, indices: impl ExactSizeIterator<Item = usize>) -> Result<()>
+    fn encode<T>(&mut self, values: T, indices: &[usize]) -> Result<()>
     where
         T: ArrayAccessor + Copy,
         T::Item: AsRef<[u8]>,
     {
         self.indices.reserve(indices.len());
 
-        for idx in indices {
+        indices.iter().try_for_each(|&idx| {
             let value = values.value(idx);
             let interned = self.interner.intern(value.as_ref())?;
             self.indices.push(interned);
             self.variable_length_bytes += value.as_ref().len() as i64;
-        }
-
-        Ok(())
+            Ok(())
+        })
     }
 
     /// Whether to encode the rows of an arrow dictionary with `dictionary` as its values and
@@ -666,10 +665,13 @@ impl DictEncoder {
         let keys = values.keys().values();
         let dictionary_values = values.values();
         self.indices.reserve(indices.len());
-        for &idx in indices {
+        indices.iter().try_for_each(|&idx| {
             let key = keys[idx].as_usize();
+
+            // Shadowed for lifetime reasons
             let value = dictionary_values.value(key);
             let value = value.as_ref();
+
             let mut interned = cache.interned[key];
             if interned == DictionaryCache::NOT_INTERNED {
                 interned = self.interner.intern(value)?;
@@ -677,7 +679,8 @@ impl DictEncoder {
             }
             self.indices.push(interned);
             self.variable_length_bytes += value.len() as i64;
-        }
+            Result::<_, ParquetError>::Ok(())
+        })?;
 
         Ok(())
     }
@@ -691,10 +694,10 @@ impl DictEncoder {
         let dictionary_cache_size = self
             .dictionary_cache
             .as_ref()
-            .map(|cache| cache.interned.capacity() * std::mem::size_of::<u64>())
+            .map(|cache| cache.interned.capacity() * size_of::<u64>())
             .unwrap_or_default();
         self.interner.estimated_memory_size()
-            + self.indices.capacity() * std::mem::size_of::<u64>()
+            + self.indices.capacity() * size_of::<u64>()
             + dictionary_cache_size
     }
 
@@ -835,13 +838,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
             }
         }
 
-        downcast_op!(
-            values.data_type(),
-            values,
-            encode,
-            indices.iter().copied(),
-            self
-        )
+        downcast_op!(values.data_type(), values, encode, indices, self)
     }
 
     fn count_values_within_byte_budget_gather(
@@ -1015,13 +1012,12 @@ impl ColumnValueEncoder for ByteArrayEncoder {
 /// Encodes the provided `values` and `indices` to `encoder`
 ///
 /// This is a free function so it can be used with `downcast_op!`
-fn encode<T, I>(values: T, indices: I, encoder: &mut ByteArrayEncoder) -> Result<()>
+fn encode<T>(values: T, indices: &[usize], encoder: &mut ByteArrayEncoder) -> Result<()>
 where
     T: ArrayAccessor + Copy,
     T::Item: Copy + Ord + AsRef<[u8]>,
-    I: ExactSizeIterator<Item = usize> + Clone,
 {
-    update_statistics(values, indices.clone(), encoder);
+    update_statistics(values, indices, encoder);
 
     // While a dictionary is in use the filter is populated from its distinct values in
     // `flush_dict_page`, so each value is hashed once rather than once per row.
@@ -1029,9 +1025,9 @@ where
         Some(dict_encoder) => dict_encoder.encode(values, indices),
         None => {
             if let Some(bloom_filter) = &mut encoder.bloom_filter {
-                for idx in indices.clone() {
+                indices.iter().for_each(|&idx| {
                     bloom_filter.insert(values.value(idx).as_ref());
-                }
+                });
             }
             encoder.fallback.encode(values, indices);
 
@@ -1056,7 +1052,7 @@ where
     &'a V: ArrayAccessor,
     <&'a V as ArrayAccessor>::Item: Copy + Ord + Default + AsRef<[u8]>,
 {
-    update_statistics(values, indices.iter().copied(), encoder);
+    update_statistics(values, indices, encoder);
     encoder
         .dict_encoder
         .as_mut()
@@ -1065,18 +1061,15 @@ where
 }
 
 /// Updates the statistics of `encoder` with the values at `indices`
-fn update_statistics<T, I>(values: T, indices: I, encoder: &mut ByteArrayEncoder)
+fn update_statistics<T>(values: T, indices: &[usize], encoder: &mut ByteArrayEncoder)
 where
     T: ArrayAccessor + Copy,
     T::Item: Copy + Ord + AsRef<[u8]>,
-    I: ExactSizeIterator<Item = usize> + Clone,
 {
     if encoder.statistics_enabled != EnabledStatistics::None {
         if let Some(accumulator) = encoder.geo_stats_accumulator.as_mut() {
-            update_geo_stats_accumulator(accumulator.as_mut(), values, indices.clone());
-        } else if let Some((min, max)) =
-            compute_min_max(values, indices.clone(), encoder.is_decimal)
-        {
+            update_geo_stats_accumulator(accumulator.as_mut(), values, indices);
+        } else if let Some((min, max)) = compute_min_max(values, indices, encoder.is_decimal) {
             // Compare before copying: `write_gather` runs once per
             // mini-batch, and a byte-budgeted mini-batch of large values can
             // hold a single value, so an unconditional copy here would
@@ -1137,7 +1130,7 @@ fn count_within_budget_views(
     // value by `max_value_len`. Skips the walk for the common small-value
     // case (what view arrays are built for, and where there is nothing to
     // bound).
-    let per_value = max_value_len + std::mem::size_of::<u32>();
+    let per_value = max_value_len + size_of::<u32>();
     if indices.len().saturating_mul(per_value) <= byte_budget {
         return indices.len();
     }
@@ -1146,7 +1139,7 @@ fn count_within_budget_views(
     let mut cum: usize = 0;
     for (i, idx) in indices.iter().enumerate() {
         let len = (views[*idx] as u32) as usize;
-        cum = cum.saturating_add(len + std::mem::size_of::<u32>());
+        cum = cum.saturating_add(len + size_of::<u32>());
         if cum > byte_budget {
             return i + 1;
         }
@@ -1173,7 +1166,7 @@ fn count_within_budget_offsets<T: ByteArrayType>(
     let last = indices[n - 1];
     let offsets = values.value_offsets();
     // Each plain-encoded value carries a 4-byte length prefix on the page.
-    let prefix_overhead = std::mem::size_of::<u32>();
+    let prefix_overhead = size_of::<u32>();
 
     // Stage 1: O(1) span upper bound. The span `offsets[last+1] -
     // offsets[first]` covers every array position in `[first, last]`, a
@@ -1214,21 +1207,17 @@ fn is_greater(is_decimal: bool, a: &[u8], b: &[u8]) -> bool {
 /// Computes the min and max for the provided array and indices
 ///
 /// This is a free function so it can be used with `downcast_op!`
-fn compute_min_max<T>(
-    array: T,
-    mut valid: impl Iterator<Item = usize>,
-    is_decimal: bool,
-) -> Option<(T::Item, T::Item)>
+fn compute_min_max<T>(array: T, valid: &[usize], is_decimal: bool) -> Option<(T::Item, T::Item)>
 where
     T: ArrayAccessor,
     T::Item: Copy + Ord + AsRef<[u8]>,
 {
-    let first_idx = valid.next()?;
+    let (&first_idx, valid) = valid.split_first()?;
 
     let first_val = array.value(first_idx);
     let mut min = first_val;
     let mut max = first_val;
-    for idx in valid {
+    valid.iter().for_each(|&idx| {
         let val = array.value(idx);
         if is_greater(is_decimal, min.as_ref(), val.as_ref()) {
             min = val;
@@ -1236,23 +1225,22 @@ where
         if is_greater(is_decimal, val.as_ref(), max.as_ref()) {
             max = val;
         }
-    }
+    });
     Some((min, max))
 }
 
 /// Updates geospatial statistics for the provided array and indices
-fn update_geo_stats_accumulator<T>(
-    bounder: &mut dyn GeoStatsAccumulator,
-    array: T,
-    valid: impl Iterator<Item = usize>,
-) where
+fn update_geo_stats_accumulator<T>(bounder: &mut dyn GeoStatsAccumulator, array: T, valid: &[usize])
+where
     T: ArrayAccessor,
     T::Item: Copy + Ord + AsRef<[u8]>,
 {
-    if bounder.is_valid() {
-        for idx in valid {
-            let val = array.value(idx);
-            bounder.update_wkb(val.as_ref());
-        }
+    if !bounder.is_valid() {
+        return;
     }
+
+    valid.iter().for_each(|&idx| {
+        let val = array.value(idx);
+        bounder.update_wkb(val.as_ref());
+    });
 }
