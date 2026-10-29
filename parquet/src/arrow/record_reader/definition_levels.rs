@@ -333,6 +333,15 @@ impl PackedDecoder {
         let indicator_value = self.decode_header()?;
         let num_values = run_len(indicator_value as u64)? as usize;
         if indicator_value & 1 == 1 {
+            let packed_bytes = num_values / 8;
+            // For a bit width of 1, each group of 8 levels occupies one byte.
+            // Validate the whole run before either read() or skip() accesses it.
+            let remaining = self.data.len().saturating_sub(self.data_offset);
+            if packed_bytes > remaining {
+                return Err(ParquetError::EOF(format!(
+                    "unexpected end of file whilst decoding definition levels bit-packed run: expected {packed_bytes} bytes, found {remaining}"
+                )));
+            }
             self.packed_count = num_values;
             self.packed_offset = 0;
         } else {
@@ -614,6 +623,29 @@ mod tests {
         }
         assert_eq!(read_level + skip_level, len);
         assert_eq!(read_value + skip_value, total_value);
+    }
+
+    #[test]
+    fn test_packed_decoder_truncated_run_returns_error() {
+        // The header declares 504 levels (63 bytes), but only three packed bytes follow.
+        let mut decoder = PackedDecoder::new();
+        decoder.set_data(Encoding::RLE, Bytes::from_static(&[0x7F, 0x55, 0x55, 0x55]));
+
+        let mut decoded = BooleanBufferBuilder::new(504);
+        let result = decoder.read(&mut decoded, 504);
+
+        assert!(matches!(result, Err(ParquetError::EOF(_))));
+    }
+
+    #[test]
+    fn test_packed_decoder_skip_truncated_run_returns_error() {
+        // The skip path must validate the same source range as the read path.
+        let mut decoder = PackedDecoder::new();
+        decoder.set_data(Encoding::RLE, Bytes::from_static(&[0x7F, 0x55, 0x55, 0x55]));
+
+        let result = decoder.skip(504);
+
+        assert!(matches!(result, Err(ParquetError::EOF(_))));
     }
 
     #[test]
