@@ -48,7 +48,7 @@ pub(super) fn build_extend(array: &ArrayData) -> Extend<'_> {
                     ))
                 })?;
             for child in &mut mutable.child_data {
-                child.try_extend(index, child_start, child_end)?;
+                child.try_extend_in_transaction(index, child_start, child_end)?;
             }
             Ok(())
         },
@@ -61,8 +61,11 @@ pub(super) fn extend_nulls(mutable: &mut _MutableArrayData, len: usize) -> Resul
         _ => unreachable!(),
     };
 
+    let child_len = len
+        .checked_mul(size)
+        .ok_or_else(|| ArrowError::MemoryError("fixed-size list length overflow".into()))?;
     for child in &mut mutable.child_data {
-        child.try_extend_nulls(len * size)?;
+        child.try_extend_nulls_in_transaction(child_len)?;
     }
     Ok(())
 }

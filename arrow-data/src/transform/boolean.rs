@@ -23,8 +23,12 @@ pub(super) fn build_extend(array: &ArrayData) -> Extend<'_> {
     let values = array.buffers()[0].as_slice();
     Box::new(
         move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
+            let new_len = mutable
+                .len
+                .checked_add(len)
+                .ok_or_else(|| arrow_schema::ArrowError::MemoryError("length overflow".into()))?;
             let buffer = &mut mutable.buffer1;
-            resize_for_bits(buffer, mutable.len + len);
+            resize_for_bits(buffer, new_len)?;
             set_bits(
                 buffer.as_slice_mut(),
                 values,
@@ -41,7 +45,11 @@ pub(super) fn extend_nulls(
     mutable: &mut _MutableArrayData,
     len: usize,
 ) -> Result<(), arrow_schema::ArrowError> {
+    let new_len = mutable
+        .len
+        .checked_add(len)
+        .ok_or_else(|| arrow_schema::ArrowError::MemoryError("length overflow".into()))?;
     let buffer = &mut mutable.buffer1;
-    resize_for_bits(buffer, mutable.len + len);
+    resize_for_bits(buffer, new_len)?;
     Ok(())
 }

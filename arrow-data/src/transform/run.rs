@@ -45,7 +45,7 @@ pub fn extend_nulls(mutable: &mut _MutableArrayData, len: usize) -> Result<(), A
 
     // For REE, we always need to add a value entry when adding a new run
     // The values array should have one entry per run, not per logical element
-    mutable.child_data[1].try_extend_nulls(1)?;
+    mutable.child_data[1].try_extend_nulls_in_transaction(1)?;
 
     // Determine the run end type from the data type
     let run_end_type = if let DataType::RunEndEncoded(run_ends_field, _) = &mutable.data_type {
@@ -194,13 +194,14 @@ fn process_extends_batch<T: ArrowNativeType>(
     mutable.child_data[0]
         .data
         .buffer1
-        .extend_from_slice(&run_ends_bytes);
+        .try_extend_from_slice(&run_ends_bytes)
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
     mutable.child_data[0].data.len += run_ends_bytes.len() / std::mem::size_of::<T>();
 
     // Batch extend the values array using the range
     let (start_idx, end_idx) =
         values_range.expect("values_range should be Some if run_ends_bytes is not empty");
-    mutable.child_data[1].try_extend(source_array_idx, start_idx, end_idx)
+    mutable.child_data[1].try_extend_in_transaction(source_array_idx, start_idx, end_idx)
 }
 
 /// Returns a function that extends the run encoded array.
