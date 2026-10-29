@@ -982,8 +982,7 @@ fn scaled_div<T: DecimalType>(
     let dividend = abs_checked::<T>(l)?;
     let divisor = abs_checked::<T>(r)?;
 
-    let mut quotient = dividend.div_checked(divisor)?;
-    let mut remainder = dividend.mod_checked(divisor)?;
+    let (mut quotient, mut remainder) = dividend.div_rem_checked(divisor)?;
     for _ in 0..mul_pow {
         // `remainder * 10` overflows for divisors near `T::Native::MAX`, so add the remainder
         // ten times and take the divisor off whenever the running sum reaches it.
@@ -2862,5 +2861,30 @@ mod tests {
     fn test_date_month_day_nano_operations() {
         test_month_day_nano_ops!(Date32Type, date_to_days);
         test_month_day_nano_ops!(Date64Type, date_to_millis);
+    }
+
+    #[test]
+    fn test_date_sub_interval_min_months() {
+        // Subtracting i32::MIN months requires negating i32::MIN, which
+        // overflows i32: the date kernels must return the Date arithmetic
+        // overflow error instead of panicking in debug builds
+        // https://github.com/apache/arrow-rs/issues/11600
+        let dates: [ArrayRef; 2] = [
+            Arc::new(Date32Array::from(vec![0])),
+            Arc::new(Date64Array::from(vec![0])),
+        ];
+        let year_month = IntervalYearMonthArray::from(vec![i32::MIN]);
+        let month_day_nano =
+            IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNano::new(i32::MIN, 0, 0)]);
+        for dates in &dates {
+            assert_eq!(
+                sub(dates, &year_month).unwrap_err().to_string(),
+                "Compute error: Date arithmetic overflow: 0 - -2147483648 months"
+            );
+            assert_eq!(
+                sub(dates, &month_day_nano).unwrap_err().to_string(),
+                "Compute error: Date arithmetic overflow: 0 - IntervalMonthDayNano { months: -2147483648, days: 0, nanoseconds: 0 }"
+            );
+        }
     }
 }

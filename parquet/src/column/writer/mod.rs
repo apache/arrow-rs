@@ -53,6 +53,7 @@ use crate::schema::types::{BasicTypeInfo, ColumnDescPtr, ColumnDescriptor};
 
 mod byte_budget_chunker;
 pub(crate) mod encoder;
+pub(crate) mod min_max;
 
 use byte_budget_chunker::{ByteBudgetChunker, SubBatchStrategy};
 
@@ -1257,8 +1258,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         page_variable_length_bytes: Option<i64>,
     ) {
         // update the column index
+        // `num_page_nulls` counts levels, not rows, so compare it with the number of levels:
+        // with repetition a page can hold as many nulls as rows and still have values.
         let null_page =
-            (self.page_metrics.num_buffered_rows as u64) == self.page_metrics.num_page_nulls;
+            (self.page_metrics.num_buffered_values as u64) == self.page_metrics.num_page_nulls;
         // a page contains only null values,
         // and writers have to set the corresponding entries in min_values and max_values to byte[0]
         if null_page && self.column_index_builder.valid() {
@@ -1351,14 +1354,13 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             // from that of FIXED_LEN_BYTE_ARRAY sort order.
             // So truncation of those types could lead to inaccurate min/max statistics
             Type::FIXED_LEN_BYTE_ARRAY
-                if !matches!(
-                    self.descr.logical_type_ref(),
-                    Some(&LogicalType::Decimal { .. } | &LogicalType::Float16)
-                ) =>
+                if !is_decimal_descr(self.descr.get_basic_info())
+                    && !matches!(self.descr.logical_type_ref(), Some(&LogicalType::Float16)) =>
             {
                 true
             }
-            Type::BYTE_ARRAY => true,
+            // As with FIXED_LEN_BYTE_ARRAY, do not truncate Decimal values
+            Type::BYTE_ARRAY if !is_decimal_descr(self.descr.get_basic_info()) => true,
             // Truncation only applies for fba/binary physical types
             _ => false,
         }
@@ -1434,7 +1436,9 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     fn truncate_statistics(&self, statistics: Statistics) -> Statistics {
         let backwards_compatible_min_max = self.descr.sort_order().is_signed();
         match statistics {
-            Statistics::ByteArray(stats) if stats._internal_has_min_max_set() => {
+            Statistics::ByteArray(stats)
+                if (stats._internal_has_min_max_set() && self.can_truncate_value()) =>
+            {
                 let (min, did_truncate_min) = self.truncate_min_value(
                     self.props.statistics_truncate_length(),
                     stats.min_bytes_opt().unwrap(),
@@ -1484,7 +1488,14 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
     /// Adds data page.
     /// Data page is either buffered in case of dictionary encoding or written directly.
+    ///
+    /// A call with nothing buffered is a no-op. Skip empty pages to preserve
+    /// strictly increasing first_row_index values in the OffsetIndex.
     pub(crate) fn add_data_page(&mut self) -> Result<()> {
+        if self.page_metrics.num_buffered_values == 0 {
+            return Ok(());
+        }
+
         // Extract encoded values
         let values_data = self.encoder.flush_data_page()?;
 
@@ -1783,11 +1794,18 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         };
 
         self.encodings.insert(compressed_page.encoding());
-        self.encoding_stats.push(PageEncodingStats {
-            page_type: PageType::DICTIONARY_PAGE,
-            encoding: compressed_page.encoding(),
-            count: 1,
-        });
+        // The dictionary page is always laid out first in the column chunk,
+        // even when a page writer that defers dictionary ordering receives it
+        // after the data pages. Keep `encoding_stats` in file order, as some
+        // readers (e.g. Arrow C++) expect the dictionary page entry first.
+        self.encoding_stats.insert(
+            0,
+            PageEncodingStats {
+                page_type: PageType::DICTIONARY_PAGE,
+                encoding: compressed_page.encoding(),
+                count: 1,
+            },
+        );
         let page_spec = self.page_writer.write_page(compressed_page)?;
         self.update_metrics_for_page(page_spec);
         // For the directory page, don't need to update column/offset index.
@@ -1941,13 +1959,7 @@ fn compare_greater<T: ParquetValueType>(basic_type_info: &BasicTypeInfo, a: &T, 
         {
             return compare_greater_f16(a.as_bytes(), b.as_bytes());
         }
-        Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY
-            if matches!(basic_type_info.converted_type(), ConvertedType::DECIMAL)
-                || matches!(
-                    basic_type_info.logical_type_ref(),
-                    Some(LogicalType::Decimal(_))
-                ) =>
-        {
+        Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY if is_decimal_descr(basic_type_info) => {
             return compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
         }
 
@@ -1997,8 +2009,18 @@ fn compare_greater_f16(a: &[u8], b: &[u8]) -> bool {
     a.total_cmp(&b) == Ordering::Greater
 }
 
+/// Returns `true` if the column described by `basic_type_info` is a Decimal column
+#[inline]
+pub(crate) fn is_decimal_descr(basic_type_info: &BasicTypeInfo) -> bool {
+    basic_type_info.converted_type() == ConvertedType::DECIMAL
+        || matches!(
+            basic_type_info.logical_type_ref(),
+            Some(LogicalType::Decimal(_))
+        )
+}
+
 /// Signed comparison of bytes arrays
-fn compare_greater_byte_array_decimals(a: &[u8], b: &[u8]) -> bool {
+pub(crate) fn compare_greater_byte_array_decimals(a: &[u8], b: &[u8]) -> bool {
     let a_length = a.len();
     let b_length = b.len();
 
@@ -4342,6 +4364,50 @@ mod tests {
     }
 
     #[test]
+    fn test_column_index_repeated_page_with_values_not_null() {
+        // four lists of [null, 7]: as many null levels as rows, but the page has values
+        let page_writer = get_test_page_writer();
+        let props = Default::default();
+        let mut writer = get_test_column_writer::<Int32Type>(page_writer, 2, 1, props);
+        writer
+            .write_batch(
+                &[7, 7, 7, 7],
+                Some(&[1, 2, 1, 2, 1, 2, 1, 2]),
+                Some(&[0, 1, 0, 1, 0, 1, 0, 1]),
+            )
+            .unwrap();
+
+        let r = writer.close().unwrap();
+        let ColumnIndexMetaData::INT32(col_idx) = r.column_index.unwrap() else {
+            panic!("wrong stats type")
+        };
+        assert!(!col_idx.is_null_page(0));
+        assert_eq!(col_idx.min_value(0), Some(&7));
+        assert_eq!(col_idx.max_value(0), Some(&7));
+        assert_eq!(col_idx.null_count(0), Some(4));
+    }
+
+    #[test]
+    fn test_column_index_repeated_page_of_nulls() {
+        // two lists of [null, null]: no values, more null levels than rows
+        let page_writer = get_test_page_writer();
+        let props = Default::default();
+        let mut writer = get_test_column_writer::<Int32Type>(page_writer, 2, 1, props);
+        writer
+            .write_batch(&[], Some(&[1, 1, 1, 1]), Some(&[0, 1, 0, 1]))
+            .unwrap();
+
+        let r = writer.close().unwrap();
+        let ColumnIndexMetaData::INT32(col_idx) = r.column_index.unwrap() else {
+            panic!("wrong stats type")
+        };
+        assert!(col_idx.is_null_page(0));
+        assert!(col_idx.min_value(0).is_none());
+        assert!(col_idx.max_value(0).is_none());
+        assert_eq!(col_idx.null_count(0), Some(4));
+    }
+
+    #[test]
     fn test_column_offset_index_metadata() {
         // write data
         // and check the offset index and column index
@@ -4603,6 +4669,52 @@ mod tests {
             assert_eq!(expected_value, stats_max_bytes);
         } else {
             panic!("expecting Statistics::FixedLenByteArray");
+        }
+    }
+
+    #[test]
+    fn test_decimal_byte_array_min_max_no_statistics_truncation() {
+        // See https://github.com/apache/arrow-rs/issues/11073
+        let page_writer = get_test_page_writer();
+
+        // Truncate at 1 byte -- far shorter than either encoded value below.
+        let builder = WriterProperties::builder().set_statistics_truncate_length(Some(1));
+        let props = Arc::new(builder.build());
+        let mut writer = get_test_decimals_column_writer::<ByteArrayType>(page_writer, 0, 0, props);
+
+        // Two's-complement, big-endian encodings of 200 and -200 (2 bytes each).
+        // Naive unsigned byte-wise truncation to 1 byte followed by an unsigned
+        // increment of the max value would corrupt these:
+        //   max: truncate([0x00, 0xC8], 1) -> [0x00], increment -> [0x01],
+        //        which decodes to 1 -- far less than the true max of 200.
+        let positive_200 = vec![0x00u8, 0xC8u8];
+        let negative_200 = vec![0xFFu8, 0x38u8];
+
+        let data = vec![
+            ByteArray::from(positive_200.clone()),
+            ByteArray::from(negative_200.clone()),
+        ];
+        writer.write_batch(&data, None, None).unwrap();
+        writer.flush_data_pages().unwrap();
+
+        let r = writer.close().unwrap();
+        assert_eq!(2, r.rows_written);
+
+        let stats = r.metadata.statistics().expect("statistics");
+        if let Statistics::ByteArray(stats) = stats {
+            // Decimal columns must never be truncated, regardless of
+            // `statistics_truncate_length`.
+            assert!(stats.min_is_exact());
+            assert!(stats.max_is_exact());
+
+            let min_value = stats.min_bytes_opt().unwrap();
+            let max_value = stats.max_bytes_opt().unwrap();
+
+            // Correct signed (two's-complement) ordering: -200 < 200.
+            assert_eq!(negative_200, min_value);
+            assert_eq!(positive_200, max_value);
+        } else {
+            panic!("expecting Statistics::ByteArray");
         }
     }
 

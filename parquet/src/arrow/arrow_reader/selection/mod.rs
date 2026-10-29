@@ -54,7 +54,9 @@ use boolean::{
 };
 pub(crate) use cursor::{LoadedRowRanges, MaskCursor, RowSelectionStrategy};
 pub use cursor::{RowSelectionCursor, RowSelectionPolicy};
-use ranges::{expand_to_batch_boundaries_from_selectors, scan_ranges_from_selectors};
+use ranges::{
+    expand_to_batch_boundaries_from_selectors, scan_ranges_from_mask, scan_ranges_from_selectors,
+};
 pub use selector::RowSelector;
 use selector::{limit_selectors, offset_selectors, split_off_selectors};
 
@@ -443,9 +445,7 @@ impl RowSelection {
             RowSelectionInner::Selectors(selectors) => {
                 scan_ranges_from_selectors(selectors.iter().copied(), page_locations)
             }
-            RowSelectionInner::Mask(mask) => {
-                scan_ranges_from_selectors(MaskRunIter::new(mask.mask()), page_locations)
-            }
+            RowSelectionInner::Mask(mask) => scan_ranges_from_mask(mask.mask(), page_locations),
         }
     }
 
@@ -852,26 +852,10 @@ impl FromIterator<RowSelector> for RowSelection {
     fn from_iter<T: IntoIterator<Item = RowSelector>>(iter: T) -> Self {
         let iter = iter.into_iter();
 
-        // Capacity before filter
         let mut selectors = Vec::with_capacity(iter.size_hint().0);
 
-        let mut filtered = iter.filter(|x| x.row_count != 0);
-        if let Some(x) = filtered.next() {
-            selectors.push(x);
-        }
-
-        for s in filtered {
-            if s.row_count == 0 {
-                continue;
-            }
-
-            // Combine consecutive selectors
-            let last = selectors.last_mut().unwrap();
-            if last.skip == s.skip {
-                last.row_count = last.row_count.checked_add(s.row_count).unwrap();
-            } else {
-                selectors.push(s)
-            }
+        for selector in iter {
+            append_normalized_selector(&mut selectors, selector);
         }
 
         Self::from_selectors(selectors)

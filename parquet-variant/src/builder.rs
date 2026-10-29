@@ -769,8 +769,8 @@ impl VariantBuilder {
     /// Enables validation of unique field keys in nested objects.
     ///
     /// This setting is propagated to all [`ObjectBuilder`]s created through this [`VariantBuilder`]
-    /// (including via any [`ListBuilder`]), and causes [`ObjectBuilder::finish()`] to return
-    /// an error if duplicate keys were inserted.
+    /// (including via any [`ListBuilder`]); see [`ObjectBuilder::with_validate_unique_fields`]
+    /// for how a duplicate key is reported.
     pub fn with_validate_unique_fields(mut self, validate_unique_fields: bool) -> Self {
         self.validate_unique_fields = validate_unique_fields;
         self

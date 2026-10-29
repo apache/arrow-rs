@@ -15,5 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod decimal;
+mod dictionary;
 mod list;
 mod map;
