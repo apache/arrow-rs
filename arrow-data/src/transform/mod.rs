@@ -912,6 +912,17 @@ impl<'a> MutableArrayData<'a> {
         Ok(())
     }
 
+    /// Extends a child while an ancestor owns a recursive rollback snapshot.
+    fn try_extend_in_transaction(
+        &mut self,
+        index: usize,
+        start: usize,
+        end: usize,
+    ) -> Result<(), ArrowError> {
+        let (len, new_len) = self.checked_extend_len(index, start, end)?;
+        self.try_extend_prevalidated(index, start, len, new_len)
+    }
+
     fn try_extend_prevalidated(
         &mut self,
         index: usize,
@@ -928,6 +939,7 @@ impl<'a> MutableArrayData<'a> {
         result
     }
 
+    #[inline]
     fn checked_extend_len(
         &self,
         index: usize,
