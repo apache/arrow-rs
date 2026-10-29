@@ -345,7 +345,10 @@ impl RecordBatch {
             })?;
 
         for (c, f) in columns.iter().zip(&schema.fields) {
-            if !f.is_nullable() && c.logical_null_count() > 0 {
+            if !f.is_nullable()
+                && !matches!(f.data_type(), DataType::Union(_, _))
+                && c.logical_null_count() > 0
+            {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "Column '{}' is declared as non-nullable but contains null values",
                     f.name()
@@ -739,7 +742,8 @@ impl RecordBatch {
         // https://github.com/rust-lang/rust/issues/50133 is no longer an
         // issue
         let iter = value.into_iter().map(|(field_name, array)| {
-            let nullable = array.logical_null_count() > 0;
+            let nullable = !matches!(array.data_type(), DataType::Union(_, _))
+                && array.logical_null_count() > 0;
             (field_name, array, nullable)
         });
 
@@ -1684,11 +1688,9 @@ mod tests {
             union_array.data_type().clone(),
             false,
         )]));
+        // Union fields cannot be nullable by definition in Arrow format, so logical nulls in variants are permitted
         let maybe_batch = RecordBatch::try_new(schema, vec![union_array]);
-        assert_eq!(
-            "Invalid argument error: Column 'a' is declared as non-nullable but contains null values",
-            format!("{}", maybe_batch.err().unwrap())
-        );
+        assert!(maybe_batch.is_ok());
     }
 
     #[test]
