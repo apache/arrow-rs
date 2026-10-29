@@ -1328,14 +1328,15 @@ fn filter_offsets<O: OffsetSizeTrait>(
     // Rebase a single run of child values to start at zero. Slicing to a
     // shorter length recounts the nulls of every descendant, so only do this
     // when the run can then be sliced without filtering
-    let base = match child_slices.as_slice() {
-        [(start, _)] => *start,
+    let base = match child_slices.as_mut_slice() {
+        [(start, end)] => {
+            let base = *start;
+            *start = 0;
+            *end -= base;
+            base
+        }
         _ => 0,
     };
-    for (start, end) in &mut child_slices {
-        *start -= base;
-        *end -= base;
-    }
 
     // Some kernels, such as `filter_run_end_array`, read the mask rather than
     // the slices, so build both. Only the selected ranges are written into the
