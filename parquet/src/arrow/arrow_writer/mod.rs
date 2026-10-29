@@ -277,7 +277,7 @@ impl<W: Write + Send> ArrowWriter<W> {
             SerializedFileWriter::new(writer, schema.root_schema_ptr(), Arc::clone(&props_ptr))?;
 
         let mut row_group_writer_factory =
-            ArrowRowGroupWriterFactory::new(&file_writer, arrow_schema.clone());
+            ArrowRowGroupWriterFactory::try_new(&file_writer, arrow_schema.clone())?;
         if let Some(page_store_factory) = options.page_store_factory {
             row_group_writer_factory =
                 row_group_writer_factory.with_page_store_factory(page_store_factory);
@@ -1037,7 +1037,7 @@ impl ArrowColumnChunk {
 ///   .unwrap();
 ///
 /// // Create a factory for building Arrow column writers
-/// let row_group_factory = ArrowRowGroupWriterFactory::new(&writer, Arc::clone(&schema));
+/// let row_group_factory = ArrowRowGroupWriterFactory::try_new(&writer, Arc::clone(&schema)).unwrap();
 /// // Create column writers for the 0th row group
 /// let col_writers = row_group_factory.create_column_writers(0).unwrap();
 ///
@@ -1269,6 +1269,10 @@ struct ArrowTopLevelWriterSpec {
     leaf_range: Range<usize>,
 }
 
+/// Replayable schema-planning errors kept only for the deprecated
+/// [`ArrowRowGroupWriterFactory::new`] constructor. It cannot return errors,
+/// and repeated `create_column_writers(&self)` calls need fresh owned errors.
+/// [`ArrowRowGroupWriterFactory::try_new`] returns the original error directly.
 #[derive(Debug)]
 enum ArrowWriteSchemaPlanError {
     General(String),
@@ -1306,21 +1310,15 @@ struct ArrowWriteSchemaPlan {
 }
 
 impl ArrowWriteSchemaPlan {
-    fn try_new(
-        parquet: &SchemaDescriptor,
-        arrow: &SchemaRef,
-    ) -> std::result::Result<Self, ArrowWriteSchemaPlanError> {
+    fn try_new(parquet: &SchemaDescriptor, arrow: &SchemaRef) -> Result<Self> {
         let parquet_leaves = parquet.columns();
         let mut leaf_count = 0;
         let mut fields = Vec::with_capacity(arrow.fields.len());
 
         for field in &arrow.fields {
-            validate_map_key_type(field.data_type())
-                .map_err(ArrowWriteSchemaPlanError::from_parquet_error)?;
+            validate_map_key_type(field.data_type())?;
             let start = leaf_count;
-            leaf_count += compute_leaves(field, &new_empty_array(field.data_type()))
-                .map_err(ArrowWriteSchemaPlanError::from_parquet_error)?
-                .len();
+            leaf_count += compute_leaves(field, &new_empty_array(field.data_type()))?.len();
             fields.push(ArrowTopLevelWriterSpec {
                 field: Arc::clone(field),
                 leaf_range: start..leaf_count,
@@ -1328,7 +1326,7 @@ impl ArrowWriteSchemaPlan {
         }
 
         if leaf_count != parquet_leaves.len() {
-            return Err(ArrowWriteSchemaPlanError::General(format!(
+            return Err(ParquetError::General(format!(
                 "Arrow schema maps to {} leaf columns but Parquet schema has {}",
                 leaf_count,
                 parquet_leaves.len()
@@ -1457,10 +1455,14 @@ impl ArrowRowGroupWriter {
 
 /// Factory that creates new column writers for each row group in the Parquet file.
 ///
-/// You can create this structure via an [`ArrowWriter::into_serialized_writer`].
+/// Create this structure with [`Self::try_new`] or [`ArrowWriter::into_serialized_writer`].
 /// See the example on [`ArrowColumnWriter`] for how to encode columns in parallel
 #[derive(Debug)]
 pub struct ArrowRowGroupWriterFactory {
+    // Only deprecated `new` can store an Err; `try_new` always stores an Ok.
+    // TODO(61.0.0): When removing `new`, store Arc<ArrowWriteSchemaPlan> directly,
+    // remove ArrowWriteSchemaPlanError and schema_plan(), and simplify
+    // from_schema_plan to accept the plan without a Result.
     schema_plan: std::result::Result<Arc<ArrowWriteSchemaPlan>, ArrowWriteSchemaPlanError>,
     props: WriterPropertiesPtr,
     page_store_factory: Arc<dyn PageStoreFactory>,
@@ -1469,14 +1471,49 @@ pub struct ArrowRowGroupWriterFactory {
 }
 
 impl ArrowRowGroupWriterFactory {
-    /// Create a new [`ArrowRowGroupWriterFactory`] for the provided file writer and Arrow schema
+    /// Create a new [`ArrowRowGroupWriterFactory`] for the provided file writer and Arrow schema.
+    ///
+    /// Schema-planning errors are deferred until [`Self::create_column_writers`] is called.
+    /// Use [`Self::try_new`] to return these errors during construction instead.
+    #[deprecated(
+        since = "60.1.0",
+        note = "Use ArrowRowGroupWriterFactory::try_new instead. This method will be removed in 61.0.0."
+    )]
     pub fn new<W: Write + Send>(
         file_writer: &SerializedFileWriter<W>,
         arrow_schema: SchemaRef,
     ) -> Self {
         let schema_plan =
             ArrowWriteSchemaPlan::try_new(file_writer.schema_descr_ptr().as_ref(), &arrow_schema)
-                .map(Arc::new);
+                .map(Arc::new)
+                .map_err(ArrowWriteSchemaPlanError::from_parquet_error);
+        Self::from_schema_plan(file_writer, schema_plan)
+    }
+
+    /// Try to create a new [`ArrowRowGroupWriterFactory`] for the provided file writer and Arrow schema.
+    ///
+    /// Validates and caches the schema-only field-to-leaf mapping for reuse across row groups.
+    ///
+    /// # Errors
+    ///
+    /// Returns schema-planning errors immediately, including invalid map-key schemas and
+    /// mismatched Arrow and Parquet leaf counts.
+    pub fn try_new<W: Write + Send>(
+        file_writer: &SerializedFileWriter<W>,
+        arrow_schema: SchemaRef,
+    ) -> Result<Self> {
+        let schema_plan =
+            ArrowWriteSchemaPlan::try_new(file_writer.schema_descr_ptr().as_ref(), &arrow_schema)?;
+        Ok(Self::from_schema_plan(
+            file_writer,
+            Ok(Arc::new(schema_plan)),
+        ))
+    }
+
+    fn from_schema_plan<W: Write + Send>(
+        file_writer: &SerializedFileWriter<W>,
+        schema_plan: std::result::Result<Arc<ArrowWriteSchemaPlan>, ArrowWriteSchemaPlanError>,
+    ) -> Self {
         let props = Arc::clone(file_writer.properties());
         Self {
             schema_plan,
@@ -3320,10 +3357,15 @@ mod tests {
             SerializedFileWriter::new(Vec::new(), parquet.root_schema_ptr(), Arc::clone(&props))
                 .unwrap();
 
+        let eager_error =
+            ArrowRowGroupWriterFactory::try_new(&file_writer, Arc::clone(&two_fields)).unwrap_err();
+        assert!(matches!(&eager_error, ParquetError::General(_)));
+        #[expect(deprecated)] // Verify that the legacy constructor still defers errors.
         let factory = ArrowRowGroupWriterFactory::new(&file_writer, Arc::clone(&two_fields));
         let Err(err) = factory.create_column_writers(0) else {
             panic!("mismatched schemas should not create column writers")
         };
+        assert_eq!(err.to_string(), eager_error.to_string());
         assert!(
             err.to_string()
                 .contains("Arrow schema maps to 2 leaf columns but Parquet schema has 1"),
@@ -3333,10 +3375,15 @@ mod tests {
         let parquet = ArrowSchemaConverter::new().convert(&two_fields).unwrap();
         let file_writer =
             SerializedFileWriter::new(Vec::new(), parquet.root_schema_ptr(), props).unwrap();
+        let eager_error =
+            ArrowRowGroupWriterFactory::try_new(&file_writer, Arc::clone(&one_field)).unwrap_err();
+        assert!(matches!(&eager_error, ParquetError::General(_)));
+        #[expect(deprecated)] // Verify that the legacy constructor still defers errors.
         let factory = ArrowRowGroupWriterFactory::new(&file_writer, one_field);
         let Err(err) = factory.create_column_writers(0) else {
             panic!("mismatched schemas should not create column writers")
         };
+        assert_eq!(err.to_string(), eager_error.to_string());
         assert!(
             err.to_string()
                 .contains("Arrow schema maps to 1 leaf columns but Parquet schema has 2"),
@@ -3520,6 +3567,14 @@ mod tests {
                 Arc::new(WriterProperties::default()),
             )
             .unwrap();
+            let eager_error =
+                ArrowRowGroupWriterFactory::try_new(&file, Arc::clone(&schema)).unwrap_err();
+            assert!(matches!(&eager_error, ParquetError::ArrowError(_)));
+            assert_eq!(
+                eager_error.to_string(),
+                "Arrow: Map key field 'key' must be non-nullable, including its encoded values"
+            );
+            #[expect(deprecated)] // Verify that the legacy constructor still defers errors.
             let factory = ArrowRowGroupWriterFactory::new(&file, schema);
             for row_group_index in 0..2 {
                 let Err(err) = factory.create_column_writers(row_group_index) else {
@@ -5677,7 +5732,7 @@ mod tests {
             SerializedFileWriter::new(&mut buf, parquet_schema.root_schema_ptr(), props.clone())
                 .unwrap();
 
-        let factory = ArrowRowGroupWriterFactory::new(&writer, Arc::clone(&schema));
+        let factory = ArrowRowGroupWriterFactory::try_new(&writer, Arc::clone(&schema)).unwrap();
         let mut col_writers = factory.create_column_writers(0).unwrap();
         let arr: ArrayRef = Arc::new(Int32Array::from_iter_values(0..64));
         for leaves in compute_leaves(schema.field(0), &arr).unwrap() {
@@ -6027,7 +6082,7 @@ mod tests {
         fn arrow_bounds(mut file: SerializedFileWriter<Vec<u8>>, array: ArrayRef) -> Vec<u8> {
             let field = Field::new("value", array.data_type().clone(), false);
             let schema = Arc::new(Schema::new(vec![field.clone()]));
-            let factory = ArrowRowGroupWriterFactory::new(&file, schema);
+            let factory = ArrowRowGroupWriterFactory::try_new(&file, schema).unwrap();
             let mut writer: ArrowColumnWriter = factory.create_column_writers(0).unwrap().remove(0);
             let leaf = compute_leaves(&field, &array).unwrap().remove(0);
             writer.write(&leaf).unwrap();
