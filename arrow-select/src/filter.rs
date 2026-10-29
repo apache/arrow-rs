@@ -1272,28 +1272,73 @@ fn set_bit_range(bytes: &mut [u8], start: usize, end: usize) {
     }
 }
 
-/// The maximum estimated size in bytes of a single selected run of child
+/// The maximum estimated size in bytes of a single selected run of the child
 /// values of a list-like array to copy rather than slice. Slicing keeps all of
 /// the child values alive, while copying costs time roughly proportional to
 /// the size of the run regardless of the child data type, so this bounds the
 /// time spent copying to about the fixed overhead of filtering the child.
 const MAX_COPIED_RUN_SIZE: usize = 64 * 1024;
 
-/// Computes the offsets of the rows selected by `predicate` from a list-like
-/// array with the given value `offsets`, along with a [`FilterPredicate`]
-/// selecting the child values of those rows.
+/// Appends the range `start..end` of child values to `slices`, merging it into
+/// the last slice if they are adjacent, and skipping it if it is empty
+fn push_child_slice(slices: &mut Vec<(usize, usize)>, start: usize, end: usize) {
+    match slices.last_mut() {
+        _ if start == end => {}
+        Some((_, last_end)) if *last_end == start => *last_end = end,
+        _ => slices.push((start, end)),
+    }
+}
+
+/// Filters the child `values` of a list-like array, selecting the `count`
+/// values in the ordered, disjoint and non-empty `slices` collected with
+/// [`push_child_slice`].
 ///
-/// The child predicate applies to the child values starting at the index
-/// returned as the third element of the tuple. That index is zero unless the
-/// selected child values form a single run larger than [`MAX_COPIED_RUN_SIZE`],
-/// which is rebased to start at zero so that its strategy is
-/// [`IterationStrategy::All`] and the child values can be sliced instead of
-/// filtered.
+/// A single run larger than [`MAX_COPIED_RUN_SIZE`] is sliced instead of
+/// copied.
+fn filter_child_slices(
+    values: &dyn Array,
+    slices: Vec<(usize, usize)>,
+    count: usize,
+) -> Result<ArrayRef, ArrowError> {
+    match slices.as_slice() {
+        [] => return Ok(new_empty_array(values.data_type())),
+        // The size of the run is estimated from the average size of the
+        // child values
+        [(start, _)]
+            if count.saturating_mul(values.get_array_memory_size()) / values.len()
+                > MAX_COPIED_RUN_SIZE =>
+        {
+            return Ok(values.slice(*start, count));
+        }
+        _ => {}
+    }
+
+    // Some kernels, such as `filter_run_end_array`, read the mask rather than
+    // the slices, so build both. Only the selected ranges are written into the
+    // zeroed mask, which is cheap when they are sparse.
+    let mask_len = slices.last().map_or(0, |(_, end)| *end);
+    let mut mask = MutableBuffer::from_len_zeroed(bit_util::ceil(mask_len, 8));
+    for (start, end) in &slices {
+        set_bit_range(mask.as_slice_mut(), *start, *end);
+    }
+    let mask = BooleanBuffer::new(mask.into(), 0, mask_len);
+    debug_assert_eq!(mask.count_set_bits(), count);
+    let predicate = FilterPredicate {
+        filter: BooleanArray::new(mask, None),
+        count,
+        strategy: IterationStrategy::Slices(slices),
+    };
+    filter_array(values, &predicate)
+}
+
+/// Computes the offsets of the rows selected by `predicate` from a list-like
+/// array with the given value `offsets`, along with the child `values` of
+/// those rows.
 fn filter_offsets<O: OffsetSizeTrait>(
     offsets: &[O],
     values: &dyn Array,
     predicate: &FilterPredicate,
-) -> (OffsetBuffer<O>, FilterPredicate, usize) {
+) -> Result<(OffsetBuffer<O>, ArrayRef), ArrowError> {
     let mut dst_offsets = Vec::with_capacity(predicate.count + 1);
     dst_offsets.push(O::usize_as(0));
     let mut cur_offset: usize = 0;
@@ -1313,11 +1358,7 @@ fn filter_offsets<O: OffsetSizeTrait>(
                 .map(|&offset| offset - shift),
         );
         cur_offset += value_end - value_start;
-        match child_slices.last_mut() {
-            _ if value_start == value_end => {}
-            Some((_, last_end)) if *last_end == value_start => *last_end = value_end,
-            _ => child_slices.push((value_start, value_end)),
-        }
+        push_child_slice(&mut child_slices, value_start, value_end);
     };
 
     // Runs of rows are runs of child values, so walk the rows by slices even
@@ -1334,50 +1375,13 @@ fn filter_offsets<O: OffsetSizeTrait>(
         _ => SlicesIterator::new(&predicate.filter).for_each(|(start, end)| extend(start, end)),
     }
 
-    // Rebase a single run of child values to start at zero. Slicing to a
-    // shorter length recounts the nulls of every descendant, so only do this
-    // when the run can then be sliced without filtering. A slice keeps all of
-    // the child values alive, so copy a small run instead. The size of the
-    // run is estimated from the average size of the child values
-    let slice_run = child_slices.len() == 1
-        && cur_offset.saturating_mul(values.get_array_memory_size()) / values.len()
-            > MAX_COPIED_RUN_SIZE;
-    let base = match child_slices.as_mut_slice() {
-        [(start, end)] if slice_run => {
-            let base = *start;
-            *start = 0;
-            *end -= base;
-            base
-        }
-        _ => 0,
-    };
-
-    // Some kernels, such as `filter_run_end_array`, read the mask rather than
-    // the slices, so build both. Only the selected ranges are written into the
-    // zeroed mask, which is cheap when they are sparse.
-    let mask_len = child_slices.last().map_or(0, |(_, end)| *end);
-    let mut mask = MutableBuffer::from_len_zeroed(bit_util::ceil(mask_len, 8));
-    for (start, end) in &child_slices {
-        set_bit_range(mask.as_slice_mut(), *start, *end);
-    }
-    let mask = BooleanBuffer::new(mask.into(), 0, mask_len);
-    debug_assert_eq!(mask.count_set_bits(), cur_offset);
-    let strategy = match child_slices.as_slice() {
-        [] => IterationStrategy::None,
-        [_] if slice_run => IterationStrategy::All,
-        _ => IterationStrategy::Slices(child_slices),
-    };
-    let child_predicate = FilterPredicate {
-        filter: BooleanArray::new(mask, None),
-        count: cur_offset,
-        strategy,
-    };
+    let values = filter_child_slices(values, child_slices, cur_offset)?;
 
     // SAFETY: `dst_offsets` starts at `[0]` and only grows by the running
     // `cur_offset`, so it is monotonically non-decreasing. Its values are
     // bounded by the span of the source `offsets`, so they fit in `O`.
     let offsets = unsafe { OffsetBuffer::new_unchecked(dst_offsets.into()) };
-    (offsets, child_predicate, base)
+    Ok((offsets, values))
 }
 
 /// `filter` implementation for lists
@@ -1385,12 +1389,7 @@ fn filter_list<O: OffsetSizeTrait>(
     array: &GenericListArray<O>,
     predicate: &FilterPredicate,
 ) -> Result<GenericListArray<O>, ArrowError> {
-    let (offsets, child_predicate, base) =
-        filter_offsets(array.value_offsets(), array.values(), predicate);
-    let values = match child_predicate.strategy {
-        IterationStrategy::All => array.values().slice(base, child_predicate.count),
-        _ => filter_array(array.values(), &child_predicate)?,
-    };
+    let (offsets, values) = filter_offsets(array.value_offsets(), array.values(), predicate)?;
 
     let field = match array.data_type() {
         DataType::List(field) | DataType::LargeList(field) => field.clone(),
