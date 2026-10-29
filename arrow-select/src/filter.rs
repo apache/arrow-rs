@@ -1272,17 +1272,26 @@ fn set_bit_range(bytes: &mut [u8], start: usize, end: usize) {
     }
 }
 
+/// The maximum estimated size in bytes of a single selected run of child
+/// values of a list-like array to copy rather than slice. Slicing keeps all of
+/// the child values alive, while copying costs time roughly proportional to
+/// the size of the run regardless of the child data type, so this bounds the
+/// time spent copying to about the fixed overhead of filtering the child.
+const MAX_COPIED_RUN_SIZE: usize = 64 * 1024;
+
 /// Computes the offsets of the rows selected by `predicate` from a list-like
 /// array with the given value `offsets`, along with a [`FilterPredicate`]
 /// selecting the child values of those rows.
 ///
 /// The child predicate applies to the child values starting at the index
 /// returned as the third element of the tuple. That index is zero unless the
-/// selected child values form a single run, which is rebased to start at zero
-/// so that its strategy is [`IterationStrategy::All`] and the child values
-/// can be sliced instead of filtered.
+/// selected child values form a single run larger than [`MAX_COPIED_RUN_SIZE`],
+/// which is rebased to start at zero so that its strategy is
+/// [`IterationStrategy::All`] and the child values can be sliced instead of
+/// filtered.
 fn filter_offsets<O: OffsetSizeTrait>(
     offsets: &[O],
+    values: &dyn Array,
     predicate: &FilterPredicate,
 ) -> (OffsetBuffer<O>, FilterPredicate, usize) {
     let mut dst_offsets = Vec::with_capacity(predicate.count + 1);
@@ -1327,9 +1336,14 @@ fn filter_offsets<O: OffsetSizeTrait>(
 
     // Rebase a single run of child values to start at zero. Slicing to a
     // shorter length recounts the nulls of every descendant, so only do this
-    // when the run can then be sliced without filtering
+    // when the run can then be sliced without filtering. A slice keeps all of
+    // the child values alive, so copy a small run instead. The size of the
+    // run is estimated from the average size of the child values
+    let slice_run = child_slices.len() == 1
+        && cur_offset.saturating_mul(values.get_array_memory_size()) / values.len()
+            > MAX_COPIED_RUN_SIZE;
     let base = match child_slices.as_mut_slice() {
-        [(start, end)] => {
+        [(start, end)] if slice_run => {
             let base = *start;
             *start = 0;
             *end -= base;
@@ -1350,7 +1364,7 @@ fn filter_offsets<O: OffsetSizeTrait>(
     debug_assert_eq!(mask.count_set_bits(), cur_offset);
     let strategy = match child_slices.as_slice() {
         [] => IterationStrategy::None,
-        [(0, _)] => IterationStrategy::All,
+        [_] if slice_run => IterationStrategy::All,
         _ => IterationStrategy::Slices(child_slices),
     };
     let child_predicate = FilterPredicate {
@@ -1371,7 +1385,8 @@ fn filter_list<O: OffsetSizeTrait>(
     array: &GenericListArray<O>,
     predicate: &FilterPredicate,
 ) -> Result<GenericListArray<O>, ArrowError> {
-    let (offsets, child_predicate, base) = filter_offsets(array.value_offsets(), predicate);
+    let (offsets, child_predicate, base) =
+        filter_offsets(array.value_offsets(), array.values(), predicate);
     let values = match child_predicate.strategy {
         IterationStrategy::All => array.values().slice(base, child_predicate.count),
         _ => filter_array(array.values(), &child_predicate)?,
@@ -2089,6 +2104,30 @@ mod tests {
     fn test_filter_list() {
         test_case_filter_list::<i32>();
         test_case_filter_list::<i64>();
+    }
+
+    #[test]
+    fn test_filter_list_single_run_memory() {
+        // 100000 rows of 4 values each
+        let list = ListArray::from_iter_primitive::<Int32Type, _, _>(
+            (0..100000).map(|i| Some((i * 4..i * 4 + 4).map(Some).collect::<Vec<_>>())),
+        );
+        let values_size = list.values().get_array_memory_size();
+
+        // A short run is copied, so as not to keep all of the values alive
+        let short = BooleanArray::from_iter((0..100000).map(|i| Some((40000..40010).contains(&i))));
+        assert_filter_matches_take(&list, &short);
+        let filtered = filter(&list, &short).unwrap();
+        assert!(filtered.as_list::<i32>().values().get_array_memory_size() < values_size / 4);
+
+        // A longer run is sliced
+        let long = BooleanArray::from_iter((0..100000).map(|i| Some((20000..40000).contains(&i))));
+        assert_filter_matches_take(&list, &long);
+        let filtered = filter(&list, &long).unwrap();
+        assert_eq!(
+            filtered.as_list::<i32>().values().get_array_memory_size(),
+            values_size
+        );
     }
 
     #[test]
