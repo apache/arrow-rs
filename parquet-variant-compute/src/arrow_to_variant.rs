@@ -31,7 +31,7 @@ use parquet_variant::{
     ObjectFieldBuilder, Variant, VariantBuilderExt, VariantDecimal4, VariantDecimal8,
     VariantDecimal16, VariantDecimalType,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 // ============================================================================
 // Row-oriented builders for efficient Arrow-to-Variant conversion
@@ -555,6 +555,8 @@ impl<'a, L: ListLikeArray> ListArrowToVariantBuilder<'a, L> {
 pub(crate) struct StructArrowToVariantBuilder<'a> {
     struct_array: &'a arrow::array::StructArray,
     field_builders: Vec<(&'a str, ArrowToVariantRowBuilder<'a>)>,
+    validate_unique_fields: bool,
+    duplicate_field_name: Option<&'a str>,
 }
 
 impl<'a> StructArrowToVariantBuilder<'a> {
@@ -563,6 +565,8 @@ impl<'a> StructArrowToVariantBuilder<'a> {
         options: &'a CastOptions,
     ) -> Result<Self, ArrowError> {
         let mut field_builders = Vec::new();
+        let mut seen_field_names = HashSet::new();
+        let mut duplicate_field_name = None;
 
         // Create a row builder for each field
         for (field_name, field_array) in struct_array
@@ -576,11 +580,20 @@ impl<'a> StructArrowToVariantBuilder<'a> {
                 options,
             )?;
             field_builders.push((*field_name, field_builder));
+
+            if !options.safe
+                && duplicate_field_name.is_none()
+                && !seen_field_names.insert(*field_name)
+            {
+                duplicate_field_name = Some(*field_name);
+            }
         }
 
         Ok(Self {
             struct_array,
             field_builders,
+            validate_unique_fields: !options.safe,
+            duplicate_field_name,
         })
     }
 
@@ -592,8 +605,16 @@ impl<'a> StructArrowToVariantBuilder<'a> {
         if self.struct_array.is_null(index) {
             builder.append_null();
         } else {
+            if let Some(field_name) = self.duplicate_field_name {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Duplicate object key '{field_name}'"
+                )));
+            }
+
             // Create object builder for this struct row
-            let mut obj_builder = builder.try_new_object()?;
+            let mut obj_builder = builder
+                .try_new_object()?
+                .with_validate_unique_fields(self.validate_unique_fields);
 
             // Process each field
             for (field_name, row_builder) in &mut self.field_builders {
@@ -612,6 +633,7 @@ pub(crate) struct MapArrowToVariantBuilder<'a> {
     map_array: &'a arrow::array::MapArray,
     key_strings: arrow::array::StringArray,
     values_builder: Box<ArrowToVariantRowBuilder<'a>>,
+    validate_unique_fields: bool,
 }
 
 impl<'a> MapArrowToVariantBuilder<'a> {
@@ -631,6 +653,7 @@ impl<'a> MapArrowToVariantBuilder<'a> {
             map_array,
             key_strings,
             values_builder: Box::new(values_builder),
+            validate_unique_fields: !options.safe,
         })
     }
 
@@ -650,11 +673,22 @@ impl<'a> MapArrowToVariantBuilder<'a> {
         let end = offsets[index + 1].as_usize();
 
         // Create object builder for this map
-        let mut object_builder = builder.try_new_object()?;
+        let mut object_builder = builder
+            .try_new_object()?
+            .with_validate_unique_fields(self.validate_unique_fields);
 
         // Add each key-value pair (loop does nothing for empty maps - correct!)
+        let mut seen_keys = self.validate_unique_fields.then(HashSet::new);
         for kv_index in start..end {
             let key = self.key_strings.value(kv_index);
+            if let Some(seen_keys) = &mut seen_keys
+                && !seen_keys.insert(key)
+            {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Duplicate object key '{key}'"
+                )));
+            }
+
             let mut field_builder = ObjectFieldBuilder::new(key, &mut object_builder);
             self.values_builder
                 .append_row(&mut field_builder, kv_index)?;

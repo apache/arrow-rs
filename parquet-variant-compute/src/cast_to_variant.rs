@@ -2036,6 +2036,110 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_to_variant_strict_rejects_duplicate_struct_fields_with_nulls() {
+        let fields = Fields::from(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("a", DataType::Int32, true),
+        ]);
+        let struct_array = StructArray::new(
+            fields,
+            vec![
+                Arc::new(Int32Array::from(vec![None])),
+                Arc::new(Int32Array::from(vec![Some(2)])),
+            ],
+            None,
+        );
+
+        let error = cast_to_variant(&struct_array).unwrap_err();
+        assert!(error.to_string().contains("Duplicate object key 'a'"));
+    }
+
+    #[test]
+    fn test_cast_to_variant_strict_rejects_duplicate_map_keys_with_nulls() {
+        let values = Int32Array::from(vec![None, Some(2)]);
+        let map_array =
+            MapArray::new_from_strings(vec!["a", "a"].into_iter(), &values, &[0, 2]).unwrap();
+
+        let error = cast_to_variant(&map_array).unwrap_err();
+        assert!(error.to_string().contains("Duplicate object key 'a'"));
+    }
+
+    #[test]
+    fn test_cast_to_variant_strict_rejects_nested_duplicate_struct_fields() {
+        let nested_fields = Fields::from(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("a", DataType::Int32, true),
+        ]);
+        let nested_array = StructArray::new(
+            nested_fields.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(1)])),
+                Arc::new(Int32Array::from(vec![Some(2)])),
+            ],
+            None,
+        );
+        let outer_fields = Fields::from(vec![Field::new(
+            "nested",
+            DataType::Struct(nested_fields),
+            false,
+        )]);
+        let outer_array = StructArray::new(outer_fields, vec![Arc::new(nested_array)], None);
+
+        let error = cast_to_variant(&outer_array).unwrap_err();
+        assert!(error.to_string().contains("Duplicate object key 'a'"));
+    }
+
+    #[test]
+    fn test_cast_to_variant_strict_allows_duplicate_keys_in_separate_objects() {
+        let values = Int32Array::from(vec![Some(1), Some(2), Some(3)]);
+        let map_array =
+            MapArray::new_from_strings(vec!["a", "a", "A"].into_iter(), &values, &[0, 1, 2, 3])
+                .unwrap();
+
+        let result = cast_to_variant(&map_array).unwrap();
+
+        assert_eq!(
+            result.value(0).as_object().unwrap().get("a"),
+            Some(Variant::from(1))
+        );
+        assert_eq!(
+            result.value(1).as_object().unwrap().get("a"),
+            Some(Variant::from(2))
+        );
+        assert_eq!(
+            result.value(2).as_object().unwrap().get("A"),
+            Some(Variant::from(3))
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_non_strict_preserves_duplicate_key_overwrite() {
+        let fields = Fields::from(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("a", DataType::Int32, true),
+        ]);
+        let struct_array = StructArray::new(
+            fields,
+            vec![
+                Arc::new(Int32Array::from(vec![Some(1)])),
+                Arc::new(Int32Array::from(vec![Some(2)])),
+            ],
+            None,
+        );
+        let options = CastOptions {
+            safe: true,
+            ..Default::default()
+        };
+
+        let result = cast_to_variant_with_options(&struct_array, &options).unwrap();
+
+        assert_eq!(
+            result.value(0).as_object().unwrap().get("a"),
+            Some(Variant::from(2))
+        );
+    }
+
+    #[test]
     fn test_cast_to_variant_map_with_non_string_keys() {
         let offsets = OffsetBuffer::new(vec![0, 1, 3].into());
         let fields = Fields::from(vec![
