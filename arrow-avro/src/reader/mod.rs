@@ -10223,6 +10223,237 @@ mod test {
         }
     }
 
+    /// Writes `rows` with `writer_json` (apache-avro) and reads them back under `reader_json`.
+    fn read_with_reader_schema(
+        writer_json: &str,
+        reader_json: &str,
+        rows: Vec<apache_avro::types::Value>,
+    ) -> Result<RecordBatch, ArrowError> {
+        let schema = apache_avro::Schema::parse_str(writer_json).expect("valid writer schema");
+        let mut bytes = Vec::new();
+        {
+            let mut writer = apache_avro::Writer::new(&schema, &mut bytes).unwrap();
+            for row in rows {
+                writer.append_value_ref(&row).expect("append row");
+            }
+            writer.flush().expect("flush");
+        }
+        ReaderBuilder::new()
+            .with_reader_schema(AvroSchema::new(reader_json.to_string()))
+            .build(Cursor::new(bytes))?
+            .next()
+            .expect("should have a batch")
+    }
+
+    /// `(type_id, value)` per row of a union column. A record branch renders its first field;
+    /// bytes and fixed render as hex, a null branch as "".
+    fn union_branches(col: &ArrayRef) -> Vec<(i8, String)> {
+        let union = col.as_any().downcast_ref::<UnionArray>().unwrap();
+        (0..union.len())
+            .map(|i| {
+                let value = union.value(i);
+                let value = match value.as_struct_opt() {
+                    Some(s) => s.column(0).clone(),
+                    None => value,
+                };
+                let rendered = arrow::util::display::array_value_to_string(&value, 0).unwrap();
+                (union.type_id(i), rendered)
+            })
+            .collect()
+    }
+
+    fn avro_record(fields: Vec<(&str, apache_avro::types::Value)>) -> apache_avro::types::Value {
+        apache_avro::types::Value::Record(
+            fields
+                .into_iter()
+                .map(|(name, value)| (name.to_string(), value))
+                .collect(),
+        )
+    }
+
+    fn avro_branch(index: u32, value: apache_avro::types::Value) -> apache_avro::types::Value {
+        apache_avro::types::Value::Union(index, Box::new(value))
+    }
+
+    // The reader lists the branches in a different order than the writer, so a by-name branch
+    // has to land on the reader branch with its name; matching by position would swap Bw and Sw.
+    #[test]
+    fn test_union_ref_branches_resolve_by_name_with_reordered_reader() {
+        use apache_avro::types::Value;
+        let writer_json = r#"{"type": "record", "name": "Root", "fields": [
+            {"name": "minValue", "type": ["null",
+                {"type": "record", "name": "Bw", "fields": [{"name": "value", "type": "bytes"}]},
+                {"type": "record", "name": "Sw", "fields": [{"name": "value", "type": "string"}]}]},
+            {"name": "maxValue", "type": ["null", "Bw", "Sw"]},
+            {"name": "tail", "type": "long"}]}"#;
+        let reader_json = r#"{"type": "record", "name": "Root", "fields": [
+            {"name": "minValue", "type": ["null",
+                {"type": "record", "name": "Sw", "fields": [{"name": "value", "type": "string"}]},
+                {"type": "record", "name": "Bw", "fields": [{"name": "value", "type": "bytes"}]}]},
+            {"name": "maxValue", "type": ["null", "Sw", "Bw"]},
+            {"name": "tail", "type": "long"}]}"#;
+        let bw = |v: &[u8]| avro_branch(1, avro_record(vec![("value", Value::Bytes(v.to_vec()))]));
+        let sw = |v: &str| avro_branch(2, avro_record(vec![("value", Value::String(v.into()))]));
+        let null = || avro_branch(0, Value::Null);
+        let rows = [
+            (bw(b"a"), bw(b"zz"), 1i64),
+            (sw("a"), sw("zz"), 2),
+            (null(), null(), 3),
+            (bw(b"b"), sw("yy"), 4),
+            (sw("b"), bw(b"yy"), 5),
+        ]
+        .into_iter()
+        .map(|(min, max, tail)| {
+            avro_record(vec![
+                ("minValue", min),
+                ("maxValue", max),
+                ("tail", Value::Long(tail)),
+            ])
+        })
+        .collect();
+
+        let batch = read_with_reader_schema(writer_json, reader_json, rows).expect("decode");
+        let s = |v: &str| v.to_string();
+        assert_eq!(
+            union_branches(batch.column(0)),
+            vec![
+                (2, s("61")),
+                (1, s("a")),
+                (0, s("")),
+                (2, s("62")),
+                (1, s("b"))
+            ],
+            "minValue"
+        );
+        assert_eq!(
+            union_branches(batch.column(1)),
+            vec![
+                (2, s("7a7a")),
+                (1, s("zz")),
+                (0, s("")),
+                (1, s("yy")),
+                (2, s("7979"))
+            ],
+            "maxValue"
+        );
+        let tail = batch
+            .column(2)
+            .as_primitive::<arrow_array::types::Int64Type>();
+        assert_eq!(tail.values().as_ref(), &[1, 2, 3, 4, 5]);
+    }
+
+    // Outside a union, a reference still has to name the reader's type: `b` refers to `A` and
+    // the reader declares `B`, which only resolves when `B` lists `A` as an alias.
+    #[test]
+    fn test_named_type_reference_requires_matching_reader_name() {
+        use apache_avro::types::Value;
+        let writer_json = r#"{"type": "record", "name": "Root", "fields": [
+            {"name": "a", "type": {"type": "record", "name": "A", "fields": [{"name": "v", "type": "long"}]}},
+            {"name": "b", "type": "A"}]}"#;
+        let reader_with = |aliases: &str| {
+            format!(
+                r#"{{"type": "record", "name": "Root", "fields": [
+                {{"name": "a", "type": {{"type": "record", "name": "A", "fields": [{{"name": "v", "type": "long"}}]}}}},
+                {{"name": "b", "type": {{"type": "record", "name": "B", "aliases": [{aliases}],
+                    "fields": [{{"name": "v", "type": "long"}}]}}}}]}}"#
+            )
+        };
+        let rows = || {
+            vec![avro_record(vec![
+                ("a", avro_record(vec![("v", Value::Long(1))])),
+                ("b", avro_record(vec![("v", Value::Long(2))])),
+            ])]
+        };
+
+        let err = read_with_reader_schema(writer_json, &reader_with(""), rows())
+            .expect_err("a reference to A must not resolve against B");
+        assert!(
+            err.to_string()
+                .contains("Named type mismatch writer=A, reader=B"),
+            "unexpected error: {err}"
+        );
+
+        let batch = read_with_reader_schema(writer_json, &reader_with(r#""A""#), rows())
+            .expect("B aliases A, so the reference resolves");
+        let b = batch.column(1).as_struct();
+        assert_eq!(
+            b.column(0)
+                .as_primitive::<arrow_array::types::Int64Type>()
+                .value(0),
+            2
+        );
+    }
+
+    // Two branches share the short name "V" in different namespaces, so only the full name
+    // tells them apart.
+    #[test]
+    fn test_union_ref_branches_resolve_by_full_name_across_namespaces() {
+        use apache_avro::types::Value;
+        let writer_json = r#"{"type": "record", "name": "Root", "fields": [
+            {"name": "minValue", "type": ["null",
+                {"type": "record", "name": "V", "namespace": "a",
+                 "fields": [{"name": "value", "type": "bytes"}]},
+                {"type": "record", "name": "V", "namespace": "b",
+                 "fields": [{"name": "value", "type": "string"}]}]},
+            {"name": "maxValue", "type": ["null", "a.V", "b.V"]}]}"#;
+        let reader_json = r#"{"type": "record", "name": "Root", "fields": [
+            {"name": "minValue", "type": ["null",
+                {"type": "record", "name": "V", "namespace": "b",
+                 "fields": [{"name": "value", "type": "string"}]},
+                {"type": "record", "name": "V", "namespace": "a",
+                 "fields": [{"name": "value", "type": "bytes"}]}]},
+            {"name": "maxValue", "type": ["null", "b.V", "a.V"]}]}"#;
+        let a = |v: &[u8]| avro_branch(1, avro_record(vec![("value", Value::Bytes(v.to_vec()))]));
+        let b = |v: &str| avro_branch(2, avro_record(vec![("value", Value::String(v.into()))]));
+        let rows = vec![
+            avro_record(vec![("minValue", a(b"a")), ("maxValue", a(b"zz"))]),
+            avro_record(vec![("minValue", b("a")), ("maxValue", b("yy"))]),
+        ];
+
+        let batch = read_with_reader_schema(writer_json, reader_json, rows).expect("decode");
+        let s = |v: &str| v.to_string();
+        assert_eq!(
+            union_branches(batch.column(1)),
+            vec![(2, s("7a7a")), (1, s("yy"))],
+            "maxValue"
+        );
+    }
+
+    // Enum and fixed branches given by name resolve by name too.
+    #[test]
+    fn test_union_ref_enum_and_fixed_branches_resolve_by_name() {
+        use apache_avro::types::Value;
+        let writer_json = r#"{"type": "record", "name": "Root", "fields": [
+            {"name": "minValue", "type": ["null",
+                {"type": "enum", "name": "E", "symbols": ["X", "Y"]},
+                {"type": "fixed", "name": "F", "size": 2}]},
+            {"name": "maxValue", "type": ["null", "E", "F"]}]}"#;
+        let reader_json = r#"{"type": "record", "name": "Root", "fields": [
+            {"name": "minValue", "type": ["null",
+                {"type": "fixed", "name": "F", "size": 2},
+                {"type": "enum", "name": "E", "symbols": ["X", "Y"]}]},
+            {"name": "maxValue", "type": ["null", "F", "E"]}]}"#;
+        let e = |i: u32, sym: &str| avro_branch(1, Value::Enum(i, sym.into()));
+        let f = |v: &[u8]| avro_branch(2, Value::Fixed(2, v.to_vec()));
+        let rows = vec![
+            avro_record(vec![("minValue", e(0, "X")), ("maxValue", e(1, "Y"))]),
+            avro_record(vec![("minValue", f(b"ab")), ("maxValue", f(b"cd"))]),
+        ];
+
+        let batch = read_with_reader_schema(writer_json, reader_json, rows).expect("decode");
+        let s = |v: &str| v.to_string();
+        assert_eq!(
+            union_branches(batch.column(0)),
+            vec![(2, s("X")), (1, s("6162"))],
+            "minValue"
+        );
+        assert_eq!(
+            union_branches(batch.column(1)),
+            vec![(2, s("Y")), (1, s("6364"))],
+            "maxValue"
+        );
+    }
+
     /// Builds a `Decoder` for a single Confluent-framed writer schema registered under `id`.
     fn confluent_decoder(id: u32, writer_schema: AvroSchema) -> Decoder {
         let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::Id);
