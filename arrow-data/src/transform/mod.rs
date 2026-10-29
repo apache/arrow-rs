@@ -44,7 +44,8 @@ mod union;
 mod utils;
 mod variable_size;
 
-type ExtendNullBits<'a> = Box<dyn Fn(&mut _MutableArrayData, usize, usize) + 'a>;
+type ExtendNullBits<'a> =
+    Box<dyn Fn(&mut _MutableArrayData, usize, usize) -> Result<(), ArrowError> + 'a>;
 // function that extends `[start..start+len]` to the mutable array.
 // this is dynamic because different data_types influence how buffers and children are extended.
 type Extend<'a> =
@@ -69,6 +70,72 @@ struct _MutableArrayData<'a> {
     pub child_data: Vec<MutableArrayData<'a>>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct MutableArrayDataState {
+    len: usize,
+    null_count: usize,
+    null_buffer_len: Option<usize>,
+    buffer1_len: usize,
+    buffer2_len: usize,
+}
+
+impl MutableArrayDataState {
+    fn new(data: &_MutableArrayData) -> Self {
+        Self {
+            len: data.len,
+            null_count: data.null_count,
+            null_buffer_len: data.null_buffer.as_ref().map(MutableBuffer::len),
+            buffer1_len: data.buffer1.len(),
+            buffer2_len: data.buffer2.len(),
+        }
+    }
+
+    fn restore(self, data: &mut _MutableArrayData, modified_len: usize) {
+        // A failed extend may set validity bits inside a preallocated buffer without
+        // changing its byte length. Clear them so a later null extend cannot observe them.
+        if let Some(buffer) = &mut data.null_buffer {
+            let end = modified_len.min(buffer.len().saturating_mul(8));
+            for i in self.len..end {
+                bit_util::unset_bit(buffer.as_slice_mut(), i);
+            }
+        }
+        data.len = self.len;
+        data.null_count = self.null_count;
+        if let (Some(buffer), Some(len)) = (&mut data.null_buffer, self.null_buffer_len) {
+            buffer.truncate(len);
+        }
+        data.buffer1.truncate(self.buffer1_len);
+        data.buffer2.truncate(self.buffer2_len);
+    }
+}
+
+fn snapshot_children(
+    data: &_MutableArrayData,
+    snapshots: &mut Vec<MutableArrayDataState>,
+) -> Result<(), ArrowError> {
+    for child in &data.child_data {
+        snapshots
+            .try_reserve(1)
+            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+        snapshots.push(MutableArrayDataState::new(&child.data));
+        snapshot_children(&child.data, snapshots)?;
+    }
+    Ok(())
+}
+
+fn restore_children(
+    data: &mut _MutableArrayData,
+    snapshots: &[MutableArrayDataState],
+    next: &mut usize,
+) {
+    for child in &mut data.child_data {
+        let modified_len = child.data.len;
+        snapshots[*next].restore(&mut child.data, modified_len);
+        *next += 1;
+        restore_children(&mut child.data, snapshots, next);
+    }
+}
+
 impl _MutableArrayData<'_> {
     fn null_buffer(&mut self) -> &mut MutableBuffer {
         self.null_buffer
@@ -77,13 +144,26 @@ impl _MutableArrayData<'_> {
     }
 }
 
+fn try_resize_for_bits(buffer: &mut MutableBuffer, len: usize) -> Result<(), ArrowError> {
+    let needed_bytes = bit_util::ceil(len, 8);
+    if buffer.len() < needed_bytes {
+        buffer
+            .try_resize(needed_bytes, 0)
+            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+    }
+    Ok(())
+}
+
 fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits<'_> {
     if let Some(nulls) = array.nulls() {
         let bytes = nulls.validity();
         Box::new(move |mutable, start, len| {
             let mutable_len = mutable.len;
             let out = mutable.null_buffer();
-            utils::resize_for_bits(out, mutable_len + len);
+            let new_len = mutable_len
+                .checked_add(len)
+                .ok_or_else(|| ArrowError::MemoryError("length overflow".into()))?;
+            try_resize_for_bits(out, new_len)?;
             mutable.null_count += set_bits(
                 out.as_slice_mut(),
                 bytes,
@@ -91,19 +171,24 @@ fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits<
                 nulls.offset() + start,
                 len,
             );
+            Ok(())
         })
     } else if use_nulls {
         Box::new(|mutable, _, len| {
             let mutable_len = mutable.len;
             let out = mutable.null_buffer();
-            utils::resize_for_bits(out, mutable_len + len);
+            let new_len = mutable_len
+                .checked_add(len)
+                .ok_or_else(|| ArrowError::MemoryError("length overflow".into()))?;
+            try_resize_for_bits(out, new_len)?;
             let write_data = out.as_slice_mut();
             (0..len).for_each(|i| {
                 bit_util::set_bit(write_data, mutable_len + i);
             });
+            Ok(())
         })
     } else {
-        Box::new(|_, _, _| {})
+        Box::new(|_, _, _| Ok(()))
     }
 }
 
@@ -179,6 +264,9 @@ pub struct MutableArrayData<'a> {
     ///
     /// This function is independent of the arrays and therefore has no lifetime.
     extend_nulls: ExtendNulls,
+
+    /// Reusable storage for rolling back nested child mutations after a failed extend.
+    rollback: Vec<MutableArrayDataState>,
 }
 
 impl std::fmt::Debug for MutableArrayData<'_> {
@@ -225,23 +313,30 @@ fn build_extend_view(array: &ArrayData, buffer_offset: u32) -> Extend<'_> {
     let views = array.buffer::<u128>(0);
     Box::new(
         move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
+            let values = &views[start..start + len];
+            let additional = values
+                .len()
+                .checked_mul(mem::size_of::<u128>())
+                .ok_or_else(|| ArrowError::MemoryError("view buffer size overflow".into()))?;
             mutable
                 .buffer1
-                .extend(views[start..start + len].iter().map(|v| {
-                    // A view of a string of 12 bytes or fewer stores the
-                    // string inline and has no buffer index, so adding 0
-                    // leaves it unchanged.
-                    let offset = if *v as u32 > MAX_INLINE_VIEW_LEN {
-                        buffer_offset
-                    } else {
-                        0
-                    };
-                    // The buffer index is bits 64 to 95 of a view. Adding
-                    // `buffer_offset` gives the string's buffer index in the
-                    // output, which fits in 32 bits, so the sum never carries
-                    // into bit 96.
-                    v + ((offset as u128) << 64)
-                }));
+                .try_reserve(additional)
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+            mutable.buffer1.extend(values.iter().map(|v| {
+                // A view of a string of 12 bytes or fewer stores the
+                // string inline and has no buffer index, so adding 0
+                // leaves it unchanged.
+                let offset = if *v as u32 > MAX_INLINE_VIEW_LEN {
+                    buffer_offset
+                } else {
+                    0
+                };
+                // The buffer index is bits 64 to 95 of a view. Adding
+                // `buffer_offset` gives the string's buffer index in the
+                // output, which fits in 32 bits, so the sum never carries
+                // into bit 96.
+                v + ((offset as u128) << 64)
+            }));
             Ok(())
         },
     )
@@ -774,6 +869,7 @@ impl<'a> MutableArrayData<'a> {
             extend_values,
             extend_null_bits,
             extend_nulls,
+            rollback: vec![],
         })
     }
 
@@ -789,8 +885,45 @@ impl<'a> MutableArrayData<'a> {
     /// Returns an error if
     /// * `index` >= the number of source arrays,
     /// * `start..end` is not a valid range within the `index`th array, or
-    /// * offset arithmetic overflows the underlying integer type.
+    /// * offset arithmetic overflows the underlying integer type, or
+    /// * memory allocation fails.
     pub fn try_extend(&mut self, index: usize, start: usize, end: usize) -> Result<(), ArrowError> {
+        let (_, new_len) = self.checked_extend_len(index, start, end)?;
+        let state = MutableArrayDataState::new(&self.data);
+        self.rollback.clear();
+        snapshot_children(&self.data, &mut self.rollback)?;
+
+        if let Err(error) = self.try_extend_in_transaction(index, start, end) {
+            state.restore(&mut self.data, new_len);
+            restore_children(&mut self.data, &self.rollback, &mut 0);
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Extends a child while an ancestor owns a recursive rollback snapshot.
+    fn try_extend_in_transaction(
+        &mut self,
+        index: usize,
+        start: usize,
+        end: usize,
+    ) -> Result<(), ArrowError> {
+        let (len, new_len) = self.checked_extend_len(index, start, end)?;
+        let result = (self.extend_null_bits[index])(&mut self.data, start, len)
+            .and_then(|()| (self.extend_values[index])(&mut self.data, index, start, len));
+
+        // An ancestor uses this length to clear validity bits written before an error and then
+        // restores the whole tree.
+        self.data.len = new_len;
+        result
+    }
+
+    fn checked_extend_len(
+        &self,
+        index: usize,
+        start: usize,
+        end: usize,
+    ) -> Result<(usize, usize), ArrowError> {
         let Some(array_len) = self.arrays.get(index).map(|array| array.len()) else {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Source array index {index} is out of bounds: there are {} source arrays",
@@ -804,20 +937,12 @@ impl<'a> MutableArrayData<'a> {
         }
 
         let len = end - start;
-        (self.extend_null_bits[index])(&mut self.data, start, len);
-        // Snapshot buffer lengths before attempting the extend so we can roll
-        // back to a consistent state if it fails.
-        let buf1_len = self.data.buffer1.len();
-        let buf2_len = self.data.buffer2.len();
-        if let Err(e) = (self.extend_values[index])(&mut self.data, index, start, len) {
-            // Restore buffers to their pre-call lengths so the array remains
-            // in a valid state for the caller to inspect or retry.
-            self.data.buffer1.truncate(buf1_len);
-            self.data.buffer2.truncate(buf2_len);
-            return Err(e);
-        }
-        self.data.len += len;
-        Ok(())
+        let new_len = self
+            .data
+            .len
+            .checked_add(len)
+            .ok_or_else(|| ArrowError::MemoryError("length overflow".into()))?;
+        Ok((len, new_len))
     }
 
     /// Extends the in progress array with a region of the input arrays.
@@ -826,7 +951,8 @@ impl<'a> MutableArrayData<'a> {
     /// This function panics if
     /// * `index` >= the number of source arrays,
     /// * `start..end` is not a valid range within the `index`th array, or
-    /// * the offset type overflows (e.g. more than 2 GiB in a `StringArray`).
+    /// * the offset type overflows (e.g. more than 2 GiB in a `StringArray`), or
+    /// * memory allocation fails.
     #[deprecated(
         since = "59.0.0",
         note = "Use `try_extend` which returns an error on overflow instead of panicking"
@@ -844,8 +970,46 @@ impl<'a> MutableArrayData<'a> {
     /// # Errors
     ///
     /// Returns an error if this [`MutableArrayData`] was not created with `use_nulls` and none
-    /// of the source arrays are nullable, or if the run-end counter overflows.
+    /// of the source arrays are nullable, the resulting length or run-end counter overflows, or
+    /// memory allocation fails.
     pub fn try_extend_nulls(&mut self, len: usize) -> Result<(), ArrowError> {
+        let Some(new_len) = self.checked_null_extend_len(len)? else {
+            return Ok(());
+        };
+        let state = MutableArrayDataState::new(&self.data);
+        self.rollback.clear();
+        snapshot_children(&self.data, &mut self.rollback)?;
+
+        if let Err(error) = self.try_extend_nulls_in_transaction(len) {
+            state.restore(&mut self.data, new_len);
+            restore_children(&mut self.data, &self.rollback, &mut 0);
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Extends a child while an ancestor owns a recursive rollback snapshot.
+    fn try_extend_nulls_in_transaction(&mut self, len: usize) -> Result<(), ArrowError> {
+        let Some(new_len) = self.checked_null_extend_len(len)? else {
+            return Ok(());
+        };
+        let bit_len = bit_util::ceil(new_len, 8);
+        let result = self
+            .data
+            .null_buffer()
+            .try_resize(bit_len, 0)
+            .map_err(|e| ArrowError::MemoryError(e.to_string()))
+            .and_then(|()| (self.extend_nulls)(&mut self.data, len));
+
+        // See `try_extend_in_transaction`: the ancestor restores this temporary length.
+        self.data.len = new_len;
+        if result.is_ok() {
+            self.data.null_count += len;
+        }
+        result
+    }
+
+    fn checked_null_extend_len(&self, len: usize) -> Result<Option<usize>, ArrowError> {
         if self.data.null_buffer.is_none() {
             return Err(ArrowError::InvalidArgumentError(
                 "MutableArrayData cannot be extended with nulls: it was created with `use_nulls` \
@@ -855,19 +1019,15 @@ impl<'a> MutableArrayData<'a> {
         }
 
         if len == 0 {
-            return Ok(());
+            return Ok(None);
         }
 
-        (self.extend_nulls)(&mut self.data, len)?;
-
-        self.data.len += len;
-        let bit_len = bit_util::ceil(self.data.len, 8);
-        let nulls = self.data.null_buffer();
-        nulls
-            .try_resize(bit_len, 0)
-            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
-        self.data.null_count += len;
-        Ok(())
+        let new_len = self
+            .data
+            .len
+            .checked_add(len)
+            .ok_or_else(|| ArrowError::MemoryError("length overflow".into()))?;
+        Ok(Some(new_len))
     }
 
     /// Extends the in progress array with null elements, ignoring the input arrays.
@@ -875,7 +1035,8 @@ impl<'a> MutableArrayData<'a> {
     /// # Panics
     ///
     /// Panics if this [`MutableArrayData`] was not created with `use_nulls` and none of the
-    /// source arrays are nullable, or if the run-end counter overflows.
+    /// source arrays are nullable, the resulting length or run-end counter overflows, or memory
+    /// allocation fails.
     #[deprecated(
         since = "59.0.0",
         note = "Use `try_extend_nulls` which returns an error on overflow instead of panicking"
@@ -990,6 +1151,35 @@ mod test {
         .unwrap()
     }
 
+    fn struct_array_data() -> ArrayData {
+        ArrayData::builder(DataType::Struct(
+            vec![
+                Field::new("first", DataType::Int64, true),
+                Field::new("second", DataType::Int64, true),
+            ]
+            .into(),
+        ))
+        .len(1)
+        .child_data(vec![int64_array_data(vec![1]), int64_array_data(vec![2])])
+        .build()
+        .unwrap()
+    }
+
+    fn nested_struct_array_data() -> ArrayData {
+        let nested = struct_array_data();
+        ArrayData::builder(DataType::Struct(
+            vec![
+                Field::new("nested", nested.data_type().clone(), true),
+                Field::new("value", DataType::Int64, true),
+            ]
+            .into(),
+        ))
+        .len(1)
+        .child_data(vec![nested, int64_array_data(vec![3])])
+        .build()
+        .unwrap()
+    }
+
     #[test]
     fn test_try_extend_invalid_index_and_range() {
         let array = int64_array_data(vec![1, 2, 3]);
@@ -1021,6 +1211,50 @@ mod test {
     }
 
     #[test]
+    fn test_try_extend_rolls_back_nested_children() {
+        let array = struct_array_data();
+        let mut mutable = MutableArrayData::new(vec![&array], false, 1);
+        let extend = std::mem::replace(
+            &mut mutable.data.child_data[1].extend_values[0],
+            Box::new(|_, _, _, _| Err(ArrowError::MemoryError("injected error".into()))),
+        );
+
+        let err = mutable.try_extend(0, 0, 1).unwrap_err();
+        assert!(err.to_string().contains("injected error"));
+        assert_eq!(mutable.data.child_data[0].len(), 0);
+        assert_eq!(mutable.data.child_data[0].data.buffer1.len(), 0);
+
+        mutable.data.child_data[1].extend_values[0] = extend;
+        mutable.try_extend(0, 0, 1).unwrap();
+        assert_eq!(mutable.freeze(), array);
+    }
+
+    #[test]
+    fn test_try_extend_rolls_back_deeply_nested_null_bits() {
+        let array = nested_struct_array_data();
+        let mut mutable = MutableArrayData::new(vec![&array], true, 1);
+        mutable.try_extend(0, 0, 1).unwrap();
+        let extend = std::mem::replace(
+            &mut mutable.data.child_data[1].extend_values[0],
+            Box::new(|_, _, _, _| Err(ArrowError::MemoryError("injected error".into()))),
+        );
+
+        mutable.try_extend(0, 0, 1).unwrap_err();
+        mutable.data.child_data[1].extend_values[0] = extend;
+        mutable.try_extend_nulls(1).unwrap();
+
+        let result = mutable.freeze();
+        assert!(!result.is_null(0));
+        assert!(result.is_null(1));
+        let nested = &result.child_data()[0];
+        assert!(!nested.is_null(0));
+        assert!(nested.is_null(1));
+        assert!(nested.child_data()[0].is_null(1));
+        assert!(nested.child_data()[1].is_null(1));
+        assert!(result.child_data()[1].is_null(1));
+    }
+
+    #[test]
     fn test_try_extend_nulls_without_null_buffer() {
         let array = int64_array_data(vec![1, 2, 3]);
         let mut mutable = MutableArrayData::new(vec![&array], false, 3);
@@ -1033,6 +1267,29 @@ mod test {
         let mut mutable = MutableArrayData::new(vec![&array], true, 3);
         mutable.try_extend_nulls(1).unwrap();
         assert_eq!(mutable.len(), 1);
+    }
+
+    #[test]
+    fn test_try_extend_nulls_rolls_back_nested_children() {
+        let array = struct_array_data();
+        let mut mutable = MutableArrayData::new(vec![&array], true, 1);
+        let extend_nulls = std::mem::replace(
+            &mut mutable.data.child_data[1].extend_nulls,
+            Box::new(|_, _| Err(ArrowError::MemoryError("injected error".into()))),
+        );
+
+        let err = mutable.try_extend_nulls(1).unwrap_err();
+        assert!(err.to_string().contains("injected error"));
+        assert_eq!(mutable.data.child_data[0].len(), 0);
+        assert_eq!(mutable.data.child_data[0].data.buffer1.len(), 0);
+
+        mutable.data.child_data[1].extend_nulls = extend_nulls;
+        mutable.try_extend_nulls(1).unwrap();
+        let result = mutable.freeze();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result.null_count(), 1);
+        assert_eq!(result.child_data()[0].len(), 1);
+        assert_eq!(result.child_data()[1].len(), 1);
     }
 
     #[test]
