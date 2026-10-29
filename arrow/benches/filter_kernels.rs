@@ -81,6 +81,19 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_built_filter(&data_array, &sparse_filter))
     });
 
+    let data_array = create_boolean_array(size, 0.0, 0.5);
+    c.bench_function("filter context boolean (kept 1/2)", |b| {
+        b.iter(|| bench_built_filter(&data_array, &filter))
+    });
+    c.bench_function(
+        "filter context boolean high selectivity (kept 1023/1024)",
+        |b| b.iter(|| bench_built_filter(&data_array, &dense_filter)),
+    );
+    c.bench_function(
+        "filter context boolean low selectivity (kept 1/1024)",
+        |b| b.iter(|| bench_built_filter(&data_array, &sparse_filter)),
+    );
+
     let data_array = create_primitive_array::<Int32Type>(size, 0.0);
     c.bench_function("filter i32 (kept 1/2)", |b| {
         b.iter(|| bench_filter(&data_array, &filter_array))
