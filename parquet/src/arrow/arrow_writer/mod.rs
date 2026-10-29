@@ -1273,6 +1273,7 @@ struct ArrowTopLevelWriterSpec {
 enum ArrowWriteSchemaPlanError {
     General(String),
     Nyi(String),
+    ArrowError(String),
 }
 
 impl ArrowWriteSchemaPlanError {
@@ -1280,6 +1281,7 @@ impl ArrowWriteSchemaPlanError {
         match self {
             Self::General(message) => ParquetError::General(message.clone()),
             Self::Nyi(message) => ParquetError::NYI(message.clone()),
+            Self::ArrowError(message) => ParquetError::ArrowError(message.clone()),
         }
     }
 
@@ -1287,6 +1289,7 @@ impl ArrowWriteSchemaPlanError {
         match error {
             ParquetError::NYI(message) => Self::Nyi(message),
             ParquetError::General(message) => Self::General(message),
+            ParquetError::ArrowError(message) => Self::ArrowError(message),
             error => Self::General(error.to_string()),
         }
     }
@@ -3518,14 +3521,16 @@ mod tests {
             )
             .unwrap();
             let factory = ArrowRowGroupWriterFactory::new(&file, schema);
-            let Err(err) = factory.create_column_writers(0) else {
-                panic!("nullable map-key schema should not create column writers")
-            };
-            assert!(
-                err.to_string()
-                    .contains("Map key field 'key' must be non-nullable"),
-                "{err}"
-            );
+            for row_group_index in 0..2 {
+                let Err(err) = factory.create_column_writers(row_group_index) else {
+                    panic!("nullable map-key schema should not create column writers")
+                };
+                assert!(matches!(&err, ParquetError::ArrowError(_)), "{err:?}");
+                assert_eq!(
+                    err.to_string(),
+                    "Arrow: Map key field 'key' must be non-nullable, including its encoded values"
+                );
+            }
         }
     }
 
@@ -3554,6 +3559,24 @@ mod tests {
                 .contains("column writers")
         );
         assert_eq!(group.buffered_rows, 0);
+    }
+
+    #[test]
+    fn arrow_write_schema_plan_preserves_error_variants() {
+        for error in [
+            ParquetError::General("schema mismatch".to_owned()),
+            ParquetError::NYI("unsupported type".to_owned()),
+            ParquetError::ArrowError("invalid schema".to_owned()),
+        ] {
+            let expected_variant = std::mem::discriminant(&error);
+            let expected_message = error.to_string();
+            let cached = ArrowWriteSchemaPlanError::from_parquet_error(error);
+            for _ in 0..2 {
+                let error = cached.to_parquet_error();
+                assert_eq!(std::mem::discriminant(&error), expected_variant);
+                assert_eq!(error.to_string(), expected_message);
+            }
+        }
     }
 
     #[test]
