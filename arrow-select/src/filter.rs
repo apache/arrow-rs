@@ -2232,6 +2232,36 @@ mod tests {
     }
 
     #[test]
+    fn test_filter_map_single_run_memory() {
+        // 100000 maps of 2 entries each
+        let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+        for i in 0..100000 {
+            builder.keys().append_value("a");
+            builder.values().append_value(i);
+            builder.keys().append_value("b");
+            builder.values().append_null();
+            builder.append(true).unwrap();
+        }
+        let map = builder.finish();
+        let entries_size = map.entries().get_array_memory_size();
+
+        // A short run is copied, so as not to keep all of the entries alive
+        let short = BooleanArray::from_iter((0..100000).map(|i| Some((40000..40010).contains(&i))));
+        assert_filter_matches_take(&map, &short);
+        let filtered = filter(&map, &short).unwrap();
+        assert!(filtered.as_map().entries().get_array_memory_size() < entries_size / 4);
+
+        // A longer run is sliced
+        let long = BooleanArray::from_iter((0..100000).map(|i| Some((20000..40000).contains(&i))));
+        assert_filter_matches_take(&map, &long);
+        let filtered = filter(&map, &long).unwrap();
+        assert_eq!(
+            filtered.as_map().entries().get_array_memory_size(),
+            entries_size
+        );
+    }
+
+    #[test]
     #[cfg_attr(miri, ignore)] // Takes too long
     fn fuzz_filter_map() {
         let mut rng = rng();
