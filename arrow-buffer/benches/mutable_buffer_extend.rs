@@ -115,6 +115,9 @@ fn criterion_benchmark(c: &mut Criterion) {
         bench_extend(&mut group, "range i32", chunk, &chunks, |_, r| {
             r.start as i32..r.end as i32
         });
+        bench_extend(&mut group, "range i64", chunk, &chunks, |_, r| {
+            r.start as i64..r.end as i64
+        });
         bench_extend(&mut group, "repeat_n u32", chunk, &chunks, |_, r| {
             std::iter::repeat_n(r.start as u32, r.len())
         });
