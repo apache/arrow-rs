@@ -640,6 +640,9 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
             DataType::LargeList(_) => {
                 Ok(Arc::new(filter_list::<i64>(values.as_list(), predicate)?))
             }
+            DataType::FixedSizeList(_, _) => {
+                Ok(Arc::new(filter_fixed_size_list(values.as_fixed_size_list(), predicate)?))
+            }
             DataType::ListView(_) => {
                 Ok(Arc::new(filter_list_view::<i32>(values.as_list_view(), predicate)))
             }
@@ -1403,6 +1406,36 @@ fn filter_list<O: OffsetSizeTrait>(
     Ok(unsafe { GenericListArray::new_unchecked(field, offsets, values, nulls) })
 }
 
+/// `filter` implementation for fixed-size lists
+fn filter_fixed_size_list(
+    array: &FixedSizeListArray,
+    predicate: &FilterPredicate,
+) -> Result<FixedSizeListArray, ArrowError> {
+    let size = array.value_length() as usize;
+    let mut child_slices = Vec::new();
+    match predicate.selection() {
+        FilterSelection::Slices(slices) => slices
+            .for_each(|(start, end)| push_child_slice(&mut child_slices, start * size, end * size)),
+        FilterSelection::Indices(indices) => indices
+            .for_each(|idx| push_child_slice(&mut child_slices, idx * size, (idx + 1) * size)),
+        FilterSelection::All { .. } | FilterSelection::None => unreachable!(),
+    }
+    let values = filter_child_slices(array.values(), child_slices, predicate.count * size)?;
+
+    let field = match array.data_type() {
+        DataType::FixedSizeList(field, _) => field.clone(),
+        _ => unreachable!(),
+    };
+    let nulls = predicate.filter_nulls(array.nulls());
+
+    // SAFETY: `values` has `predicate.count * size` elements and the data
+    // type of the child of `array`, and `nulls`, if any, has
+    // `predicate.count` bits.
+    Ok(unsafe {
+        FixedSizeListArray::new_unchecked(field, size as i32, values, nulls, predicate.count)
+    })
+}
+
 /// `filter` implementation for list views
 fn filter_list_view<OffsetType: OffsetSizeTrait>(
     array: &GenericListViewArray<OffsetType>,
@@ -2149,6 +2182,161 @@ mod tests {
         for predicate in &predicates {
             assert_filter_matches_take(&list, predicate);
             assert_filter_matches_take(&list.slice(3, 250), &predicate.slice(0, 250));
+        }
+    }
+
+    #[test]
+    fn test_filter_fixed_size_list() {
+        // [[0, 1, 2], null, [6, 7, 8], [9, 10, 11], null, [15, 16, 17], [18, 19, 20]]
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let values = Arc::new(Int32Array::from_iter_values(0..21));
+        let nulls = NullBuffer::from(vec![true, false, true, true, false, true, true]);
+        let list = FixedSizeListArray::new(field, 3, values, Some(nulls));
+        for predicate in test_predicates(list.len()) {
+            assert_filter_matches_take(&list, &predicate);
+        }
+        let sliced = list.slice(2, 4);
+        for predicate in test_predicates(sliced.len()) {
+            assert_filter_matches_take(&sliced, &predicate);
+        }
+
+        // List of fixed-size lists
+        let field = Arc::new(Field::new_list_field(list.data_type().clone(), true));
+        let offsets = OffsetBuffer::<i32>::from_lengths([2, 0, 1, 3, 1]);
+        let nested = ListArray::new(field, offsets, Arc::new(list.clone()), None);
+        for predicate in test_predicates(nested.len()) {
+            assert_filter_matches_take(&nested, &predicate);
+        }
+
+        // Fixed-size list of lists
+        let inner = ListArray::from_iter_primitive::<Int32Type, _, _>(
+            (0..12).map(|i| Some((0..i % 4).map(Some).collect::<Vec<_>>())),
+        );
+        let field = Arc::new(Field::new_list_field(inner.data_type().clone(), true));
+        let nested = FixedSizeListArray::new(field, 2, Arc::new(inner), None);
+        for predicate in test_predicates(nested.len()) {
+            assert_filter_matches_take(&nested, &predicate);
+        }
+        let sliced = nested.slice(1, 4);
+        for predicate in test_predicates(sliced.len()) {
+            assert_filter_matches_take(&sliced, &predicate);
+        }
+    }
+
+    #[test]
+    fn test_filter_fixed_size_list_zero_size() {
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let values = Arc::new(Int32Array::from(Vec::<i32>::new()));
+        let nulls = NullBuffer::from(vec![true, false, true, true, false]);
+        let list =
+            FixedSizeListArray::try_new_with_length(field, 0, values, Some(nulls), 5).unwrap();
+        for predicate in test_predicates(list.len()) {
+            let filtered = filter(&list, &predicate).unwrap();
+            filtered.to_data().validate_full().unwrap();
+            assert_eq!(filtered.len(), predicate.true_count());
+            let expected: Vec<_> = (0..predicate.len())
+                .filter(|&i| predicate.value(i))
+                .map(|i| list.is_valid(i))
+                .collect();
+            let actual: Vec<_> = (0..filtered.len()).map(|i| filtered.is_valid(i)).collect();
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn test_filter_fixed_size_list_single_run_memory() {
+        // 100000 rows of 4 values each
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let values = Arc::new(Int32Array::from_iter_values(0..400000));
+        let list = FixedSizeListArray::new(field, 4, values, None);
+        let values_size = list.values().get_array_memory_size();
+
+        // A short run is copied, so as not to keep all of the values alive
+        let short = BooleanArray::from_iter((0..100000).map(|i| Some((40000..40010).contains(&i))));
+        assert_filter_matches_take(&list, &short);
+        let filtered = filter(&list, &short).unwrap();
+        assert!(
+            filtered
+                .as_fixed_size_list()
+                .values()
+                .get_array_memory_size()
+                < values_size / 4
+        );
+
+        // A longer run is sliced
+        let long = BooleanArray::from_iter((0..100000).map(|i| Some((20000..40000).contains(&i))));
+        assert_filter_matches_take(&list, &long);
+        let filtered = filter(&list, &long).unwrap();
+        assert_eq!(
+            filtered
+                .as_fixed_size_list()
+                .values()
+                .get_array_memory_size(),
+            values_size
+        );
+    }
+
+    #[test]
+    fn test_filter_fixed_size_list_of_struct_and_run_end_encoded() {
+        let x = Int32Array::from(gen_primitive(24, 0.8));
+        let y = StringArray::from_iter(as_deref(&gen_strings(24, 0.8, 0..10)));
+        let items = StructArray::from(vec![
+            (
+                Arc::new(Field::new("x", DataType::Int32, true)),
+                Arc::new(x) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("y", DataType::Utf8, true)),
+                Arc::new(y) as ArrayRef,
+            ),
+        ]);
+        let field = Arc::new(Field::new_list_field(items.data_type().clone(), true));
+        let list = FixedSizeListArray::new(field, 4, Arc::new(items), None);
+        for predicate in test_predicates(list.len()) {
+            assert_filter_matches_take(&list, &predicate);
+        }
+
+        // REE filtering reads the bits of the child mask, not its slices
+        // [1, 1, null, 2, 2, 2, 3, 3]
+        let run_ends = Int32Array::from(vec![2, 3, 6, 8]);
+        let run_values = Int32Array::from(vec![Some(1), None, Some(2), Some(3)]);
+        let values = RunArray::try_new(&run_ends, &run_values).unwrap();
+        let field = Arc::new(Field::new_list_field(values.data_type().clone(), true));
+        let list = FixedSizeListArray::new(field, 2, Arc::new(values), None);
+        for predicate in test_predicates(list.len()) {
+            assert_filter_matches_take(&list, &predicate);
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
+    fn fuzz_filter_fixed_size_list() {
+        let mut rng = rng();
+
+        for i in 0..50 {
+            let filter_percent = match i {
+                0..=2 => 1.,
+                3..=5 => 0.,
+                _ => rng.random_range(0.0..1.0),
+            };
+
+            let array_len = rng.random_range(32..256);
+            let array_offset = rng.random_range(0..10);
+            let size = rng.random_range(1..6);
+
+            let items = gen_struct_with_list::<i32>((array_len + array_offset) * size, 4);
+            let field = Arc::new(Field::new_list_field(items.data_type().clone(), true));
+            let nulls =
+                NullBuffer::from_iter((0..array_len + array_offset).map(|_| rng.random_bool(0.8)));
+            let array = FixedSizeListArray::new(field, size as i32, Arc::new(items), Some(nulls));
+            let array = array.slice(array_offset, array_len);
+
+            let predicate_len = array_len - rng.random_range(0..10);
+            let predicate = BooleanArray::from_iter(
+                (0..predicate_len).map(|_| Some(rng.random_bool(filter_percent))),
+            );
+
+            assert_filter_matches_take(&array, &predicate);
         }
     }
 
