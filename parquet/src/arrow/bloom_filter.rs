@@ -146,6 +146,13 @@ impl<'a> ArrowSbbf<'a> {
     /// for a `FIXED_LEN_BYTE_ARRAY` column, to the column's length, truncating
     /// a value that is too large in the same way as [`ArrowWriter`].
     ///
+    /// Values of time types (timestamps, times, durations and `Date64`) are
+    /// checked in the unit of `array`'s data type, which must be the unit the
+    /// column was written in, as they are not converted between units. For
+    /// example, a `Timestamp(Millisecond, _)` value of `1_000` is not found by
+    /// checking the same instant as a `Timestamp(Microsecond, _)` value of
+    /// `1_000_000`.
+    ///
     /// Returns an error if [`ArrowWriter`] cannot write `array`'s data type to a
     /// column of this physical type, if only one of `array` and the column is
     /// a decimal or their scales differ, or if `array` is a `FixedSizeBinary`
@@ -419,6 +426,16 @@ mod tests {
         assert!(
             found.iter().all(|v| v == Some(false)),
             "{absent:?}: {found:?}"
+        );
+    }
+
+    #[test]
+    fn time_units_are_not_converted() {
+        // The same instant in a different unit hashes a different value
+        assert_round_trip(
+            Arc::new(TimestampMillisecondArray::from(vec![1_000, 2_000])),
+            Arc::new(TimestampMicrosecondArray::from(vec![1_000_000, 2_000_000])),
+            false,
         );
     }
 
