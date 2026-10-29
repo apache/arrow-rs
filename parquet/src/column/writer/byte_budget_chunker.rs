@@ -42,22 +42,19 @@ pub(crate) enum SubBatchStrategy {
     /// [#10538] for the measurements.
     ///
     /// [#10538]: https://github.com/apache/arrow-rs/issues/10538
+    ///
+    /// Also used for the dictionary page budget to ensure clustered nulls do not
+    /// cause level-scaled sub-batches to accumulate values far beyond the dictionary
+    /// limit before triggering fallback ([#11994]).
+    ///
+    /// [#10538]: https://github.com/apache/arrow-rs/issues/10538
+    /// [#11994]: https://github.com/apache/arrow-rs/issues/11994
     Values(usize),
     /// Cut after this many levels: the value budget scaled by the chunk's
     /// level:value ratio, rounded up.
     ///
-    /// Used everywhere else, because everywhere else the round-up changes no
-    /// bytes — the *dictionary page* budget shrinks toward zero as the
-    /// dictionary fills, so a one-value budget is routine there for ordinary
-    /// values, and `PLAIN` and `DELTA_LENGTH_BYTE_ARRAY` values cost the same
-    /// wherever they land — while value-exact windows cost throughput
-    /// ([#10554]).
-    ///
-    /// The round-up is bounded, which is what makes it an acceptable price. A
-    /// window spans `ceil(values * levels / values_in_chunk)` levels, so where
-    /// one value already fills the budget it covers at most two values,
-    /// whatever the null density. The page bound [#9972] added therefore still
-    /// holds; it is two values per page rather than one.
+    /// Used for uncompressed data page encodings (e.g. PLAIN and
+    /// DELTA_LENGTH_BYTE_ARRAY) where values cost the same wherever they land.
     ///
     /// [#9972]: https://github.com/apache/arrow-rs/pull/9972
     /// [#10554]: https://github.com/apache/arrow-rs/pull/10554
@@ -176,7 +173,7 @@ impl ByteBudgetChunker {
             // An encoder that cannot size its dictionary page (`?`) leaves
             // the chunk unsplit.
             let used = encoder.estimated_dict_page_size()?;
-            (self.dict_page_byte_limit.saturating_sub(used), false)
+            (self.dict_page_byte_limit.saturating_sub(used), true)
         } else {
             if self.static_always_fits {
                 return None;

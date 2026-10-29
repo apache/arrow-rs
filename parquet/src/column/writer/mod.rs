@@ -3652,6 +3652,52 @@ mod tests {
     }
 
     #[test]
+    fn test_column_writer_caps_dictionary_page_size_with_clustered_nulls() {
+        // Clustered nulls must not cause the dictionary encoder to accumulate
+        // values far past the dictionary page budget in a single mini-batch
+        // before consulting the fallback check (#11994).
+        let value_size = 8 * 1024;
+        let dict_page_limit = 64 * 1024;
+        let num_values = 28;
+        let trailing_nulls = 996;
+
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_enabled(true)
+            .set_dictionary_page_size_limit(dict_page_limit)
+            .build();
+
+        let data: Vec<_> = (0..num_values)
+            .map(|i| {
+                let mut v = vec![0u8; value_size];
+                v[..8].copy_from_slice(&(i as u64).to_le_bytes());
+                ByteArray::from(v)
+            })
+            .collect();
+
+        // 28 non-null values followed by 996 nulls in a single 1024-row chunk
+        let mut def_levels = vec![1i16; num_values];
+        def_levels.extend(std::iter::repeat_n(0i16, trailing_nulls));
+
+        let pages =
+            write_and_collect_pages::<ByteArrayType>(props, 1, 0, &data, Some(&def_levels), None);
+        let dict_page_size = pages.dict_page_size;
+
+        assert!(
+            dict_page_size > 0,
+            "expected the column to dictionary-encode"
+        );
+        // Before using exact value batching for dictionary, the 37-level window
+        // covered all 28 values (28 * 8 KiB = 224 KiB), overshooting the 64 KiB
+        // limit. With exact value batching, the dictionary page size is
+        // capped near dict_page_limit.
+        assert!(
+            dict_page_size <= 2 * dict_page_limit,
+            "dictionary page {dict_page_size} exceeds 2x the {dict_page_limit} limit",
+        );
+    }
+
+    #[test]
     fn test_column_writer_caps_page_size_for_fixed_len_byte_array() {
         // Coverage for `ParquetValueType::byte_size` override on
         // `FixedLenByteArray`. With `type_length = 1`, each plain-encoded
