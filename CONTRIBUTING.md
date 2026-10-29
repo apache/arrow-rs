@@ -186,7 +186,7 @@ Our CI uses `rustfmt` to check code formatting. Before submitting a
 PR be sure to run the following and check for lint issues:
 
 ```bash
-cargo +stable fmt --all -- --check
+cargo fmt --all -- --check
 ```
 
 ## Miri
