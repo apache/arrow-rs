@@ -1100,6 +1100,30 @@ fn test_string_view() {
 }
 
 #[test]
+fn test_string_view_inline_boundary() {
+    // Strings of 12 bytes are stored in their views and strings of 13 bytes
+    // are not. The second array's strings follow the first array's data
+    // buffer in the output.
+    let a1 = StringViewArray::from(vec!["first array, not inline"]).into_data();
+    let a2 = StringViewArray::from(vec!["twelve bytes", "thirteen byte"]).into_data();
+
+    let mut mutable = MutableArrayData::new(vec![&a1, &a2], false, 3);
+    mutable.try_extend(1, 0, 2).unwrap();
+    mutable.try_extend(0, 0, 1).unwrap();
+
+    let array = StringViewArray::from(mutable.freeze());
+    array.to_data().validate_full().unwrap();
+    assert_eq!(
+        array.iter().collect::<Vec<_>>(),
+        vec![
+            Some("twelve bytes"),
+            Some("thirteen byte"),
+            Some("first array, not inline")
+        ]
+    );
+}
+
+#[test]
 #[should_panic(expected = "Arrays with inconsistent types passed to MutableArrayData")]
 fn test_mixed_types() {
     let a = StringArray::from(vec!["abc", "def"]).to_data();
