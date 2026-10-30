@@ -214,51 +214,58 @@ impl ByteBudgetChunker {
         budget: usize,
         value_exact: bool,
     ) -> Option<SubBatchStrategy> {
-        // Ask the encoder how many of the next values fit in one page byte
-        // budget, *before* counting the chunk's values: that count is an
-        // O(chunk_size) def-level scan on nullable columns, and most chunks
-        // fit outright. The chunk holds at most `chunk_size` values, so ask
-        // about the next `chunk_size` — a window whose prefix is exactly the
-        // chunk's values. The encoder counts the window's leading values up
-        // to the first that overflows, so its answer bounds the chunk too: if
-        // it covers the whole window, it covers the chunk. Dispatch on whether the caller supplied gather
-        // indices; this mirrors how `write_mini_batch` picks `write_gather`
-        // vs `write`.
-        let (fit, window_len) = match value_indices {
+        // Ask the encoder how many of the chunk's values fit in one page byte
+        // budget. Dispatch on whether the caller supplied gather indices;
+        // this mirrors how `write_mini_batch` picks `write_gather` vs
+        // `write`.
+        let (fit, vals_in_chunk) = match value_indices {
             Some(idx) => {
+                // Ask *before* counting the chunk's values: that count is an
+                // O(chunk_size) def-level scan on nullable columns, and most
+                // chunks fit outright. The chunk holds at most `chunk_size`
+                // values, so ask about the next `chunk_size` — a window whose
+                // prefix is exactly the chunk's values. The encoder counts
+                // the window's leading values up to and including the first
+                // that overflows, so if it covers the whole window it covers
+                // the chunk.
+                //
+                // Only gather indices allow this lookahead: each one names a
+                // real value of a later chunk. A contiguous `values` slice
+                // may hold placeholders past the values its levels reference
+                // (raw `ColumnWriter` callers pad them), which cannot be
+                // sized.
                 let end = values_offset.saturating_add(chunk_size).min(idx.len());
                 let start = values_offset.min(end);
-                (
-                    E::count_values_within_byte_budget_gather(values, &idx[start..end], budget),
-                    end - start,
-                )
+                let window = &idx[start..end];
+                let fit = E::count_values_within_byte_budget_gather(values, window, budget)?;
+                if fit >= window.len() {
+                    return None;
+                }
+                // Something in the window overflows; only now count how many
+                // of its values belong to this chunk.
+                (fit, chunk_def.value_count(chunk_size, self.max_def_level))
             }
-            None => (
-                E::count_values_within_byte_budget(values, values_offset, chunk_size, budget),
-                // Clamped by the encoder to the values present; at worst
-                // this sends a fitting tail chunk down the slower path below.
-                chunk_size,
-            ),
+            None => {
+                // For a non-nullable, unrepeated column `value_count` is O(1)
+                // (`Absent`/`Uniform` def levels); nullable or nested columns
+                // pay the def-level scan.
+                let vals_in_chunk = chunk_def.value_count(chunk_size, self.max_def_level);
+                if vals_in_chunk == 0 {
+                    return None;
+                }
+                let fit = E::count_values_within_byte_budget(
+                    values,
+                    values_offset,
+                    vals_in_chunk,
+                    budget,
+                )?;
+                (fit, vals_in_chunk)
+            }
         };
-        let fit = match fit {
-            // The encoder cannot size these values; write the chunk whole.
-            None => return None,
-            // The whole window fits, so the chunk does.
-            Some(n) if n >= window_len => return None,
-            Some(n) => n,
-        };
-        // Something in the window overflows; only now count how many of the
-        // window's values belong to this chunk. For a non-nullable,
-        // unrepeated column `value_count` is O(1) (`Absent`/`Uniform` def
-        // levels); nullable or nested columns pay the def-level scan.
-        let vals_in_chunk = chunk_def.value_count(chunk_size, self.max_def_level);
-        if vals_in_chunk == 0 {
-            return None;
-        }
-        // `fit` counts the window's leading values up to and including the
-        // first that overflows. The chunk's values are the window's first
-        // `vals_in_chunk`, so the answer for the chunk is the same `fit`, or
-        // "everything fits" when `fit` reaches past them.
+        // `fit` counts leading values up to and including the first that
+        // overflows. The chunk's values are the first `vals_in_chunk` of
+        // them, so "everything fits" when `fit` reaches past them (this also
+        // covers an all-null chunk).
         if fit >= vals_in_chunk {
             return None;
         }
@@ -298,6 +305,21 @@ mod tests {
     /// chunk whose data page budget is [`BUDGET`] bytes, over both the
     /// contiguous and the gather entry points, and checks they agree.
     fn pick(lens: &[usize], def: &[i16]) -> Option<SubBatchStrategy> {
+        let values: Vec<_> = lens
+            .iter()
+            .map(|&n| ByteArray::from(vec![b'x'; n]))
+            .collect();
+        let indices: Vec<usize> = (0..values.len()).collect();
+        let contiguous = pick_values(&values, None, def);
+        assert_eq!(contiguous, pick_values(&values, Some(&indices), def));
+        contiguous
+    }
+
+    fn pick_values(
+        values: &[ByteArray],
+        value_indices: Option<&[usize]>,
+        def: &[i16],
+    ) -> Option<SubBatchStrategy> {
         let descr = Arc::new(ColumnDescriptor::new(
             Arc::new(
                 SchemaType::primitive_type_builder("col", Type::BYTE_ARRAY)
@@ -318,25 +340,8 @@ mod tests {
             ColumnValueEncoderImpl::<ByteArrayType>::try_new(&descr, &props, &column_props)
                 .unwrap();
         let chunker = ByteBudgetChunker::new(&descr, &column_props, def.len());
-        let values: Vec<_> = lens
-            .iter()
-            .map(|&n| ByteArray::from(vec![b'x'; n]))
-            .collect();
         let chunk_def = LevelDataRef::Materialized(def);
-
-        let contiguous =
-            chunker.pick_sub_batch(&encoder, &values[..], None, chunk_def, 0, def.len());
-        let indices: Vec<usize> = (0..values.len()).collect();
-        let gather = chunker.pick_sub_batch(
-            &encoder,
-            &values[..],
-            Some(&indices),
-            chunk_def,
-            0,
-            def.len(),
-        );
-        assert_eq!(contiguous, gather);
-        contiguous
+        chunker.pick_sub_batch(&encoder, values, value_indices, chunk_def, 0, def.len())
     }
 
     #[test]
@@ -360,6 +365,15 @@ mod tests {
             pick(&[1000, 10, 10], &[1, 1, 0, 1]),
             Some(SubBatchStrategy::Levels(2))
         );
+    }
+
+    #[test]
+    fn contiguous_values_past_the_chunk_are_not_read() {
+        // Raw `ColumnWriter` callers may pad `values` past the values their
+        // levels reference with placeholders that hold no data, which cannot
+        // be sized; the contiguous path must not look ahead at them.
+        let values = [ByteArray::from(vec![b'x'; 10]), ByteArray::new()];
+        assert_eq!(pick_values(&values, None, &[1, 0]), None);
     }
 
     #[test]
