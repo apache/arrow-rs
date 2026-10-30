@@ -53,15 +53,20 @@ pub(crate) enum SubBatchStrategy {
     /// wherever they land — while value-exact windows cost throughput
     /// ([#10554]).
     ///
-    /// The round-up is bounded, which is what makes it an acceptable price. A
-    /// window spans `ceil(values * levels / values_in_chunk)` levels, so where
-    /// one value already fills the budget it covers at most two values,
-    /// whatever the null density. The page bound [#9972] added therefore still
-    /// holds; it is two values per page rather than one.
+    /// The round-up must stay bounded for that price to be acceptable. The
+    /// level count alone does not bound it: the ratio is a chunk *average*,
+    /// so a window over a run of clustered values can hold far more than the
+    /// budget (28 values of 76 MiB followed by 996 nulls all land in a
+    /// 37-level window, [#11994]). Each window is therefore also capped at
+    /// `max_values` values, twice the value budget, so the page bound [#9972]
+    /// added holds whatever the null layout: two values per page rather than
+    /// one. The cap walks the window's definition levels, but adds no
+    /// mini-batches where nulls are evenly spread.
     ///
     /// [#9972]: https://github.com/apache/arrow-rs/pull/9972
     /// [#10554]: https://github.com/apache/arrow-rs/pull/10554
-    Levels(usize),
+    /// [#11994]: https://github.com/apache/arrow-rs/issues/11994
+    Levels { levels: usize, max_values: usize },
 }
 
 /// Picks byte-budget-aware mini-batch sizes for one column.
@@ -257,7 +262,10 @@ impl ByteBudgetChunker {
                             .div_ceil(vals_in_chunk)
                             .max(1)
                     };
-                    SubBatchStrategy::Levels(chunk_size.min(levels_per_subbatch))
+                    SubBatchStrategy::Levels {
+                        levels: chunk_size.min(levels_per_subbatch),
+                        max_values: values_per_subbatch.saturating_mul(2),
+                    }
                 })
             }
         }

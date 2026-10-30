@@ -868,7 +868,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     ///
     /// [`SubBatchStrategy::Values`] windows are cut on value boundaries,
     /// walking definition levels to find where the value budget is used up;
-    /// [`SubBatchStrategy::Levels`] windows are a fixed level count. See
+    /// [`SubBatchStrategy::Levels`] windows are a fixed level count, capped
+    /// at a maximum number of values. See
     /// [`SubBatchStrategy`] for which budget gets which and why.
     ///
     /// For repeated/nested columns sub-batches then extend to the next
@@ -897,7 +898,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         // level, and a value-exact window spans at least one level, so each
         // iteration below makes progress (`sub_end > sub_start`).
         debug_assert!(
-            matches!(sub_batch, SubBatchStrategy::Values(n) | SubBatchStrategy::Levels(n) if n >= 1),
+            matches!(
+                sub_batch,
+                SubBatchStrategy::Values(n) | SubBatchStrategy::Levels { levels: n, max_values: _ }
+                    if n >= 1
+            ),
             "chunker must size at least one value or level"
         );
         let max_def_level = self.descr.max_def_level();
@@ -908,7 +913,18 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 SubBatchStrategy::Values(n) => {
                     Self::window_end_for_values(chunk_def, chunk_size, max_def_level, sub_start, n)
                 }
-                SubBatchStrategy::Levels(n) => (sub_start + n).min(chunk_size),
+                SubBatchStrategy::Levels { levels, max_values } => {
+                    // Cap the ratio-sized window at `max_values` values so
+                    // clustered values cannot pile into one window.
+                    let level_end = (sub_start + levels).min(chunk_size);
+                    Self::window_end_for_values(
+                        chunk_def,
+                        level_end,
+                        max_def_level,
+                        sub_start,
+                        max_values,
+                    )
+                }
             };
             let sub_end = match chunk_rep {
                 LevelDataRef::Materialized(levels) => {
@@ -3648,6 +3664,49 @@ mod tests {
         assert!(
             dict_page_size <= 3 * dict_page_limit,
             "dictionary page {dict_page_size} exceeds 3x the {dict_page_limit} limit",
+        );
+    }
+
+    #[test]
+    fn test_column_writer_caps_dictionary_page_size_with_clustered_nulls() {
+        // Regression test for #11994. Large distinct values followed by a run
+        // of nulls: the chunk's average level:value ratio is ~36 levels per
+        // value, so a ratio-sized window over the leading values covers all
+        // of them. Each window must also be capped by value count, or every
+        // value lands in the dictionary page before its spill check runs.
+        let value_size = 64 * 1024;
+        let num_values = 28;
+        let num_nulls = 996;
+
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_enabled(true)
+            .set_dictionary_page_size_limit(value_size)
+            .build();
+
+        let data: Vec<_> = (0..num_values)
+            .map(|i| {
+                let mut v = vec![0u8; value_size];
+                v[..8].copy_from_slice(&(i as u64).to_le_bytes());
+                ByteArray::from(v)
+            })
+            .collect();
+        let mut def_levels = vec![1i16; num_values];
+        def_levels.extend(std::iter::repeat_n(0i16, num_nulls));
+
+        let pages =
+            write_and_collect_pages::<ByteArrayType>(props, 1, 0, &data, Some(&def_levels), None);
+        assert!(
+            pages.dict_page_size > 0,
+            "expected the column to dictionary-encode"
+        );
+        // At most two values per window. Before the fix the dictionary page
+        // held all 28 values (~1.8 MiB).
+        assert!(
+            pages.dict_page_size <= 3 * value_size,
+            "dictionary page {} exceeds three values ({}B)",
+            pages.dict_page_size,
+            3 * value_size,
         );
     }
 
