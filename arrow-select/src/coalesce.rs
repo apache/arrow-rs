@@ -22,7 +22,8 @@
 //! [`take`]: crate::take::take
 use crate::filter::{FilterBuilder, FilterPredicate, FilterSelection};
 use crate::interleave::interleave_record_batch;
-use crate::take::take_record_batch;
+use crate::take::{take, take_record_batch};
+use arrow_array::cast::AsArray;
 use arrow_array::types::{BinaryViewType, GenericBinaryType, GenericStringType, StringViewType};
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, downcast_primitive};
 use arrow_schema::{ArrowError, DataType, SchemaRef};
@@ -34,6 +35,7 @@ use std::sync::Arc;
 mod boolean;
 mod byte;
 mod byte_view;
+mod dictionary;
 mod fixed_size_binary;
 mod generic;
 mod list;
@@ -42,6 +44,7 @@ mod primitive;
 use boolean::InProgressBooleanArray;
 use byte::InProgressByteArray;
 use byte_view::InProgressByteViewArray;
+use dictionary::create_in_progress_dictionary;
 use fixed_size_binary::InProgressFixedSizeBinaryArray;
 use generic::GenericInProgressArray;
 use list::InProgressListArray;
@@ -62,6 +65,14 @@ fn has_sparse_filter_copy(data_type: &DataType) -> bool {
                 | DataType::List(_)
                 | DataType::LargeList(_)
         )
+        || matches!(
+            data_type,
+            DataType::Dictionary(_, value)
+            if matches!(
+                value.as_ref(),
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary
+            )
+        )
 }
 
 /// Maximum selected row fraction for the fused sparse-filter copy path.
@@ -78,6 +89,8 @@ fn should_use_sparse_filter_copy(filter_len: usize, selected_count: usize) -> bo
 // Variable-width byte arrays only outperform the materialized filter kernel at
 // very low selection densities.
 const BYTE_ARRAY_DIRECT_COPY_MAX_SELECTIVITY_DENOMINATOR: usize = 1024;
+
+const DICTIONARY_DIRECT_GATHER_MIN_VALUES_PER_ROW: usize = 16;
 
 fn should_use_byte_array_direct_copy(filter_len: usize, selected_count: usize) -> bool {
     selected_count <= filter_len / BYTE_ARRAY_DIRECT_COPY_MAX_SELECTIVITY_DENOMINATOR
@@ -372,9 +385,65 @@ impl BatchCoalescer {
         batch: RecordBatch,
         indices: &dyn Array,
     ) -> Result<(), ArrowError> {
-        // todo: optimize this to avoid materializing (copying the results of take indices to a new batch)
-        let taken_batch = take_record_batch(&batch, indices)?;
-        self.push_batch(taken_batch)
+        let selected_count = indices.len();
+        if selected_count == 0 {
+            return Ok(());
+        }
+
+        if batch.num_columns() != self.in_progress_arrays.len() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Batch has {} columns but BatchCoalescer expects {}",
+                batch.num_columns(),
+                self.in_progress_arrays.len()
+            )));
+        }
+
+        let has_sparse_dictionary = batch.columns().iter().any(|array| {
+            matches!(
+                array.data_type(),
+                DataType::Dictionary(_, value)
+                    if matches!(
+                        value.as_ref(),
+                        DataType::Utf8
+                            | DataType::LargeUtf8
+                            | DataType::Binary
+                            | DataType::LargeBinary
+                    )
+            ) && array.as_any_dictionary().values().len()
+                > selected_count.saturating_mul(DICTIONARY_DIRECT_GATHER_MIN_VALUES_PER_ROW)
+        });
+        if !has_sparse_dictionary {
+            let taken_batch = take_record_batch(&batch, indices)?;
+            return self.push_batch(taken_batch);
+        }
+
+        // Preserve the existing large-batch bypass behavior. The direct gather
+        // path below is for the small partition fragments that need coalescing.
+        if self
+            .biggest_coalesce_batch_size
+            .is_some_and(|limit| selected_count > limit)
+        {
+            let taken_batch = take_record_batch(&batch, indices)?;
+            return self.push_batch(taken_batch);
+        }
+
+        let mut offset = 0;
+        while offset < selected_count {
+            let len = (self.target_batch_size - self.buffered_rows).min(selected_count - offset);
+            let indices = indices.slice(offset, len);
+
+            for (in_progress, source) in self.in_progress_arrays.iter_mut().zip(batch.columns()) {
+                in_progress.copy_rows_by_indices_from(Arc::clone(source), indices.as_ref())?;
+            }
+
+            self.buffered_rows += len;
+            offset += len;
+            if self.buffered_rows == self.target_batch_size {
+                self.finish_buffered_batch()?;
+            }
+        }
+
+        Ok(())
     }
 
     /// Push rows gathered from multiple `batches` into the Coalescer.
@@ -838,6 +907,9 @@ fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn 
         DataType::LargeBinary => {
             Box::new(InProgressByteArray::<GenericBinaryType<i64>>::new(batch_size))
         }
+        DataType::Dictionary(key, value) => {
+            create_in_progress_dictionary(key, value, batch_size)
+        }
         DataType::FixedSizeBinary(size) => {
             Box::new(InProgressFixedSizeBinaryArray::new(*size, batch_size))
         }
@@ -891,6 +963,22 @@ trait InProgressArray: std::fmt::Debug + Send + Sync {
     ) -> Result<(), ArrowError> {
         self.set_source(Some(source));
         let result = self.copy_rows_by_filter(filter);
+        self.set_source(None);
+        result
+    }
+
+    /// Copy rows selected by `indices` from `source`.
+    ///
+    /// Implementations can override this to gather directly into their output
+    /// buffers. The default implementation materializes the selected array.
+    fn copy_rows_by_indices_from(
+        &mut self,
+        source: ArrayRef,
+        indices: &dyn Array,
+    ) -> Result<(), ArrowError> {
+        let selected = take(source.as_ref(), indices, None)?;
+        self.set_source(Some(selected));
+        let result = self.copy_rows(0, indices.len());
         self.set_source(None);
         result
     }
@@ -1866,6 +1954,11 @@ mod tests {
             Field::new(
                 "large_list",
                 DataType::new_large_list(DataType::Utf8, true),
+                true,
+            ),
+            Field::new(
+                "dictionary",
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
                 true,
             ),
         ]));
