@@ -1178,7 +1178,7 @@ mod tests {
 
     #[test]
     fn test_already_shredded_input_error() {
-        // Create a VariantArray that already has typed_value_field
+        // Create a VariantArray that already has typed_value_column
         // First create a valid VariantArray, then extract its parts to construct a shredded one
         let temp_array = VariantArray::from_iter([Some("test")]);
         let metadata = temp_array.metadata_column().clone();
