@@ -20,7 +20,7 @@
 //! Provides utilities for creating, manipulating, and converting Arrow arrays
 //! made of primitive types, strings, and nested types.
 
-use super::{ArrayData, ArrayDataBuilder, ByteView, data::new_buffers};
+use super::{ArrayData, ArrayDataBuilder, MAX_INLINE_VIEW_LEN, data::new_buffers};
 use crate::bit_mask::set_bits;
 use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
 use arrow_buffer::{
@@ -228,13 +228,19 @@ fn build_extend_view(array: &ArrayData, buffer_offset: u32) -> Extend<'_> {
             mutable
                 .buffer1
                 .extend(views[start..start + len].iter().map(|v| {
-                    let len = *v as u32;
-                    if len <= 12 {
-                        return *v; // Stored inline
-                    }
-                    let mut view = ByteView::from(*v);
-                    view.buffer_index += buffer_offset;
-                    view.into()
+                    // A view of a string of 12 bytes or fewer stores the
+                    // string inline and has no buffer index, so adding 0
+                    // leaves it unchanged.
+                    let offset = if *v as u32 > MAX_INLINE_VIEW_LEN {
+                        buffer_offset
+                    } else {
+                        0
+                    };
+                    // The buffer index is bits 64 to 95 of a view. Adding
+                    // `buffer_offset` gives the string's buffer index in the
+                    // output, which fits in 32 bits, so the sum never carries
+                    // into bit 96.
+                    v + ((offset as u128) << 64)
                 }));
             Ok(())
         },

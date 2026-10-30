@@ -1139,7 +1139,21 @@ impl ArrayData {
             )));
         }
 
-        Ok(&buffer.typed_data::<T>()[self.offset..required_elements])
+        // Only the bytes in use are typed: the buffer may be longer than
+        // `required_len` by a number of bytes that is not a multiple of
+        // `byte_width`, which `Buffer::typed_data` would assert on.
+        let bytes = &buffer.as_slice()[..required_len];
+        // SAFETY: ArrowNativeType is trivially transmutable and sealed (as in
+        // `Buffer::typed_data`); alignment is checked below
+        let (prefix, values, suffix) = unsafe { bytes.align_to::<T>() };
+        if !prefix.is_empty() || !suffix.is_empty() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Buffer {idx} of {} is not aligned to {} bytes",
+                self.data_type,
+                mem::align_of::<T>()
+            )));
+        }
+        Ok(&values[self.offset..])
     }
 
     /// Does a cheap sanity check that the `self.len` values in `buffer` are valid
@@ -3818,6 +3832,21 @@ mod tests {
             err.to_string(),
             "Invalid argument error: Buffer 0 of Dictionary(Int32, Int32) isn't large enough. Expected 16 bytes got 8"
         );
+    }
+
+    /// `validate` only requires a minimum buffer size, so an offsets buffer
+    /// may carry trailing bytes that are not a whole number of offsets.
+    #[test]
+    fn test_validate_offsets_buffer_with_trailing_bytes() {
+        let mut offsets = Buffer::from_slice_ref([0_i32, 2, 5]).as_slice().to_vec();
+        offsets.extend_from_slice(&[0, 0]);
+        let data = ArrayData::builder(DataType::Utf8)
+            .len(2)
+            .add_buffer(Buffer::from_slice_ref(&offsets))
+            .add_buffer(Buffer::from_slice_ref(b"hello"))
+            .build()
+            .unwrap();
+        data.validate_full().unwrap();
     }
 
     #[test]

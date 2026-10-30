@@ -2804,6 +2804,39 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "variant_experimental")]
+    fn arrow_variant_to_parquet_variant() -> Result<()> {
+        use parquet_variant_compute::VariantType;
+        let variant_fields = Fields::from(vec![
+            Field::new("metadata", DataType::BinaryView, false),
+            Field::new("value", DataType::BinaryView, true),
+        ]);
+        let arrow_schema = Schema::new(vec![
+            Field::new("v", DataType::Struct(variant_fields), true)
+                .with_extension_type(VariantType),
+        ]);
+
+        let parquet_schema = ArrowSchemaConverter::new().convert(&arrow_schema)?;
+
+        // The Parquet spec requires the VARIANT annotation to carry the
+        // specification version (`VARIANT(1)`); Spark rejects files without it
+        let root = parquet_schema.root_schema();
+        assert_eq!(
+            root.get_fields()[0].get_basic_info().logical_type_ref(),
+            Some(&LogicalType::variant(Some(1)))
+        );
+
+        let arrow_schema = parquet_to_arrow_schema(&parquet_schema, None)?;
+        assert!(
+            arrow_schema
+                .field(0)
+                .has_valid_extension_type::<VariantType>()
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn test_parquet_to_arrow_field_levels_with_virtual_rejects_non_virtual() {
         let message_type = "
         message test_schema {

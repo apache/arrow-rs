@@ -194,8 +194,12 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
             self.size_of_completed_buffers_from_current_source += buffers_size;
         }
 
-        let starting_buffer: u32 = self.completed.len().try_into().expect("too many buffers");
+        let starting_buffer = self.completed.len() as u32;
         self.completed.extend_from_slice(buffers);
+        assert!(
+            u32::try_from(self.completed.len()).is_ok(),
+            "too many buffers"
+        );
 
         if starting_buffer == 0 {
             // If there are no buffers, we can just use the views as is
@@ -203,12 +207,19 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
         } else {
             // If there are buffers, we need to update the buffer index
             let updated_views = views.iter().map(|v| {
-                let mut byte_view = ByteView::from(*v);
-                if byte_view.length > MAX_INLINE_VIEW_LEN {
-                    // Small views (<=12 bytes) are inlined, so only need to update large views
-                    byte_view.buffer_index += starting_buffer;
-                }
-                byte_view.as_u128()
+                // A view of a string of 12 bytes or fewer stores the string
+                // inline and has no buffer index, so adding 0 leaves it
+                // unchanged.
+                let offset = if *v as u32 > MAX_INLINE_VIEW_LEN {
+                    starting_buffer
+                } else {
+                    0
+                };
+                // The buffer index is bits 64 to 95 of a view. Adding
+                // `starting_buffer` gives the string's buffer index in the
+                // output, which fits in 32 bits, so the sum never carries into
+                // bit 96.
+                v + ((offset as u128) << 64)
             });
 
             self.views.extend(updated_views);
