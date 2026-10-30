@@ -1,5 +1,4 @@
 #!/bin/bash
-#
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -16,8 +15,6 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-#
-
 
 # This script creates a signed tarball in
 # dev/dist/apache-arrow-rs-<version>-<sha>.tar.gz and uploads it to
@@ -95,8 +92,13 @@ mkdir -p ${distdir}
          --add-file ${tmpdir}/.gitmodules-commits ${tag} \
          | gzip > ${tarball})
 
-echo "Running rat license checker on ${tarball}"
-${SOURCE_DIR}/run-rat.sh ${tarball}
+echo "Checking license headers on ${tarball}"
+(
+    audit_dir=$(mktemp -d)
+    trap 'rm -rf "${audit_dir}"' EXIT
+    "${tar}" -xzf "${tarball}" -C "${audit_dir}"
+    (cd "${audit_dir}/${release}" && hawkeye check --fail-on-unknown)
+)
 
 echo "Signing tarball and creating checksums"
 gpg --armor --output ${tarball}.asc --detach-sig ${tarball}
