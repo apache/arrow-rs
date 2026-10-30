@@ -64,14 +64,14 @@ impl<T: ArrowPrimitiveType> InProgressPrimitiveArray<T> {
     /// # Safety
     ///
     /// Every index yielded by `indices` must be less than `values.len()`, and
-    /// `indices` must yield exactly `selected_count` indices. `current` must
-    /// have capacity for `selected_count` additional values.
+    /// `indices` must yield exactly `selected_count` indices.
     unsafe fn append_values_by_indices(
         current: &mut Vec<T::Native>,
         values: &[T::Native],
         indices: FilterIndices<'_>,
         selected_count: usize,
     ) {
+        current.reserve(selected_count);
         let current_len = current.len();
         let mut written = 0;
 
@@ -100,14 +100,14 @@ impl<T: ArrowPrimitiveType> InProgressPrimitiveArray<T> {
     ///
     /// Every range yielded by `slices` must satisfy
     /// `start <= end <= values.len()`, and the ranges must contain exactly
-    /// `selected_count` values in total. `current` must have capacity for
-    /// `selected_count` additional values.
+    /// `selected_count` values in total.
     unsafe fn append_values_by_slices(
         current: &mut Vec<T::Native>,
         values: &[T::Native],
         slices: FilterSlices<'_>,
         selected_count: usize,
     ) {
+        current.reserve(selected_count);
         let current_len = current.len();
         let mut written = 0;
 
@@ -179,9 +179,8 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
 
         // Copy the values
         let values = s.values();
-        // SAFETY: copy_rows is called with ranges derived from the source array.
         self.current
-            .extend_from_slice(unsafe { values.get_unchecked(offset..offset + len) });
+            .extend_from_slice(&values[offset..offset + len]);
 
         Ok(())
     }
@@ -193,9 +192,8 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
                 let s = primitive_source::<T>(self.source.as_ref())?;
 
                 append_filtered_nulls(&mut self.nulls, s.nulls(), filter);
-                self.current.reserve(filter.count());
                 // SAFETY: the filter is built for this source array and yields
-                // `filter.count()` indices. Capacity was reserved above.
+                // `filter.count()` indices.
                 unsafe {
                     Self::append_values_by_indices(
                         &mut self.current,
@@ -211,10 +209,8 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
                 let s = primitive_source::<T>(self.source.as_ref())?;
 
                 append_filtered_nulls(&mut self.nulls, s.nulls(), filter);
-                self.current.reserve(filter.count());
                 // SAFETY: the filter is built for this source array and yields
-                // `filter.count()` values across its slices. Capacity was
-                // reserved above.
+                // `filter.count()` values across its slices.
                 unsafe {
                     Self::append_values_by_slices(
                         &mut self.current,

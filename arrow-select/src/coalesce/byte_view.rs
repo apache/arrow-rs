@@ -451,8 +451,7 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
         }
 
         let buffers = s.data_buffers();
-        // SAFETY: copy_rows is called with ranges derived from the source array.
-        let views = unsafe { s.views().as_ref().get_unchecked(offset..offset + len) };
+        let views = &s.views().as_ref()[offset..offset + len];
 
         // If there are no data buffers in s (all inlined views), can append the
         // views/nulls and done
