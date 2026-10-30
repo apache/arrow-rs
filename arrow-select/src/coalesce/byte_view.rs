@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::coalesce::InProgressArray;
+use crate::coalesce::{InProgressArray, check_filter_len};
 use crate::filter::{FilterPredicate, FilterSelection};
 use arrow_array::cast::AsArray;
 use arrow_array::types::ByteViewType;
@@ -41,13 +41,13 @@ pub(crate) struct InProgressByteViewArray<B: ByteViewType> {
     source: Option<Source>,
     /// the target batch size (and thus size for views allocation)
     batch_size: usize,
-    /// The in progress views
+    /// The in progress views (guaranteed to be valid)
     views: Vec<u128>,
     /// In progress nulls
     nulls: NullBufferBuilder,
     /// current buffer
     current: Option<Vec<u8>>,
-    /// completed buffers
+    /// completed buffers (corresponding to content of views)
     completed: Vec<Buffer>,
     /// Allocates new buffers of increasing size as needed
     buffer_source: BufferSource,
@@ -184,6 +184,9 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
     ///
     /// [`B::validate`](ByteViewType::validate) must succeed for `views` and
     /// `buffers`.
+    ///
+    /// Note: this function performs no unsafe operations itself, but it assumes
+    /// `views` are valid views for self.views and `buffers` for self.buffers
     #[inline(never)]
     unsafe fn append_views_and_update_buffer_index(
         &mut self,
@@ -244,7 +247,8 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
     /// - `views` - the views to append
     /// - `view_buffer_size` - the total number of bytes pointed to by all
     ///   views (used to allocate new buffers if needed)
-    /// - `buffers` - the buffers the reviews point to
+    /// - `buffers` - the buffers the views point to
+    ///
     /// # Safety
     ///
     /// [`B::validate`](ByteViewType::validate) must succeed for `views` and
@@ -493,8 +497,15 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
             ));
         }
 
+        if let Err(e) = check_filter_len(filter, s.len()) {
+            // Restore the source taken above before returning the error.
+            self.source = Some(source);
+            return Err(e);
+        }
+
         self.append_nulls_by_filter(filter, s.nulls());
-        // SAFETY: the filter is built for this source array.
+        // SAFETY: `check_filter_len` verified the filter is no longer than
+        // `s.views()`.
         unsafe { self.append_views_by_filter(s.views(), filter) };
 
         self.source = Some(source);
@@ -510,9 +521,11 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
         // The source views reference no external buffers, so they must all be
         // inline and we can copy just the nulls and views.
         if s.data_buffers().is_empty() {
+            check_filter_len(filter, s.len())?;
             self.ensure_capacity();
             self.append_nulls_by_filter(filter, s.nulls());
-            // SAFETY: the filter is built for this source array.
+            // SAFETY: `check_filter_len` verified the filter is no longer than
+            // `s.views()`.
             unsafe { self.append_views_by_filter(s.views(), filter) };
             return Ok(());
         }
