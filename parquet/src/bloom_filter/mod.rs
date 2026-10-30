@@ -815,6 +815,37 @@ impl Sbbf {
 
         Ok(Self::new(bitset))
     }
+
+    /// Inserts many hashes. Same result as [`Self::insert_hash`] for each.
+    pub fn insert_hashes(&mut self, hashes: &[u64]) {
+        for &hash in hashes {
+            self.insert_hash(hash);
+        }
+    }
+
+    /// Adds the values of `other` to this filter, so that afterwards it
+    /// contains every value that either filter contained.
+    ///
+    /// `other` must have at least as many blocks as this filter. When it has
+    /// more, it is folded to the size of this filter on the fly (see
+    /// [`Self::fold_to_target_fpp`]), without changing `other`. Folding and
+    /// union commute: the result is the same as inserting the values of both
+    /// filters into one filter and folding it to this size.
+    pub fn union(&mut self, other: &Sbbf) -> Result<(), ParquetError> {
+        let (len, other_len) = (self.0.len(), other.0.len());
+        if other_len < len || other_len % len != 0 {
+            return Err(ParquetError::General(format!(
+                "Cannot union a bloom filter of {other_len} blocks into one of {len} blocks"
+            )));
+        }
+        let group_size = other_len / len;
+        for (block, group) in self.0.iter_mut().zip(other.0.chunks_exact(group_size)) {
+            for other_block in group {
+                *block |= *other_block;
+            }
+        }
+        Ok(())
+    }
 }
 
 // per spec we use xxHash with seed=0
@@ -1371,5 +1402,38 @@ mod tests {
             // bit-identity means these must be exactly equal
             assert_eq!(folded_fp, fresh_fp);
         }
+    }
+
+    fn bitset(f: &Sbbf) -> Vec<u8> {
+        let mut out = vec![];
+        f.write_bitset(&mut out).unwrap();
+        out
+    }
+
+    #[test]
+    fn union_of_parts_matches_one_filter() {
+        let hashes: Vec<u64> = (0..100_000u64).map(|i| Sbbf::hash_value(&i)).collect();
+        let mut whole = Sbbf::new_with_num_of_bytes(1 << 20);
+        whole.insert_hashes(&hashes);
+        let mut merged = Sbbf::new_with_num_of_bytes(1 << 20);
+        for chunk in hashes.chunks(7_000) {
+            let mut part = Sbbf::new_with_num_of_bytes(1 << 20);
+            part.insert_hashes(chunk);
+            merged.union(&part).unwrap();
+        }
+        assert_eq!(bitset(&whole), bitset(&merged));
+        // union then fold == fold then union
+        let mut a = whole.clone();
+        a.fold_to_target_fpp(0.01);
+        merged.fold_to_target_fpp(0.01);
+        assert_eq!(bitset(&a), bitset(&merged));
+        // a larger filter is folded on the fly
+        let mut small = Sbbf::new_with_num_of_bytes(1 << 16);
+        small.insert_hashes(&hashes[..10]);
+        small.union(&whole).unwrap();
+        let mut expected = Sbbf::new_with_num_of_bytes(1 << 16);
+        expected.insert_hashes(&hashes);
+        assert_eq!(bitset(&small), bitset(&expected));
+        assert!(whole.clone().union(&small).is_err());
     }
 }

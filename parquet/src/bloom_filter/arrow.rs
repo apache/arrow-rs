@@ -279,6 +279,13 @@ impl Sbbf {
             None => result,
         })
     }
+
+    /// Checks many hashes. Bit `i` of the result is [`Self::check_hash`] of
+    /// `hashes[i]`, computed without data dependent branches, which is much
+    /// faster than calling [`Self::check_hash`] for each hash.
+    pub fn check_hashes(&self, hashes: &[u64]) -> BooleanBuffer {
+        BooleanBuffer::collect_bool(hashes.len(), |i| self.check_hash_branch_free(hashes[i]))
+    }
 }
 
 // xxHash64 (seed 0) of the 4 or 8 little-endian bytes of a value, written out so
@@ -324,6 +331,17 @@ mod tests {
     use arrow_schema::{Field, Schema};
     use bytes::Bytes;
     use std::sync::Arc;
+
+    #[test]
+    fn check_hashes_matches_check_hash() {
+        let mut filter = Sbbf::new_with_num_of_bytes(1024);
+        let hashes: Vec<u64> = (0..1000u64).map(|i| Sbbf::hash_value(&i)).collect();
+        filter.insert_hashes(&hashes[..300]);
+        let checked = filter.check_hashes(&hashes);
+        for (i, hash) in hashes.iter().enumerate() {
+            assert_eq!(checked.value(i), filter.check_hash(*hash));
+        }
+    }
 
     #[test]
     fn inlined_xxh64_matches_twox() {
