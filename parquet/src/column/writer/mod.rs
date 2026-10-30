@@ -512,7 +512,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
         let statistics_enabled = column_props.statistics_enabled;
 
-        let mut encodings = BTreeSet::new();
+        let encodings = BTreeSet::new();
 
         let mut page_metrics = PageMetrics::new();
         let mut column_metrics = ColumnMetrics::<E::T>::new();
