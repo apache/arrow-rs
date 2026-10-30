@@ -1737,7 +1737,9 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     #[inline]
     fn write_data_page(&mut self, page: CompressedPage) -> Result<()> {
         self.encodings.insert(page.encoding());
-        self.encodings.insert(Encoding::RLE); // levels
+        if self.descr.max_def_level() > 0 || self.descr.max_rep_level() > 0 {
+            self.encodings.insert(Encoding::RLE);
+        }
         match self.encoding_stats.last_mut() {
             Some(encoding_stats)
                 if encoding_stats.page_type == page.page_type()
@@ -2258,7 +2260,7 @@ mod tests {
         let metadata = r.metadata;
         assert_eq!(
             metadata.encodings().collect::<Vec<_>>(),
-            vec![Encoding::PLAIN, Encoding::RLE]
+            vec![Encoding::PLAIN]
         );
         assert_eq!(metadata.num_values(), 4); // just values
         assert_eq!(metadata.dictionary_page_offset(), None);
@@ -2293,7 +2295,7 @@ mod tests {
             true,
             &[true, false],
             None,
-            &[Encoding::PLAIN, Encoding::RLE],
+            &[Encoding::PLAIN],
             &[encoding_stats(PageType::DATA_PAGE, Encoding::PLAIN, 1)],
         );
         check_encoding_write_support::<BoolType>(
@@ -2301,7 +2303,7 @@ mod tests {
             false,
             &[true, false],
             None,
-            &[Encoding::PLAIN, Encoding::RLE],
+            &[Encoding::PLAIN],
             &[encoding_stats(PageType::DATA_PAGE, Encoding::PLAIN, 1)],
         );
         check_encoding_write_support::<BoolType>(
@@ -2329,7 +2331,7 @@ mod tests {
             true,
             &[1, 2],
             Some(0),
-            &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
             &[
                 encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
                 encoding_stats(PageType::DATA_PAGE, Encoding::RLE_DICTIONARY, 1),
@@ -2340,7 +2342,7 @@ mod tests {
             false,
             &[1, 2],
             None,
-            &[Encoding::PLAIN, Encoding::RLE],
+            &[Encoding::PLAIN],
             &[encoding_stats(PageType::DATA_PAGE, Encoding::PLAIN, 1)],
         );
         check_encoding_write_support::<Int32Type>(
@@ -2348,7 +2350,7 @@ mod tests {
             true,
             &[1, 2],
             Some(0),
-            &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
             &[
                 encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
                 encoding_stats(PageType::DATA_PAGE_V2, Encoding::RLE_DICTIONARY, 1),
@@ -2359,7 +2361,7 @@ mod tests {
             false,
             &[1, 2],
             None,
-            &[Encoding::RLE, Encoding::DELTA_BINARY_PACKED],
+            &[Encoding::DELTA_BINARY_PACKED],
             &[encoding_stats(
                 PageType::DATA_PAGE_V2,
                 Encoding::DELTA_BINARY_PACKED,
@@ -2375,7 +2377,7 @@ mod tests {
             true,
             &[1, 2],
             Some(0),
-            &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
             &[
                 encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
                 encoding_stats(PageType::DATA_PAGE, Encoding::RLE_DICTIONARY, 1),
@@ -2386,7 +2388,7 @@ mod tests {
             false,
             &[1, 2],
             None,
-            &[Encoding::PLAIN, Encoding::RLE],
+            &[Encoding::PLAIN],
             &[encoding_stats(PageType::DATA_PAGE, Encoding::PLAIN, 1)],
         );
         check_encoding_write_support::<Int64Type>(
@@ -2394,7 +2396,7 @@ mod tests {
             true,
             &[1, 2],
             Some(0),
-            &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
             &[
                 encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
                 encoding_stats(PageType::DATA_PAGE_V2, Encoding::RLE_DICTIONARY, 1),
@@ -2405,7 +2407,7 @@ mod tests {
             false,
             &[1, 2],
             None,
-            &[Encoding::RLE, Encoding::DELTA_BINARY_PACKED],
+            &[Encoding::DELTA_BINARY_PACKED],
             &[encoding_stats(
                 PageType::DATA_PAGE_V2,
                 Encoding::DELTA_BINARY_PACKED,
@@ -2421,7 +2423,7 @@ mod tests {
             true,
             &[Int96::from(vec![1, 2, 3])],
             Some(0),
-            &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
             &[
                 encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
                 encoding_stats(PageType::DATA_PAGE, Encoding::RLE_DICTIONARY, 1),
@@ -2432,7 +2434,7 @@ mod tests {
             false,
             &[Int96::from(vec![1, 2, 3])],
             None,
-            &[Encoding::PLAIN, Encoding::RLE],
+            &[Encoding::PLAIN],
             &[encoding_stats(PageType::DATA_PAGE, Encoding::PLAIN, 1)],
         );
         check_encoding_write_support::<Int96Type>(
@@ -2440,7 +2442,7 @@ mod tests {
             true,
             &[Int96::from(vec![1, 2, 3])],
             Some(0),
-            &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
             &[
                 encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
                 encoding_stats(PageType::DATA_PAGE_V2, Encoding::RLE_DICTIONARY, 1),
@@ -2451,7 +2453,7 @@ mod tests {
             false,
             &[Int96::from(vec![1, 2, 3])],
             None,
-            &[Encoding::PLAIN, Encoding::RLE],
+            &[Encoding::PLAIN],
             &[encoding_stats(PageType::DATA_PAGE_V2, Encoding::PLAIN, 1)],
         );
     }
@@ -2463,7 +2465,7 @@ mod tests {
             true,
             &[1.0, 2.0],
             Some(0),
-            &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
             &[
                 encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
                 encoding_stats(PageType::DATA_PAGE, Encoding::RLE_DICTIONARY, 1),
@@ -2474,7 +2476,7 @@ mod tests {
             false,
             &[1.0, 2.0],
             None,
-            &[Encoding::PLAIN, Encoding::RLE],
+            &[Encoding::PLAIN],
             &[encoding_stats(PageType::DATA_PAGE, Encoding::PLAIN, 1)],
         );
         check_encoding_write_support::<FloatType>(
@@ -2482,7 +2484,7 @@ mod tests {
             true,
             &[1.0, 2.0],
             Some(0),
-            &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
             &[
                 encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
                 encoding_stats(PageType::DATA_PAGE_V2, Encoding::RLE_DICTIONARY, 1),
@@ -2493,7 +2495,7 @@ mod tests {
             false,
             &[1.0, 2.0],
             None,
-            &[Encoding::PLAIN, Encoding::RLE],
+            &[Encoding::PLAIN],
             &[encoding_stats(PageType::DATA_PAGE_V2, Encoding::PLAIN, 1)],
         );
     }
@@ -2505,7 +2507,7 @@ mod tests {
             true,
             &[1.0, 2.0],
             Some(0),
-            &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
             &[
                 encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
                 encoding_stats(PageType::DATA_PAGE, Encoding::RLE_DICTIONARY, 1),
@@ -2516,7 +2518,7 @@ mod tests {
             false,
             &[1.0, 2.0],
             None,
-            &[Encoding::PLAIN, Encoding::RLE],
+            &[Encoding::PLAIN],
             &[encoding_stats(PageType::DATA_PAGE, Encoding::PLAIN, 1)],
         );
         check_encoding_write_support::<DoubleType>(
@@ -2524,7 +2526,7 @@ mod tests {
             true,
             &[1.0, 2.0],
             Some(0),
-            &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
             &[
                 encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
                 encoding_stats(PageType::DATA_PAGE_V2, Encoding::RLE_DICTIONARY, 1),
@@ -2535,7 +2537,7 @@ mod tests {
             false,
             &[1.0, 2.0],
             None,
-            &[Encoding::PLAIN, Encoding::RLE],
+            &[Encoding::PLAIN],
             &[encoding_stats(PageType::DATA_PAGE_V2, Encoding::PLAIN, 1)],
         );
     }
@@ -2547,7 +2549,7 @@ mod tests {
             true,
             &[ByteArray::from(vec![1u8])],
             Some(0),
-            &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
             &[
                 encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
                 encoding_stats(PageType::DATA_PAGE, Encoding::RLE_DICTIONARY, 1),
@@ -2558,7 +2560,7 @@ mod tests {
             false,
             &[ByteArray::from(vec![1u8])],
             None,
-            &[Encoding::PLAIN, Encoding::RLE],
+            &[Encoding::PLAIN],
             &[encoding_stats(PageType::DATA_PAGE, Encoding::PLAIN, 1)],
         );
         check_encoding_write_support::<ByteArrayType>(
@@ -2566,7 +2568,7 @@ mod tests {
             true,
             &[ByteArray::from(vec![1u8])],
             Some(0),
-            &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
             &[
                 encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
                 encoding_stats(PageType::DATA_PAGE_V2, Encoding::RLE_DICTIONARY, 1),
@@ -2577,7 +2579,7 @@ mod tests {
             false,
             &[ByteArray::from(vec![1u8])],
             None,
-            &[Encoding::RLE, Encoding::DELTA_BYTE_ARRAY],
+            &[Encoding::DELTA_BYTE_ARRAY],
             &[encoding_stats(
                 PageType::DATA_PAGE_V2,
                 Encoding::DELTA_BYTE_ARRAY,
@@ -2604,7 +2606,7 @@ mod tests {
             true,
             &[ByteArray::from(vec![1u8]).into()],
             Some(0),
-            &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
             &[
                 encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
                 encoding_stats(PageType::DATA_PAGE, Encoding::RLE_DICTIONARY, 1),
@@ -2625,7 +2627,7 @@ mod tests {
             false,
             &[ByteArray::from(vec![1u8]).into()],
             None,
-            &[Encoding::PLAIN, Encoding::RLE],
+            &[Encoding::PLAIN],
             &[encoding_stats(PageType::DATA_PAGE, Encoding::PLAIN, 1)],
         );
         check_encoding_write_support::<FixedLenByteArrayType>(
@@ -2633,7 +2635,7 @@ mod tests {
             true,
             &[ByteArray::from(vec![1u8]).into()],
             Some(0),
-            &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
             &[
                 encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
                 encoding_stats(PageType::DATA_PAGE_V2, Encoding::RLE_DICTIONARY, 1),
@@ -2644,7 +2646,7 @@ mod tests {
             false,
             &[ByteArray::from(vec![1u8]).into()],
             None,
-            &[Encoding::RLE, Encoding::DELTA_BYTE_ARRAY],
+            &[Encoding::DELTA_BYTE_ARRAY],
             &[encoding_stats(
                 PageType::DATA_PAGE_V2,
                 Encoding::DELTA_BYTE_ARRAY,
@@ -2667,7 +2669,7 @@ mod tests {
         let metadata = r.metadata;
         assert_eq!(
             metadata.encodings().collect::<Vec<_>>(),
-            vec![Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY]
+            vec![Encoding::PLAIN, Encoding::RLE_DICTIONARY]
         );
         assert_eq!(metadata.num_values(), 4);
         assert_eq!(metadata.compressed_size(), 20);
@@ -2829,7 +2831,7 @@ mod tests {
         let metadata = r.metadata;
         assert_eq!(
             metadata.encodings().collect::<Vec<_>>(),
-            vec![Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY]
+            vec![Encoding::PLAIN, Encoding::RLE_DICTIONARY]
         );
         assert_eq!(metadata.num_values(), 4);
         assert_eq!(metadata.compressed_size(), 20);
