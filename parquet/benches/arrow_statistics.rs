@@ -308,8 +308,9 @@ fn create_page_index_file(
     buffer
 }
 
-/// Measures getting page statistics from the stored column index bytes by
-/// building `ColumnIndexMetaData` and converting it to Arrow arrays.
+/// Measures getting page statistics from the stored column index bytes, either
+/// by building `ColumnIndexMetaData` and converting it to Arrow arrays, or by
+/// decoding the bytes directly with `data_page_statistics_from_bytes`.
 fn page_index_benchmark(c: &mut Criterion) {
     let row_groups = 20;
     let data_types = [Int64, Utf8, Utf8View, Decimal128(20, 2)];
@@ -373,6 +374,17 @@ fn page_index_benchmark(c: &mut Criterion) {
                     .unwrap();
                 let _ = converter
                     .data_page_nan_counts(&page_index, &row_group_indices)
+                    .unwrap();
+            })
+        });
+        group.bench_function("from bytes", |b| {
+            b.iter(|| {
+                let _ = converter
+                    .data_page_statistics_from_bytes(
+                        column_indexes
+                            .iter()
+                            .map(|(num_pages, bytes)| (*num_pages, Some(*bytes))),
+                    )
                     .unwrap();
             })
         });
