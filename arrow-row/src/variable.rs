@@ -72,11 +72,16 @@ pub(crate) fn non_null_padded_length(len: usize) -> usize {
 
 /// Decodes a single byte from each row, where a valid value is determined via
 /// a configurable sentinel. Optionally returns `None` if there are no null values.
-pub(crate) fn decode_nulls_sentinel(rows: &[&[u8]], options: SortOptions) -> Option<NullBuffer> {
+pub(crate) fn decode_nulls_sentinel(
+    rows: &[&[u8]],
+    options: SortOptions,
+) -> Result<Option<NullBuffer>, ArrowError> {
     let null_sentinel = null_sentinel(options);
-    let nulls = BooleanBuffer::collect_bool(rows.len(), |x| rows[x][0] != null_sentinel);
+    let nulls = MutableBuffer::try_collect_bool(rows.len(), |x| rows[x][0] != null_sentinel)
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+    let nulls = BooleanBuffer::new(nulls.into(), 0, rows.len());
     let nulls = NullBuffer::new(nulls);
-    (nulls.null_count() > 0).then_some(nulls)
+    Ok((nulls.null_count() > 0).then_some(nulls))
 }
 
 /// Variable length values are encoded as
@@ -277,19 +282,35 @@ fn decoded_len(row: &[u8], options: SortOptions) -> usize {
 pub fn decode_binary<I: OffsetSizeTrait>(
     rows: &mut [&[u8]],
     options: SortOptions,
-) -> GenericBinaryArray<I> {
+) -> Result<GenericBinaryArray<I>, ArrowError> {
     let len = rows.len();
-    let nulls = decode_nulls_sentinel(rows, options);
+    let nulls = decode_nulls_sentinel(rows, options)?;
 
-    let values_capacity = rows.iter().map(|row| decoded_len(row, options)).sum();
+    let values_capacity = rows.iter().try_fold(0usize, |acc, row| {
+        acc.checked_add(decoded_len(row, options))
+            .ok_or_else(|| ArrowError::MemoryError("decoded values size overflow".into()))
+    })?;
+    I::from_usize(values_capacity).ok_or(ArrowError::OffsetOverflowError(values_capacity))?;
     let mut offsets = Vec::<I>::with_capacity(len + 1);
     offsets.push(I::zero());
-    let mut values = MutableBuffer::new(values_capacity);
+    let mut values = MutableBuffer::try_with_capacity(values_capacity)
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
     for row in rows {
-        let offset = decode_blocks(row, options, |b| values.extend_from_slice(b));
+        let mut extend_error = None;
+        let offset = decode_blocks(row, options, |b| {
+            if extend_error.is_none() {
+                extend_error = values.try_extend_from_slice(b).err();
+            }
+        });
+        if let Some(error) = extend_error {
+            return Err(ArrowError::MemoryError(error.to_string()));
+        }
         *row = &row[offset..];
-        offsets.push(I::from_usize(values.len()).expect("offset overflow"))
+        offsets.push(
+            I::from_usize(values.len())
+                .ok_or_else(|| ArrowError::OffsetOverflowError(values.len()))?,
+        )
     }
 
     if options.descending {
@@ -298,13 +319,13 @@ pub fn decode_binary<I: OffsetSizeTrait>(
 
     // SAFETY:
     // Valid by construction above
-    unsafe {
+    Ok(unsafe {
         GenericBinaryArray::new_unchecked(
             OffsetBuffer::new(ScalarBuffer::from(offsets)),
             values.into(),
             nulls,
         )
-    }
+    })
 }
 
 fn decode_binary_view_inner<const VALIDATE_UTF8: bool>(
@@ -314,7 +335,7 @@ fn decode_binary_view_inner<const VALIDATE_UTF8: bool>(
     let len = rows.len();
     let inline_str_max_len = MAX_INLINE_VIEW_LEN as usize;
 
-    let nulls = decode_nulls_sentinel(rows, options);
+    let nulls = decode_nulls_sentinel(rows, options)?;
 
     // Capacity for all long strings plus room for one short string
     let mut values_capacity = inline_str_max_len;
@@ -322,7 +343,9 @@ fn decode_binary_view_inner<const VALIDATE_UTF8: bool>(
     for row in rows.iter() {
         let len = decoded_len(row, options);
         if len > inline_str_max_len {
-            values_capacity += len;
+            values_capacity = values_capacity
+                .checked_add(len)
+                .ok_or_else(|| ArrowError::MemoryError("decoded values size overflow".into()))?;
         } else if VALIDATE_UTF8 {
             inline_capacity += len;
         }
@@ -336,7 +359,8 @@ fn decode_binary_view_inner<const VALIDATE_UTF8: bool>(
             "{long_values_len} bytes of non-inlined values too long to decode into a view array with a single data buffer"
         )));
     }
-    let mut values = MutableBuffer::new(values_capacity);
+    let mut values = MutableBuffer::try_with_capacity(values_capacity)
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
     let mut view_utf8_validation_buffer = if VALIDATE_UTF8 {
         Vec::with_capacity(inline_capacity)
     } else {
@@ -347,7 +371,15 @@ fn decode_binary_view_inner<const VALIDATE_UTF8: bool>(
     let mut views = vec![0_u128; len];
     for (i, row) in rows.iter_mut().enumerate() {
         let start_offset = values.len();
-        let offset = decode_blocks(row, options, |b| values.extend_from_slice(b));
+        let mut extend_error = None;
+        let offset = decode_blocks(row, options, |b| {
+            if extend_error.is_none() {
+                extend_error = values.try_extend_from_slice(b).err();
+            }
+        });
+        if let Some(error) = extend_error {
+            return Err(ArrowError::MemoryError(error.to_string()));
+        }
         // Measure string length via change in values buffer. This way we can
         // overwrite short strings in the values buffer as we inline those to
         // views.
@@ -405,18 +437,18 @@ pub unsafe fn decode_string<I: OffsetSizeTrait>(
     rows: &mut [&[u8]],
     options: SortOptions,
     validate_utf8: bool,
-) -> GenericStringArray<I> {
-    let decoded = decode_binary::<I>(rows, options);
+) -> Result<GenericStringArray<I>, ArrowError> {
+    let decoded = decode_binary::<I>(rows, options)?;
 
     if validate_utf8 {
-        return GenericStringArray::from(decoded);
+        return Ok(GenericStringArray::from(decoded));
     }
 
     let (offsets, values, nulls) = decoded.into_parts();
 
     // SAFETY:
     // Row data must have come from a valid UTF-8 array
-    unsafe { GenericStringArray::new_unchecked(offsets, values, nulls) }
+    Ok(unsafe { GenericStringArray::new_unchecked(offsets, values, nulls) })
 }
 
 /// Decodes a string view array from `rows` with the provided `options`

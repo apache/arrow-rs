@@ -45,26 +45,36 @@ use arrow_data::transform::{Capacities, MutableArrayData};
 use arrow_schema::{ArrowError, DataType, FieldRef, Fields, SchemaRef};
 use std::{collections::HashSet, ops::Add, sync::Arc};
 
-fn binary_capacity<T: ByteArrayType>(arrays: &[&dyn Array]) -> Capacities {
-    let mut item_capacity = 0;
-    let mut bytes_capacity = 0;
+fn binary_capacity<T: ByteArrayType>(arrays: &[&dyn Array]) -> Result<Capacities, ArrowError> {
+    let mut item_capacity = 0usize;
+    let mut bytes_capacity = 0usize;
     for array in arrays {
         let a = array.as_bytes::<T>();
 
         // Guaranteed to always have at least one element
         let offsets = a.value_offsets();
-        bytes_capacity += offsets[offsets.len() - 1].as_usize() - offsets[0].as_usize();
-        item_capacity += a.len()
+        bytes_capacity = bytes_capacity
+            .checked_add(offsets[offsets.len() - 1].as_usize() - offsets[0].as_usize())
+            .ok_or_else(|| ArrowError::MemoryError("concatenated values overflow".into()))?;
+        item_capacity = item_capacity
+            .checked_add(a.len())
+            .ok_or_else(|| ArrowError::MemoryError("concatenated length overflow".into()))?;
     }
 
-    Capacities::Binary(item_capacity, Some(bytes_capacity))
+    Ok(Capacities::Binary(item_capacity, Some(bytes_capacity)))
 }
 
-fn fixed_size_list_capacity(arrays: &[&dyn Array], data_type: &DataType) -> Capacities {
+fn fixed_size_list_capacity(
+    arrays: &[&dyn Array],
+    data_type: &DataType,
+) -> Result<Capacities, ArrowError> {
     if let DataType::FixedSizeList(f, _) = data_type {
-        let item_capacity = arrays.iter().map(|a| a.len()).sum();
+        let item_capacity = arrays
+            .iter()
+            .try_fold(0usize, |total, array| total.checked_add(array.len()))
+            .ok_or_else(|| ArrowError::MemoryError("concatenated length overflow".into()))?;
         let child_data_type = f.data_type();
-        match child_data_type {
+        Ok(match child_data_type {
             // These types should match the types that `get_capacity`
             // has special handling for.
             DataType::Utf8
@@ -78,11 +88,11 @@ fn fixed_size_list_capacity(arrays: &[&dyn Array], data_type: &DataType) -> Capa
                     .collect();
                 Capacities::List(
                     item_capacity,
-                    Some(Box::new(get_capacity(&values, child_data_type))),
+                    Some(Box::new(get_capacity(&values, child_data_type)?)),
                 )
             }
             _ => Capacities::Array(item_capacity),
-        }
+        })
     } else {
         unreachable!("illegal data type for fixed size list")
     }
@@ -349,7 +359,13 @@ fn concat_list_view<OffsetSize: OffsetSizeTrait>(
 
     let sizes: ScalarBuffer<OffsetSize> = lists.iter().flat_map(|x| x.sizes()).copied().collect();
 
-    let mut offsets = MutableBuffer::with_capacity(lists.iter().map(|l| l.offsets().len()).sum());
+    let offsets_capacity = lists
+        .iter()
+        .try_fold(0usize, |acc, l| acc.checked_add(l.offsets().len()))
+        .and_then(|len| len.checked_mul(std::mem::size_of::<OffsetSize>()))
+        .ok_or_else(|| ArrowError::MemoryError("concatenated offsets size overflow".into()))?;
+    let mut offsets = MutableBuffer::try_with_capacity(offsets_capacity)
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
     let mut global_offset = OffsetSize::zero();
     for l in &lists {
         for &offset in l.offsets() {
@@ -395,7 +411,7 @@ fn concat_boolean(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
 }
 
 fn concat_bytes<T: ByteArrayType>(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
-    let Capacities::Binary(item_capacity, Some(bytes_capacity)) = binary_capacity::<T>(arrays)
+    let Capacities::Binary(item_capacity, Some(bytes_capacity)) = binary_capacity::<T>(arrays)?
     else {
         unreachable!()
     };
@@ -531,14 +547,18 @@ macro_rules! primitive_concat {
     };
 }
 
-fn get_capacity(arrays: &[&dyn Array], data_type: &DataType) -> Capacities {
+fn get_capacity(arrays: &[&dyn Array], data_type: &DataType) -> Result<Capacities, ArrowError> {
     match data_type {
         DataType::Utf8 => binary_capacity::<Utf8Type>(arrays),
         DataType::LargeUtf8 => binary_capacity::<LargeUtf8Type>(arrays),
         DataType::Binary => binary_capacity::<BinaryType>(arrays),
         DataType::LargeBinary => binary_capacity::<LargeBinaryType>(arrays),
         DataType::FixedSizeList(_, _) => fixed_size_list_capacity(arrays, data_type),
-        _ => Capacities::Array(arrays.iter().map(|a| a.len()).sum()),
+        _ => arrays
+            .iter()
+            .try_fold(0usize, |total, array| total.checked_add(array.len()))
+            .map(Capacities::Array)
+            .ok_or_else(|| ArrowError::MemoryError("concatenated length overflow".into())),
     }
 }
 
@@ -623,7 +643,7 @@ fn concat_same_type(arrays: &[&dyn Array], d: &DataType) -> Result<ArrayRef, Arr
         DataType::Utf8View => concat_byte_view::<StringViewType>(arrays),
         DataType::BinaryView => concat_byte_view::<BinaryViewType>(arrays),
         _ => {
-            let capacity = get_capacity(arrays, d);
+            let capacity = get_capacity(arrays, d)?;
             concat_fallback(arrays, capacity)
         }
     }
@@ -1138,7 +1158,8 @@ mod tests {
     fn test_concat_fixed_size_list_matches_fallback() {
         let check = |arrays: &[&dyn Array]| {
             let expected =
-                concat_fallback(arrays, get_capacity(arrays, arrays[0].data_type())).unwrap();
+                concat_fallback(arrays, get_capacity(arrays, arrays[0].data_type()).unwrap())
+                    .unwrap();
             let got = concat(arrays).unwrap();
             assert_eq!(got.as_ref(), expected.as_ref());
             got.to_data().validate_full().unwrap();

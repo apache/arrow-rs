@@ -632,7 +632,10 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
                 Ok(Arc::new(filter_byte_view(values.as_binary_view(), predicate)))
             }
             DataType::FixedSizeBinary(_) => {
-                Ok(Arc::new(filter_fixed_size_binary(values.as_fixed_size_binary(), predicate)))
+                Ok(Arc::new(filter_fixed_size_binary(
+                    values.as_fixed_size_binary(),
+                    predicate,
+                )?))
             }
             DataType::ListView(_) => {
                 Ok(Arc::new(filter_list_view::<i32>(values.as_list_view(), predicate)))
@@ -659,11 +662,11 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
             _ => {
                 let data = values.to_data();
                 // fallback to using MutableArrayData
-                let mut mutable = MutableArrayData::new(
+                let mut mutable = MutableArrayData::try_new(
                     vec![&data],
                     false,
                     predicate.count,
-                );
+                )?;
 
                 match &predicate.strategy {
                     IterationStrategy::Slices(slices) => {
@@ -1105,16 +1108,19 @@ fn filter_byte_view<T: ByteViewType>(
 }
 
 /// Copies fixed-size binary elements at `indices` from `values` into a new `MutableBuffer`.
-/// Uses raw pointer writes and `with_capacity` to avoid zero-initialization and per-call overhead.
+/// Raw writes avoid zero-initializing the destination before every byte is overwritten.
 #[inline(always)]
 fn copy_fsb_indices(
     values: &[u8],
     value_length: usize,
     indices: impl Iterator<Item = usize>,
     count: usize,
-) -> MutableBuffer {
-    let total = count * value_length;
-    let mut buffer = MutableBuffer::with_capacity(total);
+) -> Result<MutableBuffer, ArrowError> {
+    let total = count
+        .checked_mul(value_length)
+        .ok_or_else(|| ArrowError::MemoryError("filter output size overflow".into()))?;
+    let mut buffer = MutableBuffer::try_with_capacity(total)
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
     let dst_base = buffer.as_mut_ptr();
     let mut write_offset = 0usize;
     for idx in indices {
@@ -1132,32 +1138,44 @@ fn copy_fsb_indices(
     }
     // SAFETY: we wrote exactly `count * value_length` bytes into the buffer.
     unsafe { buffer.set_len(total) };
-    buffer
+    Ok(buffer)
 }
 
 fn filter_fixed_size_binary(
     array: &FixedSizeBinaryArray,
     predicate: &FilterPredicate,
-) -> FixedSizeBinaryArray {
+) -> Result<FixedSizeBinaryArray, ArrowError> {
     let values: &[u8] = array.values();
     let value_length = array.value_length() as usize;
     let calculate_offset_from_index = |index: usize| index * value_length;
+    let capacity = predicate
+        .count
+        .checked_mul(value_length)
+        .ok_or_else(|| ArrowError::MemoryError("filter output size overflow".into()))?;
     let buffer = match &predicate.strategy {
         IterationStrategy::SlicesIterator => {
-            let mut buffer = MutableBuffer::with_capacity(predicate.count * value_length);
+            let mut buffer = MutableBuffer::try_with_capacity(capacity)
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
             for (start, end) in SlicesIterator::new(&predicate.filter) {
-                buffer.extend_from_slice(
-                    &values[calculate_offset_from_index(start)..calculate_offset_from_index(end)],
-                );
+                buffer
+                    .try_extend_from_slice(
+                        &values
+                            [calculate_offset_from_index(start)..calculate_offset_from_index(end)],
+                    )
+                    .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
             }
             buffer
         }
         IterationStrategy::Slices(slices) => {
-            let mut buffer = MutableBuffer::with_capacity(predicate.count * value_length);
+            let mut buffer = MutableBuffer::try_with_capacity(capacity)
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
             for (start, end) in slices {
-                buffer.extend_from_slice(
-                    &values[calculate_offset_from_index(*start)..calculate_offset_from_index(*end)],
-                );
+                buffer
+                    .try_extend_from_slice(
+                        &values[calculate_offset_from_index(*start)
+                            ..calculate_offset_from_index(*end)],
+                    )
+                    .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
             }
             buffer
         }
@@ -1166,13 +1184,13 @@ fn filter_fixed_size_binary(
             value_length,
             IndexIterator::new(&predicate.filter, predicate.count),
             predicate.count,
-        ),
+        )?,
         IterationStrategy::Indices(indices) => copy_fsb_indices(
             values,
             value_length,
             indices.iter().copied(),
             predicate.count,
-        ),
+        )?,
         IterationStrategy::All | IterationStrategy::None => unreachable!(),
     };
 
@@ -1184,7 +1202,6 @@ fn filter_fixed_size_binary(
         nulls,
         predicate.count,
     )
-    .unwrap()
 }
 
 /// `filter` implementation for dictionaries

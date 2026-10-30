@@ -216,7 +216,11 @@ pub fn concat_elements_fixed_size_binary(
             right.value_length()
         ))
     })?;
-    let output_size = left_size + right_size;
+    let output_size = left_size.checked_add(right_size).ok_or_else(|| {
+        ArrowError::InvalidArgumentError(
+            "Concatenated FixedSizeBinary value length overflow".into(),
+        )
+    })?;
     let output_value_length = i32::try_from(output_size).map_err(|_| {
         ArrowError::InvalidArgumentError(format!(
             "Concatenated FixedSizeBinary value length {output_size} exceeds i32"
@@ -227,7 +231,8 @@ pub fn concat_elements_fixed_size_binary(
     let nulls = NullBuffer::union(left.nulls(), right.nulls());
 
     let mut result = FixedSizeBinaryBuilder::with_capacity(left.len(), output_value_length);
-    let mut buffer = MutableBuffer::with_capacity(output_size);
+    let mut buffer = MutableBuffer::try_with_capacity(output_size)
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
     for i in 0..left.len() {
         if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
             result.append_null();

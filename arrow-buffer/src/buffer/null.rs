@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::bit_iterator::{BitIndexIterator, BitIterator, BitSliceIterator};
+use crate::bit_util;
 use crate::buffer::BooleanBuffer;
 use crate::{Buffer, MutableBuffer, OverflowError};
 
@@ -121,7 +122,8 @@ impl NullBuffer {
     ///
     /// # Panics
     ///
-    /// Panics if `self.len() * count` overflows `usize`.
+    /// Panics if `self.len() * count` overflows `usize` or if the required
+    /// buffer cannot be allocated.
     /// Use [`Self::try_expand`] for a fallible version.
     pub fn expand(&self, count: usize) -> Self {
         self.try_expand(count).unwrap_or_else(|err| panic!("{err}"))
@@ -133,14 +135,16 @@ impl NullBuffer {
     ///
     /// # Errors
     ///
-    /// Errors if `self.len() * count` overflows `usize`
+    /// Errors if `self.len() * count` overflows `usize` or if the required
+    /// buffer cannot be allocated.
     pub fn try_expand(&self, count: usize) -> Result<Self, OverflowError> {
         let capacity = self
             .buffer
             .len()
             .checked_mul(count)
             .ok_or_else(|| OverflowError::new::<usize>("buffer length"))?;
-        let mut buffer = MutableBuffer::new_null(capacity);
+        let mut buffer = MutableBuffer::try_from_len_zeroed(bit_util::ceil(capacity, 8))
+            .map_err(|_| OverflowError::new::<usize>("buffer length"))?;
 
         if count.is_multiple_of(8) {
             // When count is a multiple of 8 every expanded run starts on a byte

@@ -564,7 +564,7 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
             predicate.iter().map(|b| if b { value_length } else { 0 }),
         );
 
-        let mut bytes = MutableBuffer::with_capacity(0);
+        let mut bytes = MutableBuffer::default();
         bytes
             .try_repeat_slice_n_times(value, number_of_true)
             .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
@@ -589,7 +589,7 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
         let offsets =
             OffsetBuffer::<T::Offset>::from_repeated_length(value_length, number_of_values);
 
-        let mut bytes = MutableBuffer::with_capacity(0);
+        let mut bytes = MutableBuffer::default();
         bytes
             .try_repeat_slice_n_times(value, number_of_values)
             .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
@@ -629,7 +629,8 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
             .ok_or_else(|| ArrowError::MemoryError("zip output size overflow".to_string()))?;
         T::Offset::from_usize(total_number_of_bytes)
             .ok_or(ArrowError::OffsetOverflowError(total_number_of_bytes))?;
-        let mut mutable = MutableBuffer::with_capacity(total_number_of_bytes);
+        let mut mutable = MutableBuffer::try_with_capacity(total_number_of_bytes)
+            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
         let mut offsets = Vec::<T::Offset>::with_capacity(predicate.len() + 1);
         offsets.push(T::Offset::usize_as(0));
         let mut current_offset: usize = 0;
@@ -836,7 +837,6 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
                 Ok((vec![truthy_view; result_len].into(), truthy_buffers, None))
             }
             _ => {
-                let true_count = predicate.count_set_bits();
                 let mut buffers: Vec<Buffer> = truthy_buffers.to_vec();
 
                 // Check if we need to keep falsy buffer in case view isn't inline
@@ -852,8 +852,12 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
                     byte_view_falsy.as_u128()
                 };
 
-                let total_number_of_bytes = true_count * 16 + (predicate.len() - true_count) * 16;
-                let mut mutable = MutableBuffer::new(total_number_of_bytes);
+                let total_number_of_bytes = predicate
+                    .len()
+                    .checked_mul(std::mem::size_of::<u128>())
+                    .ok_or_else(|| ArrowError::MemoryError("zip output size overflow".into()))?;
+                let mut mutable = MutableBuffer::try_with_capacity(total_number_of_bytes)
+                    .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
                 let mut filled = 0;
 
                 SlicesIterator::from(&predicate).try_for_each(
