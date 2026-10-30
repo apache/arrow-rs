@@ -19,3 +19,4 @@ mod decimal;
 mod dictionary;
 mod list;
 mod map;
+mod string;
