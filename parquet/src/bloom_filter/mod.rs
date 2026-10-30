@@ -112,9 +112,6 @@
 //! [sbbf-paper]: https://arxiv.org/pdf/2101.01719
 //! [bf-formulae]: http://tfk.mit.edu/pdf/bloom.pdf
 
-#[cfg(feature = "arrow")]
-mod arrow;
-
 use crate::basic::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
 use crate::data_type::AsBytes;
 use crate::errors::{ParquetError, Result};
@@ -568,21 +565,8 @@ impl Sbbf {
         self.insert_hash(hash_as_bytes(value));
     }
 
-    /// Return the hash that [`Self::insert`] and [`Self::check`] use for `value`.
-    ///
-    /// This is xxHash64 (seed 0) of the plain-encoded bytes of the value, as the
-    /// Parquet specification requires. Use it with [`Self::insert_hash`] and
-    /// [`Self::check_hash`] to hash a value once and use the hash many times, for
-    /// example to compute and sort the hashes before the filter is allocated.
-    pub fn hash_value<T: AsBytes + ?Sized>(value: &T) -> u64 {
-        hash_as_bytes(value)
-    }
-
-    /// Insert a hash into the filter.
-    ///
-    /// The hash must come from [`Self::hash_value`] (or an equal function), otherwise
-    /// [`Self::check`] will not find the value.
-    pub fn insert_hash(&mut self, hash: u64) {
+    /// Insert a hash into the filter
+    fn insert_hash(&mut self, hash: u64) {
         let block_index = self.hash_to_block_index(hash);
         self.0[block_index].insert(hash as u32)
     }
@@ -595,9 +579,7 @@ impl Sbbf {
     /// Check if a hash is in the filter. May return
     /// true for values that was never inserted ("false positive")
     /// but will always return false if a hash has not been inserted.
-    ///
-    /// See [`Self::hash_value`].
-    pub fn check_hash(&self, hash: u64) -> bool {
+    fn check_hash(&self, hash: u64) -> bool {
         let block_index = self.hash_to_block_index(hash);
         self.0[block_index].check(hash as u32)
     }
@@ -608,6 +590,56 @@ impl Sbbf {
     fn check_hash_branch_free(&self, hash: u64) -> bool {
         let block_index = self.hash_to_block_index(hash);
         self.0[block_index].check_branch_free(hash as u32)
+    }
+
+    /// Inserts precomputed 64-bit hashes.
+    ///
+    /// The filter can hold hashes from any well-mixed 64-bit hash function,
+    /// but [`Self::check`] only finds values whose hashes were computed as
+    /// the Parquet specification requires (xxHash64, seed 0, of the plain
+    /// encoding). Use [`Self::check_hashes`] with the same hash function.
+    pub fn insert_hashes(&mut self, hashes: &[u64]) {
+        for &hash in hashes {
+            self.insert_hash(hash);
+        }
+    }
+
+    /// Checks precomputed 64-bit hashes (see [`Self::insert_hashes`]).
+    ///
+    /// Bit `i` of the result is set if `hashes[i]` may be in the filter. The
+    /// check has no data-dependent branches, which is much faster than
+    /// checking one hash at a time.
+    #[cfg(feature = "arrow")]
+    pub fn check_hashes(&self, hashes: &[u64]) -> arrow_buffer::BooleanBuffer {
+        arrow_buffer::BooleanBuffer::collect_bool(hashes.len(), |i| {
+            self.check_hash_branch_free(hashes[i])
+        })
+    }
+
+    /// Adds the values of `other` to this filter, so that afterwards it
+    /// contains every value that either filter contained.
+    ///
+    /// `other` must have at least as many blocks as this filter, and a
+    /// multiple of them. When it has more, it is folded to the size of this
+    /// filter on the fly (see [`Self::fold_to_target_fpp`]), without changing
+    /// `other`. Folding and union commute: the result is the same as
+    /// inserting the values of both filters into one filter and folding it
+    /// to this size. This lets independent filters (for example, one per
+    /// thread) be built and then merged.
+    pub fn union(&mut self, other: &Sbbf) -> Result<(), ParquetError> {
+        let (len, other_len) = (self.0.len(), other.0.len());
+        if other_len < len || other_len % len != 0 {
+            return Err(ParquetError::General(format!(
+                "Cannot union a bloom filter of {other_len} blocks into one of {len} blocks"
+            )));
+        }
+        let group_size = other_len / len;
+        for (block, group) in self.0.iter_mut().zip(other.0.chunks_exact(group_size)) {
+            for other_block in group {
+                *block |= *other_block;
+            }
+        }
+        Ok(())
     }
 
     /// Return the total in memory size of this bloom filter in bytes
@@ -815,37 +847,6 @@ impl Sbbf {
 
         Ok(Self::new(bitset))
     }
-
-    /// Inserts many hashes. Same result as [`Self::insert_hash`] for each.
-    pub fn insert_hashes(&mut self, hashes: &[u64]) {
-        for &hash in hashes {
-            self.insert_hash(hash);
-        }
-    }
-
-    /// Adds the values of `other` to this filter, so that afterwards it
-    /// contains every value that either filter contained.
-    ///
-    /// `other` must have at least as many blocks as this filter. When it has
-    /// more, it is folded to the size of this filter on the fly (see
-    /// [`Self::fold_to_target_fpp`]), without changing `other`. Folding and
-    /// union commute: the result is the same as inserting the values of both
-    /// filters into one filter and folding it to this size.
-    pub fn union(&mut self, other: &Sbbf) -> Result<(), ParquetError> {
-        let (len, other_len) = (self.0.len(), other.0.len());
-        if other_len < len || other_len % len != 0 {
-            return Err(ParquetError::General(format!(
-                "Cannot union a bloom filter of {other_len} blocks into one of {len} blocks"
-            )));
-        }
-        let group_size = other_len / len;
-        for (block, group) in self.0.iter_mut().zip(other.0.chunks_exact(group_size)) {
-            for other_block in group {
-                *block |= *other_block;
-            }
-        }
-        Ok(())
-    }
 }
 
 // per spec we use xxHash with seed=0
@@ -860,13 +861,10 @@ fn hash_as_bytes<A: AsBytes + ?Sized>(value: &A) -> u64 {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_hash_value_insert_hash_check_hash() {
-        let mut filter = Sbbf::new_with_ndv_fpp(100, 0.01).unwrap();
-        filter.insert_hash(Sbbf::hash_value(&42i64));
-        assert!(filter.check(&42i64));
-        assert!(filter.check_hash(Sbbf::hash_value(&42i64)));
-        assert_eq!(Sbbf::hash_value("hello"), hash_as_bytes("hello"));
+    fn bitset(f: &Sbbf) -> Vec<u8> {
+        let mut out = vec![];
+        f.write_bitset(&mut out).unwrap();
+        out
     }
 
     #[test]
@@ -876,9 +874,50 @@ mod tests {
             filter.insert(&(i * 7));
         }
         for i in 0..5000u64 {
-            let h = Sbbf::hash_value(&i);
+            let h = hash_as_bytes(&i);
             assert_eq!(filter.check_hash(h), filter.check_hash_branch_free(h));
         }
+    }
+
+    #[cfg(feature = "arrow")]
+    #[test]
+    fn test_check_hashes_matches_check_hash() {
+        let hashes: Vec<u64> = (0..5000u64).map(|i| hash_as_bytes(&i)).collect();
+        let mut filter = Sbbf::new_with_num_of_bytes(256);
+        filter.insert_hashes(&hashes[..200]);
+        let result = filter.check_hashes(&hashes);
+        for (i, &h) in hashes.iter().enumerate() {
+            assert_eq!(result.value(i), filter.check_hash(h));
+        }
+        assert!((0..200).all(|i| result.value(i)));
+    }
+
+    #[test]
+    fn test_union_of_parts_matches_one_filter() {
+        let hashes: Vec<u64> = (0..100_000u64).map(|i| hash_as_bytes(&i)).collect();
+        let mut whole = Sbbf::new_with_num_of_bytes(1 << 20);
+        whole.insert_hashes(&hashes);
+        let mut merged = Sbbf::new_with_num_of_bytes(1 << 20);
+        for chunk in hashes.chunks(7_000) {
+            let mut part = Sbbf::new_with_num_of_bytes(1 << 20);
+            part.insert_hashes(chunk);
+            merged.union(&part).unwrap();
+        }
+        assert_eq!(bitset(&whole), bitset(&merged));
+        // union then fold == fold then union
+        let mut folded = whole.clone();
+        folded.fold_to_target_fpp(0.01);
+        merged.fold_to_target_fpp(0.01);
+        assert_eq!(bitset(&folded), bitset(&merged));
+        // a larger filter is folded on the fly
+        let mut small = Sbbf::new_with_num_of_bytes(1 << 16);
+        small.insert_hashes(&hashes[..10]);
+        small.union(&whole).unwrap();
+        let mut expected = Sbbf::new_with_num_of_bytes(1 << 16);
+        expected.insert_hashes(&hashes);
+        assert_eq!(bitset(&small), bitset(&expected));
+        // a smaller filter cannot be unioned into a larger one
+        assert!(whole.clone().union(&small).is_err());
     }
 
     #[test]
@@ -1402,38 +1441,5 @@ mod tests {
             // bit-identity means these must be exactly equal
             assert_eq!(folded_fp, fresh_fp);
         }
-    }
-
-    fn bitset(f: &Sbbf) -> Vec<u8> {
-        let mut out = vec![];
-        f.write_bitset(&mut out).unwrap();
-        out
-    }
-
-    #[test]
-    fn union_of_parts_matches_one_filter() {
-        let hashes: Vec<u64> = (0..100_000u64).map(|i| Sbbf::hash_value(&i)).collect();
-        let mut whole = Sbbf::new_with_num_of_bytes(1 << 20);
-        whole.insert_hashes(&hashes);
-        let mut merged = Sbbf::new_with_num_of_bytes(1 << 20);
-        for chunk in hashes.chunks(7_000) {
-            let mut part = Sbbf::new_with_num_of_bytes(1 << 20);
-            part.insert_hashes(chunk);
-            merged.union(&part).unwrap();
-        }
-        assert_eq!(bitset(&whole), bitset(&merged));
-        // union then fold == fold then union
-        let mut a = whole.clone();
-        a.fold_to_target_fpp(0.01);
-        merged.fold_to_target_fpp(0.01);
-        assert_eq!(bitset(&a), bitset(&merged));
-        // a larger filter is folded on the fly
-        let mut small = Sbbf::new_with_num_of_bytes(1 << 16);
-        small.insert_hashes(&hashes[..10]);
-        small.union(&whole).unwrap();
-        let mut expected = Sbbf::new_with_num_of_bytes(1 << 16);
-        expected.insert_hashes(&hashes);
-        assert_eq!(bitset(&small), bitset(&expected));
-        assert!(whole.clone().union(&small).is_err());
     }
 }
