@@ -429,6 +429,10 @@ fn add_benchmark(c: &mut Criterion) {
     let short_list_array = create_primitive_list_array::<i32, Int32Type>(size, 0.1, 0.1, 2);
     add_benchmark_for_nested("short list<i32> w NULLs", &short_list_array);
 
+    // No child values and no nulls, so only the offsets are filtered
+    let empty_list_array = create_primitive_list_array::<i32, Int32Type>(size, 0.0, 0.0, 0);
+    add_benchmark_for_nested("empty list<i32>", &empty_list_array);
+
     let struct_list_array = create_struct_list_array(size, 0.1, 16);
     add_benchmark_for_nested("list<struct<i64, utf8>> w NULLs", &struct_list_array);
 
@@ -467,6 +471,7 @@ fn add_benchmark(c: &mut Criterion) {
     for (name, data_array) in [
         ("list<i32> w NULLs", &list_array as &dyn Array),
         ("short list<i32> w NULLs", &short_list_array),
+        ("empty list<i32>", &empty_list_array),
         ("list<struct<i64, utf8>> w NULLs", &struct_list_array),
     ] {
         for (label, filter_array, filter) in &clustered_filters {
