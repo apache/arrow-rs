@@ -3062,8 +3062,8 @@ mod tests {
     }
 
     /// Zeroes the dictionary page body: an all-zero snappy stream declares an
-    /// uncompressed length of zero, so decoding it fails deterministically on
-    /// the decompressed-size check. Any code path that decompresses the
+    /// uncompressed length of zero followed by literals that do not fit in it,
+    /// so decoding it fails deterministically. Any code path that decompresses the
     /// dictionary therefore errors; a path that genuinely never touches it
     /// succeeds.
     fn corrupt_dictionary_body(bytes: &Bytes, body: &std::ops::Range<usize>) -> Bytes {
@@ -3106,7 +3106,7 @@ mod tests {
         let mut reader = int32_reader(corrupted);
         let err = reader.skip_records(2).unwrap_err().to_string();
         assert!(
-            err.contains("corrupt") || err.contains("size"),
+            err.contains("bytes remain") || err.contains("size"),
             "expected the deferred dictionary decode to fail on \
              decompression, got: {err}"
         );

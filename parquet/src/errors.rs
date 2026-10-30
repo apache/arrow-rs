@@ -108,6 +108,13 @@ impl From<snap::Error> for ParquetError {
     }
 }
 
+#[cfg(any(feature = "snap", test))]
+impl From<snipsnap::Error> for ParquetError {
+    fn from(e: snipsnap::Error) -> ParquetError {
+        ParquetError::External(Box::new(e))
+    }
+}
+
 impl From<cell::BorrowMutError> for ParquetError {
     fn from(e: cell::BorrowMutError) -> ParquetError {
         ParquetError::External(Box::new(e))
