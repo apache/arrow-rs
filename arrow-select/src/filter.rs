@@ -17,7 +17,6 @@
 
 //! Defines filter kernels
 
-use std::ops::AddAssign;
 use std::sync::Arc;
 
 use arrow_array::builder::BooleanBufferBuilder;
@@ -79,7 +78,7 @@ impl Iterator for SlicesIterator<'_> {
     }
 }
 
-/// An iterator of `usize` whose index in [`BooleanArray`] is true
+/// An iterator of `usize` whose index in a filter mask is true
 ///
 /// This provides the best performance on most predicates, apart from those which keep
 /// large runs and therefore favour [`SlicesIterator`]
@@ -89,9 +88,8 @@ pub(crate) struct IndexIterator<'a> {
 }
 
 impl<'a> IndexIterator<'a> {
-    pub(crate) fn new(filter: &'a BooleanArray, remaining: usize) -> Self {
-        assert_eq!(filter.null_count(), 0);
-        let iter = filter.values().set_indices();
+    pub(crate) fn new(filter: &'a BooleanBuffer, remaining: usize) -> Self {
+        let iter = filter.set_indices();
         Self { remaining, iter }
     }
 
@@ -343,23 +341,28 @@ impl FilterBuilder {
     /// Construct the final `FilterPredicate`
     pub fn build(self) -> FilterPredicate {
         let count = self.count.unwrap_or_else(|| self.filter.true_count());
-        let mut strategy = IterationStrategy::default_strategy(self.filter.len(), count);
+        let len = self.filter.len();
+        let (mask, _) = self.filter.into_parts();
+        let mut strategy = IterationStrategy::new(mask, count);
         if self.optimize {
-            match strategy {
-                IterationStrategy::SlicesIterator => {
-                    let slices = SlicesIterator::new(&self.filter).collect();
-                    strategy = IterationStrategy::Slices(slices)
+            // The precomputed strategies keep the mask only for compressing
+            strategy = match strategy {
+                IterationStrategy::SlicesIterator(mask) => {
+                    let slices = SlicesIterator::from(&mask).collect();
+                    let mask = use_compress(len, count, false).then_some(mask);
+                    IterationStrategy::Slices(slices, mask)
                 }
-                IterationStrategy::IndexIterator => {
-                    let indices = IndexIterator::new(&self.filter, count).collect();
-                    strategy = IterationStrategy::Indices(indices)
+                IterationStrategy::IndexIterator(mask) => {
+                    let indices = IndexIterator::new(&mask, count).collect();
+                    let mask = use_compress(len, count, true).then_some(mask);
+                    IterationStrategy::Indices(indices, mask)
                 }
-                _ => {}
-            }
+                strategy => strategy,
+            };
         }
 
         FilterPredicate {
-            filter: self.filter,
+            len,
             count,
             strategy,
         }
@@ -367,16 +370,21 @@ impl FilterBuilder {
 }
 
 /// The iteration strategy used to evaluate [`FilterPredicate`]
+///
+/// The lazy strategies keep the filter mask, and the precomputed strategies
+/// keep it only if [`filter_bits`] compresses with it, see [`use_compress`].
+/// Kernels that read the mask as words otherwise synthesize them with
+/// [`SliceMaskWords`] or [`IndexMaskWords`]
 #[derive(Debug)]
 enum IterationStrategy {
-    /// A lazily evaluated iterator of ranges
-    SlicesIterator,
-    /// A lazily evaluated iterator of indices
-    IndexIterator,
-    /// A precomputed list of indices
-    Indices(Vec<usize>),
-    /// A precomputed array of ranges
-    Slices(Vec<(usize, usize)>),
+    /// A lazily evaluated iterator of ranges of the mask
+    SlicesIterator(BooleanBuffer),
+    /// A lazily evaluated iterator of indices of the mask
+    IndexIterator(BooleanBuffer),
+    /// A precomputed list of indices, and the mask if compressing with it
+    Indices(Vec<usize>, Option<BooleanBuffer>),
+    /// A precomputed array of ranges, and the mask if compressing with it
+    Slices(Vec<(usize, usize)>, Option<BooleanBuffer>),
     /// Select all rows
     All,
     /// Select no rows
@@ -384,9 +392,10 @@ enum IterationStrategy {
 }
 
 impl IterationStrategy {
-    /// The default [`IterationStrategy`] for a filter of length `filter_length`
-    /// and selecting `filter_count` rows
-    fn default_strategy(filter_length: usize, filter_count: usize) -> Self {
+    /// The default [`IterationStrategy`] for the filter `mask` selecting
+    /// `filter_count` rows
+    fn new(mask: BooleanBuffer, filter_count: usize) -> Self {
+        let filter_length = mask.len();
         if filter_length == 0 || filter_count == 0 {
             return IterationStrategy::None;
         }
@@ -401,9 +410,159 @@ impl IterationStrategy {
         // This can then be used as a heuristic for the optimal iteration strategy
         let selectivity_frac = filter_count as f64 / filter_length as f64;
         if selectivity_frac > FILTER_SLICES_SELECTIVITY_THRESHOLD {
-            return IterationStrategy::SlicesIterator;
+            return IterationStrategy::SlicesIterator(mask);
         }
-        IterationStrategy::IndexIterator
+        IterationStrategy::IndexIterator(mask)
+    }
+
+    /// The filter mask, if this strategy keeps it
+    fn mask(&self) -> Option<&BooleanBuffer> {
+        match self {
+            IterationStrategy::SlicesIterator(mask) | IterationStrategy::IndexIterator(mask) => {
+                Some(mask)
+            }
+            IterationStrategy::Indices(_, mask) | IterationStrategy::Slices(_, mask) => {
+                mask.as_ref()
+            }
+            IterationStrategy::All | IterationStrategy::None => None,
+        }
+    }
+}
+
+/// An iterator of the words of a filter mask synthesized from its selected
+/// `(start, end)` ranges, see [`FilterPredicate::with_mask_words`]
+struct SliceMaskWords<I> {
+    slices: I,
+    /// The rest of a range that extends past the last word returned
+    pending: Option<(usize, usize)>,
+}
+
+impl<I: Iterator<Item = (usize, usize)>> SliceMaskWords<I> {
+    fn new(slices: I) -> Self {
+        Self {
+            slices,
+            pending: None,
+        }
+    }
+}
+
+impl<I: Iterator<Item = (usize, usize)>> Iterator for SliceMaskWords<I> {
+    type Item = (usize, u64);
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        let (mut start, mut end) = self.pending.take().or_else(|| self.slices.next())?;
+        let index = start / 64;
+        let word_start = index * 64;
+        let word_end = word_start + 64;
+        let mut word = 0;
+        loop {
+            word |= bit_range_mask(start - word_start, end.min(word_end) - word_start);
+            if end > word_end {
+                self.pending = Some((word_end, end));
+                break;
+            }
+            match self.slices.next() {
+                Some(next) if next.0 < word_end => (start, end) = next,
+                next => {
+                    self.pending = next;
+                    break;
+                }
+            }
+        }
+        Some((index, word))
+    }
+}
+
+/// An iterator of the words of a filter mask synthesized from its selected
+/// indices, see [`FilterPredicate::with_mask_words`]
+struct IndexMaskWords<I: Iterator> {
+    indices: std::iter::Peekable<I>,
+}
+
+impl<I: Iterator<Item = usize>> IndexMaskWords<I> {
+    fn new(indices: I) -> Self {
+        Self {
+            indices: indices.peekable(),
+        }
+    }
+}
+
+impl<I: Iterator<Item = usize>> Iterator for IndexMaskWords<I> {
+    type Item = (usize, u64);
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        let first = self.indices.next()?;
+        let index = first / 64;
+        let mut word = 1 << (first % 64);
+        while let Some(idx) = self.indices.next_if(|idx| idx / 64 == index) {
+            word |= 1 << (idx % 64);
+        }
+        Some((index, word))
+    }
+}
+
+/// An iterator of the non-empty words of a filter mask bitmap, see
+/// [`FilterPredicate::with_mask_words`]
+fn bitmap_mask_words(mask: &BooleanBuffer) -> impl Iterator<Item = (usize, u64)> + '_ {
+    let chunks = mask.bit_chunks();
+    chunks
+        .iter()
+        .chain(std::iter::once(chunks.remainder_bits()))
+        .enumerate()
+        .filter(|(_, word)| *word != 0)
+}
+
+/// A word with the bits `start..end` set, where `start <= end <= 64`
+#[inline]
+fn bit_range_mask(start: usize, end: usize) -> u64 {
+    debug_assert!(start <= end && end <= 64);
+    if end == start {
+        return 0;
+    }
+    (u64::MAX >> (64 - (end - start))) << start
+}
+
+/// A consumer of the words of a filter mask, see
+/// [`FilterPredicate::with_mask_words`]
+trait MaskWordsConsumer: Sized {
+    type Output;
+
+    /// Consume `words`, the non-empty words of the filter mask in ascending
+    /// order of their index
+    fn consume(self, words: impl Iterator<Item = (usize, u64)>) -> Self::Output;
+
+    /// Consume the words of the filter `mask`, which can be read more
+    /// efficiently than through [`Self::consume`]
+    fn consume_bitmap(self, mask: &BooleanBuffer) -> Self::Output {
+        self.consume(bitmap_mask_words(mask))
+    }
+}
+
+/// An iterator of `(start, end)` ranges of consecutive indices in `indices`
+struct IndexRuns<I: Iterator> {
+    indices: std::iter::Peekable<I>,
+}
+
+impl<I: Iterator<Item = usize>> IndexRuns<I> {
+    fn new(indices: I) -> Self {
+        Self {
+            indices: indices.peekable(),
+        }
+    }
+}
+
+impl<I: Iterator<Item = usize>> Iterator for IndexRuns<I> {
+    type Item = (usize, usize);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let start = self.indices.next()?;
+        let mut end = start + 1;
+        while self.indices.next_if_eq(&end).is_some() {
+            end += 1;
+        }
+        Some((start, end))
     }
 }
 
@@ -483,7 +642,8 @@ where
 /// A filtering predicate that can be applied to an [`Array`]
 #[derive(Debug)]
 pub struct FilterPredicate {
-    filter: BooleanArray,
+    /// Length of the filter mask, including rows that are not selected
+    len: usize,
     count: usize,
     /// Precomputed strategy for iterating over the selected rows of this predicate
     strategy: IterationStrategy,
@@ -527,7 +687,7 @@ impl FilterPredicate {
 
     /// Length of the filter mask, including rows that are not selected
     pub(crate) fn filter_len(&self) -> usize {
-        self.filter.len()
+        self.len
     }
 
     /// Return a [`FilterSelection`] for iterating over the rows selected by
@@ -536,18 +696,45 @@ impl FilterPredicate {
         match &self.strategy {
             IterationStrategy::None => FilterSelection::None,
             IterationStrategy::All => FilterSelection::All { len: self.count },
-            IterationStrategy::Slices(slices) => {
+            IterationStrategy::Slices(slices, _) => {
                 FilterSelection::Slices(FilterIterator::Materialized(slices.iter().copied()))
             }
-            IterationStrategy::SlicesIterator => {
-                FilterSelection::Slices(FilterIterator::Lazy(SlicesIterator::new(&self.filter)))
+            IterationStrategy::SlicesIterator(mask) => {
+                FilterSelection::Slices(FilterIterator::Lazy(SlicesIterator::from(mask)))
             }
-            IterationStrategy::Indices(indices) => {
+            IterationStrategy::Indices(indices, _) => {
                 FilterSelection::Indices(FilterIterator::Materialized(indices.iter().copied()))
             }
-            IterationStrategy::IndexIterator => FilterSelection::Indices(FilterIterator::Lazy(
-                IndexIterator::new(&self.filter, self.count),
-            )),
+            IterationStrategy::IndexIterator(mask) => {
+                FilterSelection::Indices(FilterIterator::Lazy(IndexIterator::new(mask, self.count)))
+            }
+        }
+    }
+
+    /// Pass the words of the filter mask to `consumer`, reading them from the
+    /// mask if the strategy keeps it, or synthesizing them otherwise.
+    ///
+    /// The strategy is matched once, so `consumer` is monomorphized for each
+    /// source of the words.
+    fn with_mask_words<C: MaskWordsConsumer>(&self, consumer: C) -> C::Output {
+        if let Some(mask) = self.strategy.mask() {
+            return consumer.consume_bitmap(mask);
+        }
+        match &self.strategy {
+            IterationStrategy::Slices(slices, _) => {
+                consumer.consume(SliceMaskWords::new(slices.iter().copied()))
+            }
+            IterationStrategy::Indices(indices, _) => {
+                consumer.consume(IndexMaskWords::new(indices.iter().copied()))
+            }
+            IterationStrategy::SlicesIterator(_) | IterationStrategy::IndexIterator(_) => {
+                unreachable!("lazy strategies keep the mask")
+            }
+            IterationStrategy::All => {
+                let all = [(0, self.len)];
+                consumer.consume(SliceMaskWords::new(all.iter().copied()))
+            }
+            IterationStrategy::None => consumer.consume(std::iter::empty()),
         }
     }
 
@@ -567,7 +754,7 @@ impl FilterPredicate {
             return None;
         }
 
-        assert!(nulls.len() >= self.filter.len());
+        assert!(nulls.len() >= self.len);
         match self.strategy {
             IterationStrategy::None => return None,
             IterationStrategy::All => {
@@ -595,10 +782,10 @@ impl FilterPredicate {
 }
 
 fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<ArrayRef, ArrowError> {
-    if predicate.filter.len() > values.len() {
+    if predicate.len > values.len() {
         return Err(ArrowError::InvalidArgumentError(format!(
             "Filter predicate of length {} is larger than target array of length {}",
-            predicate.filter.len(),
+            predicate.len,
             values.len()
         )));
     }
@@ -665,18 +852,19 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
                     predicate.count,
                 );
 
+                let extend = |(start, end)| mutable.try_extend(0, start, end);
                 match &predicate.strategy {
-                    IterationStrategy::Slices(slices) => {
-                        for (start, end) in slices {
-                            mutable.try_extend(0, *start, *end)?;
-                        }
+                    IterationStrategy::Slices(slices, _) => {
+                        slices.iter().copied().try_for_each(extend)?
                     }
-                    _ => {
-                        let iter = SlicesIterator::new(&predicate.filter);
-                        for (start, end) in iter {
-                            mutable.try_extend(0, start, end)?;
-                        }
+                    IterationStrategy::SlicesIterator(mask)
+                    | IterationStrategy::IndexIterator(mask) => {
+                        SlicesIterator::from(mask).try_for_each(extend)?
                     }
+                    IterationStrategy::Indices(indices, _) => {
+                        IndexRuns::new(indices.iter().copied()).try_for_each(extend)?
+                    }
+                    IterationStrategy::All | IterationStrategy::None => unreachable!(),
                 }
 
                 let data = mutable.freeze();
@@ -692,44 +880,17 @@ fn filter_run_end_array<R: RunEndIndexType>(
     predicate: &FilterPredicate,
 ) -> Result<RunArray<R>, ArrowError>
 where
-    R::Native: Into<i64> + From<bool>,
-    R::Native: AddAssign,
+    R::Native: Into<i64>,
 {
     let run_ends: &RunEndBuffer<R::Native> = array.run_ends();
     let start_physical = run_ends.get_start_physical_index();
     let end_physical = run_ends.get_end_physical_index();
-    let physical_len = end_physical - start_physical + 1;
 
-    let mut new_run_ends = vec![R::default_value(); physical_len];
-    let offset = run_ends.offset() as u64;
-
-    let mut start = 0u64;
-    let mut j = 0;
-    let mut count = R::default_value();
-    let filter_values = predicate.filter.values();
-    let run_ends = run_ends.inner();
-
-    let pred: BooleanArray = BooleanBuffer::collect_bool(physical_len, |i| {
-        let mut keep = false;
-        let mut end = (run_ends[i + start_physical].into() as u64).saturating_sub(offset);
-        let difference = end.saturating_sub(filter_values.len() as u64);
-        end -= difference;
-
-        // Safety: we subtract the difference off `end` so we are always within bounds
-        for pred in (start..end).map(|i| unsafe { filter_values.value_unchecked(i as usize) }) {
-            count += R::Native::from(pred);
-            keep |= pred
-        }
-        // this is to avoid branching
-        new_run_ends[j] = count;
-        j += keep as usize;
-
-        start = end;
-        keep
-    })
-    .into();
-
-    new_run_ends.truncate(j);
+    let (new_run_ends, pred) = predicate.with_mask_words(FilterRunEnds {
+        run_ends: &run_ends.inner()[start_physical..=end_physical],
+        offset: run_ends.offset() as u64,
+        filter_len: predicate.len as u64,
+    });
 
     let values = array.values_slice();
     let values = filter(values.as_ref(), &pred)?;
@@ -738,22 +899,118 @@ where
     RunArray::try_new(&run_ends, &values)
 }
 
+/// Computes the run ends of a filtered [`RunArray`], and the predicate
+/// selecting the values of the runs that are kept, from the filter mask words
+struct FilterRunEnds<'a, N> {
+    /// The run ends of the physical runs overlapping the array
+    run_ends: &'a [N],
+    /// The logical offset of the array
+    offset: u64,
+    /// The length of the filter mask
+    filter_len: u64,
+}
+
+impl<N> MaskWordsConsumer for FilterRunEnds<'_, N>
+where
+    N: ArrowNativeType + Into<i64>,
+{
+    type Output = (Vec<N>, BooleanArray);
+
+    fn consume(self, words: impl Iterator<Item = (usize, u64)>) -> Self::Output {
+        let mut cursor = MaskWordCursor::new(words);
+        let mut new_run_ends = vec![N::default(); self.run_ends.len()];
+        let mut j = 0;
+        let mut count = 0;
+
+        let pred = BooleanBuffer::collect_bool(self.run_ends.len(), |i| {
+            let end = (self.run_ends[i].into() as u64)
+                .saturating_sub(self.offset)
+                .min(self.filter_len);
+            let total = cursor.count_to(end as usize);
+            let keep = total != count;
+            count = total;
+            // this is to avoid branching
+            new_run_ends[j] = N::usize_as(count);
+            j += keep as usize;
+            keep
+        });
+
+        new_run_ends.truncate(j);
+        (new_run_ends, pred.into())
+    }
+}
+
+/// Counts the set bits of a filter mask before increasing positions, from its
+/// non-empty words in ascending order of their index
+struct MaskWordCursor<W> {
+    words: W,
+    /// The first bit of `word`, or `usize::MAX` once the words are exhausted
+    word_start: usize,
+    word: u64,
+    /// The number of set bits in the words before `word`
+    before: usize,
+}
+
+impl<W: Iterator<Item = (usize, u64)>> MaskWordCursor<W> {
+    fn new(words: W) -> Self {
+        let mut cursor = Self {
+            words,
+            word_start: 0,
+            word: 0,
+            before: 0,
+        };
+        cursor.advance();
+        cursor
+    }
+
+    /// Move to the next word, counting the bits of the current one
+    #[inline]
+    fn advance(&mut self) {
+        self.before += self.word.count_ones() as usize;
+        (self.word_start, self.word) = match self.words.next() {
+            Some((index, word)) => (index * 64, word),
+            None => (usize::MAX, 0),
+        };
+    }
+
+    /// The number of set bits in `0..end`, where `end` is not before the
+    /// `end` of the previous call
+    #[inline]
+    fn count_to(&mut self, end: usize) -> usize {
+        while self.word_start < end && end - self.word_start >= 64 {
+            self.advance();
+        }
+        if self.word_start >= end {
+            return self.before;
+        }
+        // `end` is within the current word
+        let bits = end - self.word_start;
+        self.before + (self.word & ((1 << bits) - 1)).count_ones() as usize
+    }
+}
+
 /// Filter the packed bitmask `buffer` with `predicate`, choosing between the
 /// strategy-based and compress-based kernels by filter density
 fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
-    // Compressing scans the whole mask a word at a time, so it loses to the
-    // slices strategies once fewer than one bit per word is dropped, and to
-    // precomputed `Indices` once fewer than one bit per word is kept. The lazy
-    // `IndexIterator` scans the mask anyway, so it never beats compressing
-    let len = predicate.filter.len();
-    let count = predicate.count;
-    let dense = count >= len - len / 64;
-    let sparse_indices =
-        count <= len / 64 && matches!(predicate.strategy, IterationStrategy::Indices(_));
-    if !dense && !sparse_indices {
+    let indices = matches!(predicate.strategy, IterationStrategy::Indices(..));
+    if use_compress(predicate.len, predicate.count, indices) {
         return filter_bits_compress(buffer, predicate);
     }
     filter_bits_strategy(buffer, predicate)
+}
+
+/// Whether [`filter_bits`] compresses with the words of the filter mask,
+/// rather than using the [`IterationStrategy`], for a filter of length `len`
+/// selecting `count` rows, with precomputed `indices` or not
+///
+/// Compressing scans the whole mask a word at a time, so it loses to the
+/// slices strategies once fewer than one bit per word is dropped, and to
+/// precomputed `Indices` once fewer than one bit per word is kept. The lazy
+/// `IndexIterator` scans the mask anyway, so it never beats compressing
+fn use_compress(len: usize, count: usize, indices: bool) -> bool {
+    let dense = count >= len - len / 64;
+    let sparse_indices = indices && count <= len / 64;
+    !dense && !sparse_indices
 }
 
 /// Filter the packed bitmask `buffer` with `predicate` using its
@@ -761,20 +1018,20 @@ fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
 fn filter_bits_strategy(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
     let src = buffer.values();
     let offset = buffer.offset();
-    assert!(buffer.len() >= predicate.filter.len());
+    assert!(buffer.len() >= predicate.len);
 
     match &predicate.strategy {
-        IterationStrategy::IndexIterator => {
+        IterationStrategy::IndexIterator(mask) => {
             let bits =
                 // SAFETY: IndexIterator uses the filter predicate to derive indices
-                IndexIterator::new(&predicate.filter, predicate.count).map(|src_idx| unsafe {
+                IndexIterator::new(mask, predicate.count).map(|src_idx| unsafe {
                     bit_util::get_bit_raw(buffer.values().as_ptr(), src_idx + offset)
                 });
 
             // SAFETY: `IndexIterator` reports its size correctly
             unsafe { MutableBuffer::from_trusted_len_iter_bool(bits).into() }
         }
-        IterationStrategy::Indices(indices) => {
+        IterationStrategy::Indices(indices, _) => {
             // SAFETY: indices were derived from the filter predicate
             let bits = indices.iter().map(|src_idx| unsafe {
                 bit_util::get_bit_raw(buffer.values().as_ptr(), *src_idx + offset)
@@ -782,14 +1039,14 @@ fn filter_bits_strategy(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> 
             // SAFETY: `Vec::iter()` reports its size correctly
             unsafe { MutableBuffer::from_trusted_len_iter_bool(bits).into() }
         }
-        IterationStrategy::SlicesIterator => {
+        IterationStrategy::SlicesIterator(mask) => {
             let mut builder = BooleanBufferBuilder::new(predicate.count);
-            for (start, end) in SlicesIterator::new(&predicate.filter) {
+            for (start, end) in SlicesIterator::from(mask) {
                 builder.append_packed_range(start + offset..end + offset, src)
             }
             builder.into()
         }
-        IterationStrategy::Slices(slices) => {
+        IterationStrategy::Slices(slices, _) => {
             let mut builder = BooleanBufferBuilder::new(predicate.count);
             for (start, end) in slices {
                 builder.append_packed_range(*start + offset..*end + offset, src)
@@ -806,78 +1063,140 @@ fn filter_bits_strategy(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> 
 /// Not inlined: within `filter_array` the packing state spills to the stack
 #[inline(never)]
 fn filter_bits_compress(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
-    /// Packs the bits extracted from successive words into the low `filled`
-    /// bits of `current`; once complete it is written at `idx` and restarts
-    /// from the bits that did not fit
-    struct Packer {
-        ptr: *mut u64,
-        idx: usize,
-        current: u64,
-        filled: u32,
-    }
+    assert!(buffer.len() >= predicate.len);
+    predicate.with_mask_words(CompressBits {
+        values: BitChunks::new(buffer.values(), buffer.offset(), predicate.len),
+        count: predicate.count,
+    })
+}
 
-    impl Packer {
-        #[inline(always)]
-        fn push(&mut self, values: u64, mask: u64) {
-            let bits = bit_util::compress(values, mask);
-            self.current |= bits << self.filled;
-            let total = self.filled + mask.count_ones();
-            if total < 64 {
-                self.filled = total;
+/// Extracts the bits of `values` kept by the filter mask words, see
+/// [`filter_bits_compress`]
+struct CompressBits<'a> {
+    /// The bits to filter, covering the length of the filter mask
+    values: BitChunks<'a>,
+    /// The number of set bits in the filter mask
+    count: usize,
+}
+
+impl MaskWordsConsumer for CompressBits<'_> {
+    type Output = Buffer;
+
+    // `filter_bits` compresses only with a mask, so the synthesized words are
+    // kept out of the bitmap loop
+    #[inline(never)]
+    fn consume(self, words: impl Iterator<Item = (usize, u64)>) -> Buffer {
+        // The words cover the length of `values`, the last one possibly its
+        // remainder
+        let values = &self.values;
+        let chunk_len = values.chunk_len();
+        let mut out = Packer::alloc(self.count);
+        let mut packer = Packer::new(&mut out);
+        // Words with no kept bits are not yielded, so the corresponding
+        // values are never read
+        for (index, mask) in words {
+            let value = if index < chunk_len {
+                values.chunk(index)
             } else {
-                // SAFETY: `count` is the number of set bits in the filter, so
-                // at most `count / 64` words are ever completed and the
-                // buffer holds `count / 64 + 1`
-                unsafe { self.ptr.add(self.idx).write(self.current) };
-                self.idx += 1;
-                // `bits >> (64 - filled)`, written so that `filled == 0`
-                // shifts everything out
-                self.current = (bits >> 1) >> (63 - self.filled);
-                self.filled = total - 64;
+                values.remainder_bits()
+            };
+            packer.push(value, mask);
+        }
+        packer.finish(out, self.count)
+    }
+
+    #[inline(always)]
+    fn consume_bitmap(self, mask: &BooleanBuffer) -> Buffer {
+        let mask_chunks = mask.bit_chunks();
+        let values = &self.values;
+        // Both chunk views cover the length of the filter mask, so indexing
+        // `values` by the position in `mask_chunks` stays in bounds
+        debug_assert_eq!(mask_chunks.chunk_len(), values.chunk_len());
+        debug_assert_eq!(self.count, mask.count_set_bits());
+        let mut out = Packer::alloc(self.count);
+        let mut packer = Packer::new(&mut out);
+        for (index, mask) in mask_chunks.iter().enumerate() {
+            // Words with no kept bits are skipped before the corresponding
+            // values are read, so only the mask is touched for them
+            if mask == 0 {
+                continue;
             }
+            packer.push(values.chunk(index), mask);
+        }
+        packer.push(values.remainder_bits(), mask_chunks.remainder_bits());
+        packer.finish(out, self.count)
+    }
+}
+
+/// Packs the bits extracted from successive words into the low `filled`
+/// bits of `current`; once complete it is written at `idx` and restarts
+/// from the bits that did not fit
+///
+/// The output buffer is held outside, so that the packing state stays in
+/// registers
+struct Packer {
+    ptr: *mut u64,
+    idx: usize,
+    current: u64,
+    filled: u32,
+}
+
+impl Packer {
+    /// The output buffer for a filter mask with `count` set bits, which its
+    /// size and the raw writes rely on
+    #[inline(always)]
+    fn alloc(count: usize) -> Vec<u64> {
+        // One word beyond the complete ones for the trailing partial word
+        Vec::with_capacity(count / 64 + 1)
+    }
+
+    #[inline(always)]
+    fn new(out: &mut Vec<u64>) -> Self {
+        Self {
+            ptr: out.as_mut_ptr(),
+            idx: 0,
+            current: 0,
+            filled: 0,
         }
     }
 
-    assert!(buffer.len() >= predicate.filter.len());
-    let mask_chunks = predicate.filter.values().bit_chunks();
-    let value_chunks = BitChunks::new(buffer.values(), buffer.offset(), predicate.filter.len());
-    // `count` is the filter's set bit count, which the buffer size and the
-    // raw writes below rely on, and both chunk views cover
-    // `predicate.filter.len()` bits, so indexing `value_chunks` by the
-    // position in `mask_chunks` stays in bounds
-    debug_assert_eq!(predicate.count, predicate.filter.true_count());
-    debug_assert_eq!(mask_chunks.chunk_len(), value_chunks.chunk_len());
-
-    // One word beyond the complete ones for the trailing partial word
-    let mut out: Vec<u64> = Vec::with_capacity(predicate.count / 64 + 1);
-    let mut packer = Packer {
-        ptr: out.as_mut_ptr(),
-        idx: 0,
-        current: 0,
-        filled: 0,
-    };
-
-    for (index, mask) in mask_chunks.iter().enumerate() {
-        // Words with no kept bits are skipped before the corresponding values
-        // are read, so only the mask is touched for them
-        if mask == 0 {
-            continue;
+    #[inline(always)]
+    fn push(&mut self, values: u64, mask: u64) {
+        let bits = bit_util::compress(values, mask);
+        self.current |= bits << self.filled;
+        let total = self.filled + mask.count_ones();
+        if total < 64 {
+            self.filled = total;
+        } else {
+            // SAFETY: `count` is the number of set bits in the filter, so
+            // at most `count / 64` words are ever completed and the
+            // buffer holds `count / 64 + 1`
+            unsafe { self.ptr.add(self.idx).write(self.current) };
+            self.idx += 1;
+            // `bits >> (64 - filled)`, written so that `filled == 0`
+            // shifts everything out
+            self.current = (bits >> 1) >> (63 - self.filled);
+            self.filled = total - 64;
         }
-        packer.push(value_chunks.chunk(index), mask);
     }
-    packer.push(value_chunks.remainder_bits(), mask_chunks.remainder_bits());
 
-    // The trailing partial word; its bits above `filled` are zero
-    // SAFETY: `idx <= count / 64`, so this and every word below it is
-    // within the buffer and written
-    debug_assert!(packer.idx < out.capacity());
-    unsafe {
-        packer.ptr.add(packer.idx).write(packer.current);
-        out.set_len(packer.idx + 1);
+    /// Write the trailing partial word to `out`, the buffer this was
+    /// created with, holding `count` bits
+    #[inline(always)]
+    fn finish(self, mut out: Vec<u64>, count: usize) -> Buffer {
+        debug_assert_eq!(self.idx * 64 + self.filled as usize, count);
+        // The trailing partial word; its bits above `filled` are zero
+        // SAFETY: `idx <= count / 64`, so this and every word below it is
+        // within the buffer and written
+        debug_assert!(self.idx < out.capacity());
+        unsafe {
+            self.ptr.add(self.idx).write(self.current);
+            out.set_len(self.idx + 1);
+        }
+        let mut out = MutableBuffer::from(out);
+        out.truncate(bit_util::ceil(count, 8));
+        out.into()
     }
-    let mut out = MutableBuffer::from(out);
-    out.truncate(bit_util::ceil(predicate.count, 8));
-    out.into()
 }
 
 /// `filter` implementation for boolean buffers
@@ -894,18 +1213,18 @@ pub(crate) fn filter_native<T: ArrowNativeType>(
     values: &[T],
     predicate: &FilterPredicate,
 ) -> Buffer {
-    assert!(values.len() >= predicate.filter.len());
+    assert!(values.len() >= predicate.len);
 
     match &predicate.strategy {
-        IterationStrategy::SlicesIterator => {
+        IterationStrategy::SlicesIterator(mask) => {
             let mut buffer = Vec::with_capacity(predicate.count);
-            for (start, end) in SlicesIterator::new(&predicate.filter) {
+            for (start, end) in SlicesIterator::from(mask) {
                 // SAFETY: indices were derived from the filter predicate
                 buffer.extend_from_slice(unsafe { values.get_unchecked(start..end) });
             }
             buffer.into()
         }
-        IterationStrategy::Slices(slices) => {
+        IterationStrategy::Slices(slices, _) => {
             let mut buffer = Vec::with_capacity(predicate.count);
             for (start, end) in slices {
                 // SAFETY: indices were derived from the filter predicate
@@ -913,15 +1232,15 @@ pub(crate) fn filter_native<T: ArrowNativeType>(
             }
             buffer.into()
         }
-        IterationStrategy::IndexIterator => {
+        IterationStrategy::IndexIterator(mask) => {
             // SAFETY: indices were derived from the filter predicate
-            let iter = IndexIterator::new(&predicate.filter, predicate.count)
+            let iter = IndexIterator::new(mask, predicate.count)
                 .map(|x| unsafe { *values.get_unchecked(x) });
 
             // SAFETY: IndexIterator is trusted length
             unsafe { MutableBuffer::from_trusted_len_iter(iter) }.into()
         }
-        IterationStrategy::Indices(indices) => {
+        IterationStrategy::Indices(indices, _) => {
             // SAFETY: indices were derived from the filter predicate
             let iter = indices.iter().map(|x| unsafe { *values.get_unchecked(*x) });
             iter.collect::<Vec<_>>().into()
@@ -1058,19 +1377,19 @@ where
     let mut filter = FilterBytes::new(predicate.count, array);
 
     match &predicate.strategy {
-        IterationStrategy::SlicesIterator => {
-            filter.extend_offsets_slices(SlicesIterator::new(&predicate.filter), predicate.count);
-            filter.extend_slices(SlicesIterator::new(&predicate.filter))
+        IterationStrategy::SlicesIterator(mask) => {
+            filter.extend_offsets_slices(SlicesIterator::from(mask), predicate.count);
+            filter.extend_slices(SlicesIterator::from(mask))
         }
-        IterationStrategy::Slices(slices) => {
+        IterationStrategy::Slices(slices, _) => {
             filter.extend_offsets_slices(slices.iter().copied(), predicate.count);
             filter.extend_slices(slices.iter().copied())
         }
-        IterationStrategy::IndexIterator => {
-            filter.extend_offsets_idx(IndexIterator::new(&predicate.filter, predicate.count));
-            filter.extend_idx(IndexIterator::new(&predicate.filter, predicate.count))
+        IterationStrategy::IndexIterator(mask) => {
+            filter.extend_offsets_idx(IndexIterator::new(mask, predicate.count));
+            filter.extend_idx(IndexIterator::new(mask, predicate.count))
         }
-        IterationStrategy::Indices(indices) => {
+        IterationStrategy::Indices(indices, _) => {
             filter.extend_offsets_idx(indices.iter().copied());
             filter.extend_idx(indices.iter().copied())
         }
@@ -1143,16 +1462,16 @@ fn filter_fixed_size_binary(
     let value_length = array.value_length() as usize;
     let calculate_offset_from_index = |index: usize| index * value_length;
     let buffer = match &predicate.strategy {
-        IterationStrategy::SlicesIterator => {
+        IterationStrategy::SlicesIterator(mask) => {
             let mut buffer = MutableBuffer::with_capacity(predicate.count * value_length);
-            for (start, end) in SlicesIterator::new(&predicate.filter) {
+            for (start, end) in SlicesIterator::from(mask) {
                 buffer.extend_from_slice(
                     &values[calculate_offset_from_index(start)..calculate_offset_from_index(end)],
                 );
             }
             buffer
         }
-        IterationStrategy::Slices(slices) => {
+        IterationStrategy::Slices(slices, _) => {
             let mut buffer = MutableBuffer::with_capacity(predicate.count * value_length);
             for (start, end) in slices {
                 buffer.extend_from_slice(
@@ -1161,13 +1480,13 @@ fn filter_fixed_size_binary(
             }
             buffer
         }
-        IterationStrategy::IndexIterator => copy_fsb_indices(
+        IterationStrategy::IndexIterator(mask) => copy_fsb_indices(
             values,
             value_length,
-            IndexIterator::new(&predicate.filter, predicate.count),
+            IndexIterator::new(mask, predicate.count),
             predicate.count,
         ),
-        IterationStrategy::Indices(indices) => copy_fsb_indices(
+        IterationStrategy::Indices(indices, _) => copy_fsb_indices(
             values,
             value_length,
             indices.iter().copied(),
@@ -1951,8 +2270,8 @@ mod tests {
                         ];
                         for predicate in &predicates {
                             let case = format!(
-                                "{:?}: len={len} density={density} offset={offset} filter_offset={filter_offset}",
-                                predicate.strategy
+                                "{}: len={len} density={density} offset={offset} filter_offset={filter_offset}",
+                                strategy_name(&predicate.strategy)
                             );
 
                             let compressed = filter_bits_compress(&values, predicate);
@@ -2050,7 +2369,8 @@ mod tests {
 
         let filter = BooleanArray::from(vec![false, true, false, true]);
         let mut selected = Vec::new();
-        let selection: FilterIndices<'_> = FilterIterator::Lazy(IndexIterator::new(&filter, 2));
+        let selection: FilterIndices<'_> =
+            FilterIterator::Lazy(IndexIterator::new(filter.values(), 2));
         selection
             .try_for_each(|idx| {
                 selected.push(idx);
@@ -2145,7 +2465,7 @@ mod tests {
             .collect();
 
         let count = filter.true_count();
-        let index_bits: Vec<_> = IndexIterator::new(&filter, count).collect();
+        let index_bits: Vec<_> = IndexIterator::new(filter.values(), count).collect();
 
         let expected_bits: Vec<_> = bools
             .iter()
@@ -2157,6 +2477,157 @@ mod tests {
 
         assert_eq!(slice_bits, expected_bits);
         assert_eq!(index_bits, expected_bits);
+
+        // The mask words read from the bitmap, or synthesized from the slices
+        // or the indices, are the non-empty words of the mask
+        let mut expected_words = vec![0u64; truncated_length.div_ceil(64)];
+        for &idx in &expected_bits {
+            expected_words[idx / 64] |= 1 << (idx % 64);
+        }
+        let expected_words: Vec<_> = expected_words
+            .into_iter()
+            .enumerate()
+            .filter(|(_, word)| *word != 0)
+            .collect();
+        let slices: Vec<_> = SlicesIterator::new(&filter).collect();
+        let bitmap_words: Vec<_> = bitmap_mask_words(filter.values()).collect();
+        let slice_words: Vec<_> = SliceMaskWords::new(slices.iter().copied()).collect();
+        let index_words: Vec<_> = IndexMaskWords::new(index_bits.iter().copied()).collect();
+        assert_eq!(bitmap_words, expected_words);
+        assert_eq!(slice_words, expected_words);
+        assert_eq!(index_words, expected_words);
+
+        // Consecutive indices merge into the slices
+        let index_runs: Vec<_> = IndexRuns::new(index_bits.iter().copied()).collect();
+        assert_eq!(index_runs, slices);
+
+        // Counting the set bits before increasing positions, some repeated,
+        // from the mask words
+        let mut cursor = MaskWordCursor::new(expected_words.iter().copied());
+        let mut end = 0;
+        while end < truncated_length {
+            end = (end + rng.random_range(0..150)).min(truncated_length);
+            let expected = expected_bits.iter().filter(|idx| **idx < end).count();
+            assert_eq!(cursor.count_to(end), expected, "0..{end}");
+        }
+    }
+
+    fn strategy_name(strategy: &IterationStrategy) -> &'static str {
+        match strategy {
+            IterationStrategy::SlicesIterator(_) => "SlicesIterator",
+            IterationStrategy::IndexIterator(_) => "IndexIterator",
+            IterationStrategy::Indices(..) => "Indices",
+            IterationStrategy::Slices(..) => "Slices",
+            IterationStrategy::All => "All",
+            IterationStrategy::None => "None",
+        }
+    }
+
+    /// The lazy strategies keep the filter mask, the precomputed ones only if
+    /// `filter_bits` compresses with it, and `All` / `None` never
+    #[test]
+    fn test_predicate_mask_retention() {
+        let cases = [
+            (vec![true; 128], false, "All", false),
+            (vec![false; 128], false, "None", false),
+            (
+                (0..128).map(|i| i % 2 == 0).collect(),
+                false,
+                "IndexIterator",
+                true,
+            ),
+            (
+                (0..128).map(|i| i % 2 == 0).collect(),
+                true,
+                "Indices",
+                true,
+            ),
+            // Sparse, so `filter_bits` uses the indices
+            ((0..128).map(|i| i == 5).collect(), true, "Indices", false),
+            (
+                (0..128).map(|i| i % 8 != 0).collect(),
+                false,
+                "SlicesIterator",
+                true,
+            ),
+            ((0..128).map(|i| i % 8 != 0).collect(), true, "Slices", true),
+            // Dense, so `filter_bits` uses the slices
+            ((0..128).map(|i| i != 5).collect(), true, "Slices", false),
+        ];
+        for (mask, optimize, name, keeps_mask) in cases {
+            let filter = BooleanArray::from(mask);
+            let buffer = filter.values().inner().clone();
+            let refs = buffer.strong_count();
+            let mut builder = FilterBuilder::new(&filter);
+            if optimize {
+                builder = builder.optimize();
+            }
+            let predicate = builder.build();
+            let case = format!("{name} keeps_mask={keeps_mask}");
+            assert_eq!(strategy_name(&predicate.strategy), name, "{case}");
+            assert_eq!(predicate.strategy.mask().is_some(), keeps_mask, "{case}");
+            assert_eq!(buffer.strong_count(), refs + keeps_mask as usize, "{case}");
+        }
+    }
+
+    /// Run-end encoded and fallback arrays filtered with every strategy match
+    /// the result of `take`
+    #[test]
+    fn test_filter_mask_kernels_strategies() {
+        let mut rng = StdRng::seed_from_u64(42);
+        let len = 1000;
+        // Runs of 3 to 6 values
+        let run_ends = Int32Array::from_iter_values(
+            (1..len as i32 / 4)
+                .map(|i| i * 4 - i % 3)
+                .chain([len as i32]),
+        );
+        let run_values = Int32Array::from_iter_values(0..run_ends.len() as i32);
+        let run_array = RunArray::<Int32Type>::try_new(&run_ends, &run_values).unwrap();
+        // Sliced, so the run ends have an offset
+        let run_array = run_array.slice(3, len - 3);
+        let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(
+            (0..len).map(|i| (i % 5 != 0).then(|| (0..i as i32 % 4).map(Some).collect::<Vec<_>>())),
+        );
+
+        // Densities producing every strategy, with filters as long as the
+        // arrays and shorter
+        for density in [0.0, 0.01, 0.5, 0.9, 0.99, 1.0] {
+            for filter_len in [len - 3, len - 40] {
+                let filter: BooleanArray = (0..filter_len)
+                    .map(|_| Some(rng.random_bool(density)))
+                    .collect();
+                let indices = UInt32Array::from_iter_values(
+                    (0..filter_len as u32).filter(|i| filter.value(*i as usize)),
+                );
+                for optimize in [false, true] {
+                    let mut builder = FilterBuilder::new(&filter);
+                    if optimize {
+                        builder = builder.optimize();
+                    }
+                    let predicate = builder.build();
+                    let case = format!(
+                        "{} density={density} filter_len={filter_len}",
+                        strategy_name(&predicate.strategy)
+                    );
+
+                    let filtered = predicate.filter(&run_array).unwrap();
+                    let filtered = filtered.as_run::<Int32Type>();
+                    let filtered = filtered.downcast::<Int32Array>().unwrap();
+                    let actual: Vec<_> = filtered.into_iter().flatten().collect();
+                    let expected: Vec<_> = indices
+                        .values()
+                        .iter()
+                        .map(|i| run_values.value(run_array.get_physical_index(*i as usize)))
+                        .collect();
+                    assert_eq!(actual, expected, "run end {case}");
+
+                    let filtered = predicate.filter(&list_array).unwrap();
+                    let expected = crate::take::take(&list_array, &indices, None).unwrap();
+                    assert_eq!(&filtered, &expected, "list {case}");
+                }
+            }
+        }
     }
 
     #[test]
@@ -2735,7 +3206,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "buffer.len() >= predicate.filter.len()")]
+    #[should_panic(expected = "buffer.len() >= predicate.len")]
     fn test_filter_bits_too_large() {
         let buffer = BooleanBuffer::from(vec![false; 8]);
         let predicate = BooleanArray::from(vec![true; 9]);
@@ -2744,7 +3215,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "values.len() >= predicate.filter.len()")]
+    #[should_panic(expected = "values.len() >= predicate.len")]
     fn test_filter_native_too_large() {
         let values = vec![1; 8];
         let predicate = BooleanArray::from(vec![false; 9]);
