@@ -24,6 +24,7 @@ use arrow_array::types::ArrowTimestampType;
 use arrow_cast::parse::string_to_datetime;
 use arrow_schema::{ArrowError, DataType, TimeUnit};
 use chrono::TimeZone;
+use num_traits::NumCast;
 
 use crate::reader::tape::{Tape, TapeElement};
 use crate::reader::{ArrayDecoder, DecoderContext};
@@ -87,8 +88,10 @@ where
                     let s = tape.get_string(idx);
                     let b = s.as_bytes();
                     lexical_core::parse::<i64>(b)
-                        .or_else(|_| lexical_core::parse::<f64>(b).map(|x| x as i64))
-                        .map_err(|_| {
+                        .ok()
+                        // a float outside the i64 range must not saturate to i64::MIN/MAX
+                        .or_else(|| lexical_core::parse::<f64>(b).ok().and_then(NumCast::from))
+                        .ok_or_else(|| {
                             ArrowError::JsonError(format!(
                                 "failed to parse {s} as {}",
                                 self.data_type

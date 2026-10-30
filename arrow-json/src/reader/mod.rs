@@ -2261,6 +2261,52 @@ mod tests {
     }
 
     #[test]
+    fn test_timestamp_float_out_of_range() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "time",
+            DataType::Timestamp(TimeUnit::Second, None),
+            true,
+        )]));
+
+        // -2^63 is the smallest representable value
+        let batch = ReaderBuilder::new(schema.clone())
+            .build(Cursor::new(
+                r#"{"time": -9.223372036854775808e18}"#.as_bytes(),
+            ))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+        let col = batch.column(0).as_primitive::<TimestampSecondType>();
+        assert_eq!(col.value(0), i64::MIN);
+
+        for buf in [
+            r#"{"time": 1e30}"#,
+            r#"{"time": -1e30}"#,
+            r#"{"time": 9.223372036854775808e18}"#,
+            r#"{"time": 1e999}"#,
+        ] {
+            let err = ReaderBuilder::new(schema.clone())
+                .build(Cursor::new(buf.as_bytes()))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("failed to parse"), "{buf}: {err}");
+
+            let batch = ReaderBuilder::new(schema.clone())
+                .with_ignore_type_conflicts(true)
+                .build(Cursor::new(buf.as_bytes()))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap();
+            assert!(batch.column(0).is_null(0), "{buf}");
+        }
+    }
+
+    #[test]
     fn test_strict_mode_no_missing_columns_in_schema() {
         let buf = r#"
         {"a": 1, "b": "2", "c": true}
