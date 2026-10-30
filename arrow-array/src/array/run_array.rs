@@ -97,6 +97,10 @@ macro_rules! ree_map {
 /// * `run_ends` and `values` have the same length
 /// * if `len > 0`, the last run end is greater than or equal to `offset + len`.
 ///
+/// Note an empty `RunArray` (`len == 0`) is valid even when `run_ends` is empty
+/// or its last run end is less than `offset`. Note this is more permissive than
+/// the Arrow C++ implementation.
+///
 /// The example below shows the same array as above after calling `slice(1, 3)`
 ///
 /// ```text
