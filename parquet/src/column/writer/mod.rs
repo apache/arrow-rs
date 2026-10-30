@@ -513,8 +513,6 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         let statistics_enabled = column_props.statistics_enabled;
 
         let mut encodings = BTreeSet::new();
-        // Used for level information
-        encodings.insert(Encoding::RLE);
 
         let mut page_metrics = PageMetrics::new();
         let mut column_metrics = ColumnMetrics::<E::T>::new();
@@ -819,7 +817,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         if self.page_metrics.num_buffered_values > 0 {
             self.add_data_page()?;
         }
-        if self.encoder.has_dictionary() {
+        if self.encoder.has_dictionary() && self.column_metrics.total_rows_written > 0 {
             self.write_dictionary_page()?;
         }
         self.flush_data_pages()?;
@@ -1739,6 +1737,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     #[inline]
     fn write_data_page(&mut self, page: CompressedPage) -> Result<()> {
         self.encodings.insert(page.encoding());
+        self.encodings.insert(Encoding::RLE); // levels
         match self.encoding_stats.last_mut() {
             Some(encoding_stats)
                 if encoding_stats.page_type == page.page_type()
