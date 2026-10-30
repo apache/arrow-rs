@@ -15,27 +15,38 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::{InProgressArray, generic::GenericInProgressArray};
+use super::{
+    DICTIONARY_DIRECT_GATHER_MIN_VALUES_PER_ROW, InProgressArray, generic::GenericInProgressArray,
+};
 use crate::concat::concat;
+use crate::dictionary::Interner;
 use crate::filter::{FilterPredicate, FilterSelection};
+use crate::interleave::interleave;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    ArrowDictionaryKeyType, BinaryType, ByteArrayType, Int8Type, Int16Type, Int32Type, Int64Type,
-    LargeBinaryType, LargeUtf8Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type, Utf8Type,
+    ArrowDictionaryKeyType, ArrowPrimitiveType, BinaryType, ByteArrayType, Int8Type, Int16Type,
+    Int32Type, Int64Type, LargeBinaryType, LargeUtf8Type, UInt8Type, UInt16Type, UInt32Type,
+    UInt64Type, Utf8Type,
 };
-use arrow_array::{Array, ArrayRef, DictionaryArray, GenericByteArray, PrimitiveArray};
-use arrow_buffer::{NullBufferBuilder, ScalarBuffer};
+use arrow_array::{
+    Array, ArrayRef, ArrowNativeTypeOp, DictionaryArray, GenericByteArray, PrimitiveArray,
+    downcast_integer_array,
+};
+use arrow_buffer::{ArrowNativeType, NullBufferBuilder, ScalarBuffer};
 use arrow_schema::{ArrowError, DataType};
 use std::marker::PhantomData;
 use std::mem::size_of;
 use std::sync::Arc;
 
+struct SourceRun {
+    start: usize,
+    end: usize,
+    source: usize,
+}
+
 struct DirectState<K: ArrowDictionaryKeyType> {
-    /// Shared dictionary values for the buffered keys.
     values: ArrayRef,
-    /// Keys accumulated without rebuilding dictionary values.
     keys: Vec<K::Native>,
-    /// Validity of `keys`.
     nulls: NullBufferBuilder,
 }
 
@@ -80,12 +91,19 @@ pub(crate) struct InProgressDictionaryArray<K: ArrowDictionaryKeyType, T: ByteAr
     source: Option<ArrayRef>,
     /// Target output row count.
     batch_size: usize,
-    /// Keys buffered while inputs share one dictionary values array.
+    /// State used by ordinary contiguous batch coalescing.
     direct: Option<DirectState<K>>,
-    /// Array slices retained after the dictionary values mapping changes.
+    /// Contiguous dictionary slices retained after their mapping changes.
     buffered_arrays: Vec<ArrayRef>,
-    /// Upper bound for the bytes retained by `buffered_arrays`.
     buffered_array_bytes: usize,
+    /// Keys in output row order. They are remapped in place when mappings differ.
+    keys: Vec<K::Native>,
+    /// Validity of `keys`.
+    nulls: NullBufferBuilder,
+    /// Distinct dictionary value arrays retained by pointer identity.
+    sources: Vec<ArrayRef>,
+    /// Contiguous key ranges and their source mapping.
+    runs: Vec<SourceRun>,
     /// Retains the byte-array value type in the state type.
     value_type: PhantomData<T>,
 }
@@ -106,13 +124,14 @@ impl<K: ArrowDictionaryKeyType, T: ByteArrayType> InProgressDictionaryArray<K, T
             direct: None,
             buffered_arrays: Vec::new(),
             buffered_array_bytes: 0,
+            keys: Vec::with_capacity(batch_size),
+            nulls: NullBufferBuilder::new(batch_size),
+            sources: Vec::new(),
+            runs: Vec::new(),
             value_type: PhantomData,
         }
     }
 
-    /// Returns the direct state while `values` is the same allocation as the
-    /// buffered mapping. Keys cannot be reused across mappings, so a different
-    /// `Arc` switches the current output batch to buffered `concat`.
     fn direct_for_values(
         &mut self,
         values: ArrayRef,
@@ -145,14 +164,219 @@ impl<K: ArrowDictionaryKeyType, T: ByteArrayType> InProgressDictionaryArray<K, T
         let Some(mut direct) = self.direct.take() else {
             return Ok(None);
         };
-        let nulls = direct.nulls.finish();
-        let keys = PrimitiveArray::<K>::try_new(ScalarBuffer::from(direct.keys), nulls)?;
+        let keys =
+            PrimitiveArray::<K>::try_new(ScalarBuffer::from(direct.keys), direct.nulls.finish())?;
         Ok(Some(DictionaryArray::try_new(keys, direct.values)?))
     }
 
     fn push_buffered(&mut self, array: ArrayRef) {
         self.buffered_array_bytes += array.get_array_memory_size();
         self.buffered_arrays.push(array);
+    }
+
+    fn has_contiguous_state(&self) -> bool {
+        self.direct.is_some() || !self.buffered_arrays.is_empty()
+    }
+
+    fn source_id(&mut self, values: ArrayRef) -> usize {
+        if let Some(last) = self.runs.last()
+            && Arc::ptr_eq(&self.sources[last.source], &values)
+        {
+            return last.source;
+        }
+        if let Some(source) = self
+            .sources
+            .iter()
+            .position(|source| Arc::ptr_eq(source, &values))
+        {
+            return source;
+        }
+        self.sources.push(values);
+        self.sources.len() - 1
+    }
+
+    fn append_run(&mut self, values: ArrayRef, start: usize) {
+        let source = self.source_id(values);
+        let end = self.keys.len();
+        if let Some(last) = self.runs.last_mut()
+            && last.source == source
+            && last.end == start
+        {
+            last.end = end;
+        } else {
+            self.runs.push(SourceRun { start, end, source });
+        }
+    }
+
+    fn append_slice(&mut self, dictionary: &DictionaryArray<K>, offset: usize, len: usize) {
+        let start = self.keys.len();
+        let keys = dictionary.keys();
+        if let Some(nulls) = keys.nulls().map(|nulls| nulls.slice(offset, len)) {
+            self.nulls.append_buffer(&nulls);
+        } else {
+            self.nulls.append_n_non_nulls(len);
+        }
+        self.keys
+            .extend_from_slice(&keys.values()[offset..offset + len]);
+        self.append_run(Arc::clone(dictionary.values()), start);
+    }
+
+    fn append_index(
+        keys: &PrimitiveArray<K>,
+        index: usize,
+        output_keys: &mut Vec<K::Native>,
+        output_nulls: &mut NullBufferBuilder,
+    ) -> Result<(), ArrowError> {
+        let key = keys.values().get(index).copied().ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "Take index {index} out of bounds for array of length {}",
+                keys.len()
+            ))
+        })?;
+        output_keys.push(key);
+        output_nulls.append(keys.is_valid(index));
+        Ok(())
+    }
+
+    fn append_indices<I: ArrowPrimitiveType>(
+        &mut self,
+        dictionary: &DictionaryArray<K>,
+        indices: &PrimitiveArray<I>,
+    ) -> Result<(), ArrowError> {
+        let start = self.keys.len();
+        self.keys.reserve(indices.len());
+        if indices.null_count() == 0 && dictionary.keys().null_count() == 0 {
+            let keys = dictionary.keys().values();
+            if let Some(index) = indices
+                .values()
+                .iter()
+                .find(|index| index.as_usize() >= keys.len())
+            {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Take index {index:?} out of bounds for array of length {}",
+                    keys.len()
+                )));
+            }
+            self.keys
+                .extend(indices.values().iter().map(|index| keys[index.as_usize()]));
+            self.nulls.append_n_non_nulls(indices.len());
+            self.append_run(Arc::clone(dictionary.values()), start);
+            return Ok(());
+        }
+        for position in 0..indices.len() {
+            if indices.is_null(position) {
+                self.keys.push(K::Native::ZERO);
+                self.nulls.append(false);
+                continue;
+            }
+            Self::append_index(
+                dictionary.keys(),
+                indices.value(position).as_usize(),
+                &mut self.keys,
+                &mut self.nulls,
+            )?;
+        }
+        self.append_run(Arc::clone(dictionary.values()), start);
+        Ok(())
+    }
+
+    fn finish_multiple_sources(
+        keys: &mut [K::Native],
+        nulls: Option<&arrow_buffer::NullBuffer>,
+        sources: &[ArrayRef],
+        runs: &[SourceRun],
+    ) -> Result<ArrayRef, ArrowError> {
+        let sources = sources
+            .iter()
+            .map(|source| {
+                source
+                    .as_any()
+                    .downcast_ref::<GenericByteArray<T>>()
+                    .expect("dictionary value type matched at construction")
+            })
+            .collect::<Vec<_>>();
+        let mut source_rows = vec![0; sources.len()];
+        for run in runs {
+            source_rows[run.source] += run.end - run.start;
+        }
+        let mut values = Interner::new(keys.len());
+        let mut local_keys = sources
+            .iter()
+            .zip(source_rows)
+            .map(|(source, rows)| {
+                (source.len() <= rows.saturating_mul(2)).then(|| vec![None; source.len()])
+            })
+            .collect::<Vec<_>>();
+        let mut value_indices = Vec::with_capacity(keys.len());
+
+        for run in runs {
+            let source = sources[run.source];
+            for (offset, key) in keys[run.start..run.end].iter_mut().enumerate() {
+                let position = run.start + offset;
+                if nulls.is_some_and(|nulls| nulls.is_null(position)) {
+                    continue;
+                }
+
+                let old_key = key.as_usize();
+                if let Some(remap) = local_keys[run.source].as_ref()
+                    && let Some(new_key) = remap.get(old_key).and_then(|key| *key)
+                {
+                    *key = new_key;
+                    continue;
+                }
+
+                if old_key >= source.len() {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "Dictionary key {old_key} out of bounds for dictionary of length {}",
+                        source.len()
+                    )));
+                }
+                let value: Option<&[u8]> = source
+                    .is_valid(old_key)
+                    .then(|| source.value(old_key).as_ref());
+                let new_key = *values.intern(value, || {
+                    let key = K::Native::from_usize(value_indices.len())
+                        .ok_or(ArrowError::DictionaryKeyOverflowError)?;
+                    value_indices.push((run.source, old_key));
+                    Ok::<_, ArrowError>(key)
+                })?;
+                if let Some(remap) = local_keys[run.source].as_mut() {
+                    remap[old_key] = Some(new_key);
+                }
+                *key = new_key;
+            }
+        }
+
+        let source_refs = sources
+            .iter()
+            .map(|source| *source as &dyn Array)
+            .collect::<Vec<_>>();
+        interleave(&source_refs, &value_indices)
+    }
+
+    fn finish_dense(
+        keys: Vec<K::Native>,
+        nulls: Option<arrow_buffer::NullBuffer>,
+        sources: &[ArrayRef],
+        runs: &[SourceRun],
+    ) -> Result<ArrayRef, ArrowError> {
+        let keys = PrimitiveArray::<K>::try_new(ScalarBuffer::from(keys), nulls)?;
+        let arrays = runs
+            .iter()
+            .map(|run| {
+                DictionaryArray::try_new(
+                    keys.slice(run.start, run.end - run.start),
+                    Arc::clone(&sources[run.source]),
+                )
+                .map(|array| Arc::new(array) as ArrayRef)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        concat(
+            &arrays
+                .iter()
+                .map(|array| array.as_ref())
+                .collect::<Vec<_>>(),
+        )
     }
 }
 
@@ -173,9 +397,13 @@ impl<K: ArrowDictionaryKeyType, T: ByteArrayType> InProgressArray
             return Ok(());
         }
         let dictionary = source.as_dictionary::<K>();
+        if !self.keys.is_empty() {
+            self.append_slice(dictionary, offset, len);
+            return Ok(());
+        }
+
         let values = Arc::clone(dictionary.values());
         let keys = dictionary.keys();
-
         let Some(direct) = self.direct_for_values(values)? else {
             self.push_buffered(source.slice(offset, len));
             return Ok(());
@@ -205,8 +433,6 @@ impl<K: ArrowDictionaryKeyType, T: ByteArrayType> InProgressArray
         if filter.count() == 0 {
             return Ok(());
         }
-        // Sharing the values `Arc` reduces filtering to copying fixed-width keys.
-        // A different mapping needs `concat` to remap those keys safely.
         let Some(direct) = self.direct_for_values(values)? else {
             self.push_buffered(filter.filter(source.as_ref())?);
             return Ok(());
@@ -235,34 +461,81 @@ impl<K: ArrowDictionaryKeyType, T: ByteArrayType> InProgressArray
         Ok(())
     }
 
+    fn copy_rows_by_indices_from(
+        &mut self,
+        source: ArrayRef,
+        indices: &dyn Array,
+    ) -> Result<(), ArrowError> {
+        if self.has_contiguous_state() {
+            let selected = crate::take::take(source.as_ref(), indices, None)?;
+            self.set_source(Some(selected));
+            let result = self.copy_rows(0, indices.len());
+            self.set_source(None);
+            return result;
+        }
+        let dictionary = source.as_dictionary::<K>();
+        downcast_integer_array!(
+            indices => self.append_indices(dictionary, indices),
+            data_type => Err(ArrowError::InvalidArgumentError(format!(
+                "Take only supported for integers, got {data_type:?}"
+            )))
+        )
+    }
+
     fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
-        if self.buffered_arrays.is_empty() {
-            return match self.take_direct()? {
-                Some(array) => Ok(Arc::new(array)),
-                None => Ok(Arc::new(DictionaryArray::<K>::try_new(
-                    PrimitiveArray::new_null(0),
-                    Arc::new(GenericByteArray::<T>::new_null(0)),
-                )?)),
-            };
+        if self.has_contiguous_state() {
+            if self.buffered_arrays.is_empty() {
+                return Ok(Arc::new(self.take_direct()?.unwrap()));
+            }
+            if let Some(array) = self.take_direct()? {
+                self.push_buffered(Arc::new(array));
+            }
+            let output = concat(
+                &self
+                    .buffered_arrays
+                    .iter()
+                    .map(|array| array.as_ref())
+                    .collect::<Vec<_>>(),
+            )?;
+            self.buffered_arrays.clear();
+            self.buffered_array_bytes = 0;
+            return Ok(output);
         }
-        if let Some(array) = self.take_direct()? {
-            self.push_buffered(Arc::new(array));
+
+        let nulls = self.nulls.finish();
+        let mut keys = std::mem::replace(&mut self.keys, Vec::with_capacity(self.batch_size));
+        let sources = std::mem::take(&mut self.sources);
+        let runs = std::mem::take(&mut self.runs);
+        if sources.len() > 1
+            && sources.iter().map(|source| source.len()).sum::<usize>()
+                <= keys
+                    .len()
+                    .saturating_mul(DICTIONARY_DIRECT_GATHER_MIN_VALUES_PER_ROW)
+        {
+            return Self::finish_dense(keys, nulls, &sources, &runs);
         }
-        let arrays = self
-            .buffered_arrays
-            .iter()
-            .map(|array| array.as_ref())
-            .collect::<Vec<_>>();
-        let output = concat(&arrays)?;
-        self.buffered_arrays.clear();
-        self.buffered_array_bytes = 0;
-        Ok(output)
+        let values = match sources.len() {
+            0 => Arc::new(GenericByteArray::<T>::new_null(0)) as ArrayRef,
+            1 => Arc::clone(&sources[0]),
+            _ => Self::finish_multiple_sources(&mut keys, nulls.as_ref(), &sources, &runs)?,
+        };
+        let keys = PrimitiveArray::<K>::try_new(ScalarBuffer::from(keys), nulls)?;
+        Ok(Arc::new(DictionaryArray::try_new(keys, values)?))
     }
 
     fn size(&self) -> usize {
         self.source
             .as_ref()
             .map_or(0, |source| source.get_array_memory_size())
+            + self
+                .sources
+                .iter()
+                .map(|source| source.get_array_memory_size())
+                .sum::<usize>()
+            + self.sources.capacity() * size_of::<ArrayRef>()
+            + self.runs.capacity() * size_of::<SourceRun>()
+            + self.keys.capacity() * size_of::<K::Native>()
+            + self.nulls.allocated_size()
             + self.buffered_array_bytes
             + self.buffered_arrays.capacity() * size_of::<ArrayRef>()
             + self.direct.as_ref().map_or(0, |direct| {
@@ -280,11 +553,11 @@ mod tests {
     use crate::filter::FilterBuilder;
     use arrow_array::types::{Int32Type, UInt8Type};
     use arrow_array::{
-        BinaryArray, BooleanArray, Int32Array, RecordBatch, StringArray, UInt8Array,
+        BinaryArray, BooleanArray, Int32Array, RecordBatch, StringArray, UInt8Array, UInt32Array,
     };
 
     #[test]
-    fn empty_copy_does_not_initialize_direct_state() {
+    fn empty_copy_does_not_initialize_state() {
         let mut in_progress = InProgressDictionaryArray::<Int32Type, Utf8Type>::new(8);
         let source = Arc::new(DictionaryArray::<Int32Type>::new(
             Int32Array::from(Vec::<i32>::new()),
@@ -294,7 +567,8 @@ mod tests {
 
         in_progress.copy_rows(0, 0).unwrap();
 
-        assert!(in_progress.direct.is_none());
+        assert!(in_progress.keys.is_empty());
+        assert!(in_progress.sources.is_empty());
     }
 
     #[test]
@@ -336,16 +610,15 @@ mod tests {
         assert_eq!(output.keys().null_count(), 1);
         assert!(output.keys().is_null(1));
 
-        // A different values allocation uses the concat fallback even if its
-        // contents are equal.
+        // Different values allocations retain separate source mappings even if
+        // their contents are equal.
         in_progress.set_source(Some(first));
         in_progress.copy_rows(3, 1).unwrap();
         in_progress.set_source(Some(equivalent_backing));
         in_progress.copy_rows(0, 2).unwrap();
         assert_eq!(in_progress.buffered_arrays.len(), 2);
 
-        // A genuinely different mapping takes the same fallback and is remapped
-        // into the output dictionary.
+        // A genuinely different mapping is remapped into the output dictionary.
         in_progress.set_source(Some(different_backing));
         in_progress.copy_rows(0, 2).unwrap();
 
@@ -363,7 +636,7 @@ mod tests {
     }
 
     #[test]
-    fn filters_distinct_mappings_through_concat_fallback() {
+    fn filters_distinct_mappings() {
         let filter = BooleanArray::from(vec![true, false, true]);
         let filter = FilterBuilder::new(&filter).build();
         let mut in_progress = create_in_progress_dictionary(&DataType::Int32, &DataType::Utf8, 4);
@@ -387,6 +660,53 @@ mod tests {
             .map(|key| key.map(|key| values.value(key)))
             .collect::<Vec<_>>();
         assert_eq!(decoded, vec![Some("a"), Some("a"), Some("b"), Some("b")]);
+    }
+
+    #[test]
+    fn gathers_alternating_sparse_dictionaries() {
+        let first_values = Arc::new(StringArray::from_iter(
+            (0..64).map(|index| (index != 1).then(|| format!("a-{index}"))),
+        )) as ArrayRef;
+        let second_values = Arc::new(StringArray::from_iter_values(
+            (0..64).map(|index| format!("b-{index}")),
+        )) as ArrayRef;
+        let dictionary = |values: &ArrayRef| {
+            Arc::new(DictionaryArray::<Int32Type>::new(
+                Int32Array::from(vec![0, 1]),
+                Arc::clone(values),
+            )) as ArrayRef
+        };
+        let first = RecordBatch::try_from_iter([("dict", dictionary(&first_values))]).unwrap();
+        let second = RecordBatch::try_from_iter([("dict", dictionary(&second_values))]).unwrap();
+        let third = RecordBatch::try_from_iter([("dict", dictionary(&first_values))]).unwrap();
+        let indices = UInt32Array::from(vec![0, 1]);
+        let mut coalescer = BatchCoalescer::new(first.schema(), 6);
+
+        for batch in [first, second, third] {
+            coalescer.push_batch_with_indices(batch, &indices).unwrap();
+        }
+
+        let output = coalescer.next_completed_batch().unwrap();
+        let output = output.column(0).as_dictionary::<Int32Type>();
+        let values = output.values().as_string::<i32>();
+        let decoded = output
+            .keys_iter()
+            .map(|key| {
+                let key = key?;
+                values.is_valid(key).then(|| values.value(key))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            decoded,
+            vec![
+                Some("a-0"),
+                None,
+                Some("b-0"),
+                Some("b-1"),
+                Some("a-0"),
+                None
+            ]
+        );
     }
 
     #[test]

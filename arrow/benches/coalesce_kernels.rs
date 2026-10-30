@@ -28,6 +28,61 @@ use arrow_select::coalesce::BatchCoalescer;
 use criterion::{Criterion, criterion_group, criterion_main};
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 
+fn add_dictionary_fanout_benchmarks(c: &mut Criterion) {
+    const BATCH_SIZE: usize = 8192;
+    const SOURCES: usize = 12;
+
+    let schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        true,
+    )]));
+
+    for cardinality in [10_000, 100_000, 1_000_000] {
+        let batches = (0..SOURCES)
+            .map(|source| {
+                let values = StringArray::from_iter_values(
+                    (0..cardinality)
+                        .map(|index| format!("value-{}", (index + source * 997) % cardinality)),
+                );
+                let mut rng = StdRng::seed_from_u64(source as u64);
+                let keys = Int32Array::from_iter_values(
+                    (0..BATCH_SIZE).map(|_| rng.random_range(0..cardinality as i32)),
+                );
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(DictionaryArray::<Int32Type>::new(
+                        keys,
+                        Arc::new(values),
+                    ))],
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let indices = (0..SOURCES)
+            .map(|source| {
+                let len = BATCH_SIZE / SOURCES + usize::from(source < BATCH_SIZE % SOURCES);
+                UInt32Array::from_iter_values(0..len as u32)
+            })
+            .collect::<Vec<_>>();
+
+        c.bench_function(
+            &format!("take: dictionary fanout 1/12, cardinality: {cardinality}"),
+            |b| {
+                b.iter(|| {
+                    let mut coalescer = BatchCoalescer::new(Arc::clone(&schema), BATCH_SIZE);
+                    for (batch, indices) in batches.iter().zip(&indices) {
+                        coalescer
+                            .push_batch_with_indices(batch.clone(), indices)
+                            .unwrap();
+                    }
+                    std::hint::black_box(coalescer.next_completed_batch().unwrap());
+                })
+            },
+        );
+    }
+}
+
 /// Benchmarks for generating evently sized output RecordBatches
 /// from a sequence of filtered source batches
 ///
@@ -757,6 +812,7 @@ fn add_all_gather_benchmarks(c: &mut Criterion, operation: GatherOperation) {
 
 criterion_group!(
     benches,
+    add_dictionary_fanout_benchmarks,
     add_all_filter_benchmarks,
     add_all_take_benchmarks,
     add_all_interleave_benchmarks

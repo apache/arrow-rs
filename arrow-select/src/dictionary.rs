@@ -93,7 +93,7 @@ pub fn garbage_collect_any_dictionary(
 /// and interns keys based on their hash value
 ///
 /// Hash collisions will result in replacement
-struct Interner<'a, V> {
+pub(crate) struct Interner<'a, V> {
     state: RandomState,
     buckets: Vec<Option<InternerBucket<'a, V>>>,
     shift: u32,
@@ -107,7 +107,7 @@ impl<'a, V> Interner<'a, V> {
     ///
     /// A larger capacity reduces the probability of hash collisions, and should be set
     /// based on an approximation of the upper bound of unique values
-    fn new(capacity: usize) -> Self {
+    pub(crate) fn new(capacity: usize) -> Self {
         // Add additional buckets to help reduce collisions
         let shift = (capacity as u64 + 128).leading_zeros();
         let num_buckets = (u64::MAX >> shift) as usize;
@@ -120,7 +120,7 @@ impl<'a, V> Interner<'a, V> {
         }
     }
 
-    fn intern<F: FnOnce() -> Result<V, E>, E>(
+    pub(crate) fn intern<F: FnOnce() -> Result<V, E>, E>(
         &mut self,
         new: Option<&'a [u8]>,
         f: F,
