@@ -247,10 +247,12 @@ mod tests {
         assert_eq!(fields.len(), 1);
         let field = &fields[0];
         assert_eq!(field.name(), "data");
-        // data should have been written with the Variant logical type
+        // data should have been written with the Variant logical type, with the
+        // specification version set (required by the Parquet spec and by readers
+        // such as Spark, which only accept `VARIANT(1)`)
         assert_eq!(
             field.get_basic_info().logical_type_ref(),
-            Some(&crate::basic::LogicalType::variant(None))
+            Some(&crate::basic::LogicalType::variant(Some(1)))
         );
     }
 
