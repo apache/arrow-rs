@@ -1,0 +1,82 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+name: API changes
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - '**/*.rs'
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - rust-toolchain.toml
+      - .cargo/**
+      - .github/workflows/api_change.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.event.pull_request.number }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    if: '!github.event.pull_request.draft'
+    name: Detect API changes
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    timeout-minutes: 60
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+      - name: Install cargo-semver-checks
+        uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177  # v2.87.30
+        with:
+          tool: cargo-semver-checks@0.51.0
+      - name: Compare public APIs with the target commit
+        id: compare
+        shell: bash
+        # Force detection even if the PR bumps Cargo versions. Comparing with the
+        # target commit avoids reporting breaking changes already merged there.
+        run: |
+          check_api() {
+            local status=0
+            cargo semver-checks check-release --baseline-rev "$BASE_SHA" \
+              --release-type minor "$@" || status=$?
+            case "$status" in
+              0) ;;
+              100) echo 'breaking=true' >> "$GITHUB_OUTPUT" ;;
+              *) return "$status" ;;
+            esac
+          }
+          check_api --workspace --exclude parquet --all-features
+          # With async enabled, 0.51 confuses the sync (&self) and async (&mut self)
+          # get_row_group_column_bloom_filter methods on identical source.
+          check_api -p parquet --default-features
+      # dev_pr.yml reads this step's conclusion through the Actions API.
+      - name: API changes detected
+        if: steps.compare.outputs.breaking == 'true'
+        run: echo 'Breaking API changes detected; dev_pr will add api-change.'

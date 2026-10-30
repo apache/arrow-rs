@@ -232,6 +232,10 @@ This means that if your PR has a breaking API change, it should be marked as
 `api-change` and it will not be merged until development opens for the next
 major release. See [this ticket] for details.
 
+CI uses `cargo-semver-checks` to add `api-change` for detected breakage without
+failing the check. Manual review is still needed, especially for Parquet features
+outside its defaults.
+
 [release schedule]: README.md#release-versioning-and-schedule
 [this ticket]: https://github.com/apache/arrow-rs/issues/5907
 
