@@ -214,52 +214,69 @@ impl ByteBudgetChunker {
         budget: usize,
         value_exact: bool,
     ) -> Option<SubBatchStrategy> {
-        // How many of this chunk's levels carry an actual value. For a
-        // non-nullable, unrepeated column every level is a value, so
-        // `value_count` is O(1) (`Absent`/`Uniform` def levels); only
-        // nullable or nested columns pay the O(chunk_size) def-level scan.
+        // Ask the encoder how many of the next values fit in one page byte
+        // budget, *before* counting the chunk's values: that count is an
+        // O(chunk_size) def-level scan on nullable columns, and most chunks
+        // fit outright. The chunk holds at most `chunk_size` values, so ask
+        // about the next `chunk_size` — a window whose prefix is exactly the
+        // chunk's values. The encoder counts the window's leading values that
+        // fit, so its answer bounds the chunk too: if the whole window fits,
+        // so does the chunk. Dispatch on whether the caller supplied gather
+        // indices; this mirrors how `write_mini_batch` picks `write_gather`
+        // vs `write`.
+        let (fit, window_len) = match value_indices {
+            Some(idx) => {
+                let end = values_offset.saturating_add(chunk_size).min(idx.len());
+                let start = values_offset.min(end);
+                (
+                    E::count_values_within_byte_budget_gather(values, &idx[start..end], budget),
+                    end - start,
+                )
+            }
+            None => (
+                E::count_values_within_byte_budget(values, values_offset, chunk_size, budget),
+                // Clamped by the encoder to the values present; at worst
+                // this sends a fitting tail chunk down the slower path below.
+                chunk_size,
+            ),
+        };
+        let fit = match fit {
+            // The encoder cannot size these values; write the chunk whole.
+            None => return None,
+            // The whole window fits, so the chunk does.
+            Some(n) if n >= window_len => return None,
+            Some(n) => n,
+        };
+        // Something in the window overflows; only now count how many of the
+        // window's values belong to this chunk. For a non-nullable,
+        // unrepeated column `value_count` is O(1) (`Absent`/`Uniform` def
+        // levels); nullable or nested columns pay the def-level scan.
         let vals_in_chunk = chunk_def.value_count(chunk_size, self.max_def_level);
         if vals_in_chunk == 0 {
             return None;
         }
-        // Ask the encoder how many of the next values fit in one page byte
-        // budget. Dispatch on whether the caller supplied gather indices;
-        // this mirrors how `write_mini_batch` picks `write_gather` vs
-        // `write`.
-        let fit = match value_indices {
-            Some(idx) => {
-                let end = (values_offset + vals_in_chunk).min(idx.len());
-                let start = values_offset.min(end);
-                E::count_values_within_byte_budget_gather(values, &idx[start..end], budget)
-            }
-            None => {
-                E::count_values_within_byte_budget(values, values_offset, vals_in_chunk, budget)
-            }
-        };
-        match fit {
-            // The encoder cannot size these values; write the chunk whole.
-            None => None,
-            // All of the chunk's values fit in the budget — no sub-batching.
-            Some(values_per_subbatch) if values_per_subbatch >= vals_in_chunk => None,
-            Some(values_per_subbatch) => {
-                // `count_values_within_byte_budget` never reports zero, but a
-                // zero-wide window would not advance `write_granular_chunk`.
-                let values_per_subbatch = values_per_subbatch.max(1);
-                Some(if value_exact {
-                    SubBatchStrategy::Values(values_per_subbatch)
-                } else {
-                    // Scale to a level count. Inexact on nullable chunks, and
-                    // deliberately so — see `SubBatchStrategy::Levels`.
-                    let levels_per_subbatch = if vals_in_chunk == chunk_size {
-                        values_per_subbatch
-                    } else {
-                        (values_per_subbatch * chunk_size)
-                            .div_ceil(vals_in_chunk)
-                            .max(1)
-                    };
-                    SubBatchStrategy::Levels(chunk_size.min(levels_per_subbatch))
-                })
-            }
+        // `fit` leading values fit and the next one overflows, so for the
+        // chunk (the window's first `vals_in_chunk` values) the answer is the
+        // same `fit`, or "everything fits" when `fit` reaches past it.
+        if fit >= vals_in_chunk {
+            return None;
         }
+        // `count_values_within_byte_budget` never reports zero, but a
+        // zero-wide window would not advance `write_granular_chunk`.
+        let values_per_subbatch = fit.max(1);
+        Some(if value_exact {
+            SubBatchStrategy::Values(values_per_subbatch)
+        } else {
+            // Scale to a level count. Inexact on nullable chunks, and
+            // deliberately so — see `SubBatchStrategy::Levels`.
+            let levels_per_subbatch = if vals_in_chunk == chunk_size {
+                values_per_subbatch
+            } else {
+                (values_per_subbatch * chunk_size)
+                    .div_ceil(vals_in_chunk)
+                    .max(1)
+            };
+            SubBatchStrategy::Levels(chunk_size.min(levels_per_subbatch))
+        })
     }
 }
