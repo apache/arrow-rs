@@ -1139,7 +1139,21 @@ impl ArrayData {
             )));
         }
 
-        Ok(&buffer.typed_data::<T>()[self.offset..required_elements])
+        // Only the bytes in use are typed: the buffer may be longer than
+        // `required_len` by a number of bytes that is not a multiple of
+        // `byte_width`, which `Buffer::typed_data` would assert on.
+        let bytes = &buffer.as_slice()[..required_len];
+        // SAFETY: ArrowNativeType is trivially transmutable and sealed (as in
+        // `Buffer::typed_data`); alignment is checked below
+        let (prefix, values, suffix) = unsafe { bytes.align_to::<T>() };
+        if !prefix.is_empty() || !suffix.is_empty() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Buffer {idx} of {} is not aligned to {} bytes",
+                self.data_type,
+                mem::align_of::<T>()
+            )));
+        }
+        Ok(&values[self.offset..])
     }
 
     /// Does a cheap sanity check that the `self.len` values in `buffer` are valid
@@ -1289,9 +1303,12 @@ impl ArrayData {
 
                 let len_plus_offset =
                     checked_len_plus_offset(&self.data_type, self.len, self.offset)?;
-                let expected_values_len = len_plus_offset
-                    .checked_mul(list_size)
-                    .expect("integer overflow computing expected number of expected values in FixedListSize");
+                let expected_values_len = len_plus_offset.checked_mul(list_size).ok_or_else(|| {
+                    ArrowError::InvalidArgumentError(format!(
+                        "Integer overflow computing expected number of values in {}: length + offset ({}) multiplied by list size ({}) exceeds usize",
+                        self.data_type, len_plus_offset, list_size
+                    ))
+                })?;
 
                 if values_data.len < expected_values_len {
                     return Err(ArrowError::InvalidArgumentError(format!(
@@ -2720,6 +2737,62 @@ mod tests {
     }
 
     #[test]
+    fn test_fixed_size_list_validation_child_len_mul_overflow() {
+        // Empty child and no parent null buffer: huge logical lengths allocate nothing.
+        let child = ArrayData::builder(DataType::Int32)
+            .len(0)
+            .add_buffer(Buffer::from_slice_ref([0i32; 0]))
+            .build()
+            .unwrap();
+        let list_size = 2i32;
+        let data_type = DataType::FixedSizeList(
+            Arc::new(Field::new("item", DataType::Int32, true)),
+            list_size,
+        );
+        // `(len + offset) * list_size` overflows; the addition itself does not.
+        let len_plus_offset = (usize::MAX / 2) + 1;
+        let overflow_cases = [(len_plus_offset, 0usize), (usize::MAX / 2, 1)];
+
+        for (len, offset) in overflow_cases {
+            let err = ArrayData::builder(data_type.clone())
+                .len(len)
+                .offset(offset)
+                .add_child_data(child.clone())
+                .build()
+                .unwrap_err();
+
+            match err {
+                ArrowError::InvalidArgumentError(msg) => assert_eq!(
+                    msg,
+                    format!(
+                        "Integer overflow computing expected number of values in {data_type}: length + offset ({len_plus_offset}) multiplied by list size ({list_size}) exceeds usize"
+                    )
+                ),
+                other => panic!("unexpected error type {other}"),
+            }
+        }
+
+        // Same product is representable here, so validation reports a short child.
+        let err = ArrayData::builder(data_type.clone())
+            .len(usize::MAX / 2)
+            .offset(0)
+            .add_child_data(child)
+            .build()
+            .unwrap_err();
+
+        match err {
+            ArrowError::InvalidArgumentError(msg) => assert_eq!(
+                msg,
+                format!(
+                    "Values length 0 is less than the length + offset ({}) multiplied by the value size ({list_size}) for {data_type}",
+                    usize::MAX / 2
+                )
+            ),
+            other => panic!("unexpected error type {other}"),
+        }
+    }
+
+    #[test]
     fn test_struct_equal_accounts_for_parent_offset() {
         let data_type =
             DataType::Struct(Fields::from(vec![Field::new("x", DataType::Int32, false)]));
@@ -3752,6 +3825,21 @@ mod tests {
             err.to_string(),
             "Invalid argument error: Buffer 0 of Dictionary(Int32, Int32) isn't large enough. Expected 16 bytes got 8"
         );
+    }
+
+    /// `validate` only requires a minimum buffer size, so an offsets buffer
+    /// may carry trailing bytes that are not a whole number of offsets.
+    #[test]
+    fn test_validate_offsets_buffer_with_trailing_bytes() {
+        let mut offsets = Buffer::from_slice_ref([0_i32, 2, 5]).as_slice().to_vec();
+        offsets.extend_from_slice(&[0, 0]);
+        let data = ArrayData::builder(DataType::Utf8)
+            .len(2)
+            .add_buffer(Buffer::from_slice_ref(&offsets))
+            .add_buffer(Buffer::from_slice_ref(b"hello"))
+            .build()
+            .unwrap();
+        data.validate_full().unwrap();
     }
 
     #[test]

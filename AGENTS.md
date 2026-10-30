@@ -23,7 +23,7 @@ Run the checks relevant to your change from the repository root:
 
 ```bash
 # Check Rust formatting and lints for code changes
-cargo +stable fmt --all -- --check
+cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 # Check spelling, including documentation changes
