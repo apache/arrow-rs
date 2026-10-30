@@ -271,7 +271,9 @@ fn view_substring_range(
         Ordering::Less => (original_length + start).max(0),
     };
     let new_end = match substring_length {
-        Some(length) => new_start.saturating_add(length as i64).min(original_length),
+        Some(length) => new_start
+            .saturating_add(u64_to_i64_saturating(length))
+            .min(original_length),
         None => original_length,
     };
     (new_start as usize, new_end as usize)
@@ -1327,5 +1329,42 @@ mod tests {
             out.as_string::<i32>().iter().collect::<Vec<_>>(),
             vec![Some("lo"), Some("ld"), None]
         );
+    }
+
+    #[test]
+    fn view_lengths_beyond_i64_max_match_the_64_bit_arms() {
+        // a length that does not fit in an i64 must saturate, not wrap to a
+        // negative length that puts the end before the start
+        let values = vec![
+            Some("hello"),
+            Some("this one is longer than twelve bytes"),
+            None,
+        ];
+        let large = LargeStringArray::from(values.clone());
+        let view = StringViewArray::from(values.clone());
+        let large_binary =
+            LargeBinaryArray::from_iter(values.iter().map(|v| v.map(|s| s.as_bytes())));
+        let binary_view =
+            BinaryViewArray::from_iter(values.iter().map(|v| v.map(|s| s.as_bytes())));
+
+        for start in [0, 1, 3, -2, 100] {
+            for length in [Some(i64::MAX as u64 + 1), Some(u64::MAX)] {
+                let expected = substring(&large, start, length).unwrap();
+                let actual = substring(&view, start, length).unwrap();
+                assert_eq!(
+                    expected.as_string::<i64>().iter().collect::<Vec<_>>(),
+                    actual.as_string_view().iter().collect::<Vec<_>>(),
+                    "LargeUtf8 and Utf8View disagree at start {start}, length {length:?}"
+                );
+
+                let expected = substring(&large_binary, start, length).unwrap();
+                let actual = substring(&binary_view, start, length).unwrap();
+                assert_eq!(
+                    expected.as_binary::<i64>().iter().collect::<Vec<_>>(),
+                    actual.as_binary_view().iter().collect::<Vec<_>>(),
+                    "LargeBinary and BinaryView disagree at start {start}, length {length:?}"
+                );
+            }
+        }
     }
 }
