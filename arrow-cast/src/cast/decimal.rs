@@ -194,6 +194,17 @@ where
     Some((f_fallible, f_infallible))
 }
 
+fn upscale_beyond_type_precision<I: DecimalType, O: DecimalType>(
+    value: I::Native,
+) -> Option<O::Native>
+where
+    I::Native: ArrowNativeTypeOp,
+    O::Native: ArrowNativeTypeOp,
+{
+    // Zero remains representable even when the scale factor exceeds the output type's range.
+    (value == I::Native::ZERO).then_some(O::Native::ZERO)
+}
+
 /// Construct closures to downscale decimals from `(input_precision, input_scale)` to
 /// `(output_precision, output_scale)`.
 ///
@@ -313,9 +324,13 @@ where
     validate_decimal_precision_and_scale::<O>(output_precision, output_scale).ok()?;
 
     if input_scale <= output_scale {
-        let (f, f_infallible) =
-            make_upscaler::<I, O>(input_precision, input_scale, output_precision, output_scale)?;
-        apply_rescaler::<I, O>(value, output_precision, f, f_infallible)
+        if let Some((f, f_infallible)) =
+            make_upscaler::<I, O>(input_precision, input_scale, output_precision, output_scale)
+        {
+            apply_rescaler::<I, O>(value, output_precision, f, f_infallible)
+        } else {
+            upscale_beyond_type_precision::<I, O>(value)
+        }
     } else {
         let Some((f, f_infallible)) =
             make_downscaler::<I, O>(input_precision, input_scale, output_precision, output_scale)
@@ -434,13 +449,15 @@ where
             cast_options,
         )
     } else {
-        // Scale increase exceeds supported precision; return overflow error
-        Err(ArrowError::CastError(format!(
-            "Cannot cast to {}({}, {}). Value overflows for output scale",
-            O::PREFIX,
+        // Scale increase exceeds the output type's precision, so only zero can fit.
+        apply_decimal_cast(
+            array,
             output_precision,
-            output_scale
-        )))
+            output_scale,
+            upscale_beyond_type_precision::<I, O>,
+            None::<fn(I::Native) -> O::Native>,
+            cast_options,
+        )
     }
 }
 
@@ -1355,6 +1372,15 @@ mod tests {
     fn test_rescale_decimal_upscale_overflow_returns_none() {
         let result = rescale_decimal::<Decimal32Type, Decimal32Type>(9_999_i32, 4, 0, 5, 2);
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_rescale_decimal_upscale_beyond_type_precision() {
+        let zero = rescale_decimal::<Decimal32Type, Decimal32Type>(0_i32, 1, -1, 9, 9);
+        assert_eq!(zero, Some(0_i32));
+
+        let nonzero = rescale_decimal::<Decimal32Type, Decimal32Type>(1_i32, 1, -1, 9, 9);
+        assert_eq!(nonzero, None);
     }
 
     #[test]

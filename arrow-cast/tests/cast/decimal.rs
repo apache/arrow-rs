@@ -2433,22 +2433,98 @@ fn test_cast_decimal256_negative_scale_native_overflow() {
     );
 }
 
+fn assert_upscale_beyond_max_scale<T: DecimalType>(
+    values: Vec<Option<T::Native>>,
+    expected_safe_values: Vec<Option<T::Native>>,
+    strict_cast_should_error: bool,
+) where
+    T::Native: DecimalCast + Copy,
+{
+    let input = values
+        .into_iter()
+        .collect::<PrimitiveArray<T>>()
+        .with_precision_and_scale(T::MAX_PRECISION, -1)
+        .unwrap();
+    let output_type = T::TYPE_CONSTRUCTOR(T::MAX_PRECISION, T::MAX_SCALE);
+    let expected = expected_safe_values
+        .into_iter()
+        .collect::<PrimitiveArray<T>>()
+        .with_precision_and_scale(T::MAX_PRECISION, T::MAX_SCALE)
+        .unwrap();
+
+    let safe_options = CastOptions {
+        safe: true,
+        ..Default::default()
+    };
+    let result = cast_with_options(&input, &output_type, &safe_options).unwrap();
+    assert_eq!(result.as_ref(), &expected);
+
+    let strict_options = CastOptions {
+        safe: false,
+        ..Default::default()
+    };
+    let result = cast_with_options(&input, &output_type, &strict_options);
+    if strict_cast_should_error {
+        assert!(result.is_err());
+    } else {
+        assert_eq!(result.unwrap().as_ref(), &expected);
+    }
+}
+
+#[test]
+fn test_cast_decimal_upscale_beyond_max_scale() {
+    macro_rules! assert_all_shapes {
+        ($decimal_type:ty, $zero:expr, $one:expr, $negative_one:expr) => {{
+            assert_upscale_beyond_max_scale::<$decimal_type>(
+                vec![Some($zero), Some($one), Some($negative_one), None],
+                vec![Some($zero), None, None, None],
+                true,
+            );
+            assert_upscale_beyond_max_scale::<$decimal_type>(
+                vec![Some($zero)],
+                vec![Some($zero)],
+                false,
+            );
+            assert_upscale_beyond_max_scale::<$decimal_type>(
+                vec![None, None],
+                vec![None, None],
+                false,
+            );
+            assert_upscale_beyond_max_scale::<$decimal_type>(vec![], vec![], false);
+        }};
+    }
+
+    assert_all_shapes!(Decimal32Type, 0_i32, 1_i32, -1_i32);
+    assert_all_shapes!(Decimal64Type, 0_i64, 1_i64, -1_i64);
+    assert_all_shapes!(Decimal128Type, 0_i128, 1_i128, -1_i128);
+    assert_all_shapes!(Decimal256Type, i256::ZERO, i256::ONE, i256::MINUS_ONE);
+}
+
 #[test]
 fn test_cast_decimal256_extreme_scale_difference() {
     let input = Decimal256Array::from(vec![Some(i256::ONE), Some(i256::MINUS_ONE), None])
         .with_precision_and_scale(76, i8::MIN)
         .unwrap();
-    for safe in [true, false] {
-        let options = CastOptions {
-            safe,
-            ..Default::default()
-        };
-        let error = cast_with_options(&input, &DataType::Decimal256(76, 76), &options).unwrap_err();
-        assert_eq!(
-            error.to_string(),
-            "Cast error: Cannot cast to Decimal256(76, 76). Value overflows for output scale"
-        );
-    }
+    let safe_options = CastOptions {
+        safe: true,
+        ..Default::default()
+    };
+    let result = cast_with_options(&input, &DataType::Decimal256(76, 76), &safe_options).unwrap();
+    let expected = Decimal256Array::from(vec![None, None, None])
+        .with_precision_and_scale(76, 76)
+        .unwrap();
+    assert_eq!(result.as_primitive::<Decimal256Type>(), &expected);
+
+    let strict_options = CastOptions {
+        safe: false,
+        ..Default::default()
+    };
+    let error =
+        cast_with_options(&input, &DataType::Decimal256(76, 76), &strict_options).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Cast error: Cannot cast to Decimal256(76, 76). Overflowing on 1"
+    );
 
     let input = input.with_precision_and_scale(76, 76).unwrap();
     let expected = Decimal256Array::from(vec![Some(i256::ZERO), Some(i256::ZERO), None])
