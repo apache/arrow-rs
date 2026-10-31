@@ -1532,7 +1532,17 @@ fn schema_from_array_helper(
         Some(n) => {
             let repetition = element.repetition_type;
 
-            let mut fields = Vec::with_capacity(usize::try_from(n)?);
+            let num_children = usize::try_from(n)?;
+            let remaining_elements = num_elements - index - 1;
+            if num_children > remaining_elements {
+                return Err(general_err!(
+                    "Schema element declares {} children, but only {} schema elements remain",
+                    num_children,
+                    remaining_elements
+                ));
+            }
+
+            let mut fields = Vec::with_capacity(num_children);
             let mut next_index = index + 1;
             for _ in 0..n {
                 let child_result = schema_from_array_helper(elements, num_elements, next_index)?;
@@ -2840,5 +2850,26 @@ mod tests {
         }];
         let result = parquet_schema_from_array(elements);
         assert!(result.unwrap_err().to_string().contains("Integer overflow"));
+    }
+
+    #[test]
+    fn test_parquet_schema_from_array_rejects_num_children_exceeding_remaining_elements() {
+        let elements = vec![SchemaElement {
+            r#type: None,
+            type_length: None,
+            repetition_type: Some(Repetition::REQUIRED),
+            name: "schema",
+            num_children: Some(i32::MAX),
+            converted_type: None,
+            scale: None,
+            precision: None,
+            field_id: None,
+            logical_type: None,
+        }];
+
+        let result = parquet_schema_from_array(elements);
+        assert!(result.unwrap_err().to_string().contains(
+            "Schema element declares 2147483647 children, but only 0 schema elements remain"
+        ));
     }
 }
