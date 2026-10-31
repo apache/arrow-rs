@@ -249,6 +249,22 @@ impl Block {
     }
 }
 
+impl Block {
+    /// Same result as [`Block::check`], but tests all 8 words without an early
+    /// exit. This has no data-dependent branch, so it is faster when many
+    /// hashes are checked in a loop.
+    #[cfg_attr(not(any(feature = "arrow", test)), expect(dead_code))]
+    #[inline(always)]
+    fn check_branch_free(&self, hash: u32) -> bool {
+        let mut missing = 0u32;
+        for (word, salt) in self.0.iter().zip(SALT) {
+            let bit = 1u32 << (hash.wrapping_mul(salt) >> 27);
+            missing |= !word & bit;
+        }
+        missing == 0
+    }
+}
+
 impl std::ops::Index<usize> for Block {
     type Output = u32;
 
@@ -568,6 +584,64 @@ impl Sbbf {
         self.0[block_index].check(hash as u32)
     }
 
+    /// Same result as [`Self::check_hash`], without data-dependent branches.
+    #[cfg_attr(not(any(feature = "arrow", test)), expect(dead_code))]
+    #[inline(always)]
+    fn check_hash_branch_free(&self, hash: u64) -> bool {
+        let block_index = self.hash_to_block_index(hash);
+        self.0[block_index].check_branch_free(hash as u32)
+    }
+
+    /// Inserts precomputed 64-bit hashes.
+    ///
+    /// The filter can hold hashes from any well-mixed 64-bit hash function,
+    /// but [`Self::check`] only finds values whose hashes were computed as
+    /// the Parquet specification requires (xxHash64, seed 0, of the plain
+    /// encoding). Use [`Self::check_hashes`] with the same hash function.
+    pub fn insert_hashes(&mut self, hashes: &[u64]) {
+        for &hash in hashes {
+            self.insert_hash(hash);
+        }
+    }
+
+    /// Checks precomputed 64-bit hashes (see [`Self::insert_hashes`]).
+    ///
+    /// Bit `i` of the result is set if `hashes[i]` may be in the filter. The
+    /// check has no data-dependent branches, which is much faster than
+    /// checking one hash at a time.
+    #[cfg(feature = "arrow")]
+    pub fn check_hashes(&self, hashes: &[u64]) -> arrow_buffer::BooleanBuffer {
+        arrow_buffer::BooleanBuffer::collect_bool(hashes.len(), |i| {
+            self.check_hash_branch_free(hashes[i])
+        })
+    }
+
+    /// Adds the values of `other` to this filter, so that afterwards it
+    /// contains every value that either filter contained.
+    ///
+    /// `other` must have at least as many blocks as this filter, and a
+    /// multiple of them. When it has more, it is folded to the size of this
+    /// filter on the fly (see [`Self::fold_to_target_fpp`]), without changing
+    /// `other`. Folding and union commute: the result is the same as
+    /// inserting the values of both filters into one filter and folding it
+    /// to this size. This lets independent filters (for example, one per
+    /// thread) be built and then merged.
+    pub fn union(&mut self, other: &Sbbf) -> Result<(), ParquetError> {
+        let (len, other_len) = (self.0.len(), other.0.len());
+        if other_len < len || other_len % len != 0 {
+            return Err(ParquetError::General(format!(
+                "Cannot union a bloom filter of {other_len} blocks into one of {len} blocks"
+            )));
+        }
+        let group_size = other_len / len;
+        for (block, group) in self.0.iter_mut().zip(other.0.chunks_exact(group_size)) {
+            for other_block in group {
+                *block |= *other_block;
+            }
+        }
+        Ok(())
+    }
+
     /// Return the total in memory size of this bloom filter in bytes
     pub(crate) fn estimated_memory_size(&self) -> usize {
         self.0.capacity() * std::mem::size_of::<Block>()
@@ -789,6 +863,65 @@ fn hash_as_bytes<A: AsBytes + ?Sized>(value: &A) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn bitset(f: &Sbbf) -> Vec<u8> {
+        let mut out = vec![];
+        f.write_bitset(&mut out).unwrap();
+        out
+    }
+
+    #[test]
+    fn test_branch_free_check_matches_check() {
+        let mut filter = Sbbf::new_with_num_of_bytes(256);
+        for i in 0..200u64 {
+            filter.insert(&(i * 7));
+        }
+        for i in 0..5000u64 {
+            let h = hash_as_bytes(&i);
+            assert_eq!(filter.check_hash(h), filter.check_hash_branch_free(h));
+        }
+    }
+
+    #[cfg(feature = "arrow")]
+    #[test]
+    fn test_check_hashes_matches_check_hash() {
+        let hashes: Vec<u64> = (0..5000u64).map(|i| hash_as_bytes(&i)).collect();
+        let mut filter = Sbbf::new_with_num_of_bytes(256);
+        filter.insert_hashes(&hashes[..200]);
+        let result = filter.check_hashes(&hashes);
+        for (i, &h) in hashes.iter().enumerate() {
+            assert_eq!(result.value(i), filter.check_hash(h));
+        }
+        assert!((0..200).all(|i| result.value(i)));
+    }
+
+    #[test]
+    fn test_union_of_parts_matches_one_filter() {
+        let hashes: Vec<u64> = (0..100_000u64).map(|i| hash_as_bytes(&i)).collect();
+        let mut whole = Sbbf::new_with_num_of_bytes(1 << 20);
+        whole.insert_hashes(&hashes);
+        let mut merged = Sbbf::new_with_num_of_bytes(1 << 20);
+        for chunk in hashes.chunks(7_000) {
+            let mut part = Sbbf::new_with_num_of_bytes(1 << 20);
+            part.insert_hashes(chunk);
+            merged.union(&part).unwrap();
+        }
+        assert_eq!(bitset(&whole), bitset(&merged));
+        // union then fold == fold then union
+        let mut folded = whole.clone();
+        folded.fold_to_target_fpp(0.01);
+        merged.fold_to_target_fpp(0.01);
+        assert_eq!(bitset(&folded), bitset(&merged));
+        // a larger filter is folded on the fly
+        let mut small = Sbbf::new_with_num_of_bytes(1 << 16);
+        small.insert_hashes(&hashes[..10]);
+        small.union(&whole).unwrap();
+        let mut expected = Sbbf::new_with_num_of_bytes(1 << 16);
+        expected.insert_hashes(&hashes);
+        assert_eq!(bitset(&small), bitset(&expected));
+        // a smaller filter cannot be unioned into a larger one
+        assert!(whole.clone().union(&small).is_err());
+    }
 
     #[test]
     fn test_hash_bytes() {
