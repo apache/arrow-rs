@@ -1729,7 +1729,8 @@ pub fn take_record_batch(
             // Null indices can put nulls in non-nullable columns, which this rejects. The
             // row count is needed for a batch with no columns.
             let options = RecordBatchOptions::new().with_row_count(Some(indices.len()));
-            RecordBatch::try_new_with_options(record_batch.schema(), columns, &options)
+            let batch = RecordBatch::try_new_with_options(record_batch.schema(), columns, &options)?;
+            Ok(batch.with_custom_metadata(record_batch.custom_metadata().clone()))
         },
         d => Err(ArrowError::InvalidArgumentError(format!("Take only supported for integers, got {d:?}")))
     )
@@ -1740,7 +1741,7 @@ mod tests {
     use super::*;
     use arrow_array::builder::*;
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
-    use arrow_schema::{Field, Fields, Schema, TimeUnit, UnionFields};
+    use arrow_schema::{Field, Fields, Metadata, Schema, TimeUnit, UnionFields};
     use num_traits::ToPrimitive;
 
     fn test_take_decimal_arrays(
@@ -4424,13 +4425,31 @@ mod tests {
 
     #[test]
     fn test_take_record_batch_no_columns() {
+        let metadata = Metadata::from([("k", "v")]);
         let options = RecordBatchOptions::new().with_row_count(Some(3));
-        let batch =
-            RecordBatch::try_new_with_options(Arc::new(Schema::empty()), vec![], &options).unwrap();
+        let batch = RecordBatch::try_new_with_options(Arc::new(Schema::empty()), vec![], &options)
+            .unwrap()
+            .with_custom_metadata(metadata.clone());
 
         let taken = take_record_batch(&batch, &UInt32Array::from(vec![2, 0, 2, 1])).unwrap();
         assert_eq!(taken.num_rows(), 4);
+        assert_eq!(taken.custom_metadata(), &metadata);
 
         assert!(take_record_batch(&batch, &UInt32Array::from(vec![3])).is_err());
+    }
+
+    #[test]
+    fn test_take_record_batch_preserves_custom_metadata() {
+        let metadata = Metadata::from([("k", "v")]);
+        let batch = RecordBatch::try_from_iter([(
+            "a",
+            Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+        )])
+        .unwrap()
+        .with_custom_metadata(metadata.clone());
+        let indices = UInt32Array::from(vec![2, 0]);
+        let taken = take_record_batch(&batch, &indices).unwrap();
+        assert_eq!(taken.num_rows(), 2);
+        assert_eq!(taken.custom_metadata(), &metadata);
     }
 }
