@@ -1548,7 +1548,8 @@ impl Default for EnabledStatistics {
 /// The bloom filter is initially sized for `ndv` distinct values at the given `fpp`, then
 /// automatically folded down after all values are inserted to achieve optimal size while
 /// maintaining the target `fpp`. See [`Sbbf::fold_to_target_fpp`] for details on the
-/// folding algorithm.
+/// folding algorithm. Disable folding with
+/// [`BloomFilterPropertiesBuilder::with_folding_enabled`] to retain the initial allocation.
 ///
 /// # Example
 ///
@@ -1578,6 +1579,7 @@ impl Default for EnabledStatistics {
 pub struct BloomFilterProperties {
     fpp: f64,
     ndv: u64,
+    folding_enabled: bool,
 }
 
 impl Default for BloomFilterProperties {
@@ -1585,6 +1587,7 @@ impl Default for BloomFilterProperties {
         BloomFilterProperties {
             fpp: DEFAULT_BLOOM_FILTER_FPP,
             ndv: DEFAULT_BLOOM_FILTER_NDV,
+            folding_enabled: true,
         }
     }
 }
@@ -1605,9 +1608,17 @@ impl BloomFilterProperties {
     /// e.g. 0.1, 0.05, or 0.001 is recommended.
     ///
     /// This value also serves as the target FPP for bloom filter folding: after all values
-    /// are inserted, the filter is folded down to the smallest size that still meets this FPP.
+    /// are inserted, the filter is folded down to the smallest size that still meets this FPP
+    /// when [`Self::folding_enabled`] is true.
     pub fn fpp(&self) -> f64 {
         self.fpp
+    }
+
+    /// Whether the writer folds sparse filters after insertion. Defaults to `true`.
+    ///
+    /// Set with [`BloomFilterPropertiesBuilder::with_folding_enabled`].
+    pub fn folding_enabled(&self) -> bool {
+        self.folding_enabled
     }
 
     /// Maximum expected number of distinct values. Defaults to [`DEFAULT_BLOOM_FILTER_NDV`].
@@ -1617,12 +1628,12 @@ impl BloomFilterProperties {
     /// When not explicitly set via the builder, this defaults to
     /// [`max_row_group_row_count`](WriterProperties::max_row_group_row_count) (resolved at
     /// build time). The bloom filter is initially sized for this many distinct values at the
-    /// given `fpp`, then folded down after insertion to achieve optimal size. A good heuristic
+    /// given `fpp`, then folded down after insertion if folding is enabled. A good heuristic
     /// is to set this to the expected number of rows in the row group. If fewer distinct values
-    /// are actually written, the filter will be automatically compacted via folding.
+    /// are actually written, the filter will be automatically compacted when folding is enabled.
     ///
-    /// Thus the only negative side of overestimating this value is that the bloom filter
-    /// will use more memory during writing than necessary, but it will not affect the final
+    /// With folding enabled, overestimating this value makes the bloom filter use more memory
+    /// during writing than necessary, but it will not affect the final
     /// bloom filter size on disk.
     ///
     /// If you wish to reduce memory usage during writing and are able to make a reasonable estimate
@@ -1644,6 +1655,7 @@ impl BloomFilterProperties {
 pub struct BloomFilterPropertiesBuilder {
     fpp: Option<f64>,
     ndv: Option<u64>,
+    folding_enabled: Option<bool>,
 }
 
 impl BloomFilterPropertiesBuilder {
@@ -1685,6 +1697,18 @@ impl BloomFilterPropertiesBuilder {
         self
     }
 
+    /// Enables or disables folding after values are inserted (defaults to `true`).
+    ///
+    /// Disabling folding retains the initial NDV/FPP-sized allocation, matching
+    /// the non-adaptive parquet-java writer's behavior. This can preserve a lower
+    /// realized false positive probability for sparse row groups at the cost of
+    /// a larger serialized filter. It does not change hashing or initial sizing,
+    /// and does not by itself guarantee byte identity with other writers.
+    pub fn with_folding_enabled(mut self, enabled: bool) -> Self {
+        self.folding_enabled = Some(enabled);
+        self
+    }
+
     /// Builds [`BloomFilterProperties`].
     ///
     ///
@@ -1702,7 +1726,12 @@ impl BloomFilterPropertiesBuilder {
         let fpp = self.fpp.unwrap_or(DEFAULT_BLOOM_FILTER_FPP);
         validate_bloom_filter_fpp(fpp).map_err(ParquetError::General)?;
         let ndv = self.ndv.unwrap_or(DEFAULT_BLOOM_FILTER_NDV);
-        Ok(BloomFilterProperties { fpp, ndv })
+        let folding_enabled = self.folding_enabled.unwrap_or(true);
+        Ok(BloomFilterProperties {
+            fpp,
+            ndv,
+            folding_enabled,
+        })
     }
 }
 
@@ -2480,7 +2509,11 @@ mod tests {
             );
             assert_eq!(
                 props.bloom_filter_properties(&ColumnPath::from("col")),
-                Some(&BloomFilterProperties { fpp: 0.1, ndv: 100 })
+                Some(&BloomFilterProperties {
+                    fpp: 0.1,
+                    ndv: 100,
+                    ..Default::default()
+                })
             );
         }
 
@@ -2518,6 +2551,7 @@ mod tests {
             Some(&BloomFilterProperties {
                 fpp: DEFAULT_BLOOM_FILTER_FPP,
                 ndv: DEFAULT_BLOOM_FILTER_NDV,
+                ..Default::default()
             })
         );
     }
@@ -2562,6 +2596,7 @@ mod tests {
             Some(&BloomFilterProperties {
                 fpp: DEFAULT_BLOOM_FILTER_FPP,
                 ndv: 100,
+                ..Default::default()
             })
         );
         assert_eq!(
@@ -2572,6 +2607,7 @@ mod tests {
             Some(&BloomFilterProperties {
                 fpp: 0.1,
                 ndv: DEFAULT_BLOOM_FILTER_NDV,
+                ..Default::default()
             })
         );
     }
@@ -2617,6 +2653,7 @@ mod tests {
             Some(&BloomFilterProperties {
                 fpp: DEFAULT_BLOOM_FILTER_FPP,
                 ndv: 100,
+                ..Default::default()
             })
         );
         assert_eq!(
@@ -2624,6 +2661,7 @@ mod tests {
             Some(&BloomFilterProperties {
                 fpp: DEFAULT_BLOOM_FILTER_FPP,
                 ndv: 200,
+                ..Default::default()
             })
         );
     }
@@ -2776,6 +2814,7 @@ mod tests {
         let props = BloomFilterProperties::builder().build();
         assert_eq!(props.fpp, DEFAULT_BLOOM_FILTER_FPP);
         assert_eq!(props.ndv, DEFAULT_BLOOM_FILTER_NDV);
+        assert!(props.folding_enabled());
         assert_eq!(props, BloomFilterProperties::default());
         assert_eq!(
             BloomFilterPropertiesBuilder::new().build(),
@@ -2877,6 +2916,7 @@ mod tests {
             .build();
         let tailored = BloomFilterProperties::builder()
             .with_fpp(0.02)
+            .with_folding_enabled(false)
             .with_max_ndv(1000)
             .build();
 
