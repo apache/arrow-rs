@@ -498,13 +498,17 @@ impl ImportedArrowArray<'_> {
                 // the len of the data buffer (buffer 2) equals the last value of the offset buffer (buffer 1)
                 let len = self.buffer_len(1, variadic_buffer_lengths, dt)?;
                 // first buffer is the null buffer => add(1)
-                // we assume that pointer is aligned for `i32`, as Utf8 uses `i32` offsets.
+                // the pointer may not be aligned for `i32`, as `consume` aligns buffers only later.
                 #[expect(clippy::cast_ptr_alignment)]
                 let offset_buffer = self.array.buffer(1).cast::<i32>();
                 // Safety: `len` is the byte length of the offset buffer; dividing by `size_of::<i32>()`
                 // gives the number of i32 elements. The `- 1` is safe because the offset buffer
                 // is always non-empty.
-                (unsafe { *offset_buffer.add(len / size_of::<i32>() - 1) }) as usize
+                (unsafe {
+                    offset_buffer
+                        .add(len / size_of::<i32>() - 1)
+                        .read_unaligned()
+                }) as usize
             }
             (DataType::LargeUtf8 | DataType::LargeBinary, 2) => {
                 // See the note on the `Utf8` / `Binary` arm above.
@@ -515,11 +519,15 @@ impl ImportedArrowArray<'_> {
                 // the len of the data buffer (buffer 2) equals the last value of the offset buffer (buffer 1)
                 let len = self.buffer_len(1, variadic_buffer_lengths, dt)?;
                 // first buffer is the null buffer => add(1)
-                // we assume that pointer is aligned for `i64`, as Large uses `i64` offsets.
+                // the pointer may not be aligned for `i64`, as `consume` aligns buffers only later.
                 #[expect(clippy::cast_ptr_alignment)]
                 let offset_buffer = self.array.buffer(1).cast::<i64>();
                 // Safety: same as the i32 case above but for i64 offsets.
-                (unsafe { *offset_buffer.add(len / size_of::<i64>() - 1) }) as usize
+                (unsafe {
+                    offset_buffer
+                        .add(len / size_of::<i64>() - 1)
+                        .read_unaligned()
+                }) as usize
             }
             // View types: these have variadic buffers.
             // Buffer 1 is the views buffer, which stores 1 u128 per length of the array.
@@ -1769,6 +1777,74 @@ mod tests_from_ffi {
         for array in arrays {
             let data = array.slice(1, 0).to_data();
             let (array, schema) = to_ffi(&data)?;
+            let imported = unsafe { from_ffi(array, &schema) }?;
+
+            imported.validate_full()?;
+            assert_eq!(imported, data);
+        }
+
+        Ok(())
+    }
+
+    /// Offsets that a producer stores at an address not aligned for their type must
+    /// import, as the C data interface only recommends alignment.
+    ///
+    /// <https://github.com/apache/arrow-rs/issues/7136>
+    #[test]
+    fn test_bytes_with_unaligned_offsets() -> Result<()> {
+        // The C layout of `FFI_ArrowArray`, filled in by hand as a C producer would.
+        #[repr(C)]
+        struct RawArrowArray {
+            length: i64,
+            null_count: i64,
+            offset: i64,
+            n_buffers: i64,
+            n_children: i64,
+            buffers: *mut *const std::ffi::c_void,
+            children: *mut *mut RawArrowArray,
+            dictionary: *mut RawArrowArray,
+            release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowArray)>,
+            private_data: *mut std::ffi::c_void,
+        }
+
+        // The buffers belong to the test, so release only marks the array released.
+        unsafe extern "C" fn release(array: *mut FFI_ArrowArray) {
+            unsafe { (*array).set_release(None) };
+        }
+
+        let arrays: [ArrayRef; 4] = [
+            Arc::new(StringArray::from(vec!["a", "bb", "ccc"])),
+            Arc::new(BinaryArray::from(vec![b"a".as_ref(), b"bb", b"ccc"])),
+            Arc::new(LargeStringArray::from(vec!["a", "bb", "ccc"])),
+            Arc::new(LargeBinaryArray::from(vec![b"a".as_ref(), b"bb", b"ccc"])),
+        ];
+        for array in arrays {
+            let data = array.to_data();
+            // The same offsets, one byte past an aligned address.
+            let mut offsets = arrow_buffer::MutableBuffer::from_len_zeroed(1);
+            offsets.extend_from_slice(data.buffers()[0].as_slice());
+            let offsets = &offsets[1..];
+            assert_ne!(offsets.as_ptr().align_offset(4), 0);
+
+            let mut buffers = [
+                std::ptr::null(),
+                offsets.as_ptr().cast(),
+                data.buffers()[1].as_ptr().cast(),
+            ];
+            let mut raw = RawArrowArray {
+                length: data.len() as i64,
+                null_count: 0,
+                offset: 0,
+                n_buffers: 3,
+                n_children: 0,
+                buffers: buffers.as_mut_ptr(),
+                children: std::ptr::null_mut(),
+                dictionary: std::ptr::null_mut(),
+                release: Some(release),
+                private_data: std::ptr::null_mut(),
+            };
+            let array = unsafe { FFI_ArrowArray::from_raw((&raw mut raw).cast()) };
+            let schema = FFI_ArrowSchema::try_from(data.data_type())?;
             let imported = unsafe { from_ffi(array, &schema) }?;
 
             imported.validate_full()?;
