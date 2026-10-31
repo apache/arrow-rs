@@ -247,10 +247,12 @@ fn interleave_bytes<T: ByteArrayType>(
     let mut capacity = 0;
     let mut offsets = Vec::with_capacity(indices.len() + 1);
     offsets.push(T::Offset::from_usize(0).unwrap());
+    let mut slices: Vec<&[u8]> = Vec::with_capacity(indices.len());
     for (a, b) in indices {
-        let o = interleaved.arrays[*a].value_offsets();
-        let element_len = o[*b + 1].as_usize() - o[*b].as_usize();
-        capacity += element_len;
+        let slice = interleaved.arrays[*a].value(*b);
+        let slice: &[u8] = slice.as_ref();
+        capacity += slice.len();
+        slices.push(slice);
         offsets.push(
             T::Offset::from_usize(capacity)
                 .ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?,
@@ -258,8 +260,8 @@ fn interleave_bytes<T: ByteArrayType>(
     }
 
     let mut values = Vec::with_capacity(capacity);
-    for (a, b) in indices {
-        values.extend_from_slice(interleaved.arrays[*a].value(*b).as_ref());
+    for slice in slices {
+        values.extend_from_slice(slice);
     }
 
     // Safety: safe by construction
