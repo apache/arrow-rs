@@ -59,6 +59,9 @@ pub use error::{OverflowError, SliceOutOfBoundsError};
 mod bigint;
 pub use bigint::i256;
 
+mod divisor;
+pub use divisor::*;
+
 mod bytes;
 
 mod native;
