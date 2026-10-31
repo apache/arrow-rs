@@ -44,6 +44,9 @@ csv-core = { version = "0.1" }
 regex = { version = "1.7.0", default-features = false, features = ["std", "unicode", "perf"] }
 
 [dev-dependencies]
+# Enable `chrono-tz` so that tests can exercise IANA (named) timezones such as
+# `America/New_York`, which is where DST transitions can be observed.
+arrow-array = { workspace = true, features = ["chrono-tz"] }
 arrow-buffer = { workspace = true }
 tempfile = "3.3"
 futures = "0.3"
