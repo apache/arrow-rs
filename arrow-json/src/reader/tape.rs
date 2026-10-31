@@ -251,7 +251,7 @@ enum DecoderState {
     ///
     /// Consists of a `(low surrogate, high surrogate, decoded length)`
     Unicode(u16, u16, u8),
-    /// A boolean or null literal
+    /// A boolean, null, or enabled nonfinite number literal
     ///
     /// Consists of `(literal, decoded length)`
     Literal(Literal, u8),
@@ -279,14 +279,23 @@ enum Literal {
     Null,
     True,
     False,
+    NaN,
+    Infinity,
+    NegativeInfinity,
 }
 
 impl Literal {
-    fn element(&self) -> TapeElement {
+    fn element(&self, bytes: &mut Vec<u8>, offsets: &mut Vec<usize>) -> TapeElement {
         match self {
             Literal::Null => TapeElement::Null,
             Literal::True => TapeElement::True,
             Literal::False => TapeElement::False,
+            Literal::NaN | Literal::Infinity | Literal::NegativeInfinity => {
+                let index = offsets.len() - 1;
+                bytes.extend_from_slice(self.bytes());
+                offsets.push(bytes.len());
+                TapeElement::Number(index as _)
+            }
         }
     }
 
@@ -295,6 +304,9 @@ impl Literal {
             Literal::Null => "null",
             Literal::True => "true",
             Literal::False => "false",
+            Literal::NaN => "NaN",
+            Literal::Infinity => "Infinity",
+            Literal::NegativeInfinity => "-Infinity",
         }
     }
 
@@ -331,6 +343,9 @@ pub struct TapeDecoder {
     /// When `false` (the default), the entire top-level array will be treated as one row
     flatten_top_level_arrays: bool,
 
+    /// Whether to accept nonstandard NaN and Infinity number literals
+    allow_non_finite_floats: bool,
+
     /// A buffer of parsed string data
     ///
     /// Note: if part way through a record, i.e. `stack` is not empty,
@@ -353,6 +368,8 @@ pub struct TapeDecoderOptions {
     pub num_fields: usize,
     /// Whether to flatten top-level arrays
     pub flatten_top_level_arrays: bool,
+    /// Whether to accept nonstandard NaN and Infinity number literals
+    pub allow_non_finite_floats: bool,
 }
 
 impl TapeDecoder {
@@ -362,6 +379,7 @@ impl TapeDecoder {
             batch_size,
             num_fields,
             flatten_top_level_arrays,
+            allow_non_finite_floats,
         } = options;
 
         let tokens_per_row = 2 + num_fields * 2;
@@ -376,6 +394,7 @@ impl TapeDecoder {
             elements,
             batch_size,
             flatten_top_level_arrays,
+            allow_non_finite_floats,
             cur_row: 0,
             bytes: Vec::with_capacity(num_fields * 2 * 8),
             stack: Vec::with_capacity(10),
@@ -494,6 +513,12 @@ impl TapeDecoder {
                             self.bytes.push(b);
                             DecoderState::Number
                         }
+                        b'N' if self.allow_non_finite_floats => {
+                            DecoderState::Literal(Literal::NaN, 1)
+                        }
+                        b'I' if self.allow_non_finite_floats => {
+                            DecoderState::Literal(Literal::Infinity, 1)
+                        }
                         b'n' => DecoderState::Literal(Literal::Null, 1),
                         b'f' => DecoderState::Literal(Literal::False, 1),
                         b't' => DecoderState::Literal(Literal::True, 1),
@@ -510,7 +535,17 @@ impl TapeDecoder {
                         b => return Err(err(b, "parsing value")),
                     };
                 }
-                DecoderState::Number => {
+                state @ DecoderState::Number => {
+                    // A leading minus may have arrived in the previous input buffer.
+                    if self.allow_non_finite_floats
+                        && iter.peek() == Some(b'I')
+                        && self.bytes.last() == Some(&b'-')
+                        && self.bytes.len() == self.offsets[self.offsets.len() - 1] + 1
+                    {
+                        self.bytes.pop();
+                        *state = DecoderState::Literal(Literal::NegativeInfinity, 1);
+                        continue;
+                    }
                     let s = iter.advance_until(|b| {
                         !matches!(b, b'0'..=b'9' | b'-' | b'+' | b'.' | b'e' | b'E')
                     });
@@ -540,7 +575,7 @@ impl TapeDecoder {
                         }
                     }
                     if *idx == bytes.len() as u8 {
-                        let element = literal.element();
+                        let element = literal.element(&mut self.bytes, &mut self.offsets);
                         self.stack.pop();
                         self.elements.push(element);
                     }
@@ -831,6 +866,7 @@ mod tests {
             batch_size: 16,
             num_fields: 2,
             flatten_top_level_arrays: false,
+            allow_non_finite_floats: false,
         })
     }
 
@@ -1143,6 +1179,7 @@ mod tests {
                 batch_size,
                 num_fields: 2,
                 flatten_top_level_arrays: true,
+                allow_non_finite_floats: false,
             });
             decoder.decode(input.as_bytes()).unwrap();
             assert!(!decoder.has_partial_row());
