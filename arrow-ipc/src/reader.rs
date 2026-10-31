@@ -2969,6 +2969,17 @@ mod tests {
         reader.next().unwrap()
     }
 
+    /// Return the first record batch decoded from the IPC Stream buffer
+    /// using the StreamDecoder API
+    fn read_stream_with_decoder(
+        buf: &[u8],
+        skip_validation: bool,
+    ) -> Result<RecordBatch, ArrowError> {
+        let mut decoder = unsafe { StreamDecoder::new().with_skip_validation(skip_validation) };
+        let mut buffer = Buffer::from(buf);
+        Ok(decoder.decode(&mut buffer)?.unwrap())
+    }
+
     fn roundtrip_ipc_stream(rb: &RecordBatch) -> RecordBatch {
         let buf = write_stream(rb);
         read_stream(&buf).unwrap()
@@ -4046,6 +4057,11 @@ mod tests {
         let buf = write_stream(&rb); // write is ok
         read_stream_skip_validation(&buf).unwrap();
         let err = read_stream(&buf).unwrap_err();
+        assert_eq!(err.to_string(), expected_err);
+
+        // IPC Stream format with StreamDecoder
+        read_stream_with_decoder(&buf, true).unwrap();
+        let err = read_stream_with_decoder(&buf, false).unwrap_err();
         assert_eq!(err.to_string(), expected_err);
 
         // IPC File format
