@@ -16,14 +16,17 @@
 // under the License.
 
 use arrow_array::builder::{Date32Builder, Decimal128Builder, Int32Builder};
-use arrow_array::{FixedSizeBinaryArray, RecordBatch, builder::StringBuilder};
+use arrow_array::{FixedSizeBinaryArray, Float64Array, RecordBatch, builder::StringBuilder};
 use arrow_buffer::Buffer;
 use arrow_ipc::convert::try_fb_to_schema;
-use arrow_ipc::reader::{FileDecoder, FileReader, StreamReader, read_footer_length};
+use arrow_ipc::reader::{
+    BufferStreamReader, FileDecoder, FileReader, StreamDecoder, StreamReader, read_footer_length,
+};
 use arrow_ipc::writer::{FileWriter, IpcWriteOptions, StreamWriter};
 use arrow_ipc::{Block, CompressionType, root_as_footer};
 use arrow_schema::{DataType, Field, Schema};
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use std::hint::black_box;
 use std::io::{Cursor, Write};
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -187,6 +190,117 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 }
 
+/// Compare readers when a complete, uncompressed IPC stream is already in memory.
+/// Serialization and input allocation are excluded; construction, validation,
+/// decoding through EOS, and dropping the decoded batches are included.
+fn in_memory_stream_benchmark(c: &mut Criterion) {
+    for (num_rows, num_batches) in [(1024, 1), (1_000_000, 1), (10_000_000, 1), (1_000_000, 10)] {
+        let batch = RecordBatch::try_from_iter(vec![(
+            "values",
+            Arc::new(Float64Array::from_iter_values(
+                (0..num_rows).map(|i| i as f64),
+            )) as _,
+        )])
+        .unwrap();
+        bench_in_memory_stream(c, "float64", &batch, num_batches);
+    }
+
+    // Include variable-length data and nulls, whose validation still reads data
+    // even when the column buffers can be shared with the input.
+    bench_in_memory_stream(c, "mixed", &create_batch(8192, true), 10);
+}
+
+fn bench_in_memory_stream(c: &mut Criterion, name: &str, batch: &RecordBatch, num_batches: usize) {
+    let mut serialized = Vec::new();
+    {
+        let mut writer = StreamWriter::try_new(&mut serialized, batch.schema().as_ref()).unwrap();
+        for _ in 0..num_batches {
+            writer.write(batch).unwrap();
+        }
+        writer.finish().unwrap();
+    }
+
+    // All readers use the same aligned allocation. Misaligned input can require
+    // copies in StreamDecoder. Neither this copy nor the Bytes wrapper is timed.
+    let buffer = Buffer::from(serialized.as_slice());
+    let bytes = bytes::Bytes::from(buffer.clone());
+    drop(serialized);
+
+    // Check results and buffer sharing outside the timed loop for both new APIs.
+    for mut reader in [
+        BufferStreamReader::try_new(buffer.clone()).unwrap(),
+        BufferStreamReader::try_new_from_bytes(bytes.clone()).unwrap(),
+    ] {
+        assert_eq!(reader.schema(), &batch.schema());
+        for _ in 0..num_batches {
+            let decoded = reader.next().unwrap().unwrap();
+            assert_eq!(&decoded, batch);
+            for column in decoded.columns() {
+                for data in column.to_data().buffers() {
+                    let start = buffer.as_ptr() as usize;
+                    let ptr = data.as_ptr() as usize;
+                    assert!(ptr >= start && ptr + data.len() <= start + buffer.len());
+                }
+            }
+        }
+        assert!(reader.next().is_none());
+    }
+
+    let mut group = c.benchmark_group("arrow_ipc_reader/in_memory");
+    let input = format!("{name}/{}x{num_batches}", batch.num_rows());
+    // This is logical IPC throughput: zero-copy readers do not scan every byte.
+    group.throughput(Throughput::Bytes(buffer.len() as u64));
+
+    group.bench_function(BenchmarkId::new("StreamReader", &input), |b| {
+        b.iter(|| {
+            let mut reader =
+                StreamReader::try_new(Cursor::new(black_box(bytes.as_ref())), None).unwrap();
+            for _ in 0..num_batches {
+                black_box(reader.next().unwrap().unwrap());
+            }
+            assert!(reader.next().is_none());
+        });
+    });
+
+    group.bench_function(BenchmarkId::new("StreamDecoder", &input), |b| {
+        b.iter(|| {
+            let mut remaining = black_box(buffer.clone());
+            let mut decoder = StreamDecoder::new();
+            for _ in 0..num_batches {
+                black_box(decoder.decode(&mut remaining).unwrap().unwrap());
+            }
+            assert!(decoder.decode(&mut remaining).unwrap().is_none());
+            decoder.finish().unwrap();
+            assert!(remaining.is_empty());
+        });
+    });
+
+    group.bench_function(BenchmarkId::new("BufferStreamReader", &input), |b| {
+        b.iter(|| {
+            let mut reader = BufferStreamReader::try_new(black_box(buffer.clone())).unwrap();
+            for _ in 0..num_batches {
+                black_box(reader.next().unwrap().unwrap());
+            }
+            assert!(reader.next().is_none());
+        });
+    });
+
+    group.bench_function(
+        BenchmarkId::new("BufferStreamReader_from_bytes", &input),
+        |b| {
+            b.iter(|| {
+                let mut reader =
+                    BufferStreamReader::try_new_from_bytes(black_box(bytes.clone())).unwrap();
+                for _ in 0..num_batches {
+                    black_box(reader.next().unwrap().unwrap());
+                }
+                assert!(reader.next().is_none());
+            });
+        },
+    );
+    group.finish();
+}
+
 /// Return an IPC stream with 10 record batches
 fn ipc_stream(options: IpcWriteOptions) -> Vec<u8> {
     let batch = create_batch(8192, true);
@@ -328,6 +442,6 @@ fn config() -> Criterion {
 criterion_group! {
     name = benches;
     config = config();
-    targets = criterion_benchmark
+    targets = criterion_benchmark, in_memory_stream_benchmark
 }
 criterion_main!(benches);
