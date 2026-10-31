@@ -1125,4 +1125,151 @@ mod tests {
             "a leading empty page must not affect encoding of the first nonempty page"
         );
     }
+    /// Lower bound on what ALP could achieve for `values`: for every vector
+    /// independently, the best `(exponent, factor)` pair over every pair the format
+    /// allows, chosen with full knowledge of the vector rather than from a sample.
+    ///
+    /// Each single-vector `encode_page` carries its own header and one offset, so that
+    /// fixed cost is subtracted per vector and the real page overhead added once.
+    fn per_vector_exhaustive_size<F: AlpFloat>(values: &[F]) -> usize {
+        let mut scratch = Scratch::<F>::new();
+        let num_vectors = values.len().div_ceil(VECTOR_SIZE);
+        let per_vector_overhead = ALP_HEADER_SIZE + std::mem::size_of::<u32>();
+
+        let mut body = 0;
+        for vector in values.chunks(VECTOR_SIZE) {
+            let mut best = usize::MAX;
+            for exponent in 0..=F::MAX_EXPONENT {
+                for factor in 0..=exponent {
+                    let params = ExponentAndFactor { exponent, factor };
+                    if let Ok(page) = encode_page(vector, &[params], &mut scratch) {
+                        best = best.min(page.len() - per_vector_overhead);
+                    }
+                }
+            }
+            body += best;
+        }
+        ALP_HEADER_SIZE + num_vectors * std::mem::size_of::<u32>() + body
+    }
+
+    /// What the sampling heuristic actually produces for the same input.
+    fn heuristic_size<F: AlpFloat>(values: &[F]) -> usize {
+        let mut scratch = Scratch::<F>::new();
+        let preset = build_preset(values);
+        encode_page(values, &preset, &mut scratch).unwrap().len()
+    }
+
+    /// The two-level sampling must land close to exhaustive parameter search on
+    /// structured data, including inputs whose scale changes partway through the page
+    /// or between vectors - cases where sampling only eight vectors, and 256 of the
+    /// 1024 values within each, could in principle mislead it.
+    #[test]
+    fn test_sampling_close_to_exhaustive_on_structured_data() {
+        let n = 8 * VECTOR_SIZE;
+        let cases: Vec<(&str, Vec<f64>)> = vec![
+            ("two decimals", (0..n).map(|i| i as f64 * 0.01).collect()),
+            (
+                "six decimals",
+                (0..n).map(|i| i as f64 * 0.000001).collect(),
+            ),
+            (
+                "scale changes halfway",
+                (0..n)
+                    .map(|i| {
+                        if i < n / 2 {
+                            i as f64 * 0.01
+                        } else {
+                            i as f64 * 0.0000001
+                        }
+                    })
+                    .collect(),
+            ),
+            (
+                "scale alternates per vector",
+                (0..n)
+                    .map(|i| {
+                        if (i / VECTOR_SIZE).is_multiple_of(2) {
+                            i as f64 * 0.01
+                        } else {
+                            i as f64 * 0.0000001
+                        }
+                    })
+                    .collect(),
+            ),
+            (
+                "scale changes only in the last vector",
+                (0..n)
+                    .map(|i| {
+                        if i < n - VECTOR_SIZE {
+                            i as f64 * 0.01
+                        } else {
+                            i as f64 * 0.0000001
+                        }
+                    })
+                    .collect(),
+            ),
+        ];
+
+        for (name, values) in &cases {
+            let heuristic = heuristic_size(values);
+            let optimal = per_vector_exhaustive_size(values);
+            let ratio = heuristic as f64 / optimal as f64;
+            assert!(
+                ratio <= 1.01,
+                "{name}: sampling chose parameters {ratio:.3}x worse than exhaustive \
+                 ({heuristic} bytes vs {optimal})"
+            );
+        }
+    }
+
+    /// f32 has a smaller parameter space (66 pairs against 190), so it is checked
+    /// separately rather than assumed to follow f64.
+    #[test]
+    fn test_sampling_close_to_exhaustive_f32() {
+        let n = 8 * VECTOR_SIZE;
+        let values: Vec<f32> = (0..n).map(|i| i as f32 * 0.01).collect();
+        let heuristic = heuristic_size(&values);
+        let optimal = per_vector_exhaustive_size(&values);
+        let ratio = heuristic as f64 / optimal as f64;
+        assert!(
+            ratio <= 1.01,
+            "f32: sampling chose parameters {ratio:.3}x worse than exhaustive \
+             ({heuristic} bytes vs {optimal})"
+        );
+    }
+
+    /// Known gap, pinned so it cannot silently widen.
+    ///
+    /// On high-entropy floats the sampled size estimate mis-ranks parameters: it builds
+    /// a preset of the single pair `(16, 0)` while every vector's true optimum is
+    /// `(0, 0)`. Because the preset holds only one candidate, `select_params` returns it
+    /// without evaluating anything, so no per-vector correction can recover. The result
+    /// is roughly 10% larger than exhaustive search would give.
+    ///
+    /// Encoding is deterministic, so this is reproducible. The bound leaves headroom for
+    /// platform differences and will still pass if the heuristic is improved.
+    #[test]
+    fn test_sampling_regression_high_entropy() {
+        let n = 8 * VECTOR_SIZE;
+        let values: Vec<f64> = (0..n)
+            .map(|i| {
+                let x = (i as u64).wrapping_mul(0x9E3779B97F4A7C15);
+                f64::from_bits(0x3FF0000000000000 | (x >> 12))
+            })
+            .collect();
+
+        let heuristic = heuristic_size(&values);
+        let optimal = per_vector_exhaustive_size(&values);
+        let ratio = heuristic as f64 / optimal as f64;
+
+        let raw = values.len() * std::mem::size_of::<f64>();
+        println!(
+            "high entropy: heuristic {heuristic}, per-vector optimum {optimal}, raw f64 {raw}"
+        );
+        assert!(
+            ratio <= 1.15,
+            "the high-entropy sampling gap widened to {ratio:.3}x \
+             ({heuristic} bytes vs {optimal})"
+        );
+    }
 }
