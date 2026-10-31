@@ -1320,6 +1320,37 @@ fn ensure_names_match(
     }
 }
 
+/// Name, namespace attribute and aliases of a named type or of a reference to one.
+fn named_type_parts<'s, 'a>(
+    schema: &'s Schema<'a>,
+) -> Option<(&'a str, Option<&'a str>, &'s [&'a str])> {
+    match schema {
+        Schema::TypeName(TypeName::Ref(name)) => Some((name, None, &[])),
+        Schema::Complex(ComplexType::Record(r)) => Some((r.name, r.namespace, &r.aliases)),
+        Schema::Complex(ComplexType::Enum(e)) => Some((e.name, e.namespace, &e.aliases)),
+        Schema::Complex(ComplexType::Fixed(f)) => Some((f.name, f.namespace, &f.aliases)),
+        _ => None,
+    }
+}
+
+/// Whether `writer` and `reader`, at least one of which is a named-type reference, name the
+/// same type (by full name or alias) when resolved against the enclosing `namespace`.
+fn named_types_match(writer: &Schema<'_>, reader: &Schema<'_>, namespace: Option<&str>) -> bool {
+    let (Some((w_name, w_ns, w_aliases)), Some((r_name, r_ns, r_aliases))) =
+        (named_type_parts(writer), named_type_parts(reader))
+    else {
+        return false;
+    };
+    names_match(
+        w_name,
+        named_type_namespace(w_name, w_ns, namespace),
+        w_aliases,
+        r_name,
+        named_type_namespace(r_name, r_ns, namespace),
+        r_aliases,
+    )
+}
+
 fn primitive_of(schema: &Schema) -> Option<PrimitiveType> {
     match schema {
         Schema::TypeName(TypeName::Primitive(primitive)) => Some(*primitive),
@@ -1962,8 +1993,19 @@ impl<'a> Maker<'a> {
                 Schema::Complex(ComplexType::Enum(writer_enum)),
                 Schema::Complex(ComplexType::Enum(reader_enum)),
             ) => self.resolve_enums(writer_enum, reader_enum, reader_schema, namespace),
-            (Schema::TypeName(TypeName::Ref(_)), _) => self.parse_type(reader_schema, namespace),
-            (_, Schema::TypeName(TypeName::Ref(_))) => self.parse_type(reader_schema, namespace),
+            (Schema::TypeName(TypeName::Ref(_)), _) | (_, Schema::TypeName(TypeName::Ref(_))) => {
+                // A reference only resolves against a schema naming the same type; otherwise
+                // a by-name union branch would match whichever reader branch is tried first.
+                if !named_types_match(writer_schema, reader_schema, namespace) {
+                    let name = |s| named_type_parts(s).map_or("<unnamed type>", |(n, _, _)| n);
+                    return Err(ArrowError::SchemaError(format!(
+                        "Named type mismatch writer={}, reader={}",
+                        name(writer_schema),
+                        name(reader_schema)
+                    )));
+                }
+                self.parse_type(reader_schema, namespace)
+            }
             _ => Err(ArrowError::NotYetImplemented(
                 "Other resolutions not yet implemented".to_string(),
             )),
