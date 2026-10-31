@@ -22,45 +22,25 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::{Float32Type, Float64Type, RunEndIndexType};
 use arrow_array::{Array, BooleanArray, RunArray, downcast_run_array};
 use arrow_buffer::{ArrowNativeType, BooleanBuffer};
-use arrow_schema::DataType;
+use arrow_schema::{DataType, Field};
 
 use crate::arrow::arrow_writer::{
     FixedLenByteArrayVisitor, PrimitiveVisitor, visit_fixed_len_byte_array, visit_i32, visit_i64,
 };
+use crate::arrow::schema::{arrow_to_parquet_type, parquet_to_arrow_field};
 use crate::basic::{ConvertedType, LogicalType, Type as PhysicalType};
 use crate::bloom_filter::Sbbf;
 use crate::data_type::AsBytes;
 use crate::errors::{ParquetError, Result};
-use crate::schema::types::ColumnDescriptor;
+use crate::schema::types::{ColumnDescriptor, Type};
 
 /// A Parquet bloom filter ([`Sbbf`]) that can be checked with Arrow arrays
 ///
-/// [`ArrowWriter`] converts some Arrow types to a different Parquet physical
-/// type before writing them, for example `Int8` and `UInt16` are stored as
-/// `INT32`, and the bloom filter is built from the converted values. Checking
-/// such a filter with [`Sbbf::check`] and the original Arrow value hashes
-/// different bytes, and so reports values that are present as absent.
-///
-/// [`ArrowSbbf::check`] applies the same conversion as [`ArrowWriter`]
-/// before checking the filter.
-///
-/// These are the Arrow types whose values [`ArrowWriter`] stores differently:
-///
-/// | Arrow type | Parquet physical type | Stored value |
-/// |---|---|---|
-/// | `Int8`, `Int16` | `INT32` | Sign-extended |
-/// | `UInt8`, `UInt16` | `INT32` | Zero-extended |
-/// | `UInt32` | `INT32` | Same bits, so values above `i32::MAX` are negative |
-/// | `UInt64` | `INT64` | Same bits, so values above `i64::MAX` are negative |
-/// | `Date64` | `INT32` with [`coerce_types`], otherwise `INT64` | With [`coerce_types`], days rounded towards zero; otherwise milliseconds |
-/// | `Decimal32` to `Decimal256` of precision 1 to 9 | `INT32` | Unscaled value, with wider types truncated to 32 bits |
-/// | `Decimal64` to `Decimal256` of precision 10 to 18 | `INT64` | Unscaled value, with wider types truncated to 64 bits |
-/// | `Decimal128`, `Decimal256` of precision 19 or more | `FIXED_LEN_BYTE_ARRAY` | Unscaled value as big-endian two's complement, truncated to the length for the precision |
-/// | `Float16` | `FIXED_LEN_BYTE_ARRAY` of length 2 | Little-endian bytes |
-/// | `Interval(YearMonth)`, `Interval(DayTime)` | `FIXED_LEN_BYTE_ARRAY` of length 12 | Months, days and milliseconds as little-endian 32-bit integers; the fields the Arrow type does not have are zero |
-///
-/// Other types are stored as they are. A dictionary or run-end encoded array is
-/// stored as its values.
+/// [`ArrowWriter`] may store an Arrow value as a different Parquet value, and
+/// the bloom filter holds the stored value, so [`Sbbf::check`] with the Arrow
+/// value can report a value that is present as absent. [`ArrowSbbf::check`]
+/// converts Arrow values in the same way as [`ArrowWriter`] before checking the
+/// filter.
 ///
 /// ```
 /// # use std::sync::Arc;
@@ -94,46 +74,65 @@ use crate::schema::types::ColumnDescriptor;
 /// let sbbf = row_group.get_column_bloom_filter(0).unwrap();
 /// let column = reader.metadata().row_group(0).column(0).column_descr();
 ///
-/// // Checking the Arrow value directly hashes a single byte, not the INT32 that was written
+/// // The Int8 values were written as INT32, so checking an i8 misses them
 /// assert!(!sbbf.check(&1_i8));
 ///
-/// let found = ArrowSbbf::new(sbbf, column)
-///     .check(&Int8Array::from(vec![1, 3, 4]))
-///     .unwrap();
-/// assert!(found.value(0));
-/// assert!(found.value(1));
-/// assert!(!found.value(2));
+/// // Use the column's Arrow type, here Int8, from the file's Arrow schema
+/// let arrow_type = batch.schema().field(0).data_type().clone();
+/// let sbbf = ArrowSbbf::try_new(sbbf, column, Some(arrow_type)).unwrap();
+/// let found = sbbf.check(&Int8Array::from(vec![1, 3, 4])).unwrap();
+/// assert_eq!(found, vec![Some(true), Some(true), Some(false)].into());
 /// ```
 ///
 /// [`ArrowWriter`]: crate::arrow::ArrowWriter
-/// [`coerce_types`]: crate::file::properties::WriterPropertiesBuilder::set_coerce_types
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ArrowSbbf<'a> {
     sbbf: &'a Sbbf,
+    /// The Arrow type of the arrays to check
+    arrow_type: DataType,
     physical_type: PhysicalType,
-    /// The length of the column's values if it is a `FIXED_LEN_BYTE_ARRAY` column,
-    /// otherwise 0
+    /// The length of the column's values if it is a `FIXED_LEN_BYTE_ARRAY`
+    /// column, otherwise 0
+    ///
+    /// Decimals are converted to this length, as other writers can store
+    /// decimals in more bytes than their precision needs.
     type_length: usize,
-    /// The scale of the column's values if it is a decimal column
-    decimal_scale: Option<i32>,
 }
 
 impl<'a> ArrowSbbf<'a> {
-    /// Create a new [`ArrowSbbf`] for the bloom filter of the column described by `column`
-    pub fn new(sbbf: &'a Sbbf, column: &ColumnDescriptor) -> Self {
-        let decimal_scale = match column.logical_type_ref() {
-            Some(LogicalType::Decimal(decimal)) => Some(decimal.scale),
-            _ if column.converted_type() == ConvertedType::DECIMAL => Some(column.type_scale()),
-            _ => None,
+    /// Create a new [`ArrowSbbf`] for the bloom filter `sbbf` of `column`
+    ///
+    /// `arrow_type` is the Arrow type of the arrays that will be checked, for
+    /// example the type of the column in the file's Arrow schema. If `None`, the
+    /// type is derived from `column` in the same way as when reading a file
+    /// without an Arrow schema.
+    ///
+    /// Returns an error if values of `arrow_type` cannot be stored in `column`,
+    /// or if `arrow_type` is a decimal and `column` is not a decimal of the same
+    /// scale, or the other way around.
+    pub fn try_new(
+        sbbf: &'a Sbbf,
+        column: &ColumnDescriptor,
+        arrow_type: Option<DataType>,
+    ) -> Result<Self> {
+        let arrow_type = match arrow_type {
+            Some(arrow_type) => arrow_type,
+            None => parquet_to_arrow_field(column)?.data_type().clone(),
         };
-        Self {
+        validate(column.self_type(), &arrow_type)?;
+        Ok(Self {
             sbbf,
+            arrow_type,
             physical_type: column.physical_type(),
             // The schema checks that the length of a FIXED_LEN_BYTE_ARRAY column
             // is positive, and other columns have no length
             type_length: column.type_length().try_into().unwrap_or(0),
-            decimal_scale,
-        }
+        })
+    }
+
+    /// Returns the Arrow type of the arrays this [`ArrowSbbf`] checks
+    pub fn arrow_type(&self) -> &DataType {
+        &self.arrow_type
     }
 
     /// Check each value of `array` against the bloom filter
@@ -141,30 +140,17 @@ impl<'a> ArrowSbbf<'a> {
     /// Returns `true` if the value may be present, and `false` if it is
     /// definitely absent. Nulls in `array` are null in the result.
     ///
-    /// Decimal values of any precision can be checked against a decimal column
-    /// of the same scale. They are converted to the column's physical type and,
-    /// for a `FIXED_LEN_BYTE_ARRAY` column, to the column's length, truncating
-    /// a value that is too large in the same way as [`ArrowWriter`].
-    ///
-    /// Values of time types (timestamps, times, durations and `Date64`) are
-    /// checked in the unit of `array`'s data type, which must be the unit the
-    /// column was written in, as they are not converted between units. For
-    /// example, a `Timestamp(Millisecond, _)` value of `1_000` is not found by
-    /// checking the same instant as a `Timestamp(Microsecond, _)` value of
-    /// `1_000_000`.
-    ///
-    /// Returns an error if [`ArrowWriter`] cannot write `array`'s data type to a
-    /// column of this physical type, if only one of `array` and the column is
-    /// a decimal or their scales differ, or if `array` is a `FixedSizeBinary`
-    /// array whose values have a different length than the column's.
-    ///
-    /// [`ArrowWriter`]: crate::arrow::ArrowWriter
+    /// `array` must have the type returned by [`Self::arrow_type`], or be a
+    /// dictionary or run-end encoded array of values of that type, or a
+    /// [`NullArray`](arrow_array::NullArray). Values are not converted between
+    /// time units, so the type's unit must be the unit the column was written in.
     pub fn check(&self, array: &dyn Array) -> Result<BooleanArray> {
         if let Some(dictionary) = array.as_any_dictionary_opt() {
             let values = self.check(dictionary.values().as_ref())?;
             let found = arrow_select::take::take(&values, dictionary.keys(), None)?;
             return Ok(found.as_boolean().clone());
         }
+        let value_type = value_type(&self.arrow_type);
         match array.data_type() {
             DataType::Null => return Ok(BooleanArray::new_null(array.len())),
             DataType::RunEndEncoded(_, _) => {
@@ -173,57 +159,42 @@ impl<'a> ArrowSbbf<'a> {
                     _ => unreachable!("RunEndEncoded array is not a RunArray"),
                 );
             }
+            data_type if data_type != value_type => {
+                return Err(ParquetError::General(format!(
+                    "Cannot check {data_type} values with an ArrowSbbf for {value_type} values"
+                )));
+            }
             _ => {}
         }
-        self.validate_decimal(array.data_type())?;
 
+        // `try_new` checked that ArrowWriter stores values of this type in a
+        // column of this physical type, so the conversions below accept them
         let sbbf = self.sbbf;
-        let primitive = CheckPrimitive {
-            sbbf,
-            physical_type: self.physical_type,
-        };
-        let found = match (self.physical_type, array.data_type()) {
-            (PhysicalType::INT32, _) => visit_i32(array, primitive)?,
-            (PhysicalType::INT64, _) => visit_i64(array, primitive)?,
-            (PhysicalType::FLOAT, DataType::Float32) => {
-                primitive.slice(array.as_primitive::<Float32Type>().values())?
+        let found = match self.physical_type {
+            PhysicalType::INT32 => visit_i32(array, CheckPrimitive { sbbf })?,
+            PhysicalType::INT64 => visit_i64(array, CheckPrimitive { sbbf })?,
+            PhysicalType::FLOAT => {
+                CheckPrimitive { sbbf }.slice(array.as_primitive::<Float32Type>().values())?
             }
-            (PhysicalType::DOUBLE, DataType::Float64) => {
-                primitive.slice(array.as_primitive::<Float64Type>().values())?
+            PhysicalType::DOUBLE => {
+                CheckPrimitive { sbbf }.slice(array.as_primitive::<Float64Type>().values())?
             }
-            (PhysicalType::BOOLEAN, DataType::Boolean) => array
+            PhysicalType::BOOLEAN => array
                 .as_boolean()
                 .values()
                 .iter()
                 .map(|v| sbbf.check(&v))
                 .collect(),
-            (PhysicalType::BYTE_ARRAY, DataType::Utf8) => {
-                check_bytes(sbbf, array.as_string::<i32>())
-            }
-            (PhysicalType::BYTE_ARRAY, DataType::LargeUtf8) => {
-                check_bytes(sbbf, array.as_string::<i64>())
-            }
-            (PhysicalType::BYTE_ARRAY, DataType::Utf8View) => {
-                check_bytes(sbbf, array.as_string_view())
-            }
-            (PhysicalType::BYTE_ARRAY, DataType::Binary) => {
-                check_bytes(sbbf, array.as_binary::<i32>())
-            }
-            (PhysicalType::BYTE_ARRAY, DataType::LargeBinary) => {
-                check_bytes(sbbf, array.as_binary::<i64>())
-            }
-            (PhysicalType::BYTE_ARRAY, DataType::BinaryView) => {
-                check_bytes(sbbf, array.as_binary_view())
-            }
-            (PhysicalType::FIXED_LEN_BYTE_ARRAY, _) => {
+            PhysicalType::BYTE_ARRAY => check_byte_array(sbbf, array),
+            PhysicalType::FIXED_LEN_BYTE_ARRAY => {
                 let visitor = CheckFixedLenByteArray {
                     sbbf,
-                    array,
+                    len: array.len(),
                     type_length: self.type_length,
                 };
                 visit_fixed_len_byte_array(array, visitor)?
             }
-            (physical_type, data_type) => return Err(unsupported(physical_type, data_type)),
+            PhysicalType::INT96 => unreachable!("ArrowWriter does not write INT96 columns"),
         };
         Ok(BooleanArray::new(found, array.logical_nulls()))
     }
@@ -243,52 +214,91 @@ impl<'a> ArrowSbbf<'a> {
         }
         Ok(builder.finish())
     }
+}
 
-    /// Returns an error unless both or neither of the column and `data_type` are
-    /// decimals, and decimals have the same scale
-    ///
-    /// Decimal values are stored as unscaled integers, so a value of another
-    /// scale is a different integer, and so is the integer value of an array
-    /// that is not a decimal. Converting it to the column's scale could lose
-    /// digits, so it is not supported.
-    fn validate_decimal(&self, data_type: &DataType) -> Result<()> {
-        let scale = match data_type {
-            DataType::Decimal32(_, scale)
-            | DataType::Decimal64(_, scale)
-            | DataType::Decimal128(_, scale)
-            | DataType::Decimal256(_, scale) => Some(i32::from(*scale)),
-            _ => None,
-        };
-        match (self.decimal_scale, scale) {
-            (None, None) => Ok(()),
-            (Some(column_scale), Some(scale)) if column_scale == scale => Ok(()),
-            (Some(column_scale), Some(scale)) => Err(ParquetError::General(format!(
-                "Cannot check a bloom filter of a decimal column with scale {column_scale} with decimal values with scale {scale}"
-            ))),
-            (Some(column_scale), None) => Err(ParquetError::General(format!(
-                "Cannot check a bloom filter of a decimal column with scale {column_scale} with {data_type} values"
-            ))),
-            (None, Some(_)) => Err(ParquetError::General(
-                "Cannot check a bloom filter of a column that is not a decimal with decimal values"
-                    .to_string(),
-            )),
-        }
+/// Returns the type of the values of a dictionary or run-end encoded `data_type`,
+/// or `data_type` itself
+fn value_type(data_type: &DataType) -> &DataType {
+    match data_type {
+        DataType::Dictionary(_, values) => value_type(values),
+        DataType::RunEndEncoded(_, values) => value_type(values.data_type()),
+        _ => data_type,
     }
 }
 
-/// Returns the error for checking a bloom filter of `physical_type` with values
-/// of `data_type`, which [`ArrowWriter`](crate::arrow::ArrowWriter) cannot write
-/// to such a column
-fn unsupported(physical_type: PhysicalType, data_type: &DataType) -> ParquetError {
-    ParquetError::General(format!(
-        "Cannot check a bloom filter of physical type {physical_type} with {data_type} values"
-    ))
+/// Returns an error unless [`ArrowWriter`] stores values of `arrow_type` in the
+/// same way as values of `column`, so that they can be checked against its
+/// bloom filter
+///
+/// [`ArrowWriter`]: crate::arrow::ArrowWriter
+fn validate(column: &Type, arrow_type: &DataType) -> Result<()> {
+    if !arrow_type.is_nested() {
+        let field = Field::new(column.name(), arrow_type.clone(), true);
+        // Only Date64 depends on `coerce_types`, which is stored as INT32 days
+        // or INT64 milliseconds
+        for coerce_types in [false, true] {
+            let written = arrow_to_parquet_type(&field, coerce_types)?;
+            if is_stored_as(&written, column) {
+                return Ok(());
+            }
+        }
+    }
+    Err(ParquetError::General(format!(
+        "Cannot check a bloom filter of type {} with {arrow_type} values",
+        describe(column)
+    )))
+}
+
+/// Returns whether values written to a column of type `written` can be checked
+/// against the bloom filter of a column of type `column`
+fn is_stored_as(written: &Type, column: &Type) -> bool {
+    let physical_type = column.get_physical_type();
+    match (decimal_scale(written), decimal_scale(column)) {
+        // Decimals are stored as unscaled integers, which are converted to the
+        // column's physical type and length
+        (Some(written_scale), Some(scale)) => {
+            written_scale == scale && physical_type != PhysicalType::BYTE_ARRAY
+        }
+        (None, None) => {
+            written.get_physical_type() == physical_type
+                && (physical_type != PhysicalType::FIXED_LEN_BYTE_ARRAY
+                    || type_length(written) == type_length(column))
+        }
+        _ => false,
+    }
+}
+
+/// Returns the scale of a decimal type, or `None` if `t` is not a decimal
+fn decimal_scale(t: &Type) -> Option<i32> {
+    let info = t.get_basic_info();
+    let decimal = matches!(info.logical_type_ref(), Some(LogicalType::Decimal(_)))
+        || info.converted_type() == ConvertedType::DECIMAL;
+    decimal.then(|| t.get_scale())
+}
+
+fn type_length(t: &Type) -> i32 {
+    match t {
+        Type::PrimitiveType { type_length, .. } => *type_length,
+        Type::GroupType { .. } => -1,
+    }
+}
+
+/// Describes the parts of `column`'s type that determine how its values are stored
+fn describe(column: &Type) -> String {
+    let physical_type = column.get_physical_type();
+    let length = match physical_type {
+        PhysicalType::FIXED_LEN_BYTE_ARRAY => format!("({})", type_length(column)),
+        _ => String::new(),
+    };
+    let decimal = decimal_scale(column)
+        .map(|scale| format!(" DECIMAL({}, {scale})", column.get_precision()))
+        .unwrap_or_default();
+    format!("{physical_type}{length}{decimal}")
 }
 
 /// Checks the `INT32`, `INT64`, `FLOAT` or `DOUBLE` values passed to it against a bloom filter
 struct CheckPrimitive<'a> {
     sbbf: &'a Sbbf,
-    physical_type: PhysicalType,
 }
 
 impl<T: AsBytes> PrimitiveVisitor<T> for CheckPrimitive<'_> {
@@ -304,16 +314,13 @@ impl<T: AsBytes> PrimitiveVisitor<T> for CheckPrimitive<'_> {
             .map(|v| self.sbbf.check(&convert(*v)))
             .collect())
     }
-
-    fn unsupported(&self, data_type: &DataType, _error: ParquetError) -> ParquetError {
-        unsupported(self.physical_type, data_type)
-    }
 }
 
-/// Checks the `FIXED_LEN_BYTE_ARRAY` values of `array` passed to it against a bloom filter
+/// Checks the `FIXED_LEN_BYTE_ARRAY` values passed to it against a bloom filter
 struct CheckFixedLenByteArray<'a> {
     sbbf: &'a Sbbf,
-    array: &'a dyn Array,
+    /// The number of values in the array
+    len: usize,
     type_length: usize,
 }
 
@@ -326,15 +333,11 @@ impl FixedLenByteArrayVisitor for CheckFixedLenByteArray<'_> {
     }
 
     fn values(self, length: usize, fill: impl Fn(usize, &mut [u8])) -> Result<BooleanBuffer> {
-        if length != self.type_length {
-            return Err(ParquetError::General(format!(
-                "Cannot check a bloom filter of a FIXED_LEN_BYTE_ARRAY column of length {} with {} values, which have length {length}",
-                self.type_length,
-                self.array.data_type()
-            )));
-        }
+        // `ArrowSbbf::try_new` checked that the Arrow type is stored in values
+        // of the column's length
+        debug_assert_eq!(length, self.type_length);
         let mut value = vec![0; length];
-        Ok((0..self.array.len())
+        Ok((0..self.len)
             .map(|i| {
                 value.fill(0);
                 fill(i, &mut value);
@@ -342,9 +345,18 @@ impl FixedLenByteArrayVisitor for CheckFixedLenByteArray<'_> {
             })
             .collect())
     }
+}
 
-    fn unsupported(&self, data_type: &DataType, _error: ParquetError) -> ParquetError {
-        unsupported(PhysicalType::FIXED_LEN_BYTE_ARRAY, data_type)
+/// Checks the values of a `BYTE_ARRAY` column, which are stored as they are
+fn check_byte_array(sbbf: &Sbbf, array: &dyn Array) -> BooleanBuffer {
+    match array.data_type() {
+        DataType::Utf8 => check_bytes(sbbf, array.as_string::<i32>()),
+        DataType::LargeUtf8 => check_bytes(sbbf, array.as_string::<i64>()),
+        DataType::Utf8View => check_bytes(sbbf, array.as_string_view()),
+        DataType::Binary => check_bytes(sbbf, array.as_binary::<i32>()),
+        DataType::LargeBinary => check_bytes(sbbf, array.as_binary::<i64>()),
+        DataType::BinaryView => check_bytes(sbbf, array.as_binary_view()),
+        d => unreachable!("ArrowWriter does not write {d} to BYTE_ARRAY columns"),
     }
 }
 
@@ -364,10 +376,11 @@ mod tests {
     use crate::file::properties::{ReaderProperties, WriterProperties};
     use crate::file::reader::{FileReader, SerializedFileReader};
     use crate::file::serialized_reader::ReadOptionsBuilder;
-    use crate::schema::types::{ColumnDescPtr, ColumnPath, Type};
+    use crate::schema::types::{ColumnDescPtr, ColumnPath};
     use arrow_array::types::{Int16Type, Int32Type};
     use arrow_array::*;
-    use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, i256};
+    use arrow_buffer::{IntervalDayTime, i256};
+    use arrow_schema::{IntervalUnit, TimeUnit};
     use bytes::Bytes;
     use std::sync::Arc;
 
@@ -411,10 +424,20 @@ mod tests {
             .unwrap()
     }
 
+    /// Checks `array` against `sbbf` with an [`ArrowSbbf`] for the type of `array`
+    fn check(sbbf: &Sbbf, column: &ColumnDescriptor, array: &dyn Array) -> Result<BooleanArray> {
+        ArrowSbbf::try_new(sbbf, column, Some(array.data_type().clone()))?.check(array)
+    }
+
+    /// Returns the error message of `result`
+    fn error<T: std::fmt::Debug>(result: Result<T>) -> String {
+        result.unwrap_err().to_string()
+    }
+
     /// Writes `written` and checks that every value is found and no value of `absent` is
     fn assert_round_trip(written: ArrayRef, absent: ArrayRef, coerce_types: bool) {
         let (sbbf, column) = write_and_read_bloom_filter(written.clone(), coerce_types);
-        let sbbf = ArrowSbbf::new(&sbbf, &column);
+        let sbbf = ArrowSbbf::try_new(&sbbf, &column, Some(written.data_type().clone())).unwrap();
 
         let found = sbbf.check(written.as_ref()).unwrap();
         assert!(
@@ -431,12 +454,15 @@ mod tests {
 
     #[test]
     fn time_units_are_not_converted() {
-        // The same instant in a different unit hashes a different value
-        assert_round_trip(
-            Arc::new(TimestampMillisecondArray::from(vec![1_000, 2_000])),
-            Arc::new(TimestampMicrosecondArray::from(vec![1_000_000, 2_000_000])),
-            false,
-        );
+        let written = TimestampMillisecondArray::from(vec![1_000, 2_000]);
+        let (sbbf, column) = write_and_read_bloom_filter(Arc::new(written.clone()), false);
+        let found = check(&sbbf, &column, &written).unwrap();
+        assert_eq!(found, BooleanArray::from(vec![true, true]));
+
+        // The same instants in a different unit are different values
+        let micros = TimestampMicrosecondArray::from(vec![1_000_000, 2_000_000]);
+        let found = check(&sbbf, &column, &micros).unwrap();
+        assert_eq!(found, BooleanArray::from(vec![false, false]));
     }
 
     #[test]
@@ -496,9 +522,7 @@ mod tests {
         assert!(sbbf.check(&5_i32));
         assert!(sbbf.check(&0_i32));
 
-        let found = ArrowSbbf::new(&sbbf, &column)
-            .check(written.as_ref())
-            .unwrap();
+        let found = check(&sbbf, &column, written.as_ref()).unwrap();
         assert_eq!(found, BooleanArray::from(vec![true, true]));
     }
 
@@ -533,52 +557,48 @@ mod tests {
         let (sbbf, column) =
             write_and_read_bloom_filter(Arc::new(decimal128(vec![12345, -12345], 30, 2)), false);
         assert_eq!(column.type_length(), 13);
-        let sbbf = ArrowSbbf::new(&sbbf, &column);
 
         // The values are converted to the column's width, whatever the array's precision
         for precision in [20, 30, 38] {
-            let found = sbbf
-                .check(&decimal128(vec![12345, -12345, 54321], precision, 2))
-                .unwrap();
+            let found = check(
+                &sbbf,
+                &column,
+                &decimal128(vec![12345, -12345, 54321], precision, 2),
+            )
+            .unwrap();
             assert_eq!(
                 found,
                 BooleanArray::from(vec![true, true, false]),
                 "precision {precision}"
             );
         }
-        let found = sbbf
-            .check(
-                &Decimal256Array::from(vec![i256::from(12345), i256::from(-12345)])
-                    .with_precision_and_scale(76, 2)
-                    .unwrap(),
-            )
+        let decimal256 = Decimal256Array::from(vec![i256::from(12345), i256::from(-12345)])
+            .with_precision_and_scale(76, 2)
             .unwrap();
+        let found = check(&sbbf, &column, &decimal256).unwrap();
         assert_eq!(found, BooleanArray::from(vec![true, true]));
 
         // Narrower decimal types are sign-extended to 13 bytes
-        let found = sbbf
-            .check(
-                &Decimal32Array::from(vec![12345, -12345, 54321])
-                    .with_precision_and_scale(9, 2)
-                    .unwrap(),
-            )
+        let decimal32 = Decimal32Array::from(vec![12345, -12345, 54321])
+            .with_precision_and_scale(9, 2)
             .unwrap();
+        let found = check(&sbbf, &column, &decimal32).unwrap();
         assert_eq!(found, BooleanArray::from(vec![true, true, false]));
-        let found = sbbf
-            .check(
-                &Decimal64Array::from(vec![12345, -12345, 54321])
-                    .with_precision_and_scale(18, 2)
-                    .unwrap(),
-            )
+        let decimal64 = Decimal64Array::from(vec![12345, -12345, 54321])
+            .with_precision_and_scale(18, 2)
             .unwrap();
+        let found = check(&sbbf, &column, &decimal64).unwrap();
         assert_eq!(found, BooleanArray::from(vec![true, true, false]));
 
         // Values that need more than 13 bytes are truncated to their low 13
         // bytes, like ArrowWriter does. These are the bytes of 12345 and -12345
         let wide = 1_i128 << 104;
-        let found = sbbf
-            .check(&decimal128(vec![12345 + wide, -12345 - wide], 38, 2))
-            .unwrap();
+        let found = check(
+            &sbbf,
+            &column,
+            &decimal128(vec![12345 + wide, -12345 - wide], 38, 2),
+        )
+        .unwrap();
         assert_eq!(found, BooleanArray::from(vec![true, true]));
     }
 
@@ -601,9 +621,12 @@ mod tests {
             sbbf.insert(bytes.as_slice());
         }
 
-        let found = ArrowSbbf::new(&sbbf, &column)
-            .check(&decimal128(vec![12345, -12345, 54321], 10, 2))
-            .unwrap();
+        let found = check(
+            &sbbf,
+            &column,
+            &decimal128(vec![12345, -12345, 54321], 10, 2),
+        )
+        .unwrap();
         assert_eq!(found, BooleanArray::from(vec![true, true, false]));
     }
 
@@ -616,13 +639,10 @@ mod tests {
         let (sbbf, column) = write_and_read_bloom_filter(Arc::new(written), false);
         assert_eq!(column.physical_type(), PhysicalType::INT64);
 
-        let found = ArrowSbbf::new(&sbbf, &column)
-            .check(
-                &Decimal32Array::from(vec![12345, -12345, 54321])
-                    .with_precision_and_scale(9, 2)
-                    .unwrap(),
-            )
+        let decimal32 = Decimal32Array::from(vec![12345, -12345, 54321])
+            .with_precision_and_scale(9, 2)
             .unwrap();
+        let found = check(&sbbf, &column, &decimal32).unwrap();
         assert_eq!(found, BooleanArray::from(vec![true, true, false]));
     }
 
@@ -638,9 +658,7 @@ mod tests {
                 2,
             ));
             let (sbbf, column) = write_and_read_bloom_filter(written.clone(), false);
-            let found = ArrowSbbf::new(&sbbf, &column)
-                .check(written.as_ref())
-                .unwrap();
+            let found = check(&sbbf, &column, written.as_ref()).unwrap();
             assert_eq!(
                 found,
                 BooleanArray::from(vec![true, true]),
@@ -652,33 +670,41 @@ mod tests {
     #[test]
     fn decimal_scale_differs_from_column() {
         // Stored as INT32, INT64 and FIXED_LEN_BYTE_ARRAY depending on precision
-        for precision in [5, 15, 30] {
+        for (precision, column_type) in [
+            (5, "INT32 DECIMAL(5, 2)"),
+            (15, "INT64 DECIMAL(15, 2)"),
+            (30, "FIXED_LEN_BYTE_ARRAY(13) DECIMAL(30, 2)"),
+        ] {
             let (sbbf, column) =
                 write_and_read_bloom_filter(Arc::new(decimal128(vec![12345], precision, 2)), false);
-            let sbbf = ArrowSbbf::new(&sbbf, &column);
-            let found = sbbf.check(&decimal128(vec![12345], precision, 2)).unwrap();
+            let found = check(&sbbf, &column, &decimal128(vec![12345], precision, 2)).unwrap();
             assert_eq!(found, BooleanArray::from(vec![true]));
 
             // 123.45 at scale 3 is 123450, so checking 12345 would check 12.345
-            let err = sbbf
-                .check(&decimal128(vec![123450], precision, 3))
-                .unwrap_err();
+            let err = error(ArrowSbbf::try_new(
+                &sbbf,
+                &column,
+                Some(DataType::Decimal128(precision, 3)),
+            ));
             assert_eq!(
-                err.to_string(),
-                "Parquet error: Cannot check a bloom filter of a decimal column with scale 2 with decimal values with scale 3",
-                "precision {precision}"
+                err,
+                format!(
+                    "Parquet error: Cannot check a bloom filter of type {column_type} with Decimal128({precision}, 3) values"
+                )
             );
         }
 
         // Nor can decimal values be checked against a column that is not a decimal
         let (sbbf, column) =
             write_and_read_bloom_filter(Arc::new(Int32Array::from(vec![12345])), false);
-        let err = ArrowSbbf::new(&sbbf, &column)
-            .check(&decimal128(vec![12345], 5, 0))
-            .unwrap_err();
+        let err = error(ArrowSbbf::try_new(
+            &sbbf,
+            &column,
+            Some(DataType::Decimal128(5, 0)),
+        ));
         assert_eq!(
-            err.to_string(),
-            "Parquet error: Cannot check a bloom filter of a column that is not a decimal with decimal values"
+            err,
+            "Parquet error: Cannot check a bloom filter of type INT32 with Decimal128(5, 0) values"
         );
     }
 
@@ -688,25 +714,25 @@ mod tests {
         for precision in [5, 15, 30] {
             let (sbbf, column) =
                 write_and_read_bloom_filter(Arc::new(decimal128(vec![500], precision, 2)), false);
-            let sbbf = ArrowSbbf::new(&sbbf, &column);
 
             // 500 at scale 2 is 5.00, so checking the integer 500 or 5 would be ambiguous
-            let err = sbbf.check(&Int32Array::from(vec![500])).unwrap_err();
-            assert_eq!(
-                err.to_string(),
-                "Parquet error: Cannot check a bloom filter of a decimal column with scale 2 with Int32 values",
-                "precision {precision}"
+            let err = error(ArrowSbbf::try_new(&sbbf, &column, Some(DataType::Int32)));
+            assert!(
+                err.ends_with("with Int32 values"),
+                "precision {precision}: {err}"
             );
         }
 
         let (sbbf, column) =
             write_and_read_bloom_filter(Arc::new(decimal128(vec![500], 30, 2)), false);
-        let err = ArrowSbbf::new(&sbbf, &column)
-            .check(&FixedSizeBinaryArray::try_from_iter([[0; 13]].into_iter()).unwrap())
-            .unwrap_err();
+        let err = error(ArrowSbbf::try_new(
+            &sbbf,
+            &column,
+            Some(DataType::FixedSizeBinary(13)),
+        ));
         assert_eq!(
-            err.to_string(),
-            "Parquet error: Cannot check a bloom filter of a decimal column with scale 2 with FixedSizeBinary(13) values"
+            err,
+            "Parquet error: Cannot check a bloom filter of type FIXED_LEN_BYTE_ARRAY(13) DECIMAL(30, 2) with FixedSizeBinary(13) values"
         );
     }
 
@@ -714,17 +740,18 @@ mod tests {
     fn fixed_size_binary_length_differs_from_column() {
         let written = FixedSizeBinaryArray::try_from_iter([b"abcd", b"efgh"].into_iter()).unwrap();
         let (sbbf, column) = write_and_read_bloom_filter(Arc::new(written.clone()), false);
-        let sbbf = ArrowSbbf::new(&sbbf, &column);
 
-        let found = sbbf.check(&written).unwrap();
+        let found = check(&sbbf, &column, &written).unwrap();
         assert_eq!(found, BooleanArray::from(vec![true, true]));
 
-        let err = sbbf
-            .check(&FixedSizeBinaryArray::try_from_iter([b"abc"].into_iter()).unwrap())
-            .unwrap_err();
+        let err = error(ArrowSbbf::try_new(
+            &sbbf,
+            &column,
+            Some(DataType::FixedSizeBinary(3)),
+        ));
         assert_eq!(
-            err.to_string(),
-            "Parquet error: Cannot check a bloom filter of a FIXED_LEN_BYTE_ARRAY column of length 4 with FixedSizeBinary(3) values, which have length 3"
+            err,
+            "Parquet error: Cannot check a bloom filter of type FIXED_LEN_BYTE_ARRAY(4) with FixedSizeBinary(3) values"
         );
     }
 
@@ -774,10 +801,21 @@ mod tests {
     }
 
     #[test]
+    fn arrow_type_from_column() {
+        let (sbbf, column) =
+            write_and_read_bloom_filter(Arc::new(Int8Array::from(vec![1, 2, 3])), false);
+        let sbbf = ArrowSbbf::try_new(&sbbf, &column, None).unwrap();
+        assert_eq!(sbbf.arrow_type(), &DataType::Int8);
+
+        let found = sbbf.check(&Int8Array::from(vec![1, 4])).unwrap();
+        assert_eq!(found, BooleanArray::from(vec![true, false]));
+    }
+
+    #[test]
     fn dictionary_and_nulls() {
         let (sbbf, column) =
             write_and_read_bloom_filter(Arc::new(Int8Array::from(vec![1, 2, 3])), false);
-        let sbbf = ArrowSbbf::new(&sbbf, &column);
+        let sbbf = ArrowSbbf::try_new(&sbbf, &column, None).unwrap();
 
         let found = sbbf
             .check(&Int8Array::from(vec![Some(1), None, Some(4)]))
@@ -809,7 +847,8 @@ mod tests {
         ];
         for written in columns {
             let (sbbf, column) = write_and_read_bloom_filter(written, false);
-            let found = ArrowSbbf::new(&sbbf, &column)
+            let found = ArrowSbbf::try_new(&sbbf, &column, None)
+                .unwrap()
                 .check(&NullArray::new(2))
                 .unwrap();
             assert_eq!(found, BooleanArray::from(vec![None, None]));
@@ -822,7 +861,7 @@ mod tests {
         let values = Int16Array::from(vec![1, -2, 7, 3]);
         let written = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
         let (sbbf, column) = write_and_read_bloom_filter(Arc::new(written), false);
-        let sbbf = ArrowSbbf::new(&sbbf, &column);
+        let sbbf = ArrowSbbf::try_new(&sbbf, &column, None).unwrap();
 
         let values = Int16Array::from(vec![Some(-2), Some(4), None, Some(1)]);
         let array =
@@ -851,30 +890,59 @@ mod tests {
     fn unsupported_type() {
         let (sbbf, column) =
             write_and_read_bloom_filter(Arc::new(Int8Array::from(vec![1, 2, 3])), false);
-        let err = ArrowSbbf::new(&sbbf, &column)
-            .check(&StringArray::from(vec!["1"]))
-            .unwrap_err();
+        let err = error(ArrowSbbf::try_new(&sbbf, &column, Some(DataType::Utf8)));
         assert_eq!(
-            err.to_string(),
-            "Parquet error: Cannot check a bloom filter of physical type INT32 with Utf8 values"
+            err,
+            "Parquet error: Cannot check a bloom filter of type INT32 with Utf8 values"
+        );
+        let list = DataType::new_list(DataType::Int8, true);
+        let err = error(ArrowSbbf::try_new(&sbbf, &column, Some(list)));
+        assert_eq!(
+            err,
+            "Parquet error: Cannot check a bloom filter of type INT32 with List(Int8) values"
         );
 
         let written = FixedSizeBinaryArray::try_from_iter([b"abcd"].into_iter()).unwrap();
         let (sbbf, column) = write_and_read_bloom_filter(Arc::new(written), false);
-        let sbbf = ArrowSbbf::new(&sbbf, &column);
-        let err = sbbf.check(&Int32Array::from(vec![1])).unwrap_err();
+        let err = error(ArrowSbbf::try_new(&sbbf, &column, Some(DataType::Int32)));
         assert_eq!(
-            err.to_string(),
-            "Parquet error: Cannot check a bloom filter of physical type FIXED_LEN_BYTE_ARRAY with Int32 values"
+            err,
+            "Parquet error: Cannot check a bloom filter of type FIXED_LEN_BYTE_ARRAY(4) with Int32 values"
         );
-        let err = sbbf
-            .check(&IntervalMonthDayNanoArray::from(vec![
-                IntervalMonthDayNano::new(1, 2, 3),
-            ]))
-            .unwrap_err();
+        let interval = DataType::Interval(IntervalUnit::MonthDayNano);
+        let err = error(ArrowSbbf::try_new(&sbbf, &column, Some(interval)));
         assert_eq!(
-            err.to_string(),
-            "Parquet error: Cannot check a bloom filter of physical type FIXED_LEN_BYTE_ARRAY with Interval(MonthDayNano) values"
+            err,
+            "Parquet error: Cannot check a bloom filter of type FIXED_LEN_BYTE_ARRAY(4) with Interval(MonthDayNano) values"
+        );
+    }
+
+    #[test]
+    fn array_type_differs_from_arrow_type() {
+        let (sbbf, column) =
+            write_and_read_bloom_filter(Arc::new(Int8Array::from(vec![1, 2, 3])), false);
+        let sbbf = ArrowSbbf::try_new(&sbbf, &column, None).unwrap();
+        let err = error(sbbf.check(&Int16Array::from(vec![1])));
+        assert_eq!(
+            err,
+            "Parquet error: Cannot check Int16 values with an ArrowSbbf for Int8 values"
+        );
+
+        // A dictionary or run-end encoded type is checked by its values
+        let dictionary = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Int8));
+        let sbbf = ArrowSbbf::try_new(sbbf.sbbf, &column, Some(dictionary)).unwrap();
+        let found = sbbf.check(&Int8Array::from(vec![1, 4])).unwrap();
+        assert_eq!(found, BooleanArray::from(vec![true, false]));
+
+        // Values are not converted between time units
+        let ms = TimestampMillisecondArray::from(vec![1_000]);
+        let (sbbf, column) = write_and_read_bloom_filter(Arc::new(ms), false);
+        let micros = DataType::Timestamp(TimeUnit::Microsecond, None);
+        let sbbf = ArrowSbbf::try_new(&sbbf, &column, Some(micros)).unwrap();
+        let err = error(sbbf.check(&TimestampMillisecondArray::from(vec![1_000])));
+        assert_eq!(
+            err,
+            "Parquet error: Cannot check Timestamp(ms) values with an ArrowSbbf for Timestamp(µs) values"
         );
     }
 
@@ -1151,8 +1219,7 @@ mod tests {
             assert_eq!(filters.len(), columns.len());
             for ((name, array), (sbbf, column)) in columns.iter().zip(&filters) {
                 let context = format!("{name} with coerce_types {coerce_types}");
-                let found = ArrowSbbf::new(sbbf, column)
-                    .check(array.as_ref())
+                let found = check(sbbf, column, array.as_ref())
                     .unwrap_or_else(|e| panic!("{context}: {e}"));
                 assert_eq!(found.len(), array.len(), "{context}");
                 // Every value is found, and nulls are null
@@ -1161,6 +1228,9 @@ mod tests {
                     let valid = nulls.as_ref().is_none_or(|nulls| nulls.is_valid(i));
                     assert_eq!(found, valid.then_some(true), "{context}: index {i}");
                 }
+
+                // The type derived from the column is also accepted
+                ArrowSbbf::try_new(sbbf, column, None).unwrap_or_else(|e| panic!("{context}: {e}"));
             }
         }
     }

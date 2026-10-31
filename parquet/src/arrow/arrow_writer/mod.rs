@@ -1708,13 +1708,6 @@ pub(crate) trait PrimitiveVisitor<T> {
 
     /// Receives values that are each stored as `convert(value)`
     fn map<S: Copy>(self, values: &[S], convert: impl Fn(S) -> T) -> Result<Self::Output>;
-
-    /// Returns the error for an Arrow type that cannot be stored in the column
-    ///
-    /// `error` is the error that [`ArrowWriter`] returns.
-    fn unsupported(&self, _data_type: &ArrowDataType, error: ParquetError) -> ParquetError {
-        error
-    }
 }
 
 /// Passes the values [`ArrowWriter`] stores for `column` in an `INT32` column to `visitor`
@@ -1778,10 +1771,7 @@ pub(crate) fn visit_i32<V: PrimitiveVisitor<i32>>(
                 v.as_i128() as i32
             })
         }
-        d => Err(visitor.unsupported(
-            d,
-            ParquetError::General(format!("Cannot coerce {d} to I32")),
-        )),
+        d => Err(ParquetError::General(format!("Cannot coerce {d} to I32"))),
     }
 }
 
@@ -1854,10 +1844,7 @@ pub(crate) fn visit_i64<V: PrimitiveVisitor<i64>>(
                 v.as_i128() as i64
             })
         }
-        d => Err(visitor.unsupported(
-            d,
-            ParquetError::General(format!("Cannot coerce {d} to I64")),
-        )),
+        d => Err(ParquetError::General(format!("Cannot coerce {d} to I64"))),
     }
 }
 
@@ -1902,13 +1889,6 @@ pub(crate) trait FixedLenByteArrayVisitor {
     /// `fill(i, value)` writes the value at index `i` of the array to `value`,
     /// which is `length` zeroed bytes.
     fn values(self, length: usize, fill: impl Fn(usize, &mut [u8])) -> Result<Self::Output>;
-
-    /// Returns the error for an Arrow type that cannot be stored in the column
-    ///
-    /// `error` is the error that [`ArrowWriter`] returns.
-    fn unsupported(&self, _data_type: &ArrowDataType, error: ParquetError) -> ParquetError {
-        error
-    }
 }
 
 /// Passes the values [`ArrowWriter`] stores for `column` in a `FIXED_LEN_BYTE_ARRAY`
@@ -1938,12 +1918,9 @@ pub(crate) fn visit_fixed_len_byte_array<V: FixedLenByteArrayVisitor>(
                     value[8..12].copy_from_slice(&interval.milliseconds.to_le_bytes());
                 })
             }
-            IntervalUnit::MonthDayNano => Err(visitor.unsupported(
-                column.data_type(),
-                ParquetError::NYI(format!(
-                    "Attempting to write an Arrow interval type {interval_unit:?} to parquet that is not yet implemented"
-                )),
-            )),
+            IntervalUnit::MonthDayNano => Err(ParquetError::NYI(format!(
+                "Attempting to write an Arrow interval type {interval_unit:?} to parquet that is not yet implemented"
+            ))),
         },
         ArrowDataType::FixedSizeBinary(_) => {
             let array = column.as_fixed_size_binary();
@@ -1969,11 +1946,8 @@ pub(crate) fn visit_fixed_len_byte_array<V: FixedLenByteArrayVisitor>(
                 value.copy_from_slice(&array.value(i).to_le_bytes());
             })
         }
-        d => Err(visitor.unsupported(
-            d,
-            ParquetError::NYI(
-                "Attempting to write an Arrow type that is not yet implemented".to_string(),
-            ),
+        _ => Err(ParquetError::NYI(
+            "Attempting to write an Arrow type that is not yet implemented".to_string(),
         )),
     }
 }
