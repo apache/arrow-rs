@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["write_offset"],"struct":["ReadOnlyMetadataBuilder","WritableMetadataBuilder"],"trait":["MetadataBuilder"]};

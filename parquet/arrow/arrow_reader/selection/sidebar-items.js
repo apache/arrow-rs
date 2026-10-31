@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["RowSelectionCursor","RowSelectionInner","RowSelectionPolicy","RowSelectionStrategy"],"fn":["append_normalized_selector","auto_min_mask_runs","filters_to_boolean_buffer","selectors_below_run_limit"],"mod":["algebra","boolean","cursor","ranges","selector"],"struct":["LoadedRowRanges","MaskCursor","MaskRunIter","RowSelection","RowSelector"]};
