@@ -16,7 +16,13 @@
 // under the License.
 
 //! Page Index structures for efficient page-level skipping
+//!
+//! Row-group and column counts are each limited to `i32::MAX`, consistent with the
+//! Parquet/Thrift metadata format. Populated entries are stored sparsely, subject to platform
+//! address-space and available-memory limits.
 
+use crate::errors::{ParquetError, Result};
+use crate::file::metadata::column_chunk::{ColumnChunkEntries, ColumnChunkMap};
 use crate::file::metadata::memory::HeapSize;
 use crate::file::page_index::{
     column_index::ColumnIndexMetaData,
@@ -365,10 +371,11 @@ impl RowGroupPageIndex {
 
 /// Struct to encapsulate the Parquet [Page Index]
 ///
-/// This struct provides a dense representation of the Page Index. It is
-/// used internally by this crate when assembling and writing the Page
-/// Index. It is also the default implementation of the [`PageIndexProvider`]
-/// contained in the [`ParquetMetaData`].
+/// This struct provides a sparse, immutable representation of the Page Index, stored in row-major
+/// order and keyed by row group and column index. It owns its populated column and offset index
+/// metadata. Use [`Self::into_index_entries`] to move that metadata into an external cache.
+/// It is used internally by this crate when assembling and writing the Page Index, and is the
+/// default implementation of the [`PageIndexProvider`] contained in the [`ParquetMetaData`].
 ///
 /// # Example: Constructing a synthetic `PageIndex`
 ///
@@ -424,9 +431,13 @@ impl RowGroupPageIndex {
 ///
 /// // Assemble the PageIndex (one entry per row group, each with one
 /// // entry per column) and attach it to the metadata
-/// let mut page_index = PageIndexBuilder::new(1, 1);
-/// page_index.put_column_index(column_index, 0, 0);
-/// page_index.put_offset_index(offset_index, 0, 0);
+/// let mut page_index = PageIndexBuilder::try_new(1, 1).unwrap();
+/// page_index
+///     .try_put_column_index(column_index, 0, 0)
+///     .unwrap();
+/// page_index
+///     .try_put_offset_index(offset_index, 0, 0)
+///     .unwrap();
 /// let page_index = page_index.build();
 /// let metadata = metadata
 ///     .into_builder()
@@ -441,24 +452,65 @@ impl RowGroupPageIndex {
 /// [`ParquetMetaData`]: crate::file::metadata::ParquetMetaData
 #[derive(Debug, Clone, PartialEq)]
 pub struct PageIndex {
-    column_indexes: Option<Vec<Vec<Option<ColumnIndexMetaData>>>>,
-    offset_indexes: Option<Vec<Vec<Option<OffsetIndexMetaData>>>>,
+    column_indexes: Option<ColumnChunkEntries<ColumnIndexMetaData>>,
+    offset_indexes: Option<ColumnChunkEntries<OffsetIndexMetaData>>,
 }
 
 impl PageIndex {
-    pub(crate) fn new(
+    pub(crate) fn try_new(
         column_indexes: Option<Vec<Vec<Option<ColumnIndexMetaData>>>>,
         offset_indexes: Option<Vec<Vec<Option<OffsetIndexMetaData>>>>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        let column_indexes = column_indexes
+            .map(ColumnChunkEntries::try_from_rows)
+            .transpose()?
+            .filter(|indexes| !indexes.is_empty());
+        let offset_indexes = offset_indexes
+            .map(ColumnChunkEntries::try_from_rows)
+            .transpose()?
+            .filter(|indexes| !indexes.is_empty());
+
+        Ok(Self {
             column_indexes,
             offset_indexes,
-        }
+        })
     }
 
     /// Convert this `PageIndex` into a [`PageIndexBuilder`]
     pub fn into_builder(self) -> PageIndexBuilder {
-        self.into()
+        self.try_into_builder()
+            .unwrap_or_else(|err| panic!("failed to thaw page index: {err}"))
+    }
+
+    /// Fallibly converts this `PageIndex` into a [`PageIndexBuilder`].
+    pub fn try_into_builder(self) -> Result<PageIndexBuilder> {
+        PageIndexBuilder::try_new_from(self)
+    }
+
+    /// Consumes this page index and returns its populated column and offset index entries.
+    ///
+    /// Each entry contains its `(row_group_index, column_index)` coordinate and owned index
+    /// metadata. This can be used to move parsed indexes into a cache without cloning their
+    /// metadata. Entries are returned in row-major order.
+    #[expect(clippy::type_complexity)]
+    pub fn into_index_entries(
+        self,
+    ) -> (
+        impl Iterator<Item = ((usize, usize), ColumnIndexMetaData)>,
+        impl Iterator<Item = ((usize, usize), OffsetIndexMetaData)>,
+    ) {
+        let column_indexes = self
+            .column_indexes
+            .into_iter()
+            .flat_map(ColumnChunkEntries::into_iter)
+            .map(|(key, index)| (key.coordinates(), index));
+        let offset_indexes = self
+            .offset_indexes
+            .into_iter()
+            .flat_map(ColumnChunkEntries::into_iter)
+            .map(|(key, index)| (key.coordinates(), index));
+
+        (column_indexes, offset_indexes)
     }
 }
 
@@ -476,8 +528,10 @@ impl PageIndexProvider for PageIndex {
         row_group_idx: usize,
         column_idx: usize,
     ) -> Option<&ColumnIndexMetaData> {
-        let rg = self.column_indexes.as_ref()?.get(row_group_idx)?;
-        rg.get(column_idx)?.as_ref()
+        self.column_indexes
+            .as_ref()?
+            .get(row_group_idx, column_idx)
+            .ok()?
     }
 
     fn offset_index(
@@ -485,8 +539,10 @@ impl PageIndexProvider for PageIndex {
         row_group_idx: usize,
         column_idx: usize,
     ) -> Option<&OffsetIndexMetaData> {
-        let rg = self.offset_indexes.as_ref()?.get(row_group_idx)?;
-        rg.get(column_idx)?.as_ref()
+        self.offset_indexes
+            .as_ref()?
+            .get(row_group_idx, column_idx)
+            .ok()?
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -506,42 +562,40 @@ impl HeapSize for PageIndex {
 /// - Populating column indexes for predicate columns (for page filtering)
 /// - Populating offset indexes for projected columns (for direct I/O)
 /// - Automatic conversion of empty structures to `None` to save memory
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct PageIndexBuilder {
-    column_indexes: Option<Vec<Vec<Option<ColumnIndexMetaData>>>>,
-    offset_indexes: Option<Vec<Vec<Option<OffsetIndexMetaData>>>>,
+    column_indexes: Option<ColumnChunkMap<ColumnIndexMetaData>>,
+    offset_indexes: Option<ColumnChunkMap<OffsetIndexMetaData>>,
 }
 
 impl PageIndexBuilder {
-    /// Creates an empty index structure with space for the specified number of row groups and columns
+    /// Creates a new [`PageIndexBuilder`] for the specified number of row groups and columns.
     ///
-    /// Returns `Some` containing a nested vector structure where all entries are initialized to `None`.
-    /// The outer vector has one entry per row group, and each inner vector has one entry per column.
+    /// The dimensions are used to validate inserted coordinates. Storage is allocated only for
+    /// entries populated using
+    /// [`put_column_index`](Self::put_column_index) and [`put_offset_index`](Self::put_offset_index).
     ///
-    /// # Type Parameters
-    /// * `T` - The type of index this is to be, either `ColumnIndexMetaData` or `OffsetIndexMetaData`
-    fn empty_index<T>(num_row_groups: usize, num_columns: usize) -> Option<Vec<Vec<Option<T>>>> {
-        Some(
-            (0..num_row_groups)
-                .map(|_| {
-                    let mut idx = Vec::with_capacity(num_columns);
-                    idx.resize_with(num_columns, || None);
-                    idx
-                })
-                .collect(),
-        )
+    /// # Panics
+    ///
+    /// Panics if either dimension exceeds `i32::MAX`, the maximum collection size representable
+    /// by Thrift.
+    ///
+    /// Use [`try_new`](Self::try_new) for a fallible alternative.
+    pub fn new(num_row_groups: usize, num_columns: usize) -> Self {
+        Self::try_new(num_row_groups, num_columns).expect("invalid page index dimensions")
     }
 
-    /// Creates a new [`PageIndexBuilder`] with space allocated for both column and offset indexes
+    /// Attempts to create a new [`PageIndexBuilder`] for the specified number of row groups and columns.
     ///
-    /// This allocates empty index structures for the specified number of row groups and columns.
-    /// All index entries are initialized to `None` and can be populated using
-    /// [`put_column_index`](Self::put_column_index) and [`put_offset_index`](Self::put_offset_index).
-    pub fn new(num_row_groups: usize, num_columns: usize) -> Self {
-        Self {
-            column_indexes: Self::empty_index(num_row_groups, num_columns),
-            offset_indexes: Self::empty_index(num_row_groups, num_columns),
-        }
+    /// # Errors
+    ///
+    /// Returns an error if either dimension exceeds `i32::MAX`, the maximum collection size
+    /// representable by Thrift.
+    pub fn try_new(num_row_groups: usize, num_columns: usize) -> Result<Self> {
+        Ok(Self {
+            column_indexes: Some(ColumnChunkMap::try_new(num_row_groups, num_columns)?),
+            offset_indexes: Some(ColumnChunkMap::try_new(num_row_groups, num_columns)?),
+        })
     }
 
     /// Creates a new [`PageIndexBuilder`] from an existing [`PageIndex`]
@@ -549,34 +603,97 @@ impl PageIndexBuilder {
     /// This takes ownership of the index structures from the provided [`PageIndex`],
     /// allowing them to be modified and rebuilt. Useful for updating existing page indexes.
     pub(crate) fn new_from(page_index: PageIndex) -> Self {
-        Self {
-            column_indexes: page_index.column_indexes,
-            offset_indexes: page_index.offset_indexes,
-        }
+        Self::try_new_from(page_index)
+            .unwrap_or_else(|err| panic!("failed to thaw page index: {err}"))
+    }
+
+    fn try_new_from(page_index: PageIndex) -> Result<Self> {
+        Ok(Self {
+            column_indexes: page_index
+                .column_indexes
+                .map(ColumnChunkEntries::try_into_map)
+                .transpose()?,
+            offset_indexes: page_index
+                .offset_indexes
+                .map(ColumnChunkEntries::try_into_map)
+                .transpose()?,
+        })
     }
 
     /// Allocates space for column indexes
     ///
-    /// This allocates an empty index structure for the specified number of row groups and columns.
-    /// All index entries are initialized to `None` and can be populated using
+    /// This replaces any existing column indexes with an empty sparse map having the specified
+    /// dimensions. It can then be populated using
     /// [`put_column_index`](Self::put_column_index).
     ///
     /// This can be used to add column index storage to a builder that lacks one
     /// (either a `Default` builder, or one created from a [`PageIndex`] without column indexes).
+    ///
+    /// # Panics
+    ///
+    /// Panics if either dimension exceeds `i32::MAX`, the maximum collection size representable
+    /// by Thrift.
+    ///
+    /// Use [`try_allocate_column_indexes`](Self::try_allocate_column_indexes) for a
+    /// fallible alternative.
     pub fn allocate_column_indexes(&mut self, num_row_groups: usize, num_columns: usize) {
-        self.column_indexes = Self::empty_index(num_row_groups, num_columns);
+        self.try_allocate_column_indexes(num_row_groups, num_columns)
+            .expect("invalid page index dimensions");
+    }
+
+    /// Attempts to allocate space for column indexes
+    ///
+    /// This is a fallible version of [`allocate_column_indexes`](Self::allocate_column_indexes).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either dimension exceeds `i32::MAX`, the maximum collection size
+    /// representable by Thrift.
+    pub fn try_allocate_column_indexes(
+        &mut self,
+        num_row_groups: usize,
+        num_columns: usize,
+    ) -> Result<()> {
+        self.column_indexes = Some(ColumnChunkMap::try_new(num_row_groups, num_columns)?);
+        Ok(())
     }
 
     /// Allocates space for offset indexes
     ///
-    /// This allocates an empty index structure for the specified number of row groups and columns.
-    /// All index entries are initialized to `None` and can be populated using
+    /// This replaces any existing offset indexes with an empty sparse map having the specified
+    /// dimensions. It can then be populated using
     /// [`put_offset_index`](Self::put_offset_index).
     ///
     /// This can be used to add offset index storage to a builder that lacks one
     /// (either a `Default` builder, or one created from a [`PageIndex`] without offset indexes).
+    ///
+    /// # Panics
+    ///
+    /// Panics if either dimension exceeds `i32::MAX`, the maximum collection size representable
+    /// by Thrift.
+    ///
+    /// Use [`try_allocate_offset_indexes`](Self::try_allocate_offset_indexes) for a
+    /// fallible alternative.
     pub fn allocate_offset_indexes(&mut self, num_row_groups: usize, num_columns: usize) {
-        self.offset_indexes = Self::empty_index(num_row_groups, num_columns);
+        self.try_allocate_offset_indexes(num_row_groups, num_columns)
+            .expect("invalid page index dimensions");
+    }
+
+    /// Attempts to allocate space for offset indexes
+    ///
+    /// This is a fallible version of [`allocate_offset_indexes`](Self::allocate_offset_indexes).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either dimension exceeds `i32::MAX`, the maximum collection size
+    /// representable by Thrift.
+    pub fn try_allocate_offset_indexes(
+        &mut self,
+        num_row_groups: usize,
+        num_columns: usize,
+    ) -> Result<()> {
+        self.offset_indexes = Some(ColumnChunkMap::try_new(num_row_groups, num_columns)?);
+        Ok(())
     }
 
     /// Sets the column index for a specific row group and column
@@ -589,12 +706,37 @@ impl PageIndexBuilder {
         row_group_idx: usize,
         column_idx: usize,
     ) {
-        if let Some(ref mut indexes) = self.column_indexes
-            && let Some(row_group) = indexes.get_mut(row_group_idx)
-            && let Some(column_slot) = row_group.get_mut(column_idx)
-        {
-            *column_slot = Some(column_index);
+        // preserve stated contract that this does nothing when indexes were not allocated
+        // or passed in indices are out of bounds
+        let Some(indexes) = self.column_indexes.as_ref() else {
+            return;
+        };
+        if row_group_idx >= indexes.num_row_groups() || column_idx >= indexes.num_columns() {
+            return;
         }
+        self.try_put_column_index(column_index, row_group_idx, column_idx)
+            .unwrap_or_else(|err| panic!("{err}"));
+    }
+
+    /// Attempts to set the column index for a specific row group and column.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error, and drops `column_index`, if column indexes were not allocated or the
+    /// coordinate is out of bounds.
+    pub fn try_put_column_index(
+        &mut self,
+        column_index: ColumnIndexMetaData,
+        row_group_idx: usize,
+        column_idx: usize,
+    ) -> Result<()> {
+        let indexes = self
+            .column_indexes
+            .as_mut()
+            .ok_or_else(|| ParquetError::General("column indexes are not allocated".to_string()))?;
+        indexes
+            .try_insert(row_group_idx, column_idx, column_index)
+            .map(|_| ())
     }
 
     /// Sets the offset index for a specific row group and column
@@ -607,22 +749,42 @@ impl PageIndexBuilder {
         row_group_idx: usize,
         column_idx: usize,
     ) {
-        if let Some(ref mut indexes) = self.offset_indexes
-            && let Some(row_group) = indexes.get_mut(row_group_idx)
-            && let Some(column_slot) = row_group.get_mut(column_idx)
-        {
-            *column_slot = Some(offset_index);
+        // preserve stated contract that this does nothing when indexes were not allocated
+        // or passed in indices are out of bounds
+        let Some(indexes) = self.offset_indexes.as_ref() else {
+            return;
+        };
+        if row_group_idx >= indexes.num_row_groups() || column_idx >= indexes.num_columns() {
+            return;
         }
+        self.try_put_offset_index(offset_index, row_group_idx, column_idx)
+            .unwrap_or_else(|err| panic!("{err}"));
     }
 
-    /// Checks if an index structure is entirely empty (all entries are None)
-    fn is_empty_index<T>(index: Option<&Vec<Vec<Option<T>>>>) -> bool {
-        match index {
-            None => true,
-            Some(row_groups) => row_groups
-                .iter()
-                .all(|columns| columns.iter().all(|entry| entry.is_none())),
-        }
+    /// Attempts to set the offset index for a specific row group and column.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error, and drops `offset_index`, if offset indexes were not allocated or the
+    /// coordinate is out of bounds.
+    pub fn try_put_offset_index(
+        &mut self,
+        offset_index: OffsetIndexMetaData,
+        row_group_idx: usize,
+        column_idx: usize,
+    ) -> Result<()> {
+        let indexes = self
+            .offset_indexes
+            .as_mut()
+            .ok_or_else(|| ParquetError::General("offset indexes are not allocated".to_string()))?;
+        indexes
+            .try_insert(row_group_idx, column_idx, offset_index)
+            .map(|_| ())
+    }
+
+    /// Checks if an index structure is entirely empty.
+    fn is_empty_index<T>(index: Option<&ColumnChunkMap<T>>) -> bool {
+        index.is_none_or(ColumnChunkMap::is_empty)
     }
 
     /// Consumes the builder and returns a [`PageIndex`]
@@ -633,6 +795,11 @@ impl PageIndexBuilder {
     /// - [`PageIndex::has_column_indexes()`] and [`PageIndex::has_offset_indexes()`]
     ///   correctly return `false` for unpopulated indexes
     pub fn build(self) -> PageIndex {
+        self.try_build().expect("failed to build page index")
+    }
+
+    /// Fallibly consumes the builder and returns a [`PageIndex`].
+    pub fn try_build(self) -> Result<PageIndex> {
         let column_indexes = if Self::is_empty_index(self.column_indexes.as_ref()) {
             None
         } else {
@@ -645,12 +812,276 @@ impl PageIndexBuilder {
             self.offset_indexes
         };
 
-        PageIndex::new(column_indexes, offset_indexes)
+        Ok(PageIndex {
+            column_indexes: column_indexes.map(ColumnChunkMap::try_freeze).transpose()?,
+            offset_indexes: offset_indexes.map(ColumnChunkMap::try_freeze).transpose()?,
+        })
     }
 }
 
 impl From<PageIndex> for PageIndexBuilder {
     fn from(page_index: PageIndex) -> Self {
         Self::new_from(page_index)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::basic::Type as PhysicalType;
+    use crate::file::metadata::{ColumnIndexBuilder, OffsetIndexBuilder};
+
+    #[test]
+    fn test_dimensions_within_i32_max() {
+        // Valid dimensions should work
+        let builder = PageIndexBuilder::new(100, 50);
+        assert!(builder.column_indexes.is_some());
+        assert!(builder.offset_indexes.is_some());
+
+        let result = PageIndexBuilder::try_new(100, 50);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_try_new_validates_dimensions() {
+        // Test row group count exceeding i32::MAX
+        let oversized = i32::MAX as usize + 1;
+        let result = PageIndexBuilder::try_new(oversized, 10);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("row group count exceeds i32::MAX"),
+            "unexpected error: {err}"
+        );
+
+        // Test column count exceeding i32::MAX
+        let result = PageIndexBuilder::try_new(10, oversized);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("column count exceeds i32::MAX"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid page index dimensions")]
+    fn test_new_panics_on_oversized_row_groups() {
+        let oversized = i32::MAX as usize + 1;
+        PageIndexBuilder::new(oversized, 10);
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid page index dimensions")]
+    fn test_new_panics_on_oversized_columns() {
+        let oversized = i32::MAX as usize + 1;
+        PageIndexBuilder::new(10, oversized);
+    }
+
+    #[test]
+    fn test_try_allocate_column_indexes_validates_dimensions() {
+        let mut builder = PageIndexBuilder::default();
+        let oversized = i32::MAX as usize + 1;
+
+        let result = builder.try_allocate_column_indexes(oversized, 10);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("row group count exceeds i32::MAX"),
+            "unexpected error: {err}"
+        );
+
+        let result = builder.try_allocate_column_indexes(10, oversized);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("column count exceeds i32::MAX"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid page index dimensions")]
+    fn test_allocate_column_indexes_panics_on_oversized() {
+        let mut builder = PageIndexBuilder::default();
+        let oversized = i32::MAX as usize + 1;
+        builder.allocate_column_indexes(oversized, 10);
+    }
+
+    #[test]
+    fn test_try_allocate_offset_indexes_validates_dimensions() {
+        let mut builder = PageIndexBuilder::default();
+        let oversized = i32::MAX as usize + 1;
+
+        let result = builder.try_allocate_offset_indexes(oversized, 10);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("row group count exceeds i32::MAX"),
+            "unexpected error: {err}"
+        );
+
+        let result = builder.try_allocate_offset_indexes(10, oversized);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("column count exceeds i32::MAX"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid page index dimensions")]
+    fn test_allocate_offset_indexes_panics_on_oversized() {
+        let mut builder = PageIndexBuilder::default();
+        let oversized = i32::MAX as usize + 1;
+        builder.allocate_offset_indexes(oversized, 10);
+    }
+
+    #[test]
+    fn test_page_index_builder_basic_operations() {
+        let mut builder = PageIndexBuilder::new(2, 3);
+
+        // Create a simple column index
+        let mut col_index = ColumnIndexBuilder::new(PhysicalType::INT32);
+        col_index.append(
+            false,
+            1i32.to_le_bytes().to_vec(),
+            10i32.to_le_bytes().to_vec(),
+            0,
+            None,
+        );
+        let col_index = col_index.build().unwrap();
+
+        // Create a simple offset index
+        let mut off_index = OffsetIndexBuilder::new();
+        off_index.append_row_count(100);
+        off_index.append_offset_and_size(1000, 500);
+        let off_index = off_index.build();
+
+        // Insert indexes and report coordinates that cannot be populated
+        assert!(
+            builder
+                .try_put_column_index(col_index.clone(), 0, 0)
+                .is_ok()
+        );
+        assert!(
+            builder
+                .try_put_offset_index(off_index.clone(), 0, 0)
+                .is_ok()
+        );
+        assert!(
+            builder
+                .try_put_column_index(col_index.clone(), 2, 0)
+                .is_err()
+        );
+        assert!(
+            builder
+                .try_put_offset_index(off_index.clone(), 0, 3)
+                .is_err()
+        );
+
+        // Legacy insertion remains a no-op for unallocated storage and invalid coordinates.
+        let mut legacy_unallocated = PageIndexBuilder::default();
+        legacy_unallocated.put_column_index(col_index.clone(), 0, 0);
+        legacy_unallocated.put_offset_index(off_index.clone(), 0, 0);
+        let empty_page_index = legacy_unallocated.build();
+        assert!(!empty_page_index.has_column_indexes());
+        assert!(!empty_page_index.has_offset_indexes());
+
+        builder.put_column_index(col_index.clone(), 2, 0);
+        builder.put_column_index(col_index.clone(), 0, 3);
+        builder.put_offset_index(off_index.clone(), 2, 0);
+        builder.put_offset_index(off_index.clone(), 0, 3);
+
+        let mut unallocated = PageIndexBuilder::default();
+        assert!(unallocated.try_put_column_index(col_index, 0, 0).is_err());
+        assert!(unallocated.try_put_offset_index(off_index, 0, 0).is_err());
+
+        // Build and verify
+        let page_index = builder.build();
+        assert!(page_index.has_column_indexes());
+        assert!(page_index.has_offset_indexes());
+        assert!(page_index.column_index(0, 0).is_some());
+        assert!(page_index.offset_index(0, 0).is_some());
+        assert!(page_index.column_index(0, 1).is_none());
+        assert!(page_index.offset_index(1, 0).is_none());
+    }
+
+    #[test]
+    fn test_into_index_entries_moves_owned_values_in_row_major_order() {
+        fn column_index(seed: i32, num_pages: usize) -> ColumnIndexMetaData {
+            let mut builder = ColumnIndexBuilder::new(PhysicalType::INT32);
+            for page in 0..num_pages {
+                let min = seed + page as i32;
+                builder.append(
+                    false,
+                    min.to_le_bytes().to_vec(),
+                    (min + 10).to_le_bytes().to_vec(),
+                    0,
+                    None,
+                );
+            }
+            builder.build().unwrap()
+        }
+
+        fn offset_index(seed: i64, num_pages: usize) -> OffsetIndexMetaData {
+            let mut builder = OffsetIndexBuilder::new();
+            for page in 0..num_pages {
+                builder.append_row_count(10);
+                builder.append_offset_and_size(seed + page as i64 * 100, 100);
+            }
+            builder.build()
+        }
+
+        let first_column = column_index(1, 1);
+        let second_column = column_index(2, 2);
+        let column_values = match &second_column {
+            ColumnIndexMetaData::INT32(index) => index.min_values().as_ptr(),
+            _ => unreachable!(),
+        };
+        let offset = offset_index(10, 3);
+        let page_locations = offset.page_locations().as_ptr();
+
+        let mut builder = PageIndexBuilder::new(3, 3);
+        builder.try_put_column_index(second_column, 2, 0).unwrap();
+        builder.try_put_offset_index(offset, 1, 1).unwrap();
+        builder
+            .try_put_column_index(first_column.clone(), 0, 2)
+            .unwrap();
+
+        let (column_entries, offset_entries) = builder.build().into_index_entries();
+        let column_entries = column_entries.collect::<Vec<_>>();
+        let offset_entries = offset_entries.collect::<Vec<_>>();
+        assert_eq!(
+            column_entries,
+            vec![((0, 2), first_column), ((2, 0), column_index(2, 2))]
+        );
+        assert_eq!(offset_entries, vec![((1, 1), offset_index(10, 3))]);
+        match &column_entries[1].1 {
+            ColumnIndexMetaData::INT32(index) => {
+                assert_eq!(index.min_values().as_ptr(), column_values)
+            }
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            offset_entries[0].1.page_locations().as_ptr(),
+            page_locations
+        );
+
+        let column = column_index(3, 1);
+        let mut builder = PageIndexBuilder::default();
+        builder.try_allocate_column_indexes(1, 1).unwrap();
+        builder.try_put_column_index(column.clone(), 0, 0).unwrap();
+        let (column_entries, offset_entries) = builder.build().into_index_entries();
+        assert_eq!(column_entries.collect::<Vec<_>>(), vec![((0, 0), column)]);
+        assert_eq!(offset_entries.count(), 0);
+    }
+
+    #[test]
+    fn test_page_index_try_new_discards_empty_indexes() {
+        let page_index = PageIndex::try_new(Some(vec![vec![None]]), Some(vec![])).unwrap();
+        assert!(!page_index.has_column_indexes());
+        assert!(!page_index.has_offset_indexes());
     }
 }
