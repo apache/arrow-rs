@@ -29,7 +29,10 @@ use std::fs::File;
 use std::io::{Read as _, Seek, SeekFrom, Write as _};
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, BinaryArray, Float64Array, Int32Array, RecordBatch, StringArray};
+use arrow::array::{
+    ArrayRef, BinaryArray, Float64Array, Int32Array, LargeBinaryArray, RecordBatch, StringArray,
+};
+use arrow::buffer::{Buffer, OffsetBuffer};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use bytes::Bytes;
 use parquet::arrow::arrow_writer::{
@@ -39,7 +42,7 @@ use parquet::arrow::arrow_writer::{
 use parquet::arrow::{ArrowSchemaConverter, ArrowWriter};
 use parquet::basic::Encoding;
 use parquet::errors::Result;
-use parquet::file::properties::{WriterProperties, WriterVersion};
+use parquet::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
 use parquet::file::writer::SerializedFileWriter;
 
 #[test]
@@ -140,6 +143,14 @@ unsafe impl GlobalAlloc for TrackingAllocator {
             }
         }
         new_ptr
+    }
+
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        let ptr = unsafe { self.inner.alloc_zeroed(layout) };
+        if !ptr.is_null() {
+            add_live_bytes(layout.size());
+        }
+        ptr
     }
 }
 
@@ -592,4 +603,36 @@ fn unused_delta_fallback_does_not_preallocate() {
     });
 
     assert!(peak < COLUMNS * 64 * 1024, "peak: {peak}");
+}
+
+#[test]
+// The value is 2^32 bytes, which does not fit in a 32-bit address space
+#[cfg(target_pointer_width = "64")]
+fn test_dictionary_rejects_value_longer_than_u32() {
+    // The dictionary page prefixes each value with its length as a u32, so a
+    // 2^32 byte value would have its length truncated to 0
+    let len = 1usize << 32;
+    let mut data = vec![0u8; len];
+    // Read as the next value's length if the truncated prefix were trusted
+    data[..4].copy_from_slice(&[0xFF; 4]);
+    let array = LargeBinaryArray::new(
+        OffsetBuffer::new(vec![0i64, len as i64].into()),
+        Buffer::from_vec(data),
+        None,
+    );
+    let batch = RecordBatch::try_from_iter([("col", Arc::new(array) as ArrayRef)]).unwrap();
+
+    let props = WriterProperties::builder()
+        // statistics are disabled to avoid copying the value for min/max and using a lot of extra memory in this test
+        .set_statistics_enabled(EnabledStatistics::None)
+        // The bloom filter is built from the dictionary page,
+        .set_bloom_filter_enabled(true)
+        .build();
+    let mut writer = ArrowWriter::try_new(std::io::sink(), batch.schema(), Some(props)).unwrap();
+
+    let err = writer.write(&batch).unwrap_err().to_string();
+    assert_eq!(
+        err,
+        "Parquet error: Byte array value is too large to be written in dictionary: 4294967296 bytes"
+    );
 }

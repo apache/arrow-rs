@@ -62,6 +62,22 @@ pub fn sign_extend_be<const N: usize>(b: &[u8]) -> [u8; N] {
     result
 }
 
+/// Sign extends `b`, a big-endian two's complement value of `W` bytes, to `N` bytes.
+///
+/// Equivalent to [`sign_extend_be`] for a width known at compile time, which keeps the
+/// copy a constant-size move.
+#[inline]
+pub fn sign_extend_be_fixed<const W: usize, const N: usize>(b: &[u8; W]) -> [u8; N] {
+    const { assert!(W > 0 && W <= N, "invalid width for sign extension") };
+    let mut result = if b[0] & 0x80 != 0 {
+        [u8::MAX; N]
+    } else {
+        [0; N]
+    };
+    result[N - W..].copy_from_slice(b);
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

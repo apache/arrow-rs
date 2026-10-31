@@ -31,10 +31,10 @@ permissions:
   contents: read
 
 jobs:
-  # Check workspace wide compile and test with default features for
-  # mac
+  # Check workspace wide compile and test with default features for macOS.
+  # Fork macOS runners frequently time out, so keep this testing upstream.
   macos:
-    if: ${{ !inputs.lint-only }}
+    if: ${{ !inputs.lint-only && github.repository == 'apache/arrow-rs' }}
     name: Test on Mac
     runs-on: macos-latest
     steps:

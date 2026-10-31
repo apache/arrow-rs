@@ -17,7 +17,9 @@
 
 pub use self::decimal::{VariantDecimal4, VariantDecimal8, VariantDecimal16, VariantDecimalType};
 pub use self::list::VariantList;
-pub use self::metadata::{EMPTY_VARIANT_METADATA, EMPTY_VARIANT_METADATA_BYTES, VariantMetadata};
+pub use self::metadata::{
+    EMPTY_VARIANT_METADATA, EMPTY_VARIANT_METADATA_BYTES, VARIANT_SPEC_VERSION, VariantMetadata,
+};
 pub use self::object::VariantObject;
 
 // Publicly export types used in the API

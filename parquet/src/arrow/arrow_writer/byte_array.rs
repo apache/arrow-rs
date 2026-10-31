@@ -32,7 +32,6 @@ use crate::geospatial::accumulator::{GeoStatsAccumulator, try_new_geo_stats_accu
 use crate::geospatial::statistics::GeospatialStatistics;
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::num_required_bits;
-use crate::util::interner::{Interner, Storage};
 use crate::util::prefix::common_prefix_length;
 use arrow_array::types::ByteArrayType;
 use arrow_array::{
@@ -302,53 +301,287 @@ impl FallbackEncoder {
     }
 }
 
-/// [`Storage`] for the [`Interner`] used by [`DictEncoder`]
-#[derive(Debug, Default)]
-struct ByteArrayStorage {
-    /// Encoded dictionary data
-    page: Vec<u8>,
+/// Maximum size of a value that can be inlined in the hash table
+const SHORT_VALUE_LEN: usize = size_of::<u64>() - 1;
 
-    values: Vec<std::ops::Range<usize>>,
+/// Entry in the hash table
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+struct Entry {
+    /// hash of the value (stored to avoid recomputing it in hash table check)
+    hash: u64,
+    /// if len =< [`SHORT_VALUE_LEN`]: the data inlined
+    /// if len > [`SHORT_VALUE_LEN`], the offset of where the data starts
+    offset_or_inline: OffsetOrInlineView,
+    index_in_dict: u64,
 }
 
-impl Storage for ByteArrayStorage {
-    type Key = u64;
-    type Value = [u8];
+/// Either offset to the dictionary page bytes or inline bytes when the bytes are short enough
+/// to avoid doing the indirection
+///
+/// For inlined view:
+///   +------------+---------------+------------------------------+
+///   | 1 bit set  | len {7 bits}  | value {56 bits}              |
+///   +------------+---------------+------------------------------+
+///
+/// For non-inlined view:
+///   +--------------+--------------------------------------------+
+///   | 1 bit unset  | offset in dict {63 bits}                   |
+///   +--------------+--------------------------------------------+
+///
+/// the inline view contain it's length to avoid having another field for length in the entry
+/// since if the hashes are the same, most probably the length will be the same, so we can do the indirection check
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct OffsetOrInlineView(u64);
 
-    fn get(&self, idx: Self::Key) -> &Self::Value {
-        &self.page[self.values[idx as usize].clone()]
+impl OffsetOrInlineView {
+    const INLINE_FLAG: u64 = 1 << 63;
+    const LEN_SHIFT: u32 = 56;
+
+    #[inline]
+    fn is_non_inlined(&self) -> bool {
+        (self.0 & Self::INLINE_FLAG) == 0
     }
 
-    fn push(&mut self, value: &Self::Value) -> Self::Key {
-        let key = self.values.len();
+    #[inline]
+    fn is_inlined(&self) -> bool {
+        !self.is_non_inlined()
+    }
+
+    #[inline]
+    fn new_inlined(value: &[u8]) -> Self {
+        debug_assert!(value.len() <= 7);
+
+        // Value bytes occupy the low 56 bits, byte 0 in the least significant position
+        let mut buf = [0u8; 8];
+        buf[..value.len()].copy_from_slice(value);
+        let packed = u64::from_le_bytes(buf);
+
+        Self(Self::INLINE_FLAG | ((value.len() as u64) << Self::LEN_SHIFT) | packed)
+    }
+
+    #[inline]
+    fn new_non_inlined(offset: u64) -> Self {
+        // `offset` is a position in the dictionary page `Vec`, whose length is at
+        // most `isize::MAX`, so it always fits in 63 bits and can't collide with
+        // `INLINE_FLAG`
+        // also, having the inline flag set for non-inlined values would mean the dictionary page is at least 9 exabytes.
+        debug_assert_eq!(
+            offset & Self::INLINE_FLAG,
+            0,
+            "dictionary page offset must fit in 63 bits"
+        );
+        let non_inlined_value = offset;
+        Self(non_inlined_value)
+    }
+
+    fn maybe_non_inlined_value(&self) -> Option<u64> {
+        if self.is_non_inlined() {
+            // Not inlined is when the first bit is unset, so the value
+            Some(self.0)
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct ByteArrayInterner {
+    state: ahash::RandomState,
+    /// Underlying hash set for each distinct value
+    map: hashbrown::hash_table::HashTable<Entry>,
+    /// Encoded dictionary page: each value prefixed by its length as a `u32`
+    page: Vec<u8>,
+}
+
+impl ByteArrayInterner {
+    fn intern(&mut self, value: &[u8]) -> Result<u64> {
+        let hash = self.state.hash_one(value);
+
+        // value is "small" - can be inlined
+        let (found_entry, inline) = if let Some(inline) = maybe_inline_value(value) {
+            // is value is already present in the set?
+            let entry = self.map.find(hash, |header| {
+                // value is stored inline so no need to consult buffer
+                // (this is the "small string optimization")
+                //
+                // no need to compare the hashes since the hash is a function of the value which is compared here
+                let is_same = inline == header.offset_or_inline;
+
+                if is_same {
+                    debug_assert_eq!(
+                        header.hash, hash,
+                        "hashes must match if the values are the same"
+                    );
+                }
+
+                is_same
+            });
+
+            (entry, Some(inline))
+        } else {
+            // value is not "small"
+            // Check if the value is already present in the set
+            let entry = self.map.find(hash, |header| {
+                // compare hash
+                if header.hash != hash {
+                    return false;
+                }
+
+                // If the value is not inlined compare it
+                let Some(offset) = header.offset_or_inline.maybe_non_inlined_value() else {
+                    // that value is inline, so it must be different
+                    return false;
+                };
+
+                self.is_at(offset, value)
+            });
+
+            (entry, None)
+        };
+
+        if let Some(entry) = found_entry {
+            return Ok(entry.index_in_dict);
+        }
+
+        // if no existing entry, make a new one
+        self.insert(value, hash, inline)
+    }
+
+    /// Returns whether `value` is in the dictionary page at `offset`
+    #[inline(always)]
+    fn is_at(&self, offset: u64, value: &[u8]) -> bool {
+        let offset = offset as usize;
+        // SAFETY: every value in the page is preceded by its length
+        let stored_len = unsafe { self.page.get_unchecked(offset - 4..offset) };
+        // Rarely false, as the hashes matched, so the branch predicts well and
+        // the comparison's reads issue before the length is known
+        if u32::from_le_bytes(stored_len.try_into().unwrap()) as usize != value.len() {
+            return false;
+        }
+        // SAFETY: the value at `offset` has the length just checked
+        let existing = unsafe { self.page.get_unchecked(offset..offset + value.len()) };
+        existing == value
+    }
+
+    fn num_unique_values(&self) -> usize {
+        self.map.len()
+    }
+
+    /// Appends `value` to the dictionary, in the empty slot at `pos`
+    fn insert(
+        &mut self,
+        value: &[u8],
+        hash: u64,
+        inline: Option<OffsetOrInlineView>,
+    ) -> Result<u64> {
+        // If inline provided it should inlined
+        debug_assert!(inline.is_none_or(|i| i.is_inlined()));
+
+        // The dictionary page is PLAIN encoded, where each value is prefixed by
+        // its length as a 4-byte little endian integer so we need to reject that since we use unsafe access later
+        //
+        // From the parquet-format spec:
+        // > Encoding PLAIN:
+        // > [...] For the byte array type, it encodes the length as a 4-byte little
+        // > endian integer, followed by the bytes.
+        // >
+        // > Dictionary Encoding:
+        // > [...] Dictionary page format: the entries in the dictionary using the plain encoding.
+        // >
+        //
+        // Reference:
+        // - Plain encoding: https://github.com/apache/parquet-format/blob/53b8bd8576827080d4382fa457003f45b41cda6e/Encodings.md?plain=1#L72-L73
+        // - Plain dictionary encoding: https://github.com/apache/parquet-format/blob/53b8bd8576827080d4382fa457003f45b41cda6e/Encodings.md?plain=1#L83
+        if value.len() > u32::MAX as usize {
+            return Err(ParquetError::General(format!(
+                "Byte array value is too large to be written in dictionary: {} bytes",
+                value.len()
+            )));
+        }
+
+        let key = self.num_unique_values() as u64;
+        let len = value.len();
 
         self.page.reserve(4 + value.len());
-        self.page.extend_from_slice((value.len() as u32).as_bytes());
-
-        let start = self.page.len();
+        self.page.extend_from_slice(&(len as u32).to_le_bytes());
+        let offset = self.page.len() as u64;
         self.page.extend_from_slice(value);
-        self.values.push(start..self.page.len());
 
-        key as u64
+        // Make the new entry
+        let new_header = Entry {
+            hash,
+            offset_or_inline: inline.unwrap_or_else(|| OffsetOrInlineView::new_non_inlined(offset)),
+            index_in_dict: key,
+        };
+        self.map
+            .insert_unique(hash, new_header, |header| header.hash);
+
+        Ok(key)
     }
 
     fn estimated_memory_size(&self) -> usize {
-        self.page.capacity() * std::mem::size_of::<u8>()
-            + self.values.capacity() * std::mem::size_of::<std::ops::Range<usize>>()
+        self.page.capacity() * std::mem::size_of::<u8>() + self.map.allocation_size()
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &[u8]> {
+        ByteArrayInternerIterator {
+            values: &self.page,
+            current_index: 0,
+        }
+    }
+}
+
+/// Iterates the values of a [`ByteArrayInterner`]'s dictionary page
+///
+/// `values` must be a page built by [`ByteArrayInterner::insert`], which is a
+/// sequence of values each preceded by its exact length as a `u32`, and
+/// `current_index` must start at 0, so it is always at the start of a value
+struct ByteArrayInternerIterator<'a> {
+    values: &'a [u8],
+    current_index: usize,
+}
+
+impl<'a> Iterator for ByteArrayInternerIterator<'a> {
+    type Item = &'a [u8];
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current_index >= self.values.len() {
+            return None;
+        }
+
+        // SAFETY: `current_index` is at the start of a value and is not past
+        // the end of the page, so the value's 4-byte length prefix is in bounds
+        let len_bytes = unsafe {
+            self.values
+                .get_unchecked(self.current_index..self.current_index + 4)
+        };
+        let len = u32::from_le_bytes(len_bytes.try_into().unwrap()) as usize;
+
+        let start = self.current_index + 4;
+        let end = start + len;
+
+        // SAFETY: `insert` writes exactly `len` bytes after the prefix, and
+        // rejects values whose length does not fit in a `u32`, so the prefix is
+        // never truncated and `start..end` is within the page
+        let value = unsafe { self.values.get_unchecked(start..end) };
+
+        self.current_index = end;
+
+        Some(value)
     }
 }
 
 /// A dictionary encoder for byte array data
 #[derive(Debug, Default)]
 struct DictEncoder {
-    interner: Interner<ByteArrayStorage>,
+    interner: ByteArrayInterner,
     indices: Vec<u64>,
     variable_length_bytes: i64,
 }
 
 impl DictEncoder {
     /// Encode `values` to the in-progress page
-    fn encode<T>(&mut self, values: T, indices: impl ExactSizeIterator<Item = usize>)
+    fn encode<T>(&mut self, values: T, indices: impl ExactSizeIterator<Item = usize>) -> Result<()>
     where
         T: ArrayAccessor + Copy,
         T::Item: AsRef<[u8]>,
@@ -357,14 +590,16 @@ impl DictEncoder {
 
         for idx in indices {
             let value = values.value(idx);
-            let interned = self.interner.intern(value.as_ref());
+            let interned = self.interner.intern(value.as_ref())?;
             self.indices.push(interned);
             self.variable_length_bytes += value.as_ref().len() as i64;
         }
+
+        Ok(())
     }
 
     fn bit_width(&self) -> u8 {
-        let length = self.interner.storage().values.len();
+        let length = self.interner.num_unique_values();
         num_required_bits(length.saturating_sub(1) as u64)
     }
 
@@ -378,15 +613,16 @@ impl DictEncoder {
     }
 
     fn estimated_dict_page_size(&self) -> usize {
-        self.interner.storage().page.len()
+        self.interner.page.len()
     }
 
     fn flush_dict_page(self) -> DictionaryPage {
-        let storage = self.interner.into_inner();
+        let unique_values = self.interner.num_unique_values();
+        let bytes = self.interner.page;
 
         DictionaryPage {
-            buf: storage.page.into(),
-            num_values: storage.values.len(),
+            buf: bytes.into(),
+            num_values: unique_values,
             is_sorted: false,
         }
     }
@@ -419,6 +655,14 @@ impl DictEncoder {
             nan_count: None,
             variable_length_bytes,
         }
+    }
+}
+
+fn maybe_inline_value(value: &[u8]) -> Option<OffsetOrInlineView> {
+    if value.len() <= SHORT_VALUE_LEN {
+        Some(OffsetOrInlineView::new_inlined(value))
+    } else {
+        None
     }
 }
 
@@ -487,8 +731,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
             encode,
             indices.iter().copied(),
             self
-        );
-        Ok(())
+        )
     }
 
     fn count_values_within_byte_budget_gather(
@@ -633,9 +876,8 @@ impl ColumnValueEncoder for ByteArrayEncoder {
                 }
 
                 if let Some(bloom_filter) = &mut self.bloom_filter {
-                    let storage = encoder.interner.storage();
-                    for range in &storage.values {
-                        bloom_filter.insert(&storage.page[range.clone()]);
+                    for value in encoder.interner.iter() {
+                        bloom_filter.insert(value);
                     }
                 }
 
@@ -663,7 +905,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
 /// Encodes the provided `values` and `indices` to `encoder`
 ///
 /// This is a free function so it can be used with `downcast_op!`
-fn encode<T, I>(values: T, indices: I, encoder: &mut ByteArrayEncoder)
+fn encode<T, I>(values: T, indices: I, encoder: &mut ByteArrayEncoder) -> Result<()>
 where
     T: ArrayAccessor + Copy,
     T::Item: Copy + Ord + AsRef<[u8]>,
@@ -709,7 +951,9 @@ where
                     bloom_filter.insert(values.value(idx).as_ref());
                 }
             }
-            encoder.fallback.encode(values, indices)
+            encoder.fallback.encode(values, indices);
+
+            Ok(())
         }
     }
 }
