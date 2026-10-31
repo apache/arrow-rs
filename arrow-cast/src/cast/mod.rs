@@ -410,6 +410,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             | Time64(Microsecond | Nanosecond)
             | Timestamp(Second | Millisecond | Microsecond | Nanosecond, _)
             | Interval(_)
+            | Duration(_)
             | BinaryView,
         ) => true,
         (Utf8 | LargeUtf8, Utf8View) => true,
@@ -1172,6 +1173,18 @@ pub fn cast_with_options(
             Interval(IntervalUnit::MonthDayNano) => {
                 cast_string_to_month_day_nano_interval::<i32>(array, cast_options)
             }
+            Duration(TimeUnit::Second) => {
+                cast_string_to_duration::<DurationSecondType, i32>(array, cast_options)
+            }
+            Duration(TimeUnit::Millisecond) => {
+                cast_string_to_duration::<DurationMillisecondType, i32>(array, cast_options)
+            }
+            Duration(TimeUnit::Microsecond) => {
+                cast_string_to_duration::<DurationMicrosecondType, i32>(array, cast_options)
+            }
+            Duration(TimeUnit::Nanosecond) => {
+                cast_string_to_duration::<DurationNanosecondType, i32>(array, cast_options)
+            }
             _ => Err(ArrowError::CastError(format!(
                 "Casting from {from_type} to {to_type} not supported",
             ))),
@@ -1229,6 +1242,18 @@ pub fn cast_with_options(
             Interval(IntervalUnit::DayTime) => cast_view_to_day_time_interval(array, cast_options),
             Interval(IntervalUnit::MonthDayNano) => {
                 cast_view_to_month_day_nano_interval(array, cast_options)
+            }
+            Duration(TimeUnit::Second) => {
+                cast_view_to_duration::<DurationSecondType>(array, cast_options)
+            }
+            Duration(TimeUnit::Millisecond) => {
+                cast_view_to_duration::<DurationMillisecondType>(array, cast_options)
+            }
+            Duration(TimeUnit::Microsecond) => {
+                cast_view_to_duration::<DurationMicrosecondType>(array, cast_options)
+            }
+            Duration(TimeUnit::Nanosecond) => {
+                cast_view_to_duration::<DurationNanosecondType>(array, cast_options)
             }
             _ => Err(ArrowError::CastError(format!(
                 "Casting from {from_type} to {to_type} not supported",
@@ -1304,6 +1329,18 @@ pub fn cast_with_options(
             }
             Interval(IntervalUnit::MonthDayNano) => {
                 cast_string_to_month_day_nano_interval::<i64>(array, cast_options)
+            }
+            Duration(TimeUnit::Second) => {
+                cast_string_to_duration::<DurationSecondType, i64>(array, cast_options)
+            }
+            Duration(TimeUnit::Millisecond) => {
+                cast_string_to_duration::<DurationMillisecondType, i64>(array, cast_options)
+            }
+            Duration(TimeUnit::Microsecond) => {
+                cast_string_to_duration::<DurationMicrosecondType, i64>(array, cast_options)
+            }
+            Duration(TimeUnit::Nanosecond) => {
+                cast_string_to_duration::<DurationNanosecondType, i64>(array, cast_options)
             }
             _ => Err(ArrowError::CastError(format!(
                 "Casting from {from_type} to {to_type} not supported",
@@ -3243,6 +3280,141 @@ mod tests {
                 i64::MAX - 2
             )
         );
+    }
+
+    #[test]
+    fn test_cast_string_to_duration() {
+        let array = StringArray::from(vec![Some("1"), Some("-2"), None, Some("invalid")]);
+        let to_type = DataType::Duration(TimeUnit::Second);
+        assert!(can_cast_types(array.data_type(), &to_type));
+
+        let casted = cast(&array, &to_type).unwrap();
+        assert_eq!(
+            casted.as_primitive::<DurationSecondType>(),
+            &DurationSecondArray::from(vec![Some(1), Some(-2), None, None])
+        );
+
+        let options = CastOptions {
+            safe: false,
+            format_options: FormatOptions::default(),
+        };
+        let err = cast_with_options(&array, &to_type, &options).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Cast error: Cannot cast string 'invalid' to value of Duration(s) type"
+        );
+    }
+
+    #[test]
+    fn test_cast_string_with_units_to_duration() {
+        let array = StringArray::from(vec![
+            Some("1 hour 10 minutes"),
+            Some("90 seconds"),
+            Some("0.5 hours"),
+            Some("-1 hour -30 minutes"),
+            Some("2 days"),
+            Some("1 week"),
+            Some("45 days 14 hours 2 mins 34 secs"),
+            None,
+            Some("2 months"),
+        ]);
+        let to_type = DataType::Duration(TimeUnit::Second);
+
+        let casted = cast(&array, &to_type).unwrap();
+        assert_eq!(
+            casted.as_primitive::<DurationSecondType>(),
+            &DurationSecondArray::from(vec![
+                Some(4200),
+                Some(90),
+                Some(1800),
+                Some(-5400),
+                Some(172800),
+                Some(604800),
+                Some(3938554),
+                None,
+                None
+            ])
+        );
+
+        let options = CastOptions {
+            safe: false,
+            format_options: FormatOptions::default(),
+        };
+        let err = cast_with_options(&array, &to_type, &options).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Compute error: Cannot convert interval containing non-zero months to duration"
+        );
+    }
+
+    #[test]
+    fn test_cast_fractional_calendar_units_to_duration() {
+        let array = StringArray::from(vec![
+            Some("0.5 months"),
+            Some("-0.5 months"),
+            Some("1.5 months"),
+            Some("0.5 years"),
+            Some("0.5 decades"),
+            Some("15 days"),
+            Some("0.5 days"),
+            Some("0.5 weeks"),
+        ]);
+        let to_type = DataType::Duration(TimeUnit::Second);
+
+        let casted = cast(&array, &to_type).unwrap();
+        assert_eq!(
+            casted.as_primitive::<DurationSecondType>(),
+            &DurationSecondArray::from(vec![
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(1_296_000),
+                Some(43_200),
+                Some(302_400)
+            ])
+        );
+
+        let options = CastOptions {
+            safe: false,
+            format_options: FormatOptions::default(),
+        };
+        let err = cast_with_options(&array, &to_type, &options).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Cast error: Cannot cast string '0.5 months' to value of Duration(s) type"
+        );
+    }
+
+    #[test]
+    fn test_cast_large_string_and_view_to_duration() {
+        let to_type = DataType::Duration(TimeUnit::Nanosecond);
+        for array in [
+            Arc::new(LargeStringArray::from(vec![
+                Some("10"),
+                Some("1 minute"),
+                Some("1 day"),
+                None,
+            ])) as ArrayRef,
+            Arc::new(StringViewArray::from(vec![
+                Some("10"),
+                Some("1 minute"),
+                Some("1 day"),
+                None,
+            ])) as ArrayRef,
+        ] {
+            let casted = cast(&array, &to_type).unwrap();
+            assert_eq!(
+                casted.as_primitive::<DurationNanosecondType>(),
+                &DurationNanosecondArray::from(vec![
+                    Some(10),
+                    Some(60_000_000_000),
+                    Some(86_400_000_000_000),
+                    None
+                ])
+            );
+        }
     }
 
     #[test]

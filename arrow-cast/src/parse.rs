@@ -1326,23 +1326,36 @@ const NANOS_PER_MILLIS: i64 = 1_000_000;
 const NANOS_PER_SECOND: i64 = 1_000 * NANOS_PER_MILLIS;
 const NANOS_PER_MINUTE: i64 = 60 * NANOS_PER_SECOND;
 const NANOS_PER_HOUR: i64 = 60 * NANOS_PER_MINUTE;
-#[cfg(test)]
-const NANOS_PER_DAY: i64 = 24 * NANOS_PER_HOUR;
+pub(crate) const NANOS_PER_DAY: i64 = 24 * NANOS_PER_HOUR;
 
 /// Config to parse interval strings
 ///
-/// Currently stores the `default_unit` to use if the string doesn't have one specified
+/// Stores the `default_unit` to use if the string doesn't have one specified,
+/// and whether fractional calendar units may be spilled into smaller units.
 #[derive(Debug, Clone)]
 pub struct IntervalParseConfig {
     /// The default unit to use if none is specified
     /// e.g. `INTERVAL 1` represents `INTERVAL 1 SECOND` when default_unit = [IntervalUnit::Second]
     default_unit: IntervalUnit,
+    /// Whether fractional calendar units (centuries, decades, years, months)
+    /// may be spilled into smaller units. `0.5 months` is parsed as 15 days
+    /// when this is `true`.
+    allow_fractional_calendar_units: bool,
 }
 
 impl IntervalParseConfig {
     /// Create a new [IntervalParseConfig] with the given default unit
     pub fn new(default_unit: IntervalUnit) -> Self {
-        Self { default_unit }
+        Self {
+            default_unit,
+            allow_fractional_calendar_units: true,
+        }
+    }
+
+    /// Reject fractional calendar units instead of spilling them into smaller units
+    pub fn reject_fractional_calendar_units(mut self) -> Self {
+        self.allow_fractional_calendar_units = false;
+        self
     }
 }
 
@@ -1419,6 +1432,13 @@ impl IntervalUnit {
             Some(s) => s.parse(),
             None => Ok(config.default_unit),
         }
+    }
+
+    fn is_calendar_unit(self) -> bool {
+        matches!(
+            self,
+            Self::Century | Self::Decade | Self::Year | Self::Month
+        )
     }
 }
 
@@ -1737,6 +1757,16 @@ fn parse_interval_components(
             "Invalid input syntax for type interval: {value:?}"
         )));
     };
+
+    if !config.allow_fractional_calendar_units {
+        for (amount, unit) in &pairs {
+            if amount.frac != 0 && unit.is_calendar_unit() {
+                return Err(ArrowError::ParseError(format!(
+                    "Fractional calendar units are not supported: {value:?}"
+                )));
+            }
+        }
+    }
 
     // collect parsed results
     let (amounts, units): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
