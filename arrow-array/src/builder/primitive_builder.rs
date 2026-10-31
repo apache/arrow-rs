@@ -390,6 +390,14 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         PrimitiveArray::<T>::from(array_data)
     }
 
+    /// Shortens the builder to its first `len` values
+    ///
+    /// If `len` is greater than or equal to the current length, this has no effect.
+    pub fn truncate(&mut self, len: usize) {
+        self.values_builder.truncate(len);
+        self.null_buffer_builder.truncate(len);
+    }
+
     /// Returns the current values buffer as a slice
     pub fn values_slice(&self) -> &[T::Native] {
         self.values_builder.as_slice()
@@ -486,6 +494,21 @@ mod tests {
             assert!(arr.is_valid(i));
             assert_eq!(i as i32, arr.value(i));
         }
+    }
+
+    #[test]
+    fn test_primitive_array_builder_truncate() {
+        let mut builder = Int32Builder::new();
+        builder.append_value(1);
+        builder.append_null();
+        builder.append_value(3);
+        builder.truncate(2);
+        builder.append_value(4);
+        builder.truncate(5);
+        assert_eq!(
+            builder.finish(),
+            Int32Array::from(vec![Some(1), None, Some(4)])
+        );
     }
 
     #[test]

@@ -744,7 +744,11 @@ impl Decoder {
                         self.awaiting_body = false;
                         continue;
                     }
-                    Err(ref e) if is_incomplete_data(e) => break,
+                    Err(ref e) if is_incomplete_data(e) => {
+                        // The body is decoded again from its start with the next chunk.
+                        self.active_decoder.rollback();
+                        break;
+                    }
                     Err(e) => return Err(e),
                 };
             }
@@ -769,7 +773,14 @@ impl Decoder {
         if self.remaining_capacity == 0 {
             return Err(AvroError::BatchFull);
         }
-        let consumed = self.active_decoder.decode(data, 1)?;
+        let consumed = match self.active_decoder.decode(data, 1) {
+            Ok(n) => n,
+            Err(e) => {
+                // Leave nothing behind, so the datum can be passed again
+                self.active_decoder.rollback();
+                return Err(e);
+            }
+        };
         self.remaining_capacity -= 1;
         Ok(consumed)
     }
@@ -2807,6 +2818,30 @@ mod test {
         let values = second.column(0).as_primitive::<Int32Type>();
         assert_eq!(values.values(), &[-7]);
         assert!(decoder.flush().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_unframed_decode_retry_after_partial_record() {
+        let schema = AvroSchema::new(
+            r#"{"type":"record","name":"r","fields":[{"name":"s","type":"string"},{"name":"n","type":"int"}]}"#
+                .to_string(),
+        );
+        let mut store = SchemaStore::new();
+        let fp = store.register(schema).unwrap();
+        let mut decoder = ReaderBuilder::new()
+            .with_writer_schema_store(store)
+            .with_active_fingerprint(fp)
+            .with_decoder_mode(DecoderMode::UnframedDatum)
+            .build_decoder()
+            .unwrap();
+        // "ab", then 42; the first attempt ends after the string
+        let datum = [&[0x04, b'a', b'b'][..], &encode_zigzag(42)].concat();
+        assert!(decoder.decode(&datum[..3]).is_err());
+        assert_eq!(decoder.decode(&datum).unwrap(), datum.len());
+        let batch = decoder.flush().unwrap().expect("batch");
+        assert_eq!(batch.num_rows(), 1);
+        assert_eq!(batch.column(0).as_string::<i32>().value(0), "ab");
+        assert_eq!(batch.column(1).as_primitive::<Int32Type>().value(0), 42);
     }
 
     #[test]

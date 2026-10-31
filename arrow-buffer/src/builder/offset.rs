@@ -64,6 +64,26 @@ impl<O: ArrowNativeType> OffsetBufferBuilder<O> {
         Ok(())
     }
 
+    /// Shortens the builder to its first `len` slices
+    ///
+    /// If `len` is greater than or equal to the current number of slices, this has no effect.
+    ///
+    /// ```
+    /// # use arrow_buffer::OffsetBufferBuilder;
+    /// let mut builder = OffsetBufferBuilder::<i32>::new(3);
+    /// builder.push_length(2);
+    /// builder.push_length(3);
+    /// builder.truncate(1);
+    /// builder.push_length(4);
+    /// assert_eq!(&*builder.finish(), &[0, 2, 6]);
+    /// ```
+    #[inline]
+    pub fn truncate(&mut self, len: usize) {
+        self.offsets.truncate(len + 1);
+        // The first offset is never removed
+        self.last_offset = self.offsets[self.offsets.len() - 1].as_usize();
+    }
+
     /// Reserve space for at least `additional` further offsets
     #[inline]
     pub fn reserve(&mut self, additional: usize) {
