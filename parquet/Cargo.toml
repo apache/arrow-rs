@@ -51,6 +51,7 @@ object_store = { workspace = true, optional = true, features = ["tokio"] }
 
 bytes = { version = "1.1", default-features = false, features = ["std"] }
 snap = { version = "1.0", default-features = false, optional = true }
+snipsnap = { git = "https://github.com/Dandandan/snipsnap", rev = "2f32cbd03a1322dfb923af1b26103f0e2966dc15", optional = true }
 brotli = { version = "9.0", default-features = false, features = ["std"], optional = true }
 # To use `flate2` you must enable either the `flate2-zlib-rs` or `flate2-rust_backend` backends
 flate2 = { version = "1.1", default-features = false, optional = true }
@@ -81,6 +82,7 @@ mimalloc = { version = "0.1", default-features = false }
 base64 = { version = "0.23", default-features = false, features = ["std"] }
 criterion = { workspace = true, default-features = false, features = ["async_futures"]  }
 snap = { version = "1.0", default-features = false }
+snipsnap = { git = "https://github.com/Dandandan/snipsnap", rev = "2f32cbd03a1322dfb923af1b26103f0e2966dc15" }
 tempfile = { version = "3.0", default-features = false }
 insta = { workspace = true, default-features = true }
 proptest = { version = "1.0", default-features = false, features = ["std"] }
@@ -102,6 +104,8 @@ all-features = true
 
 [features]
 default = ["arrow", "snap", "brotli", "flate2-zlib-rs", "lz4", "zstd", "base64", "simdutf8"]
+# Enable Snappy (decompression uses snipsnap)
+snap = ["dep:snap", "dep:snipsnap"]
 # Enable lz4
 lz4 = ["lz4_flex"]
 # Enable arrow reader/writer APIs

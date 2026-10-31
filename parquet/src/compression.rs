@@ -224,14 +224,14 @@ pub fn create_codec(codec: CodecType, _options: &CodecOptions) -> Result<Option<
 
 #[cfg(any(feature = "snap", test))]
 mod snappy_codec {
-    use snap::raw::{Decoder, Encoder, decompress_len, max_compress_len};
+    use snap::raw::{Encoder, max_compress_len};
+    use snipsnap::{decompress_into_uninit, decompress_len};
 
     use crate::compression::Codec;
     use crate::errors::Result;
 
     /// Codec for Snappy compression format.
     pub struct SnappyCodec {
-        decoder: Decoder,
         encoder: Encoder,
     }
 
@@ -239,7 +239,6 @@ mod snappy_codec {
         /// Creates new Snappy compression codec.
         pub(crate) fn new() -> Self {
             Self {
-                decoder: Decoder::new(),
                 encoder: Encoder::new(),
             }
         }
@@ -257,10 +256,14 @@ mod snappy_codec {
                 None => decompress_len(input_buf)?,
             };
             let offset = output_buf.len();
-            output_buf.resize(offset + len, 0);
-            self.decoder
-                .decompress(input_buf, &mut output_buf[offset..])
-                .map_err(|e| e.into())
+            output_buf.reserve(len);
+            // Decode into spare capacity so the output is not zero-filled first
+            let n = decompress_into_uninit(input_buf, &mut output_buf.spare_capacity_mut()[..len])?
+                .len();
+            // SAFETY: `decompress_into_uninit` initialized the first `n` bytes
+            // of the spare capacity on success
+            unsafe { output_buf.set_len(offset + n) };
+            Ok(n)
         }
 
         fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
