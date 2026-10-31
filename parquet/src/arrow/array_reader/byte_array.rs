@@ -53,6 +53,11 @@ pub fn make_byte_array_reader(
             .clone(),
     };
 
+    // A schema given to the reader can map this column to a string type even
+    // though the Parquet annotation does not describe one, in which case the
+    // decoder still has to validate the data as UTF-8.
+    let validate_utf8 = matches!(data_type, ArrowType::Utf8 | ArrowType::LargeUtf8);
+
     match data_type {
         ArrowType::Binary
         | ArrowType::Utf8
@@ -62,6 +67,7 @@ pub fn make_byte_array_reader(
             if let Some(threshold) = padding_threshold {
                 reader.set_padding_threshold(threshold);
             }
+            reader.set_validate_utf8(validate_utf8);
             Ok(Box::new(ByteArrayReader::<i32>::new(
                 pages, data_type, reader,
             )))
@@ -71,6 +77,7 @@ pub fn make_byte_array_reader(
             if let Some(threshold) = padding_threshold {
                 reader.set_padding_threshold(threshold);
             }
+            reader.set_validate_utf8(validate_utf8);
             Ok(Box::new(ByteArrayReader::<i64>::new(
                 pages, data_type, reader,
             )))
@@ -195,6 +202,10 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
             decoder: None,
             validate_utf8,
         }
+    }
+
+    fn set_validate_utf8(&mut self, validate_utf8: bool) {
+        self.validate_utf8 |= validate_utf8;
     }
 
     fn set_dict(

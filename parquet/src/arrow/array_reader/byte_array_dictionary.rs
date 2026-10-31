@@ -44,7 +44,7 @@ use crate::util::bit_util::BitPacking;
 /// A macro to reduce verbosity of [`make_byte_array_dictionary_reader`]
 macro_rules! make_reader {
     (
-        ($pages:expr, $column_desc:expr, $data_type:expr, $batch_size:expr, $padding_threshold:expr) => match ($k:expr, $v:expr) {
+        ($pages:expr, $column_desc:expr, $data_type:expr, $batch_size:expr, $padding_threshold:expr, $validate_utf8:expr) => match ($k:expr, $v:expr) {
             $(($key_arrow:pat, $value_arrow:pat) => ($key_type:ty, $value_type:ty),)+
         }
     ) => {
@@ -55,6 +55,7 @@ macro_rules! make_reader {
                     if let Some(threshold) = $padding_threshold {
                         reader.set_padding_threshold(threshold);
                     }
+                    reader.set_validate_utf8($validate_utf8);
                     Ok(Box::new(ByteArrayDictionaryReader::<$key_type, $value_type>::try_new(
                         $pages, $data_type, reader,
                     )?))
@@ -94,10 +95,22 @@ pub fn make_byte_array_dictionary_reader(
             .clone(),
     };
 
+    // A schema given to the reader can map this column to a dictionary with a
+    // string value type even though the Parquet annotation does not describe
+    // one, in which case the decoder still has to validate the data as UTF-8.
+    let validate_utf8 = matches!(
+        &data_type,
+        ArrowType::Dictionary(_, value_type)
+            if matches!(
+                value_type.as_ref(),
+                ArrowType::Utf8 | ArrowType::LargeUtf8 | ArrowType::Utf8View
+            )
+    );
+
     match &data_type {
         ArrowType::Dictionary(key_type, value_type) => {
             make_reader! {
-                (pages, column_desc, data_type, batch_size, padding_threshold) => match (key_type.as_ref(), value_type.as_ref()) {
+                (pages, column_desc, data_type, batch_size, padding_threshold, validate_utf8) => match (key_type.as_ref(), value_type.as_ref()) {
                     (ArrowType::UInt8, ArrowType::Binary | ArrowType::Utf8 | ArrowType::Utf8View | ArrowType::BinaryView | ArrowType::FixedSizeBinary(_)) => (u8, i32),
                     (ArrowType::UInt8, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (u8, i64),
                     (ArrowType::Int8, ArrowType::Binary | ArrowType::Utf8 | ArrowType::Utf8View | ArrowType::BinaryView | ArrowType::FixedSizeBinary(_)) => (i8, i32),
@@ -295,15 +308,31 @@ struct DictionaryDecoder<K, V> {
     /// Dictionary decoder
     decoder: Option<MaybeDictionaryDecoder>,
 
+    /// Whether the values are validated as UTF-8, and so built as strings,
+    /// see [`Self::value_type`].
     validate_utf8: bool,
-
-    value_type: ArrowType,
 
     /// `Some` only for `FIXED_LEN_BYTE_ARRAY` columns, selecting fixed-width
     /// decoding; `None` for other physical types.
     flba_column_descr: Option<ColumnDescPtr>,
 
     phantom: PhantomData<(K, V)>,
+}
+
+impl<K, V: OffsetSizeTrait> DictionaryDecoder<K, V> {
+    /// The type of the dictionary values.
+    ///
+    /// Values are built as strings exactly when they are validated as UTF-8:
+    /// when the column is annotated as a string, or is read into a dictionary
+    /// with string values even though its annotation does not say so.
+    fn value_type(&self) -> ArrowType {
+        match (V::IS_LARGE, self.validate_utf8) {
+            (true, true) => ArrowType::LargeUtf8,
+            (true, false) => ArrowType::LargeBinary,
+            (false, true) => ArrowType::Utf8,
+            (false, false) => ArrowType::Binary,
+        }
+    }
 }
 
 impl<K, V> ColumnValueDecoder for DictionaryDecoder<K, V>
@@ -316,22 +345,18 @@ where
     fn new(col: &ColumnDescPtr) -> Self {
         let validate_utf8 = col.converted_type() == ConvertedType::UTF8;
 
-        let value_type = match (V::IS_LARGE, col.converted_type() == ConvertedType::UTF8) {
-            (true, true) => ArrowType::LargeUtf8,
-            (true, false) => ArrowType::LargeBinary,
-            (false, true) => ArrowType::Utf8,
-            (false, false) => ArrowType::Binary,
-        };
-
         Self {
             dict: None,
             decoder: None,
             validate_utf8,
-            value_type,
             flba_column_descr: (col.physical_type() == Type::FIXED_LEN_BYTE_ARRAY)
                 .then(|| col.clone()),
             phantom: Default::default(),
         }
+    }
+
+    fn set_validate_utf8(&mut self, validate_utf8: bool) {
+        self.validate_utf8 |= validate_utf8;
     }
 
     fn set_dict(
@@ -376,7 +401,7 @@ where
                 .read(&mut buffer, usize::MAX)?;
         }
 
-        let array = buffer.into_array(None, self.value_type.clone());
+        let array = buffer.into_array(None, self.value_type());
         self.dict = Some(array);
         Ok(())
     }
@@ -426,6 +451,7 @@ where
     }
 
     fn read(&mut self, out: &mut Self::Buffer, num_values: usize) -> Result<usize> {
+        let value_type = self.value_type();
         match self.decoder.as_mut().expect("decoder set") {
             MaybeDictionaryDecoder::Fallback(decoder) => {
                 decoder.read(out.spill_values()?, num_values, None)
@@ -445,7 +471,7 @@ where
                     .as_ref()
                     .ok_or_else(|| general_err!("missing dictionary page for column"))?;
 
-                assert_eq!(dict.data_type(), &self.value_type);
+                assert_eq!(dict.data_type(), &value_type);
 
                 if dict.is_empty() {
                     return Ok(0); // All data must be NULL
@@ -471,7 +497,7 @@ where
                         let mut keys = vec![K::default(); len];
                         let len = decoder.get_batch(&mut keys)?;
 
-                        assert_eq!(dict.data_type(), &self.value_type);
+                        assert_eq!(dict.data_type(), &value_type);
 
                         let data = dict.to_data();
                         let dict_buffers = data.buffers();

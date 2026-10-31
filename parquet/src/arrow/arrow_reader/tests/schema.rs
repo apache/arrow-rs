@@ -563,34 +563,98 @@ fn test_schema_error_bad_nullability() {
     )
 }
 
+/// The ways a byte array column is written, with the encodings each produces:
+/// dictionary pages (the default), dictionary pages that fall back to PLAIN
+/// part way through the column chunk, and PLAIN, DELTA_LENGTH_BYTE_ARRAY and
+/// DELTA_BYTE_ARRAY pages without a dictionary.
+fn byte_array_encodings() -> Vec<(Vec<Encoding>, WriterProperties)> {
+    let without_dictionary = |encoding| {
+        WriterProperties::builder()
+            .set_dictionary_enabled(false)
+            .set_encoding(encoding)
+            .build()
+    };
+    // A one-byte limit makes the writer abandon the dictionary after the
+    // first value.
+    let dictionary_fallback = WriterProperties::builder()
+        .set_dictionary_page_size_limit(1)
+        .set_write_batch_size(1)
+        .build();
+    vec![
+        (vec![Encoding::RLE_DICTIONARY], WriterProperties::default()),
+        (
+            vec![Encoding::RLE_DICTIONARY, Encoding::PLAIN],
+            dictionary_fallback,
+        ),
+        (vec![Encoding::PLAIN], without_dictionary(Encoding::PLAIN)),
+        (
+            vec![Encoding::DELTA_LENGTH_BYTE_ARRAY],
+            without_dictionary(Encoding::DELTA_LENGTH_BYTE_ARRAY),
+        ),
+        (
+            vec![Encoding::DELTA_BYTE_ARRAY],
+            without_dictionary(Encoding::DELTA_BYTE_ARRAY),
+        ),
+    ]
+}
+
+/// Writes `batch` with `props`, checking that every column used `encodings`.
+fn write_with_encodings(
+    batch: &RecordBatch,
+    encodings: &[Encoding],
+    props: WriterProperties,
+) -> File {
+    let file = tempfile().unwrap();
+    let mut writer =
+        ArrowWriter::try_new(file.try_clone().unwrap(), batch.schema(), Some(props)).unwrap();
+    writer.write(batch).unwrap();
+    writer.close().unwrap();
+
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file.try_clone().unwrap()).unwrap();
+    for column in builder.metadata().row_group(0).columns() {
+        let written: Vec<_> = column.encodings().collect();
+        assert!(
+            encodings.iter().all(|encoding| written.contains(encoding)),
+            "{} was written as {written:?}, not {encodings:?}",
+            column.column_path()
+        );
+    }
+    file
+}
+
 #[test]
 fn test_read_binary_as_utf8() {
-    let file = write_parquet_from_iter(vec![
+    let values = vec![b"one".as_ref(), b"two".as_ref(), b"three".as_ref()];
+    let batch = RecordBatch::try_from_iter(vec![
         (
             "binary_to_utf8",
-            Arc::new(BinaryArray::from(vec![
-                b"one".as_ref(),
-                b"two".as_ref(),
-                b"three".as_ref(),
-            ])) as ArrayRef,
+            Arc::new(BinaryArray::from(values.clone())) as ArrayRef,
         ),
         (
             "large_binary_to_large_utf8",
-            Arc::new(LargeBinaryArray::from(vec![
-                b"one".as_ref(),
-                b"two".as_ref(),
-                b"three".as_ref(),
-            ])) as ArrayRef,
+            Arc::new(LargeBinaryArray::from(values.clone())) as ArrayRef,
         ),
         (
             "binary_view_to_utf8_view",
-            Arc::new(BinaryViewArray::from(vec![
-                b"one".as_ref(),
-                b"two".as_ref(),
-                b"three".as_ref(),
-            ])) as ArrayRef,
+            Arc::new(BinaryViewArray::from(values.clone())) as ArrayRef,
         ),
-    ]);
+        (
+            "binary_to_dictionary_utf8",
+            Arc::new(BinaryArray::from(values.clone())) as ArrayRef,
+        ),
+        (
+            "large_binary_to_dictionary_large_utf8",
+            Arc::new(LargeBinaryArray::from(values.clone())) as ArrayRef,
+        ),
+        (
+            "binary_to_dictionary_utf8_view",
+            Arc::new(BinaryArray::from(values)) as ArrayRef,
+        ),
+    ])
+    .unwrap();
+    let dictionary = |value_type| {
+        ArrowDataType::Dictionary(Box::new(ArrowDataType::Int32), Box::new(value_type))
+    };
     let supplied_fields = Fields::from(vec![
         Field::new("binary_to_utf8", ArrowDataType::Utf8, false),
         Field::new(
@@ -599,66 +663,135 @@ fn test_read_binary_as_utf8() {
             false,
         ),
         Field::new("binary_view_to_utf8_view", ArrowDataType::Utf8View, false),
+        Field::new(
+            "binary_to_dictionary_utf8",
+            dictionary(ArrowDataType::Utf8),
+            false,
+        ),
+        Field::new(
+            "large_binary_to_dictionary_large_utf8",
+            dictionary(ArrowDataType::LargeUtf8),
+            false,
+        ),
+        Field::new(
+            "binary_to_dictionary_utf8_view",
+            dictionary(ArrowDataType::Utf8View),
+            false,
+        ),
     ]);
+    let supplied_schema = Arc::new(Schema::new(supplied_fields));
 
-    let options = ArrowReaderOptions::new().with_schema(Arc::new(Schema::new(supplied_fields)));
-    let mut arrow_reader =
-        ParquetRecordBatchReaderBuilder::try_new_with_options(file.try_clone().unwrap(), options)
+    for (encodings, props) in byte_array_encodings() {
+        let file = write_with_encodings(&batch, &encodings, props);
+        let options = ArrowReaderOptions::new().with_schema(Arc::clone(&supplied_schema));
+        let mut arrow_reader = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
             .expect("reader builder with schema")
             .build()
             .expect("reader with schema");
 
-    let batch = arrow_reader.next().unwrap().unwrap();
-    assert_eq!(batch.num_columns(), 3);
-    assert_eq!(batch.num_rows(), 3);
-    assert_eq!(
-        batch
-            .column(0)
-            .as_string::<i32>()
-            .iter()
-            .collect::<Vec<_>>(),
-        vec![Some("one"), Some("two"), Some("three")]
-    );
-
-    assert_eq!(
-        batch
-            .column(1)
-            .as_string::<i64>()
-            .iter()
-            .collect::<Vec<_>>(),
-        vec![Some("one"), Some("two"), Some("three")]
-    );
-
-    assert_eq!(
-        batch.column(2).as_string_view().iter().collect::<Vec<_>>(),
-        vec![Some("one"), Some("two"), Some("three")]
-    );
+        let read = arrow_reader.next().unwrap().unwrap();
+        assert_eq!(read.num_rows(), 3);
+        for (field, column) in supplied_schema.fields().iter().zip(read.columns()) {
+            assert_eq!(column.data_type(), field.data_type(), "{encodings:?}");
+            column.to_data().validate_full().unwrap();
+            let strings = arrow_cast::cast(column, &ArrowDataType::Utf8).unwrap();
+            assert_eq!(
+                strings.as_string::<i32>().iter().collect::<Vec<_>>(),
+                vec![Some("one"), Some("two"), Some("three")],
+                "{} written as {encodings:?}",
+                field.name()
+            );
+        }
+    }
 }
 
+/// A supplied schema that reads a `Binary` column as a string type must still
+/// validate UTF-8. The readers used to enable validation only when the Parquet
+/// column was annotated as a string, so a schema hint bypassed it entirely and
+/// produced a string array over arbitrary bytes.
 #[test]
-#[should_panic(expected = "Invalid UTF8 sequence at")]
 fn test_read_non_utf8_binary_as_utf8() {
-    let file = write_parquet_from_iter(vec![(
+    // Invalid UTF-8 after an empty value and a null, so that when the writer
+    // abandons the dictionary after the first value, the invalid values are in
+    // the PLAIN pages that follow.
+    let batch = RecordBatch::try_from_iter(vec![(
         "non_utf8_binary",
-        Arc::new(BinaryArray::from(vec![
-            b"\xDE\x00\xFF".as_ref(),
-            b"\xDE\x01\xAA".as_ref(),
-            b"\xDE\x02\xFF".as_ref(),
+        Arc::new(BinaryArray::from_opt_vec(vec![
+            Some(b"".as_ref()),
+            None,
+            Some(b"\xDE\x00\xFF".as_ref()),
+            Some(b"\xDE\x01\xAA".as_ref()),
         ])) as ArrayRef,
-    )]);
-    let supplied_fields = Fields::from(vec![Field::new(
-        "non_utf8_binary",
-        ArrowDataType::Utf8,
-        false,
-    )]);
+    )])
+    .unwrap();
+    let dictionary = |value_type| {
+        ArrowDataType::Dictionary(Box::new(ArrowDataType::Int32), Box::new(value_type))
+    };
 
-    let options = ArrowReaderOptions::new().with_schema(Arc::new(Schema::new(supplied_fields)));
-    let mut arrow_reader =
-        ParquetRecordBatchReaderBuilder::try_new_with_options(file.try_clone().unwrap(), options)
+    for (encodings, props) in byte_array_encodings() {
+        let file = write_with_encodings(&batch, &encodings, props);
+        for supplied_type in [
+            ArrowDataType::Utf8,
+            ArrowDataType::LargeUtf8,
+            ArrowDataType::Utf8View,
+            dictionary(ArrowDataType::Utf8),
+            dictionary(ArrowDataType::LargeUtf8),
+            dictionary(ArrowDataType::Utf8View),
+        ] {
+            let supplied_fields = Fields::from(vec![Field::new(
+                "non_utf8_binary",
+                supplied_type.clone(),
+                true,
+            )]);
+
+            let options =
+                ArrowReaderOptions::new().with_schema(Arc::new(Schema::new(supplied_fields)));
+            let mut arrow_reader = ParquetRecordBatchReaderBuilder::try_new_with_options(
+                file.try_clone().unwrap(),
+                options,
+            )
             .expect("reader builder with schema")
             .build()
             .expect("reader with schema");
-    arrow_reader.next().unwrap().unwrap_err();
+
+            let err = arrow_reader.next().unwrap().unwrap_err();
+            assert!(
+                err.to_string().contains("encountered non UTF-8 data"),
+                "{encodings:?} read as {supplied_type}: unexpected error: {err}"
+            );
+        }
+    }
+}
+
+/// A `JSON` column is read as `Utf8` by default, so it must be validated as
+/// UTF-8 even though its converted type is `JSON` rather than `UTF8`.
+#[test]
+fn test_read_non_utf8_json() {
+    let message_type = "message schema { REQUIRED BYTE_ARRAY json (JSON); }";
+    let schema = Arc::new(parse_message_type(message_type).unwrap());
+    let file = tempfile().unwrap();
+    let mut writer =
+        SerializedFileWriter::new(file.try_clone().unwrap(), schema, Default::default()).unwrap();
+    let mut row_group_writer = writer.next_row_group().unwrap();
+    let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+    column_writer
+        .typed::<ByteArrayType>()
+        .write_batch(&[ByteArray::from(b"\"\xFF\"".to_vec())], None, None)
+        .unwrap();
+    column_writer.close().unwrap();
+    row_group_writer.close().unwrap();
+    writer.close().unwrap();
+
+    let mut arrow_reader = ParquetRecordBatchReader::try_new(file, 1024).unwrap();
+    assert_eq!(
+        arrow_reader.schema().field(0).data_type(),
+        &ArrowDataType::Utf8
+    );
+    let err = arrow_reader.next().unwrap().unwrap_err();
+    assert!(
+        err.to_string().contains("encountered non UTF-8 data"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]
