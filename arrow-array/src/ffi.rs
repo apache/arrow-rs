@@ -1821,7 +1821,7 @@ mod tests_from_ffi {
         for array in arrays {
             let data = array.to_data();
             // The same offsets, one byte past an aligned address.
-            let mut offsets = vec![0_u8];
+            let mut offsets = arrow_buffer::MutableBuffer::from_len_zeroed(1);
             offsets.extend_from_slice(data.buffers()[0].as_slice());
             let offsets = &offsets[1..];
             assert_ne!(offsets.as_ptr().align_offset(4), 0);
