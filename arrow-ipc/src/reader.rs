@@ -23,6 +23,37 @@
 //! however the [`FileReader`] expects a reader that supports [`Seek`]ing
 //!
 //! [`Seek`]: std::io::Seek
+//!
+//! # Dictionary value type metadata
+//!
+//! Since version 1.6 of the IPC format, the `DictionaryEncoding` of a
+//! dictionary-encoded field can hold `custom_metadata` for the dictionary
+//! *value* type, for example the `ARROW:extension:name` of a dictionary whose
+//! values are an extension type, while `Field.custom_metadata` describes the
+//! field's own type, for example an extension type whose storage type is a
+//! dictionary.
+//!
+//! [`DataType::Dictionary`] cannot carry metadata for its value type (see
+//! [#7982](https://github.com/apache/arrow-rs/issues/7982)), so until it can,
+//! arrow-rs maps the value type metadata to the metadata of the [`Field`]:
+//!
+//! * If the field's own metadata has no `ARROW:extension:name`, the value type
+//!   metadata is copied into the field's metadata. Keys already present in the
+//!   field's metadata take precedence.
+//! * Otherwise the value type metadata is dropped.
+//!
+//! This applies to the schemas read by [`FileReader`], [`StreamReader`] and
+//! the schema conversions in [`crate::convert`]. The C Data Interface import
+//! (`Field::try_from(&FFI_ArrowSchema)`) maps the metadata of the `dictionary`
+//! of an imported schema the same way. It keeps metadata such as an
+//! `arrow.uuid` extension type on dictionary-encoded fields, where writers
+//! that predate version 1.6 put it.
+//!
+//! arrow-rs never writes `DictionaryEncoding.custom_metadata`: the metadata of
+//! a dictionary-encoded field is always written to `Field.custom_metadata`,
+//! the position used before version 1.6, which other implementations read as
+//! metadata of the field's own type (for example an extension type whose
+//! storage type is a dictionary).
 
 mod stream;
 pub use stream::*;
@@ -4467,5 +4498,135 @@ mod tests {
             err.to_string().contains("Unexpected end of stream"),
             "unexpected error: {err}"
         );
+    }
+
+    /// A batch of a uuid dictionary column, without extension metadata
+    fn uuid_dictionary_batch() -> RecordBatch {
+        use crate::convert::test_util::uuid_dictionary_type;
+        let values =
+            FixedSizeBinaryArray::try_from_iter([[1u8; 16], [2u8; 16]].into_iter()).unwrap();
+        let keys = Int32Array::from(vec![Some(1), None, Some(0), Some(1)]);
+        let array = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap();
+        let schema = Schema::new(vec![Field::new("uuids", uuid_dictionary_type(), true)]);
+        RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap()
+    }
+
+    /// The schema of [`uuid_dictionary_batch`], with `arrow.uuid` as the
+    /// dictionary value type
+    fn fb_uuid_dictionary_schema<'a>(
+        fbb: &mut flatbuffers::FlatBufferBuilder<'a>,
+    ) -> Vec<flatbuffers::WIPOffset<crate::Field<'a>>> {
+        use crate::convert::test_util::{UUID, fb_dictionary_field};
+        let value_metadata: &[_] = &[(extension::EXTENSION_TYPE_NAME_KEY, UUID)];
+        vec![fb_dictionary_field(
+            fbb,
+            "uuids",
+            0,
+            Some(value_metadata),
+            &[],
+        )]
+    }
+
+    /// Assert that `schema` and `batches` are [`uuid_dictionary_batch`], with the
+    /// dictionary value type metadata copied to the field
+    fn assert_uuid_dictionary_batch(schema: SchemaRef, batches: Vec<RecordBatch>) {
+        let batch = uuid_dictionary_batch();
+        let field = batch.schema().field(0).clone().with_metadata([(
+            extension::EXTENSION_TYPE_NAME_KEY,
+            crate::convert::test_util::UUID,
+        )]);
+        let expected = Arc::new(Schema::new(vec![field]));
+        assert_eq!(schema, expected);
+        assert_eq!(batches, vec![batch.with_schema(expected).unwrap()]);
+    }
+
+    #[test]
+    fn test_stream_reader_dictionary_value_metadata() {
+        use crate::convert::test_util::fb_schema_message;
+
+        let batch = uuid_dictionary_batch();
+        let mut stream = vec![];
+        {
+            let mut writer =
+                crate::writer::StreamWriter::try_new(&mut stream, &batch.schema()).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+
+        // replace the schema message with one whose dictionary encoding has
+        // metadata for the dictionary value type
+        assert_eq!(stream[..4], CONTINUATION_MARKER);
+        let schema_len = i32::from_le_bytes(stream[4..8].try_into().unwrap()) as usize;
+        let mut fbb = flatbuffers::FlatBufferBuilder::new();
+        let fields = fb_uuid_dictionary_schema(&mut fbb);
+        let mut message = fb_schema_message(fbb, &fields);
+        message.resize(message.len().next_multiple_of(8), 0);
+        let mut new_stream = CONTINUATION_MARKER.to_vec();
+        new_stream.extend_from_slice(&(message.len() as i32).to_le_bytes());
+        new_stream.extend_from_slice(&message);
+        new_stream.extend_from_slice(&stream[8 + schema_len..]);
+
+        let reader = StreamReader::try_new(std::io::Cursor::new(new_stream), None).unwrap();
+        let schema = reader.schema();
+        let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
+        assert_uuid_dictionary_batch(schema, batches);
+    }
+
+    #[test]
+    fn test_file_reader_dictionary_value_metadata() {
+        use crate::convert::test_util::fb_schema;
+
+        let batch = uuid_dictionary_batch();
+        let mut file = vec![];
+        {
+            let mut writer =
+                crate::writer::FileWriter::try_new(&mut file, &batch.schema()).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+
+        // replace the schema in the footer with one whose dictionary encoding
+        // has metadata for the dictionary value type
+        let (data, trailer) = file.split_at(file.len() - 10);
+        assert_eq!(&trailer[4..], crate::ARROW_MAGIC);
+        let footer_len = i32::from_le_bytes(trailer[..4].try_into().unwrap()) as usize;
+        let (data, footer) = data.split_at(data.len() - footer_len);
+        let footer = root_as_footer(footer).unwrap();
+        let dictionaries = footer
+            .dictionaries()
+            .unwrap()
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        let record_batches = footer
+            .recordBatches()
+            .unwrap()
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+
+        let mut fbb = flatbuffers::FlatBufferBuilder::new();
+        let fields = fb_uuid_dictionary_schema(&mut fbb);
+        let schema = fb_schema(&mut fbb, &fields);
+        let dictionaries = fbb.create_vector(&dictionaries);
+        let record_batches = fbb.create_vector(&record_batches);
+        let mut new_footer = crate::FooterBuilder::new(&mut fbb);
+        new_footer.add_version(footer.version());
+        new_footer.add_schema(schema);
+        new_footer.add_dictionaries(dictionaries);
+        new_footer.add_recordBatches(record_batches);
+        let new_footer = new_footer.finish();
+        fbb.finish(new_footer, None);
+        let new_footer = fbb.finished_data();
+
+        let mut new_file = data.to_vec();
+        new_file.extend_from_slice(new_footer);
+        new_file.extend_from_slice(&(new_footer.len() as i32).to_le_bytes());
+        new_file.extend_from_slice(&trailer[4..]);
+
+        let reader = FileReader::try_new(std::io::Cursor::new(new_file), None).unwrap();
+        let schema = reader.schema();
+        let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
+        assert_uuid_dictionary_batch(schema, batches);
     }
 }
