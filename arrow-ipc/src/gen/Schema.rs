@@ -24,29 +24,6 @@ use std::{cmp::Ordering, mem};
 
 // @generated
 
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-pub const ENUM_MIN_METADATA_VERSION: i16 = 0;
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-pub const ENUM_MAX_METADATA_VERSION: i16 = 4;
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-#[allow(non_camel_case_types)]
-pub const ENUM_VALUES_METADATA_VERSION: [MetadataVersion; 5] = [
-    MetadataVersion::V1,
-    MetadataVersion::V2,
-    MetadataVersion::V3,
-    MetadataVersion::V4,
-    MetadataVersion::V5,
-];
-
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
 pub struct MetadataVersion(pub i16);
@@ -138,26 +115,6 @@ impl<'a> flatbuffers::Verifiable for MetadataVersion {
 }
 
 impl flatbuffers::SimpleToVerifyInSlice for MetadataVersion {}
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-pub const ENUM_MIN_FEATURE: i64 = 0;
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-pub const ENUM_MAX_FEATURE: i64 = 2;
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-#[allow(non_camel_case_types)]
-pub const ENUM_VALUES_FEATURE: [Feature; 3] = [
-    Feature::UNUSED,
-    Feature::DICTIONARY_REPLACEMENT,
-    Feature::COMPRESSED_BODY,
-];
 
 /// Represents Arrow Features that might not have full support
 /// within implementations. This is intended to be used in
@@ -262,22 +219,6 @@ impl<'a> flatbuffers::Verifiable for Feature {
 }
 
 impl flatbuffers::SimpleToVerifyInSlice for Feature {}
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-pub const ENUM_MIN_UNION_MODE: i16 = 0;
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-pub const ENUM_MAX_UNION_MODE: i16 = 1;
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-#[allow(non_camel_case_types)]
-pub const ENUM_VALUES_UNION_MODE: [UnionMode; 2] = [UnionMode::Sparse, UnionMode::Dense];
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
@@ -353,23 +294,6 @@ impl<'a> flatbuffers::Verifiable for UnionMode {
 }
 
 impl flatbuffers::SimpleToVerifyInSlice for UnionMode {}
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-pub const ENUM_MIN_PRECISION: i16 = 0;
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-pub const ENUM_MAX_PRECISION: i16 = 2;
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-#[allow(non_camel_case_types)]
-pub const ENUM_VALUES_PRECISION: [Precision; 3] =
-    [Precision::HALF, Precision::SINGLE, Precision::DOUBLE];
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
@@ -447,22 +371,6 @@ impl<'a> flatbuffers::Verifiable for Precision {
 }
 
 impl flatbuffers::SimpleToVerifyInSlice for Precision {}
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-pub const ENUM_MIN_DATE_UNIT: i16 = 0;
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-pub const ENUM_MAX_DATE_UNIT: i16 = 1;
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-#[allow(non_camel_case_types)]
-pub const ENUM_VALUES_DATE_UNIT: [DateUnit; 2] = [DateUnit::DAY, DateUnit::MILLISECOND];
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
@@ -538,27 +446,6 @@ impl<'a> flatbuffers::Verifiable for DateUnit {
 }
 
 impl flatbuffers::SimpleToVerifyInSlice for DateUnit {}
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-pub const ENUM_MIN_TIME_UNIT: i16 = 0;
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-pub const ENUM_MAX_TIME_UNIT: i16 = 3;
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-#[allow(non_camel_case_types)]
-pub const ENUM_VALUES_TIME_UNIT: [TimeUnit; 4] = [
-    TimeUnit::SECOND,
-    TimeUnit::MILLISECOND,
-    TimeUnit::MICROSECOND,
-    TimeUnit::NANOSECOND,
-];
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
@@ -643,26 +530,6 @@ impl<'a> flatbuffers::Verifiable for TimeUnit {
 }
 
 impl flatbuffers::SimpleToVerifyInSlice for TimeUnit {}
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-pub const ENUM_MIN_INTERVAL_UNIT: i16 = 0;
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-pub const ENUM_MAX_INTERVAL_UNIT: i16 = 2;
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-#[allow(non_camel_case_types)]
-pub const ENUM_VALUES_INTERVAL_UNIT: [IntervalUnit; 3] = [
-    IntervalUnit::YEAR_MONTH,
-    IntervalUnit::DAY_TIME,
-    IntervalUnit::MONTH_DAY_NANO,
-];
 
 /// The unit of an Interval.
 ///
@@ -757,50 +624,6 @@ impl<'a> flatbuffers::Verifiable for IntervalUnit {
 }
 
 impl flatbuffers::SimpleToVerifyInSlice for IntervalUnit {}
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-pub const ENUM_MIN_TYPE: u8 = 0;
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-pub const ENUM_MAX_TYPE: u8 = 26;
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-#[allow(non_camel_case_types)]
-pub const ENUM_VALUES_TYPE: [Type; 27] = [
-    Type::NONE,
-    Type::Null,
-    Type::Int,
-    Type::FloatingPoint,
-    Type::Binary,
-    Type::Utf8,
-    Type::Bool,
-    Type::Decimal,
-    Type::Date,
-    Type::Time,
-    Type::Timestamp,
-    Type::Interval,
-    Type::List,
-    Type::Struct_,
-    Type::Union,
-    Type::FixedSizeBinary,
-    Type::FixedSizeList,
-    Type::Map,
-    Type::Duration,
-    Type::LargeBinary,
-    Type::LargeUtf8,
-    Type::LargeList,
-    Type::RunEndEncoded,
-    Type::BinaryView,
-    Type::Utf8View,
-    Type::ListView,
-    Type::LargeListView,
-];
 
 /// ----------------------------------------------------------------------
 /// Top-level Type value, enabling extensible type-specific metadata. We can
@@ -959,23 +782,6 @@ impl<'a> flatbuffers::Verifiable for Type {
 impl flatbuffers::SimpleToVerifyInSlice for Type {}
 pub struct TypeUnionTableOffset {}
 
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-pub const ENUM_MIN_DICTIONARY_KIND: i16 = 0;
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-pub const ENUM_MAX_DICTIONARY_KIND: i16 = 0;
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-#[allow(non_camel_case_types)]
-pub const ENUM_VALUES_DICTIONARY_KIND: [DictionaryKind; 1] = [DictionaryKind::DenseArray];
-
 /// ----------------------------------------------------------------------
 /// Dictionary encoding metadata
 /// Maintained for forwards compatibility, in the future
@@ -1053,22 +859,6 @@ impl<'a> flatbuffers::Verifiable for DictionaryKind {
 }
 
 impl flatbuffers::SimpleToVerifyInSlice for DictionaryKind {}
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-pub const ENUM_MIN_ENDIANNESS: i16 = 0;
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-pub const ENUM_MAX_ENDIANNESS: i16 = 1;
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-#[allow(non_camel_case_types)]
-pub const ENUM_VALUES_ENDIANNESS: [Endianness; 2] = [Endianness::Little, Endianness::Big];
 
 /// ----------------------------------------------------------------------
 /// Endianness of the platform producing the data

@@ -143,7 +143,7 @@ mod tests {
 
     #[test]
     fn test_null_array_builder() {
-        let mut builder = NullArray::builder(10);
+        let mut builder = NullArray::builder();
         builder.append_null();
         builder.append_nulls(4);
         builder.append_empty_value();
@@ -158,7 +158,7 @@ mod tests {
 
     #[test]
     fn test_null_array_builder_finish_cloned() {
-        let mut builder = NullArray::builder(16);
+        let mut builder = NullArray::builder();
         builder.append_null();
         builder.append_empty_value();
         builder.append_empty_values(3);

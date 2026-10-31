@@ -70,11 +70,8 @@ impl NullArray {
         Self { len }
     }
 
-    /// Returns a new null array builder
-    ///
-    /// Note that the `capacity` parameter to this function is _deprecated_. It
-    /// now does nothing, and will be removed in a future version.
-    pub fn builder(_capacity: usize) -> NullBuilder {
+    /// Returns a new null array builder.
+    pub fn builder() -> NullBuilder {
         NullBuilder::new()
     }
 }

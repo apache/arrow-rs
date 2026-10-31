@@ -27,24 +27,6 @@ use std::{cmp::Ordering, mem};
 
 // @generated
 
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-pub const ENUM_MIN_COMPRESSION_TYPE: i8 = 0;
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-pub const ENUM_MAX_COMPRESSION_TYPE: i8 = 1;
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-#[allow(non_camel_case_types)]
-pub const ENUM_VALUES_COMPRESSION_TYPE: [CompressionType; 2] =
-    [CompressionType::LZ4_FRAME, CompressionType::ZSTD];
-
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
 pub struct CompressionType(pub i8);
@@ -123,23 +105,6 @@ impl<'a> flatbuffers::Verifiable for CompressionType {
 }
 
 impl flatbuffers::SimpleToVerifyInSlice for CompressionType {}
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-pub const ENUM_MIN_BODY_COMPRESSION_METHOD: i8 = 0;
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-pub const ENUM_MAX_BODY_COMPRESSION_METHOD: i8 = 0;
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-#[allow(non_camel_case_types)]
-pub const ENUM_VALUES_BODY_COMPRESSION_METHOD: [BodyCompressionMethod; 1] =
-    [BodyCompressionMethod::BUFFER];
 
 /// Provided for forward compatibility in case we need to support different
 /// strategies for compressing the IPC message body (like whole-body
@@ -225,29 +190,6 @@ impl<'a> flatbuffers::Verifiable for BodyCompressionMethod {
 }
 
 impl flatbuffers::SimpleToVerifyInSlice for BodyCompressionMethod {}
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-pub const ENUM_MIN_MESSAGE_HEADER: u8 = 0;
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-pub const ENUM_MAX_MESSAGE_HEADER: u8 = 5;
-#[deprecated(
-    since = "2.0.0",
-    note = "Use associated constants instead. This will no longer be generated in 2021."
-)]
-#[allow(non_camel_case_types)]
-pub const ENUM_VALUES_MESSAGE_HEADER: [MessageHeader; 6] = [
-    MessageHeader::NONE,
-    MessageHeader::Schema,
-    MessageHeader::DictionaryBatch,
-    MessageHeader::RecordBatch,
-    MessageHeader::Tensor,
-    MessageHeader::SparseTensor,
-];
 
 /// ----------------------------------------------------------------------
 /// The root Message type

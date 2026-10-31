@@ -1019,24 +1019,6 @@ impl IpcDataGenerator {
         })
     }
 
-    /// Encodes a batch to a number of [EncodedData] items (dictionary batches + the record batch).
-    /// The [DictionaryTracker] keeps track of dictionaries with new `dict_id`s  (so they are only sent once)
-    /// Make sure the [DictionaryTracker] is initialized at the start of the stream.
-    #[deprecated(since = "57.0.0", note = "Use `encode` instead")]
-    pub fn encoded_batch(
-        &self,
-        batch: &RecordBatch,
-        dictionary_tracker: &mut DictionaryTracker,
-        write_options: &IpcWriteOptions,
-    ) -> Result<(Vec<EncodedData>, EncodedData), ArrowError> {
-        self.encode(
-            batch,
-            dictionary_tracker,
-            write_options,
-            &mut Default::default(),
-        )
-    }
-
     /// Encodes a `RecordBatch` into a flatbuffer IPC message and fills `sink` with the
     /// serialised buffer data.
     ///
@@ -1398,7 +1380,7 @@ pub enum DictionaryHandling {
     Delta,
 }
 
-/// Describes what kind of update took place after a call to [`DictionaryTracker::insert`].
+/// Describes what kind of update took place after a call to [`DictionaryTracker::insert_column`].
 #[derive(Debug, Clone)]
 pub enum DictionaryUpdate {
     /// No dictionary was written, the dictionary was identical to what was already
@@ -1456,45 +1438,6 @@ impl DictionaryTracker {
     /// traversing the schema
     pub fn dict_id(&mut self) -> &[i64] {
         &self.dict_ids
-    }
-
-    /// Keep track of the dictionary with the given ID and values. Behavior:
-    ///
-    /// * If this ID has been written already and has the same data, return `Ok(false)` to indicate
-    ///   that the dictionary was not actually inserted (because it's already been seen).
-    /// * If this ID has been written already but with different data, and this tracker is
-    ///   configured to return an error, return an error.
-    /// * If the tracker has not been configured to error on replacement or this dictionary
-    ///   has never been seen before, return `Ok(true)` to indicate that the dictionary was just
-    ///   inserted.
-    #[deprecated(since = "56.1.0", note = "Use `insert_column` instead")]
-    pub fn insert(&mut self, dict_id: i64, column: &ArrayRef) -> Result<bool, ArrowError> {
-        let dict_data = column.to_data();
-        let dict_values = &dict_data.child_data()[0];
-
-        // If a dictionary with this id was already emitted, check if it was the same.
-        if let Some(last) = self.written.get(&dict_id) {
-            if ArrayData::ptr_eq(&last.child_data()[0], dict_values) {
-                // Same dictionary values => no need to emit it again
-                return Ok(false);
-            }
-            if self.error_on_replacement {
-                // If error on replacement perform a logical comparison
-                if last.child_data()[0] == *dict_values {
-                    // Same dictionary values => no need to emit it again
-                    return Ok(false);
-                }
-                return Err(ArrowError::InvalidArgumentError(
-                    "Dictionary replacement detected when writing IPC file format. \
-                     Arrow IPC files only support a single dictionary for a given field \
-                     across all batches."
-                        .to_string(),
-                ));
-            }
-        }
-
-        self.written.insert(dict_id, dict_data);
-        Ok(true)
     }
 
     /// Keep track of the dictionary with the given ID and values. The return
