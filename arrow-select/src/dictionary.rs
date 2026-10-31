@@ -17,7 +17,7 @@
 
 //! Dictionary utilities for Arrow arrays
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use crate::filter::filter;
 use crate::interleave::interleave;
@@ -140,9 +140,47 @@ impl<'a, V> Interner<'a, V> {
     }
 }
 
+// Above this ratio, scanning and mapping every dictionary value costs more than
+// collecting the keys referenced by the selected rows.
+const MAX_DENSE_MAPPING_VALUES_PER_ROW: usize = 16;
+
+pub(crate) enum KeyMapping<K: ArrowDictionaryKeyType> {
+    Dense(Vec<K::Native>),
+    Sparse(HashMap<usize, K::Native, RandomState>),
+}
+
+impl<K: ArrowDictionaryKeyType> KeyMapping<K> {
+    fn new_dense(len: usize) -> Self {
+        Self::Dense(vec![K::Native::ZERO; len])
+    }
+
+    fn new_sparse(capacity: usize) -> Self {
+        Self::Sparse(HashMap::with_capacity_and_hasher(
+            capacity,
+            RandomState::with_seeds(0, 0, 0, 0),
+        ))
+    }
+
+    fn insert(&mut self, old_key: usize, new_key: K::Native) {
+        match self {
+            Self::Dense(mapping) => mapping[old_key] = new_key,
+            Self::Sparse(mapping) => {
+                mapping.insert(old_key, new_key);
+            }
+        }
+    }
+
+    pub fn get(&self, old_key: usize) -> Option<K::Native> {
+        match self {
+            Self::Dense(mapping) => mapping.get(old_key).copied(),
+            Self::Sparse(mapping) => mapping.get(&old_key).copied(),
+        }
+    }
+}
+
 pub(crate) struct MergedDictionaries<K: ArrowDictionaryKeyType> {
-    /// Provides `key_mappings[`array_idx`][`old_key`] -> new_key`
-    pub key_mappings: Vec<Vec<K::Native>>,
+    /// Provides `key_mappings[array_idx].get(old_key) -> new_key`
+    pub key_mappings: Vec<KeyMapping<K>>,
     /// The new values
     pub values: ArrayRef,
 }
@@ -249,11 +287,24 @@ pub(crate) fn merge_dictionary_values<K: ArrowDictionaryKeyType>(
         };
         let keys = dictionary.keys().values();
         let values = dictionary.values().as_ref();
-        let values_mask = compute_values_mask(keys, key_mask, values.len());
+        let selected_rows = key_mask
+            .map(BooleanBuffer::count_set_bits)
+            .unwrap_or(keys.len());
+        let use_sparse_mapping =
+            values.len() > selected_rows.saturating_mul(MAX_DENSE_MAPPING_VALUES_PER_ROW);
 
-        let masked_values = get_masked_values(values, &values_mask);
-        num_values += masked_values.len();
-        value_slices.push(masked_values);
+        let referenced_keys;
+        let values_mask;
+        let selection = if use_sparse_mapping {
+            referenced_keys = compute_referenced_keys(keys, key_mask);
+            ValueSelection::Indices(&referenced_keys)
+        } else {
+            values_mask = compute_values_mask(keys, key_mask, values.len());
+            ValueSelection::Mask(&values_mask)
+        };
+        let selected_values = get_selected_values(values, selection);
+        num_values += selected_values.len();
+        value_slices.push((selected_values, use_sparse_mapping));
         values_arrays.push(values)
     }
 
@@ -267,28 +318,50 @@ pub(crate) fn merge_dictionary_values<K: ArrowDictionaryKeyType>(
         .iter()
         .enumerate()
         .zip(value_slices)
-        .map(|((dictionary_idx, dictionary), values)| {
-            let zero = K::Native::from_usize(0).unwrap();
-            let mut mapping = vec![zero; dictionary.values().len()];
+        .map(
+            |((dictionary_idx, dictionary), (values, use_sparse_mapping))| {
+                let mut mapping = match use_sparse_mapping {
+                    true => KeyMapping::new_sparse(values.len()),
+                    false => KeyMapping::new_dense(dictionary.values().len()),
+                };
 
-            for (value_idx, value) in values {
-                mapping[value_idx] =
-                    *interner.intern(value, || match K::Native::from_usize(indices.len()) {
-                        Some(idx) => {
-                            indices.push((dictionary_idx, value_idx));
-                            Ok(idx)
-                        }
-                        None => Err(ArrowError::DictionaryKeyOverflowError),
-                    })?;
-            }
-            Ok(mapping)
-        })
+                for (value_idx, value) in values {
+                    let new_key =
+                        *interner.intern(value, || match K::Native::from_usize(indices.len()) {
+                            Some(idx) => {
+                                indices.push((dictionary_idx, value_idx));
+                                Ok(idx)
+                            }
+                            None => Err(ArrowError::DictionaryKeyOverflowError),
+                        })?;
+                    mapping.insert(value_idx, new_key);
+                }
+                Ok(mapping)
+            },
+        )
         .collect::<Result<Vec<_>, ArrowError>>()?;
 
     Ok(MergedDictionaries {
         key_mappings,
         values: interleave(&values_arrays, &indices)?,
     })
+}
+
+/// Return sorted, unique dictionary value indices referenced by `keys`.
+fn compute_referenced_keys<K: ArrowNativeType>(
+    keys: &ScalarBuffer<K>,
+    mask: Option<&BooleanBuffer>,
+) -> Vec<usize> {
+    let mut indices = match mask {
+        Some(mask) => mask
+            .set_indices()
+            .map(|idx| keys[idx].as_usize())
+            .collect::<Vec<_>>(),
+        None => keys.iter().map(|key| key.as_usize()).collect(),
+    };
+    indices.sort_unstable();
+    indices.dedup();
+    indices
 }
 
 /// Return a mask identifying the values that are referenced by keys in `dictionary`
@@ -312,60 +385,82 @@ fn compute_values_mask<K: ArrowNativeType>(
     builder.finish()
 }
 
-/// Process primitive array values to bytes
-fn masked_primitives_to_bytes<'a, T: ArrowPrimitiveType>(
+#[derive(Clone, Copy)]
+enum ValueSelection<'a> {
+    Mask(&'a BooleanBuffer),
+    Indices(&'a [usize]),
+}
+
+impl ValueSelection<'_> {
+    fn len(&self) -> usize {
+        match self {
+            Self::Mask(mask) => mask.count_set_bits(),
+            Self::Indices(indices) => indices.len(),
+        }
+    }
+
+    fn for_each(&self, f: impl FnMut(usize)) {
+        match self {
+            Self::Mask(mask) => mask.set_indices().for_each(f),
+            Self::Indices(indices) => indices.iter().copied().for_each(f),
+        }
+    }
+}
+
+/// Process selected primitive array values to bytes.
+fn selected_primitives_to_bytes<'a, T: ArrowPrimitiveType>(
     array: &'a PrimitiveArray<T>,
-    mask: &BooleanBuffer,
+    selection: ValueSelection<'_>,
 ) -> Vec<(usize, Option<&'a [u8]>)>
 where
     T::Native: ToByteSlice,
 {
-    let mut out = Vec::with_capacity(mask.count_set_bits());
+    let mut out = Vec::with_capacity(selection.len());
     let values = array.values();
-    for idx in mask.set_indices() {
+    selection.for_each(|idx| {
         out.push((
             idx,
             array.is_valid(idx).then_some(values[idx].to_byte_slice()),
         ))
-    }
+    });
     out
 }
 
-macro_rules! masked_primitive_to_bytes_helper {
-    ($t:ty, $array:expr, $mask:expr) => {
-        masked_primitives_to_bytes::<$t>($array.as_primitive(), $mask)
+macro_rules! selected_primitive_to_bytes_helper {
+    ($t:ty, $array:expr, $selection:expr) => {
+        selected_primitives_to_bytes::<$t>($array.as_primitive(), $selection)
     };
 }
 
-/// Return a Vec containing for each set index in `mask`, the index and byte value of that index
-fn get_masked_values<'a>(
+/// Return the index and byte value for each selected entry.
+fn get_selected_values<'a>(
     array: &'a dyn Array,
-    mask: &BooleanBuffer,
+    selection: ValueSelection<'_>,
 ) -> Vec<(usize, Option<&'a [u8]>)> {
     downcast_primitive! {
-        array.data_type() => (masked_primitive_to_bytes_helper, array, mask),
-        DataType::Utf8 => masked_bytes(array.as_string::<i32>(), mask),
-        DataType::LargeUtf8 => masked_bytes(array.as_string::<i64>(), mask),
-        DataType::Binary => masked_bytes(array.as_binary::<i32>(), mask),
-        DataType::LargeBinary => masked_bytes(array.as_binary::<i64>(), mask),
+        array.data_type() => (selected_primitive_to_bytes_helper, array, selection),
+        DataType::Utf8 => selected_bytes(array.as_string::<i32>(), selection),
+        DataType::LargeUtf8 => selected_bytes(array.as_string::<i64>(), selection),
+        DataType::Binary => selected_bytes(array.as_binary::<i32>(), selection),
+        DataType::LargeBinary => selected_bytes(array.as_binary::<i64>(), selection),
         _ => unimplemented!("Dictionary merging for type {} is not implemented", array.data_type()),
     }
 }
 
-/// Compute [`get_masked_values`] for a [`GenericByteArray`]
+/// Compute [`get_selected_values`] for a [`GenericByteArray`]
 ///
 /// Note: this does not check the null mask and will return values contained in null slots
-fn masked_bytes<'a, T: ByteArrayType>(
+fn selected_bytes<'a, T: ByteArrayType>(
     array: &'a GenericByteArray<T>,
-    mask: &BooleanBuffer,
+    selection: ValueSelection<'_>,
 ) -> Vec<(usize, Option<&'a [u8]>)> {
-    let mut out = Vec::with_capacity(mask.count_set_bits());
-    for idx in mask.set_indices() {
+    let mut out = Vec::with_capacity(selection.len());
+    selection.for_each(|idx| {
         out.push((
             idx,
             array.is_valid(idx).then_some(array.value(idx).as_ref()),
         ))
-    }
+    });
     out
 }
 
@@ -379,6 +474,13 @@ mod tests {
     use arrow_array::{DictionaryArray, Int8Array, Int32Array, StringArray};
     use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer, OffsetBuffer};
     use std::sync::Arc;
+
+    fn assert_mapping(mapping: &KeyMapping<Int32Type>, expected: &[i32]) {
+        let actual = (0..expected.len())
+            .map(|idx| mapping.get(idx).unwrap_or_default())
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
 
     #[test]
     fn test_garbage_collect_i32_dictionary() {
@@ -464,8 +566,8 @@ mod tests {
         assert_eq!(&actual, &["a", "b", "d", "c", "e", "f"]);
 
         assert_eq!(merged.key_mappings.len(), 2);
-        assert_eq!(&merged.key_mappings[0], &[0, 1, 2, 3, 4]);
-        assert_eq!(&merged.key_mappings[1], &[3, 5, 2, 0]);
+        assert_mapping(&merged.key_mappings[0], &[0, 1, 2, 3, 4]);
+        assert_mapping(&merged.key_mappings[1], &[3, 5, 2, 0]);
 
         let a_slice = a.slice(1, 4);
         let merged = merge_dictionary_values(&[&a_slice, &b], None).unwrap();
@@ -475,8 +577,8 @@ mod tests {
         assert_eq!(&actual, &["a", "b", "d", "c", "f"]);
 
         assert_eq!(merged.key_mappings.len(), 2);
-        assert_eq!(&merged.key_mappings[0], &[0, 1, 2, 0, 0]);
-        assert_eq!(&merged.key_mappings[1], &[3, 4, 2, 0]);
+        assert_mapping(&merged.key_mappings[0], &[0, 1, 2, 0, 0]);
+        assert_mapping(&merged.key_mappings[1], &[3, 4, 2, 0]);
 
         // Mask out only ["b", "b", "d"] from a
         let a_mask = BooleanBuffer::from_iter([false, true, false, true, true, false, false]);
@@ -488,8 +590,8 @@ mod tests {
         assert_eq!(&actual, &["b", "d", "c", "f", "a"]);
 
         assert_eq!(merged.key_mappings.len(), 2);
-        assert_eq!(&merged.key_mappings[0], &[0, 0, 1, 0, 0]);
-        assert_eq!(&merged.key_mappings[1], &[2, 3, 1, 4]);
+        assert_mapping(&merged.key_mappings[0], &[0, 0, 1, 0, 0]);
+        assert_mapping(&merged.key_mappings[1], &[2, 3, 1, 4]);
     }
 
     #[test]
@@ -511,8 +613,8 @@ mod tests {
         let expected = StringArray::from(vec![None, Some("bingo"), Some("hello")]);
         assert_eq!(merged.values.as_ref(), &expected);
         assert_eq!(merged.key_mappings.len(), 2);
-        assert_eq!(&merged.key_mappings[0], &[0, 0, 1, 2, 0]);
-        assert_eq!(&merged.key_mappings[1], &[] as &[i32; 0]);
+        assert_mapping(&merged.key_mappings[0], &[0, 0, 1, 2, 0]);
+        assert_mapping(&merged.key_mappings[1], &[]);
     }
 
     #[test]
@@ -524,5 +626,22 @@ mod tests {
         let merged = merge_dictionary_values(&[&a], None).unwrap();
         let expected = StringArray::from(vec!["b"]);
         assert_eq!(merged.values.as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_merge_oversized_dictionary_slice() {
+        let values = StringArray::from_iter_values((0..1_000).map(|idx| idx.to_string()));
+        let keys = Int32Array::from(vec![Some(999), None, Some(1), Some(999)]);
+        let dictionary = DictionaryArray::new(keys, Arc::new(values));
+
+        let merged = merge_dictionary_values(&[&dictionary], None).unwrap();
+        let values = as_string_array(merged.values.as_ref());
+        let actual = values.iter().collect::<Vec<_>>();
+
+        assert_eq!(actual, vec![Some("1"), Some("999")]);
+        assert!(matches!(merged.key_mappings[0], KeyMapping::Sparse(_)));
+        assert_eq!(merged.key_mappings[0].get(1), Some(0));
+        assert_eq!(merged.key_mappings[0].get(999), Some(1));
+        assert_eq!(merged.key_mappings[0].get(500), None);
     }
 }
