@@ -1460,7 +1460,7 @@ impl ArrowRowGroupWriter {
 #[derive(Debug)]
 pub struct ArrowRowGroupWriterFactory {
     // Only deprecated `new` can store an Err; `try_new` always stores an Ok.
-    // TODO(61.0.0): When removing `new`, store Arc<ArrowWriteSchemaPlan> directly,
+    // TODO: When removing `new`, store Arc<ArrowWriteSchemaPlan> directly,
     // remove ArrowWriteSchemaPlanError and schema_plan(), and simplify
     // from_schema_plan to accept the plan without a Result.
     schema_plan: std::result::Result<Arc<ArrowWriteSchemaPlan>, ArrowWriteSchemaPlanError>,
@@ -1477,7 +1477,7 @@ impl ArrowRowGroupWriterFactory {
     /// Use [`Self::try_new`] to return these errors during construction instead.
     #[deprecated(
         since = "60.2.0",
-        note = "Use ArrowRowGroupWriterFactory::try_new instead. This method will be removed in 61.0.0."
+        note = "Use `ArrowRowGroupWriterFactory::try_new` instead"
     )]
     pub fn new<W: Write + Send>(
         file_writer: &SerializedFileWriter<W>,
