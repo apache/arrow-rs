@@ -36,10 +36,7 @@ use crate::arrow::schema::{
     ParquetField, parquet_to_arrow_schema_and_fields, virtual_type::is_virtual_column,
 };
 use crate::arrow::{FieldLevels, ProjectionMask, parquet_to_arrow_field_levels_with_virtual};
-use crate::basic::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
-use crate::bloom_filter::{
-    SBBF_HEADER_SIZE_ESTIMATE, Sbbf, chunk_read_bloom_filter_header_and_offset,
-};
+use crate::bloom_filter::Sbbf;
 use crate::column::page::{PageIterator, PageReader};
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::FileDecryptionProperties;
@@ -1353,56 +1350,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
         let metadata = self.metadata.row_group(row_group_idx);
         let column_metadata = metadata.column(column_idx);
 
-        let offset: u64 = if let Some(offset) = column_metadata.bloom_filter_offset() {
-            offset
-                .try_into()
-                .map_err(|_| ParquetError::General("Bloom filter offset is invalid".to_string()))?
-        } else {
-            return Ok(None);
-        };
-
-        let buffer = match column_metadata.bloom_filter_length() {
-            Some(length) => self.input.0.get_bytes(offset, length as usize),
-            None => self.input.0.get_bytes(offset, SBBF_HEADER_SIZE_ESTIMATE),
-        }?;
-
-        let (header, bitset_offset) =
-            chunk_read_bloom_filter_header_and_offset(offset, buffer.clone())?;
-
-        match header.algorithm {
-            BloomFilterAlgorithm::BLOCK => {
-                // this match exists to future proof the singleton algorithm enum
-            }
-        }
-        match header.compression {
-            BloomFilterCompression::UNCOMPRESSED => {
-                // this match exists to future proof the singleton compression enum
-            }
-        }
-        match header.hash {
-            BloomFilterHash::XXHASH => {
-                // this match exists to future proof the singleton hash enum
-            }
-        }
-
-        let bitset = match column_metadata.bloom_filter_length() {
-            Some(_) => {
-                let bitset_start = bitset_offset
-                    .checked_sub(offset)
-                    .and_then(|start| usize::try_from(start).ok())
-                    .ok_or_else(|| {
-                        ParquetError::General("Bloom filter offset is invalid".to_string())
-                    })?;
-                buffer.slice(bitset_start..)
-            }
-            None => {
-                let bitset_length: usize = header.num_bytes.try_into().map_err(|_| {
-                    ParquetError::General("Bloom filter length is invalid".to_string())
-                })?;
-                self.input.0.get_bytes(bitset_offset, bitset_length)?
-            }
-        };
-        Ok(Some(Sbbf::new(&bitset)))
+        Sbbf::read_from_column_chunk(column_metadata, &self.input.0)
     }
 
     /// Build a [`ParquetRecordBatchReader`]
