@@ -952,24 +952,7 @@ fn loaded_row_ranges_for_projection(
 ) -> Option<LoadedRowRanges> {
     let selection = selection?;
     let page_index = page_index?;
-
-    (0..num_columns)
-        .into_iter()
-        .filter_map(|leaf_idx| {
-            let column_metadata = page_index.offset_index(leaf_idx)?;
-            let pages = column_metadata.page_locations();
-            (projection_mask.leaf_included(leaf_idx) && !pages.is_empty()).then(|| {
-                RowSelection::from_consecutive_ranges(
-                    selection
-                        .row_ranges_for_selected_pages(pages, total_rows)
-                        .into_iter(),
-                    total_rows,
-                )
-            })
-        })
-        .reduce(|loaded, column| loaded.intersection(&column))
-        .filter(|loaded| loaded.skipped_row_count() != 0)
-        .map(LoadedRowRanges::from_selection)
+    selection.loaded_row_ranges(projection_mask, &page_index, num_columns, total_rows)
 }
 
 #[cfg(test)]

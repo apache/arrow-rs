@@ -28,6 +28,7 @@ use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::column::page::PageIterator;
 use crate::column::reader::decoder::ColumnValueDecoder;
 use crate::file::metadata::ParquetMetaData;
+use crate::file::metadata::page_index::RowGroupPageIndex;
 use crate::file::reader::{FilePageIterator, FileReader};
 
 mod builder;
@@ -168,6 +169,15 @@ pub trait RowGroups {
 
     /// Returns the parquet metadata
     fn metadata(&self) -> &ParquetMetaData;
+
+    /// Returns the page index used to choose the loaded pages, if any.
+    ///
+    /// Implementations that load only pages selected by a row selection should
+    /// return the page index used to choose those pages. Readers use it to keep
+    /// mask-based row selection within the loaded pages.
+    fn page_index(&self) -> Option<&RowGroupPageIndex> {
+        None
+    }
 }
 
 impl RowGroups for Arc<dyn FileReader> {

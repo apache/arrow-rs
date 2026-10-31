@@ -23,6 +23,7 @@ mod column_reader;
 mod options;
 mod row_selection;
 mod schema;
+mod sparse_row_groups;
 mod virtual_columns;
 
 use std::cmp::min;

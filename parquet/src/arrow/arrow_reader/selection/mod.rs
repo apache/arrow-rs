@@ -29,6 +29,8 @@
 //! * `ranges`: mapping a [`RowSelection`] onto page and batch ranges
 //! * `cursor`: iterating a [`RowSelection`] while reading
 
+use crate::arrow::ProjectionMask;
+use crate::file::metadata::page_index::RowGroupPageIndex;
 use crate::file::page_index::offset_index::PageLocation;
 use arrow_array::{Array, BooleanArray};
 use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
@@ -475,6 +477,33 @@ impl RowSelection {
         }
 
         row_ranges
+    }
+
+    pub(crate) fn loaded_row_ranges(
+        &self,
+        projection: &ProjectionMask,
+        page_index: &RowGroupPageIndex,
+        num_columns: usize,
+        total_rows: usize,
+    ) -> Option<LoadedRowRanges> {
+        (0..num_columns)
+            .filter_map(|leaf_idx| {
+                if !projection.leaf_included(leaf_idx) {
+                    return None;
+                }
+
+                let pages = page_index.offset_index(leaf_idx)?.page_locations();
+                (!pages.is_empty()).then(|| {
+                    RowSelection::from_consecutive_ranges(
+                        self.row_ranges_for_selected_pages(pages, total_rows)
+                            .into_iter(),
+                        total_rows,
+                    )
+                })
+            })
+            .reduce(|loaded, column| loaded.intersection(&column))
+            .filter(|loaded| loaded.skipped_row_count() != 0)
+            .map(LoadedRowRanges::from_selection)
     }
 
     /// Splits off the first `row_count` from this [`RowSelection`]

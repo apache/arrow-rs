@@ -1833,13 +1833,28 @@ impl ParquetRecordBatchReader {
     ) -> Result<Self> {
         // note metrics are not supported in this API
         let metrics = ArrowReaderMetrics::disabled();
+        let projection = ProjectionMask::all();
         let array_reader = ArrayReaderBuilder::new(row_groups, &metrics)
             .with_batch_size(batch_size)
             .with_parquet_metadata(row_groups.metadata())
-            .build_array_reader(levels.levels.as_ref(), &ProjectionMask::all())?;
+            .build_array_reader(levels.levels.as_ref(), &projection)?;
+
+        let loaded_row_ranges = row_groups.page_index().and_then(|page_index| {
+            selection.as_ref()?.loaded_row_ranges(
+                &projection,
+                page_index,
+                row_groups
+                    .metadata()
+                    .file_metadata()
+                    .schema_descr()
+                    .num_columns(),
+                row_groups.num_rows(),
+            )
+        });
 
         let read_plan = ReadPlanBuilder::new(batch_size)
             .with_selection(selection)
+            .with_loaded_row_ranges(loaded_row_ranges)
             .build();
 
         Ok(Self {

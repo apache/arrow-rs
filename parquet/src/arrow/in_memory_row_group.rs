@@ -342,6 +342,10 @@ impl RowGroups for InMemoryRowGroup<'_> {
     fn metadata(&self) -> &ParquetMetaData {
         self.metadata
     }
+
+    fn page_index(&self) -> Option<&RowGroupPageIndex> {
+        self.page_index.as_ref()
+    }
 }
 
 /// An in-memory column chunk.
