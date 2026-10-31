@@ -166,15 +166,22 @@ impl StructArray {
                 )));
             }
 
-            if !f.is_nullable()
-                && let Some(a) = a.logical_nulls()
-                && nulls.as_ref().is_none_or(|n| !n.contains(&a))
-                && a.null_count() > 0
-            {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Found unmasked nulls for non-nullable StructArray field {:?}",
-                    f.name()
-                )));
+            if !f.is_nullable() {
+                // Avoid materializing a logical null buffer when only its count is needed.
+                let has_unmasked_nulls = match nulls.as_ref() {
+                    None => a.logical_null_count() > 0,
+                    Some(n) if n.null_count() == 0 => a.logical_null_count() > 0,
+                    Some(n) if n.null_count() == len => false,
+                    Some(n) => a
+                        .logical_nulls()
+                        .is_some_and(|child| child.null_count() > 0 && !n.contains(&child)),
+                };
+                if has_unmasked_nulls {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "Found unmasked nulls for non-nullable StructArray field {:?}",
+                        f.name()
+                    )));
+                }
             }
         }
 
@@ -1190,6 +1197,67 @@ mod tests {
         let nulls = None;
 
         StructArray::try_new(fields, arrays, nulls).expect("should not error");
+    }
+
+    #[test]
+    fn test_non_nullable_null_array_validation() {
+        use crate::NullArray;
+        let fields = Fields::from(vec![Field::new("a", DataType::Null, false)]);
+        let child = || Arc::new(NullArray::new(usize::MAX)) as ArrayRef;
+        assert!(
+            StructArray::try_new_with_length(fields.clone(), vec![child()], None, usize::MAX)
+                .is_err()
+        );
+
+        let child = || Arc::new(NullArray::new(3)) as ArrayRef;
+        assert!(StructArray::try_new(fields.clone(), vec![child()], None).is_err());
+        assert!(
+            StructArray::try_new(
+                fields.clone(),
+                vec![child()],
+                Some(NullBuffer::from(vec![true, true, true]))
+            )
+            .is_err()
+        );
+        assert!(
+            StructArray::try_new(
+                fields.clone(),
+                vec![child()],
+                Some(NullBuffer::from(vec![false, false, false]))
+            )
+            .is_ok()
+        );
+        assert!(
+            StructArray::try_new(
+                fields.clone(),
+                vec![child()],
+                Some(NullBuffer::from(vec![false, true, false]))
+            )
+            .is_err()
+        );
+        assert!(
+            StructArray::try_new_with_length(fields, vec![Arc::new(NullArray::new(0))], None, 0)
+                .is_ok()
+        );
+
+        let fields = Fields::from(vec![Field::new("a", DataType::Int32, false)]);
+        let child = || Arc::new(Int32Array::from(vec![None, Some(1), None])) as ArrayRef;
+        assert!(
+            StructArray::try_new(
+                fields.clone(),
+                vec![child()],
+                Some(NullBuffer::from(vec![false, true, false]))
+            )
+            .is_ok()
+        );
+        assert!(
+            StructArray::try_new(
+                fields,
+                vec![child()],
+                Some(NullBuffer::from(vec![true, true, false]))
+            )
+            .is_err()
+        );
     }
 
     #[test]
