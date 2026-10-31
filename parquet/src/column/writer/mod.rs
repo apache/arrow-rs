@@ -2656,6 +2656,90 @@ mod tests {
     }
 
     #[test]
+    fn test_column_writer_no_dictionary_page_for_empty_required() {
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_enabled(true)
+            .build();
+        let meta = column_write_and_get_metadata_with_def_levels::<Int64Type>(props, &[], &[], 0);
+        assert_eq!(meta.dictionary_page_offset(), None);
+        assert_eq!(meta.data_page_offset(), 0);
+        assert_eq!(meta.uncompressed_size(), 0);
+        assert_eq!(meta.compressed_size(), 0);
+        assert_eq!(meta.encodings().collect::<Vec<_>>(), &[]);
+        assert_eq!(meta.page_encoding_stats().unwrap(), &[]);
+    }
+
+    #[test]
+    fn test_column_writer_no_dictionary_page_for_empty_optional() {
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_enabled(true)
+            .build();
+        let meta = column_write_and_get_metadata_with_def_levels::<Int64Type>(props, &[], &[], 1);
+        assert_eq!(meta.dictionary_page_offset(), None);
+        assert_eq!(meta.data_page_offset(), 0);
+        assert_eq!(meta.uncompressed_size(), 0);
+        assert_eq!(meta.compressed_size(), 0);
+        assert_eq!(meta.encodings().collect::<Vec<_>>(), &[]);
+        assert_eq!(meta.page_encoding_stats().unwrap(), &[]);
+    }
+
+    #[test]
+    fn test_column_writer_encoding_includes_rle_for_all_null_data() {
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_enabled(true)
+            .build();
+        let meta = column_write_and_get_metadata_with_def_levels::<Int64Type>(props, &[], &[0], 1);
+        // this writes an empty dictionary page because we write the all-null data page with RLE_DICTIONARY encoding
+        assert_eq!(meta.dictionary_page_offset(), Some(0));
+        assert_eq!(meta.data_page_offset(), 0);
+        assert_eq!(meta.uncompressed_size(), 7);
+        assert_eq!(meta.compressed_size(), 7);
+        assert_eq!(
+            meta.encodings().collect::<Vec<_>>(),
+            &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY]
+        );
+        assert_eq!(
+            meta.page_encoding_stats().unwrap(),
+            &[
+                encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
+                encoding_stats(PageType::DATA_PAGE, Encoding::RLE_DICTIONARY, 1)
+            ]
+        );
+    }
+
+    #[test]
+    fn test_column_writer_encoding_includes_rle_for_mixed_null_data() {
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_enabled(true)
+            .build();
+        let meta = column_write_and_get_metadata_with_def_levels::<Int64Type>(
+            props,
+            &[42_i64],
+            &[1, 0],
+            1,
+        );
+        assert_eq!(meta.dictionary_page_offset(), Some(0));
+        assert_eq!(meta.data_page_offset(), 8);
+        assert_eq!(meta.uncompressed_size(), 16);
+        assert_eq!(meta.compressed_size(), 16);
+        assert_eq!(
+            meta.encodings().collect::<Vec<_>>(),
+            &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY]
+        );
+        assert_eq!(
+            meta.page_encoding_stats().unwrap(),
+            &[
+                encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
+                encoding_stats(PageType::DATA_PAGE, Encoding::RLE_DICTIONARY, 1)
+            ]
+        );
+    }
+
+    #[test]
     fn test_column_writer_check_metadata() {
         let page_writer = get_test_page_writer();
         let props = Default::default();
@@ -2674,7 +2758,7 @@ mod tests {
         assert_eq!(metadata.num_values(), 4);
         assert_eq!(metadata.compressed_size(), 20);
         assert_eq!(metadata.uncompressed_size(), 20);
-        assert_eq!(metadata.data_page_offset(), 0);
+        assert_eq!(metadata.data_page_offset(), 16);
         assert_eq!(metadata.dictionary_page_offset(), Some(0));
         if let Some(stats) = metadata.statistics() {
             assert_eq!(stats.null_count_opt(), Some(0));
@@ -2836,7 +2920,7 @@ mod tests {
         assert_eq!(metadata.num_values(), 4);
         assert_eq!(metadata.compressed_size(), 20);
         assert_eq!(metadata.uncompressed_size(), 20);
-        assert_eq!(metadata.data_page_offset(), 0);
+        assert_eq!(metadata.data_page_offset(), 16);
         assert_eq!(metadata.dictionary_page_offset(), Some(0));
         if let Some(stats) = metadata.statistics() {
             assert_eq!(stats.null_count_opt(), Some(0));
@@ -5542,6 +5626,19 @@ mod tests {
         writer.close().unwrap().metadata
     }
 
+    fn column_write_and_get_metadata_with_def_levels<T: DataType>(
+        props: WriterProperties,
+        values: &[T::T],
+        def_levels: &[i16],
+        max_def_level: i16,
+    ) -> ColumnChunkMetaData {
+        let page_writer = get_test_page_writer();
+        let props = Arc::new(props);
+        let mut writer = get_test_column_writer::<T>(page_writer, max_def_level, 0, props);
+        writer.write_batch(values, Some(def_levels), None).unwrap();
+        writer.close().unwrap().metadata
+    }
+
     // Helper function to more compactly create a PageEncodingStats struct.
     fn encoding_stats(page_type: PageType, encoding: Encoding, count: i32) -> PageEncodingStats {
         PageEncodingStats {
@@ -5744,10 +5841,13 @@ mod tests {
 
     /// Returns page writer that collects pages without serializing them.
     fn get_test_page_writer() -> Box<dyn PageWriter> {
-        Box::new(TestPageWriter {})
+        Box::new(TestPageWriter::default())
     }
 
-    struct TestPageWriter {}
+    #[derive(Default)]
+    struct TestPageWriter {
+        bytes_written: u64,
+    }
 
     impl PageWriter for TestPageWriter {
         fn write_page(&mut self, page: CompressedPage) -> Result<PageWriteSpec> {
@@ -5756,8 +5856,9 @@ mod tests {
             res.uncompressed_size = page.uncompressed_size();
             res.compressed_size = page.compressed_size();
             res.num_values = page.num_values();
-            res.offset = 0;
+            res.offset = self.bytes_written;
             res.bytes_written = page.data().len() as u64;
+            self.bytes_written += res.bytes_written;
             Ok(res)
         }
 
@@ -5897,7 +5998,7 @@ mod tests {
     #[test]
     fn test_page_v2_snappy_compression_fallback() {
         // Test that PageV2 sets is_compressed to false when Snappy compression increases data size
-        let page_writer = TestPageWriter {};
+        let page_writer = TestPageWriter::default();
 
         // Create WriterProperties with PageV2 and Snappy compression
         let props = WriterProperties::builder()
