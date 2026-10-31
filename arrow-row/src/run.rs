@@ -19,7 +19,8 @@ use crate::{RowConverter, Rows, SortField, variable};
 use arrow_array::types::RunEndIndexType;
 use arrow_array::{PrimitiveArray, RunArray};
 use arrow_buffer::{ArrowNativeType, ScalarBuffer};
-use arrow_schema::{ArrowError, SortOptions};
+use arrow_schema::{ArrowError, DataType, SortOptions};
+use std::sync::Arc;
 
 /// Computes the lengths of each row for a RunEndEncodedArray
 pub fn compute_lengths<R: RunEndIndexType>(
@@ -90,12 +91,6 @@ pub unsafe fn decode<R: RunEndIndexType>(
     field: &SortField,
     validate_utf8: bool,
 ) -> Result<RunArray<R>, ArrowError> {
-    if rows.is_empty() {
-        let values = unsafe { converter.convert_raw(&mut [], validate_utf8) }?;
-        let run_ends_array = PrimitiveArray::<R>::try_new(ScalarBuffer::from(vec![]), None)?;
-        return RunArray::<R>::try_new(&run_ends_array, &values[0]);
-    }
-
     // Decode each row's REE data and collect the decoded values
     let mut decoded_values = Vec::new();
     let mut run_ends = Vec::new();
@@ -136,7 +131,9 @@ pub unsafe fn decode<R: RunEndIndexType>(
         }
     }
     // Add the final run end
-    run_ends.push(R::Native::usize_as(rows.len()));
+    if !rows.is_empty() {
+        run_ends.push(R::Native::usize_as(rows.len()));
+    }
 
     // Convert the unique decoded values using the row converter
     let mut unique_rows: Vec<&[u8]> = decoded_values.iter().map(|v| v.as_slice()).collect();
@@ -146,11 +143,27 @@ pub unsafe fn decode<R: RunEndIndexType>(
         unsafe { converter.convert_raw(&mut unique_rows, validate_utf8) }?
     };
 
-    // Create run ends array
-    let run_ends_array = PrimitiveArray::<R>::try_new(ScalarBuffer::from(run_ends), None)?;
-
-    // Create the RunEndEncodedArray
-    RunArray::<R>::try_new(&run_ends_array, &values[0])
+    let run_ends = PrimitiveArray::<R>::try_new(ScalarBuffer::from(run_ends), None)?;
+    let (_, run_ends, values) = RunArray::<R>::try_new(&run_ends, &values[0])?.into_parts();
+    let data_type = match &field.data_type {
+        DataType::RunEndEncoded(run_ends_field, values_field)
+            if values_field.data_type() != values.data_type() =>
+        {
+            // Dictionary values decode to their underlying type, including in nested arrays.
+            DataType::RunEndEncoded(
+                Arc::clone(run_ends_field),
+                Arc::new(
+                    values_field
+                        .as_ref()
+                        .clone()
+                        .with_data_type(values.data_type().clone()),
+                ),
+            )
+        }
+        _ => field.data_type.clone(),
+    };
+    // SAFETY: run ends and value count are validated above; fields match the decoded types.
+    Ok(unsafe { RunArray::<R>::new_unchecked(data_type, run_ends, values) })
 }
 
 #[cfg(test)]
@@ -158,7 +171,11 @@ mod tests {
     use crate::{RowConverter, SortField};
     use arrow_array::cast::AsArray;
     use arrow_array::types::{Int16Type, Int32Type, Int64Type, RunEndIndexType};
-    use arrow_array::{Array, Int64Array, PrimitiveArray, RunArray, StringArray};
+    use arrow_array::{
+        Array, ArrayRef, DictionaryArray, Int64Array, PrimitiveArray, RunArray, StringArray,
+        StructArray,
+    };
+    use arrow_data::ArrayData;
     use arrow_schema::{DataType, Field, SortOptions};
     use std::sync::Arc;
 
@@ -728,6 +745,67 @@ mod tests {
         // Verify both columns round-trip correctly
         let result_ree = arrays[0].as_run::<Int32Type>();
         assert_eq!(result_ree.len(), 0);
+    }
+
+    #[test]
+    fn test_run_end_encoded_dictionary_values() {
+        let dictionary: DictionaryArray<Int32Type> = ["a", "b"].into_iter().collect();
+        let ends = PrimitiveArray::<Int32Type>::from(vec![2, 4]).to_data();
+        for nested in [false, true] {
+            let values = [
+                Arc::new(dictionary.clone()) as ArrayRef,
+                Arc::new(StringArray::from(vec!["a", "b"])) as ArrayRef,
+            ]
+            .map(|values| {
+                if nested {
+                    Arc::new(StructArray::from(vec![(
+                        Arc::new(Field::new("child", values.data_type().clone(), false)),
+                        values,
+                    )])) as ArrayRef
+                } else {
+                    values
+                }
+            });
+            let [input, expected] = values.map(|values| {
+                let data_type = DataType::RunEndEncoded(
+                    Arc::new(Field::new("ends", DataType::Int32, false)),
+                    Arc::new(
+                        Field::new("labels", values.data_type().clone(), false)
+                            .with_metadata([("source".to_string(), "test".to_string())]),
+                    ),
+                );
+                RunArray::<Int32Type>::from(
+                    ArrayData::builder(data_type)
+                        .len(4)
+                        .child_data(vec![ends.clone(), values.to_data()])
+                        .build()
+                        .unwrap(),
+                )
+            });
+            let converter =
+                RowConverter::new(vec![SortField::new(input.data_type().clone())]).unwrap();
+            for (offset, len) in [(0, 4), (1, 3), (4, 0)] {
+                let rows = converter
+                    .convert_columns(&[Arc::new(input.slice(offset, len))])
+                    .unwrap();
+                let actual = converter.convert_rows(&rows).unwrap();
+                assert_eq!(actual[0].to_data(), expected.slice(offset, len).to_data());
+                actual[0].to_data().validate_full().unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn test_run_end_encoded_decode_overflow() {
+        let array = RunArray::<Int16Type>::try_new(
+            &PrimitiveArray::from(vec![1]),
+            &Int64Array::from(vec![42]),
+        )
+        .unwrap();
+        let converter = RowConverter::new(vec![SortField::new(array.data_type().clone())]).unwrap();
+        let rows = converter.convert_columns(&[Arc::new(array)]).unwrap();
+        let too_many_rows = std::iter::repeat_with(|| rows.row(0)).take(i16::MAX as usize + 1);
+        assert!(converter.convert_rows(too_many_rows).is_err());
     }
 
     #[test]

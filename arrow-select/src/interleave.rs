@@ -27,7 +27,7 @@ use arrow_array::*;
 use arrow_buffer::bit_mask::set_bits;
 use arrow_buffer::bit_util;
 use arrow_buffer::{
-    ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, OffsetBuffer,
+    ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, OffsetBuffer, RunEndBuffer,
 };
 use arrow_data::ByteView;
 use arrow_data::transform::MutableArrayData;
@@ -701,12 +701,11 @@ fn interleave_run_end<R: RunEndIndexType>(
     run_ends_buf.push(R::Native::from_usize(n).unwrap());
 
     let taken_values = interleave(&value_arrays, &dedup_pairs)?;
-    let run_ends = PrimitiveArray::<R>::from_iter_values(run_ends_buf);
-
-    Ok(Arc::new(RunArray::<R>::try_new(
-        &run_ends,
-        taken_values.as_ref(),
-    )?))
+    let run_ends = RunEndBuffer::new(run_ends_buf.into(), 0, n);
+    // SAFETY: inputs have the same type and interleaving produces one value per run.
+    Ok(Arc::new(unsafe {
+        RunArray::<R>::new_unchecked(values[0].data_type().clone(), run_ends, taken_values)
+    }))
 }
 
 fn interleave_list_view<O: OffsetSizeTrait>(
