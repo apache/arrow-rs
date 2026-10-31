@@ -214,12 +214,6 @@ where
         )));
     }
 
-    if a.is_empty() {
-        return Ok(Ok(PrimitiveArray::from(ArrayData::new_empty(
-            &T::DATA_TYPE,
-        ))));
-    }
-
     let mut builder = a.into_builder()?;
 
     builder
@@ -323,12 +317,6 @@ where
         )));
     }
     let len = a.len();
-
-    if a.is_empty() {
-        return Ok(Ok(PrimitiveArray::from(ArrayData::new_empty(
-            &T::DATA_TYPE,
-        ))));
-    }
 
     // Physical and logical nulls coincide for a `PrimitiveArray`, but gate on `is_nullable` to
     // match `try_binary`. That check is allowed to be conservative, so fall back to the no-nulls
@@ -466,6 +454,36 @@ mod tests {
 
         let expected = Int32Array::from(vec![Some(16), None, Some(12), None, Some(6)]);
         assert_eq!(c, expected);
+    }
+
+    #[test]
+    fn test_binary_mut_empty_shared_buffer() {
+        let b = Int32Array::from(Vec::<i32>::new());
+
+        let a = Int32Array::from(Vec::<i32>::new());
+        let shared = a.clone();
+        let err =
+            binary_mut(a, &b, |l, r| l + r).expect_err("shared empty buffer should not be reused");
+        assert_eq!(err, shared);
+
+        let a = Int32Array::from(Vec::<i32>::new());
+        let shared = a.clone();
+        let err = try_binary_mut(a, &b, |l, r| Ok(l + r))
+            .expect_err("shared empty buffer should not be reused");
+        assert_eq!(err, shared);
+
+        // An empty array whose buffer is not shared can still be used
+        let a = Int32Array::from(Vec::<i32>::new());
+        let result = binary_mut(a, &b, |l, r| l + r)
+            .expect("unshared buffer")
+            .expect("infallible operation");
+        assert_eq!(result, Int32Array::from(Vec::<i32>::new()));
+
+        let a = Int32Array::from(Vec::<i32>::new());
+        let result = try_binary_mut(a, &b, |l, r| Ok(l + r))
+            .expect("unshared buffer")
+            .expect("infallible operation");
+        assert_eq!(result, Int32Array::from(Vec::<i32>::new()));
     }
 
     #[test]
