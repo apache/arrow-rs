@@ -369,6 +369,24 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         Variant::try_new_with_metadata_and_shallow_validation(self.metadata.clone(), value_bytes)
     }
 
+    /// Returns a field's original bytes, excluding subsequent values.
+    ///
+    /// Indices follow [`Self::iter`] order. Checks offsets and shallowly validates the value;
+    /// use [`Self::try_field`] for recursive validation. Invalid indices return an error.
+    pub fn field_value_bytes(&self, index: usize) -> Result<&'v [u8], ArrowError> {
+        if index >= self.len() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Object field index {index} out of bounds for length {}",
+                self.len()
+            )));
+        }
+        let bytes = slice_from_slice(self.value, self.first_value_byte as _..)?;
+        let bytes = slice_from_slice(bytes, self.get_offset(index)? as _..)?;
+        let value =
+            Variant::try_new_with_metadata_and_shallow_validation(self.metadata.clone(), bytes)?;
+        slice_from_slice(bytes, ..value.encoded_len())
+    }
+
     // Attempts to retrieve the ith offset from the field offset region of the byte buffer.
     fn get_offset(&self, i: usize) -> Result<u32, ArrowError> {
         let byte_range = self.first_field_offset_byte as _..self.first_value_byte as _;
