@@ -23,14 +23,15 @@ use std::iter::FusedIterator;
 use std::ops::Range;
 use std::sync::Arc;
 
-use super::reader_builder::StageSchedule;
+use super::reader_builder::{StageFetch, StageSchedule};
 use crate::arrow::arrow_reader::{ReadPlanBuilder, RowSelection};
 use crate::arrow::in_memory_row_group::{
-    ColumnFetch, column_selection, columns_to_fetch, dictionary_range, page_range,
+    ColumnFetch, column_chunk_range, column_fetches, dictionary_range, offset_index_for_row_group,
+    page_range,
 };
 use crate::errors::ParquetError;
 use crate::file::metadata::ParquetMetaData;
-use crate::file::metadata::page_index::PageIndexProvider;
+use crate::file::metadata::page_index::RowGroupPageIndex;
 use crate::file::page_index::offset_index::PageLocation;
 
 mod budget;
@@ -379,42 +380,6 @@ impl Planner {
         self.next_row += rows.selected_before(row_count);
 
         let metadata = &self.frontier.parquet_metadata;
-        let page_index = metadata
-            .page_index()
-            .filter(|page_index| page_index.has_offset_indexes())
-            .cloned();
-        let row_group = metadata.row_group(row_group_idx);
-
-        // Predicate columns that are cached for the output are fetched with the
-        // selection expanded to batch boundaries. See `fetch_ranges`.
-        let stages = &self.columns.stages;
-        let expanded_selection = match (&selection, stages.cache_projection()) {
-            (Some(selection), Some(_)) => {
-                Some(selection.expand_to_batch_boundaries(self.columns.batch_size, row_count))
-            }
-            _ => None,
-        };
-
-        let num_columns = row_group.columns().len();
-        let mut planned_columns = vec![false; num_columns];
-        let mut stage_plans = vec![];
-        for (stage, fetch) in stages.stages() {
-            // The decoder reuses a column that an earlier stage read.
-            // `columns_to_fetch` filters, so it gives no size hint. Reserve
-            // for every column to avoid growing the vector one column at a time.
-            let mut columns = Vec::with_capacity(num_columns);
-            columns.extend(columns_to_fetch(fetch.projection, num_columns, |idx| {
-                planned_columns[idx]
-            }));
-            // The plan keeps `columns` until the end of the row group. Release
-            // the capacity that a narrow projection does not use.
-            columns.shrink_to_fit();
-            for &column_idx in &columns {
-                planned_columns[column_idx] = true;
-            }
-            stage_plans.push(StagePlan { stage, columns });
-        }
-
         self.current = Some(RowGroupRanges {
             row_group: RowGroupContext {
                 row_group_idx,
@@ -422,12 +387,12 @@ impl Planner {
                 first_row,
                 rows,
                 selection,
-                expanded_selection,
+                batch_size: self.columns.batch_size,
                 stages: Arc::clone(&self.columns.stages),
                 metadata: Arc::clone(metadata),
-                page_index,
+                page_index: offset_index_for_row_group(metadata, row_group_idx),
             },
-            stages: stage_plans.into_iter(),
+            next_stage: 0,
             stage: None,
         });
         Ok(true)
@@ -467,26 +432,20 @@ impl Planner {
 /// Once [`ScanPlan::next`] returns `None`, it always returns `None`.
 impl FusedIterator for ScanPlan {}
 
-/// The columns that one decoding stage of a row group reads first.
-#[derive(Debug, Clone)]
-struct StagePlan {
-    stage: ScanStage,
-    /// Leaf column indexes, in file order.
-    columns: Vec<usize>,
-}
-
 /// The planned ranges of one row group, in decode order.
 ///
-/// Each stage is a merge of one cursor per column chunk. A cursor
-/// returns the ranges of its column chunk in file order, and their first
-/// rows do not decrease. A heap picks the cursor whose next range has the
-/// smallest [`RangeOrder`], so the ranges of a stage are ordered by first
-/// row without collecting and sorting all of them.
+/// The stages of [`StageSchedule`] are planned one at a time, when the
+/// first range of a stage is asked for. Each stage is a merge of one cursor
+/// per column chunk that the stage fetches (see [`column_fetches`]). A
+/// cursor returns the ranges of its column chunk in file order, and their
+/// first rows do not decrease. A heap picks the cursor whose next range has
+/// the smallest [`RangeOrder`], so the ranges of a stage are ordered by
+/// first row without collecting and sorting all of them.
 #[derive(Debug, Clone)]
 struct RowGroupRanges {
     row_group: RowGroupContext,
-    /// Stages not yet started.
-    stages: std::vec::IntoIter<StagePlan>,
+    /// Position in [`StageSchedule::stages`] of the next stage to start.
+    next_stage: usize,
     /// The stage being merged.
     stage: Option<StageRanges>,
 }
@@ -501,15 +460,14 @@ struct RowGroupContext {
     rows: SelectedRows,
     /// The selection the decoder uses to choose pages.
     selection: Option<RowSelection>,
-    /// The selection expanded to batch boundaries, for cached predicate
-    /// columns.
-    expanded_selection: Option<RowSelection>,
+    /// The output batch size, which aligns cached predicate reads.
+    batch_size: usize,
     /// What each decoding stage fetches.
     stages: Arc<StageSchedule>,
     /// The file metadata, for the byte ranges of the column chunks.
     metadata: Arc<ParquetMetaData>,
-    /// The file's page index, if it has offset indexes.
-    page_index: Option<Arc<dyn PageIndexProvider>>,
+    /// The page index of the row group, if the file has offset indexes.
+    page_index: Option<RowGroupPageIndex>,
 }
 
 /// The merge state of one stage.
@@ -638,24 +596,9 @@ impl RowGroupRanges {
                     last_row,
                 });
             }
-            let plan = self.stages.next()?;
-            let mut selected = None;
-            let mut heap = Vec::with_capacity(plan.columns.len());
-            for (slot, &column_idx) in plan.columns.iter().enumerate() {
-                let (head, pages) = self.row_group.first_range(column_idx, plan.stage);
-                if let Some(pages) = pages {
-                    selected.get_or_insert_with(|| vec![None; plan.columns.len()])[slot] =
-                        Some(pages);
-                }
-                if let Some((order, head)) = head {
-                    heap.push(Reverse((order, position(slot), head)));
-                }
-            }
-            self.stage = Some(StageRanges {
-                columns: plan.columns,
-                selected,
-                heap: BinaryHeap::from(heap),
-            });
+            let (stage, fetch) = self.row_group.stages.stages().nth(self.next_stage)?;
+            self.next_stage += 1;
+            self.stage = Some(self.row_group.start_stage(stage, fetch));
         }
     }
 }
@@ -664,18 +607,55 @@ impl RowGroupContext {
     fn locations(&self, column_idx: usize) -> Option<&[PageLocation]> {
         self.page_index
             .as_ref()?
-            .offset_index(self.row_group_idx, column_idx)
+            .offset_index(column_idx)
             .map(|offset_index| offset_index.page_locations().as_slice())
     }
 
     /// Byte range of the whole column chunk.
     fn chunk(&self, column_idx: usize) -> Range<u64> {
-        let (start, len) = self
-            .metadata
-            .row_group(self.row_group_idx)
-            .column(column_idx)
-            .byte_range();
-        start..start + len
+        column_chunk_range(
+            self.metadata
+                .row_group(self.row_group_idx)
+                .column(column_idx),
+        )
+    }
+
+    /// The merge state of `stage`, with one cursor per column chunk that the
+    /// stage fetches.
+    fn start_stage(&self, stage: ScanStage, fetch: StageFetch<'_>) -> StageRanges {
+        let fetches = column_fetches(
+            self.metadata.row_group(self.row_group_idx),
+            self.row_count,
+            self.page_index.as_ref(),
+            fetch.projection,
+            self.selection.as_ref(),
+            self.batch_size,
+            fetch.cache_projection,
+            |column_idx| self.stages.is_read_before(stage, column_idx),
+        );
+        let mut columns = vec![];
+        let mut selected: Option<Vec<Option<Vec<usize>>>> = None;
+        let mut heap = vec![];
+        for (column_idx, fetch) in fetches {
+            let slot = columns.len();
+            let (head, pages) = self.first_range(column_idx, fetch);
+            if let Some(selected) = selected.as_mut() {
+                selected.push(pages);
+            } else if pages.is_some() {
+                let mut lists = vec![None; slot];
+                lists.push(pages);
+                selected = Some(lists);
+            }
+            if let Some((order, head)) = head {
+                heap.push(Reverse((order, position(slot), head)));
+            }
+            columns.push(column_idx);
+        }
+        StageRanges {
+            columns,
+            selected,
+            heap: BinaryHeap::from(heap),
+        }
     }
 
     /// Planned rows of the whole row group.
@@ -711,46 +691,37 @@ impl RowGroupContext {
         Some((rows.start, Reverse(rows.end), locations[idx].offset as u64))
     }
 
-    /// The first range of one column chunk: its sort key and position, or
-    /// `None` if the column chunk has no range. Also returns the data pages
-    /// that the decoder reads, if the selection removes pages.
+    /// The first range of the column chunk of `column_idx`, which the
+    /// decoder fetches as `fetch`: its sort key and position, or `None` if
+    /// the column chunk has no range. Also returns the data pages that the
+    /// decoder reads, if the selection removes pages.
     ///
-    /// The ranges are the same bytes that `InMemoryRowGroup::fetch_ranges`
-    /// requests, split at page boundaries when page locations are known.
+    /// The ranges are the same bytes that `fetch` requests, split at page
+    /// boundaries when page locations are known.
     fn first_range(
         &self,
         column_idx: usize,
-        stage: ScanStage,
+        fetch: ColumnFetch<'_>,
     ) -> (Option<(RangeOrder, HeadPosition)>, Option<Vec<usize>>) {
-        let fetch_selection = column_selection(
-            self.selection.as_ref(),
-            self.expanded_selection.as_ref(),
-            self.stages.fetch(stage).cache_projection,
-            column_idx,
-        );
-        let all_locations = self.locations(column_idx);
-        let fetch = ColumnFetch::new(self.chunk(column_idx), all_locations, fetch_selection);
-        // The decoder fetches a whole column chunk as one range. If page
-        // locations are known, the plan splits it into the same bytes, page
-        // by page.
-        let locations = all_locations.filter(|l| !l.is_empty());
-        let (locations, dictionary, selected) = match (fetch, locations) {
-            (ColumnFetch::Chunk { range }, Some(locations)) => {
-                (locations, dictionary_range(range.start, locations), None)
+        let (locations, dictionary, selected) = match fetch {
+            // The decoder fetches a whole column chunk as one range. If page
+            // locations are known, the plan splits it into the same bytes,
+            // page by page.
+            ColumnFetch::Chunk { range } => {
+                match self.locations(column_idx).filter(|l| !l.is_empty()) {
+                    Some(locations) => (locations, dictionary_range(range.start, locations), None),
+                    None => {
+                        let rows = self.row_group_rows();
+                        let order = (rows.start, Reverse(rows.end), range.start);
+                        return (Some((order, CHUNK)), None);
+                    }
+                }
             }
-            (ColumnFetch::Chunk { range }, None) => {
-                let rows = self.row_group_rows();
-                let order = (rows.start, Reverse(rows.end), range.start);
-                return (Some((order, CHUNK)), None);
-            }
-            (
-                ColumnFetch::Pages {
-                    dictionary,
-                    locations,
-                    pages,
-                },
-                _,
-            ) => (locations, dictionary, Some(pages)),
+            ColumnFetch::Pages {
+                dictionary,
+                locations,
+                pages,
+            } => (locations, dictionary, Some(pages)),
         };
         let pages = match &selected {
             Some(pages) => PageSet::Selected(pages),
