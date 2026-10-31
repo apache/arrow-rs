@@ -310,7 +310,11 @@ fn interleave_dictionaries<K: ArrowDictionaryKeyType>(
         match old_keys.is_valid(*b) {
             true => {
                 let old_key = old_keys.values()[*b];
-                keys.append_value(merged.key_mappings[*a][old_key.as_usize()])
+                keys.append_value(
+                    merged.key_mappings[*a]
+                        .get(old_key.as_usize())
+                        .expect("referenced dictionary key should be mapped"),
+                )
             }
             false => keys.append_null(),
         }
@@ -1135,6 +1139,29 @@ mod tests {
         let vc = v.downcast_dict::<StringArray>().unwrap();
         let collected: Vec<_> = vc.into_iter().map(Option::unwrap).collect();
         assert_eq!(&collected, &["c", "c", "c"]);
+    }
+
+    #[test]
+    fn test_interleave_oversized_dictionaries() {
+        let make_dictionary = |prefix| {
+            let values = StringArray::from_iter_values(
+                (0..1_000).map(|idx| format!("{prefix}_value_{idx}")),
+            );
+            let keys = Int32Array::from_iter_values([1, 999]);
+            DictionaryArray::<Int32Type>::new(keys, Arc::new(values))
+        };
+        let a = make_dictionary("a");
+        let b = make_dictionary("b");
+
+        let result = interleave(&[&a, &b], &[(0, 1), (1, 0), (0, 0)]).unwrap();
+        let actual = result
+            .as_dictionary::<Int32Type>()
+            .downcast_dict::<StringArray>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        assert_eq!(actual, ["a_value_999", "b_value_1", "a_value_1"].map(Some));
     }
 
     #[test]
