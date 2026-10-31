@@ -396,7 +396,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             Some(offset_indexes)
         };
         if column_indexes.is_some() || offset_indexes.is_some() {
-            let page_index = PageIndex::new(column_indexes, offset_indexes);
+            let page_index = PageIndex::try_new(column_indexes, offset_indexes)?;
             encoder = encoder.with_page_index(Arc::new(page_index));
         }
 
