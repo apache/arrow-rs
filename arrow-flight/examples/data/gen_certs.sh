@@ -1,30 +1,53 @@
 #!/bin/sh
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
 
-# source: https://users.rust-lang.org/t/use-tokio-tungstenite-with-rustls-instead-of-native-tls-for-secure-websockets/90130
+# Generate test-only certificates with OpenSSL 1.1.1 or later.
+# Run from arrow-flight/examples/data: sh gen_certs.sh
+# Overwrites ca_root, client and server .pem/.key files in the current directory.
+set -eu
 
-make_and_sign() {
-    # Create unencrypted private key and a CSR (certificate signing request)
-    openssl req -newkey rsa:2048 -nodes -subj "/C=FI/CN=vahid" -keyout "$1.key" -out "$1.csr"
+cert_tmp=$(mktemp -d)
+trap 'rm -rf "$cert_tmp"' EXIT
+trap 'exit 1' HUP INT TERM
 
-    # Create self-signed certificate (`$1.pem`) with the private key and CSR
-    openssl x509 -signkey "$1.key" -in "$1.csr" -req -days 365 -out "$1.pem"
+openssl req -new -x509 -newkey rsa:2048 -nodes -sha256 -days 1825 \
+    -config /dev/null -subj "/CN=Arrow Flight Test CA" \
+    -addext "basicConstraints=critical,CA:TRUE" \
+    -addext "keyUsage=critical,keyCertSign,cRLSign" \
+    -addext "subjectKeyIdentifier=hash" \
+    -keyout ca_root.key -out ca_root.pem
 
-    # Sign the CSR (`$1.pem`) with the root CA certificate and private key
-    # => this overwrites `$1.pem` because it gets signed
-    openssl x509 -req -CA ca_root.pem -CAkey ca_root.key -in "$1.csr" -out "$1.pem" -days 1825 -CAcreateserial -extfile localhost.ext
-}
+for identity in client server; do
+    openssl req -new -newkey rsa:2048 -nodes -sha256 \
+        -config /dev/null -subj "/CN=Arrow Flight Test $identity" \
+        -keyout "$identity.key" -out "$cert_tmp/request.csr"
 
-# Create a self-signed root CA
-openssl req -x509 -sha256 -nodes -subj "/C=FI/CN=vahid" -days 1825 -newkey rsa:2048 -keyout ca_root.key -out ca_root.pem
-
-# Create file localhost.ext with the following content:
-cat <<'EOF' > localhost.ext
+    cat > "$cert_tmp/extensions.cnf" <<EOF
+basicConstraints=critical,CA:FALSE
+keyUsage=critical,digitalSignature,keyEncipherment
+extendedKeyUsage=${identity}Auth
+subjectAltName=DNS:localhost
+subjectKeyIdentifier=hash
 authorityKeyIdentifier=keyid,issuer
-basicConstraints=CA:FALSE
-subjectAltName = @alt_names
-[alt_names]
-DNS.1 = localhost
 EOF
 
-make_and_sign client
-make_and_sign server
+    openssl x509 -req -in "$cert_tmp/request.csr" -sha256 -days 1825 \
+        -CA ca_root.pem -CAkey ca_root.key \
+        -CAserial "$cert_tmp/ca.srl" -CAcreateserial \
+        -extfile "$cert_tmp/extensions.cnf" -out "$identity.pem"
+done
