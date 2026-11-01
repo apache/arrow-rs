@@ -306,6 +306,85 @@ pub(crate) fn merge_dictionary_values<K: ArrowDictionaryKeyType>(
     })
 }
 
+/// Merges referenced entries from multiple dictionary values arrays.
+///
+/// `values_masks[i]` corresponds to `values_arrays[i]`, with each set bit identifying a
+/// value to retain. Returns the merged values and a mapping from each source value index
+/// to its index in the merged array. Mapping entries for unreferenced values are zero and
+/// must not be used.
+///
+/// Values are gathered without hashing when they fit in `K`, preserving duplicates across
+/// sources. Otherwise, values are deduplicated on a best-effort basis to avoid key overflow.
+pub(crate) fn merge_dictionary_values_with_masks<K: ArrowDictionaryKeyType>(
+    values_arrays: &[&dyn Array],
+    values_masks: &[BooleanBuffer],
+) -> Result<MergedDictionaries<K>, ArrowError> {
+    assert_eq!(values_arrays.len(), values_masks.len());
+    let num_values = values_masks.iter().map(BooleanBuffer::count_set_bits).sum();
+
+    // Dictionary values need not be unique. Avoid hashing when the referenced
+    // values already fit in the key type, and only deduplicate to avoid overflow.
+    if num_values == 0 || K::Native::from_usize(num_values - 1).is_some() {
+        let zero = K::Native::from_usize(0).unwrap();
+        let mut indices = Vec::with_capacity(num_values);
+        let key_mappings = values_arrays
+            .iter()
+            .zip(values_masks)
+            .enumerate()
+            .map(|(dictionary_idx, (values, mask))| {
+                let mut mapping = vec![zero; values.len()];
+                for value_idx in mask.set_indices() {
+                    mapping[value_idx] = K::Native::from_usize(indices.len()).unwrap();
+                    indices.push((dictionary_idx, value_idx));
+                }
+                mapping
+            })
+            .collect();
+        return Ok(MergedDictionaries {
+            key_mappings,
+            values: interleave(values_arrays, &indices)?,
+        });
+    }
+
+    let value_slices = values_arrays
+        .iter()
+        .zip(values_masks)
+        .map(|(values, mask)| get_masked_values(*values, mask))
+        .collect::<Vec<_>>();
+    // Map from value to new index
+    let mut interner = Interner::new(num_values);
+    // Interleave indices for new values array
+    let mut indices = Vec::with_capacity(num_values);
+
+    // Compute the mapping for each dictionary
+    let key_mappings = values_arrays
+        .iter()
+        .enumerate()
+        .zip(value_slices)
+        .map(|((dictionary_idx, value_array), values)| {
+            let zero = K::Native::from_usize(0).unwrap();
+            let mut mapping = vec![zero; value_array.len()];
+
+            for (value_idx, value) in values {
+                mapping[value_idx] =
+                    *interner.intern(value, || match K::Native::from_usize(indices.len()) {
+                        Some(idx) => {
+                            indices.push((dictionary_idx, value_idx));
+                            Ok(idx)
+                        }
+                        None => Err(ArrowError::DictionaryKeyOverflowError),
+                    })?;
+            }
+            Ok(mapping)
+        })
+        .collect::<Result<Vec<_>, ArrowError>>()?;
+
+    Ok(MergedDictionaries {
+        key_mappings,
+        values: interleave(values_arrays, &indices)?,
+    })
+}
+
 /// Return a mask identifying the values that are referenced by keys in `dictionary`
 /// at the positions indicated by `selection`
 fn compute_values_mask<K: ArrowNativeType>(
@@ -612,6 +691,23 @@ mod tests {
         assert_eq!(merged.key_mappings.len(), 2);
         assert_eq!(&merged.key_mappings[0], &[0, 0, 1, 0, 0]);
         assert_eq!(&merged.key_mappings[1], &[2, 3, 1, 4]);
+    }
+
+    #[test]
+    fn test_merge_dictionary_values_with_masks() {
+        let first = StringArray::from_iter_values(["a", "unused-a", "shared"]);
+        let second = StringArray::from_iter_values(["shared", "b", "unused-b"]);
+        let values = [&first as &dyn Array, &second as &dyn Array];
+        let masks = [
+            BooleanBuffer::from_iter([true, false, true]),
+            BooleanBuffer::from_iter([true, true, false]),
+        ];
+
+        let merged = merge_dictionary_values_with_masks::<Int32Type>(&values, &masks).unwrap();
+
+        let expected = StringArray::from_iter_values(["a", "shared", "shared", "b"]);
+        assert_eq!(merged.values.as_ref(), &expected);
+        assert_eq!(merged.key_mappings, vec![vec![0, 0, 1], vec![2, 3, 0]]);
     }
 
     #[test]
