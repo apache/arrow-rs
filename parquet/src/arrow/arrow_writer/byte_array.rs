@@ -313,7 +313,7 @@ impl FallbackEncoder {
 }
 
 /// Maximum size of a value that can be inlined in the hash table
-const SHORT_VALUE_LEN: usize = size_of::<u64>() - 1;
+const SHORT_VALUE_LEN: usize = std::mem::size_of::<u64>() - 1;
 
 /// Entry in the hash table
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
@@ -531,7 +531,7 @@ impl ByteArrayInterner {
     }
 
     fn estimated_memory_size(&self) -> usize {
-        self.page.capacity() * size_of::<u8>() + self.map.allocation_size()
+        self.page.capacity() * std::mem::size_of::<u8>() + self.map.allocation_size()
     }
 
     fn iter(&self) -> impl Iterator<Item = &[u8]> {
@@ -694,10 +694,10 @@ impl DictEncoder {
         let dictionary_cache_size = self
             .dictionary_cache
             .as_ref()
-            .map(|cache| cache.interned.capacity() * size_of::<u64>())
+            .map(|cache| cache.interned.capacity() * std::mem::size_of::<u64>())
             .unwrap_or_default();
         self.interner.estimated_memory_size()
-            + self.indices.capacity() * size_of::<u64>()
+            + self.indices.capacity() * std::mem::size_of::<u64>()
             + dictionary_cache_size
     }
 
@@ -830,7 +830,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
                     key,
                     value,
                     values,
-                    encode_dictionary,
+                    encode_with_dictionary_cache,
                     indices,
                     dictionary,
                     self
@@ -1040,7 +1040,7 @@ where
 /// dictionary encoder
 ///
 /// This is a free function so it can be used with `downcast_dict_values_op!`
-fn encode_dictionary<'a, K, V>(
+fn encode_with_dictionary_cache<'a, K, V>(
     values: TypedDictionaryArray<'a, K, V>,
     indices: &[usize],
     dictionary: &ArrayRef,
@@ -1121,7 +1121,7 @@ fn count_within_budget_views(
     max_value_len: usize,
 ) -> usize {
     // Each plain-encoded BYTE_ARRAY value carries a 4-byte length prefix, so
-    // the budget is compared against `value_len + size_of::<u32>()` — the
+    // the budget is compared against `value_len + std::mem::size_of::<u32>()` — the
     // bytes actually written to the page, not just the payload.
     //
     // Stage 1: O(1) conservative bound. View arrays have no prefix-sum
@@ -1130,7 +1130,7 @@ fn count_within_budget_views(
     // value by `max_value_len`. Skips the walk for the common small-value
     // case (what view arrays are built for, and where there is nothing to
     // bound).
-    let per_value = max_value_len + size_of::<u32>();
+    let per_value = max_value_len + std::mem::size_of::<u32>();
     if indices.len().saturating_mul(per_value) <= byte_budget {
         return indices.len();
     }
@@ -1139,7 +1139,7 @@ fn count_within_budget_views(
     let mut cum: usize = 0;
     for (i, idx) in indices.iter().enumerate() {
         let len = (views[*idx] as u32) as usize;
-        cum = cum.saturating_add(len + size_of::<u32>());
+        cum = cum.saturating_add(len + std::mem::size_of::<u32>());
         if cum > byte_budget {
             return i + 1;
         }
@@ -1166,7 +1166,7 @@ fn count_within_budget_offsets<T: ByteArrayType>(
     let last = indices[n - 1];
     let offsets = values.value_offsets();
     // Each plain-encoded value carries a 4-byte length prefix on the page.
-    let prefix_overhead = size_of::<u32>();
+    let prefix_overhead = std::mem::size_of::<u32>();
 
     // Stage 1: O(1) span upper bound. The span `offsets[last+1] -
     // offsets[first]` covers every array position in `[first, last]`, a
@@ -1242,5 +1242,52 @@ where
     for &idx in valid {
         let val = array.value(idx);
         bounder.update_wkb(val.as_ref());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow_array::{DictionaryArray, Int32Array, StringArray};
+
+    fn string_values(n: usize) -> ArrayRef {
+        Arc::new(StringArray::from_iter_values(
+            (0..n).map(|i| format!("v{i}")),
+        ))
+    }
+
+    #[test]
+    fn use_dictionary_cache_new_dictionary() {
+        let encoder = DictEncoder::default();
+        let dictionary = string_values(3);
+
+        // A new cache only pays off with at least one row per dictionary value
+        assert!(encoder.use_dictionary_cache(&dictionary, 4));
+        assert!(encoder.use_dictionary_cache(&dictionary, 3));
+        assert!(!encoder.use_dictionary_cache(&dictionary, 2));
+        assert!(!encoder.use_dictionary_cache(&dictionary, 0));
+    }
+
+    #[test]
+    fn use_dictionary_cache_cached_dictionary() {
+        let mut encoder = DictEncoder::default();
+        let dictionary = string_values(3);
+        let array = DictionaryArray::new(Int32Array::from(vec![0, 1, 2]), dictionary.clone());
+        encoder
+            .encode_dictionary(
+                array.downcast_dict::<StringArray>().unwrap(),
+                &[0, 1, 2],
+                &dictionary,
+            )
+            .unwrap();
+
+        // An existing cache is reused however few rows reference it
+        assert!(encoder.use_dictionary_cache(&dictionary, 1));
+        assert!(encoder.use_dictionary_cache(&dictionary, 0));
+
+        // Equal values in a different allocation do not use the existing cache
+        let other = string_values(3);
+        assert!(!encoder.use_dictionary_cache(&other, 2));
+        assert!(encoder.use_dictionary_cache(&other, 3));
     }
 }

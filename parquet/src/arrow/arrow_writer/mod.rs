@@ -2336,7 +2336,7 @@ mod tests {
     use arrow::error::Result as ArrowResult;
     use arrow::util::data_gen::create_random_array;
     use arrow::util::pretty::pretty_format_batches;
-    use arrow::{array::*, buffer::Buffer};
+    use arrow::{array::*, buffer::Buffer, compute::cast};
     use arrow_buffer::{IntervalMonthDayNano, NullBuffer, OffsetBuffer};
     use arrow_schema::Fields;
     use arrow_select::concat::concat;
@@ -2635,10 +2635,45 @@ mod tests {
         writer.into_inner().unwrap()
     }
 
-    #[test]
-    fn arrow_writer_string_dictionary_reused_across_batches() {
-        use arrow::compute::{cast, concat};
+    /// Writes each of `arrays` as a batch, in several mini-batches, checks they round trip,
+    /// and returns the number of values in the column's dictionary page
+    fn write_string_dictionaries(arrays: &[ArrayRef]) -> usize {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            arrays[0].data_type().clone(),
+            true,
+        )]));
+        let props = WriterProperties::builder().set_write_batch_size(2).build();
+        let mut file = vec![];
+        let mut writer = ArrowWriter::try_new(&mut file, schema.clone(), Some(props)).unwrap();
+        for array in arrays {
+            let batch = RecordBatch::try_new(schema.clone(), vec![array.clone()]).unwrap();
+            writer.write(&batch).unwrap();
+        }
+        writer.close().unwrap();
 
+        let reader = SerializedFileReader::new(Bytes::from(file.clone())).unwrap();
+        let mut pages = reader
+            .get_row_group(0)
+            .unwrap()
+            .get_column_page_reader(0)
+            .unwrap();
+        let dictionary_page = pages.get_next_page().unwrap().unwrap();
+        assert!(matches!(dictionary_page, Page::DictionaryPage { .. }));
+
+        let expected: Vec<&dyn Array> = arrays.iter().map(|a| a.as_ref()).collect();
+        let expected = concat(&expected).unwrap();
+        let actual = read_column(file);
+        assert_eq!(
+            cast(&actual, &DataType::Utf8).unwrap().as_ref(),
+            cast(&expected, &DataType::Utf8).unwrap().as_ref()
+        );
+
+        dictionary_page.num_values() as usize
+    }
+
+    #[test]
+    fn arrow_writer_string_dictionary_cache_reused_for_same_values() {
         // "dup" is in the dictionary twice, and values are both short enough to be inlined and not
         let shared: ArrayRef = Arc::new(StringArray::from(vec![
             "a",
@@ -2657,62 +2692,33 @@ mod tests {
             Some(0),
         ]);
         let first = DictionaryArray::new(keys, shared.clone());
-        // Same dictionary values as `first`, so they are encoded with the same cache
+        // Same values `Arc` as `first`, so encoded with the cache built for `first`. Sliced,
+        // with fewer rows than values, so the cache is only used because it is reused
         let keys = Int32Array::from(vec![Some(4), Some(4), Some(1), None, Some(2), Some(0)]);
-        let second = DictionaryArray::new(keys, shared).slice(1, 5);
-        // A different dictionary, sharing some values with the first
-        let other: ArrayRef = Arc::new(StringArray::from(vec!["zz", "a", "new value!!"]));
-        let keys = Int32Array::from(vec![Some(2), Some(1), Some(0), Some(1)]);
-        let third = DictionaryArray::new(keys, other);
-        // More dictionary values than rows, so they are not cached
-        let large: ArrayRef = Arc::new(StringArray::from_iter_values(
-            (0..10).map(|i| format!("value {i}")),
-        ));
-        let keys = Int32Array::from(vec![Some(9), None, Some(3)]);
-        let fourth = DictionaryArray::new(keys, large);
+        let second = DictionaryArray::new(keys, shared).slice(1, 4);
 
-        let arrays: Vec<ArrayRef> = vec![
-            Arc::new(first),
-            Arc::new(second),
-            Arc::new(third),
-            Arc::new(fourth),
-        ];
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "col",
-            arrays[0].data_type().clone(),
-            true,
-        )]));
-        // Several mini-batches per array
-        let props = WriterProperties::builder().set_write_batch_size(2).build();
-        let mut file = vec![];
-        let mut writer = ArrowWriter::try_new(&mut file, schema.clone(), Some(props)).unwrap();
-        for array in &arrays {
-            let batch = RecordBatch::try_new(schema.clone(), vec![array.clone()]).unwrap();
-            writer.write(&batch).unwrap();
-        }
-        writer.close().unwrap();
+        let arrays: Vec<ArrayRef> = vec![Arc::new(first), Arc::new(second)];
+        // a, bb, longer than eight bytes, dup
+        assert_eq!(write_string_dictionaries(&arrays), 4);
+    }
 
-        let reader = SerializedFileReader::new(Bytes::from(file.clone())).unwrap();
-        let mut pages = reader
-            .get_row_group(0)
-            .unwrap()
-            .get_column_page_reader(0)
-            .unwrap();
-        let dictionary_page = pages.get_next_page().unwrap().unwrap();
-        assert!(matches!(dictionary_page, Page::DictionaryPage { .. }));
-        // a, bb, longer than eight bytes, dup, zz, new value!!, value 9, value 3
-        assert_eq!(dictionary_page.num_values(), 8);
-
-        let expected: Vec<&dyn Array> = arrays.iter().map(|a| a.as_ref()).collect();
-        let expected = concat(&expected).unwrap();
-        let reader = ParquetRecordBatchReader::try_new(Bytes::from(file), 1024).unwrap();
-        let actual: Vec<RecordBatch> = reader.map(|b| b.unwrap()).collect();
-        let actual: Vec<&dyn Array> = actual.iter().map(|b| b.column(0).as_ref()).collect();
-        let actual = concat(&actual).unwrap();
-        assert_eq!(
-            cast(&actual, &DataType::Utf8).unwrap().as_ref(),
-            cast(&expected, &DataType::Utf8).unwrap().as_ref()
+    #[test]
+    fn arrow_writer_string_dictionary_cache_replaced_for_new_values() {
+        let first_values: ArrayRef = Arc::new(StringArray::from(vec!["a", "bb", "ccc"]));
+        let first = DictionaryArray::new(Int32Array::from(vec![0, 1, 2, 0]), first_values.clone());
+        // A different values `Arc`, sharing some values with `first` at other keys, so a
+        // stale cache would map keys to the wrong values
+        let second_values: ArrayRef = Arc::new(StringArray::from(vec!["zz", "a", "new value!!"]));
+        let second = DictionaryArray::new(
+            Int32Array::from(vec![Some(2), Some(1), None, Some(0), Some(1)]),
+            second_values,
         );
+        // Back to `first`'s values, whose cache has since been replaced
+        let third = DictionaryArray::new(Int32Array::from(vec![2, 1, 0]), first_values);
+
+        let arrays: Vec<ArrayRef> = vec![Arc::new(first), Arc::new(second), Arc::new(third)];
+        // a, bb, ccc, zz, new value!!
+        assert_eq!(write_string_dictionaries(&arrays), 5);
     }
 
     #[test]
