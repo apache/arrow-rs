@@ -276,9 +276,31 @@ impl BooleanBufferBuilder {
         self.advance(additional);
 
         let offset = self.len() - additional;
-        for (i, v) in slice.iter().enumerate() {
+        let buffer = self.buffer.as_slice_mut();
+
+        // Set bits individually until the write position is byte aligned
+        let head = ((8 - offset % 8) % 8).min(additional);
+        let (head_slice, rest) = slice.split_at(head);
+        for (i, v) in head_slice.iter().enumerate() {
             if *v {
-                unsafe { bit_util::set_bit_raw(self.buffer.as_mut_ptr(), offset + i) }
+                bit_util::set_bit(buffer, offset + i)
+            }
+        }
+
+        // Pack 8 bools into each byte without branching: a `bool` is a byte
+        // holding 0 or 1, and the multiply moves byte `i` to bit `56 + i`
+        let byte_offset = (offset + head) / 8;
+        let (chunks, remainder) = rest.as_chunks::<8>();
+        for (dst, chunk) in buffer[byte_offset..].iter_mut().zip(chunks) {
+            let bytes: [u8; 8] = std::array::from_fn(|i| chunk[i] as u8);
+            let packed = u64::from_le_bytes(bytes).wrapping_mul(0x0102_0408_1020_4080) >> 56;
+            *dst = packed as u8;
+        }
+
+        let remainder_offset = self.len - remainder.len();
+        for (i, v) in remainder.iter().enumerate() {
+            if *v {
+                bit_util::set_bit(buffer, remainder_offset + i)
             }
         }
     }
@@ -787,6 +809,45 @@ mod tests {
             let finished = builder.finish();
             for (i, &v) in bools.iter().enumerate() {
                 assert_eq!(finished.value(i), v, "at index {i} for len {len}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_append_slice_all_byte_patterns() {
+        for byte in 0..=u8::MAX {
+            let values: Vec<bool> = (0..8).map(|i| byte & (1 << i) != 0).collect();
+            let mut b = BooleanBufferBuilder::new(8);
+            b.append_slice(&values);
+            assert_eq!(b.as_slice(), &[byte]);
+        }
+    }
+
+    #[test]
+    fn test_append_slice_offsets() {
+        // Exercise every combination of starting bit offset and slice length
+        // around the byte boundaries, including after a truncate.
+        let pattern: Vec<bool> = (0..100).map(|i| (i * 7 + i / 3) % 5 < 2).collect();
+        for start in 0..17 {
+            for len in 0..pattern.len() {
+                let mut b = BooleanBufferBuilder::new(0);
+                b.append_n(start + 3, true);
+                b.truncate(start);
+                b.append_slice(&pattern[..len]);
+                b.append(true);
+                let finished = b.finish();
+                assert_eq!(finished.len(), start + len + 1);
+                for i in 0..start {
+                    assert!(finished.value(i), "start {start} len {len} index {i}");
+                }
+                for (i, v) in pattern[..len].iter().enumerate() {
+                    assert_eq!(
+                        finished.value(start + i),
+                        *v,
+                        "start {start} len {len} index {i}"
+                    );
+                }
+                assert!(finished.value(start + len));
             }
         }
     }
