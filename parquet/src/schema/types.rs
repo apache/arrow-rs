@@ -1531,8 +1531,18 @@ fn schema_from_array_helper(
         }
         Some(n) => {
             let repetition = element.repetition_type;
+            let child_count = usize::try_from(n)?;
+            let remaining_elements = num_elements - (index + 1);
+            if child_count > remaining_elements {
+                return Err(general_err!(
+                    "Group '{}' declares {} children, but only {} schema elements remain",
+                    element.name,
+                    child_count,
+                    remaining_elements
+                ));
+            }
 
-            let mut fields = Vec::with_capacity(usize::try_from(n)?);
+            let mut fields = Vec::with_capacity(child_count);
             let mut next_index = index + 1;
             for _ in 0..n {
                 let child_result = schema_from_array_helper(elements, num_elements, next_index)?;
@@ -2822,6 +2832,29 @@ mod tests {
             .with_logical_type(Some(LogicalType::File))
             .build();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parquet_schema_from_array_rejects_excessive_num_children() {
+        let elements = vec![SchemaElement {
+            r#type: None,
+            type_length: None,
+            repetition_type: Some(Repetition::REQUIRED),
+            name: "schema",
+            num_children: Some(i32::MAX),
+            converted_type: None,
+            scale: None,
+            precision: None,
+            field_id: None,
+            logical_type: None,
+        }];
+        let result = parquet_schema_from_array(elements);
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("declares 2147483647 children, but only 0 schema elements remain")
+        );
     }
 
     #[test]
