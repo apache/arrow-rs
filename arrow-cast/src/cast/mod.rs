@@ -3983,6 +3983,159 @@ mod tests {
         assert!(c.is_null(3));
     }
 
+    /// The rows of the string array used by the string -> timestamp DST tests,
+    /// and the instants they denote in `America/New_York` according to
+    /// PostgreSQL 17.11.
+    ///
+    /// They deliberately straddle both transitions of 2024, so a single offset
+    /// resolved once for the whole array cannot satisfy all of them.
+    const DST_STRINGS: [&str; 5] = [
+        // EDT (-04:00), before the November transition.
+        "2024-11-02 12:00:00",
+        // Ambiguous: 01:30 happens twice, the later (EST) instant wins.
+        "2024-11-03 01:30:00",
+        // EST (-05:00), after the November transition.
+        "2024-11-03 12:00:00",
+        // Nonexistent: 02:30 is skipped in March and shifts to 03:30 EDT.
+        "2024-03-10 02:30:00",
+        // EST (-05:00), before the March transition.
+        "2024-03-09 12:00:00",
+    ];
+
+    const DST_SECONDS: [i64; 5] = [
+        1_730_563_200,
+        1_730_615_400,
+        1_730_653_200,
+        1_710_055_800,
+        1_710_003_600,
+    ];
+
+    // Casting strings to `Timestamp(_, Some(tz))` goes through
+    // `string_to_datetime`, not through `adjust_timestamp_to_timezone`, so it
+    // needs its own coverage of the DST rules. See `crate::local_time`.
+    #[test]
+    fn test_cast_string_to_named_timezone_dst() {
+        let to_type = DataType::Timestamp(TimeUnit::Second, Some("America/New_York".into()));
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+
+        let mut values: Vec<Option<&str>> = DST_STRINGS.iter().copied().map(Some).collect();
+        values.push(None);
+
+        let arrays: Vec<ArrayRef> = vec![
+            Arc::new(StringArray::from(values.clone())),
+            Arc::new(LargeStringArray::from(values.clone())),
+            Arc::new(StringViewArray::from(values)),
+        ];
+
+        for array in arrays {
+            let from_type = array.data_type().clone();
+            let b = cast_with_options(&array, &to_type, &options)
+                .unwrap_or_else(|e| panic!("{from_type:?}: {e}"));
+            assert_eq!(b.data_type(), &to_type);
+            let c = b.as_primitive::<TimestampSecondType>();
+            for (i, expected) in DST_SECONDS.iter().enumerate() {
+                assert_eq!(c.value(i), *expected, "{from_type:?} row {i}");
+            }
+            assert!(c.is_null(5), "{from_type:?} null row");
+        }
+    }
+
+    // The same values must not silently become null under `safe` casting either.
+    #[test]
+    fn test_cast_string_to_named_timezone_dst_safe() {
+        let to_type = DataType::Timestamp(TimeUnit::Second, Some("America/New_York".into()));
+        let options = CastOptions {
+            safe: true,
+            ..Default::default()
+        };
+
+        let array = StringArray::from(vec![
+            Some(DST_STRINGS[1]),
+            Some(DST_STRINGS[3]),
+            Some("not a timestamp"),
+            None,
+        ]);
+
+        let b = cast_with_options(&array, &to_type, &options).unwrap();
+        let c = b.as_primitive::<TimestampSecondType>();
+        assert_eq!(c.value(0), DST_SECONDS[1]);
+        assert_eq!(c.value(1), DST_SECONDS[3]);
+        // Genuinely unparsable input still becomes null.
+        assert!(c.is_null(2));
+        assert!(c.is_null(3));
+        assert_eq!(c.null_count(), 2);
+    }
+
+    // Sub-second precision survives the shift applied to a nonexistent reading.
+    #[test]
+    fn test_cast_string_to_named_timezone_dst_nanos() {
+        let to_type = DataType::Timestamp(TimeUnit::Nanosecond, Some("America/New_York".into()));
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+
+        let array = StringArray::from(vec![
+            "2024-03-10 02:30:00.123456789",
+            "2024-11-03 01:30:00.123456789",
+        ]);
+        let b = cast_with_options(&array, &to_type, &options).unwrap();
+        let c = b.as_primitive::<TimestampNanosecondType>();
+        assert_eq!(c.value(0), 1_710_055_800 * 1_000_000_000 + 123_456_789);
+        assert_eq!(c.value(1), 1_730_615_400 * 1_000_000_000 + 123_456_789);
+    }
+
+    // A date-only string reads local midnight, which is itself skipped or
+    // repeated in some zones.
+    #[test]
+    fn test_cast_string_to_named_timezone_dst_date_only() {
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+
+        // Local midnight does not exist in Sao Paulo on 2018-11-04.
+        let to_type = DataType::Timestamp(TimeUnit::Second, Some("America/Sao_Paulo".into()));
+        let array = StringArray::from(vec!["2018-11-04"]);
+        let b = cast_with_options(&array, &to_type, &options).unwrap();
+        assert_eq!(
+            b.as_primitive::<TimestampSecondType>().value(0),
+            1_541_300_400
+        );
+
+        // Local midnight happens twice in Havana on 2024-11-03.
+        let to_type = DataType::Timestamp(TimeUnit::Second, Some("America/Havana".into()));
+        let array = StringArray::from(vec!["2024-11-03"]);
+        let b = cast_with_options(&array, &to_type, &options).unwrap();
+        assert_eq!(
+            b.as_primitive::<TimestampSecondType>().value(0),
+            1_730_610_000
+        );
+    }
+
+    // A timezone named by the string itself is resolved the same way, matching
+    // PostgreSQL.
+    #[test]
+    fn test_cast_string_to_timezone_named_in_string_dst() {
+        let to_type = DataType::Timestamp(TimeUnit::Second, Some("UTC".into()));
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+
+        let array = StringArray::from(vec![
+            "2024-03-10 02:30:00 America/New_York",
+            "2024-11-03 01:30:00 America/New_York",
+        ]);
+        let b = cast_with_options(&array, &to_type, &options).unwrap();
+        let c = b.as_primitive::<TimestampSecondType>();
+        assert_eq!(c.value(0), 1_710_055_800);
+        assert_eq!(c.value(1), 1_730_615_400);
+    }
+
     // The same values must not become null when `safe` casting is requested.
     #[test]
     fn test_cast_timestamp_to_named_timezone_dst_safe() {
