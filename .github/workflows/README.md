@@ -19,6 +19,9 @@
 
 CI selects checks for pull requests according to their source and changed files.
 See the [contributor guide](../../CONTRIBUTING.md#pull-requests-from-forks) for fork CI setup.
+Fork pushes and manual runs execute the regular suites except macOS tests and Miri.
+macOS tests run only upstream to avoid frequent timeouts on fork runners; they remain
+enabled for same-repository and release-branch PRs, upstream manual runs, and the merge queue.
 The merge queue runs the full test suite, except Miri, against the proposed merge result.
 Pushes to upstream `main` populate caches and publish documentation without repeating tests.
 A single required status check combines the results and blocks merging on failure.

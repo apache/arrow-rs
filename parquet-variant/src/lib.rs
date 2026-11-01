@@ -40,10 +40,12 @@
 
 mod builder;
 mod decoder;
+mod extension;
 mod path;
 mod utils;
 mod variant;
 
 pub use builder::*;
+pub use extension::VariantType;
 pub use path::{VariantPath, VariantPathElement};
 pub use variant::*;

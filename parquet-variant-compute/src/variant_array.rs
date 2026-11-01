@@ -34,11 +34,12 @@ use arrow::datatypes::{
     TimestampMicrosecondType, TimestampNanosecondType,
 };
 use arrow::error::Result;
-use arrow_schema::extension::{ExtensionType, Uuid as UuidExtension};
+use arrow_schema::extension::Uuid as UuidExtension;
 use arrow_schema::{ArrowError, DataType, Field, FieldRef, TimeUnit};
 use chrono::{DateTime, NaiveTime};
 use parquet_variant::{
     Uuid, Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16, VariantDecimalType as _,
+    VariantType,
 };
 
 use std::borrow::Cow;
@@ -120,51 +121,6 @@ fn validate_metadata_array(array: &dyn Array) -> Result<()> {
             "VariantArray 'metadata' field must be Binary, LargeBinary, BinaryView, or a Dictionary or RunEndEncoded array of one of those types, got {}",
             array.data_type()
         ))),
-    }
-}
-
-/// Arrow Variant [`ExtensionType`].
-///
-/// Represents the canonical Arrow Extension Type for storing variants.
-/// See [`VariantArray`] for more examples of using this extension type.
-pub struct VariantType;
-
-impl ExtensionType for VariantType {
-    const NAME: &'static str = "arrow.parquet.variant";
-
-    // Variants extension metadata is an empty string
-    // <https://github.com/apache/arrow/blob/d803afcc43f5d132506318fd9e162d33b2c3d4cd/docs/source/format/CanonicalExtensions.rst?plain=1#L473>
-    type Metadata = &'static str;
-
-    fn metadata(&self) -> &Self::Metadata {
-        &""
-    }
-
-    fn serialize_metadata(&self) -> Option<String> {
-        Some(String::new())
-    }
-
-    fn deserialize_metadata(_metadata: Option<&str>) -> Result<Self::Metadata> {
-        Ok("")
-    }
-
-    fn supports_data_type(&self, data_type: &DataType) -> Result<()> {
-        if matches!(data_type, DataType::Struct(_)) {
-            Ok(())
-        } else {
-            Err(ArrowError::InvalidArgumentError(format!(
-                "VariantType only supports StructArray, got {data_type}"
-            )))
-        }
-    }
-
-    fn try_new(data_type: &DataType, _metadata: Self::Metadata) -> Result<Self> {
-        Self.supports_data_type(data_type)?;
-        Ok(Self)
-    }
-
-    fn validate(data_type: &DataType, _metadata: Self::Metadata) -> Result<()> {
-        Self.supports_data_type(data_type)
     }
 }
 
