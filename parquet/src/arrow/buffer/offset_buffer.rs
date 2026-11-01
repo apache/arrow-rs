@@ -94,26 +94,62 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
         dict_values: &[u8],
     ) -> Result<()> {
         self.offsets.reserve(keys.len());
+        let offsets_start = self.offsets.len();
+        let offsets_dst = self.offsets.as_mut_ptr();
 
+        // Values and offsets are written through raw pointers, as this is
+        // much faster than `extend_from_slice` and `push` for short values.
+        // `len` bytes of `self.values` and `offsets_start + count` offsets
+        // are initialized, and the lengths are updated before returning.
+        let mut len = self.values.len();
+        let mut dst = self.values.as_mut_ptr();
+        let mut count = 0;
+        let mut result = Ok(());
         for key in keys {
             let index = key.as_usize();
             if index + 1 >= dict_offsets.len() {
-                return Err(general_err!(
+                result = Err(general_err!(
                     "dictionary key beyond bounds of dictionary: 0..{}",
                     dict_offsets.len().saturating_sub(1)
                 ));
+                break;
             }
             let start_offset = dict_offsets[index].as_usize();
             let end_offset = dict_offsets[index + 1].as_usize();
+            if start_offset > end_offset || end_offset > dict_values.len() {
+                result = Err(general_err!("invalid dictionary offsets"));
+                break;
+            }
+            let value_len = end_offset - start_offset;
+            let Some(offset) = I::from_usize(len + value_len) else {
+                result = Err(general_err!("index overflow decoding byte array"));
+                break;
+            };
 
-            // Dictionary values are verified when decoding dictionary page
-            self.values
-                .extend_from_slice(&dict_values[start_offset..end_offset]);
-            let index_offset = I::from_usize(self.values.len())
-                .ok_or_else(|| general_err!("index overflow decoding byte array"))?;
-            self.offsets.push(index_offset);
+            // `copy_value` may write up to `COPY_CHUNK` bytes past the value
+            if self.values.capacity() - len < value_len + COPY_CHUNK {
+                // SAFETY: the first `len` bytes are initialized
+                unsafe { self.values.set_len(len) };
+                self.values.reserve(value_len + COPY_CHUNK);
+                dst = self.values.as_mut_ptr();
+            }
+            // SAFETY: `start_offset + value_len <= dict_values.len()` was
+            // checked above, and `self.values` has capacity for
+            // `len + value_len + COPY_CHUNK` bytes
+            unsafe { copy_value(dict_values, start_offset, value_len, dst.add(len)) };
+            len += value_len;
+            // SAFETY: capacity for `keys.len()` more offsets was reserved above,
+            // and `count < keys.len()`
+            unsafe { offsets_dst.add(offsets_start + count).write(offset) };
+            count += 1;
         }
-        Ok(())
+        // SAFETY: the first `len` bytes and `offsets_start + count` offsets
+        // were initialized above
+        unsafe {
+            self.values.set_len(len);
+            self.offsets.set_len(offsets_start + count);
+        }
+        result
     }
 
     /// Validates that `&self.values[start_offset..]` is a valid UTF-8 sequence
@@ -141,6 +177,51 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
         };
 
         make_array(data)
+    }
+}
+
+/// Number of bytes [`copy_value`] copies at once
+const COPY_CHUNK: usize = 16;
+
+/// Copies `src[start..start + len]` to `dst`
+///
+/// Values of up to `4 * COPY_CHUNK` bytes are copied in whole `COPY_CHUNK`
+/// byte chunks when `src` has enough bytes past `start`, as this is faster
+/// than `memcpy` for short values. This may write up to `COPY_CHUNK` bytes
+/// past `dst + len`.
+///
+/// # Safety
+///
+/// `start + len <= src.len()`, and `dst` must be valid for writes of
+/// `len + COPY_CHUNK` bytes
+#[inline(always)]
+unsafe fn copy_value(src: &[u8], start: usize, len: usize, dst: *mut u8) {
+    // SAFETY: `start <= src.len()`
+    let src_ptr = unsafe { src.as_ptr().add(start) };
+    // SAFETY: only called below when `i + COPY_CHUNK` is at most `available`
+    // and at most `len + COPY_CHUNK`
+    let copy_chunk =
+        |i: usize| unsafe { std::ptr::copy_nonoverlapping(src_ptr.add(i), dst.add(i), COPY_CHUNK) };
+    let available = src.len() - start;
+    if len <= COPY_CHUNK && available >= COPY_CHUNK {
+        copy_chunk(0);
+    } else if len > COPY_CHUNK
+        && len <= 4 * COPY_CHUNK
+        && available >= len.next_multiple_of(COPY_CHUNK)
+    {
+        // Explicitly unrolled, as LLVM turns the equivalent loop into `memcpy`
+        copy_chunk(0);
+        copy_chunk(COPY_CHUNK);
+        if len > 2 * COPY_CHUNK {
+            copy_chunk(2 * COPY_CHUNK);
+            if len > 3 * COPY_CHUNK {
+                copy_chunk(3 * COPY_CHUNK);
+            }
+        }
+    } else {
+        // SAFETY: `src[start..start + len]` is valid, and `dst` is valid for
+        // `len` bytes
+        unsafe { std::ptr::copy_nonoverlapping(src_ptr, dst, len) };
     }
 }
 
@@ -238,6 +319,73 @@ mod tests {
             strings.iter().map(|x| x.unwrap()).collect::<Vec<_>>(),
             vec!["hello", "bar", "cd", "f", "ab", "e"]
         )
+    }
+
+    #[test]
+    fn test_offset_buffer_extend_from_dictionary_lengths() {
+        // Values around each multiple of the chunk size of `copy_value`,
+        // including ones ending near the end of the dictionary
+        let lengths = [
+            0, 1, 7, 15, 16, 17, 31, 32, 33, 47, 48, 49, 63, 64, 65, 100, 2, 0, 3, 17, 40, 0,
+        ];
+        let dict: Vec<String> = lengths
+            .iter()
+            .enumerate()
+            .map(|(i, len)| {
+                (0..*len)
+                    .map(|j| (b'a' + ((i + j) % 26) as u8) as char)
+                    .collect()
+            })
+            .collect();
+        let mut dict_offsets = vec![0i32];
+        let mut dict_values = Vec::new();
+        for v in &dict {
+            dict_values.extend_from_slice(v.as_bytes());
+            dict_offsets.push(dict_values.len() as i32);
+        }
+        // Exactly sized, so reads past the end are caught by sanitizers
+        let dict_values = dict_values.into_boxed_slice();
+        let keys: Vec<i32> = (0..200).map(|i| (i * 7) % dict.len() as i32).collect();
+
+        let mut buffer = OffsetBuffer::<i32>::with_capacity(0);
+        buffer.try_push(b"first", true).unwrap();
+        // In several calls, so that some start with little spare capacity
+        for chunk in keys.chunks(30) {
+            buffer
+                .extend_from_dictionary(chunk, &dict_offsets, &dict_values)
+                .unwrap();
+        }
+
+        let array = buffer.into_array(None, ArrowType::Utf8);
+        let strings = array.as_any().downcast_ref::<StringArray>().unwrap();
+        let expected: Vec<&str> = std::iter::once("first")
+            .chain(keys.iter().map(|k| dict[*k as usize].as_str()))
+            .collect();
+        assert_eq!(
+            strings.iter().map(|x| x.unwrap()).collect::<Vec<_>>(),
+            expected
+        );
+    }
+
+    #[test]
+    fn test_offset_buffer_extend_from_dictionary_err() {
+        let dict_offsets = [0i32, 2, 5, 9];
+        let dict_values = b"abcdefgh";
+
+        // Values before the invalid key are kept, and the buffer stays valid
+        for (keys, err) in [
+            (&[1, 0, 3, 1][..], "dictionary key beyond bounds"),
+            (&[1, 0, 2, 1][..], "invalid dictionary offsets"),
+        ] {
+            let mut buffer = OffsetBuffer::<i32>::with_capacity(0);
+            buffer.try_push(b"first", true).unwrap();
+            let e = buffer
+                .extend_from_dictionary(keys, &dict_offsets, dict_values)
+                .unwrap_err();
+            assert!(e.to_string().contains(err), "{e}");
+            assert_eq!(buffer.offsets, [0, 5, 8, 10]);
+            assert_eq!(buffer.values, b"firstcdeab");
+        }
     }
 
     #[test]
