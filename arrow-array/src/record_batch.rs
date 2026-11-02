@@ -115,6 +115,8 @@ macro_rules! create_array {
     (@from TimestampMillisecond) => { $crate::TimestampMillisecondArray };
     (@from TimestampMicrosecond) => { $crate::TimestampMicrosecondArray };
     (@from TimestampNanosecond) => { $crate::TimestampNanosecondArray };
+    (@from Date32) => { $crate::Date32Array };
+    (@from Date64) => { $crate::Date64Array };
 
     (@from $ty: ident) => {
         compile_error!(concat!("Unsupported data type: ", stringify!($ty)))
@@ -156,7 +158,6 @@ macro_rules! create_array {
 ///
 /// ```rust
 /// use arrow_array::record_batch;
-/// use arrow_schema;
 ///
 /// let batch = record_batch!(
 ///     ("a", Int32, [1, 2, 3]),
@@ -180,20 +181,13 @@ macro_rules! create_array {
 #[macro_export]
 macro_rules! record_batch {
     ($(($name: expr, $type: ident, $($values: tt)+)),*) => {
-        {
-            let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![
-                $(
-                    arrow_schema::Field::new($name, arrow_schema::DataType::$type, true),
-                )*
-            ]));
-
-            $crate::RecordBatch::try_new(
-                schema,
-                vec![$(
-                    $crate::create_array!($type, $($values)+),
-                )*]
-            )
-        }
+        $crate::RecordBatch::try_from_iter_with_nullable(vec![$(
+            (
+                ::std::string::String::from($name),
+                $crate::create_array!($type, $($values)+) as $crate::ArrayRef,
+                true,
+            ),
+        )*])
     };
 }
 
@@ -962,12 +956,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::{Date64Type, Int32Type, Int64Type};
     use crate::{
         BooleanArray, Int8Array, Int32Array, Int64Array, ListArray, StringArray, StringViewArray,
     };
     use arrow_buffer::{Buffer, NullBuffer, ToByteSlice};
     use arrow_data::{ArrayData, ArrayDataBuilder};
-    use arrow_schema::Fields;
+    use arrow_schema::{Fields, TimeUnit};
     use std::collections::HashMap;
 
     #[test]
@@ -1036,6 +1031,82 @@ mod tests {
 
         let large_binary = record_batch.column(1).as_binary::<i64>();
         assert_eq!(b"xxx", large_binary.value(0));
+    }
+
+    #[test]
+    fn create_record_batch_macro() {
+        let values = vec![7, 8, 9];
+        let name = String::from("c");
+
+        let record_batch = record_batch!(
+            ("a", Int32, [1, 2, 3]),
+            ("b", Utf8, [Some("x"), None, Some("z")]),
+            (name, Int64, values)
+        )
+        .unwrap();
+
+        let expected = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("c", DataType::Int64, true),
+        ]);
+        assert_eq!(&expected, record_batch.schema().as_ref());
+        assert_eq!(3, record_batch.num_rows());
+        assert_eq!(
+            &[1, 2, 3],
+            record_batch.column(0).as_primitive::<Int32Type>().values()
+        );
+        let b = record_batch.column(1).as_string::<i32>();
+        assert_eq!(
+            vec![Some("x"), None, Some("z")],
+            b.iter().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            &[7, 8, 9],
+            record_batch.column(2).as_primitive::<Int64Type>().values()
+        );
+    }
+
+    #[test]
+    fn create_record_batch_macro_parameterized_types() {
+        let record_batch = record_batch!(
+            ("ts", TimestampSecond, [1, 2]),
+            ("d", Decimal128, [Some(100), None])
+        )
+        .unwrap();
+
+        let expected = Schema::new(vec![
+            Field::new("ts", DataType::Timestamp(TimeUnit::Second, None), true),
+            Field::new("d", DataType::Decimal128(38, 10), true),
+        ]);
+        assert_eq!(&expected, record_batch.schema().as_ref());
+        assert_eq!(1, record_batch.column(1).null_count());
+    }
+
+    #[test]
+    fn create_record_batch_macro_date_types() {
+        let record_batch = record_batch!(
+            ("d32", Date32, [Some(1), None]),
+            ("d64", Date64, [86_400_000, 172_800_000])
+        )
+        .unwrap();
+
+        let expected = Schema::new(vec![
+            Field::new("d32", DataType::Date32, true),
+            Field::new("d64", DataType::Date64, true),
+        ]);
+        assert_eq!(&expected, record_batch.schema().as_ref());
+        assert_eq!(1, record_batch.column(0).null_count());
+        assert_eq!(
+            &[86_400_000, 172_800_000],
+            record_batch.column(1).as_primitive::<Date64Type>().values()
+        );
+    }
+
+    #[test]
+    fn create_record_batch_macro_length_mismatch() {
+        let err = record_batch!(("a", Int32, [1, 2, 3]), ("b", Int32, [1, 2])).unwrap_err();
+        assert!(matches!(err, ArrowError::InvalidArgumentError(_)));
     }
 
     #[test]

@@ -20,13 +20,15 @@
 //!
 //! - [`GetCatalogsBuilder`] for building responses to [`CommandGetCatalogs`] queries.
 //! - [`GetDbSchemasBuilder`] for building responses to [`CommandGetDbSchemas`] queries.
-//! - [`GetTablesBuilder`]for building responses to [`CommandGetTables`] queries.
-//! - [`SqlInfoDataBuilder`]for building responses to [`CommandGetSqlInfo`] queries.
-//! - [`XdbcTypeInfoDataBuilder`]for building responses to [`CommandGetXdbcTypeInfo`] queries.
+//! - [`GetTablesBuilder`] for building responses to [`CommandGetTables`] queries.
+//! - [`GetTableTypesBuilder`] for building responses to [`CommandGetTableTypes`] queries.
+//! - [`SqlInfoDataBuilder`] for building responses to [`CommandGetSqlInfo`] queries.
+//! - [`XdbcTypeInfoDataBuilder`] for building responses to [`CommandGetXdbcTypeInfo`] queries.
 //!
 //! [`CommandGetCatalogs`]: crate::sql::CommandGetCatalogs
 //! [`CommandGetDbSchemas`]: crate::sql::CommandGetDbSchemas
 //! [`CommandGetTables`]: crate::sql::CommandGetTables
+//! [`CommandGetTableTypes`]: crate::sql::CommandGetTableTypes
 //! [`CommandGetSqlInfo`]: crate::sql::CommandGetSqlInfo
 //! [`CommandGetXdbcTypeInfo`]: crate::sql::CommandGetXdbcTypeInfo
 
@@ -39,9 +41,12 @@ mod xdbc_info;
 
 pub use catalogs::GetCatalogsBuilder;
 pub use db_schemas::GetDbSchemasBuilder;
-pub use sql_info::{SqlInfoData, SqlInfoDataBuilder};
+pub use sql_info::{GetSqlInfoBuilder, SqlInfoData, SqlInfoDataBuilder};
+pub use table_types::GetTableTypesBuilder;
 pub use tables::GetTablesBuilder;
-pub use xdbc_info::{XdbcTypeInfo, XdbcTypeInfoData, XdbcTypeInfoDataBuilder};
+pub use xdbc_info::{
+    GetXdbcTypeInfoBuilder, XdbcTypeInfo, XdbcTypeInfoData, XdbcTypeInfoDataBuilder,
+};
 
 use arrow_array::ArrayRef;
 use arrow_array::UInt32Array;

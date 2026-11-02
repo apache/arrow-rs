@@ -293,7 +293,19 @@ impl ImportedArrowArray<'_> {
         };
 
         let data_layout = layout(&self.data_type);
-        let buffers = self.buffers(data_layout.can_contain_null_mask, data_layout.variadic)?;
+        let mut buffers = self.buffers(data_layout.can_contain_null_mask, data_layout.variadic)?;
+
+        // The values buffer of an empty array at offset 0 is imported as empty (see
+        // `buffer_len`), so its lone offset, which can be any value, is reset to 0.
+        if len == 0
+            && offset == 0
+            && matches!(
+                self.data_type,
+                DataType::Utf8 | DataType::Binary | DataType::LargeUtf8 | DataType::LargeBinary
+            )
+        {
+            buffers[0] = MutableBuffer::from_len_zeroed(buffers[0].len()).into();
+        }
 
         let null_bit_buffer = if data_layout.can_contain_null_mask {
             self.null_bit_buffer()
@@ -1402,10 +1414,11 @@ mod tests_from_ffi {
     use crate::{
         ArrayRef, GenericByteViewArray, ListArray,
         array::{
-            Array, BooleanArray, DictionaryArray, FixedSizeBinaryArray, FixedSizeListArray,
-            Int32Array, Int64Array, StringArray, StructArray, UInt32Array, UInt64Array,
+            Array, BinaryArray, BooleanArray, DictionaryArray, FixedSizeBinaryArray,
+            FixedSizeListArray, Int32Array, Int64Array, LargeBinaryArray, LargeStringArray,
+            StringArray, StructArray, UInt32Array, UInt64Array,
         },
-        ffi::{FFI_ArrowArray, FFI_ArrowSchema, from_ffi},
+        ffi::{FFI_ArrowArray, FFI_ArrowSchema, from_ffi, to_ffi},
         make_array,
     };
 
@@ -1736,6 +1749,67 @@ mod tests_from_ffi {
                 // not short-circuited to 0.
                 assert_eq!(imported.buffers()[1].len(), [0, 1, 3, 5][offset]);
             }
+        }
+
+        Ok(())
+    }
+
+    /// An empty slice keeps the offset it was sliced at as its lone offset, which
+    /// must not make the imported array invalid.
+    ///
+    /// <https://github.com/apache/arrow-rs/issues/11585>
+    #[test]
+    fn test_empty_slice_of_bytes() -> Result<()> {
+        let arrays: [ArrayRef; 4] = [
+            Arc::new(StringArray::from(vec!["ab", "c"])),
+            Arc::new(BinaryArray::from(vec![b"ab".as_ref(), b"c"])),
+            Arc::new(LargeStringArray::from(vec!["ab", "c"])),
+            Arc::new(LargeBinaryArray::from(vec![b"ab".as_ref(), b"c"])),
+        ];
+        for array in arrays {
+            let data = array.slice(1, 0).to_data();
+            let (array, schema) = to_ffi(&data)?;
+            let imported = unsafe { from_ffi(array, &schema) }?;
+
+            imported.validate_full()?;
+            assert_eq!(imported, data);
+        }
+
+        Ok(())
+    }
+
+    /// Unlike bytes, the values of lists and maps are a child array imported with its
+    /// own length, so the lone offset of an empty slice stays within it.
+    #[test]
+    fn test_empty_slice_of_lists() -> Result<()> {
+        use crate::builder::{
+            Int32Builder, LargeListBuilder, ListBuilder, MapBuilder, StringBuilder,
+        };
+
+        let mut list = ListBuilder::new(Int32Builder::new());
+        list.append_value([Some(1), Some(2)]);
+        list.append_value([Some(3)]);
+        let mut large_list = LargeListBuilder::new(Int32Builder::new());
+        large_list.append_value([Some(1), Some(2)]);
+        large_list.append_value([Some(3)]);
+        let mut map = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+        for (k, v) in [("a", 1), ("b", 2)] {
+            map.keys().append_value(k);
+            map.values().append_value(v);
+            map.append(true).unwrap();
+        }
+        let arrays: [ArrayRef; 3] = [
+            Arc::new(list.finish()),
+            Arc::new(large_list.finish()),
+            Arc::new(map.finish()),
+        ];
+        for array in arrays {
+            let data = array.slice(1, 0).to_data();
+            let (array, schema) = to_ffi(&data)?;
+            let imported = unsafe { from_ffi(array, &schema) }?;
+
+            imported.validate_full()?;
+            assert_eq!(imported, data);
         }
 
         Ok(())

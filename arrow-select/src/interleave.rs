@@ -969,7 +969,12 @@ pub fn interleave_record_batch(
     record_batches: &[&RecordBatch],
     indices: &[(usize, usize)],
 ) -> Result<RecordBatch, ArrowError> {
-    let schema = record_batches[0].schema();
+    let Some(first) = record_batches.first() else {
+        return Err(ArrowError::InvalidArgumentError(
+            "interleave_record_batch requires input of at least one record batch".to_string(),
+        ));
+    };
+    let schema = first.schema();
     let columns = (0..schema.fields().len())
         .map(|i| {
             let column_values: Vec<&dyn Array> = record_batches
@@ -979,7 +984,13 @@ pub fn interleave_record_batch(
             interleave(&column_values, indices)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    RecordBatch::try_new(schema, columns)
+    // The row count is set explicitly so that a batch with no columns still
+    // produces a batch with `indices.len()` rows, like `take_record_batch`.
+    RecordBatch::try_new_with_options(
+        schema,
+        columns,
+        &RecordBatchOptions::new().with_row_count(Some(indices.len())),
+    )
 }
 
 #[cfg(test)]
@@ -991,7 +1002,7 @@ mod tests {
     };
     use arrow_array::types::{Decimal128Type, Int8Type, TimestampMicrosecondType};
     use arrow_buffer::ScalarBuffer;
-    use arrow_schema::{Field, TimeUnit};
+    use arrow_schema::{Field, Schema, TimeUnit};
 
     #[test]
     fn test_primitive() {
@@ -2532,5 +2543,24 @@ mod tests {
 
         assert_eq!(result.value(0).len(), 1);
         assert_eq!(result.value(3).len(), 1);
+    }
+
+    #[test]
+    fn test_interleave_record_batch_empty_input() {
+        let err = interleave_record_batch(&[], &[]).unwrap_err();
+        assert!(matches!(err, ArrowError::InvalidArgumentError(_)));
+    }
+
+    #[test]
+    fn test_interleave_record_batch_no_columns() {
+        // A batch with no columns but a known row count interleaves to a
+        // batch with `indices.len()` rows, matching `take_record_batch`.
+        let options = RecordBatchOptions::new().with_row_count(Some(3));
+        let batch =
+            RecordBatch::try_new_with_options(Arc::new(Schema::empty()), vec![], &options).unwrap();
+
+        let result = interleave_record_batch(&[&batch], &[(0, 0), (0, 2)]).unwrap();
+        assert_eq!(result.num_columns(), 0);
+        assert_eq!(result.num_rows(), 2);
     }
 }
