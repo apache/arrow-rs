@@ -19,7 +19,7 @@
 extern crate criterion;
 use criterion::Criterion;
 use rand::RngExt;
-use rand::distr::{Distribution, StandardUniform, Uniform};
+use rand::distr::Uniform;
 use std::hint;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime};
@@ -30,14 +30,6 @@ use arrow::compute::{CastOptions, cast, cast_with_options};
 use arrow::datatypes::*;
 use arrow::util::bench_util::*;
 use arrow::util::test_util::seedable_rng;
-
-fn build_array<T: ArrowPrimitiveType>(size: usize) -> ArrayRef
-where
-    StandardUniform: Distribution<T::Native>,
-{
-    let array = create_primitive_array::<T>(size, 0.1);
-    Arc::new(array)
-}
 
 fn build_utf8_date_array(size: usize, with_nulls: bool) -> ArrayRef {
     use chrono::NaiveDate;
@@ -79,38 +71,6 @@ fn build_utf8_date_time_array(size: usize, with_nulls: bool) -> ArrayRef {
         }
     }
     Arc::new(builder.finish())
-}
-
-fn build_decimal128_array(size: usize, precision: u8, scale: i8) -> ArrayRef {
-    let mut rng = seedable_rng();
-    let mut builder = Decimal128Builder::with_capacity(size);
-
-    for _ in 0..size {
-        builder.append_value(rng.random_range::<i128, _>(0..1000000000));
-    }
-    Arc::new(
-        builder
-            .finish()
-            .with_precision_and_scale(precision, scale)
-            .unwrap(),
-    )
-}
-
-fn build_decimal256_array(size: usize, precision: u8, scale: i8) -> ArrayRef {
-    let mut rng = seedable_rng();
-    let mut builder = Decimal256Builder::with_capacity(size);
-    let mut bytes = [0; 32];
-    for _ in 0..size {
-        let num = rng.random_range::<i128, _>(0..1000000000);
-        bytes[0..16].clone_from_slice(&num.to_le_bytes());
-        builder.append_value(i256::from_le_bytes(bytes));
-    }
-    Arc::new(
-        builder
-            .finish()
-            .with_precision_and_scale(precision, scale)
-            .unwrap(),
-    )
 }
 
 fn build_string_array(size: usize) -> ArrayRef {
@@ -258,32 +218,43 @@ fn cast_array(array: &ArrayRef, to_type: DataType) {
 }
 
 fn add_benchmark(c: &mut Criterion) {
-    let i32_array = build_array::<Int32Type>(512);
-    let i32_array_8192 = build_array::<Int32Type>(8192);
+    let i32_array: ArrayRef = Arc::new(create_primitive_array::<Int32Type>(512, 0.1));
+    let i32_array_8192: ArrayRef = Arc::new(create_primitive_array::<Int32Type>(8192, 0.1));
     let bool_array: ArrayRef = Arc::new(create_boolean_array(8192, 0.1, 0.5));
     let bool_array_no_nulls: ArrayRef = Arc::new(create_boolean_array(8192, 0.0, 0.5));
-    let i64_array = build_array::<Int64Type>(512);
+    let i64_array: ArrayRef = Arc::new(create_primitive_array::<Int64Type>(512, 0.1));
     let i64_within_1e6 = create_primitive_array_range::<Int64Type>(512, 0.1, -1_000_000..1_000_000);
     let mut values: Vec<Option<i64>> = i64_within_1e6.iter().collect();
     *values.last_mut().unwrap() = Some(10_000_000_000_000_000);
     let i64_late_overflow = Arc::new(Int64Array::from(values)) as ArrayRef;
     let i64_within_1e6 = Arc::new(i64_within_1e6) as ArrayRef;
-    let f32_array = build_array::<Float32Type>(512);
-    let f32_utf8_array = cast(&build_array::<Float32Type>(512), &DataType::Utf8).unwrap();
-    let i32_utf8_array = cast(&build_array::<Int32Type>(512), &DataType::Utf8).unwrap();
+    let f32_array: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(512, 0.1));
+    let f32_utf8_array = cast(
+        &create_primitive_array::<Float32Type>(512, 0.1),
+        &DataType::Utf8,
+    )
+    .unwrap();
+    let i32_utf8_array = cast(
+        &create_primitive_array::<Int32Type>(512, 0.1),
+        &DataType::Utf8,
+    )
+    .unwrap();
 
-    let f64_array = build_array::<Float64Type>(512);
-    let date64_array = build_array::<Date64Type>(512);
-    let date32_array = build_array::<Date32Type>(512);
-    let time32s_array = build_array::<Time32SecondType>(512);
-    let time64ns_array = build_array::<Time64NanosecondType>(512);
-    let time_ns_array = build_array::<TimestampNanosecondType>(512);
-    let time_ms_array = build_array::<TimestampMillisecondType>(512);
+    let f64_array: ArrayRef = Arc::new(create_primitive_array::<Float64Type>(512, 0.1));
+    let date64_array: ArrayRef = Arc::new(create_primitive_array::<Date64Type>(512, 0.1));
+    let date32_array: ArrayRef = Arc::new(create_primitive_array::<Date32Type>(512, 0.1));
+    let time32s_array: ArrayRef = Arc::new(create_primitive_array::<Time32SecondType>(512, 0.1));
+    let time64ns_array: ArrayRef =
+        Arc::new(create_primitive_array::<Time64NanosecondType>(512, 0.1));
+    let time_ns_array: ArrayRef =
+        Arc::new(create_primitive_array::<TimestampNanosecondType>(512, 0.1));
+    let time_ms_array: ArrayRef =
+        Arc::new(create_primitive_array::<TimestampMillisecondType>(512, 0.1));
     let utf8_date_array = build_utf8_date_array(512, true);
     let utf8_date_time_array = build_utf8_date_time_array(512, true);
 
-    let decimal128_array = build_decimal128_array(8_000, 10, 3);
-    let decimal256_array = build_decimal256_array(8_000, 50, 3);
+    let decimal128_array: ArrayRef = Arc::new(create_decimal128_array(8_000, 10, 3));
+    let decimal256_array: ArrayRef = Arc::new(create_decimal256_array(8_000, 50, 3));
     let string_array = build_string_array(512);
     let wide_string_array = cast(&string_array, &DataType::LargeUtf8).unwrap();
 

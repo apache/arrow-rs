@@ -20,7 +20,7 @@ use arrow::array::{
     StructArrayAssembler,
 };
 use arrow::buffer::Buffer;
-use arrow::compute::CastOptions;
+use arrow::compute::{CastOptions, cast};
 use arrow_schema::{DataType, Field, FieldRef, Fields};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime};
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
@@ -30,6 +30,7 @@ use parquet_variant::{
 };
 use parquet_variant_compute::{
     GetOptions, VariantArray, VariantArrayBuilder, json_to_variant, shred_variant, variant_get,
+    variant_to_json,
 };
 use parquet_variant_json::append_json;
 use rand::RngExt;
@@ -42,7 +43,7 @@ use std::sync::Arc;
 
 const VARIANT_GET_UNSHREDDED_OBJECT_ROWS: usize = 262_144;
 const VARIANT_ARRAY_BUILD_ROWS: usize = 262_144;
-const SHRED_VARIANT_OBJECT_ROWS: usize = 8_192;
+const VARIANT_BATCH_ROWS: usize = 8_192;
 
 fn variant_array_builder_build_bench(c: &mut Criterion) {
     c.bench_function("variant_array_builder_build_262k_small_values", |b| {
@@ -203,6 +204,60 @@ fn benchmark_batch_json_string_to_variant(c: &mut Criterion) {
     }
 }
 
+pub fn variant_to_json_primitive_bench(c: &mut Criterion) {
+    let primitive = create_primitive_variant_array(VARIANT_BATCH_ROWS);
+    let input = ArrayRef::from(primitive.clone());
+
+    // Little JSON writing makes per-row binary column dispatch visible.
+    c.bench_function("variant_to_json_primitive", |b| {
+        b.iter(|| variant_to_json(&input).unwrap())
+    });
+
+    // Read the same integers from typed_value rather than binary Variant values.
+    let shredded = shred_variant(&primitive, &DataType::Int64).unwrap();
+    let input = ArrayRef::from(shredded);
+    c.bench_function("variant_to_json_shredded_primitive", |b| {
+        b.iter(|| variant_to_json(&input).unwrap())
+    });
+}
+
+pub fn variant_to_json_bench(c: &mut Criterion) {
+    // Object iteration resolves metadata field names and recursively writes scalar values.
+    let objects = create_object_variant_array(VARIANT_BATCH_ROWS);
+    let input = ArrayRef::from(objects.clone());
+    c.bench_function("variant_to_json_object", |b| {
+        b.iter(|| variant_to_json(&input).unwrap())
+    });
+
+    // Same documents and BinaryView values, with dictionary lookup or run-end lookup added.
+    let (dictionary, ree) = create_encoded_metadata_variant_arrays(&objects);
+    for (name, input) in [
+        ("variant_to_json_dictionary_metadata", dictionary),
+        ("variant_to_json_ree_metadata", ree),
+    ] {
+        c.bench_function(name, |b| b.iter(|| variant_to_json(&input).unwrap()));
+    }
+
+    // Wide objects exercise field-name lookup and JSON key serialization for every field.
+    let json: ArrayRef = Arc::new(StringArray::from_iter_values(random_structure(
+        VARIANT_BATCH_ROWS,
+        200,
+    )));
+    let input = ArrayRef::from(json_to_variant(&json).unwrap());
+    c.bench_function("variant_to_json_wide_object", |b| {
+        b.iter(|| variant_to_json(&input).unwrap())
+    });
+
+    // Lists recurse through elements without metadata field-name lookups.
+    let json: ArrayRef = Arc::new(StringArray::from_iter_values(json_repeated_list(
+        VARIANT_BATCH_ROWS,
+    )));
+    let input = ArrayRef::from(json_to_variant(&json).unwrap());
+    c.bench_function("variant_to_json_list", |b| {
+        b.iter(|| variant_to_json(&input).unwrap())
+    });
+}
+
 pub fn variant_get_bench(c: &mut Criterion) {
     let variant_array = create_primitive_variant_array(8192);
     let input = ArrayRef::from(variant_array);
@@ -301,7 +356,7 @@ pub fn variant_get_unshredded_object_path_bench(c: &mut Criterion) {
 }
 
 pub fn variant_get_object_path_metadata_bench(c: &mut Criterion) {
-    let size = SHRED_VARIANT_OBJECT_ROWS;
+    let size = VARIANT_BATCH_ROWS;
     let num_fields = 300;
     let field = Arc::new(Field::new("typed_value", DataType::Int32, true));
     let path = VariantPath::from(vec![VariantPathElement::field("attr.140")]);
@@ -370,7 +425,7 @@ pub fn variant_get_object_path_metadata_bench(c: &mut Criterion) {
 /// dictionary. The source array's dictionary holds 300 field names, so the cost of that name
 /// lookup is visible.
 pub fn shred_variant_partial_object_bench(c: &mut Criterion) {
-    let variant_array = create_unshredded_object_variant_array(SHRED_VARIANT_OBJECT_ROWS);
+    let variant_array = create_unshredded_object_variant_array(VARIANT_BATCH_ROWS);
 
     // The source objects have 15 fields (`attr.000`, `attr.020`, ... `attr.280`). Shred the first
     // 5 of them, leaving the other 10 to be written to the leftover `value` column.
@@ -395,7 +450,7 @@ pub fn shred_variant_partial_object_bench(c: &mut Criterion) {
 /// Same as [`shred_variant_partial_object_bench`], but no field of the source objects is covered
 /// by the shredding schema, so all 15 fields per row take the leftover `value` column path.
 pub fn shred_variant_unmatched_object_bench(c: &mut Criterion) {
-    let variant_array = create_unshredded_object_variant_array(SHRED_VARIANT_OBJECT_ROWS);
+    let variant_array = create_unshredded_object_variant_array(VARIANT_BATCH_ROWS);
 
     let shredded_fields = (0..5)
         .map(|index| {
@@ -821,6 +876,8 @@ criterion_group!(
     shred_variant_unmatched_object_bench,
     variant_array_builder_build_bench,
     benchmark_batch_json_string_to_variant,
+    variant_to_json_bench,
+    variant_to_json_primitive_bench,
     variant_get_utf8_from_unshredded_string_bench,
     variant_get_binary_from_unshredded_binary_bench,
     variant_get_utf8_from_int_bench,
@@ -854,6 +911,45 @@ fn create_primitive_variant_array(size: usize) -> VariantArray {
     }
 
     variant_builder.build()
+}
+
+/// Reuses the person generator, alternating schemas in runs of 64 rows for metadata encoding.
+fn create_object_variant_array(size: usize) -> VariantArray {
+    let json = json_repeated_struct(size).enumerate().map(|(i, json)| {
+        if i / 64 % 2 == 0 {
+            json
+        } else {
+            json.replace("\"age\":", "\"years\":")
+        }
+    });
+    let input: ArrayRef = Arc::new(StringArray::from_iter_values(json));
+    json_to_variant(&input).unwrap()
+}
+
+/// Encodes the two metadata dictionaries from `create_object_variant_array` while
+/// preserving BinaryView storage and the value column. Run-end encoding uses 64-row runs.
+fn create_encoded_metadata_variant_arrays(objects: &VariantArray) -> (ArrayRef, ArrayRef) {
+    let metadata = objects.metadata_column();
+    let dictionary_type =
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::BinaryView));
+    let dictionary = cast(metadata, &dictionary_type).unwrap();
+
+    let ree_type = DataType::RunEndEncoded(
+        Arc::new(Field::new("run_ends", DataType::Int32, false)),
+        Arc::new(Field::new("values", DataType::BinaryView, false)),
+    );
+    let ree = cast(metadata, &ree_type).unwrap();
+
+    let with_metadata = |metadata: ArrayRef| -> ArrayRef {
+        Arc::new(
+            StructArrayAssembler::new()
+                .with_field("metadata", metadata, false)
+                .with_field("value", objects.value_column().clone(), false)
+                .build()
+                .unwrap(),
+        )
+    };
+    (with_metadata(dictionary), with_metadata(ree))
 }
 
 /// Creates a `VariantArray` where the values are already shredded as UTF8.

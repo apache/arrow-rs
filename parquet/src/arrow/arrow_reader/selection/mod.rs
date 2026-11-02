@@ -852,26 +852,10 @@ impl FromIterator<RowSelector> for RowSelection {
     fn from_iter<T: IntoIterator<Item = RowSelector>>(iter: T) -> Self {
         let iter = iter.into_iter();
 
-        // Capacity before filter
         let mut selectors = Vec::with_capacity(iter.size_hint().0);
 
-        let mut filtered = iter.filter(|x| x.row_count != 0);
-        if let Some(x) = filtered.next() {
-            selectors.push(x);
-        }
-
-        for s in filtered {
-            if s.row_count == 0 {
-                continue;
-            }
-
-            // Combine consecutive selectors
-            let last = selectors.last_mut().unwrap();
-            if last.skip == s.skip {
-                last.row_count = last.row_count.checked_add(s.row_count).unwrap();
-            } else {
-                selectors.push(s)
-            }
+        for selector in iter {
+            append_normalized_selector(&mut selectors, selector);
         }
 
         Self::from_selectors(selectors)

@@ -1687,17 +1687,8 @@ impl Decoder {
             Self::StringView(offsets, values) => {
                 let offsets = flush_offsets(offsets);
                 let values = flush_values(values);
-                let array = StringArray::try_new(offsets, values.into(), nulls.clone())?;
-                let values: Vec<&str> = (0..array.len())
-                    .map(|i| {
-                        if array.is_valid(i) {
-                            array.value(i)
-                        } else {
-                            ""
-                        }
-                    })
-                    .collect();
-                Arc::new(StringViewArray::from(values))
+                let array = StringArray::try_new(offsets, values.into(), nulls)?;
+                Arc::new(StringViewArray::from(&array))
             }
             Self::Array(field, offsets, values) => {
                 let values = values.flush(None)?;

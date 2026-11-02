@@ -538,18 +538,20 @@ mod zstd_codec {
     /// Uses `zstd::bulk` API with reusable compressor/decompressor contexts
     /// to avoid the overhead of reinitializing contexts for each operation.
     pub struct ZSTDCodec {
-        compressor: zstd::bulk::Compressor<'static>,
-        decompressor: zstd::bulk::Decompressor<'static>,
+        level: ZstdLevel,
+        // Created on first use, because writers only compress and readers only
+        // decompress.
+        compressor: Option<zstd::bulk::Compressor<'static>>,
+        decompressor: Option<zstd::bulk::Decompressor<'static>>,
     }
 
     impl ZSTDCodec {
         /// Creates new Zstandard compression codec.
         pub(crate) fn new(level: ZstdLevel) -> Self {
             Self {
-                compressor: zstd::bulk::Compressor::new(level.compression_level())
-                    .expect("valid zstd compression level"),
-                decompressor: zstd::bulk::Decompressor::new()
-                    .expect("can create zstd decompressor"),
+                level,
+                compressor: None,
+                decompressor: None,
             }
         }
     }
@@ -577,6 +579,9 @@ mod zstd_codec {
             cursor.set_position(offset as u64);
             let len = self
                 .decompressor
+                .get_or_insert_with(|| {
+                    zstd::bulk::Decompressor::new().expect("can create zstd decompressor")
+                })
                 .decompress_to_buffer(input_buf, &mut cursor)?;
             Ok(len)
         }
@@ -588,7 +593,13 @@ mod zstd_codec {
 
             let mut cursor = Cursor::new(output_buf);
             cursor.set_position(offset as u64);
-            let _written = self.compressor.compress_to_buffer(input_buf, &mut cursor)?;
+            let _written = self
+                .compressor
+                .get_or_insert_with(|| {
+                    zstd::bulk::Compressor::new(self.level.compression_level())
+                        .expect("valid zstd compression level")
+                })
+                .compress_to_buffer(input_buf, &mut cursor)?;
             Ok(())
         }
     }
