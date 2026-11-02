@@ -170,8 +170,8 @@ impl<'a> UnalignedBitChunk<'a> {
 
     /// Counts the number of ones
     pub fn count_ones(&self) -> usize {
-        let edges = self.prefix.into_iter().chain(self.suffix);
-        edges.map(|x| x.count_ones() as usize).sum::<usize>() + count_ones_words(self.chunks)
+        let count = |word: Option<u64>| word.map_or(0, |w| w.count_ones() as usize);
+        count(self.prefix) + count_ones_words(self.chunks) + count(self.suffix)
     }
 }
 
@@ -181,26 +181,27 @@ fn count_ones_words(words: &[u64]) -> usize {
 }
 
 /// Summing four byte popcounts in `u8` lanes before widening lets LLVM emit one
-/// widening per 64 bytes. A `u64::count_ones` sum widens every 16 bytes. On x86
+/// widening per 64-byte block. A `u64::count_ones` sum widens every 16 bytes. On x86
 /// the `u64` sum measured faster (#11776), so this is only used on aarch64.
 #[cfg(target_arch = "aarch64")]
 fn count_ones_words(words: &[u64]) -> usize {
-    let (chunks, tail) = words.as_chunks::<8>();
+    // A block is 8 words (64 bytes), the unit that is widened once.
+    let (blocks, tail) = words.as_chunks::<8>();
     let mut total = 0;
-    // `lane_counts` counts in u16 lanes so that one widening per chunk suffices. Each
-    // lane gains at most 32 (four bytes of eight bits) per chunk, so add the lanes
-    // into `total` and reset them before they can overflow.
-    const CHUNKS_PER_FLUSH: usize = (u16::MAX / 32) as usize;
-    for flush_group in chunks.chunks(CHUNKS_PER_FLUSH) {
+    // `lane_counts` counts in u16 lanes so that one widening per block suffices. Each
+    // lane gains at most 32 (four bytes of eight bits) per block, so flush the lanes
+    // (add them into `total` and reset them) before they can overflow.
+    const BLOCKS_PER_FLUSH: usize = (u16::MAX / 32) as usize;
+    for flush_group in blocks.chunks(BLOCKS_PER_FLUSH) {
         let mut lane_counts = [0u16; 16];
-        for chunk in flush_group {
-            let chunk = chunk.as_slice().to_byte_slice();
-            // Lane `lane` sums byte `lane` of each of the chunk's four 16-byte vectors.
+        for block in flush_group {
+            let bytes = block.as_slice().to_byte_slice();
+            // Lane `lane` sums byte `lane` of each of the block's four 16-byte vectors.
             for lane in 0..16 {
-                let count = chunk[lane].count_ones() as u8
-                    + chunk[16 + lane].count_ones() as u8
-                    + chunk[32 + lane].count_ones() as u8
-                    + chunk[48 + lane].count_ones() as u8;
+                let count = bytes[lane].count_ones() as u8
+                    + bytes[16 + lane].count_ones() as u8
+                    + bytes[32 + lane].count_ones() as u8
+                    + bytes[48 + lane].count_ones() as u8;
                 lane_counts[lane] += count as u16;
             }
         }
@@ -863,7 +864,7 @@ mod tests {
 
     #[test]
     fn test_unaligned_bit_chunk_count_ones() {
-        // Sizes in bytes around the 64-byte chunk and the 2047-chunk flush in
+        // Sizes in bytes around the 64-byte block and the 2047-block flush in
         // `count_ones_words`. With all-ones input, this fails if the flush comes too
         // late and a u16 lane counter overflows. Random input (`None`) fails if a
         // lane counts the wrong bytes, which uniform input hides.
