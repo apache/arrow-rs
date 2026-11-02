@@ -32,7 +32,8 @@ runs:
           /usr/local/cargo/registry/index/
           /usr/local/cargo/registry/cache/
           /usr/local/cargo/git/db/
-        key: cargo-cache3-${{ hashFiles('**/Cargo.toml') }}
+        # API scans create root-only baseline manifests under target in the container.
+        key: cargo-cache3-${{ hashFiles('**/Cargo.toml', '!target/**') }}
         restore-keys: cargo-cache3-
     - name: Setup Rust toolchain
       shell: bash
