@@ -43,8 +43,6 @@ jobs:
     container:
       image: amd64/rust
     timeout-minutes: 60
-    env:
-      BASE_SHA: ${{ github.event.pull_request.base.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -59,12 +57,14 @@ jobs:
       - name: Compare public APIs with the target commit
         id: compare
         shell: bash
-        # Force detection even if the PR bumps Cargo versions. Comparing with the
-        # target commit avoids reporting breaking changes already merged there.
+        # The event's base SHA can lag behind the checked-out PR merge commit.
+        # Its first parent is the exact target commit used for this merge.
+        # Force detection even if the PR bumps Cargo versions.
         run: |
+          base_sha=$(git rev-parse HEAD^1)
           check_api() {
             local status=0
-            cargo semver-checks check-release --baseline-rev "$BASE_SHA" \
+            cargo semver-checks check-release --baseline-rev "$base_sha" \
               --release-type minor "$@" || status=$?
             case "$status" in
               0) ;;
