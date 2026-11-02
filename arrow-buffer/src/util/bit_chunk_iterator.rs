@@ -170,8 +170,8 @@ impl<'a> UnalignedBitChunk<'a> {
 
     /// Counts the number of ones
     pub fn count_ones(&self) -> usize {
-        let count = |word: Option<u64>| word.map_or(0, |w| w.count_ones() as usize);
-        count(self.prefix) + count_ones_words(self.chunks) + count(self.suffix)
+        let edges = self.prefix.into_iter().chain(self.suffix);
+        edges.map(|x| x.count_ones() as usize).sum::<usize>() + count_ones_words(self.chunks)
     }
 }
 
