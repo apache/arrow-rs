@@ -53,6 +53,32 @@ fn criterion_benchmark(c: &mut Criterion) {
     }
 
     group.finish();
+
+    // Many appends of 1 to 7 values each, starting in the middle of a byte
+    const CALLS: usize = 7 * 1024;
+    let short_inputs = [
+        ("random", (0..8).map(|_| rng.random_bool(0.5)).collect()),
+        ("all_false", vec![false; 8]),
+    ];
+
+    let mut group = c.benchmark_group("BooleanBufferBuilder append_slice short");
+    group.throughput(Throughput::Elements(CALLS as u64));
+
+    for (name, values) in &short_inputs {
+        group.bench_with_input(*name, values, |b, values: &Vec<bool>| {
+            b.iter(|| {
+                let mut builder = BooleanBufferBuilder::new(3 + CALLS * 4);
+                builder.append_n(3, true);
+                for i in 0..CALLS {
+                    let len = i % 7 + 1;
+                    builder.append_slice(hint::black_box(&values[..len]));
+                }
+                hint::black_box(builder.finish())
+            })
+        });
+    }
+
+    group.finish();
 }
 
 criterion_group!(benches, criterion_benchmark);

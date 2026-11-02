@@ -276,6 +276,26 @@ impl BooleanBufferBuilder {
         self.advance(additional);
 
         let offset = self.len() - additional;
+
+        // Too short to fill a whole byte, so packing would only add overhead
+        if additional < 8 {
+            for (i, v) in slice.iter().enumerate() {
+                if *v {
+                    unsafe { bit_util::set_bit_raw(self.buffer.as_mut_ptr(), offset + i) }
+                }
+            }
+        } else {
+            self.pack_slice(offset, slice)
+        }
+    }
+
+    /// Writes `slice` into the already allocated bits starting at `offset`
+    ///
+    /// Kept out of line so that the short slice path of [`Self::append_slice`]
+    /// stays small when inlined
+    #[inline(never)]
+    fn pack_slice(&mut self, offset: usize, slice: &[bool]) {
+        let additional = slice.len();
         let buffer = self.buffer.as_slice_mut();
 
         // Set bits individually until the write position is byte aligned
