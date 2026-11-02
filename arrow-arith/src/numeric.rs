@@ -790,8 +790,11 @@ fn interval_mul_f64(
     let month_remainder_days = month_remainder
         .to_i32()
         .ok_or_else(|| overflow("month remainder"))?;
-    let mut seconds_remainder =
-        timestamp_round((days_product.fract() + month_remainder.fract()) * SECONDS_PER_DAY);
+    // Same order as DuckDB; regrouping the terms (e.g. via `fract()`) can change the last ns.
+    let mut seconds_remainder = timestamp_round(
+        (days_product - f64::from(days) + month_remainder - f64::from(month_remainder_days))
+            * SECONDS_PER_DAY,
+    );
 
     if seconds_remainder.abs() >= SECONDS_PER_DAY {
         let remainder_days = (seconds_remainder / SECONDS_PER_DAY)
@@ -2249,6 +2252,37 @@ mod tests {
             mul(&interval, &null_factor).unwrap().as_ref(),
             &IntervalMonthDayNanoArray::new_null(interval.len())
         );
+    }
+
+    #[test]
+    fn test_interval_mul_div_f64_matches_duckdb_rounding() {
+        // Regression test for https://github.com/apache/arrow-rs/issues/12004: each of these
+        // results is off by 1 ns unless the sub-day remainder is summed in DuckDB's order.
+        let interval = IntervalMonthDayNanoArray::from(vec![
+            IntervalMonthDayNanoType::make_value(1, 1, 0),
+            IntervalMonthDayNanoType::make_value(1, 1, 0),
+            IntervalMonthDayNanoType::make_value(1, 2, 0),
+            IntervalMonthDayNanoType::make_value(1, 1, 0),
+        ]);
+        let factor = Float64Array::from(vec![32. / 7., 10. / 13., 5. / 7., -32. / 7.]);
+        let expected = IntervalMonthDayNanoArray::from(vec![
+            IntervalMonthDayNanoType::make_value(4, 21, 61_714_285_726_628),
+            IntervalMonthDayNanoType::make_value(0, 23, 73_107_692_314_339),
+            IntervalMonthDayNanoType::make_value(0, 22, 74_057_142_894_171),
+            IntervalMonthDayNanoType::make_value(-4, -21, -61_714_285_726_628),
+        ]);
+        assert_eq!(mul(&interval, &factor).unwrap().as_ref(), &expected);
+
+        // Division multiplies by the reciprocal, so it follows the same order.
+        let interval =
+            IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNanoType::make_value(1, 1, 0)]);
+        let factor = Float64Array::new_scalar(7. / 32.);
+        let expected = IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNanoType::make_value(
+            4,
+            21,
+            61_714_285_726_628,
+        )]);
+        assert_eq!(div(&interval, &factor).unwrap().as_ref(), &expected);
     }
 
     #[test]
