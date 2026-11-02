@@ -31,10 +31,10 @@ permissions:
   contents: read
 
 jobs:
-  # Check workspace wide compile and test with default features for
-  # mac
+  # Check workspace wide compile and test with default features for macOS.
+  # Fork macOS runners frequently time out, so keep this testing upstream.
   macos:
-    if: ${{ !inputs.lint-only }}
+    if: ${{ !inputs.lint-only && github.repository == 'apache/arrow-rs' }}
     name: Test on Mac
     runs-on: macos-latest
     steps:
@@ -109,7 +109,7 @@ jobs:
         uses: ./.github/actions/setup-rustup
       - name: Install cargo-shear
         id: install-shear
-        uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177  # v2.87.30
+        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91  # v2.87.31
         with:
           tool: cargo-shear
       - name: Check workspace dependencies
@@ -133,7 +133,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv
-        uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177  # v2.87.30
+        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91  # v2.87.31
         with:
           tool: cargo-msrv
       - name: Check all packages

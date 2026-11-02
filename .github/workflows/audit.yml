@@ -31,17 +31,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Install cargo-audit
-        uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177  # v2.87.30
+        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91  # v2.87.31
         with:
           tool: cargo-audit
       - name: Run audit check
         # ubuntu-slim has no Rust toolchain to dispatch `cargo audit`, so
         # call the binary directly.
-        # tonic 0.14 pins zstd 0.13, but its compression codec doesn't use the
-        # APIs affected by these advisories. Remove these once tonic updates.
-        # See https://github.com/grpc/grpc-rust/issues/2960
-        run: |
-          cargo-audit audit \
-            --ignore RUSTSEC-2026-0391 \
-            --ignore RUSTSEC-2026-0398 \
-            --ignore RUSTSEC-2026-0403
+        run: cargo-audit audit

@@ -70,6 +70,8 @@ def validate_fork_ci(workflows, ci):
     for name, job in rust["jobs"].items():
         if name in {"lint", "unused-dependencies"}:
             assert "if" not in job, f"rust/{name}: lightweight check must run upstream"
+        elif name == "macos":
+            assert job.get("if") == "${{ !inputs.lint-only && github.repository == 'apache/arrow-rs' }}", "rust/macos: must only run upstream outside lint-only mode"
         else:
             assert job.get("if") == "${{ !inputs.lint-only }}", f"rust/{name}: runs during lint-only mode"
     docs = load_yaml(workflows / "docs.yml")
@@ -307,6 +309,9 @@ class ConfigurationTests(unittest.TestCase):
             (".asf.yaml", "enforcement: active", "enforcement: disabled"),
             (".asf.yaml", "type: merge_queue", "type: deletion"),
             (".github/workflows/rust.yml", "    if: ${{ !inputs.lint-only }}\n", ""),
+            (".github/workflows/rust.yml", "    if: ${{ !inputs.lint-only && github.repository == 'apache/arrow-rs' }}\n", ""),
+            (".github/workflows/rust.yml", " && github.repository == 'apache/arrow-rs'", ""),
+            (".github/workflows/rust.yml", "!inputs.lint-only && ", ""),
             (".github/workflows/ci.yml", "      lint-only: ${{ needs.changes.outputs.fork-pr == 'true' }}\n", ""),
             (".github/workflows/docs.yml", "github.repository == 'apache/arrow-rs' && ", ""),
             (".asf.yaml", '"Required Checks"', '"Missing Check"'),

@@ -25,6 +25,13 @@
 //! parsing of sequences of one or more arbitrarily formatted JSON values, including
 //! but not limited to newline-delimited JSON.
 //!
+//! # Timestamps
+//!
+//! Timestamps are parsed with [`arrow_cast::parse::string_to_datetime`]. A
+//! timestamp without an explicit offset that falls in a daylight savings gap or
+//! overlap of the target timezone is resolved as described there, rather than
+//! returning an error.
+//!
 //! # Basic Usage
 //!
 //! [`Reader`] can be used directly with synchronous data sources, such as [`std::fs::File`]
@@ -2014,6 +2021,29 @@ mod tests {
         test_timestamp::<TimestampMillisecondType>();
         test_timestamp::<TimestampMicrosecondType>();
         test_timestamp::<TimestampNanosecondType>();
+    }
+
+    // A local time in a DST gap or overlap of the target timezone is resolved
+    // as described in `arrow_cast::parse::string_to_datetime`: an ambiguous
+    // reading takes the later instant, and a nonexistent reading is shifted
+    // forward by the length of the gap.
+    #[test]
+    fn test_timestamp_dst_transitions() {
+        let buf = r#"
+        {"a": "2024-03-10 02:30:00"}
+        {"a": "2024-11-03 01:30:00"}
+        "#;
+        let data_type = DataType::Timestamp(TimeUnit::Second, Some("America/New_York".into()));
+        let schema = Arc::new(Schema::new(vec![Field::new("a", data_type, true)]));
+
+        let batches = do_read(buf, 1024, true, false, schema);
+        assert_eq!(batches.len(), 1);
+
+        let col = batches[0].column(0).as_primitive::<TimestampSecondType>();
+        assert_eq!(col.null_count(), 0);
+        // Nonexistent 02:30 is read as 03:30 EDT (2024-03-10T07:30:00Z), and
+        // ambiguous 01:30 takes the later EST instant (2024-11-03T06:30:00Z)
+        assert_eq!(col.values(), &[1_710_055_800, 1_730_615_400]);
     }
 
     fn test_time<T: ArrowTemporalType>() {
