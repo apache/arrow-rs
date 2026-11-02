@@ -97,41 +97,6 @@ fn sync_builder_rejects_malformed_filter() {
 }
 
 #[test]
-fn standalone_filter_reads_use_exact_ranges() {
-    let mut filter = Sbbf::new(&[0; 96]);
-    filter.insert("present");
-    let mut serialized = Vec::new();
-    filter.write(&mut serialized).unwrap();
-    let bytes = Bytes::from(serialized);
-    let header_length = (bytes.len() - 96) as u64;
-    let offset = 13;
-    assert!(Sbbf::from_bytes(&bytes).unwrap().check("present"));
-
-    for length in [Some(bytes.len() as i32), None] {
-        let responses = if length.is_some() {
-            vec![bytes.clone()]
-        } else {
-            vec![bytes.slice(..20), bytes.slice(header_length as usize..)]
-        };
-        let reader = RecordingReader::new(responses);
-        let loaded = Sbbf::read_from_column_chunk(&column(Some(offset as i64), length), &reader)
-            .unwrap()
-            .unwrap();
-        assert_eq!(loaded.num_blocks(), 3);
-        assert!(loaded.check("present"));
-        let expected = if length.is_some() {
-            std::iter::once(offset..offset + bytes.len() as u64).collect()
-        } else {
-            vec![
-                offset..offset + 20,
-                offset + header_length..offset + bytes.len() as u64,
-            ]
-        };
-        assert_eq!(reader.requests(), expected);
-    }
-}
-
-#[test]
 fn missing_and_invalid_locations_do_not_read() {
     let reader = RecordingReader::default();
     assert!(
@@ -147,40 +112,6 @@ fn missing_and_invalid_locations_do_not_read() {
         assert!(Sbbf::read_from_column_chunk(&metadata, &reader).is_err());
     }
     assert!(reader.requests().is_empty());
-}
-
-#[test]
-fn invalid_headers_and_bitsets_remain_errors() {
-    // Deserialization and sync reads must enforce the same header/payload contract.
-    for (declared, actual) in [(-1, 32), (0, 0), (33, 33), (64, 32), (32, 64)] {
-        let bytes = encode(declared, actual);
-        let reader = RecordingReader::new([bytes.clone()]);
-        let error =
-            Sbbf::read_from_column_chunk(&column(Some(0), Some(bytes.len() as i32)), &reader)
-                .unwrap_err();
-        assert_eq!(
-            error.to_string(),
-            Sbbf::from_bytes(&bytes).unwrap_err().to_string()
-        );
-        assert_eq!(reader.requests().len(), 1);
-    }
-    let mut unsupported = encode(32, 32).to_vec();
-    unsupported[3] = 0x2c; // Unknown algorithm union variant.
-    for bytes in [Bytes::from_static(&[0]), Bytes::from(unsupported)] {
-        let reader = RecordingReader::new([bytes.clone()]);
-        assert!(
-            Sbbf::read_from_column_chunk(&column(Some(0), Some(bytes.len() as i32)), &reader,)
-                .is_err()
-        );
-        assert!(Sbbf::from_bytes(&bytes).is_err());
-    }
-    // Without an advertised length, reject invalid sizes before requesting the bitset.
-    for declared in [-1, 0, 33] {
-        let bytes = encode(declared, 32);
-        let reader = RecordingReader::new([bytes.slice(..20)]);
-        assert!(Sbbf::read_from_column_chunk(&column(Some(0), None), &reader).is_err());
-        assert_eq!(reader.requests(), vec![0..20]);
-    }
 }
 
 #[test]

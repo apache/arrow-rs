@@ -465,7 +465,7 @@ impl Sbbf {
                         decoder.push_range(range, buffer)?;
                     }
                 }
-                DecodeResult::Data(sbbf) => return Ok(sbbf),
+                DecodeResult::Data(sbbf) => return Ok(Some(sbbf)),
                 DecodeResult::Finished => {
                     return Err(general_err!("invalid value returned from SbbfPushDecoder"));
                 }
@@ -500,7 +500,7 @@ impl Sbbf {
                         decoder.push_range(range, buffer)?;
                     }
                 }
-                DecodeResult::Data(sbbf) => return Ok(sbbf),
+                DecodeResult::Data(sbbf) => return Ok(Some(sbbf)),
                 DecodeResult::Finished => {
                     return Err(general_err!("invalid value returned from SbbfPushDecoder"));
                 }
@@ -838,7 +838,7 @@ fn read_bloom_filter_header_and_length(buffer: &[u8]) -> Result<(BloomFilterHead
 /// Decoding state machine
 #[derive(Debug)]
 enum DecodeState {
-    /// Reading the metadata thrift structure
+    /// Finding the first Bloom filter range
     FindingRange,
     // Reading the SBBF header
     ReadingSbbfHeader(Range<u64>),
@@ -851,7 +851,44 @@ enum DecodeState {
     Intermediate,
 }
 
-/// Decodes a Bloom filter from bytes pushed by the caller
+/// Decodes a Bloom filter from caller-provided file ranges, without performing I/O.
+///
+/// The metadata and pushed bytes must refer to the same file. Ranges use absolute
+/// file offsets. Call [`Self::try_decode`] to discover which ranges are needed,
+/// then supply them using [`Self::push_range`] or [`Self::push_ranges`]. Bytes may
+/// also be pushed in advance to avoid requests for already-buffered data.
+///
+/// Each requested range must be contained in a single pushed buffer; adjacent
+/// buffers are not coalesced. After an error from [`Self::try_decode`], discard
+/// the decoder.
+///
+/// # Example
+///
+/// ```no_run
+/// use bytes::Bytes;
+/// use parquet::DecodeResult;
+/// use parquet::bloom_filter::{Sbbf, SbbfPushDecoder};
+/// use parquet::errors::Result;
+/// use parquet::file::metadata::ColumnChunkMetaData;
+///
+/// fn decode_filter(metadata: &ColumnChunkMetaData, file_bytes: Bytes) -> Result<Option<Sbbf>> {
+///     let Some(mut decoder) = SbbfPushDecoder::try_new(metadata)? else {
+///         return Ok(None);
+///     };
+///     loop {
+///         match decoder.try_decode()? {
+///             DecodeResult::NeedsData(ranges) => {
+///                 let buffers = ranges.iter().map(|range| {
+///                     file_bytes.slice(range.start as usize..range.end as usize)
+///                 }).collect();
+///                 decoder.push_ranges(ranges, buffers)?;
+///             }
+///             DecodeResult::Data(filter) => return Ok(Some(filter)),
+///             DecodeResult::Finished => unreachable!("filter was returned above"),
+///         }
+///     }
+/// }
+/// ```
 pub struct SbbfPushDecoder {
     /// Decoding state
     state: DecodeState,
@@ -864,7 +901,10 @@ pub struct SbbfPushDecoder {
 }
 
 impl SbbfPushDecoder {
-    /// Returns `None` if the column chunk has no Bloom filter
+    /// Create a new Bloom filter decoder for the given column chunk.
+    ///
+    /// Returns `None` if the column chunk has no Bloom filter offset.
+    /// Invalid offsets and nonpositive advertised lengths return an error.
     pub fn try_new(column_metadata: &ColumnChunkMetaData) -> Result<Option<Self>> {
         let Some(offset) = column_metadata.bloom_filter_offset() else {
             return Ok(None);
@@ -888,22 +928,29 @@ impl SbbfPushDecoder {
         }))
     }
 
-    /// Pushes a single range of data into the decoder's buffer.
+    /// Pushes a file range into the decoder's buffer.
+    ///
+    /// Returns an error if the buffer length differs from the range length or
+    /// decoding has finished.
     pub fn push_range(&mut self, range: Range<u64>, buffer: Bytes) -> Result<()> {
         if matches!(&self.state, DecodeState::Finished) {
             return Err(general_err!(
-                "ParquetMetaDataPushDecoder: cannot push data after decoding is finished"
+                "SbbfPushDecoder: cannot push data after decoding is finished"
             ));
         }
         self.buffers.push_range(range, buffer)?;
         Ok(())
     }
 
-    /// Push data into the decoder's buffer.
+    /// Pushes multiple file ranges into the decoder's buffer.
+    ///
+    /// The number of ranges must match the number of buffers, and each buffer
+    /// must have the same length as its range. Pushing after decoding has
+    /// finished returns an error.
     pub fn push_ranges(&mut self, ranges: Vec<Range<u64>>, buffers: Vec<Bytes>) -> Result<()> {
         if matches!(&self.state, DecodeState::Finished) {
             return Err(general_err!(
-                "ParquetMetaDataPushDecoder: cannot push data after decoding is finished"
+                "SbbfPushDecoder: cannot push data after decoding is finished"
             ));
         }
         self.buffers.push_ranges(ranges, buffers)?;
@@ -922,40 +969,58 @@ impl SbbfPushDecoder {
         self.buffers.get_bytes(start, len)
     }
 
-    /// `NeedsData` once if `bloom_filter_length` is known, twice otherwise
-    /// (header estimate, then the bitset)
-    pub fn try_decode(&mut self) -> Result<DecodeResult<Option<Sbbf>>> {
-        match std::mem::replace(&mut self.state, DecodeState::Intermediate) {
-            DecodeState::FindingRange => {
-                let range = bloom_filter_read_range(
-                    self.offset,
-                    0..self.length.unwrap_or(SBBF_HEADER_SIZE_ESTIMATE),
-                )?;
-                self.state = DecodeState::ReadingSbbfHeader(range.clone());
-                Ok(DecodeResult::NeedsData(vec![range]))
-            }
-            DecodeState::ReadingSbbfHeader(range) => {
-                let buffer = self.get_bytes(&range)?;
-                let bitset_range = bloom_filter_bitset_range(&buffer, self.length)?;
-                // if the column metadata had the length, we are done
-                if self.length.is_some() {
-                    let bitset = buffer.slice(bitset_range);
-                    self.state = DecodeState::Finished;
-                    Ok(DecodeResult::Data(Some(Sbbf::new(&bitset))))
-                } else {
+    /// Attempts to decode the filter, returning the file ranges needed if data
+    /// is missing. Repeated calls before supplying data return the same ranges.
+    ///
+    /// Without prefetched data, requests one range when `bloom_filter_length` is
+    /// known, or two otherwise (a 20-byte header estimate, then the bitset).
+    /// Headers larger than the estimate require an advertised length.
+    /// After returning [`DecodeResult::Data`], subsequent calls return
+    /// [`DecodeResult::Finished`].
+    pub fn try_decode(&mut self) -> Result<DecodeResult<Sbbf>> {
+        loop {
+            match std::mem::replace(&mut self.state, DecodeState::Intermediate) {
+                DecodeState::FindingRange => {
+                    let range = bloom_filter_read_range(
+                        self.offset,
+                        0..self.length.unwrap_or(SBBF_HEADER_SIZE_ESTIMATE),
+                    )?;
+                    self.state = DecodeState::ReadingSbbfHeader(range);
+                }
+                DecodeState::ReadingSbbfHeader(range) => {
+                    if !self.buffers.has_range(&range) {
+                        self.state = DecodeState::ReadingSbbfHeader(range.clone());
+                        return Ok(DecodeResult::NeedsData(vec![range]));
+                    }
+                    let buffer = self.get_bytes(&range)?;
+                    let bitset_range = bloom_filter_bitset_range(&buffer, self.length)?;
+                    if self.length.is_some() {
+                        let bitset = buffer.slice(bitset_range);
+                        self.state = DecodeState::Finished;
+                        return Ok(DecodeResult::Data(Sbbf::new(&bitset)));
+                    }
                     let range = bloom_filter_read_range(self.offset, bitset_range)?;
-                    self.state = DecodeState::ReadingSbbfBitset(range.clone());
-                    Ok(DecodeResult::NeedsData(vec![range]))
+                    self.state = DecodeState::ReadingSbbfBitset(range);
+                }
+                DecodeState::ReadingSbbfBitset(range) => {
+                    if !self.buffers.has_range(&range) {
+                        self.state = DecodeState::ReadingSbbfBitset(range.clone());
+                        return Ok(DecodeResult::NeedsData(vec![range]));
+                    }
+                    let bitset = self.get_bytes(&range)?;
+                    self.state = DecodeState::Finished;
+                    return Ok(DecodeResult::Data(Sbbf::new(&bitset)));
+                }
+                DecodeState::Finished => {
+                    self.state = DecodeState::Finished;
+                    return Ok(DecodeResult::Finished);
+                }
+                DecodeState::Intermediate => {
+                    return Err(general_err!(
+                        "SbbfPushDecoder: internal error, invalid state"
+                    ));
                 }
             }
-            DecodeState::ReadingSbbfBitset(range) => {
-                let bitset = self.get_bytes(&range)?;
-                self.state = DecodeState::Finished;
-                Ok(DecodeResult::Data(Some(Sbbf::new(&bitset))))
-            }
-            _ => Err(general_err!(
-                "SbbfPushDecoder: internal error, invalid state"
-            )),
         }
     }
 }
@@ -968,6 +1033,143 @@ mod tests {
     fn test_bloom_filter_read_range_overflow() {
         assert!(bloom_filter_read_range(u64::MAX, 0..1).is_err());
         assert!(bloom_filter_read_range(u64::MAX, 1..2).is_err());
+    }
+
+    fn push_decoder_fixture(with_length: bool) -> (SbbfPushDecoder, Bytes) {
+        use crate::schema::parser::parse_message_type;
+        use crate::schema::types::SchemaDescriptor;
+        use std::sync::Arc;
+
+        let schema =
+            Arc::new(parse_message_type("message schema { REQUIRED BYTE_ARRAY value; }").unwrap());
+        let descriptor = SchemaDescriptor::new(schema).column(0);
+        let mut filter = Sbbf::new(&[0; 32]);
+        filter.insert("present");
+        let mut serialized = Vec::new();
+        filter.write(&mut serialized).unwrap();
+        let bytes = Bytes::from(serialized);
+        let metadata = ColumnChunkMetaData::builder(descriptor)
+            .set_bloom_filter_offset(Some(13))
+            .set_bloom_filter_length(with_length.then_some(bytes.len() as i32))
+            .build()
+            .unwrap();
+        (SbbfPushDecoder::try_new(&metadata).unwrap().unwrap(), bytes)
+    }
+
+    fn decoder_needs_range(decoder: &mut SbbfPushDecoder) -> Range<u64> {
+        match decoder.try_decode().unwrap() {
+            DecodeResult::NeedsData(ranges) => {
+                assert_eq!(ranges.len(), 1);
+                ranges.into_iter().next().unwrap()
+            }
+            other => panic!("expected NeedsData, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_push_decoder_finished_is_terminal() {
+        for with_length in [true, false] {
+            let (mut decoder, bytes) = push_decoder_fixture(with_length);
+            loop {
+                match decoder.try_decode().unwrap() {
+                    DecodeResult::NeedsData(ranges) => {
+                        for range in ranges {
+                            let buffer =
+                                bytes.slice((range.start - 13) as usize..(range.end - 13) as usize);
+                            decoder.push_range(range, buffer).unwrap();
+                        }
+                    }
+                    DecodeResult::Data(_) => break,
+                    DecodeResult::Finished => panic!("finished without producing a filter"),
+                }
+            }
+            for _ in 0..2 {
+                assert!(matches!(
+                    decoder.try_decode().unwrap(),
+                    DecodeResult::Finished
+                ));
+                let range = 13..13 + bytes.len() as u64;
+                assert!(decoder.push_range(range.clone(), bytes.clone()).is_err());
+                assert!(
+                    decoder
+                        .push_ranges(vec![range], vec![bytes.clone()])
+                        .is_err()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_push_decoder_waits_for_pending_data() {
+        for with_length in [true, false] {
+            let (mut decoder, bytes) = push_decoder_fixture(with_length);
+            let range = decoder_needs_range(&mut decoder);
+            assert_eq!(decoder_needs_range(&mut decoder), range);
+            let buffer = bytes.slice(..(range.end - range.start) as usize);
+            // A valid shorter range must not poison a decoder waiting for the whole range.
+            decoder
+                .push_range(range.start..range.end - 1, buffer.slice(..buffer.len() - 1))
+                .unwrap();
+            assert_eq!(decoder_needs_range(&mut decoder), range);
+            decoder.push_range(range, buffer).unwrap();
+            if !with_length {
+                let range = decoder_needs_range(&mut decoder);
+                assert_eq!(decoder_needs_range(&mut decoder), range);
+                let buffer = bytes.slice((range.start - 13) as usize..);
+                decoder
+                    .push_range(range.start..range.end - 1, buffer.slice(..buffer.len() - 1))
+                    .unwrap();
+                assert_eq!(decoder_needs_range(&mut decoder), range);
+                decoder.push_range(range, buffer).unwrap();
+            }
+            assert!(matches!(
+                decoder.try_decode().unwrap(),
+                DecodeResult::Data(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn test_push_decoder_prefetched_ranges() {
+        for with_length in [true, false] {
+            let (mut decoder, bytes) = push_decoder_fixture(with_length);
+            let mut file_bytes = vec![0; 13];
+            file_bytes.extend_from_slice(&bytes);
+            file_bytes.extend_from_slice(&[0; 5]);
+            let file_bytes = Bytes::from(file_bytes);
+            // Push an inner range first, then a containing range with surrounding file data.
+            decoder
+                .push_ranges(
+                    vec![13..33, 0..file_bytes.len() as u64],
+                    vec![bytes.slice(..20), file_bytes],
+                )
+                .unwrap();
+            match decoder.try_decode().unwrap() {
+                DecodeResult::Data(filter) => assert!(filter.check("present")),
+                other => panic!("prefetched filter should decode without I/O, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_push_decoder_rejects_invalid_pushes_and_remains_usable() {
+        let (mut decoder, bytes) = push_decoder_fixture(true);
+        let range = decoder_needs_range(&mut decoder);
+        assert!(decoder.push_ranges(vec![range.clone()], vec![]).is_err());
+        assert!(decoder.push_ranges(vec![], vec![bytes.clone()]).is_err());
+        for length in [bytes.len() - 1, bytes.len() + 1] {
+            assert!(
+                decoder
+                    .push_range(range.clone(), Bytes::from(vec![0; length]))
+                    .is_err()
+            );
+        }
+        assert_eq!(decoder_needs_range(&mut decoder), range);
+        decoder.push_ranges(vec![range], vec![bytes]).unwrap();
+        assert!(matches!(
+            decoder.try_decode().unwrap(),
+            DecodeResult::Data(_)
+        ));
     }
 
     #[test]

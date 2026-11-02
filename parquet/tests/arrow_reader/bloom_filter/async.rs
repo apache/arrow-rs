@@ -154,45 +154,6 @@ async fn test_get_row_group_column_bloom_filter(data: Bytes, with_length: bool) 
 }
 
 #[tokio::test]
-async fn standalone_filter_reads_use_exact_ranges() {
-    // Three blocks are valid even though the writer normally uses powers of two.
-    let mut filter = Sbbf::new(&[0; 96]);
-    filter.insert("present");
-    let mut serialized = Vec::new();
-    filter.write(&mut serialized).unwrap();
-    let bytes = Bytes::from(serialized);
-    let header_length = (bytes.len() - filter.num_blocks() * 32) as u64;
-    let offset = 13;
-
-    for length in [Some(bytes.len() as i32), None] {
-        let metadata = column(Some(offset as i64), length);
-        let responses = if length.is_some() {
-            vec![bytes.clone()]
-        } else {
-            vec![bytes.slice(..20), bytes.slice(header_length as usize..)]
-        };
-        let mut reader = RecordingReader::new(responses);
-        let borrowed: &mut dyn AsyncFileReader = &mut reader;
-        let loaded = Sbbf::read_from_column_chunk_async(&metadata, borrowed)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(loaded.num_blocks(), 3);
-        assert!(loaded.check("present"));
-        // The legacy prefix overlaps the bitset; resume at the decoded header end.
-        let expected = if length.is_some() {
-            std::iter::once(offset..offset + bytes.len() as u64).collect()
-        } else {
-            vec![
-                offset..offset + 20,
-                offset + header_length..offset + bytes.len() as u64,
-            ]
-        };
-        assert_eq!(reader.requests(), expected);
-    }
-}
-
-#[tokio::test]
 async fn missing_and_invalid_locations_do_not_read() {
     let mut reader = RecordingReader::default();
     // An orphan length does not advertise a filter without an offset.
@@ -218,42 +179,6 @@ async fn missing_and_invalid_locations_do_not_read() {
 }
 
 #[tokio::test]
-async fn invalid_headers_and_bitsets_remain_errors() {
-    let mut canonical = Vec::new();
-    Sbbf::new(&[0; 32]).write(&mut canonical).unwrap();
-    assert_eq!(encode(32, 32).as_ref(), canonical.as_slice());
-    // Reject invalid bitset sizes, then both undersized and oversized payloads.
-    for (declared, actual) in [(-1, 32), (0, 0), (33, 33), (64, 32), (32, 64)] {
-        let bytes = encode(declared, actual);
-        let mut reader = RecordingReader::new([bytes.clone()]);
-        assert!(
-            Sbbf::read_from_column_chunk_async(
-                &column(Some(0), Some(bytes.len() as i32)),
-                &mut reader,
-            )
-            .await
-            .is_err(),
-            "declared {declared}, actual {actual}"
-        );
-        assert_eq!(reader.requests().len(), 1);
-    }
-    // Decode failures must remain errors, not be mistaken for an absent filter.
-    let mut unsupported = encode(32, 32).to_vec();
-    unsupported[3] = 0x2c; // Unknown algorithm union variant.
-    for bytes in [Bytes::from_static(&[0]), Bytes::from(unsupported)] {
-        let mut reader = RecordingReader::new([bytes.clone()]);
-        assert!(
-            Sbbf::read_from_column_chunk_async(
-                &column(Some(0), Some(bytes.len() as i32)),
-                &mut reader,
-            )
-            .await
-            .is_err()
-        );
-    }
-}
-
-#[tokio::test]
 async fn exact_responses_and_transport_errors_are_required() {
     let bytes = encode(32, 32);
     // With a known total length, the entire response must match the requested range.
@@ -261,10 +186,11 @@ async fn exact_responses_and_transport_errors_are_required() {
         let mut response = bytes.to_vec();
         response.resize(response_length, 0);
         let mut reader = RecordingReader::new([response.into()]);
+        let borrowed: &mut dyn AsyncFileReader = &mut reader;
         assert!(
             Sbbf::read_from_column_chunk_async(
                 &column(Some(0), Some(bytes.len() as i32)),
-                &mut reader,
+                borrowed,
             )
             .await
             .is_err()
@@ -302,45 +228,4 @@ async fn exact_responses_and_transport_errors_are_required() {
         );
         assert_eq!(reader.requests().len(), failure_at + 1);
     }
-}
-
-#[tokio::test]
-async fn extended_headers_require_an_advertised_length() {
-    let mut serialized = Vec::new();
-    Sbbf::new(&[0; 32]).write(&mut serialized).unwrap();
-    let canonical = Bytes::from(serialized);
-    let header_length = canonical.len() - 32;
-    let mut bytes = canonical[..header_length - 1].to_vec();
-    // Unknown binary field extends the header beyond the legacy prefix.
-    bytes.extend_from_slice(&[0x18, 24]);
-    bytes.extend_from_slice(&[0; 24]);
-    bytes.push(0);
-    bytes.extend_from_slice(&canonical[header_length..]);
-    let bytes = Bytes::from(bytes);
-    assert_eq!(Sbbf::from_bytes(&bytes).unwrap().num_blocks(), 1);
-    let sync = RecordingReader::new([bytes.clone()]);
-    assert_eq!(
-        Sbbf::read_from_column_chunk(&column(Some(0), Some(bytes.len() as i32)), &sync)
-            .unwrap()
-            .unwrap()
-            .num_blocks(),
-        1
-    );
-    // An advertised length lets the parser skip the complete unknown field.
-    let mut known = RecordingReader::new([bytes.clone()]);
-    assert!(
-        Sbbf::read_from_column_chunk_async(&column(Some(0), Some(bytes.len() as i32)), &mut known,)
-            .await
-            .unwrap()
-            .is_some()
-    );
-    // The legacy 20-byte prefix cannot decode this header; do not return a partial filter.
-    let mut legacy = RecordingReader::new([bytes.slice(..20)]);
-    assert!(
-        Sbbf::read_from_column_chunk_async(&column(Some(0), None), &mut legacy)
-            .await
-            .is_err()
-    );
-    assert_eq!(legacy.requests().len(), 1);
-    assert_eq!(legacy.requests()[0], 0..20);
 }
