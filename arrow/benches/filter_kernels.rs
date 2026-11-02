@@ -67,6 +67,27 @@ fn create_struct_list_array(size: usize, null_density: f32, max_list_size: usize
     ListArray::new(field, offsets, Arc::new(values), nulls)
 }
 
+/// Creates a `List<Int32>` array with an empty row where `empty` is set, and
+/// a random number of elements in `1..=max_list_size` in every other row
+fn create_list_array_empty_at(empty: &BooleanArray, max_list_size: usize) -> ListArray {
+    let mut rng = StdRng::seed_from_u64(42);
+    let lengths: Vec<usize> = empty
+        .values()
+        .iter()
+        .map(|empty| {
+            if empty {
+                0
+            } else {
+                rng.random_range(1..=max_list_size)
+            }
+        })
+        .collect();
+    let values = create_primitive_array::<Int32Type>(lengths.iter().sum(), 0.0);
+    let offsets = OffsetBuffer::<i32>::from_lengths(lengths);
+    let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+    ListArray::new(field, offsets, Arc::new(values), None)
+}
+
 /// Creates a `FixedSizeList<Struct<x: Int64, y: Utf8>>` array of `size` rows
 fn create_struct_fixed_size_list_array(size: usize, list_size: i32) -> FixedSizeListArray {
     let values = create_xy_struct_array(size * list_size as usize);
@@ -429,10 +450,6 @@ fn add_benchmark(c: &mut Criterion) {
     let short_list_array = create_primitive_list_array::<i32, Int32Type>(size, 0.1, 0.1, 2);
     add_benchmark_for_nested("short list<i32> w NULLs", &short_list_array);
 
-    // No child values and no nulls, so only the offsets are filtered
-    let empty_list_array = create_primitive_list_array::<i32, Int32Type>(size, 0.0, 0.0, 0);
-    add_benchmark_for_nested("empty list<i32>", &empty_list_array);
-
     let struct_list_array = create_struct_list_array(size, 0.1, 16);
     add_benchmark_for_nested("list<struct<i64, utf8>> w NULLs", &struct_list_array);
 
@@ -471,7 +488,6 @@ fn add_benchmark(c: &mut Criterion) {
     for (name, data_array) in [
         ("list<i32> w NULLs", &list_array as &dyn Array),
         ("short list<i32> w NULLs", &short_list_array),
-        ("empty list<i32>", &empty_list_array),
         ("list<struct<i64, utf8>> w NULLs", &struct_list_array),
     ] {
         for (label, filter_array, filter) in &clustered_filters {
@@ -482,6 +498,28 @@ fn add_benchmark(c: &mut Criterion) {
                 b.iter(|| bench_built_filter(data_array, filter))
             });
         }
+    }
+
+    // Selecting the empty rows of a column of empty and non-empty lists, as
+    // with a `cardinality(col) = 0` predicate, leaves only the offsets to be
+    // filtered
+    let (_, clustered_filter_array, clustered_filter) = &clustered_filters[0];
+    for (label, filter_array, filter) in [
+        ("kept 1/2", &filter_array, &filter),
+        (
+            "runs of 64, kept 1/2",
+            clustered_filter_array,
+            clustered_filter,
+        ),
+    ] {
+        let data_array = create_list_array_empty_at(filter_array, 16);
+        c.bench_function(&format!("filter empty rows of list<i32> ({label})"), |b| {
+            b.iter(|| bench_filter(&data_array, filter_array))
+        });
+        c.bench_function(
+            &format!("filter context empty rows of list<i32> ({label})"),
+            |b| b.iter(|| bench_built_filter(&data_array, filter)),
+        );
     }
 }
 
