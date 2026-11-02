@@ -279,14 +279,29 @@ impl BooleanBufferBuilder {
 
         // Too short to fill a whole byte, so packing would only add overhead
         if additional < 8 {
-            for (i, v) in slice.iter().enumerate() {
-                if *v {
-                    unsafe { bit_util::set_bit_raw(self.buffer.as_mut_ptr(), offset + i) }
-                }
+            if additional == 0 {
+                return;
+            }
+            // At most 7 bits starting at bit 7 end at bit 13, so they span at most two bytes
+            let bits = (Self::pack_bits(slice) as u16) << (offset % 8);
+            let buffer = self.buffer.as_slice_mut();
+            buffer[offset / 8] |= bits as u8;
+            if let Some(next) = buffer.get_mut(offset / 8 + 1) {
+                *next |= (bits >> 8) as u8;
             }
         } else {
             self.pack_slice(offset, slice)
         }
+    }
+
+    /// Packs up to 7 bools into the low bits of a byte, `slice[i]` at bit `i`,
+    /// without a branch per value
+    #[inline]
+    fn pack_bits(slice: &[bool]) -> u8 {
+        slice
+            .iter()
+            .enumerate()
+            .fold(0, |acc, (i, v)| acc | ((*v as u8) << i))
     }
 
     /// Writes `slice` into the already allocated bits starting at `offset`
@@ -298,14 +313,10 @@ impl BooleanBufferBuilder {
         let additional = slice.len();
         let buffer = self.buffer.as_slice_mut();
 
-        // Set bits individually until the write position is byte aligned
+        // Fill the first byte up to the next byte boundary
         let head = ((8 - offset % 8) % 8).min(additional);
         let (head_slice, rest) = slice.split_at(head);
-        for (i, v) in head_slice.iter().enumerate() {
-            if *v {
-                bit_util::set_bit(buffer, offset + i)
-            }
-        }
+        buffer[offset / 8] |= Self::pack_bits(head_slice) << (offset % 8);
 
         // Pack 8 bools into each byte without branching: a `bool` is a byte
         // holding 0 or 1, and the multiply moves byte `i` to bit `56 + i`
@@ -317,11 +328,9 @@ impl BooleanBufferBuilder {
             *dst = packed as u8;
         }
 
-        let remainder_offset = self.len - remainder.len();
-        for (i, v) in remainder.iter().enumerate() {
-            if *v {
-                bit_util::set_bit(buffer, remainder_offset + i)
-            }
+        // The remainder starts on a byte boundary
+        if !remainder.is_empty() {
+            buffer[(self.len - remainder.len()) / 8] |= Self::pack_bits(remainder);
         }
     }
 
