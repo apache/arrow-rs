@@ -22,13 +22,13 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::{Float32Type, Float64Type, RunEndIndexType};
 use arrow_array::{Array, BooleanArray, RunArray, downcast_run_array};
 use arrow_buffer::{ArrowNativeType, BooleanBuffer};
-use arrow_schema::{DataType, Field};
+use arrow_schema::{DataType, Field, TimeUnit as ArrowTimeUnit};
 
 use crate::arrow::arrow_writer::{
     FixedLenByteArrayVisitor, PrimitiveVisitor, visit_fixed_len_byte_array, visit_i32, visit_i64,
 };
 use crate::arrow::schema::{arrow_to_parquet_type, parquet_to_arrow_field};
-use crate::basic::{ConvertedType, LogicalType, Type as PhysicalType};
+use crate::basic::{ConvertedType, LogicalType, TimeUnit, Type as PhysicalType};
 use crate::bloom_filter::Sbbf;
 use crate::data_type::AsBytes;
 use crate::errors::{ParquetError, Result};
@@ -108,8 +108,9 @@ impl<'a> ArrowSbbf<'a> {
     /// without an Arrow schema.
     ///
     /// Returns an error if values of `arrow_type` cannot be stored in `column`,
-    /// or if `arrow_type` is a decimal and `column` is not a decimal of the same
-    /// scale, or the other way around.
+    /// if `arrow_type` is a decimal and `column` is not a decimal of the same
+    /// scale, or the other way around, or if `arrow_type` is a time or timestamp
+    /// in a different unit than `column`.
     pub fn try_new(
         sbbf: &'a Sbbf,
         column: &ColumnDescriptor,
@@ -142,8 +143,7 @@ impl<'a> ArrowSbbf<'a> {
     ///
     /// `array` must have the type returned by [`Self::arrow_type`], or be a
     /// dictionary or run-end encoded array of values of that type, or a
-    /// [`NullArray`](arrow_array::NullArray). Values are not converted between
-    /// time units, so the type's unit must be the unit the column was written in.
+    /// [`NullArray`](arrow_array::NullArray).
     pub fn check(&self, array: &dyn Array) -> Result<BooleanArray> {
         if let Some(dictionary) = array.as_any_dictionary_opt() {
             let values = self.check(dictionary.values().as_ref())?;
@@ -232,6 +232,15 @@ fn value_type(data_type: &DataType) -> &DataType {
 ///
 /// [`ArrowWriter`]: crate::arrow::ArrowWriter
 fn validate(column: &Type, arrow_type: &DataType) -> Result<()> {
+    // ArrowWriter stores seconds without a unit, so they cannot be told apart
+    // from values in a column that has one
+    let seconds = matches!(
+        value_type(arrow_type),
+        DataType::Timestamp(ArrowTimeUnit::Second, _) | DataType::Time32(ArrowTimeUnit::Second)
+    );
+    if seconds && time_unit(column).is_some() {
+        return Err(type_mismatch(column, arrow_type));
+    }
     if !arrow_type.is_nested() {
         let field = Field::new(column.name(), arrow_type.clone(), true);
         // Only Date64 depends on `coerce_types`, which is stored as INT32 days
@@ -243,10 +252,14 @@ fn validate(column: &Type, arrow_type: &DataType) -> Result<()> {
             }
         }
     }
-    Err(ParquetError::General(format!(
+    Err(type_mismatch(column, arrow_type))
+}
+
+fn type_mismatch(column: &Type, arrow_type: &DataType) -> ParquetError {
+    ParquetError::General(format!(
         "Cannot check a bloom filter of type {} with {arrow_type} values",
         describe(column)
-    )))
+    ))
 }
 
 /// Returns whether values written to a column of type `written` can be checked
@@ -263,6 +276,11 @@ fn is_stored_as(written: &Type, column: &Type) -> bool {
             written.get_physical_type() == physical_type
                 && (physical_type != PhysicalType::FIXED_LEN_BYTE_ARRAY
                     || type_length(written) == type_length(column))
+                // The same values mean different instants in different units
+                && match (time_unit(written), time_unit(column)) {
+                    (Some(written_unit), Some(unit)) => written_unit == unit,
+                    _ => true,
+                }
         }
         _ => false,
     }
@@ -274,6 +292,19 @@ fn decimal_scale(t: &Type) -> Option<i32> {
     let decimal = matches!(info.logical_type_ref(), Some(LogicalType::Decimal(_)))
         || info.converted_type() == ConvertedType::DECIMAL;
     decimal.then(|| t.get_scale())
+}
+
+/// Returns the unit of a `TIME` or `TIMESTAMP` type, or `None` if `t` has no unit
+fn time_unit(t: &Type) -> Option<TimeUnit> {
+    let info = t.get_basic_info();
+    match info.logical_type_ref() {
+        Some(LogicalType::Time(time) | LogicalType::Timestamp(time)) => Some(time.unit),
+        _ => match info.converted_type() {
+            ConvertedType::TIME_MILLIS | ConvertedType::TIMESTAMP_MILLIS => Some(TimeUnit::MILLIS),
+            ConvertedType::TIME_MICROS | ConvertedType::TIMESTAMP_MICROS => Some(TimeUnit::MICROS),
+            _ => None,
+        },
+    }
 }
 
 fn type_length(t: &Type) -> i32 {
@@ -293,7 +324,10 @@ fn describe(column: &Type) -> String {
     let decimal = decimal_scale(column)
         .map(|scale| format!(" DECIMAL({}, {scale})", column.get_precision()))
         .unwrap_or_default();
-    format!("{physical_type}{length}{decimal}")
+    let unit = time_unit(column)
+        .map(|unit| format!(" ({unit:?})"))
+        .unwrap_or_default();
+    format!("{physical_type}{length}{decimal}{unit}")
 }
 
 /// Checks the `INT32`, `INT64`, `FLOAT` or `DOUBLE` values passed to it against a bloom filter
@@ -453,16 +487,43 @@ mod tests {
     }
 
     #[test]
-    fn time_units_are_not_converted() {
+    fn time_units_must_match() {
         let written = TimestampMillisecondArray::from(vec![1_000, 2_000]);
         let (sbbf, column) = write_and_read_bloom_filter(Arc::new(written.clone()), false);
         let found = check(&sbbf, &column, &written).unwrap();
         assert_eq!(found, BooleanArray::from(vec![true, true]));
 
-        // The same instants in a different unit are different values
-        let micros = TimestampMicrosecondArray::from(vec![1_000_000, 2_000_000]);
-        let found = check(&sbbf, &column, &micros).unwrap();
-        assert_eq!(found, BooleanArray::from(vec![false, false]));
+        // The same instants in a different unit are different values, so
+        // checking them would report instants in the file as absent
+        for unit in [
+            TimeUnit::Second,
+            TimeUnit::Microsecond,
+            TimeUnit::Nanosecond,
+        ] {
+            let arrow_type = DataType::Timestamp(unit, None);
+            let err = error(ArrowSbbf::try_new(&sbbf, &column, Some(arrow_type.clone())));
+            assert_eq!(
+                err,
+                format!(
+                    "Parquet error: Cannot check a bloom filter of type INT64 (MILLIS) with {arrow_type} values"
+                )
+            );
+        }
+
+        let written = Time64MicrosecondArray::from(vec![1_000]);
+        let (sbbf, column) = write_and_read_bloom_filter(Arc::new(written), false);
+        let nanos = DataType::Time64(TimeUnit::Nanosecond);
+        let err = error(ArrowSbbf::try_new(&sbbf, &column, Some(nanos)));
+        assert_eq!(
+            err,
+            "Parquet error: Cannot check a bloom filter of type INT64 (MICROS) with Time64(ns) values"
+        );
+
+        // Seconds are written without a unit, so they match a column without one
+        let written = TimestampSecondArray::from(vec![1, 2]);
+        let (sbbf, column) = write_and_read_bloom_filter(Arc::new(written.clone()), false);
+        let found = check(&sbbf, &column, &written).unwrap();
+        assert_eq!(found, BooleanArray::from(vec![true, true]));
     }
 
     #[test]
@@ -933,17 +994,6 @@ mod tests {
         let sbbf = ArrowSbbf::try_new(sbbf.sbbf, &column, Some(dictionary)).unwrap();
         let found = sbbf.check(&Int8Array::from(vec![1, 4])).unwrap();
         assert_eq!(found, BooleanArray::from(vec![true, false]));
-
-        // Values are not converted between time units
-        let ms = TimestampMillisecondArray::from(vec![1_000]);
-        let (sbbf, column) = write_and_read_bloom_filter(Arc::new(ms), false);
-        let micros = DataType::Timestamp(TimeUnit::Microsecond, None);
-        let sbbf = ArrowSbbf::try_new(&sbbf, &column, Some(micros)).unwrap();
-        let err = error(sbbf.check(&TimestampMillisecondArray::from(vec![1_000])));
-        assert_eq!(
-            err,
-            "Parquet error: Cannot check Timestamp(ms) values with an ArrowSbbf for Timestamp(µs) values"
-        );
     }
 
     /// Returns `values` with a null inserted at index 2
