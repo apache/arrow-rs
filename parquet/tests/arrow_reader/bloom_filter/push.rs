@@ -39,6 +39,127 @@ fn expect_needs_data<T: Debug>(result: Result<DecodeResult<T>>) -> Vec<Range<u64
     }
 }
 
+/// Expect that the [`DecodeResult`] is [`DecodeResult::Finished`]
+fn expect_finished<T: Debug>(result: Result<DecodeResult<T>>) {
+    match result.expect("Expected Ok(DecodeResult::Finished)") {
+        DecodeResult::Finished => {}
+        result => panic!("Expected DecodeResult::Finished, got {result:?}"),
+    }
+}
+
+/// Expect a request for exactly one range and return it
+fn expect_single_range(decoder: &mut SbbfPushDecoder) -> Range<u64> {
+    let ranges = expect_needs_data(decoder.try_decode());
+    assert_eq!(ranges.len(), 1);
+    ranges.into_iter().next().unwrap()
+}
+
+fn push_decoder_fixture(with_length: bool) -> (SbbfPushDecoder, Bytes) {
+    let mut filter = Sbbf::new(&[0; 32]);
+    filter.insert("present");
+    let mut serialized = Vec::new();
+    filter.write(&mut serialized).unwrap();
+    let bytes = Bytes::from(serialized);
+    let metadata = column(Some(13), with_length.then_some(bytes.len() as i32));
+    (SbbfPushDecoder::try_new(&metadata).unwrap().unwrap(), bytes)
+}
+
+#[test]
+fn test_push_decoder_finished_is_terminal() {
+    for with_length in [true, false] {
+        let (mut decoder, bytes) = push_decoder_fixture(with_length);
+        loop {
+            match decoder.try_decode().unwrap() {
+                DecodeResult::NeedsData(ranges) => {
+                    for range in ranges {
+                        let buffer =
+                            bytes.slice((range.start - 13) as usize..(range.end - 13) as usize);
+                        decoder.push_range(range, buffer).unwrap();
+                    }
+                }
+                DecodeResult::Data(_) => break,
+                DecodeResult::Finished => panic!("finished without producing a filter"),
+            }
+        }
+        for _ in 0..2 {
+            expect_finished(decoder.try_decode());
+            let range = 13..13 + bytes.len() as u64;
+            assert!(decoder.push_range(range.clone(), bytes.clone()).is_err());
+            assert!(
+                decoder
+                    .push_ranges(vec![range], vec![bytes.clone()])
+                    .is_err()
+            );
+        }
+    }
+}
+
+#[test]
+fn test_push_decoder_waits_for_pending_data() {
+    for with_length in [true, false] {
+        let (mut decoder, bytes) = push_decoder_fixture(with_length);
+        let range = expect_single_range(&mut decoder);
+        assert_eq!(expect_single_range(&mut decoder), range);
+        let buffer = bytes.slice(..(range.end - range.start) as usize);
+        // A valid shorter range must not poison a decoder waiting for the whole range.
+        decoder
+            .push_range(range.start..range.end - 1, buffer.slice(..buffer.len() - 1))
+            .unwrap();
+        assert_eq!(expect_single_range(&mut decoder), range);
+        decoder.push_range(range, buffer).unwrap();
+        if !with_length {
+            let range = expect_single_range(&mut decoder);
+            // Polling again must return the same pending range.
+            assert_eq!(expect_single_range(&mut decoder), range);
+            let buffer = bytes.slice((range.start - 13) as usize..);
+            decoder
+                .push_range(range.start..range.end - 1, buffer.slice(..buffer.len() - 1))
+                .unwrap();
+            assert_eq!(expect_single_range(&mut decoder), range);
+            decoder.push_range(range, buffer).unwrap();
+        }
+        expect_data(decoder.try_decode());
+    }
+}
+
+#[test]
+fn test_push_decoder_prefetched_ranges() {
+    for with_length in [true, false] {
+        let (mut decoder, bytes) = push_decoder_fixture(with_length);
+        let mut file_bytes = vec![0; 13];
+        file_bytes.extend_from_slice(&bytes);
+        file_bytes.extend_from_slice(&[0; 5]);
+        let file_bytes = Bytes::from(file_bytes);
+        // Push an inner range first, then a containing range with surrounding file data.
+        decoder
+            .push_ranges(
+                vec![13..33, 0..file_bytes.len() as u64],
+                vec![bytes.slice(..20), file_bytes],
+            )
+            .unwrap();
+        // The prefetched filter should decode without requesting more data.
+        assert!(expect_data(decoder.try_decode()).check("present"));
+    }
+}
+
+#[test]
+fn test_push_decoder_rejects_invalid_pushes_and_remains_usable() {
+    let (mut decoder, bytes) = push_decoder_fixture(true);
+    let range = expect_single_range(&mut decoder);
+    assert!(decoder.push_ranges(vec![range.clone()], vec![]).is_err());
+    assert!(decoder.push_ranges(vec![], vec![bytes.clone()]).is_err());
+    for length in [bytes.len() - 1, bytes.len() + 1] {
+        assert!(
+            decoder
+                .push_range(range.clone(), Bytes::from(vec![0; length]))
+                .is_err()
+        );
+    }
+    assert_eq!(expect_single_range(&mut decoder), range);
+    decoder.push_ranges(vec![range], vec![bytes]).unwrap();
+    expect_data(decoder.try_decode());
+}
+
 #[test]
 fn push_decoder_requests_exact_ranges() {
     // Three blocks are valid even though the writer normally uses powers of two.
