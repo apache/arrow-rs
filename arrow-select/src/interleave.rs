@@ -275,13 +275,27 @@ fn interleave_dictionaries<K: ArrowDictionaryKeyType>(
     indices: &[(usize, usize)],
 ) -> Result<ArrayRef, ArrowError> {
     let dictionaries: Vec<_> = arrays.iter().map(|x| x.as_dictionary::<K>()).collect();
-    if let Some(array) = try_interleave_shared_dictionary(&dictionaries, indices) {
-        return Ok(array);
-    }
-
     let (should_merge, has_overflow) =
         should_merge_dictionary_values::<K>(&dictionaries, indices.len());
     if !should_merge {
+        let first_values = dictionaries[0].values();
+        let shared_values = if dictionaries
+            .iter()
+            .skip(1)
+            .all(|dictionary| Arc::ptr_eq(first_values, dictionary.values()))
+        {
+            Some(first_values)
+        } else if dictionaries.len() > 2 {
+            // For larger interleaves, distinct mappings may belong only to
+            // unused or all-null inputs and can be ignored.
+            referenced_shared_dictionary_values(&dictionaries, indices)
+        } else {
+            None
+        };
+        if let Some(shared_values) = shared_values {
+            return interleave_shared_dictionary(&dictionaries, indices, shared_values);
+        }
+
         return if has_overflow {
             interleave_fallback(arrays, indices)
         } else {
@@ -297,7 +311,6 @@ fn interleave_dictionaries<K: ArrowDictionaryKeyType>(
                 MutableBuffer::new_null(dictionary.len()),
                 dictionary.len(),
             );
-
             for (_, key_idx) in indices.iter().filter(|(a, _)| *a == a_idx) {
                 key_mask.set_bit(*key_idx, true);
             }
@@ -323,17 +336,19 @@ fn interleave_dictionaries<K: ArrowDictionaryKeyType>(
     Ok(Arc::new(array))
 }
 
-/// Interleaves dictionary keys without copying values when all referenced,
-/// non-null keys use the same values array.
-fn try_interleave_shared_dictionary<K: ArrowDictionaryKeyType>(
-    dictionaries: &[&DictionaryArray<K>],
+fn referenced_shared_dictionary_values<'a, K: ArrowDictionaryKeyType>(
+    dictionaries: &[&'a DictionaryArray<K>],
     indices: &[(usize, usize)],
-) -> Option<ArrayRef> {
-    // Reject the common two-mapping case before allocating the output buffers.
+) -> Option<&'a ArrayRef> {
+    // Preserve the cheap rejection path for distinct mappings. This avoids
+    // allocating source tracking for the common mixed-dictionary case.
     if dictionaries.len() > 1 {
+        let has_nulls = dictionaries
+            .iter()
+            .any(|dictionary| dictionary.null_count() != 0);
         let mut first_source = None;
         for &(array_idx, row_idx) in indices {
-            if dictionaries[array_idx].keys().is_null(row_idx) {
+            if has_nulls && dictionaries[array_idx].keys().is_null(row_idx) {
                 continue;
             }
 
@@ -353,44 +368,42 @@ fn try_interleave_shared_dictionary<K: ArrowDictionaryKeyType>(
         }
     }
 
-    let mut shared_values: Option<&ArrayRef> = None;
+    let mut shared_values = None;
     let mut checked_sources = vec![false; dictionaries.len()];
-    let mut has_nulls = false;
-    let mut keys = Vec::with_capacity(indices.len());
-
     for &(array_idx, row_idx) in indices {
-        let dictionary = dictionaries[array_idx];
-        let source_keys = dictionary.keys();
-        if source_keys.is_null(row_idx) {
-            keys.push(K::Native::ZERO);
-            has_nulls = true;
+        if checked_sources[array_idx] || dictionaries[array_idx].keys().is_null(row_idx) {
             continue;
         }
 
-        if !checked_sources[array_idx] {
-            let values = dictionary.values();
-            match shared_values {
-                Some(shared) if !Arc::ptr_eq(shared, values) => return None,
-                None => shared_values = Some(values),
-                _ => {}
-            }
-            checked_sources[array_idx] = true;
+        let values = dictionaries[array_idx].values();
+        match shared_values {
+            Some(shared) if !Arc::ptr_eq(shared, values) => return None,
+            None => shared_values = Some(values),
+            _ => {}
         }
-        keys.push(source_keys.values()[row_idx]);
+        checked_sources[array_idx] = true;
     }
 
     // If all selected keys are null, any input values array is a valid mapping.
-    let values = shared_values.unwrap_or_else(|| dictionaries[indices[0].0].values());
-    let nulls = has_nulls.then(|| {
-        NullBuffer::new(BooleanBuffer::collect_bool(indices.len(), |i| {
-            let (array_idx, row_idx) = indices[i];
-            dictionaries[array_idx].keys().is_valid(row_idx)
-        }))
-    });
-    let keys = PrimitiveArray::<K>::new(keys.into(), nulls);
-    // SAFETY: every non-null key came from a dictionary backed by `values`.
-    let array = unsafe { DictionaryArray::new_unchecked(keys, Arc::clone(values)) };
-    Some(Arc::new(array))
+    Some(shared_values.unwrap_or_else(|| dictionaries[indices[0].0].values()))
+}
+
+/// Interleaves dictionary keys without copying their shared values array.
+fn interleave_shared_dictionary<K: ArrowDictionaryKeyType>(
+    dictionaries: &[&DictionaryArray<K>],
+    indices: &[(usize, usize)],
+    shared_values: &ArrayRef,
+) -> Result<ArrayRef, ArrowError> {
+    let key_arrays: Vec<&dyn Array> = dictionaries
+        .iter()
+        .map(|dictionary| dictionary.keys() as &dyn Array)
+        .collect();
+    let keys = interleave_primitive::<K>(&key_arrays, indices, dictionaries[0].keys().data_type())?;
+    // SAFETY: every non-null key came from a dictionary backed by `shared_values`.
+    let array = unsafe {
+        DictionaryArray::new_unchecked(keys.as_primitive::<K>().clone(), Arc::clone(shared_values))
+    };
+    Ok(Arc::new(array))
 }
 
 fn interleave_views<T: ByteViewType>(
@@ -1236,7 +1249,7 @@ mod tests {
     }
 
     #[test]
-    fn test_interleave_dictionary_shared_values() {
+    fn test_interleave_dictionary_reuses_referenced_shared_values() {
         let values: ArrayRef = Arc::new(StringArray::from_iter_values(["a", "b", "c"]));
         let dict_a = DictionaryArray::<Int32Type>::new(
             Int32Array::from(vec![Some(0), None, Some(2)]),
@@ -1254,7 +1267,16 @@ mod tests {
 
         let result = interleave(
             &[&dict_a, &dict_b, &null_dict, &unused],
-            &[(0, 2), (1, 0), (2, 0), (0, 1), (1, 1)],
+            &[
+                (0, 2),
+                (1, 0),
+                (2, 0),
+                (0, 1),
+                (1, 1),
+                (0, 0),
+                (1, 0),
+                (0, 2),
+            ],
         )
         .unwrap();
         let result = result.as_dictionary::<Int32Type>();
@@ -1262,12 +1284,34 @@ mod tests {
         assert!(Arc::ptr_eq(result.values(), &values));
         assert_eq!(
             result.keys(),
-            &Int32Array::from(vec![Some(2), Some(1), None, None, Some(0)])
+            &Int32Array::from(vec![
+                Some(2),
+                Some(1),
+                None,
+                None,
+                Some(0),
+                Some(0),
+                Some(1),
+                Some(2),
+            ])
         );
     }
 
     #[test]
-    fn test_interleave_dictionary_overflow_same_values() {
+    fn test_interleave_dictionary_empty_values() {
+        let values: ArrayRef = Arc::new(StringArray::new_null(0));
+        let dictionary =
+            DictionaryArray::<Int8Type>::new(Int8Array::new_null(2), Arc::clone(&values));
+
+        let result = interleave(&[&dictionary], &[(0, 1), (0, 0)]).unwrap();
+        let result = result.as_dictionary::<Int8Type>();
+
+        assert!(Arc::ptr_eq(result.values(), &values));
+        assert_eq!(result.keys(), &Int8Array::new_null(2));
+    }
+
+    #[test]
+    fn test_interleave_dictionary_shared_values_avoid_key_overflow() {
         let values: ArrayRef = Arc::new(StringArray::from_iter_values(
             (0..50).map(|i| format!("v{i}")),
         ));
@@ -1296,6 +1340,24 @@ mod tests {
             .map(|x| x.unwrap())
             .collect();
         assert_eq!(string_result, vec!["v0", "v0", "v49"]);
+    }
+
+    #[test]
+    fn test_interleave_dictionary_distinct_values_overflow_returns_err() {
+        let values_a: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..200).map(|i| format!("a{i}")),
+        ));
+        let values_b: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..200).map(|i| format!("b{i}")),
+        ));
+        let dict_a =
+            DictionaryArray::<UInt8Type>::new(UInt8Array::from_iter_values(0..200), values_a);
+        let dict_b =
+            DictionaryArray::<UInt8Type>::new(UInt8Array::from_iter_values(0..200), values_b);
+        let indices: Vec<_> = (0..200).flat_map(|i| [(0, i), (1, i)]).collect();
+
+        let err = interleave(&[&dict_a, &dict_b], &indices).unwrap_err();
+        assert!(matches!(err, ArrowError::DictionaryKeyOverflowError));
     }
 
     fn test_interleave_lists<O: OffsetSizeTrait>() {
