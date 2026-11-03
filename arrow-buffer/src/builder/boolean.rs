@@ -277,12 +277,14 @@ impl BooleanBufferBuilder {
 
         let offset = self.len() - additional;
 
-        // Too short to fill a whole byte, so packing would only add overhead
-        if additional < 8 {
+        // Up to 8 values touch at most two bytes, so pack them directly. This
+        // includes 8 values at an unaligned offset, which leave no whole byte
+        // for `pack_slice` to pack.
+        if additional <= 8 {
             if additional == 0 {
                 return;
             }
-            // At most 7 bits starting at bit 7 end at bit 13, so they span at most two bytes
+            // At most 8 bits starting at bit 7 end at bit 14, so they span at most two bytes
             let bits = (Self::pack_bits(slice) as u16) << (offset % 8);
             let buffer = self.buffer.as_slice_mut();
             buffer[offset / 8] |= bits as u8;
@@ -294,7 +296,7 @@ impl BooleanBufferBuilder {
         }
     }
 
-    /// Packs up to 7 bools into the low bits of a byte, `slice[i]` at bit `i`,
+    /// Packs up to 8 bools into a byte, `slice[i]` at bit `i`,
     /// without a branch per value
     #[inline]
     fn pack_bits(slice: &[bool]) -> u8 {
@@ -845,10 +847,15 @@ mod tests {
     #[test]
     fn test_append_slice_all_byte_patterns() {
         for byte in 0..=u8::MAX {
-            let values: Vec<bool> = (0..8).map(|i| byte & (1 << i) != 0).collect();
+            // 8 values take the short path, 16 values are packed with the multiply
+            let values: Vec<bool> = (0..16).map(|i| byte & (1 << (i % 8)) != 0).collect();
             let mut b = BooleanBufferBuilder::new(8);
-            b.append_slice(&values);
+            b.append_slice(&values[..8]);
             assert_eq!(b.as_slice(), &[byte]);
+
+            let mut b = BooleanBufferBuilder::new(16);
+            b.append_slice(&values);
+            assert_eq!(b.as_slice(), &[byte, byte]);
         }
     }
 
