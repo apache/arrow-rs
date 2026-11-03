@@ -858,10 +858,11 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
                         slices.iter().copied().try_for_each(extend)?
                     }
                     IterationStrategy::SlicesIterator(mask)
-                    | IterationStrategy::IndexIterator(mask) => {
+                    | IterationStrategy::IndexIterator(mask)
+                    | IterationStrategy::Indices(_, Some(mask)) => {
                         SlicesIterator::from(mask).try_for_each(extend)?
                     }
-                    IterationStrategy::Indices(indices, _) => {
+                    IterationStrategy::Indices(indices, None) => {
                         IndexRuns::new(indices.iter().copied()).try_for_each(extend)?
                     }
                     IterationStrategy::All | IterationStrategy::None => unreachable!(),
