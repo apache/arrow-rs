@@ -20,7 +20,7 @@ use criterion::*;
 use std::hint;
 
 fn criterion_benchmark(c: &mut Criterion) {
-    for len in [64, 1024, 65536] {
+    for len in [64, 448, 960, 1024, 65536] {
         // All true (no nulls)
         let all_true = BooleanArray::from(vec![true; len]);
         c.bench_function(&format!("true_count(all_true, {len})"), |b| {

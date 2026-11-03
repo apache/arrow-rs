@@ -497,7 +497,7 @@ fn write_dict_columns(page_store_factory: Option<Arc<dyn PageStoreFactory>>, poo
         SerializedFileWriter::new(std::io::sink(), parquet_schema.root_schema_ptr(), props)
             .unwrap();
 
-    let mut factory = ArrowRowGroupWriterFactory::new(&file, schema.clone());
+    let mut factory = ArrowRowGroupWriterFactory::try_new(&file, schema.clone()).unwrap();
     if let Some(f) = page_store_factory {
         factory = factory.with_page_store_factory(f);
     }

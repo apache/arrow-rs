@@ -591,6 +591,11 @@ impl<T> ValueStatistics<T> {
         }
     }
 
+    /// Returns these statistics with `min` and `max` replaced and every other field kept.
+    pub(crate) fn with_min_max(self, min: Option<T>, max: Option<T>) -> Self {
+        Self { min, max, ..self }
+    }
+
     /// Set whether the stored `min` field represents the exact
     /// minimum, or just a bound on the minimum value.
     ///

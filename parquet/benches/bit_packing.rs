@@ -156,7 +156,7 @@ fn bench_arrow_dictionary_indices(c: &mut Criterion, values: &[i32]) {
         .unwrap();
     let file_writer =
         SerializedFileWriter::new(Vec::new(), parquet_schema.root_schema_ptr(), props).unwrap();
-    let factory = ArrowRowGroupWriterFactory::new(&file_writer, arrow_schema);
+    let factory = ArrowRowGroupWriterFactory::try_new(&file_writer, arrow_schema).unwrap();
     let mut leaves = compute_leaves(&field, &array).unwrap();
     let leaf = leaves.pop().unwrap();
 
