@@ -159,7 +159,7 @@ const _: () = crate::utils::expect_size_of::<VariantMetadata>(20);
 /// let metadata_bytes = metadata_builder.into_inner();
 /// assert_eq!(&metadata_bytes, EMPTY_VARIANT_METADATA_BYTES);
 /// ```
-pub const EMPTY_VARIANT_METADATA_BYTES: &[u8] = &[1, 0, 0];
+pub const EMPTY_VARIANT_METADATA_BYTES: &[u8] = &[VARIANT_SPEC_VERSION, 0, 0];
 
 /// The empty metadata dictionary.
 ///
