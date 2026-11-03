@@ -1690,7 +1690,9 @@ mod tests {
     #[test]
     fn test_checked_integer_overflow_position() {
         let one = Int32Array::new_scalar(1);
-        for len in [1, 15, 16, 17, 63, 64, 65, 8192] {
+        // Every length up to 130 puts the overflow in each part of the vector loop
+        // for strides up to 64 rows.
+        for len in 1..=130 {
             let mut values = vec![1; len];
             values[len - 1] = i32::MAX;
             let array = Int32Array::from(values.clone());
