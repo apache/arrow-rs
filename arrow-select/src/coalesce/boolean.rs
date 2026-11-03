@@ -16,12 +16,96 @@
 // under the License.
 
 use super::InProgressArray;
-use crate::filter::{FilterPredicate, filter_bits_compress, filter_bits_compress_pair};
+use crate::filter::{FilterPredicate, Packer};
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, BooleanArray};
+use arrow_buffer::bit_chunk_iterator::BitChunks;
 use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder, NullBufferBuilder};
 use arrow_schema::ArrowError;
 use std::sync::Arc;
+
+fn copy_filter_words_without_nulls(
+    output_values: &mut BooleanBufferBuilder,
+    source_value_chunks: &BitChunks<'_>,
+    filter_chunks: &BitChunks<'_>,
+) {
+    let mut value_packer = Packer::default();
+
+    // Check the mask first so sparse filters skip reading most source words.
+    for (index, filter_mask) in filter_chunks.iter().enumerate() {
+        if filter_mask == 0 {
+            continue;
+        }
+
+        if let Some(complete_word) =
+            value_packer.push(source_value_chunks.chunk(index), filter_mask)
+        {
+            output_values.append_word(complete_word, 64);
+        }
+    }
+
+    let filter_mask = filter_chunks.remainder_bits();
+    if filter_mask != 0
+        && let Some(complete_word) =
+            value_packer.push(source_value_chunks.remainder_bits(), filter_mask)
+    {
+        output_values.append_word(complete_word, 64);
+    }
+
+    if let Some((pending_bits, pending_len)) = value_packer.finish() {
+        output_values.append_word(pending_bits, pending_len);
+    }
+}
+
+fn copy_filter_words_with_nulls(
+    output_values: &mut BooleanBufferBuilder,
+    output_validity: &mut NullBufferBuilder,
+    source_value_chunks: &BitChunks<'_>,
+    source_validity_chunks: &BitChunks<'_>,
+    filter_chunks: &BitChunks<'_>,
+) {
+    let mut value_packer = Packer::default();
+    let mut validity_packer = Packer::default();
+
+    // Check the mask first so sparse filters skip reading most source words.
+    for (index, filter_mask) in filter_chunks.iter().enumerate() {
+        if filter_mask == 0 {
+            continue;
+        }
+
+        if let Some(complete_word) =
+            value_packer.push(source_value_chunks.chunk(index), filter_mask)
+        {
+            output_values.append_word(complete_word, 64);
+        }
+        if let Some(complete_word) =
+            validity_packer.push(source_validity_chunks.chunk(index), filter_mask)
+        {
+            output_validity.append_word(complete_word, 64);
+        }
+    }
+
+    let filter_mask = filter_chunks.remainder_bits();
+    if filter_mask != 0 {
+        if let Some(complete_word) =
+            value_packer.push(source_value_chunks.remainder_bits(), filter_mask)
+        {
+            output_values.append_word(complete_word, 64);
+        }
+        if let Some(complete_word) =
+            validity_packer.push(source_validity_chunks.remainder_bits(), filter_mask)
+        {
+            output_validity.append_word(complete_word, 64);
+        }
+    }
+
+    if let Some((pending_bits, pending_len)) = value_packer.finish() {
+        output_values.append_word(pending_bits, pending_len);
+    }
+    if let Some((pending_bits, pending_len)) = validity_packer.finish() {
+        output_validity.append_word(pending_bits, pending_len);
+    }
+}
 
 #[derive(Debug)]
 pub(crate) struct InProgressBooleanArray {
@@ -92,25 +176,42 @@ impl InProgressArray for InProgressBooleanArray {
         }
 
         let source = source.as_boolean();
+        // Read values and mask in aligned words even when the source is sliced.
+        let filter_chunks = filter.filter_mask().bit_chunks();
+        let source_values = source.values();
+        let source_value_chunks = BitChunks::new(
+            source_values.values(),
+            source_values.offset(),
+            filter.filter_len(),
+        );
+        // Ignore present-but-all-valid buffers to avoid allocating output validity
+        // for data with no actual nulls.
+        let source_validity_chunks =
+            source
+                .nulls()
+                .filter(|nulls| nulls.null_count() != 0)
+                .map(|nulls| {
+                    let nulls = nulls.inner();
+                    BitChunks::new(nulls.values(), nulls.offset(), filter.filter_len())
+                });
+
         let output_values = self
             .values
             .get_or_insert_with(|| BooleanBufferBuilder::new(self.batch_size));
-        // Treat all-valid sources as non-null to keep output validity lazy.
-        if let Some(source_nulls) = source.nulls().filter(|nulls| nulls.null_count() != 0) {
-            filter_bits_compress_pair(
-                source.values(),
-                source_nulls.inner(),
-                filter,
-                |values, validity, count| {
-                    output_values.append_word(values, count);
-                    self.nulls.append_word(validity, count);
-                },
+
+        // Branch once here so non-null inputs avoid validity work in the chunk loop.
+        let selected_count = filter.count();
+        if let Some(source_validity_chunks) = &source_validity_chunks {
+            copy_filter_words_with_nulls(
+                output_values,
+                &mut self.nulls,
+                &source_value_chunks,
+                source_validity_chunks,
+                &filter_chunks,
             );
         } else {
-            filter_bits_compress(source.values(), filter, |values, count| {
-                output_values.append_word(values, count)
-            });
-            self.nulls.append_n_non_nulls(filter.count());
+            copy_filter_words_without_nulls(output_values, &source_value_chunks, &filter_chunks);
+            self.nulls.append_n_non_nulls(selected_count);
         }
         Ok(())
     }
