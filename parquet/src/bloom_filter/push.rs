@@ -57,7 +57,7 @@ enum DecodeState {
 ///
 /// # Example
 ///
-/// ```no_run
+/// ```rust
 /// use bytes::Bytes;
 /// use parquet::DecodeResult;
 /// use parquet::bloom_filter::{Sbbf, SbbfPushDecoder};
@@ -81,6 +81,27 @@ enum DecodeState {
 ///         }
 ///     }
 /// }
+///
+/// # fn main() -> Result<()> {
+/// # use std::sync::Arc;
+/// # use parquet::schema::parser::parse_message_type;
+/// # use parquet::schema::types::SchemaDescriptor;
+/// # let schema = Arc::new(parse_message_type("message schema { REQUIRED BYTE_ARRAY value; }")?);
+/// # let descriptor = SchemaDescriptor::new(schema).column(0);
+/// # let mut original = Sbbf::new_with_num_of_bytes(32);
+/// # original.insert("present");
+/// # let offset = 13;
+/// # let mut serialized = vec![0; offset];
+/// # original.write(&mut serialized)?;
+/// # let file_bytes = Bytes::from(serialized);
+/// # let metadata = ColumnChunkMetaData::builder(descriptor)
+/// #     .set_bloom_filter_offset(Some(offset as i64))
+/// #     .set_bloom_filter_length(Some((file_bytes.len() - offset) as i32))
+/// #     .build()?;
+/// let filter = decode_filter(&metadata, file_bytes)?.unwrap();
+/// assert!(filter.check("present"));
+/// # Ok(())
+/// # }
 /// ```
 pub struct SbbfPushDecoder {
     /// Decoding state
