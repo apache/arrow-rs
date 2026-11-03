@@ -198,6 +198,32 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_concat(&v1, &v2))
     });
 
+    const DICTIONARY_SLICE_ROWS: usize = 682;
+    const DICTIONARY_SLICE_COUNT: usize = 12;
+    for values_per_key in [4, 8, 12, 16, 20, 24, 32, 64] {
+        let values_len = DICTIONARY_SLICE_ROWS * values_per_key;
+        let inputs = (0..DICTIONARY_SLICE_COUNT)
+            .map(|dictionary_idx| {
+                let values = StringArray::from_iter_values(
+                    (0..values_len).map(|value_idx| format!("{dictionary_idx:02}_{value_idx:017}")),
+                );
+                let keys = Int32Array::from_iter_values(0..values_len as i32);
+                let dictionary = DictionaryArray::<Int32Type>::new(keys, Arc::new(values));
+                dictionary.slice(values_len - DICTIONARY_SLICE_ROWS, DICTIONARY_SLICE_ROWS)
+            })
+            .collect::<Vec<_>>();
+        let arrays = inputs
+            .iter()
+            .map(|array| array as &dyn Array)
+            .collect::<Vec<_>>();
+        c.bench_function(
+            &format!(
+                "concat str_dict_slice rows={DICTIONARY_SLICE_ROWS} values_per_key={values_per_key} count={DICTIONARY_SLICE_COUNT}"
+            ),
+            |b| b.iter(|| bench_concat_arrays(&arrays)),
+        );
+    }
+
     let v1 = FixedSizeListArray::try_new(
         Arc::new(Field::new_list_field(DataType::Int32, true)),
         1024,
