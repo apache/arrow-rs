@@ -219,6 +219,19 @@ mod tests {
         assert_filtered_words_match_filter_kernel("with nulls", source);
     }
 
+    #[test]
+    fn filtered_words_with_unaligned_validity_match_filter_kernel() {
+        let values: BooleanBuffer = (0..SOURCE_OFFSET + FILTER_LEN).map(source_value).collect();
+        let validity: BooleanBuffer = (0..FILTER_LEN + 11).map(|index| index % 11 != 0).collect();
+        let source = BooleanArray::new(
+            values.slice(SOURCE_OFFSET, FILTER_LEN),
+            Some(NullBuffer::new(validity.slice(11, FILTER_LEN))),
+        );
+        assert_ne!(source.values().offset(), source.nulls().unwrap().offset());
+
+        assert_filtered_words_match_filter_kernel("unaligned validity", source);
+    }
+
     fn assert_filtered_words_match_filter_kernel(source_case: &str, source: BooleanArray) {
         for (filter_case, filter) in filter_cases() {
             assert_filter_copy_matches_kernel(source_case, filter_case, &source, &filter);
