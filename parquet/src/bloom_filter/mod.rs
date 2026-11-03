@@ -977,6 +977,52 @@ impl SbbfPushDecoder {
     /// Headers larger than the estimate require an advertised length.
     /// After returning [`DecodeResult::Data`], subsequent calls return
     /// [`DecodeResult::Finished`].
+    ///
+    /// The state transitions can be visualized as:
+    /// ```text
+    ///                 ┌──────────────┐
+    ///                 │ FindingRange │
+    ///                 └──────────────┘
+    ///                        │
+    ///               choose initial range
+    ///                        │
+    ///                        ▼
+    ///              ┌───────────────────┐
+    ///              │ ReadingSbbfHeader │
+    ///              └───────────────────┘
+    ///                  │           │
+    ///         length unknown   length known
+    ///                  │           │
+    ///                  ▼           │
+    ///       ┌───────────────────┐  │
+    ///       │ ReadingSbbfBitset │  │
+    ///       └───────────────────┘  │
+    ///                  │           │
+    ///                  └─────+─────┘
+    ///                        │
+    ///                 return Data(Sbbf)
+    ///                        │
+    ///                        ▼
+    ///                   ┌──────────┐
+    ///                   │ Finished │
+    ///                   └──────────┘
+    ///                        │
+    ///                 return Finished
+    ///                        │       ┌──────────┐
+    ///                        └─────> │ Finished │
+    ///                                └──────────┘
+    ///
+    /// Waiting-state self-loops:
+    ///
+    ///   ReadingSbbfHeader ── bytes missing / NeedsData(range) ──> ReadingSbbfHeader
+    ///   ReadingSbbfBitset ── bytes missing / NeedsData(range) ──> ReadingSbbfBitset
+    /// ```
+    ///
+    /// In the above:
+    ///  - The initial range is the whole filter when its length is known, otherwise a 20-byte header prefix.
+    ///  - Transitions proceed within the same `try_decode()` call while the required bytes are buffered;
+    ///    push_range(s) supplies bytes without changing state.
+    ///  - Header parsing/validation must succeed before advancing. Any decoding error leaves the decoder unusable.
     pub fn try_decode(&mut self) -> Result<DecodeResult<Sbbf>> {
         loop {
             match std::mem::replace(&mut self.state, DecodeState::Intermediate) {
