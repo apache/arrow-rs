@@ -463,17 +463,22 @@ impl PageIndex {
     ) -> Result<Self> {
         let column_indexes = column_indexes
             .map(ColumnChunkEntries::try_from_rows)
-            .transpose()?
-            .filter(|indexes| !indexes.is_empty());
+            .transpose()?;
         let offset_indexes = offset_indexes
             .map(ColumnChunkEntries::try_from_rows)
-            .transpose()?
-            .filter(|indexes| !indexes.is_empty());
+            .transpose()?;
 
-        Ok(Self {
-            column_indexes,
-            offset_indexes,
-        })
+        Ok(Self::from_entries(column_indexes, offset_indexes))
+    }
+
+    pub(crate) fn from_entries(
+        column_indexes: Option<ColumnChunkEntries<ColumnIndexMetaData>>,
+        offset_indexes: Option<ColumnChunkEntries<OffsetIndexMetaData>>,
+    ) -> Self {
+        Self {
+            column_indexes: column_indexes.filter(|indexes| !indexes.is_empty()),
+            offset_indexes: offset_indexes.filter(|indexes| !indexes.is_empty()),
+        }
     }
 
     /// Convert this `PageIndex` into a [`PageIndexBuilder`]

@@ -139,11 +139,7 @@ impl<T> ColumnChunkMap<T> {
             entries.push(entry);
         }
         entries.sort_unstable_by_key(|(key, _)| *key);
-        Ok(ColumnChunkEntries {
-            num_row_groups: self.num_row_groups,
-            num_columns: self.num_columns,
-            entries: entries.into_boxed_slice(),
-        })
+        ColumnChunkEntries::try_from_sorted_entries(self.num_row_groups, self.num_columns, entries)
     }
 }
 
@@ -161,6 +157,37 @@ pub(crate) struct ColumnChunkEntries<T> {
 }
 
 impl<T> ColumnChunkEntries<T> {
+    /// Constructs immutable storage from entries in strictly increasing row-major order.
+    /// Missing coordinates need no placeholder; dimensions only bound the stored keys.
+    pub(crate) fn try_from_sorted_entries(
+        num_row_groups: usize,
+        num_columns: usize,
+        entries: Vec<(ColumnChunkKey, T)>,
+    ) -> Result<Self> {
+        validate_dimensions(num_row_groups, num_columns)?;
+        let mut previous = None;
+        for (key, _) in &entries {
+            let (row_group_idx, column_idx) = key.coordinates();
+            if row_group_idx >= num_row_groups || column_idx >= num_columns {
+                return Err(ParquetError::General(format!(
+                    "column chunk coordinate out of bounds: row group {row_group_idx}, column \
+                     {column_idx}; dimensions are {num_row_groups} by {num_columns}"
+                )));
+            }
+            if previous.is_some_and(|previous| previous >= *key) {
+                return Err(ParquetError::General(
+                    "column chunk entries must be unique and in row-major order".to_string(),
+                ));
+            }
+            previous = Some(*key);
+        }
+        Ok(Self {
+            num_row_groups,
+            num_columns,
+            entries: entries.into_boxed_slice(),
+        })
+    }
+
     pub(crate) fn try_from_rows(rows: Vec<Vec<Option<T>>>) -> Result<Self> {
         let num_row_groups = rows.len();
         let num_columns = rows.iter().map(Vec::len).max().unwrap_or_default();
@@ -185,11 +212,7 @@ impl<T> ColumnChunkEntries<T> {
                 }
             }
         }
-        Ok(Self {
-            num_row_groups,
-            num_columns,
-            entries: entries.into_boxed_slice(),
-        })
+        Self::try_from_sorted_entries(num_row_groups, num_columns, entries)
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -273,6 +296,46 @@ mod tests {
         assert_eq!(entries.get(0, 2).unwrap(), None);
         assert!(entries.get(2, 0).is_err());
         assert!(entries.get(0, 3).is_err());
+    }
+
+    #[test]
+    fn sorted_entries_preserve_sparse_coordinates() {
+        let entries = ColumnChunkEntries::try_from_sorted_entries(
+            100,
+            1_000,
+            vec![
+                (ColumnChunkKey::try_new(0, 3).unwrap(), 3_i32),
+                (ColumnChunkKey::try_new(99, 999).unwrap(), 999),
+            ],
+        )
+        .unwrap();
+        assert_eq!(entries.get(0, 3).unwrap(), Some(&3));
+        assert_eq!(entries.get(0, 2).unwrap(), None);
+        assert_eq!(entries.get(99, 999).unwrap(), Some(&999));
+        assert_eq!(
+            entries.heap_size(),
+            2 * std::mem::size_of::<(ColumnChunkKey, i32)>()
+        );
+        assert!(
+            ColumnChunkEntries::<i32>::try_from_sorted_entries(0, 0, vec![])
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn sorted_entries_reject_invalid_coordinates_and_order() {
+        let first = ColumnChunkKey::try_new(0, 0).unwrap();
+        let second = ColumnChunkKey::try_new(1, 1).unwrap();
+        for entries in [vec![(first, 1), (first, 2)], vec![(second, 1), (first, 2)]] {
+            assert!(ColumnChunkEntries::try_from_sorted_entries(2, 2, entries).is_err());
+        }
+        assert!(ColumnChunkEntries::try_from_sorted_entries(1, 2, vec![(second, 1)]).is_err());
+        assert!(ColumnChunkEntries::try_from_sorted_entries(2, 1, vec![(second, 1)]).is_err());
+        assert!(
+            ColumnChunkEntries::<i32>::try_from_sorted_entries(i32::MAX as usize + 1, 1, vec![],)
+                .is_err()
+        );
     }
 
     #[test]
