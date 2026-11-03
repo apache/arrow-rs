@@ -16,6 +16,8 @@
 // under the License.
 
 //! Check Arrow arrays against Parquet bloom filters
+//!
+//! See [`ArrowSbbf`] for details and an example.
 
 use arrow_array::builder::BooleanBuilder;
 use arrow_array::cast::AsArray;
@@ -42,17 +44,34 @@ use crate::schema::types::{ColumnDescriptor, Type};
 /// converts Arrow values in the same way as [`ArrowWriter`] before checking the
 /// filter.
 ///
+/// # Example
+///
+/// Read a bloom filter with [`ParquetRecordBatchReaderBuilder::get_row_group_column_bloom_filter`]
+/// (or [`ParquetRecordBatchStreamBuilder::get_row_group_column_bloom_filter`]
+/// for async readers) and check it with values of the column's Arrow type from
+/// the reader's schema.
+///
+/// The bloom filter's column index is the index of the Parquet leaf column,
+/// which differs from the Arrow field index when the schema has nested fields.
+/// Use [`parquet_column`] to find it.
+///
 /// ```
 /// # use std::sync::Arc;
 /// # use bytes::Bytes;
-/// # use arrow_array::{ArrayRef, Int8Array, RecordBatch};
-/// # use parquet::arrow::ArrowWriter;
-/// # use parquet::arrow::bloom_filter::ArrowSbbf;
-/// # use parquet::file::properties::{ReaderProperties, WriterProperties};
-/// # use parquet::file::reader::{FileReader, SerializedFileReader};
-/// # use parquet::file::serialized_reader::ReadOptionsBuilder;
-/// let array: ArrayRef = Arc::new(Int8Array::from(vec![1, 2, 3]));
-/// let batch = RecordBatch::try_from_iter([("c", array)]).unwrap();
+/// # use arrow_array::{ArrayRef, Int32Array, Int8Array, RecordBatch, StructArray};
+/// # use arrow_schema::{DataType, Field};
+/// # use parquet::arrow::{ArrowSbbf, ArrowWriter, parquet_column};
+/// # use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+/// # use parquet::file::properties::WriterProperties;
+/// // The struct `s` has two Parquet leaf columns, so `c` is leaf column 2
+/// let x: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+/// let y: ArrayRef = Arc::new(Int32Array::from(vec![4, 5, 6]));
+/// let s: ArrayRef = Arc::new(StructArray::from(vec![
+///     (Arc::new(Field::new("x", DataType::Int32, false)), x),
+///     (Arc::new(Field::new("y", DataType::Int32, false)), y),
+/// ]));
+/// let c: ArrayRef = Arc::new(Int8Array::from(vec![1, 2, 3]));
+/// let batch = RecordBatch::try_from_iter([("s", s), ("c", c)]).unwrap();
 ///
 /// let props = WriterProperties::builder()
 ///     .set_bloom_filter_enabled(true)
@@ -62,29 +81,32 @@ use crate::schema::types::{ColumnDescriptor, Type};
 /// writer.write(&batch).unwrap();
 /// writer.close().unwrap();
 ///
-/// let options = ReadOptionsBuilder::new()
-///     .with_reader_properties(
-///         ReaderProperties::builder()
-///             .set_read_bloom_filter(true)
-///             .build(),
-///     )
-///     .build();
-/// let reader = SerializedFileReader::new_with_options(Bytes::from(buffer), options).unwrap();
-/// let row_group = reader.get_row_group(0).unwrap();
-/// let sbbf = row_group.get_column_bloom_filter(0).unwrap();
-/// let column = reader.metadata().row_group(0).column(0).column_descr();
+/// let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(buffer)).unwrap();
+/// let (leaf_idx, field) = parquet_column(builder.parquet_schema(), builder.schema(), "c").unwrap();
+/// assert_eq!(leaf_idx, 2);
+/// let sbbf = builder
+///     .get_row_group_column_bloom_filter(0, leaf_idx)
+///     .unwrap()
+///     .expect("column has a bloom filter");
 ///
 /// // The Int8 values were written as INT32, so checking an i8 misses them
 /// assert!(!sbbf.check(&1_i8));
 ///
-/// // Use the column's Arrow type, here Int8, from the file's Arrow schema
-/// let arrow_type = batch.schema().field(0).data_type().clone();
-/// let sbbf = ArrowSbbf::try_new(sbbf, column, Some(arrow_type)).unwrap();
+/// // ArrowSbbf converts the values as ArrowWriter did
+/// let column = builder.metadata().row_group(0).column(leaf_idx).column_descr();
+/// let sbbf = ArrowSbbf::try_new(&sbbf, column, Some(field.data_type().clone())).unwrap();
 /// let found = sbbf.check(&Int8Array::from(vec![1, 3, 4])).unwrap();
 /// assert_eq!(found, vec![Some(true), Some(true), Some(false)].into());
+///
+/// // A row group can be skipped when no value may be present
+/// let can_skip = found.true_count() == 0;
+/// assert!(!can_skip);
 /// ```
 ///
 /// [`ArrowWriter`]: crate::arrow::ArrowWriter
+/// [`ParquetRecordBatchReaderBuilder::get_row_group_column_bloom_filter`]: crate::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::get_row_group_column_bloom_filter
+/// [`ParquetRecordBatchStreamBuilder::get_row_group_column_bloom_filter`]: crate::arrow::async_reader::ParquetRecordBatchStreamBuilder::get_row_group_column_bloom_filter
+/// [`parquet_column`]: crate::arrow::parquet_column
 #[derive(Debug, Clone)]
 pub struct ArrowSbbf<'a> {
     sbbf: &'a Sbbf,

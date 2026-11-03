@@ -1345,6 +1345,13 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
     /// Returns `None` if the column does not have a bloom filter
     ///
     /// We should call this function after other forms pruning, such as projection and predicate pushdown.
+    ///
+    /// `column_idx` is the index of the Parquet leaf column, which can differ from
+    /// the Arrow field index; see [`parquet_column`](crate::arrow::parquet_column).
+    ///
+    /// To check the returned filter with Arrow values, use
+    /// [`ArrowSbbf`](crate::arrow::ArrowSbbf), which converts them in the same
+    /// way as [`ArrowWriter`](crate::arrow::ArrowWriter).
     pub fn get_row_group_column_bloom_filter(
         &self,
         row_group_idx: usize,

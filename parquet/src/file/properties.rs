@@ -1233,6 +1233,11 @@ impl WriterPropertiesBuilder {
     ///   value are used. See [`set_bloom_filter_max_ndv`] and
     ///   [`set_bloom_filter_fpp`] to further adjust the ndv and fpp.
     ///
+    /// * To check bloom filters written by [`ArrowWriter`] with Arrow values,
+    ///   use [`ArrowSbbf`].
+    ///
+    /// [`ArrowWriter`]: crate::arrow::ArrowWriter
+    /// [`ArrowSbbf`]: crate::arrow::ArrowSbbf
     /// [`set_bloom_filter_max_ndv`]: Self::set_bloom_filter_max_ndv
     /// [`set_bloom_filter_fpp`]: Self::set_bloom_filter_fpp
     pub fn set_bloom_filter_enabled(mut self, value: bool) -> Self {
