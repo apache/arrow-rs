@@ -190,6 +190,8 @@ mod list;
 mod run;
 mod variable;
 
+// Gathering copies one value per row before encoding, so only use it when the
+// dictionary is large and sparse enough for skipping unused values to pay off.
 const DICTIONARY_GATHER_MIN_VALUES: usize = 32 * 1024;
 const DICTIONARY_GATHER_RATIO: usize = 4;
 
@@ -781,8 +783,6 @@ impl Codec {
             Codec::Dictionary(converter, nulls) => {
                 let dictionary = array.as_any_dictionary();
                 let values = dictionary.values();
-                // Gathering pays an O(rows) copy to avoid O(values) encoding.
-                // The cutoff keeps the existing path for small or dense dictionaries.
                 if values.len() >= DICTIONARY_GATHER_MIN_VALUES
                     && values.len() >= dictionary.len().saturating_mul(DICTIONARY_GATHER_RATIO)
                 {
