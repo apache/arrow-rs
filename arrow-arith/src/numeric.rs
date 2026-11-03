@@ -410,41 +410,51 @@ where
     T: ArrowPrimitiveType,
     F: Fn(T::Native, T::Native) -> (T::Native, bool),
 {
-    let mut overflow = false;
-    let mut apply = |l, r| {
-        let (value, overflowed) = op(l, r);
-        overflow |= overflowed;
-        value
-    };
-    let array = match (l_s, r_s) {
+    match (l_s, r_s) {
         (true, true) | (false, false) => {
             if l.len() != r.len() {
                 return None;
             }
-            let values: Vec<_> = l
-                .values()
-                .iter()
-                .zip(r.values())
-                .map(|(&l, &r)| apply(l, r))
-                .collect();
-            PrimitiveArray::new(values.into(), NullBuffer::union(l.nulls(), r.nulls()))
+            let pairs = l.values().iter().zip(r.values());
+            let values = collect_overflowing(pairs.map(|(&l, &r)| op(l, r)))?;
+            Some(PrimitiveArray::new(
+                values.into(),
+                NullBuffer::union(l.nulls(), r.nulls()),
+            ))
         }
         (true, false) => match (l.null_count() == 0).then(|| l.value(0)) {
-            None => return Some(PrimitiveArray::new_null(r.len())),
+            None => Some(PrimitiveArray::new_null(r.len())),
             Some(l) => {
-                let values: Vec<_> = r.values().iter().map(|&r| apply(l, r)).collect();
-                PrimitiveArray::new(values.into(), r.nulls().cloned())
+                let values = collect_overflowing(r.values().iter().map(|&r| op(l, r)))?;
+                Some(PrimitiveArray::new(values.into(), r.nulls().cloned()))
             }
         },
         (false, true) => match (r.null_count() == 0).then(|| r.value(0)) {
-            None => return Some(PrimitiveArray::new_null(l.len())),
+            None => Some(PrimitiveArray::new_null(l.len())),
             Some(r) => {
-                let values: Vec<_> = l.values().iter().map(|&l| apply(l, r)).collect();
-                PrimitiveArray::new(values.into(), l.nulls().cloned())
+                let values = collect_overflowing(l.values().iter().map(|&l| op(l, r)))?;
+                Some(PrimitiveArray::new(values.into(), l.nulls().cloned()))
             }
         },
-    };
-    (!overflow).then_some(array)
+    }
+}
+
+/// Collects the values of `iter`, returning `None` if any was flagged as overflowed.
+///
+/// This intentional `inline(never)` keeps `overflow` in a register. Inlined
+/// into `integer_op` under thin LTO, LLVM keeps the flag in memory and loads
+/// and stores it on every row, which serializes the loop and keeps it from
+/// vectorizing.
+#[inline(never)]
+fn collect_overflowing<N>(iter: impl Iterator<Item = (N, bool)>) -> Option<Vec<N>> {
+    let mut overflow = false;
+    let values = iter
+        .map(|(value, overflowed)| {
+            overflow |= overflowed;
+            value
+        })
+        .collect();
+    (!overflow).then_some(values)
 }
 
 /// Perform an arithmetic operation on integers
@@ -1610,6 +1620,18 @@ mod tests {
             .map(|i| nulls.is_valid(i).then(|| checked(l[i], r[i])).transpose())
             .collect();
         assert_kernel_result::<T>(kernel(&l_array, &r_array), expected);
+
+        // An overflow in one row sends the whole array to the checked kernel,
+        // which would hide a missed overflow in another row, so also check each
+        // row alone.
+        for i in 0..l.len() {
+            let expected = match nulls.is_valid(i) {
+                true => checked(l[i], r[i]).map(|v| vec![Some(v)]),
+                false => Ok(vec![None]),
+            };
+            let actual = kernel(&l_array.slice(i, 1), &r_array.slice(i, 1));
+            assert_kernel_result::<T>(actual, expected);
+        }
 
         for &x in edges {
             let scalar = PrimitiveArray::<T>::new_scalar(x);
