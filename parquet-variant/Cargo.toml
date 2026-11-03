@@ -28,7 +28,7 @@ edition = { workspace = true }
 rust-version = { workspace = true }
 
 [dependencies]
-arrow-schema = { workspace = true }
+arrow-schema = { workspace = true, features = ["canonical_extension_types"] }
 chrono = { workspace = true }
 half = { version = "2.1", default-features = false }
 indexmap = "2.10.0"

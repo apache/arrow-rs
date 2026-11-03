@@ -866,7 +866,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     ///
     /// [`SubBatchStrategy::Values`] windows are cut on value boundaries,
     /// walking definition levels to find where the value budget is used up;
-    /// [`SubBatchStrategy::Levels`] windows are a fixed level count. See
+    /// [`SubBatchStrategy::Levels`] windows are a fixed level count, capped
+    /// at a maximum number of values. See
     /// [`SubBatchStrategy`] for which budget gets which and why.
     ///
     /// For repeated/nested columns sub-batches then extend to the next
@@ -895,7 +896,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         // level, and a value-exact window spans at least one level, so each
         // iteration below makes progress (`sub_end > sub_start`).
         debug_assert!(
-            matches!(sub_batch, SubBatchStrategy::Values(n) | SubBatchStrategy::Levels(n) if n >= 1),
+            matches!(
+                sub_batch,
+                SubBatchStrategy::Values(n) | SubBatchStrategy::Levels { levels: n, max_values: _ }
+                    if n >= 1
+            ),
             "chunker must size at least one value or level"
         );
         let max_def_level = self.descr.max_def_level();
@@ -906,7 +911,18 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 SubBatchStrategy::Values(n) => {
                     Self::window_end_for_values(chunk_def, chunk_size, max_def_level, sub_start, n)
                 }
-                SubBatchStrategy::Levels(n) => (sub_start + n).min(chunk_size),
+                SubBatchStrategy::Levels { levels, max_values } => {
+                    // Cap the ratio-sized window at `max_values` values so
+                    // clustered values cannot pile into one window.
+                    let level_end = (sub_start + levels).min(chunk_size);
+                    Self::window_end_for_values(
+                        chunk_def,
+                        level_end,
+                        max_def_level,
+                        sub_start,
+                        max_values,
+                    )
+                }
             };
             let sub_end = match chunk_rep {
                 LevelDataRef::Materialized(levels) => {
@@ -1430,58 +1446,55 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     }
 
     /// Truncate the min and max values that will be written to a data page
-    /// header or column chunk Statistics
+    /// header or column chunk Statistics.
+    ///
+    /// Binary statistics are always rebuilt from a copy of their bytes, even when they are not
+    /// truncated, so the returned [`Statistics`] never alias the buffers the values were written
+    /// from. Columns whose values must not be truncated (see [`Self::can_truncate_value`]) are
+    /// copied without being shortened.
     fn truncate_statistics(&self, statistics: Statistics) -> Statistics {
-        let backwards_compatible_min_max = self.descr.sort_order().is_signed();
+        let truncation_length = self
+            .can_truncate_value()
+            .then(|| self.props.statistics_truncate_length())
+            .flatten();
         match statistics {
-            Statistics::ByteArray(stats)
-                if (stats._internal_has_min_max_set() && self.can_truncate_value()) =>
-            {
-                let (min, did_truncate_min) = self.truncate_min_value(
-                    self.props.statistics_truncate_length(),
-                    stats.min_bytes_opt().unwrap(),
-                );
-                let (max, did_truncate_max) = self.truncate_max_value(
-                    self.props.statistics_truncate_length(),
-                    stats.max_bytes_opt().unwrap(),
-                );
-                Statistics::ByteArray(
-                    ValueStatistics::new(
-                        Some(min.into()),
-                        Some(max.into()),
-                        stats.distinct_count(),
-                        stats.null_count_opt(),
-                        backwards_compatible_min_max,
-                    )
-                    .with_max_is_exact(!did_truncate_max)
-                    .with_min_is_exact(!did_truncate_min),
-                )
+            Statistics::ByteArray(stats) if stats._internal_has_min_max_set() => {
+                Statistics::ByteArray(self.copy_and_truncate_min_max(stats, truncation_length))
             }
-            Statistics::FixedLenByteArray(stats)
-                if (stats._internal_has_min_max_set() && self.can_truncate_value()) =>
-            {
-                let (min, did_truncate_min) = self.truncate_min_value(
-                    self.props.statistics_truncate_length(),
-                    stats.min_bytes_opt().unwrap(),
-                );
-                let (max, did_truncate_max) = self.truncate_max_value(
-                    self.props.statistics_truncate_length(),
-                    stats.max_bytes_opt().unwrap(),
-                );
+            Statistics::FixedLenByteArray(stats) if stats._internal_has_min_max_set() => {
                 Statistics::FixedLenByteArray(
-                    ValueStatistics::new(
-                        Some(min.into()),
-                        Some(max.into()),
-                        stats.distinct_count(),
-                        stats.null_count_opt(),
-                        backwards_compatible_min_max,
-                    )
-                    .with_max_is_exact(!did_truncate_max)
-                    .with_min_is_exact(!did_truncate_min),
+                    self.copy_and_truncate_min_max(stats, truncation_length),
                 )
             }
             stats => stats,
         }
+    }
+
+    /// Returns `stats` with min and max copied into their own buffers, truncated to
+    /// `truncation_length` bytes if one is given. Every other field is kept as is.
+    ///
+    /// Values handed to [`Self::write_batch`] may be slices of a larger shared buffer (the Arrow
+    /// writer slices all `FixedLenByteArray` values of a batch out of one allocation), and the
+    /// running min/max are clones of those values. Copying here keeps the column chunk
+    /// statistics, which outlive the write, from pinning those buffers.
+    fn copy_and_truncate_min_max<T>(
+        &self,
+        stats: ValueStatistics<T>,
+        truncation_length: Option<usize>,
+    ) -> ValueStatistics<T>
+    where
+        T: ParquetValueType + From<Vec<u8>>,
+    {
+        let (min, did_truncate_min) =
+            self.truncate_min_value(truncation_length, stats.min_bytes_opt().unwrap());
+        let (max, did_truncate_max) =
+            self.truncate_max_value(truncation_length, stats.max_bytes_opt().unwrap());
+        let min_is_exact = stats.min_is_exact() && !did_truncate_min;
+        let max_is_exact = stats.max_is_exact() && !did_truncate_max;
+        stats
+            .with_min_max(Some(min.into()), Some(max.into()))
+            .with_min_is_exact(min_is_exact)
+            .with_max_is_exact(max_is_exact)
     }
 
     /// Adds data page.
@@ -3737,6 +3750,49 @@ mod tests {
     }
 
     #[test]
+    fn test_column_writer_caps_dictionary_page_size_with_clustered_nulls() {
+        // Regression test for #11994. Large distinct values followed by a run
+        // of nulls: the chunk's average level:value ratio is ~36 levels per
+        // value, so a ratio-sized window over the leading values covers all
+        // of them. Each window must also be capped by value count, or every
+        // value lands in the dictionary page before its spill check runs.
+        let value_size = 64 * 1024;
+        let num_values = 28;
+        let num_nulls = 996;
+
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_enabled(true)
+            .set_dictionary_page_size_limit(value_size)
+            .build();
+
+        let data: Vec<_> = (0..num_values)
+            .map(|i| {
+                let mut v = vec![0u8; value_size];
+                v[..8].copy_from_slice(&(i as u64).to_le_bytes());
+                ByteArray::from(v)
+            })
+            .collect();
+        let mut def_levels = vec![1i16; num_values];
+        def_levels.extend(std::iter::repeat_n(0i16, num_nulls));
+
+        let pages =
+            write_and_collect_pages::<ByteArrayType>(props, 1, 0, &data, Some(&def_levels), None);
+        assert!(
+            pages.dict_page_size > 0,
+            "expected the column to dictionary-encode"
+        );
+        // At most two values per window. Before the fix the dictionary page
+        // held all 28 values (~1.8 MiB).
+        assert!(
+            pages.dict_page_size <= 3 * value_size,
+            "dictionary page {} exceeds three values ({}B)",
+            pages.dict_page_size,
+            3 * value_size,
+        );
+    }
+
+    #[test]
     fn test_column_writer_caps_page_size_for_fixed_len_byte_array() {
         // Coverage for `ParquetValueType::byte_size` override on
         // `FixedLenByteArray`. With `type_length = 1`, each plain-encoded
@@ -4755,6 +4811,59 @@ mod tests {
         } else {
             panic!("expecting Statistics::FixedLenByteArray");
         }
+    }
+
+    #[test]
+    fn test_decimal_statistics_do_not_alias_written_values() {
+        // See https://github.com/apache/arrow-rs/issues/12027
+        //
+        // The Arrow writer slices all FixedLenByteArray values of a batch out of one shared
+        // buffer. Decimal and Float16 statistics are never truncated and used to be stored as
+        // clones of the written values, so the column chunk statistics kept every such buffer
+        // alive for as long as the file metadata existed.
+        let page_writer = get_test_page_writer();
+        let mut writer = get_test_decimals_column_writer::<FixedLenByteArrayType>(
+            page_writer,
+            0,
+            0,
+            Default::default(),
+        );
+
+        // Four 16-byte big-endian non-negative values in ascending order, in one buffer
+        let arena = Bytes::from((0..64u8).collect::<Vec<_>>());
+        let values: Vec<FixedLenByteArray> = (0..4)
+            .map(|i| ByteArray::from(arena.slice(i * 16..(i + 1) * 16)).into())
+            .collect();
+        writer.write_batch(&values, None, None).unwrap();
+        let r = writer.close().unwrap();
+        drop(values);
+
+        let statistics = r.metadata.statistics().unwrap();
+        // Copying must not change how the statistics are written: Decimal has a signed sort
+        // order, so both min_value/max_value and the deprecated min/max are emitted
+        assert!(!statistics.is_min_max_deprecated());
+        assert!(statistics.is_min_max_backwards_compatible());
+        let Statistics::FixedLenByteArray(stats) = statistics else {
+            panic!("expecting Statistics::FixedLenByteArray");
+        };
+        let min = stats.min_bytes_opt().unwrap();
+        let max = stats.max_bytes_opt().unwrap();
+        assert_eq!(min, &arena[..16]);
+        assert_eq!(max, &arena[48..]);
+
+        // The statistics must own their bytes rather than point into the written buffer
+        let arena_range = arena.as_ptr_range();
+        assert!(
+            !arena_range.contains(&min.as_ptr()),
+            "min aliases the written buffer"
+        );
+        assert!(
+            !arena_range.contains(&max.as_ptr()),
+            "max aliases the written buffer"
+        );
+
+        assert!(stats.min_is_exact());
+        assert!(stats.max_is_exact());
     }
 
     #[test]
