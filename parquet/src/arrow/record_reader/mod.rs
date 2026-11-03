@@ -85,6 +85,9 @@ pub struct GenericRecordReader<V, CV> {
     /// as the valid_mask for `pad_nulls` (via `as_slice()`) and as the null
     /// bitmap consumed by the leaf reader (via `consume_compact_bitmap`).
     compact_bitmap: Option<BooleanBufferBuilder>,
+    /// Whether the value decoders must validate UTF-8 regardless of the
+    /// column's annotation, see [`Self::set_validate_utf8`].
+    validate_utf8: bool,
 }
 
 impl<V, CV> GenericRecordReader<V, CV>
@@ -114,13 +117,24 @@ where
             values_written: 0,
             padding_threshold: None,
             compact_bitmap: None,
+            validate_utf8: false,
         }
+    }
+
+    /// Validate that the decoded values are UTF-8 even if the column is not
+    /// annotated `UTF8`. Byte array readers set this when they produce an
+    /// Arrow string type.
+    pub fn set_validate_utf8(&mut self) {
+        self.validate_utf8 = true;
     }
 
     /// Set the current page reader.
     pub fn set_page_reader(&mut self, page_reader: Box<dyn PageReader>) -> Result<()> {
         let descr = &self.column_desc;
-        let values_decoder = CV::new(descr);
+        let mut values_decoder = CV::new(descr);
+        if self.validate_utf8 {
+            values_decoder.set_validate_utf8();
+        }
 
         let def_level_decoder = (descr.max_def_level() != 0).then(|| {
             DefinitionLevelBufferDecoder::new(descr.max_def_level(), packed_null_mask(descr))

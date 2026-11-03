@@ -636,29 +636,81 @@ fn test_read_binary_as_utf8() {
 }
 
 #[test]
-#[should_panic(expected = "Invalid UTF8 sequence at")]
-fn test_read_non_utf8_binary_as_utf8() {
-    let file = write_parquet_from_iter(vec![(
-        "non_utf8_binary",
-        Arc::new(BinaryArray::from(vec![
-            b"\xDE\x00\xFF".as_ref(),
-            b"\xDE\x01\xAA".as_ref(),
-            b"\xDE\x02\xFF".as_ref(),
-        ])) as ArrayRef,
-    )]);
-    let supplied_fields = Fields::from(vec![Field::new(
-        "non_utf8_binary",
+fn test_read_binary_as_string_types_validates_utf8() {
+    // BINARY columns without the UTF8 annotation, read as every string type.
+    // Valid UTF-8 reads as strings, and invalid UTF-8 returns an error rather
+    // than an array holding invalid UTF-8.
+    let string_types = [
         ArrowDataType::Utf8,
-        false,
-    )]);
+        ArrowDataType::LargeUtf8,
+        ArrowDataType::Utf8View,
+        ArrowDataType::Dictionary(
+            Box::new(ArrowDataType::Int32),
+            Box::new(ArrowDataType::Utf8),
+        ),
+        ArrowDataType::Dictionary(
+            Box::new(ArrowDataType::Int32),
+            Box::new(ArrowDataType::LargeUtf8),
+        ),
+        ArrowDataType::Dictionary(
+            Box::new(ArrowDataType::Int32),
+            Box::new(ArrowDataType::Utf8View),
+        ),
+    ];
 
-    let options = ArrowReaderOptions::new().with_schema(Arc::new(Schema::new(supplied_fields)));
-    let mut arrow_reader =
-        ParquetRecordBatchReaderBuilder::try_new_with_options(file.try_clone().unwrap(), options)
-            .expect("reader builder with schema")
-            .build()
-            .expect("reader with schema");
-    arrow_reader.next().unwrap().unwrap_err();
+    for (values, valid) in [
+        (vec![b"one".as_ref(), b"two".as_ref()], true),
+        (vec![b"one".as_ref(), b"\xDE\x00\xFF".as_ref()], false),
+    ] {
+        let batch = RecordBatch::try_from_iter([(
+            "binary",
+            Arc::new(BinaryArray::from(values)) as ArrayRef,
+        )])
+        .unwrap();
+
+        for dictionary_enabled in [true, false] {
+            let props = WriterProperties::builder()
+                .set_dictionary_enabled(dictionary_enabled)
+                .build();
+            let mut buf = Vec::new();
+            let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+            writer.write(&batch).unwrap();
+            writer.close().unwrap();
+            let buf = Bytes::from(buf);
+
+            for data_type in &string_types {
+                let context = format!("{data_type}, dictionary_enabled = {dictionary_enabled}");
+                let schema = Arc::new(Schema::new(vec![Field::new(
+                    "binary",
+                    data_type.clone(),
+                    false,
+                )]));
+                let options = ArrowReaderOptions::new().with_schema(schema);
+                let mut reader =
+                    ParquetRecordBatchReaderBuilder::try_new_with_options(buf.clone(), options)
+                        .unwrap()
+                        .build()
+                        .unwrap();
+                let result = reader.next().unwrap();
+                if valid {
+                    let column = Arc::clone(result.unwrap().column(0));
+                    assert_eq!(column.data_type(), data_type, "{context}");
+                    let strings = arrow_cast::cast(&column, &ArrowDataType::Utf8).unwrap();
+                    assert_eq!(
+                        strings.as_string::<i32>().iter().collect::<Vec<_>>(),
+                        vec![Some("one"), Some("two")],
+                        "{context}"
+                    );
+                } else {
+                    let err = result.unwrap_err();
+                    assert!(
+                        err.to_string().contains("non UTF-8 data"),
+                        "{context}: {err}"
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[test]

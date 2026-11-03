@@ -62,6 +62,9 @@ pub fn make_byte_array_reader(
             if let Some(threshold) = padding_threshold {
                 reader.set_padding_threshold(threshold);
             }
+            if data_type == ArrowType::Utf8 {
+                reader.set_validate_utf8();
+            }
             Ok(Box::new(ByteArrayReader::<i32>::new(
                 pages, data_type, reader,
             )))
@@ -70,6 +73,9 @@ pub fn make_byte_array_reader(
             let mut reader = GenericRecordReader::new(column_desc, batch_size);
             if let Some(threshold) = padding_threshold {
                 reader.set_padding_threshold(threshold);
+            }
+            if data_type == ArrowType::LargeUtf8 {
+                reader.set_validate_utf8();
             }
             Ok(Box::new(ByteArrayReader::<i64>::new(
                 pages, data_type, reader,
@@ -195,6 +201,10 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
             decoder: None,
             validate_utf8,
         }
+    }
+
+    fn set_validate_utf8(&mut self) {
+        self.validate_utf8 = true;
     }
 
     fn set_dict(

@@ -55,6 +55,9 @@ macro_rules! make_reader {
                     if let Some(threshold) = $padding_threshold {
                         reader.set_padding_threshold(threshold);
                     }
+                    if matches!($v, ArrowType::Utf8 | ArrowType::LargeUtf8 | ArrowType::Utf8View) {
+                        reader.set_validate_utf8();
+                    }
                     Ok(Box::new(ByteArrayDictionaryReader::<$key_type, $value_type>::try_new(
                         $pages, $data_type, reader,
                     )?))
@@ -332,6 +335,16 @@ where
                 .then(|| col.clone()),
             phantom: Default::default(),
         }
+    }
+
+    fn set_validate_utf8(&mut self) {
+        // The values are read as strings even though the column is not annotated
+        // `UTF8`, so validate them and decode them into a string array.
+        self.validate_utf8 = true;
+        self.value_type = match V::IS_LARGE {
+            true => ArrowType::LargeUtf8,
+            false => ArrowType::Utf8,
+        };
     }
 
     fn set_dict(
