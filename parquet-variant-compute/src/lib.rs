@@ -58,7 +58,8 @@ mod variant_array_builder;
 mod variant_get;
 mod variant_to_arrow;
 
-pub use variant_array::{ShreddingState, VariantArray, VariantArrayIter, VariantType};
+pub use parquet_variant::VariantType;
+pub use variant_array::{ShreddingState, VariantArray, VariantArrayIter};
 pub use variant_array_builder::{VariantArrayBuilder, VariantValueArrayBuilder};
 
 pub use cast_to_variant::{cast_to_variant, cast_to_variant_with_options};

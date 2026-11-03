@@ -350,6 +350,23 @@ mod tests {
     }
 
     #[test]
+    fn test_variant_path_bracket_field_ownership() {
+        use VariantPathElement::Field;
+
+        let path = VariantPath::try_from(r#"[""]["plain"]["escaped\]field"]['a]b']"#).unwrap();
+
+        assert!(matches!(
+            &path[..],
+            [
+                Field { name: Cow::Borrowed("") },
+                Field { name: Cow::Borrowed("plain") },
+                Field { name: Cow::Owned(escaped) },
+                Field { name: Cow::Borrowed("a]b") },
+            ] if escaped == "escaped]field"
+        ));
+    }
+
+    #[test]
     fn test_invalid_path_parse() {
         // Leading dot
         let err = VariantPath::try_from(".foo.bar").unwrap_err();
