@@ -220,25 +220,22 @@ impl ByteBudgetChunker {
         value_exact: bool,
     ) -> Option<SubBatchStrategy> {
         // Ask the encoder how many of the chunk's values fit in one page byte
-        // budget. Dispatch on whether the caller supplied gather indices;
-        // this mirrors how `write_mini_batch` picks `write_gather` vs
+        // budget. Dispatch on whether the caller supplied gather indices.
+        // This mirrors how `write_mini_batch` picks `write_gather` or
         // `write`.
         let (fit, vals_in_chunk) = match value_indices {
             Some(idx) => {
-                // Ask *before* counting the chunk's values: that count is an
-                // O(chunk_size) def-level scan on nullable columns, and most
-                // chunks fit outright. The chunk holds at most `chunk_size`
-                // values, so ask about the next `chunk_size` — a window whose
-                // prefix is exactly the chunk's values. The encoder counts
-                // the window's leading values up to and including the first
-                // that overflows, so if it covers the whole window it covers
-                // the chunk.
+                // Counting the chunk's values scans its def levels on a
+                // nullable column, and most chunks fit outright. So the
+                // encoder first sizes the next `chunk_size` values. The
+                // chunk's values are a prefix of this window. If the whole
+                // window fits, the chunk fits too.
                 //
-                // Only gather indices allow this lookahead: each one names a
-                // real value of a later chunk. A contiguous `values` slice
-                // may hold placeholders past the values its levels reference
-                // (raw `ColumnWriter` callers pad them), which cannot be
-                // sized.
+                // Only gather indices allow this lookahead, because each one
+                // names a real value of a later chunk. A contiguous `values`
+                // slice may hold placeholders past the values its levels
+                // reference. Raw `ColumnWriter` callers pad them, and they
+                // cannot be sized.
                 let end = values_offset.saturating_add(chunk_size).min(idx.len());
                 let start = values_offset.min(end);
                 let window = &idx[start..end];
@@ -246,14 +243,14 @@ impl ByteBudgetChunker {
                 if fit >= window.len() {
                     return None;
                 }
-                // Something in the window overflows; only now count how many
-                // of its values belong to this chunk.
+                // A value in the window overflows. Only now count the
+                // window's values that belong to this chunk.
                 (fit, chunk_def.value_count(chunk_size, self.max_def_level))
             }
             None => {
                 // For a non-nullable, unrepeated column `value_count` is O(1)
-                // (`Absent`/`Uniform` def levels); nullable or nested columns
-                // pay the def-level scan.
+                // (`Absent` or `Uniform` def levels). Nullable or nested
+                // columns pay the def-level scan.
                 let vals_in_chunk = chunk_def.value_count(chunk_size, self.max_def_level);
                 if vals_in_chunk == 0 {
                     return None;
@@ -267,10 +264,10 @@ impl ByteBudgetChunker {
                 (fit, vals_in_chunk)
             }
         };
-        // `fit` counts leading values up to and including the first that
-        // overflows. The chunk's values are the first `vals_in_chunk` of
-        // them, so "everything fits" when `fit` reaches past them (this also
-        // covers an all-null chunk).
+        // The chunk's values are the first `vals_in_chunk` values that the
+        // encoder sized. By the prefix rule of
+        // `count_values_within_byte_budget`, the chunk fits when `fit`
+        // reaches `vals_in_chunk`. This also covers an all-null chunk.
         if fit >= vals_in_chunk {
             return None;
         }
