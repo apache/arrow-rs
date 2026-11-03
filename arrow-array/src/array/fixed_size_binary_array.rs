@@ -422,6 +422,10 @@ impl FixedSizeBinaryArray {
     /// # Errors
     ///
     /// Returns error if argument has length zero, or sizes of nested slices don't match.
+    ///
+    /// # Panics
+    ///
+    /// Panics if memory allocation fails.
     pub fn try_from_sparse_iter_with_size<T, U>(
         mut iter: T,
         value_length: i32,
