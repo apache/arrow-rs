@@ -754,7 +754,8 @@ fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
     let len = predicate.filter.len();
     let count = predicate.count;
     let dense = count >= len - len / 64;
-    if !dense && !predicate.uses_sparse_indices() {
+    let sparse_indices = predicate.uses_sparse_indices();
+    if !dense && !sparse_indices {
         return collect_filter_bits_compress(buffer, predicate);
     }
     filter_bits_strategy(buffer, predicate)
