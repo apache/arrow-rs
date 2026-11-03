@@ -987,35 +987,25 @@ impl SbbfPushDecoder {
     ///               choose initial range
     ///                        │
     ///                        ▼
-    ///              ┌───────────────────┐
-    ///              │ ReadingSbbfHeader │
-    ///              └───────────────────┘
-    ///                  │           │
-    ///         length unknown   length known
-    ///                  │           │
-    ///                  ▼           │
-    ///       ┌───────────────────┐  │
-    ///       │ ReadingSbbfBitset │  │
-    ///       └───────────────────┘  │
-    ///                  │           │
-    ///                  └─────+─────┘
-    ///                        │
-    ///                 return Data(Sbbf)
-    ///                        │
-    ///                        ▼
-    ///                   ┌──────────┐
-    ///                   │ Finished │
-    ///                   └──────────┘
-    ///                        │
-    ///                 return Finished
-    ///                        │       ┌──────────┐
-    ///                        └─────> │ Finished │
-    ///                                └──────────┘
-    ///
-    /// Waiting-state self-loops:
-    ///
-    ///   ReadingSbbfHeader ── bytes missing / NeedsData(range) ──> ReadingSbbfHeader
-    ///   ReadingSbbfBitset ── bytes missing / NeedsData(range) ──> ReadingSbbfBitset
+    ///              ┌───────────────────┐ ───┐ bytes missing:
+    ///              │ ReadingSbbfHeader │    │ return NeedsData(range),
+    ///              └───────────────────┘ ◀──┘ wait for push_range(s)
+    ///                 │               │
+    ///            length known   length unknown
+    ///                 │               │
+    ///                 │               ▼
+    ///                 │     ┌───────────────────┐ ───┐ bytes missing:
+    ///                 │     │ ReadingSbbfBitset │    │ return NeedsData(range),
+    ///                 │     └───────────────────┘ ◀──┘ wait for push_range(s)
+    ///                 │               │
+    ///                 └───────┬───────┘
+    ///                         │
+    ///                  return Data(Sbbf)
+    ///                         │
+    ///                         ▼
+    ///                   ┌──────────┐ ───┐
+    ///                   │ Finished │    │ return Finished
+    ///                   └──────────┘ ◀──┘
     /// ```
     ///
     /// In the above:
