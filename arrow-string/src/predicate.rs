@@ -31,6 +31,13 @@ pub(crate) enum Predicate<'a> {
     StartsWith(&'a str),
     EndsWith(&'a str),
 
+    /// Case-sensitive LIKE with only `%` wildcards and multiple literal segments.
+    OrderedLiterals {
+        segments: Vec<Finder<'a>>,
+        anchored_start: bool,
+        anchored_end: bool,
+    },
+
     /// Equality ignoring ASCII case
     IEqAscii(&'a str),
     /// Starts with ignoring ASCII case
@@ -55,6 +62,21 @@ impl<'a> Predicate<'a> {
             && !contains_like_pattern(&pattern[1..pattern.len() - 1])
         {
             Ok(Self::contains(&pattern[1..pattern.len() - 1]))
+        } else if !pattern.as_bytes().contains(&b'_') && !pattern.as_bytes().contains(&b'\\') {
+            let segments = pattern
+                .split('%')
+                .filter(|segment| !segment.is_empty())
+                .map(|segment| Finder::new(segment.as_bytes()))
+                .collect::<Vec<_>>();
+            if segments.len() >= 2 {
+                Ok(Self::OrderedLiterals {
+                    segments,
+                    anchored_start: !pattern.starts_with('%'),
+                    anchored_end: !pattern.ends_with('%'),
+                })
+            } else {
+                Ok(Self::Regex(regex_like(pattern, false)?))
+            }
         } else {
             Ok(Self::Regex(regex_like(pattern, false)?))
         }
@@ -87,6 +109,16 @@ impl<'a> Predicate<'a> {
             Predicate::Eq(v) => *v == haystack,
             Predicate::IEqAscii(v) => haystack.eq_ignore_ascii_case(v),
             Predicate::Contains(finder) => finder.find(haystack.as_bytes()).is_some(),
+            Predicate::OrderedLiterals {
+                segments,
+                anchored_start,
+                anchored_end,
+            } => ordered_literals_match(
+                haystack.as_bytes(),
+                segments,
+                *anchored_start,
+                *anchored_end,
+            ),
             Predicate::StartsWith(v) => starts_with(haystack, v, equals_kernel),
             Predicate::IStartsWithAscii(v) => {
                 starts_with(haystack, v, equals_ignore_ascii_case_kernel)
@@ -198,8 +230,49 @@ impl<'a> Predicate<'a> {
             Predicate::Regex(v) => {
                 BooleanArray::from_unary(array, |haystack| v.is_match(haystack) != negate)
             }
+            Predicate::OrderedLiterals {
+                segments,
+                anchored_start,
+                anchored_end,
+            } => BooleanArray::from_unary(array, |haystack| {
+                ordered_literals_match(
+                    haystack.as_bytes(),
+                    segments,
+                    *anchored_start,
+                    *anchored_end,
+                ) != negate
+            }),
         }
     }
+}
+
+fn ordered_literals_match(
+    haystack: &[u8],
+    segments: &[Finder<'_>],
+    anchored_start: bool,
+    anchored_end: bool,
+) -> bool {
+    let mut cursor = 0;
+    let next = if anchored_start {
+        let first = segments[0].needle();
+        if !haystack.starts_with(first) {
+            return false;
+        }
+        cursor = first.len();
+        1
+    } else {
+        0
+    };
+
+    let searchable_end = segments.len() - usize::from(anchored_end);
+    for finder in &segments[next..searchable_end] {
+        let Some(position) = finder.find(&haystack[cursor..]) else {
+            return false;
+        };
+        cursor += position + finder.needle().len();
+    }
+
+    !anchored_end || haystack[cursor..].ends_with(segments.last().unwrap().needle())
 }
 
 fn equals_bytes(lhs: &[u8], rhs: &[u8], byte_eq_kernel: impl Fn((&u8, &u8)) -> bool) -> bool {
@@ -309,6 +382,150 @@ fn contains_like_pattern(pattern: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_array::StringArray;
+
+    #[test]
+    fn test_ordered_literals_matches_existing_regex() {
+        let patterns = [
+            "%a%b%",
+            "%aba%aba%",
+            "%a%b",
+            "a%b%",
+            "a%b",
+            "%%a%%%b%%",
+            "%é%a%",
+            "a%\nb",
+            "special%requests",
+            "%special%requests%",
+        ];
+        let mut haystacks = vec![
+            "abxxb".to_owned(),
+            "ababa".to_owned(),
+            "abaaba".to_owned(),
+            "a\nb".to_owned(),
+            "éa".to_owned(),
+            "ééa".to_owned(),
+            "special customer requests".to_owned(),
+        ];
+        let mut frontier = vec![String::new()];
+        for _ in 0..5 {
+            haystacks.extend(frontier.iter().cloned());
+            frontier = frontier
+                .iter()
+                .flat_map(|s| ["a", "b", "é", "\n"].map(|c| format!("{s}{c}")))
+                .collect();
+        }
+        haystacks.extend(frontier);
+
+        for pattern in patterns {
+            let fast = Predicate::like(pattern).unwrap();
+            assert!(matches!(fast, Predicate::OrderedLiterals { .. }));
+            let regex = regex_like(pattern, false).unwrap();
+            for haystack in &haystacks {
+                assert_eq!(
+                    fast.evaluate(haystack),
+                    regex.is_match(haystack),
+                    "pattern={pattern:?}, haystack={haystack:?}"
+                );
+            }
+        }
+
+        assert!(!Predicate::like("%aba%aba%").unwrap().evaluate("ababa"));
+        assert!(Predicate::like("%a%b").unwrap().evaluate("abxxb"));
+    }
+
+    #[test]
+    fn test_ordered_literals_generated_patterns_match_regex() {
+        let mut haystacks = vec![String::new()];
+        let mut frontier = vec![String::new()];
+        for _ in 0..5 {
+            frontier = frontier
+                .iter()
+                .flat_map(|s| ["a", "b", "é", "\n"].map(|c| format!("{s}{c}")))
+                .collect();
+            haystacks.extend(frontier.iter().cloned());
+        }
+        haystacks.extend([
+            "ababaaba".to_owned(),
+            "a---b---c---d".to_owned(),
+            "éa\nbé".to_owned(),
+        ]);
+
+        let mut patterns = Vec::new();
+        for first in ["a", "b", "aba", "é"] {
+            for second in ["a", "b", "aba", "é"] {
+                for third in ["a", "b", "aba"] {
+                    for separator in ["%", "%%"] {
+                        for prefix in ["", "%"] {
+                            for suffix in ["", "%"] {
+                                patterns.push(format!(
+                                    "{prefix}{first}{separator}{second}{separator}{third}{suffix}"
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for literals in [
+            ["a", "b", "c", "d"],
+            ["aba", "a", "aba", "b"],
+            ["é", "a", "b", "é"],
+        ] {
+            for separator in ["%", "%%"] {
+                for prefix in ["", "%"] {
+                    for suffix in ["", "%"] {
+                        patterns.push(format!(
+                            "{prefix}{}{separator}{}{separator}{}{separator}{}{suffix}",
+                            literals[0], literals[1], literals[2], literals[3]
+                        ));
+                    }
+                }
+            }
+        }
+
+        for pattern in &patterns {
+            let fast = Predicate::like(pattern).unwrap();
+            assert!(matches!(fast, Predicate::OrderedLiterals { .. }));
+            let regex = regex_like(pattern, false).unwrap();
+            for haystack in &haystacks {
+                assert_eq!(
+                    fast.evaluate(haystack),
+                    regex.is_match(haystack),
+                    "pattern={pattern:?}, haystack={haystack:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_ordered_literals_array_nulls_and_negation() {
+        let pattern = "%a%b";
+        let fast = Predicate::like(pattern).unwrap();
+        let regex = Predicate::Regex(regex_like(pattern, false).unwrap());
+        let utf8 = StringArray::from(vec![Some("abxxb"), None, Some("ababa"), Some("b")]);
+        let view = StringViewArray::from(vec![Some("abxxb"), None, Some("ababa"), Some("b")]);
+        for negate in [false, true] {
+            assert_eq!(
+                fast.evaluate_array(&utf8, negate),
+                regex.evaluate_array(&utf8, negate)
+            );
+            assert_eq!(
+                fast.evaluate_array(&view, negate),
+                regex.evaluate_array(&view, negate)
+            );
+        }
+    }
+
+    #[test]
+    fn test_ordered_literals_unsupported_patterns_use_regex() {
+        for pattern in [r"%a\%b%", r"%a\_b%", r"%a\\b%", "%a_b%"] {
+            assert!(matches!(
+                Predicate::like(pattern).unwrap(),
+                Predicate::Regex(_)
+            ));
+        }
+    }
 
     #[test]
     fn test_regex_like() {
