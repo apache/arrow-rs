@@ -39,6 +39,8 @@ mod uuid;
 pub use uuid::Uuid;
 mod variable_shape_tensor;
 pub use variable_shape_tensor::{VariableShapeTensor, VariableShapeTensorMetadata};
+mod variant;
+pub use variant::VariantType;
 
 use crate::{ArrowError, Field};
 
@@ -84,6 +86,11 @@ pub enum CanonicalExtensionType {
     ///
     /// <https://arrow.apache.org/docs/format/CanonicalExtensions.html#timestamp-with-offset>
     TimestampWithOffset(TimestampWithOffset),
+
+    /// The extension type for Parquet Variant.
+    ///
+    /// <https://arrow.apache.org/docs/format/CanonicalExtensions.html#parquet-variant>
+    Variant(VariantType),
 }
 
 impl TryFrom<&Field> for CanonicalExtensionType {
@@ -107,6 +114,7 @@ impl TryFrom<&Field> for CanonicalExtensionType {
                 TimestampWithOffset::NAME => value
                     .try_extension_type::<TimestampWithOffset>()
                     .map(Into::into),
+                VariantType::NAME => value.try_extension_type::<VariantType>().map(Into::into),
                 _ => Err(ArrowError::InvalidArgumentError(format!(
                     "Unsupported canonical extension type: {name}"
                 ))),
@@ -162,5 +170,11 @@ impl From<Bool8> for CanonicalExtensionType {
 impl From<TimestampWithOffset> for CanonicalExtensionType {
     fn from(value: TimestampWithOffset) -> Self {
         CanonicalExtensionType::TimestampWithOffset(value)
+    }
+}
+
+impl From<VariantType> for CanonicalExtensionType {
+    fn from(value: VariantType) -> Self {
+        CanonicalExtensionType::Variant(value)
     }
 }
