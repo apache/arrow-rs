@@ -937,19 +937,68 @@ fn filter_bits_compress_impl<const PAIR: bool>(
 /// Not inlined: within `filter_array` the packing state spills to the stack.
 #[inline(never)]
 fn collect_filter_bits_compress(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
+    /// Packs the bits extracted from successive words into the low `filled`
+    /// bits of `current`; once complete it is written at `idx` and restarts
+    /// from the bits that did not fit.
+    struct Packer {
+        ptr: *mut u64,
+        idx: usize,
+        current: u64,
+        filled: u32,
+    }
+
+    impl Packer {
+        #[inline(always)]
+        fn push(&mut self, values: u64, mask: u64) {
+            let bits = bit_util::compress(values, mask);
+            self.current |= bits << self.filled;
+            let total = self.filled + mask.count_ones();
+            if total < 64 {
+                self.filled = total;
+            } else {
+                // SAFETY: `count` is the number of set bits in the filter, so
+                // at most `count / 64` words are ever completed and the
+                // buffer holds `count / 64 + 1`.
+                unsafe { self.ptr.add(self.idx).write(self.current) };
+                self.idx += 1;
+                // `bits >> (64 - filled)`, written so that `filled == 0`
+                // shifts everything out.
+                self.current = (bits >> 1) >> (63 - self.filled);
+                self.filled = total - 64;
+            }
+        }
+    }
+
+    assert!(buffer.len() >= predicate.filter.len());
+    let mask_chunks = predicate.filter.values().bit_chunks();
+    let value_chunks = BitChunks::new(buffer.values(), buffer.offset(), predicate.filter.len());
+    debug_assert_eq!(predicate.count, predicate.filter.true_count());
+    debug_assert_eq!(mask_chunks.chunk_len(), value_chunks.chunk_len());
+
     // One word beyond the complete ones for the trailing partial word
     let mut out: Vec<u64> = Vec::with_capacity(predicate.count / 64 + 1);
-    let ptr = out.as_mut_ptr();
-    let mut idx = 0;
-    filter_bits_compress(buffer, predicate, |word, _| {
-        debug_assert!(idx <= predicate.count / 64);
-        // SAFETY: `count` is the number of set bits in the filter, so at most
-        // `count / 64 + 1` words are emitted and the output has room
-        unsafe { ptr.add(idx).write(word) };
-        idx += 1;
-    });
-    // SAFETY: every word below `idx` was initialized by the callback above
-    unsafe { out.set_len(idx) };
+    let mut packer = Packer {
+        ptr: out.as_mut_ptr(),
+        idx: 0,
+        current: 0,
+        filled: 0,
+    };
+
+    for (index, mask) in mask_chunks.iter().enumerate() {
+        if mask == 0 {
+            continue;
+        }
+        packer.push(value_chunks.chunk(index), mask);
+    }
+    packer.push(value_chunks.remainder_bits(), mask_chunks.remainder_bits());
+
+    // SAFETY: `idx <= count / 64`, so this and every word below it is
+    // within the buffer and written.
+    debug_assert!(packer.idx < out.capacity());
+    unsafe {
+        packer.ptr.add(packer.idx).write(packer.current);
+        out.set_len(packer.idx + 1);
+    }
     let mut out = MutableBuffer::from(out);
     out.truncate(bit_util::ceil(predicate.count, 8));
     out.into()
