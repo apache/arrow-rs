@@ -55,10 +55,10 @@ jobs:
           # PyArrow tests happen in integration.yml.
           cargo test --workspace
 
-  # Check workspace wide compile and test with default features for
-  # windows
+  # Check workspace wide compile and test with default features for Windows.
+  # Keep this testing upstream to reduce compute in forks.
   windows:
-    if: ${{ !inputs.lint-only }}
+    if: ${{ !inputs.lint-only && github.repository == 'apache/arrow-rs' }}
     name: Test on Windows
     runs-on: windows-latest
     steps:
