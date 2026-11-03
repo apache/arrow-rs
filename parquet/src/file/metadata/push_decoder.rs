@@ -232,6 +232,8 @@ pub struct ParquetMetaDataPushDecoder {
     column_index_mask: ColumnChunkMask,
     /// which rows and columns of the offset index should be read
     offset_index_mask: ColumnChunkMask,
+    /// Page-index range already requested for the current policies and masks.
+    pending_page_index_range: Option<Range<u64>>,
     /// Underlying buffers
     buffers: crate::util::push_buffers::PushBuffers,
     /// Encryption API
@@ -258,6 +260,7 @@ impl ParquetMetaDataPushDecoder {
             offset_index_policy: PageIndexPolicy::Optional,
             column_index_mask: ColumnChunkMask::all(),
             offset_index_mask: ColumnChunkMask::all(),
+            pending_page_index_range: None,
             buffers: crate::util::push_buffers::PushBuffers::new(file_len),
             metadata_parser: MetadataParser::new(),
         })
@@ -304,18 +307,21 @@ impl ParquetMetaDataPushDecoder {
     pub fn with_page_index_policy(mut self, page_index_policy: PageIndexPolicy) -> Self {
         self.column_index_policy = page_index_policy;
         self.offset_index_policy = page_index_policy;
+        self.pending_page_index_range = None;
         self
     }
 
     /// Set the policy for reading the ColumnIndex (part of the PageIndex)
     pub fn with_column_index_policy(mut self, column_index_policy: PageIndexPolicy) -> Self {
         self.column_index_policy = column_index_policy;
+        self.pending_page_index_range = None;
         self
     }
 
     /// Set the policy for reading the OffsetIndex (part of the PageIndex)
     pub fn with_offset_index_policy(mut self, offset_index_policy: PageIndexPolicy) -> Self {
         self.offset_index_policy = offset_index_policy;
+        self.pending_page_index_range = None;
         self
     }
 
@@ -325,18 +331,21 @@ impl ParquetMetaDataPushDecoder {
     pub fn with_page_index_mask(mut self, mask: ColumnChunkMask) -> Self {
         self.column_index_mask = mask.clone();
         self.offset_index_mask = mask;
+        self.pending_page_index_range = None;
         self
     }
 
     /// Select the row groups and columns for which column indexes are read.
     pub fn with_column_index_mask(mut self, mask: ColumnChunkMask) -> Self {
         self.column_index_mask = mask;
+        self.pending_page_index_range = None;
         self
     }
 
     /// Select the row groups and columns for which offset indexes are read.
     pub fn with_offset_index_mask(mut self, mask: ColumnChunkMask) -> Self {
         self.offset_index_mask = mask;
+        self.pending_page_index_range = None;
         self
     }
 
@@ -547,13 +556,16 @@ impl ParquetMetaDataPushDecoder {
         &mut self,
         metadata: Box<ParquetMetaData>,
     ) -> Result<DecodeResult<(Box<ParquetMetaData>, Option<PageIndex>)>> {
-        let range = range_for_page_index(
-            &metadata,
-            self.column_index_policy,
-            self.offset_index_policy,
-            &self.column_index_mask,
-            &self.offset_index_mask,
-        );
+        // Reuse the requested range on resume. Only keep it while waiting for bytes.
+        let range = self.pending_page_index_range.take().or_else(|| {
+            range_for_page_index(
+                &metadata,
+                self.column_index_policy,
+                self.offset_index_policy,
+                &self.column_index_mask,
+                &self.offset_index_mask,
+            )
+        });
 
         let Some(page_index_range) = range else {
             self.state = DecodeState::Finished;
@@ -561,6 +573,7 @@ impl ParquetMetaDataPushDecoder {
         };
 
         if !self.buffers.has_range(&page_index_range) {
+            self.pending_page_index_range = Some(page_index_range.clone());
             self.state = DecodeState::ReadingPageIndex(metadata);
             return Ok(DecodeResult::NeedsData(vec![page_index_range]));
         }
@@ -778,13 +791,79 @@ mod tests {
     }
 
     #[test]
+    fn test_change_page_index_selection_while_waiting() {
+        type Decoder = ParquetMetaDataPushDecoder;
+        let metadata = test_metadata_without_page_index();
+        let check = |initial: fn(Decoder) -> Decoder, change: fn(Decoder) -> Decoder| {
+            let new_decoder = || {
+                initial(Decoder::try_new_with_metadata(test_file_len(), metadata.clone()).unwrap())
+            };
+            let mut decoder = new_decoder();
+            let original = expect_needs_data(decoder.try_decode());
+            decoder = change(decoder);
+
+            let mut fresh = change(new_decoder());
+            let expected = expect_needs_data(fresh.try_decode());
+            assert_ne!(original, expected);
+            assert_eq!(expect_needs_data(decoder.try_decode()), expected);
+            push_ranges_to_metadata_decoder(&mut decoder, expected.clone());
+            push_ranges_to_metadata_decoder(&mut fresh, expected);
+            assert_eq!(
+                expect_data(decoder.try_decode()),
+                expect_data(fresh.try_decode())
+            );
+        };
+
+        let all = |decoder| decoder;
+        let one_chunk = |decoder: Decoder| {
+            decoder.with_page_index_mask(ColumnChunkMask::row_groups_and_columns([0], [1]))
+        };
+        check(all, |d| d.with_column_index_policy(PageIndexPolicy::Skip));
+        check(all, |d| d.with_offset_index_policy(PageIndexPolicy::Skip));
+        check(all, one_chunk);
+        check(one_chunk, |d| {
+            d.with_column_index_mask(ColumnChunkMask::all())
+        });
+        check(one_chunk, |d| {
+            d.with_offset_index_mask(ColumnChunkMask::all())
+        });
+    }
+
+    #[test]
+    fn test_missing_required_offset_index_after_pending_request() {
+        let mut metadata = test_metadata_without_page_index().into_builder();
+        let mut groups = metadata.take_row_groups();
+        let column = &mut groups[0].columns_mut()[0];
+        *column = column
+            .clone()
+            .into_builder()
+            .set_offset_index_offset(None)
+            .set_offset_index_length(None)
+            .build()
+            .unwrap();
+        let metadata = metadata.set_row_groups(groups).build();
+        let mut decoder =
+            ParquetMetaDataPushDecoder::try_new_with_metadata(test_file_len(), metadata).unwrap();
+
+        // The other chunks still require index bytes under either policy.
+        expect_needs_data(decoder.try_decode());
+        decoder = decoder.with_offset_index_policy(PageIndexPolicy::Required);
+        let ranges = expect_needs_data(decoder.try_decode());
+        push_ranges_to_metadata_decoder(&mut decoder, ranges);
+        let error = decoder.try_decode().unwrap_err();
+        assert!(
+            matches!(error, ParquetError::General(message) if message == "missing offset index")
+        );
+        assert!(decoder.pending_page_index_range.is_none());
+    }
+
+    #[test]
     fn test_page_index_decoder_no_indexes_requested() {
         let metadata = test_metadata_without_page_index();
         let mut decoder =
-            ParquetMetaDataPushDecoder::try_new_with_metadata(test_file_len(), metadata)
-                .unwrap()
-                .with_page_index_policy(PageIndexPolicy::Skip);
-
+            ParquetMetaDataPushDecoder::try_new_with_metadata(test_file_len(), metadata).unwrap();
+        expect_needs_data(decoder.try_decode_page_index());
+        decoder = decoder.with_page_index_policy(PageIndexPolicy::Skip);
         assert!(expect_data(decoder.try_decode_page_index()).1.is_none());
         expect_finished(decoder.try_decode_page_index());
 
@@ -824,6 +903,7 @@ mod tests {
             .collect();
         decoder.push_ranges(ranges.clone(), invalid_data).unwrap();
         decoder.try_decode_page_index().unwrap_err();
+        assert!(decoder.pending_page_index_range.is_none());
 
         decoder.clear_all_ranges();
         push_ranges_to_metadata_decoder(&mut decoder, ranges);
@@ -861,10 +941,18 @@ mod tests {
         // data, so try_decode_page_index is now valid and asks for the same range
         let index_ranges_again = expect_needs_data(decoder.try_decode_page_index());
         assert_eq!(index_ranges, index_ranges_again);
+        assert_eq!(
+            decoder.pending_page_index_range.as_ref(),
+            index_ranges.first()
+        );
+        push_ranges_to_metadata_decoder(&mut decoder, index_ranges.clone());
+        decoder.clear_all_ranges();
+        assert_eq!(expect_needs_data(decoder.try_decode()), index_ranges);
         push_ranges_to_metadata_decoder(&mut decoder, index_ranges);
 
         // The regular decode path still works and attaches the page index
         let metadata = expect_data(decoder.try_decode());
+        assert!(decoder.pending_page_index_range.is_none());
         assert_eq!(metadata.num_row_groups(), 2);
         assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
 

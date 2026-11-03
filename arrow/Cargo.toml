@@ -269,6 +269,10 @@ name = "string_dictionary_builder"
 harness = false
 
 [[bench]]
+name = "primitive_dictionary_builder"
+harness = false
+
+[[bench]]
 name = "string_run_builder"
 harness = false
 required-features = ["test_utils"]
