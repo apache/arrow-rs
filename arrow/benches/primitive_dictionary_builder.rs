@@ -64,6 +64,7 @@ where
     do_bench(20, 1000);
     do_bench(100, 10000);
     do_bench(10000, 100000);
+    do_bench(8192, 512000);
 
     group.finish();
 }
