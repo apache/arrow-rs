@@ -27,9 +27,10 @@ use arrow::datatypes::{
 use arrow::temporal_conversions::{as_date, as_datetime, as_time};
 use arrow_schema::{ArrowError, DataType, TimeUnit};
 use chrono::{DateTime, TimeZone, Utc};
+use crate::VariantArray;
 use parquet_variant::{
     ObjectFieldBuilder, Variant, VariantBuilderExt, VariantDecimal4, VariantDecimal8,
-    VariantDecimal16, VariantDecimalType,
+    VariantDecimal16, VariantDecimalType, VariantType,
 };
 use std::collections::HashMap;
 
@@ -85,6 +86,7 @@ pub(crate) enum ArrowToVariantRowBuilder<'a> {
     RunEndEncodedInt16(RunEndEncodedArrowToVariantBuilder<'a, datatypes::Int16Type>),
     RunEndEncodedInt32(RunEndEncodedArrowToVariantBuilder<'a, datatypes::Int32Type>),
     RunEndEncodedInt64(RunEndEncodedArrowToVariantBuilder<'a, datatypes::Int64Type>),
+    Variant(VariantArrowToVariantBuilder<'a>),
 }
 
 impl ArrowToVariantRowBuilder<'_> {
@@ -142,7 +144,52 @@ impl ArrowToVariantRowBuilder<'_> {
             RunEndEncodedInt16(b) => b.append_row(builder, index),
             RunEndEncodedInt32(b) => b.append_row(builder, index),
             RunEndEncodedInt64(b) => b.append_row(builder, index),
+            Variant(b) => b.append_row(builder, index),
         }
+    }
+}
+
+/// Variant builder for nested fields with VariantType extension
+pub(crate) struct VariantArrowToVariantBuilder<'a> {
+    variant_array: VariantArray,
+    _marker: std::marker::PhantomData<&'a ()>,
+}
+
+impl<'a> VariantArrowToVariantBuilder<'a> {
+    pub(crate) fn new(array: &'a dyn Array) -> Result<Self, ArrowError> {
+        let variant_array = VariantArray::try_new(array)?;
+        Ok(Self {
+            variant_array,
+            _marker: std::marker::PhantomData,
+        })
+    }
+
+    fn append_row(
+        &mut self,
+        builder: &mut impl VariantBuilderExt,
+        index: usize,
+    ) -> Result<(), ArrowError> {
+        if self.variant_array.is_null(index) {
+            builder.append_null();
+        } else {
+            let val = self.variant_array.try_value(index)?;
+            builder.append_value(val);
+        }
+        Ok(())
+    }
+}
+
+pub(crate) fn make_arrow_to_variant_row_builder_from_field<'a>(
+    field: &'a arrow_schema::Field,
+    array: &'a dyn Array,
+    options: &'a CastOptions,
+) -> Result<ArrowToVariantRowBuilder<'a>, ArrowError> {
+    if field.has_valid_extension_type::<VariantType>() {
+        Ok(ArrowToVariantRowBuilder::Variant(
+            VariantArrowToVariantBuilder::new(array)?,
+        ))
+    } else {
+        make_arrow_to_variant_row_builder(field.data_type(), array, options)
     }
 }
 
@@ -240,19 +287,24 @@ pub(crate) fn make_arrow_to_variant_row_builder<'a>(
             DataType::Utf8 => Utf8(StringArrowToVariantBuilder::new(array)),
             DataType::LargeUtf8 => LargeUtf8(StringArrowToVariantBuilder::new(array)),
             DataType::Utf8View => Utf8View(StringViewArrowToVariantBuilder::new(array)),
-            DataType::List(_) => List(ListArrowToVariantBuilder::new(array.as_list(), options)?),
-            DataType::LargeList(_) => {
-                LargeList(ListArrowToVariantBuilder::new(array.as_list(), options)?)
+            DataType::List(field) => {
+                List(ListArrowToVariantBuilder::new(field.as_ref(), array.as_list(), options)?)
             }
-            DataType::ListView(_) => ListView(ListArrowToVariantBuilder::new(
+            DataType::LargeList(field) => {
+                LargeList(ListArrowToVariantBuilder::new(field.as_ref(), array.as_list(), options)?)
+            }
+            DataType::ListView(field) => ListView(ListArrowToVariantBuilder::new(
+                field.as_ref(),
                 array.as_list_view(),
                 options,
             )?),
-            DataType::LargeListView(_) => LargeListView(ListArrowToVariantBuilder::new(
+            DataType::LargeListView(field) => LargeListView(ListArrowToVariantBuilder::new(
+                field.as_ref(),
                 array.as_list_view(),
                 options,
             )?),
-            DataType::FixedSizeList(_, _) => FixedSizeList(ListArrowToVariantBuilder::new(
+            DataType::FixedSizeList(field, _) => FixedSizeList(ListArrowToVariantBuilder::new(
+                field.as_ref(),
                 array.as_fixed_size_list(),
                 options,
             )?),
@@ -518,10 +570,14 @@ pub(crate) struct ListArrowToVariantBuilder<'a, L: ListLikeArray> {
 }
 
 impl<'a, L: ListLikeArray> ListArrowToVariantBuilder<'a, L> {
-    pub(crate) fn new(array: &'a L, options: &'a CastOptions) -> Result<Self, ArrowError> {
+    pub(crate) fn new(
+        field: &'a arrow_schema::Field,
+        array: &'a L,
+        options: &'a CastOptions,
+    ) -> Result<Self, ArrowError> {
         let values = array.values();
         let values_builder =
-            make_arrow_to_variant_row_builder(values.data_type(), values, options)?;
+            make_arrow_to_variant_row_builder_from_field(field, values.as_ref(), options)?;
 
         Ok(Self {
             list_array: array,
@@ -565,17 +621,17 @@ impl<'a> StructArrowToVariantBuilder<'a> {
         let mut field_builders = Vec::new();
 
         // Create a row builder for each field
-        for (field_name, field_array) in struct_array
-            .column_names()
+        for (field, field_array) in struct_array
+            .fields()
             .iter()
             .zip(struct_array.columns().iter())
         {
-            let field_builder = make_arrow_to_variant_row_builder(
-                field_array.data_type(),
+            let field_builder = make_arrow_to_variant_row_builder_from_field(
+                field.as_ref(),
                 field_array.as_ref(),
                 options,
             )?;
-            field_builders.push((*field_name, field_builder));
+            field_builders.push((field.name().as_str(), field_builder));
         }
 
         Ok(Self {
@@ -624,8 +680,11 @@ impl<'a> MapArrowToVariantBuilder<'a> {
 
         // Create recursive builder for values
         let values = map_array.values();
-        let values_builder =
-            make_arrow_to_variant_row_builder(values.data_type(), values.as_ref(), options)?;
+        let values_builder = make_arrow_to_variant_row_builder_from_field(
+            map_array.entries().fields()[1].as_ref(),
+            values.as_ref(),
+            options,
+        )?;
 
         Ok(Self {
             map_array,
@@ -2024,5 +2083,53 @@ mod tests {
                 Some(Variant::from(expected_last)),
             ],
         );
+    }
+
+    #[test]
+    fn test_nested_variant_struct_row_builder() {
+        use std::sync::Arc;
+        use arrow::array::{ArrayRef, StructArray};
+        use parquet_variant::Variant;
+        use crate::{VariantArrayBuilder, cast_to_variant};
+        use parquet_variant_json::VariantToJson;
+
+        let mut builder = VariantArrayBuilder::new(1);
+        builder.append_variant(Variant::Int32(1));
+        let child = builder.build();
+
+        let field = Arc::new(child.field("a"));
+        let input = StructArray::new(vec![field].into(), vec![ArrayRef::from(child)], None);
+
+        let output = cast_to_variant(&input).unwrap();
+        let val = output.try_value(0).unwrap();
+        let json_str = val.to_json_string().unwrap();
+        assert_eq!(json_str, r#"{"a":1}"#);
+    }
+
+    #[test]
+    fn test_nested_variant_list_row_builder() {
+        use std::sync::Arc;
+        use arrow::array::{ArrayRef, ListArray};
+        use arrow::buffer::OffsetBuffer;
+        use parquet_variant::Variant;
+        use crate::{VariantArrayBuilder, cast_to_variant};
+        use parquet_variant_json::VariantToJson;
+
+        let mut builder = VariantArrayBuilder::new(1);
+        builder.append_variant(Variant::Int32(1));
+        let child = builder.build();
+
+        let field = Arc::new(child.field("item"));
+        let input = ListArray::new(
+            field,
+            OffsetBuffer::new(vec![0_i32, 1].into()),
+            ArrayRef::from(child),
+            None,
+        );
+
+        let output = cast_to_variant(&input).unwrap();
+        let val = output.try_value(0).unwrap();
+        let json_str = val.to_json_string().unwrap();
+        assert_eq!(json_str, "[1]");
     }
 }
