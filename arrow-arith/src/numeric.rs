@@ -444,16 +444,27 @@ where
 /// This intentional `inline(never)` keeps `overflow` in a register. Inlined
 /// into `integer_op` under thin LTO, LLVM keeps the flag in memory and loads
 /// and stores it on every row, which serializes the loop and keeps it from
-/// vectorizing.
+/// vectorizing. The loop writes into the `Vec`'s spare capacity itself,
+/// because whether LLVM inlines the loop inside `collect` depends on the
+/// closure and the target, and when it doesn't, that loop reaches the flag
+/// through a pointer.
 #[inline(never)]
-fn collect_overflowing<N>(iter: impl Iterator<Item = (N, bool)>) -> Option<Vec<N>> {
+fn collect_overflowing<N>(iter: impl ExactSizeIterator<Item = (N, bool)>) -> Option<Vec<N>> {
+    let mut values = Vec::with_capacity(iter.len());
     let mut overflow = false;
-    let values = iter
-        .map(|(value, overflowed)| {
-            overflow |= overflowed;
-            value
-        })
-        .collect();
+    let mut written = 0;
+    for (slot, (value, overflowed)) in values.spare_capacity_mut().iter_mut().zip(iter) {
+        slot.write(value);
+        overflow |= overflowed;
+        written += 1;
+    }
+    debug_assert!(written <= values.capacity());
+    // SAFETY: the loop initialized the first `written` slots of the spare
+    // capacity, and `written` counts those writes, so it doesn't rely on
+    // `iter.len()`. With `collect`, rescaled `Decimal128` add was 1.2x slower
+    // on Apple M5 Max, and 0.83x as fast as `main` on Neoverse-V2, where the
+    // flag stayed in memory.
+    unsafe { values.set_len(written) };
     (!overflow).then_some(values)
 }
 
@@ -503,20 +514,27 @@ impl OverflowingOp for i256 {
     }
 }
 
-/// Multiplies `l` and `r` by their scale multipliers, then applies `op`,
-/// reporting whether any of the three steps overflowed.
+/// Multiplies `l` by `mul`, then applies `op`, reporting whether either step
+/// overflowed. With unequal scales only the operand with the smaller scale is
+/// multiplied, because the other multiplier is one.
 #[inline]
-fn rescaled<N: OverflowingOp>(
+fn rescale_left<N: OverflowingOp>(l: N, mul: N, r: N, op: impl Fn(N, N) -> (N, bool)) -> (N, bool) {
+    let (l, l_overflow) = l.mul_overflowing(mul);
+    let (value, overflow) = op(l, r);
+    (value, l_overflow | overflow)
+}
+
+/// Like [`rescale_left`], but multiplies `r` by `mul`.
+#[inline]
+fn rescale_right<N: OverflowingOp>(
     l: N,
-    l_mul: N,
     r: N,
-    r_mul: N,
+    mul: N,
     op: impl Fn(N, N) -> (N, bool),
 ) -> (N, bool) {
-    let (l, l_overflow) = l.mul_overflowing(l_mul);
-    let (r, r_overflow) = r.mul_overflowing(r_mul);
+    let (r, r_overflow) = r.mul_overflowing(mul);
     let (value, overflow) = op(l, r);
-    (value, l_overflow | r_overflow | overflow)
+    (value, r_overflow | overflow)
 }
 
 /// Perform an arithmetic operation on integers
@@ -1268,9 +1286,16 @@ where
                 // keep the loop from vectorizing under thin LTO, like the borrowed
                 // captures #11525 fixed in `unary`.
                 Op::Add | Op::AddWrapping => {
-                    match overflowing_op(l, l_s, r, r_s, move |l, r| {
-                        rescaled(l, l_mul, r, r_mul, T::Native::add_overflowing)
-                    }) {
+                    let add = T::Native::add_overflowing;
+                    let array = match s1 < s2 {
+                        true => overflowing_op(l, l_s, r, r_s, move |l, r| {
+                            rescale_left(l, l_mul, r, add)
+                        }),
+                        false => overflowing_op(l, l_s, r, r_s, move |l, r| {
+                            rescale_right(l, r, r_mul, add)
+                        }),
+                    };
+                    match array {
                         Some(array) => array,
                         None => try_op!(
                             l,
@@ -1282,9 +1307,16 @@ where
                     }
                 }
                 Op::Sub | Op::SubWrapping => {
-                    match overflowing_op(l, l_s, r, r_s, move |l, r| {
-                        rescaled(l, l_mul, r, r_mul, T::Native::sub_overflowing)
-                    }) {
+                    let sub = T::Native::sub_overflowing;
+                    let array = match s1 < s2 {
+                        true => overflowing_op(l, l_s, r, r_s, move |l, r| {
+                            rescale_left(l, l_mul, r, sub)
+                        }),
+                        false => overflowing_op(l, l_s, r, r_s, move |l, r| {
+                            rescale_right(l, r, r_mul, sub)
+                        }),
+                    };
+                    match array {
                         Some(array) => array,
                         None => try_op!(
                             l,
