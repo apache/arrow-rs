@@ -1551,6 +1551,28 @@ mod test {
     }
 
     #[test]
+    fn test_utf8_view_keeps_nulls_of_nullable_strings() {
+        let schema = Schema::new(vec![Field::new("s", DataType::Utf8, true)]);
+        let values = vec![Some("a"), None, Some(""), None, Some("b")];
+        let col: ArrayRef = Arc::new(StringArray::from(values.clone()));
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![col]).unwrap();
+        let mut writer = AvroWriter::new(Vec::<u8>::new(), schema).unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+        let bytes = writer.into_inner();
+
+        let reader = ReaderBuilder::new()
+            .with_utf8_view(true)
+            .build(Cursor::new(bytes))
+            .unwrap();
+        let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(batches.len(), 1);
+        let col = batches[0].column(0).as_string_view();
+        assert_eq!(col.null_count(), 2);
+        assert_eq!(col, &StringViewArray::from(values));
+    }
+
+    #[test]
     fn test_block_sync_marker_mismatch_errors() {
         let path = arrow_test_data("avro/alltypes_plain.avro");
         let mut bytes = std::fs::read(&path).unwrap();

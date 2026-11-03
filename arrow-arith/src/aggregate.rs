@@ -990,7 +990,10 @@ pub fn product_checked<T: ArrowNumericType>(
 }
 
 /// Returns the minimum value in the array, according to the natural order.
-/// For floating point arrays any NaN values are considered to be greater than any other non-null value
+///
+/// Floating point values are compared using IEEE 754 totalOrder (see [`f64::total_cmp`]):
+/// a positive NaN is greater than every non-NaN value, including positive infinity, and a
+/// negative NaN is less than every non-NaN value, including negative infinity.
 ///
 /// # Example
 /// ```rust
@@ -1005,7 +1008,10 @@ pub fn min<T: ArrowNumericType>(array: &PrimitiveArray<T>) -> Option<T::Native> 
 }
 
 /// Returns the maximum value in the array, according to the natural order.
-/// For floating point arrays any NaN values are considered to be greater than any other non-null value
+///
+/// Floating point values are compared using IEEE 754 totalOrder (see [`f64::total_cmp`]):
+/// a positive NaN is greater than every non-NaN value, including positive infinity, and a
+/// negative NaN is less than every non-NaN value, including negative infinity.
 ///
 /// # Example
 /// ```rust

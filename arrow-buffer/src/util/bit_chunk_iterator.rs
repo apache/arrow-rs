@@ -17,6 +17,8 @@
 
 //! Types for iterating over bitmasks in 64-bit chunks
 
+#[cfg(target_arch = "aarch64")]
+use crate::ToByteSlice;
 use crate::util::bit_util::ceil;
 use std::fmt::Debug;
 
@@ -168,8 +170,45 @@ impl<'a> UnalignedBitChunk<'a> {
 
     /// Counts the number of ones
     pub fn count_ones(&self) -> usize {
-        self.iter().map(|x| x.count_ones() as usize).sum()
+        let edges = self.prefix.into_iter().chain(self.suffix);
+        edges.map(|x| x.count_ones() as usize).sum::<usize>() + count_ones_words(self.chunks)
     }
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+fn count_ones_words(words: &[u64]) -> usize {
+    words.iter().map(|x| x.count_ones() as usize).sum()
+}
+
+/// Summing four byte popcounts in `u8` lanes before widening lets LLVM emit one
+/// widening per 64-byte block. A `u64::count_ones` sum widens every 16 bytes. On x86
+/// the `u64` sum measured faster (#11776), so this is only used on aarch64.
+#[cfg(target_arch = "aarch64")]
+fn count_ones_words(words: &[u64]) -> usize {
+    // A block is 8 words (64 bytes), the unit that is widened once.
+    let (blocks, tail) = words.as_chunks::<8>();
+    let mut total = 0;
+    // `lane_counts` counts in u16 lanes so that one widening per block suffices. Each
+    // lane gains at most 32 (four bytes of eight bits) per block, so flush the lanes
+    // (add them into `total` and reset them) before they can overflow.
+    const BLOCKS_PER_FLUSH: usize = (u16::MAX / 32) as usize;
+    for flush_group in blocks.chunks(BLOCKS_PER_FLUSH) {
+        let mut lane_counts = [0u16; 16];
+        for block in flush_group {
+            let bytes = block.as_slice().to_byte_slice();
+            // Lane `lane` sums byte `lane` of each of the block's four 16-byte vectors.
+            for lane in 0..16 {
+                let count = bytes[lane].count_ones() as u8
+                    + bytes[16 + lane].count_ones() as u8
+                    + bytes[32 + lane].count_ones() as u8
+                    + bytes[48 + lane].count_ones() as u8;
+                lane_counts[lane] += count as u16;
+            }
+        }
+        total += lane_counts.iter().copied().map(usize::from).sum::<usize>();
+    }
+    // Counting the tail in words avoids widening each byte popcount to u64.
+    total + tail.iter().map(|w| w.count_ones() as usize).sum::<usize>()
 }
 
 impl<'a> IntoIterator for &UnalignedBitChunk<'a> {
@@ -464,6 +503,7 @@ mod tests {
 
     use crate::buffer::Buffer;
     use crate::util::bit_chunk_iterator::UnalignedBitChunk;
+    use crate::util::bit_util::get_bit;
 
     #[test]
     fn test_iter_aligned() {
@@ -820,6 +860,40 @@ mod tests {
         assert!(unaligned.chunks().is_empty());
         assert_eq!(unaligned.lead_padding(), 1);
         assert_eq!(unaligned.trailing_padding(), 62);
+    }
+
+    #[test]
+    fn test_unaligned_bit_chunk_count_ones() {
+        // Sizes in bytes around the 64-byte block and the 2047-block flush in
+        // `count_ones_words`. With all-ones input, this fails if the flush comes too
+        // late and a u16 lane counter overflows. Random input (`None`) fails if a
+        // lane counts the wrong bytes, which uniform input hides.
+        let sizes = [
+            0, 1, 7, 8, 63, 64, 65, 72, 136, 131_008, 131_072, 131_136, 131_207,
+        ];
+        let mut rng = StdRng::seed_from_u64(42);
+        for size in sizes {
+            for byte in [Some(0xFF_u8), Some(0xA5), Some(0x00), None] {
+                let bytes = match byte {
+                    Some(byte) => vec![byte; size],
+                    None => (0..size).map(|_| rng.random()).collect(),
+                };
+                let buffer = Buffer::from(bytes);
+                let bits = size * 8;
+                for offset in [0, 3.min(bits), 64.min(bits)] {
+                    let len = bits - offset;
+                    let unaligned = UnalignedBitChunk::new(buffer.as_slice(), offset, len);
+                    let expected = (offset..bits)
+                        .filter(|i| get_bit(buffer.as_slice(), *i))
+                        .count();
+                    assert_eq!(
+                        unaligned.count_ones(),
+                        expected,
+                        "{size} {byte:#x?} {offset}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
