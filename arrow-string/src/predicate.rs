@@ -31,7 +31,7 @@ pub(crate) enum Predicate<'a> {
     StartsWith(&'a str),
     EndsWith(&'a str),
 
-    /// Case-sensitive LIKE with only `%` wildcards and multiple literal segments.
+    /// Case-sensitive LIKE with only `%` wildcards and multiple literal segments
     OrderedLiterals {
         segments: Vec<Finder<'a>>,
         anchored_start: bool,
@@ -384,21 +384,11 @@ mod tests {
     use super::*;
     use arrow_array::StringArray;
 
-    #[test]
-    fn test_ordered_literals_matches_existing_regex() {
-        let patterns = [
-            "%a%b%",
-            "%aba%aba%",
-            "%a%b",
-            "a%b%",
-            "a%b",
-            "%%a%%%b%%",
-            "%é%a%",
-            "a%\nb",
-            "special%requests",
-            "%special%requests%",
-        ];
+    fn ordered_literal_haystacks() -> Vec<String> {
         let mut haystacks = vec![
+            "ababaaba".to_owned(),
+            "a---b---c---d".to_owned(),
+            "éa\nbé".to_owned(),
             "abxxb".to_owned(),
             "ababa".to_owned(),
             "abaaba".to_owned(),
@@ -416,6 +406,26 @@ mod tests {
                 .collect();
         }
         haystacks.extend(frontier);
+
+        haystacks
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
+    fn test_ordered_literals_matches_existing_regex() {
+        let patterns = [
+            "%a%b%",
+            "%aba%aba%",
+            "%a%b",
+            "a%b%",
+            "a%b",
+            "%%a%%%b%%",
+            "%é%a%",
+            "a%\nb",
+            "special%requests",
+            "%special%requests%",
+        ];
+        let haystacks = ordered_literal_haystacks();
 
         for pattern in patterns {
             let fast = Predicate::like(pattern).unwrap();
@@ -435,21 +445,9 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_ordered_literals_generated_patterns_match_regex() {
-        let mut haystacks = vec![String::new()];
-        let mut frontier = vec![String::new()];
-        for _ in 0..5 {
-            frontier = frontier
-                .iter()
-                .flat_map(|s| ["a", "b", "é", "\n"].map(|c| format!("{s}{c}")))
-                .collect();
-            haystacks.extend(frontier.iter().cloned());
-        }
-        haystacks.extend([
-            "ababaaba".to_owned(),
-            "a---b---c---d".to_owned(),
-            "éa\nbé".to_owned(),
-        ]);
+        let haystacks = ordered_literal_haystacks();
 
         let mut patterns = Vec::new();
         for first in ["a", "b", "aba", "é"] {

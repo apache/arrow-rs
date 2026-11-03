@@ -588,80 +588,6 @@ mod tests {
         };
     }
 
-    test_utf8_scalar!(
-        test_ordered_literal_like_scalar_representations,
-        vec![
-            Some("abxxb"),
-            Some("ababa"),
-            Some("a\na b"),
-            None,
-            Some("b"),
-            Some("aéb")
-        ],
-        "%a%b",
-        like,
-        vec![
-            Some(true),
-            Some(false),
-            Some(true),
-            None,
-            Some(false),
-            Some(true)
-        ]
-    );
-
-    test_utf8_scalar!(
-        test_ordered_literal_not_like_scalar_representations,
-        vec![Some("abaaba"), Some("ababa"), None, Some("aba\naba")],
-        "%aba%aba%",
-        nlike,
-        vec![Some(false), Some(true), None, Some(false)]
-    );
-
-    test_utf8!(
-        test_ordered_literal_array_patterns,
-        vec![
-            Some("xxabyy"),
-            Some("acb"),
-            Some("a--b--c"),
-            Some("ababa"),
-            Some("abaaba"),
-            Some("a\nb"),
-            Some("abxxb"),
-            None,
-            Some("ab"),
-            Some("ab"),
-            Some("aabbccdd"),
-        ],
-        vec![
-            Some("%a%b%"),
-            Some("%a%b%c%"),
-            Some("a%b%c"),
-            Some("%aba%aba%"),
-            Some("%aba%aba%"),
-            Some("a%%b"),
-            Some("%a%b"),
-            Some("%a%b%"),
-            None,
-            Some("a%b%c"),
-            Some("a%b%c%d"),
-        ],
-        like,
-        vec![
-            Some(true),
-            Some(false),
-            Some(true),
-            Some(false),
-            Some(true),
-            Some(true),
-            Some(true),
-            None,
-            None,
-            Some(false),
-            Some(true),
-        ]
-    );
-
     /// Applying `op(left, right)`, left side is array, right side is scalar
     /// The macro tests four types of array implementations:
     /// - `StringArray`
@@ -716,6 +642,80 @@ mod tests {
             }
         };
     }
+
+    test_utf8_scalar!(
+        test_utf8_array_like_scalar_ordered_literals,
+        vec![
+            Some("abxxb"),
+            Some("ababa"),
+            Some("a\na b"),
+            None,
+            Some("b"),
+            Some("aéb")
+        ],
+        "%a%b",
+        like,
+        vec![
+            Some(true),
+            Some(false),
+            Some(true),
+            None,
+            Some(false),
+            Some(true)
+        ]
+    );
+
+    test_utf8_scalar!(
+        test_utf8_array_nlike_scalar_ordered_literals,
+        vec![Some("abaaba"), Some("ababa"), None, Some("aba\naba")],
+        "%aba%aba%",
+        nlike,
+        vec![Some(false), Some(true), None, Some(false)]
+    );
+
+    test_utf8!(
+        test_utf8_array_like_ordered_literals,
+        vec![
+            Some("xxabyy"),
+            Some("acb"),
+            Some("a--b--c"),
+            Some("ababa"),
+            Some("abaaba"),
+            Some("a\nb"),
+            Some("abxxb"),
+            None,
+            Some("ab"),
+            Some("ab"),
+            Some("aabbccdd"),
+        ],
+        vec![
+            Some("%a%b%"),
+            Some("%a%b%c%"),
+            Some("a%b%c"),
+            Some("%aba%aba%"),
+            Some("%aba%aba%"),
+            Some("a%%b"),
+            Some("%a%b"),
+            Some("%a%b%"),
+            None,
+            Some("a%b%c"),
+            Some("a%b%c%d"),
+        ],
+        like,
+        vec![
+            Some(true),
+            Some(false),
+            Some(true),
+            Some(false),
+            Some(true),
+            Some(true),
+            Some(true),
+            None,
+            None,
+            Some(false),
+            Some(true),
+        ]
+    );
 
     test_utf8!(
         test_utf8_array_like,
