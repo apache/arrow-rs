@@ -903,7 +903,7 @@ mod tests {
     }
 
     /// Returns a column of each Arrow type that [`ArrowWriter`] can write to a
-    /// primitive column, with edge values and a null
+    /// primitive column, with edge values and a null in the third row
     fn writer_type_columns() -> Vec<(&'static str, ArrayRef)> {
         let day = 86_400_000;
         let f16 = half::f16::from_f32;
@@ -965,7 +965,9 @@ mod tests {
             Some(i16::MIN),
             Some(5),
         ]);
-        let keys = Int32Array::from(with_null([0, 1, 0, 1]));
+        // The dictionaries have no repeated values, so the last rows have
+        // values that are not in the first rows
+        let keys = Int32Array::from(with_null([0, 1, 2, 3]));
         let ree_int8 = RunArray::<Int32Type>::try_new(
             &Int32Array::from(vec![2, 3, 5]),
             &Int8Array::from(vec![Some(-3), None, Some(i8::MAX)]),
@@ -1128,28 +1130,42 @@ mod tests {
                 "dictionary_int16",
                 Arc::new(DictionaryArray::new(
                     keys.clone(),
-                    Arc::new(Int16Array::from(vec![-1, i16::MAX])),
+                    Arc::new(Int16Array::from(vec![-1, i16::MAX, 7, i16::MIN])),
                 )),
             ),
             (
                 "dictionary_decimal",
                 Arc::new(DictionaryArray::new(
                     keys.clone(),
-                    decimal128(30).slice(0, 2),
+                    Arc::new(
+                        Decimal128Array::from(vec![-12345, 1, 12345, i128::MAX / 3])
+                            .with_precision_and_scale(30, 2)
+                            .unwrap(),
+                    ),
                 )),
             ),
             (
                 "dictionary_fixed_size_binary",
                 Arc::new(DictionaryArray::new(
                     keys.clone(),
-                    fsb(vec![Some(b"abcd"), Some(b"wxyz")]),
+                    fsb(vec![
+                        Some(b"abcd"),
+                        Some(b"wxyz"),
+                        Some(b"efgh"),
+                        Some(b"ijkl"),
+                    ]),
                 )),
             ),
             (
                 "dictionary_utf8",
                 Arc::new(DictionaryArray::new(
                     keys,
-                    Arc::new(StringArray::from(vec!["a", "longer than twelve bytes"])),
+                    Arc::new(StringArray::from(vec![
+                        "a",
+                        "longer than twelve bytes",
+                        "b",
+                        "c",
+                    ])),
                 )),
             ),
             ("ree_int8", Arc::new(ree_int8.unwrap())),
@@ -1159,24 +1175,37 @@ mod tests {
 
     /// Writes a column of each Arrow type that [`ArrowWriter`] can write to a
     /// primitive column, and checks that [`ArrowSbbf`] finds every written value
+    /// and does not find values that were not written
     #[test]
     fn every_writer_type() {
         let columns = writer_type_columns();
         let batch = RecordBatch::try_from_iter(columns.clone()).unwrap();
+        // The last two rows of each column have values that are not in the
+        // first three rows, except for booleans, which only have two values
+        let (head, tail) = (batch.slice(0, 3), batch.slice(3, 2));
         for coerce_types in [false, true] {
-            let filters = write_and_read_bloom_filters(&batch, coerce_types);
-            assert_eq!(filters.len(), columns.len());
-            for ((name, array), (sbbf, column)) in columns.iter().zip(&filters) {
+            let all = write_and_read_bloom_filters(&batch, coerce_types);
+            let first_rows = write_and_read_bloom_filters(&head, coerce_types);
+            for (i, (name, _)) in columns.iter().enumerate() {
                 let context = format!("{name} with coerce_types {coerce_types}");
-                let found = ArrowSbbf::try_new(sbbf, column, array.data_type().clone())
-                    .and_then(|sbbf| sbbf.check(array.as_ref()))
-                    .unwrap_or_else(|e| panic!("{context}: {e}"));
-                assert_eq!(found.len(), array.len(), "{context}");
+                let check = |(sbbf, column): &(Sbbf, ColumnDescPtr), array: &ArrayRef| {
+                    ArrowSbbf::try_new(sbbf, column, array.data_type().clone())
+                        .and_then(|sbbf| sbbf.check(array.as_ref()))
+                        .unwrap_or_else(|e| panic!("{context}: {e}"))
+                };
                 // Every value is found, and nulls are null
+                let array = batch.column(i);
+                let found = check(&all[i], array);
                 let nulls = array.logical_nulls();
-                for (i, found) in found.iter().enumerate() {
-                    let valid = nulls.as_ref().is_none_or(|nulls| nulls.is_valid(i));
-                    assert_eq!(found, valid.then_some(true), "{context}: index {i}");
+                let valid = |i| nulls.as_ref().is_none_or(|nulls| nulls.is_valid(i));
+                let expected: BooleanArray =
+                    (0..array.len()).map(|i| valid(i).then_some(true)).collect();
+                assert_eq!(found, expected, "{context}");
+
+                // Values that were not written are not found
+                if *name != "bool" {
+                    let found = check(&first_rows[i], tail.column(i));
+                    assert_eq!(found, BooleanArray::from(vec![false, false]), "{context}");
                 }
             }
         }
