@@ -1064,6 +1064,7 @@ impl SbbfPushDecoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fmt::Debug;
 
     #[test]
     fn test_bloom_filter_read_range_overflow() {
@@ -1092,14 +1093,35 @@ mod tests {
         (SbbfPushDecoder::try_new(&metadata).unwrap().unwrap(), bytes)
     }
 
-    fn decoder_needs_range(decoder: &mut SbbfPushDecoder) -> Range<u64> {
-        match decoder.try_decode().unwrap() {
-            DecodeResult::NeedsData(ranges) => {
-                assert_eq!(ranges.len(), 1);
-                ranges.into_iter().next().unwrap()
-            }
-            other => panic!("expected NeedsData, got {other:?}"),
+    /// Expect that the [`DecodeResult`] is a [`DecodeResult::Data`] and return the corresponding element
+    fn expect_data<T: Debug>(result: Result<DecodeResult<T>>) -> T {
+        match result.expect("Expected Ok(DecodeResult::Data(T))") {
+            DecodeResult::Data(data) => data,
+            result => panic!("Expected DecodeResult::Data, got {result:?}"),
         }
+    }
+
+    /// Expect that the [`DecodeResult`] is a [`DecodeResult::NeedsData`] and return the corresponding ranges
+    fn expect_needs_data<T: Debug>(result: Result<DecodeResult<T>>) -> Vec<Range<u64>> {
+        match result.expect("Expected Ok(DecodeResult::NeedsData(ranges))") {
+            DecodeResult::NeedsData(ranges) => ranges,
+            result => panic!("Expected DecodeResult::NeedsData, got {result:?}"),
+        }
+    }
+
+    /// Expect that the [`DecodeResult`] is [`DecodeResult::Finished`]
+    fn expect_finished<T: Debug>(result: Result<DecodeResult<T>>) {
+        match result.expect("Expected Ok(DecodeResult::Finished)") {
+            DecodeResult::Finished => {}
+            result => panic!("Expected DecodeResult::Finished, got {result:?}"),
+        }
+    }
+
+    /// Expect a request for exactly one range and return it
+    fn expect_single_range(decoder: &mut SbbfPushDecoder) -> Range<u64> {
+        let ranges = expect_needs_data(decoder.try_decode());
+        assert_eq!(ranges.len(), 1);
+        ranges.into_iter().next().unwrap()
     }
 
     #[test]
@@ -1120,10 +1142,7 @@ mod tests {
                 }
             }
             for _ in 0..2 {
-                assert!(matches!(
-                    decoder.try_decode().unwrap(),
-                    DecodeResult::Finished
-                ));
+                expect_finished(decoder.try_decode());
                 let range = 13..13 + bytes.len() as u64;
                 assert!(decoder.push_range(range.clone(), bytes.clone()).is_err());
                 assert!(
@@ -1139,29 +1158,27 @@ mod tests {
     fn test_push_decoder_waits_for_pending_data() {
         for with_length in [true, false] {
             let (mut decoder, bytes) = push_decoder_fixture(with_length);
-            let range = decoder_needs_range(&mut decoder);
-            assert_eq!(decoder_needs_range(&mut decoder), range);
+            let range = expect_single_range(&mut decoder);
+            assert_eq!(expect_single_range(&mut decoder), range);
             let buffer = bytes.slice(..(range.end - range.start) as usize);
             // A valid shorter range must not poison a decoder waiting for the whole range.
             decoder
                 .push_range(range.start..range.end - 1, buffer.slice(..buffer.len() - 1))
                 .unwrap();
-            assert_eq!(decoder_needs_range(&mut decoder), range);
+            assert_eq!(expect_single_range(&mut decoder), range);
             decoder.push_range(range, buffer).unwrap();
             if !with_length {
-                let range = decoder_needs_range(&mut decoder);
-                assert_eq!(decoder_needs_range(&mut decoder), range);
+                let range = expect_single_range(&mut decoder);
+                // ask it again, should get the same requesta again
+                assert_eq!(expect_single_range(&mut decoder), range);
                 let buffer = bytes.slice((range.start - 13) as usize..);
                 decoder
                     .push_range(range.start..range.end - 1, buffer.slice(..buffer.len() - 1))
                     .unwrap();
-                assert_eq!(decoder_needs_range(&mut decoder), range);
+                assert_eq!(expect_single_range(&mut decoder), range);
                 decoder.push_range(range, buffer).unwrap();
             }
-            assert!(matches!(
-                decoder.try_decode().unwrap(),
-                DecodeResult::Data(_)
-            ));
+            expect_data(decoder.try_decode());
         }
     }
 
@@ -1180,17 +1197,15 @@ mod tests {
                     vec![bytes.slice(..20), file_bytes],
                 )
                 .unwrap();
-            match decoder.try_decode().unwrap() {
-                DecodeResult::Data(filter) => assert!(filter.check("present")),
-                other => panic!("prefetched filter should decode without I/O, got {other:?}"),
-            }
+            // The prefetched filter should decode without requesting more data.
+            assert!(expect_data(decoder.try_decode()).check("present"));
         }
     }
 
     #[test]
     fn test_push_decoder_rejects_invalid_pushes_and_remains_usable() {
         let (mut decoder, bytes) = push_decoder_fixture(true);
-        let range = decoder_needs_range(&mut decoder);
+        let range = expect_single_range(&mut decoder);
         assert!(decoder.push_ranges(vec![range.clone()], vec![]).is_err());
         assert!(decoder.push_ranges(vec![], vec![bytes.clone()]).is_err());
         for length in [bytes.len() - 1, bytes.len() + 1] {
@@ -1200,12 +1215,9 @@ mod tests {
                     .is_err()
             );
         }
-        assert_eq!(decoder_needs_range(&mut decoder), range);
+        assert_eq!(expect_single_range(&mut decoder), range);
         decoder.push_ranges(vec![range], vec![bytes]).unwrap();
-        assert!(matches!(
-            decoder.try_decode().unwrap(),
-            DecodeResult::Data(_)
-        ));
+        expect_data(decoder.try_decode());
     }
 
     #[test]

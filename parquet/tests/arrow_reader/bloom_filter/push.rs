@@ -19,12 +19,23 @@ use super::{column, encode};
 use bytes::Bytes;
 use parquet::DecodeResult;
 use parquet::bloom_filter::{Sbbf, SbbfPushDecoder};
+use parquet::errors::Result;
+use std::fmt::Debug;
 use std::ops::Range;
 
-fn assert_needs_data(decoder: &mut SbbfPushDecoder, expected: Range<u64>) {
-    match decoder.try_decode().unwrap() {
-        DecodeResult::NeedsData(ranges) => assert_eq!(ranges, vec![expected]),
-        other => panic!("expected NeedsData, got {other:?}"),
+/// Expect that the [`DecodeResult`] is a [`DecodeResult::Data`] and return the corresponding element
+fn expect_data<T: Debug>(result: Result<DecodeResult<T>>) -> T {
+    match result.expect("Expected Ok(DecodeResult::Data(T))") {
+        DecodeResult::Data(data) => data,
+        result => panic!("Expected DecodeResult::Data, got {result:?}"),
+    }
+}
+
+/// Expect that the [`DecodeResult`] is a [`DecodeResult::NeedsData`] and return the corresponding ranges
+fn expect_needs_data<T: Debug>(result: Result<DecodeResult<T>>) -> Vec<Range<u64>> {
+    match result.expect("Expected Ok(DecodeResult::NeedsData(ranges))") {
+        DecodeResult::NeedsData(ranges) => ranges,
+        result => panic!("Expected DecodeResult::NeedsData, got {result:?}"),
     }
 }
 
@@ -46,26 +57,28 @@ fn push_decoder_requests_exact_ranges() {
             .unwrap();
         if length.is_some() {
             let range = offset..offset + bytes.len() as u64;
-            assert_needs_data(&mut decoder, range.clone());
+            assert_eq!(expect_needs_data(decoder.try_decode()), vec![range.clone()]);
             decoder.push_range(range, bytes.clone()).unwrap();
         } else {
             let prefix = offset..offset + 20;
-            assert_needs_data(&mut decoder, prefix.clone());
+            assert_eq!(
+                expect_needs_data(decoder.try_decode()),
+                vec![prefix.clone()]
+            );
             decoder.push_range(prefix, bytes.slice(..20)).unwrap();
             // The legacy prefix overlaps the bitset; resume at the decoded header end.
             let bitset = offset + header_length..offset + bytes.len() as u64;
-            assert_needs_data(&mut decoder, bitset.clone());
+            assert_eq!(
+                expect_needs_data(decoder.try_decode()),
+                vec![bitset.clone()]
+            );
             decoder
                 .push_range(bitset, bytes.slice(header_length as usize..))
                 .unwrap();
         }
-        match decoder.try_decode().unwrap() {
-            DecodeResult::Data(loaded) => {
-                assert_eq!(loaded.num_blocks(), 3);
-                assert!(loaded.check("present"));
-            }
-            other => panic!("expected Data, got {other:?}"),
-        }
+        let loaded = expect_data(decoder.try_decode());
+        assert_eq!(loaded.num_blocks(), 3);
+        assert!(loaded.check("present"));
     }
 }
 
@@ -87,7 +100,7 @@ fn push_decoder_rejects_invalid_headers_and_bitsets() {
         let mut decoder = SbbfPushDecoder::try_new(&column(Some(0), Some(bytes.len() as i32)))
             .unwrap()
             .unwrap();
-        assert_needs_data(&mut decoder, range.clone());
+        assert_eq!(expect_needs_data(decoder.try_decode()), vec![range.clone()]);
         decoder.push_range(range, bytes.clone()).unwrap();
         assert_eq!(
             decoder.try_decode().unwrap_err().to_string(),
@@ -100,7 +113,7 @@ fn push_decoder_rejects_invalid_headers_and_bitsets() {
         let mut decoder = SbbfPushDecoder::try_new(&column(Some(0), None))
             .unwrap()
             .unwrap();
-        assert_needs_data(&mut decoder, 0..20);
+        assert_eq!(expect_needs_data(decoder.try_decode()), vec![0..20]);
         decoder.push_range(0..20, bytes.slice(..20)).unwrap();
         assert!(decoder.try_decode().is_err());
     }
@@ -124,18 +137,15 @@ fn push_decoder_extended_headers_require_an_advertised_length() {
         .unwrap()
         .unwrap();
     let range = 0..bytes.len() as u64;
-    assert_needs_data(&mut known, range.clone());
+    assert_eq!(expect_needs_data(known.try_decode()), vec![range.clone()]);
     known.push_range(range, bytes.clone()).unwrap();
-    match known.try_decode().unwrap() {
-        DecodeResult::Data(filter) => assert_eq!(filter.num_blocks(), 1),
-        other => panic!("expected Data, got {other:?}"),
-    }
+    assert_eq!(expect_data(known.try_decode()).num_blocks(), 1);
 
     // The legacy 20-byte prefix cannot decode this header or request a bitset.
     let mut legacy = SbbfPushDecoder::try_new(&column(Some(0), None))
         .unwrap()
         .unwrap();
-    assert_needs_data(&mut legacy, 0..20);
+    assert_eq!(expect_needs_data(legacy.try_decode()), vec![0..20]);
     legacy.push_range(0..20, bytes.slice(..20)).unwrap();
     assert!(legacy.try_decode().is_err());
 }
