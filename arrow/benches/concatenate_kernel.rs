@@ -200,7 +200,7 @@ fn add_benchmark(c: &mut Criterion) {
 
     const DICTIONARY_SLICE_ROWS: usize = 682;
     const DICTIONARY_SLICE_COUNT: usize = 12;
-    for values_per_key in [4, 8, 12, 16, 20, 24, 32, 64] {
+    for values_per_key in [4, 8, 12, 16, 24] {
         let values_len = DICTIONARY_SLICE_ROWS * values_per_key;
         let inputs = (0..DICTIONARY_SLICE_COUNT)
             .map(|dictionary_idx| {
