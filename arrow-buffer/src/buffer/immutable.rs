@@ -440,6 +440,9 @@ impl Buffer {
     ///
     /// This can be used to reuse / mutate the underlying data.
     ///
+    /// With the `pool` feature enabled, a successful conversion releases the buffer's
+    /// memory reservation. The returned `Vec` is not tracked by the memory pool.
+    ///
     /// # Errors
     ///
     /// Returns `Err(self)` if
@@ -469,6 +472,8 @@ impl Buffer {
         Arc::try_unwrap(self.data)
             .map(|bytes| unsafe {
                 let ptr = bytes.ptr().as_ptr().cast();
+                #[cfg(feature = "pool")]
+                drop(bytes.reservation.take());
                 std::mem::forget(bytes);
                 // Safety
                 // Verified that bytes layout matches that of Vec
@@ -660,6 +665,8 @@ impl<T: ArrowNativeType> FromIterator<T> for Buffer {
 #[cfg(test)]
 mod tests {
     use crate::i256;
+    #[cfg(feature = "pool")]
+    use crate::pool::{MemoryPool, TrackingMemoryPool};
     use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::thread;
 
@@ -960,6 +967,29 @@ mod tests {
     fn slice_overflow() {
         let buffer = Buffer::from(MutableBuffer::from_len_zeroed(12));
         buffer.slice_with_length(2, usize::MAX);
+    }
+
+    #[test]
+    #[cfg(feature = "pool")]
+    fn test_into_vec_releases_reservation() {
+        let pool = TrackingMemoryPool::default();
+        let buffer = Buffer::from_vec(vec![1_u8, 2, 3]);
+        buffer.claim(&pool);
+        assert_eq!(pool.used(), 3);
+
+        let shared = buffer.clone();
+        let buffer = buffer.into_vec::<u8>().unwrap_err();
+        assert_eq!(pool.used(), 3);
+        drop(shared);
+
+        let ptr = buffer.as_ptr();
+        let values = buffer.into_vec::<u8>().unwrap();
+        assert_eq!(values.as_ptr(), ptr);
+        assert_eq!(values, [1, 2, 3]);
+        assert_eq!(pool.used(), 0);
+
+        drop(values);
+        assert_eq!(pool.used(), 0);
     }
 
     #[test]

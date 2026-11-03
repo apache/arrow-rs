@@ -1139,7 +1139,21 @@ impl ArrayData {
             )));
         }
 
-        Ok(&buffer.typed_data::<T>()[self.offset..required_elements])
+        // Only the bytes in use are typed: the buffer may be longer than
+        // `required_len` by a number of bytes that is not a multiple of
+        // `byte_width`, which `Buffer::typed_data` would assert on.
+        let bytes = &buffer.as_slice()[..required_len];
+        // SAFETY: ArrowNativeType is trivially transmutable and sealed (as in
+        // `Buffer::typed_data`); alignment is checked below
+        let (prefix, values, suffix) = unsafe { bytes.align_to::<T>() };
+        if !prefix.is_empty() || !suffix.is_empty() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Buffer {idx} of {} is not aligned to {} bytes",
+                self.data_type,
+                mem::align_of::<T>()
+            )));
+        }
+        Ok(&values[self.offset..])
     }
 
     /// Does a cheap sanity check that the `self.len` values in `buffer` are valid
@@ -1324,6 +1338,9 @@ impl ArrayData {
                 }
             }
             DataType::RunEndEncoded(run_ends_field, values_field) => {
+                // See the `RunArray` invariants for the rules enforced here and
+                // in `check_run_ends`:
+                // https://docs.rs/arrow/latest/arrow/array/struct.RunArray.html#offset-and-len
                 self.validate_num_child_data(2)?;
                 let run_ends_data = self.get_valid_child_data(0, run_ends_field.data_type())?;
                 let values_data = self.get_valid_child_data(1, values_field.data_type())?;
@@ -1839,7 +1856,11 @@ impl ArrayData {
         })
     }
 
-    /// Validates that each value in run_ends array is positive and strictly increasing.
+    /// Validates that each value in run_ends array is positive and strictly
+    /// increasing, and that the last value covers the parent's `offset + len`
+    /// (when the parent is non-empty), as required by the [`RunArray` invariants].
+    ///
+    /// [`RunArray` invariants]: https://docs.rs/arrow/latest/arrow/array/struct.RunArray.html#offset-and-len
     fn check_run_ends<T>(
         &self,
         parent_len: usize,
@@ -3811,6 +3832,21 @@ mod tests {
             err.to_string(),
             "Invalid argument error: Buffer 0 of Dictionary(Int32, Int32) isn't large enough. Expected 16 bytes got 8"
         );
+    }
+
+    /// `validate` only requires a minimum buffer size, so an offsets buffer
+    /// may carry trailing bytes that are not a whole number of offsets.
+    #[test]
+    fn test_validate_offsets_buffer_with_trailing_bytes() {
+        let mut offsets = Buffer::from_slice_ref([0_i32, 2, 5]).as_slice().to_vec();
+        offsets.extend_from_slice(&[0, 0]);
+        let data = ArrayData::builder(DataType::Utf8)
+            .len(2)
+            .add_buffer(Buffer::from_slice_ref(&offsets))
+            .add_buffer(Buffer::from_slice_ref(b"hello"))
+            .build()
+            .unwrap();
+        data.validate_full().unwrap();
     }
 
     #[test]

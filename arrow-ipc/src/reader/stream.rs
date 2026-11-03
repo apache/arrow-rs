@@ -157,7 +157,12 @@ impl StreamDecoder {
     /// }
     /// ```
     pub fn decode(&mut self, buffer: &mut Buffer) -> Result<Option<RecordBatch>, ArrowError> {
-        while !buffer.is_empty() {
+        while !buffer.is_empty()
+            || matches!(
+                    &self.state,
+                    DecoderState::Body { message } if message.as_ref().bodyLength() == 0
+            )
+        {
             match &mut self.state {
                 DecoderState::Header {
                     buf,
@@ -392,6 +397,25 @@ mod tests {
 
         let err = decoder.finish().unwrap_err().to_string();
         assert_eq!(err, "Ipc error: Unexpected End of Stream");
+    }
+
+    #[test]
+    fn test_schema_without_eos() {
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+
+        let mut buf = Vec::new();
+        let writer = StreamWriter::try_new(&mut buf, &schema).unwrap();
+        // The schema has a zero-length body. Drop without finish to omit EOS.
+        drop(writer);
+
+        let mut buffer = Buffer::from_vec(buf);
+        let mut decoder = StreamDecoder::new();
+        let output = decoder.decode(&mut buffer).unwrap();
+
+        assert!(output.is_none());
+        assert!(buffer.is_empty());
+        assert_eq!(decoder.schema(), Some(schema));
+        decoder.finish().unwrap();
     }
 
     #[test]
