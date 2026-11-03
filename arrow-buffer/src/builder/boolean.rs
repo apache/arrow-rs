@@ -336,8 +336,7 @@ impl BooleanBufferBuilder {
         }
         byte_idx += chunks.len();
 
-        // Pack the tail. The trailing byte was zero-initialized by `advance` and
-        // `pack_bools` leaves the padding bits above `tail.len()` zero.
+        // Pack the tail.
         if !tail.is_empty() {
             buf[byte_idx] = pack_bools(tail);
         }
