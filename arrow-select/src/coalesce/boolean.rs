@@ -85,6 +85,12 @@ impl InProgressArray for InProgressBooleanArray {
             )));
         }
 
+        if filter.uses_sparse_indices() {
+            let filtered = filter.filter(source.as_ref())?;
+            self.append_array(filtered.as_boolean());
+            return Ok(());
+        }
+
         let source = source.as_boolean();
         let output_values = self
             .values

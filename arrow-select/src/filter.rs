@@ -530,6 +530,12 @@ impl FilterPredicate {
         self.filter.len()
     }
 
+    /// Returns whether bit filtering should gather precomputed indices instead of compressing.
+    pub(crate) fn uses_sparse_indices(&self) -> bool {
+        self.count <= self.filter.len() / 64
+            && matches!(self.strategy, IterationStrategy::Indices(_))
+    }
+
     /// Return a [`FilterSelection`] for iterating over the rows selected by
     /// this [`FilterPredicate`].
     pub(crate) fn selection(&self) -> FilterSelection<'_> {
@@ -748,9 +754,7 @@ fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
     let len = predicate.filter.len();
     let count = predicate.count;
     let dense = count >= len - len / 64;
-    let sparse_indices =
-        count <= len / 64 && matches!(predicate.strategy, IterationStrategy::Indices(_));
-    if !dense && !sparse_indices {
+    if !dense && !predicate.uses_sparse_indices() {
         return collect_filter_bits_compress(buffer, predicate);
     }
     filter_bits_strategy(buffer, predicate)
