@@ -755,9 +755,7 @@ fn interleave_list_view_copy<O: OffsetSizeTrait>(
             O::from_usize(capacity).ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?,
         );
         sizes.push(O::from_usize(size).ok_or_else(|| ArrowError::OffsetOverflowError(size))?);
-        capacity = capacity
-            .checked_add(size)
-            .ok_or_else(|| ArrowError::MemoryError("interleaved child length overflow".into()))?;
+        capacity += size;
     }
 
     let child_data: Vec<_> = interleaved

@@ -1157,12 +1157,9 @@ fn filter_fixed_size_binary(
             let mut buffer = MutableBuffer::try_with_capacity(capacity)
                 .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
             for (start, end) in SlicesIterator::new(&predicate.filter) {
-                buffer
-                    .try_extend_from_slice(
-                        &values
-                            [calculate_offset_from_index(start)..calculate_offset_from_index(end)],
-                    )
-                    .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+                buffer.extend_from_slice(
+                    &values[calculate_offset_from_index(start)..calculate_offset_from_index(end)],
+                );
             }
             buffer
         }
@@ -1170,12 +1167,9 @@ fn filter_fixed_size_binary(
             let mut buffer = MutableBuffer::try_with_capacity(capacity)
                 .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
             for (start, end) in slices {
-                buffer
-                    .try_extend_from_slice(
-                        &values[calculate_offset_from_index(*start)
-                            ..calculate_offset_from_index(*end)],
-                    )
-                    .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+                buffer.extend_from_slice(
+                    &values[calculate_offset_from_index(*start)..calculate_offset_from_index(*end)],
+                );
             }
             buffer
         }

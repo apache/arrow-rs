@@ -507,9 +507,7 @@ pub(crate) fn try_decode_fixed_size_binary(
 
     for row in rows {
         let i = split_off(row, encoded_len);
-        values
-            .try_extend_from_slice(&i[1..])
-            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+        values.extend_from_slice(&i[1..]);
     }
 
     if options.descending {

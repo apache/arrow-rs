@@ -286,10 +286,7 @@ pub fn decode_binary<I: OffsetSizeTrait>(
     let len = rows.len();
     let nulls = decode_nulls_sentinel(rows, options)?;
 
-    let values_capacity = rows.iter().try_fold(0usize, |acc, row| {
-        acc.checked_add(decoded_len(row, options))
-            .ok_or_else(|| ArrowError::MemoryError("decoded values size overflow".into()))
-    })?;
+    let values_capacity = rows.iter().map(|row| decoded_len(row, options)).sum();
     I::from_usize(values_capacity).ok_or(ArrowError::OffsetOverflowError(values_capacity))?;
     let mut offsets = Vec::<I>::with_capacity(len + 1);
     offsets.push(I::zero());
@@ -297,20 +294,9 @@ pub fn decode_binary<I: OffsetSizeTrait>(
         .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
     for row in rows {
-        let mut extend_error = None;
-        let offset = decode_blocks(row, options, |b| {
-            if extend_error.is_none() {
-                extend_error = values.try_extend_from_slice(b).err();
-            }
-        });
-        if let Some(error) = extend_error {
-            return Err(ArrowError::MemoryError(error.to_string()));
-        }
+        let offset = decode_blocks(row, options, |b| values.extend_from_slice(b));
         *row = &row[offset..];
-        offsets.push(
-            I::from_usize(values.len())
-                .ok_or_else(|| ArrowError::OffsetOverflowError(values.len()))?,
-        )
+        offsets.push(I::usize_as(values.len()))
     }
 
     if options.descending {
@@ -343,9 +329,7 @@ fn decode_binary_view_inner<const VALIDATE_UTF8: bool>(
     for row in rows.iter() {
         let len = decoded_len(row, options);
         if len > inline_str_max_len {
-            values_capacity = values_capacity
-                .checked_add(len)
-                .ok_or_else(|| ArrowError::MemoryError("decoded values size overflow".into()))?;
+            values_capacity += len;
         } else if VALIDATE_UTF8 {
             inline_capacity += len;
         }
@@ -371,15 +355,7 @@ fn decode_binary_view_inner<const VALIDATE_UTF8: bool>(
     let mut views = vec![0_u128; len];
     for (i, row) in rows.iter_mut().enumerate() {
         let start_offset = values.len();
-        let mut extend_error = None;
-        let offset = decode_blocks(row, options, |b| {
-            if extend_error.is_none() {
-                extend_error = values.try_extend_from_slice(b).err();
-            }
-        });
-        if let Some(error) = extend_error {
-            return Err(ArrowError::MemoryError(error.to_string()));
-        }
+        let offset = decode_blocks(row, options, |b| values.extend_from_slice(b));
         // Measure string length via change in values buffer. This way we can
         // overwrite short strings in the values buffer as we inline those to
         // views.
