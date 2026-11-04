@@ -17,8 +17,8 @@
 
 //! [`VariantType`] Arrow extension type
 
-use arrow_schema::extension::ExtensionType;
-use arrow_schema::{ArrowError, DataType};
+use crate::extension::ExtensionType;
+use crate::{ArrowError, DataType};
 
 /// Arrow Variant [`ExtensionType`].
 ///
@@ -27,6 +27,7 @@ use arrow_schema::{ArrowError, DataType};
 /// of using this extension type.
 ///
 /// [`VariantArray`]: https://docs.rs/parquet-variant-compute/latest/parquet_variant_compute/struct.VariantArray.html
+#[derive(Debug, Clone, PartialEq)]
 pub struct VariantType;
 
 impl ExtensionType for VariantType {
@@ -71,13 +72,18 @@ impl ExtensionType for VariantType {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_schema::{Field, Fields};
+    use crate::extension::CanonicalExtensionType;
+    use crate::{Field, Fields};
 
     #[test]
     fn variant_type_requires_struct() {
         let field = Field::new("v", DataType::Struct(Fields::empty()), true)
             .with_extension_type(VariantType);
         assert!(field.has_valid_extension_type::<VariantType>());
+        assert_eq!(
+            field.try_canonical_extension_type().unwrap(),
+            CanonicalExtensionType::Variant(VariantType),
+        );
 
         let err = Field::new("v", DataType::Binary, true)
             .try_with_extension_type(VariantType)
