@@ -359,12 +359,12 @@ macro_rules! divisor_op {
             }
             let divisor = $divisor::new($d)?;
             let l = l.as_primitive::<$t>();
-            // Experiment: every array with nulls divides only its valid values, so that the
-            // benchmark bot can compare this path with `unary` at each share of nulls. The
-            // threshold follows from those numbers
-            if l.null_count() > 0 {
-                // The divisor matches on its variant for each value, which costs a predictable
-                // branch and keeps this to one loop per op
+            // `unary` costs the same whatever the nulls, and `try_unary` visits only the valid
+            // values. On x86, `unary` is slower than `try_unary` with a hardware divide above
+            // roughly 60% nulls, so more than half null takes `try_unary`
+            if l.null_count() > l.len() / 2 {
+                // Calling the enum's `wrapping_div_rem`, which matches on the variant, keeps this
+                // to one `try_unary` per op
                 let Ok(array) = match op {
                     Op::Div => l.try_unary::<_, $t, Infallible>(move |n| {
                         Ok(divisor.wrapping_div_rem(n).0)
