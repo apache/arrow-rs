@@ -97,7 +97,7 @@ fn main() -> Result<()> {
     let file = File::create(args.path).unwrap();
     let mut writer = ParquetWriter::try_new(file, schema.clone(), Some(properties))?;
 
-    let mut system = System::new_with_specifics(RefreshKind::everything());
+    let mut system = System::new_with_specifics(RefreshKind::everything())?;
     eprintln!(
         "{} Writing {} batches of {} rows. RSS = {}",
         now(),
