@@ -536,11 +536,10 @@ mod tests {
     use super::*;
 
     use arrow_array::cast::as_string_array;
-    use arrow_array::types::Int8Type;
-    use arrow_array::types::Int32Type;
+    use arrow_array::types::{Int8Type, Int32Type, UInt8Type};
     use arrow_array::{
         ArrayRef, DictionaryArray, Int8Array, Int32Array, ListArray, NullArray, RunArray,
-        StringArray, StringViewArray,
+        StringArray, StringViewArray, UInt8Array,
     };
     use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer, OffsetBuffer};
     use arrow_schema::Field;
@@ -844,5 +843,30 @@ mod tests {
         assert_eq!(merged.key_mappings[0].get(1), Some(0));
         assert_eq!(merged.key_mappings[0].get(999), Some(1));
         assert_eq!(merged.key_mappings[0].get(500), None);
+    }
+
+    #[test]
+    fn test_merge_sparse_dictionary_overflow() {
+        const UNIQUE_VALUES: usize = u8::MAX as usize + 2;
+
+        // One sparse value per dictionary exceeds the 256 values representable by UInt8.
+        let dictionaries = (0..UNIQUE_VALUES)
+            .map(|dictionary_idx| {
+                let values = StringArray::from_iter_values(
+                    (0..=MAX_DENSE_MAPPING_VALUES_PER_ROW)
+                        .map(|value_idx| format!("{dictionary_idx}-{value_idx}")),
+                );
+                let keys = UInt8Array::from_iter_values([0]);
+                DictionaryArray::<UInt8Type>::new(keys, Arc::new(values))
+            })
+            .collect::<Vec<_>>();
+        let dictionaries = dictionaries.iter().collect::<Vec<_>>();
+
+        let result = merge_dictionary_values(&dictionaries, None);
+
+        assert!(matches!(
+            result,
+            Err(ArrowError::DictionaryKeyOverflowError)
+        ));
     }
 }
