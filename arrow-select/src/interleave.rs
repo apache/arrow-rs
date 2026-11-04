@@ -33,6 +33,7 @@ use arrow_data::ByteView;
 use arrow_data::transform::MutableArrayData;
 use arrow_schema::{ArrowError, DataType, FieldRef, Fields};
 use std::collections::BTreeMap;
+use std::ops::Range;
 use std::sync::Arc;
 
 macro_rules! primitive_helper {
@@ -440,62 +441,135 @@ fn interleave_list_like_primitive_child<L: ListLikeArray, T: ArrowPrimitiveType>
         .map(|list| list.values().as_primitive::<T>())
         .collect();
 
-    let has_child_nulls = child_arrays.iter().any(|a| a.null_count() > 0);
+    let ranges = indices
+        .iter()
+        .map(|&(array, row)| (array, interleaved.arrays[array].element_range(row)));
+    interleave_primitive_ranges(&child_arrays, ranges, capacity, data_type)
+}
 
-    // Build values buffer by copying contiguous slices
+/// Copy list child ranges without expanding them into an index per child value.
+#[inline]
+fn interleave_primitive_ranges<T: ArrowPrimitiveType>(
+    arrays: &[&PrimitiveArray<T>],
+    ranges: impl Iterator<Item = (usize, Range<usize>)> + Clone,
+    capacity: usize,
+    data_type: &DataType,
+) -> ArrayRef {
+    let has_nulls = arrays.iter().any(|a| a.null_count() > 0);
     let mut values: Vec<T::Native> = Vec::with_capacity(capacity);
-    for &(array, row) in indices {
-        let range = interleaved.arrays[array].element_range(row);
+    for (array, range) in ranges.clone() {
         if !range.is_empty() {
-            values.extend_from_slice(&child_arrays[array].values()[range]);
+            values.extend_from_slice(&arrays[array].values()[range]);
         }
     }
-
-    // Build null buffer. Pre-allocate with 0x00 (all null), then:
-    // - Sources with nulls: set_bits copies the source validity bits into the destination range.
-    // - Sources without nulls: set the bit range to all 1s directly.
-    let nulls = if has_child_nulls {
-        let null_byte_len = bit_util::ceil(capacity, 8);
-        let mut output_null_buf = MutableBuffer::from_len_zeroed(null_byte_len);
-
-        let mut offset_write = 0;
-        let mut output_null_count = 0usize;
-        for &(array, row) in indices {
-            let range = interleaved.arrays[array].element_range(row);
-            let len = range.len();
-            if len > 0 {
-                match child_arrays[array].nulls() {
-                    Some(null_buffer) => {
-                        output_null_count += set_bits(
-                            output_null_buf.as_slice_mut(),
-                            null_buffer.validity(),
-                            offset_write,
-                            null_buffer.offset() + range.start,
-                            len,
-                        );
-                    }
-                    None => {
-                        // For a non-nullable source, set the bit range to all 1s directly.
-                        let buf = output_null_buf.as_slice_mut();
-                        (offset_write..offset_write + len).for_each(|i| bit_util::set_bit(buf, i));
-                    }
-                }
-            }
-            offset_write += len;
-        }
-
-        if output_null_count > 0 {
-            let bool_buf = BooleanBuffer::new(output_null_buf.into(), 0, capacity);
-            // SAFETY: null_count is accumulated from set_bits which correctly counts unset bits
-            Some(unsafe { NullBuffer::new_unchecked(bool_buf, output_null_count) })
-        } else {
-            None
-        }
+    let nulls = if has_nulls {
+        interleave_nulls_ranges(arrays, ranges, capacity)
     } else {
         None
     };
-
     Arc::new(PrimitiveArray::<T>::new(values.into(), nulls).with_data_type(data_type.clone()))
+}
+
+/// Copy only this array's validity: parent and child masks remain independent.
+#[inline]
+fn interleave_nulls_ranges<A: Array>(
+    arrays: &[&A],
+    ranges: impl Iterator<Item = (usize, Range<usize>)>,
+    capacity: usize,
+) -> Option<NullBuffer> {
+    let mut buffer = MutableBuffer::from_len_zeroed(bit_util::ceil(capacity, 8));
+    let mut offset = 0;
+    for (array, range) in ranges {
+        let len = range.len();
+        if len > 0 {
+            match arrays[array].nulls() {
+                Some(nulls) => {
+                    set_bits(
+                        buffer.as_slice_mut(),
+                        nulls.validity(),
+                        offset,
+                        nulls.offset() + range.start,
+                        len,
+                    );
+                }
+                None => {
+                    let buffer = buffer.as_slice_mut();
+                    (offset..offset + len).for_each(|i| bit_util::set_bit(buffer, i));
+                }
+            }
+        }
+        offset += len;
+    }
+    let nulls = NullBuffer::new(BooleanBuffer::new(buffer.into(), 0, capacity));
+    (nulls.null_count() > 0).then_some(nulls)
+}
+
+fn can_interleave_struct_ranges(fields: &Fields) -> bool {
+    macro_rules! supported {
+        ($t:ty) => {
+            true
+        };
+    }
+    fields.iter().all(|field| {
+        downcast_primitive! {
+            field.data_type() => (supported),
+            _ => false
+        }
+    })
+}
+
+/// Preserve the list ranges through a Struct of primitive fields. Replaying the
+/// ranges avoids both a per-child index vector and a separate range allocation.
+/// Even null lists and null structs retain their backing values and child masks.
+fn interleave_list_struct_child<O: OffsetSizeTrait>(
+    interleaved: &Interleave<'_, GenericListArray<O>>,
+    indices: &[(usize, usize)],
+    capacity: usize,
+    fields: &Fields,
+) -> Result<ArrayRef, ArrowError> {
+    let arrays: Vec<_> = interleaved
+        .arrays
+        .iter()
+        .map(|list| list.values().as_struct())
+        .collect();
+    let ranges = indices
+        .iter()
+        .map(|&(array, row)| (array, interleaved.arrays[array].element_range(row)));
+    let nulls = if arrays.iter().any(|a| a.null_count() > 0) {
+        interleave_nulls_ranges(&arrays, ranges.clone(), capacity)
+    } else {
+        None
+    };
+    let columns = fields
+        .iter()
+        .enumerate()
+        .map(|(i, field)| {
+            macro_rules! primitive_field {
+                ($t:ty) => {{
+                    let children: Vec<_> = arrays
+                        .iter()
+                        .map(|array| array.column(i).as_primitive::<$t>())
+                        .collect();
+                    interleave_primitive_ranges(
+                        &children,
+                        ranges.clone(),
+                        capacity,
+                        field.data_type(),
+                    )
+                }};
+            }
+            downcast_primitive! {
+                field.data_type() => (primitive_field),
+                _ => unreachable!("checked by can_interleave_struct_ranges")
+            }
+        })
+        .collect();
+    Ok(Arc::new(StructArray::try_new_with_length(
+        fields.clone(),
+        columns,
+        nulls,
+        capacity,
+    )?))
 }
 
 /// Interleave child values for non-primitive child types, shared by List and FixedSizeList.
@@ -555,6 +629,10 @@ fn interleave_list<O: OffsetSizeTrait>(
         // ranges, avoiding both the intermediate child_indices Vec allocation and
         // MutableArrayData's function pointer indirection.
         field.data_type() => (list_primitive_helper),
+        // Short lists offer no bulk-copy advantage over the scalar gather.
+        DataType::Struct(fields) if capacity > indices.len() && can_interleave_struct_ranges(fields) => {
+            interleave_list_struct_child(&interleaved, indices, capacity, fields)?
+        }
         _ => {
             interleave_list_like_child(&interleaved, indices, capacity)?
         }
@@ -1003,6 +1081,7 @@ mod tests {
     use arrow_array::types::{Decimal128Type, Int8Type, TimestampMicrosecondType};
     use arrow_buffer::ScalarBuffer;
     use arrow_schema::{Field, Schema, TimeUnit};
+    use std::collections::HashMap;
 
     #[test]
     fn test_primitive() {
@@ -1346,6 +1425,433 @@ mod tests {
     fn test_lists_timestamp_tz() {
         test_interleave_lists_timestamp_tz::<i32>();
         test_interleave_lists_timestamp_tz::<i64>();
+    }
+
+    /// The old list path expands child indices and recursively interleaves the
+    /// child array. Keep it as the oracle, including backing values under nulls.
+    fn check_list_ranges<O: OffsetSizeTrait>(
+        arrays: &[&dyn Array],
+        indices: &[(usize, usize)],
+    ) -> ArrayRef {
+        let actual = interleave(arrays, indices).unwrap();
+        let list = actual.as_list::<O>();
+        let input = Interleave::<'_, GenericListArray<O>>::new(arrays, indices);
+        let mut offsets = vec![0];
+        for &(a, row) in indices {
+            offsets.push(offsets.last().unwrap() + input.arrays[a].value_length(row).as_usize());
+        }
+        assert_eq!(list.data_type(), arrays[0].data_type());
+        assert_eq!(
+            list.value_offsets()
+                .iter()
+                .map(|o| o.as_usize())
+                .collect::<Vec<_>>(),
+            offsets
+        );
+        assert_eq!(
+            (0..list.len())
+                .map(|i| list.is_valid(i))
+                .collect::<Vec<_>>(),
+            indices
+                .iter()
+                .map(|&(a, row)| input.arrays[a].is_valid(row))
+                .collect::<Vec<_>>()
+        );
+        let expected =
+            interleave_list_like_child(&input, indices, *offsets.last().unwrap()).unwrap();
+        assert_eq!(list.values().as_ref(), expected.as_ref());
+        assert_range_validity(list.values().as_ref(), expected.as_ref());
+        if let DataType::Struct(_) = expected.data_type() {
+            for (a, b) in list
+                .values()
+                .as_struct()
+                .columns()
+                .iter()
+                .zip(expected.as_struct().columns())
+            {
+                assert_range_validity(a.as_ref(), b.as_ref());
+                // Logical equality alone ignores payloads under nulls, including
+                // NaN payloads and signed zero. Compare the physical buffers too.
+                assert_eq!(a.to_data().buffers(), b.to_data().buffers());
+            }
+        } else {
+            assert_eq!(
+                list.values().to_data().buffers(),
+                expected.to_data().buffers()
+            );
+        }
+        actual
+    }
+
+    fn assert_range_validity(actual: &dyn Array, expected: &dyn Array) {
+        assert_eq!(actual.len(), expected.len());
+        assert_eq!(actual.null_count(), expected.null_count());
+        for i in 0..actual.len() {
+            assert_eq!(actual.is_valid(i), expected.is_valid(i));
+        }
+    }
+
+    fn sliced_struct_list<O: OffsetSizeTrait>(mode: usize) -> GenericListArray<O> {
+        let validity = |period| match mode {
+            0 => None,
+            1 => Some(NullBuffer::from_iter((0..24).map(|i| i % period != 0))),
+            _ => Some(NullBuffer::new_null(24)),
+        };
+        let bits = [
+            0x7ff8000000000001,
+            0x7ff0000000000002,
+            0x8000000000000000,
+            0,
+        ];
+        let floats = Float64Array::new(
+            (0..24)
+                .map(|i| f64::from_bits(bits[i % bits.len()]))
+                .collect::<Vec<_>>()
+                .into(),
+            validity(3),
+        )
+        .slice(1, 20);
+        let times = TimestampMicrosecondArray::new(
+            (0..24).map(i64::from).collect::<Vec<_>>().into(),
+            validity(5),
+        )
+        .with_timezone("+08:00")
+        .slice(2, 20);
+        let decimals = Decimal128Array::new(
+            (0..24).map(i128::from).collect::<Vec<_>>().into(),
+            validity(7),
+        )
+        .with_precision_and_scale(20, 3)
+        .unwrap()
+        .slice(3, 20);
+        let columns: Vec<ArrayRef> = vec![Arc::new(floats), Arc::new(times), Arc::new(decimals)];
+        let fields: Fields = columns
+            .iter()
+            .enumerate()
+            .map(|(i, a)| {
+                Field::new(format!("f{i}"), a.data_type().clone(), true).with_metadata(
+                    HashMap::from([("field-key".to_owned(), "field-value".to_owned())]),
+                )
+            })
+            .collect();
+        let nulls = validity(2).map(|n| n.slice(1, 20));
+        let child = StructArray::new(fields, columns, nulls).slice(3, 12);
+        let field =
+            Field::new("entries", child.data_type().clone(), true).with_metadata(HashMap::from([
+                ("list-key".to_owned(), "list-value".to_owned()),
+            ]));
+        let offsets = OffsetBuffer::new(
+            [0, 1, 1, 4, 8, 12]
+                .map(|i| O::from_usize(i).unwrap())
+                .to_vec()
+                .into(),
+        );
+        let nulls = match mode {
+            0 => None,
+            1 => Some(NullBuffer::from(vec![true, true, false, true, false])),
+            _ => Some(NullBuffer::new_null(5)),
+        };
+        GenericListArray::new(Arc::new(field), offsets, Arc::new(child), nulls).slice(1, 4)
+    }
+
+    fn check_struct_list_slices<O: OffsetSizeTrait>() {
+        let a = sliced_struct_list::<O>(0);
+        let b = sliced_struct_list::<O>(1);
+        let c = sliced_struct_list::<O>(2);
+        let arrays: [&dyn Array; 3] = [&a, &b, &c];
+        for indices in [
+            vec![(1, 1), (0, 3), (2, 2), (1, 3), (0, 0), (1, 1)],
+            vec![(0, 0), (1, 0), (2, 0)],
+            vec![(0, 1)],
+            vec![],
+        ] {
+            check_list_ranges::<O>(&arrays, &indices);
+        }
+        // Exercise many range/bitmap boundaries deterministically, without RNG.
+        let indices: Vec<_> = (0..257).map(|i| (i % 3, (i * 7 / 3) % 4)).collect();
+        check_list_ranges::<O>(&arrays, &indices);
+    }
+
+    #[test]
+    fn test_list_struct_ranges_sliced() {
+        check_struct_list_slices::<i32>();
+        check_struct_list_slices::<i64>();
+    }
+
+    #[test]
+    fn test_list_struct_ranges_hidden_values() {
+        let bits = [
+            0x8000000000000000,
+            0x7ff8000000000001,
+            0x7ff0000000000002,
+            0,
+        ];
+        let floats = Float64Array::new(
+            bits.map(f64::from_bits).to_vec().into(),
+            Some(NullBuffer::from(vec![true, false, true, false])),
+        );
+        let child = StructArray::new(
+            vec![Field::new("value", DataType::Float64, true)].into(),
+            vec![Arc::new(floats)],
+            Some(NullBuffer::from(vec![false, true, false, true])),
+        );
+        let list = ListArray::new(
+            Arc::new(Field::new_list_field(child.data_type().clone(), true)),
+            OffsetBuffer::new(vec![0, 2, 2, 4].into()),
+            Arc::new(child),
+            Some(NullBuffer::from(vec![false, true, true])),
+        );
+        let result = check_list_ranges::<i32>(&[&list], &[(0, 2), (0, 0), (0, 1), (0, 0)]);
+        let list = result.as_list::<i32>();
+        assert_eq!(list.value_offsets(), &[0, 2, 4, 4, 6]);
+        assert_eq!(
+            list.nulls().unwrap().iter().collect::<Vec<_>>(),
+            [true, false, true, false]
+        );
+        let child = list.values().as_struct();
+        assert_eq!(
+            child.nulls().unwrap().iter().collect::<Vec<_>>(),
+            [false, true, false, true, false, true]
+        );
+        let values = child.column(0).as_primitive::<Float64Type>();
+        assert_eq!(
+            values.nulls().unwrap().iter().collect::<Vec<_>>(),
+            [true, false, true, false, true, false]
+        );
+        assert_eq!(
+            values
+                .values()
+                .iter()
+                .map(|v| v.to_bits())
+                .collect::<Vec<_>>(),
+            [bits[2], bits[3], bits[0], bits[1], bits[0], bits[1]]
+        );
+    }
+
+    fn check_struct_list_empty<O: OffsetSizeTrait>() {
+        let child =
+            StructArray::new_empty_fields(3, Some(NullBuffer::from(vec![true, false, true])));
+        let list = GenericListArray::<O>::new(
+            Arc::new(Field::new_list_field(child.data_type().clone(), true)),
+            OffsetBuffer::new(
+                [0, 0, 2, 3]
+                    .map(|i| O::from_usize(i).unwrap())
+                    .to_vec()
+                    .into(),
+            ),
+            Arc::new(child),
+            None,
+        );
+        let result = check_list_ranges::<O>(&[&list], &[(0, 2), (0, 1), (0, 1)]);
+        assert_eq!(result.as_list::<O>().values().len(), 5);
+        check_list_ranges::<O>(&[&list], &[(0, 0), (0, 0)]);
+        check_list_ranges::<O>(&[&list], &[]);
+    }
+
+    #[test]
+    fn test_list_struct_ranges_empty() {
+        check_struct_list_empty::<i32>();
+        check_struct_list_empty::<i64>();
+    }
+
+    #[test]
+    fn test_list_struct_ranges_offset_overflow() {
+        let child = StructArray::new_empty_fields(i32::MAX as usize, None);
+        let list = ListArray::new(
+            Arc::new(Field::new_list_field(child.data_type().clone(), false)),
+            OffsetBuffer::new(vec![0, i32::MAX].into()),
+            Arc::new(child),
+            None,
+        );
+        assert!(matches!(interleave(&[&list], &[(0, 0), (0, 0)]),
+            Err(ArrowError::OffsetOverflowError(n)) if n == 2 * i32::MAX as usize));
+    }
+
+    #[test]
+    fn test_list_struct_ranges_dispatch() {
+        use arrow_schema::IntervalUnit;
+        let mut types = vec![
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::UInt8,
+            DataType::UInt16,
+            DataType::UInt32,
+            DataType::UInt64,
+            DataType::Float16,
+            DataType::Float32,
+            DataType::Float64,
+            DataType::Decimal32(8, 2),
+            DataType::Decimal64(16, 3),
+            DataType::Decimal128(20, 4),
+            DataType::Decimal256(40, 5),
+            DataType::Date32,
+            DataType::Date64,
+            DataType::Time32(TimeUnit::Second),
+            DataType::Time32(TimeUnit::Millisecond),
+            DataType::Time64(TimeUnit::Microsecond),
+            DataType::Time64(TimeUnit::Nanosecond),
+            DataType::Interval(IntervalUnit::YearMonth),
+            DataType::Interval(IntervalUnit::DayTime),
+            DataType::Interval(IntervalUnit::MonthDayNano),
+        ];
+        for unit in [
+            TimeUnit::Second,
+            TimeUnit::Millisecond,
+            TimeUnit::Microsecond,
+            TimeUnit::Nanosecond,
+        ] {
+            types.push(DataType::Timestamp(unit, Some("UTC".into())));
+            types.push(DataType::Duration(unit));
+        }
+        for data_type in types {
+            let fields: Fields = vec![Field::new("value", data_type.clone(), true)].into();
+            assert!(can_interleave_struct_ranges(&fields), "{data_type}");
+            let child = StructArray::new(fields, vec![new_null_array(&data_type, 5)], None);
+            let list = ListArray::new(
+                Arc::new(Field::new_list_field(child.data_type().clone(), false)),
+                OffsetBuffer::new(vec![0, 2, 5].into()),
+                Arc::new(child),
+                None,
+            );
+            check_list_ranges::<i32>(&[&list], &[(0, 1), (0, 0), (0, 1)]);
+        }
+        // is_primitive() alone would accept these unsupported temporal types.
+        for data_type in [
+            DataType::Time32(TimeUnit::Nanosecond),
+            DataType::Time64(TimeUnit::Second),
+        ] {
+            assert!(!can_interleave_struct_ranges(
+                &vec![Field::new("value", data_type, true)].into()
+            ));
+        }
+    }
+
+    #[test]
+    fn test_list_struct_ranges_fallback() {
+        let nested: ArrayRef = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>([
+            Some(vec![Some(1)]),
+            None,
+            Some(vec![]),
+        ]));
+        let unsupported: Vec<ArrayRef> = vec![
+            Arc::new(BooleanArray::from(vec![Some(true), None, Some(false)])),
+            Arc::new(StringArray::from(vec![Some("a"), None, Some("b")])),
+            Arc::new(DictionaryArray::<Int32Type>::from_iter([
+                Some("a"),
+                None,
+                Some("b"),
+            ])),
+            nested,
+        ];
+        for other in unsupported {
+            let fields: Fields = vec![
+                Field::new("a", DataType::Int64, false),
+                Field::new("b", other.data_type().clone(), true),
+            ]
+            .into();
+            assert!(!can_interleave_struct_ranges(&fields));
+            let child = StructArray::new(
+                fields,
+                vec![Arc::new(Int64Array::from(vec![1, 2, 3])), other],
+                None,
+            );
+            let list = ListArray::new(
+                Arc::new(Field::new_list_field(child.data_type().clone(), false)),
+                OffsetBuffer::new(vec![0, 1, 3].into()),
+                Arc::new(child),
+                None,
+            );
+            check_list_ranges::<i32>(&[&list], &[(0, 1), (0, 0), (0, 1)]);
+        }
+    }
+
+    #[test]
+    fn test_list_primitive_ranges_sliced() {
+        let a = Int64Array::new(
+            (0..24).map(i64::from).collect::<Vec<_>>().into(),
+            Some(NullBuffer::from_iter((0..24).map(|i| i % 3 != 0))),
+        )
+        .slice(1, 20);
+        let b = Int64Array::from_iter_values(0..20);
+        let lists: Vec<_> = [a, b]
+            .into_iter()
+            .map(|a| {
+                ListArray::new(
+                    Arc::new(Field::new_list_field(DataType::Int64, true)),
+                    OffsetBuffer::new(vec![0, 1, 2, 9, 20].into()),
+                    Arc::new(a),
+                    Some(NullBuffer::from(vec![true, false, true, true])),
+                )
+                .slice(1, 3)
+            })
+            .collect();
+        check_list_ranges::<i32>(&[&lists[0], &lists[1]], &[(0, 2), (1, 1), (0, 1), (0, 0)]);
+        let result = check_list_ranges::<i32>(&[&lists[0], &lists[1]], &[(0, 0), (1, 0)]);
+        assert!(result.as_list::<i32>().values().nulls().is_none());
+    }
+
+    #[test]
+    fn test_list_struct_ranges_nonnullable_field() {
+        // A nonnullable field may contain nulls hidden by its Struct's mask.
+        let nulls = NullBuffer::from(vec![true, false, true, false]);
+        let values = Int64Array::new(vec![10, 11, 12, 13].into(), Some(nulls.clone()));
+        let child = StructArray::new(
+            vec![Field::new("value", DataType::Int64, false)].into(),
+            vec![Arc::new(values)],
+            Some(nulls),
+        )
+        .slice(1, 3);
+        let list = ListArray::new(
+            Arc::new(Field::new_list_field(child.data_type().clone(), true)),
+            OffsetBuffer::new(vec![0, 1, 3].into()),
+            Arc::new(child),
+            None,
+        );
+        let result = check_list_ranges::<i32>(&[&list], &[(0, 1), (0, 0), (0, 1)]);
+        let child = result.as_list::<i32>().values().as_struct();
+        assert!(!child.fields()[0].is_nullable());
+        assert_eq!(
+            child.column(0).as_primitive::<Int64Type>().values(),
+            &[12, 13, 11, 12, 13]
+        );
+    }
+
+    #[test]
+    fn test_fixed_size_list_primitive_ranges_sliced() {
+        let field = Arc::new(Field::new_list_field(DataType::Int64, true));
+        let values = Int64Array::new(
+            (0..14).map(i64::from).collect::<Vec<_>>().into(),
+            Some(NullBuffer::from_iter((0..14).map(|i| i % 3 != 0))),
+        )
+        .slice(1, 12);
+        let a = FixedSizeListArray::new(
+            field.clone(),
+            2,
+            Arc::new(values),
+            Some(NullBuffer::from(vec![true, false, true, false, true, true])),
+        )
+        .slice(1, 4);
+        let b = FixedSizeListArray::new(
+            field,
+            2,
+            Arc::new(Int64Array::from_iter_values(20..28)),
+            None,
+        );
+        let arrays: [&dyn Array; 2] = [&a, &b];
+        let indices = [(0, 3), (1, 0), (0, 1), (0, 3)];
+        let result = interleave(&arrays, &indices).unwrap();
+        let list = result.as_fixed_size_list();
+        let input = Interleave::<'_, FixedSizeListArray>::new(&arrays, &indices);
+        let expected = interleave_list_like_child(&input, &indices, indices.len() * 2).unwrap();
+        assert_eq!(list.nulls(), input.nulls.as_ref());
+        assert_eq!(list.values().as_ref(), expected.as_ref());
+        assert_range_validity(list.values().as_ref(), expected.as_ref());
+        assert_eq!(
+            list.values().to_data().buffers(),
+            expected.to_data().buffers()
+        );
     }
 
     fn test_interleave_list_views<O: OffsetSizeTrait>() {
