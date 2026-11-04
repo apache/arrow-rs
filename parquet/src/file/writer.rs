@@ -533,6 +533,7 @@ fn write_bloom_filters<W: Write + Send>(
     let Some(row_group_bloom_filters) = bloom_filters[row_group_idx].take() else {
         return Ok(());
     };
+    debug_assert_eq!(row_group_bloom_filters.len(), row_group.columns().len());
     for (column_chunk, bloom_filter) in row_group
         .columns_mut()
         .iter_mut()
