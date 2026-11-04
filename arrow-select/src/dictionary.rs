@@ -313,8 +313,9 @@ pub(crate) fn merge_dictionary_values<K: ArrowDictionaryKeyType>(
 /// to its index in the merged array. Mapping entries for unreferenced values are zero and
 /// must not be used.
 ///
-/// Values are gathered without hashing when they fit in `K`, preserving duplicates across
-/// sources. Otherwise, values are deduplicated on a best-effort basis to avoid key overflow.
+/// Referenced values are gathered without hashing when their count fits in `K`'s key space,
+/// preserving duplicates across sources. Otherwise, values are deduplicated on a best-effort
+/// basis to avoid key overflow.
 pub(crate) fn merge_dictionary_values_with_masks<K: ArrowDictionaryKeyType>(
     values_arrays: &[&dyn Array],
     values_masks: &[BooleanBuffer],
@@ -322,8 +323,8 @@ pub(crate) fn merge_dictionary_values_with_masks<K: ArrowDictionaryKeyType>(
     assert_eq!(values_arrays.len(), values_masks.len());
     let num_values = values_masks.iter().map(BooleanBuffer::count_set_bits).sum();
 
-    // Dictionary values need not be unique. Avoid hashing when the referenced
-    // values already fit in the key type, and only deduplicate to avoid overflow.
+    // Dictionary values need not be unique. Avoid hashing when the referenced value count
+    // fits in `K`'s key space, and only deduplicate to avoid overflow.
     if num_values == 0 || K::Native::from_usize(num_values - 1).is_some() {
         let zero = K::Native::from_usize(0).unwrap();
         let mut indices = Vec::with_capacity(num_values);
@@ -351,12 +352,9 @@ pub(crate) fn merge_dictionary_values_with_masks<K: ArrowDictionaryKeyType>(
         .zip(values_masks)
         .map(|(values, mask)| get_masked_values(*values, mask))
         .collect::<Vec<_>>();
-    // Map from value to new index
     let mut interner = Interner::new(num_values);
-    // Interleave indices for new values array
     let mut indices = Vec::with_capacity(num_values);
 
-    // Compute the mapping for each dictionary
     let key_mappings = values_arrays
         .iter()
         .enumerate()

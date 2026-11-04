@@ -112,7 +112,8 @@ impl<K: ArrowDictionaryKeyType> InProgressDictionaryArray<K> {
     }
 
     /// Compacts referenced values and remaps source-local keys while preserving chunk order.
-    /// Equal values are only deduplicated when the combined values would overflow `K`.
+    /// Equal referenced values are only deduplicated when their count would overflow
+    /// `K`'s key space.
     fn merge_sources(
         sources: &[ArrayRef],
         chunks: &[KeyChunk<K>],
