@@ -16,8 +16,11 @@
 // under the License.
 
 use arrow_array::builder::{Date32Builder, Decimal128Builder, Int32Builder};
-use arrow_array::{FixedSizeBinaryArray, RecordBatch, builder::StringBuilder};
-use arrow_buffer::Buffer;
+use arrow_array::types::Int32Type;
+use arrow_array::{
+    ArrayRef, DictionaryArray, FixedSizeBinaryArray, ListArray, RecordBatch, builder::StringBuilder,
+};
+use arrow_buffer::{Buffer, OffsetBuffer};
 use arrow_ipc::convert::try_fb_to_schema;
 use arrow_ipc::reader::{FileDecoder, FileReader, StreamReader, read_footer_length};
 use arrow_ipc::writer::{FileWriter, IpcWriteOptions, StreamWriter};
@@ -185,6 +188,47 @@ fn criterion_benchmark(c: &mut Criterion) {
             }
         })
     });
+
+    for (name, nested) in [("flat", false), ("nested", true)] {
+        let buffer = wide_dictionary_ipc_stream(1000, nested);
+        group.bench_function(format!("StreamReader/dictionaries_1000/{name}"), |b| {
+            b.iter(|| {
+                let mut reader = StreamReader::try_new(buffer.as_slice(), None).unwrap();
+                reader.next().unwrap().unwrap();
+                assert!(reader.next().is_none());
+            })
+        });
+    }
+}
+
+/// Return an IPC stream with one small record batch of `num_columns` dictionary columns, so the
+/// stream holds `num_columns` dictionary batches. With `nested`, each dictionary is a list item.
+fn wide_dictionary_ipc_stream(num_columns: usize, nested: bool) -> Vec<u8> {
+    let dictionary: ArrayRef = Arc::new(
+        ["a", "b", "a", "c"]
+            .into_iter()
+            .collect::<DictionaryArray<Int32Type>>(),
+    );
+    let column = if nested {
+        let item = Arc::new(Field::new("item", dictionary.data_type().clone(), true));
+        Arc::new(ListArray::new(
+            item,
+            OffsetBuffer::from_lengths([2, 2]),
+            dictionary,
+            None,
+        )) as ArrayRef
+    } else {
+        dictionary
+    };
+    let batch = RecordBatch::try_from_iter(
+        (0..num_columns).map(|i| (format!("c{i}"), Arc::clone(&column))),
+    )
+    .unwrap();
+    let mut buffer = Vec::new();
+    let mut writer = StreamWriter::try_new(&mut buffer, batch.schema().as_ref()).unwrap();
+    writer.write(&batch).unwrap();
+    writer.finish().unwrap();
+    buffer
 }
 
 /// Return an IPC stream with 10 record batches
