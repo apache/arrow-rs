@@ -303,22 +303,30 @@ fn interleave_dictionaries<K: ArrowDictionaryKeyType>(
         };
     }
 
-    let masks: Vec<_> = dictionaries
+    interleave_merged_dictionaries(&dictionaries, indices)
+}
+
+// Keep merge-path code generation independent of shared-mapping detection.
+#[inline(never)]
+fn interleave_merged_dictionaries<K: ArrowDictionaryKeyType>(
+    dictionaries: &[&DictionaryArray<K>],
+    indices: &[(usize, usize)],
+) -> Result<ArrayRef, ArrowError> {
+    let mut masks: Vec<_> = dictionaries
         .iter()
-        .enumerate()
-        .map(|(a_idx, dictionary)| {
-            let mut key_mask = BooleanBufferBuilder::new_from_buffer(
+        .map(|dictionary| {
+            BooleanBufferBuilder::new_from_buffer(
                 MutableBuffer::new_null(dictionary.len()),
                 dictionary.len(),
-            );
-            for (_, key_idx) in indices.iter().filter(|(a, _)| *a == a_idx) {
-                key_mask.set_bit(*key_idx, true);
-            }
-            key_mask.finish()
+            )
         })
         .collect();
+    for &(array_idx, key_idx) in indices {
+        masks[array_idx].set_bit(key_idx, true);
+    }
+    let masks: Vec<_> = masks.into_iter().map(|mut mask| mask.finish()).collect();
 
-    let merged = merge_dictionary_values(&dictionaries, Some(&masks))?;
+    let merged = merge_dictionary_values(dictionaries, Some(&masks))?;
 
     // Recompute keys
     let mut keys = PrimitiveBuilder::<K>::with_capacity(indices.len());
