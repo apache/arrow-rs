@@ -350,13 +350,6 @@ fn interleave_merged_dictionaries<K: ArrowDictionaryKeyType>(
 /// values cannot affect the output. Returns `None` if two referenced sources use
 /// different values arrays. If every selected key is null, returns the values array
 /// for the first selected input.
-///
-/// [`interleave`] validates that `dictionaries` and `indices` are non-empty before
-/// this helper is reached.
-///
-/// The first pass rejects the common case where the first two referenced sources
-/// differ before allocating source tracking. The second checks each referenced source
-/// at most once.
 fn referenced_shared_dictionary_values<'a, K: ArrowDictionaryKeyType>(
     dictionaries: &[&'a DictionaryArray<K>],
     indices: &[(usize, usize)],
