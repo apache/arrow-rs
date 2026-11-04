@@ -18,14 +18,7 @@
 # under the License.
 #
 
-# This script removes all RCs and all but the most recent versions of
-# arrow-rs from svn.
-#
-# The older versions are in SVN history as well as available on the
-# archive page https://archive.apache.org/dist/
-#
-# See
-# https://infra.apache.org/release-download-pages.html
+# This script removes all RCs of arrow-rs from svn.
 
 set -e
 set -u
@@ -44,20 +37,4 @@ for old_rc in $old_rcs; do
     delete \
     -m "Remove old Apache Arrow Rust RC: ${old_rc}" \
     ${dev_base_url}/${old_rc}
-done
-
-echo "Remove all but the most recent version"
-release_base_url="https://dist.apache.org/repos/dist/release/arrow"
-old_releases=$(
-  svn ls ${release_base_url} | \
-  grep -E '^arrow-rs-[0-9\.]+' | \
-  sort --version-sort --reverse | \
-  tail -n +2
-)
-for old_release_version in $old_releases; do
-  echo "Remove old release: ${old_release_version}"
-  svn \
-    delete \
-    -m "Remove Apache Arrow Rust release: ${old_release_version}" \
-    ${release_base_url}/${old_release_version}
 done
