@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use arrow_array::{ArrayRef, RecordBatch};
+use arrow_array::{ArrayRef, RecordBatch, RecordBatchReader};
 use arrow_buffer::{Buffer, MutableBuffer};
 use arrow_data::UnsafeFlag;
 use arrow_schema::{ArrowError, SchemaRef};
@@ -262,6 +262,7 @@ impl StreamDecoder {
                                 &version,
                             )?
                             .with_require_alignment(self.require_alignment)
+                            .with_skip_validation(self.skip_validation.clone())
                             .read_record_batch()?;
                             self.state = DecoderState::default();
                             return Ok(Some(batch));
@@ -342,15 +343,17 @@ impl StreamDecoder {
 /// on both the input alignment and how the stream was encoded.
 ///
 /// Decoding still allocates schema and array metadata and validates array data;
-/// sharing buffers does not skip validation. Keeping a decoded batch with shared
+/// sharing buffers does not skip validation by default. Use
+/// [`try_new_with_decoder`](Self::try_new_with_decoder) to configure validation
+/// and alignment before decoding. Keeping a decoded batch with shared
 /// buffers alive also retains the input allocation, even after this reader is dropped.
 ///
 /// # Errors
 ///
 /// Errors encountered while decoding the schema, leading dictionaries, or the
 /// first record batch may be returned by the constructor. Later decoding errors
-/// are returned as iterator items. Stop reading after an error; the reader does
-/// not guarantee that it can resume decoding or that the next call returns `None`.
+/// are returned as iterator items. After an error, the reader is finished and
+/// subsequent calls to `next` return `None`.
 ///
 /// # Example
 ///
@@ -408,7 +411,35 @@ impl BufferStreamReader {
     /// schema message, or if decoding the leading dictionaries or first record
     /// batch fails during construction.
     pub fn try_new(buffer: Buffer) -> Result<Self, ArrowError> {
-        let mut decoder = StreamDecoder::new();
+        Self::try_new_with_decoder(buffer, StreamDecoder::new())
+    }
+
+    /// Create a reader using the provided [`StreamDecoder`].
+    ///
+    /// This allows configuring [`StreamDecoder::with_require_alignment`] and
+    /// [`StreamDecoder::with_skip_validation`] before decoding, including the
+    /// dictionaries and first record batch that may be decoded during construction.
+    ///
+    /// ```
+    /// # use arrow_buffer::Buffer;
+    /// # use arrow_ipc::reader::{BufferStreamReader, StreamDecoder};
+    /// # use arrow_schema::ArrowError;
+    /// # unsafe fn read_trusted_stream(buffer: Buffer) -> Result<BufferStreamReader, ArrowError> {
+    /// // SAFETY: the caller knows this stream contains valid Arrow IPC data,
+    /// // for example because it was written by this application.
+    /// let decoder = unsafe { StreamDecoder::new().with_skip_validation(true) };
+    /// BufferStreamReader::try_new_with_decoder(buffer, decoder)
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`try_new`](Self::try_new), subject to the
+    /// decoder's alignment and validation settings.
+    pub fn try_new_with_decoder(
+        buffer: Buffer,
+        mut decoder: StreamDecoder,
+    ) -> Result<Self, ArrowError> {
         let mut working = buffer;
         let mut pending: Option<RecordBatch> = None;
         // Drive the decoder until the schema is parsed. `StreamDecoder`
@@ -462,9 +493,8 @@ impl BufferStreamReader {
     /// Returns `true` once the reader has consumed the EOS marker or observed
     /// that the input has been exhausted.
     ///
-    /// This can also be `true` after reporting a truncated message, so it does
-    /// not imply that decoding succeeded. A decoding error does not always set
-    /// this flag; callers should stop reading after any error.
+    /// This is also `true` after reporting a decoding error, so it does not
+    /// imply that decoding succeeded.
     pub fn is_finished(&self) -> bool {
         self.finished || self.decoder.is_finished()
     }
@@ -490,11 +520,22 @@ impl Iterator for BufferStreamReader {
             match self.decoder.decode(&mut self.buffer) {
                 Ok(Some(batch)) => return Some(Ok(batch)),
                 Ok(None) => {}
-                Err(e) => return Some(Err(e)),
+                Err(e) => {
+                    self.finished = true;
+                    return Some(Err(e));
+                }
             }
         }
     }
 }
+
+impl RecordBatchReader for BufferStreamReader {
+    fn schema(&self) -> SchemaRef {
+        self.schema.clone()
+    }
+}
+
+impl std::iter::FusedIterator for BufferStreamReader {}
 
 /// Reserves a message's declared length before copying its first bytes into an empty `buf`,
 /// bounded as in `read_body_bounded`. Growing with each input buffer instead doubles the
@@ -786,7 +827,7 @@ mod tests {
         // input buffer's underlying storage.
         let (batch, schema) = make_int_batch(1024);
         let bytes = serialize_stream(std::slice::from_ref(&batch), schema.as_ref());
-        let owned = Buffer::from_vec(bytes);
+        let owned = Buffer::from(bytes.as_slice());
         let owned_ptr = owned.as_ptr();
         let owned_len = owned.len();
         let mut r = BufferStreamReader::try_new(owned).unwrap();
@@ -815,9 +856,111 @@ mod tests {
     fn buffer_stream_reader_schema_only() {
         let (_, schema) = make_int_batch(0);
         let bytes = serialize_stream(&[], schema.as_ref());
-        let mut r = BufferStreamReader::try_new(Buffer::from_vec(bytes)).unwrap();
-        assert_eq!(r.schema().as_ref(), schema.as_ref());
-        assert!(r.next().is_none());
+        for len in [bytes.len(), bytes.len() - 8] {
+            let mut r = BufferStreamReader::try_new(Buffer::from(&bytes[..len])).unwrap();
+            assert_eq!(r.schema().as_ref(), schema.as_ref());
+            assert!(r.next().is_none());
+            assert!(r.is_finished());
+            assert!(r.next().is_none());
+        }
+    }
+
+    #[test]
+    fn buffer_stream_reader_record_batch_reader() {
+        let (batch, schema) = make_int_batch(4);
+        let bytes = serialize_stream(std::slice::from_ref(&batch), schema.as_ref());
+        let mut reader: Box<dyn RecordBatchReader> =
+            Box::new(BufferStreamReader::try_new(Buffer::from_vec(bytes)).unwrap());
+        assert_eq!(reader.schema(), schema);
+        assert_eq!(reader.next().unwrap().unwrap(), batch);
+        assert!(reader.next().is_none());
+    }
+
+    #[test]
+    fn buffer_stream_reader_misaligned_input() {
+        let (batch, schema) = make_int_batch(4);
+        let bytes = serialize_stream(&[batch.clone(), batch.clone()], schema.as_ref());
+        let mut storage = MutableBuffer::new(bytes.len() + 1);
+        storage.push(0_u8);
+        storage.extend_from_slice(&bytes);
+        let input = Buffer::from(storage).slice(1);
+        assert_ne!(input.as_ptr().align_offset(4), 0);
+
+        for mut reader in [
+            BufferStreamReader::try_new(input.clone()).unwrap(),
+            BufferStreamReader::try_new_from_bytes(bytes::Bytes::from(input.clone())).unwrap(),
+        ] {
+            for _ in 0..2 {
+                let decoded = reader.next().unwrap().unwrap();
+                assert_eq!(decoded, batch);
+                let data = decoded.column(0).to_data();
+                let values = &data.buffers()[0];
+                assert_eq!(values.as_ptr().align_offset(4), 0);
+                let ptr = values.as_ptr() as usize;
+                let start = input.as_ptr() as usize;
+                assert!(ptr < start || ptr >= start + input.len());
+            }
+            assert!(reader.next().is_none());
+        }
+
+        let decoder = StreamDecoder::new().with_require_alignment(true);
+        // The setting must apply to the first batch decoded by the constructor.
+        let err = BufferStreamReader::try_new_with_decoder(input, decoder).unwrap_err();
+        assert!(err.to_string().contains("align"), "{err}");
+
+        let decoder = StreamDecoder::new().with_require_alignment(true);
+        let reader =
+            BufferStreamReader::try_new_with_decoder(Buffer::from(bytes.as_slice()), decoder)
+                .unwrap();
+        assert_eq!(
+            reader.collect::<Result<Vec<_>, _>>().unwrap(),
+            vec![batch.clone(), batch]
+        );
+    }
+
+    #[test]
+    fn buffer_stream_reader_skip_validation() {
+        let strings = Arc::new(StringArray::from(vec![Some("hello"), None, Some("world")]));
+        let dict = Arc::new(DictionaryArray::<Int32Type>::from_iter([
+            Some("a"),
+            None,
+            Some("b"),
+        ]));
+        let batch = RecordBatch::try_from_iter(vec![
+            ("strings", strings as ArrayRef),
+            ("dictionary", dict as ArrayRef),
+        ])
+        .unwrap();
+        let bytes = serialize_stream(&[batch.clone(), batch.clone()], batch.schema().as_ref());
+        // SAFETY: the stream was just serialized from valid arrays.
+        let decoder = unsafe { StreamDecoder::new().with_skip_validation(true) };
+        let reader =
+            BufferStreamReader::try_new_with_decoder(Buffer::from_vec(bytes), decoder).unwrap();
+        assert_eq!(
+            reader.collect::<Result<Vec<_>, _>>().unwrap(),
+            vec![batch.clone(), batch]
+        );
+    }
+
+    #[test]
+    fn buffer_stream_reader_decode_error_finishes_reader() {
+        let (batch, schema) = make_int_batch(4);
+        let mut bytes = serialize_stream(std::slice::from_ref(&batch), schema.as_ref());
+        bytes.truncate(bytes.len() - 8);
+        // A second schema is invalid within a stream. Leave a complete batch
+        // after it so the reader still has unread input when decoding fails.
+        bytes.extend(serialize_stream(
+            std::slice::from_ref(&batch),
+            schema.as_ref(),
+        ));
+        let mut reader = BufferStreamReader::try_new(Buffer::from_vec(bytes)).unwrap();
+        assert_eq!(reader.next().unwrap().unwrap(), batch);
+        assert!(!reader.is_finished());
+        let err = reader.next().unwrap().unwrap_err();
+        assert!(err.to_string().contains("Not expecting a schema"), "{err}");
+        assert!(reader.is_finished());
+        assert!(reader.next().is_none());
+        assert!(reader.next().is_none());
     }
 
     #[test]
@@ -837,12 +980,14 @@ mod tests {
 
     #[test]
     fn buffer_stream_reader_no_eos_marker() {
-        let (batch, schema) = make_int_batch(4);
-        let mut bytes = serialize_stream(std::slice::from_ref(&batch), schema.as_ref());
-        bytes.truncate(bytes.len() - 8); // strip the EOS marker
-        let r = BufferStreamReader::try_new(Buffer::from_vec(bytes)).unwrap();
-        let collected: Vec<_> = r.map(Result::unwrap).collect();
-        assert_eq!(collected, vec![batch]);
+        for rows in [0, 4] {
+            let (batch, schema) = make_int_batch(rows);
+            let mut bytes = serialize_stream(std::slice::from_ref(&batch), schema.as_ref());
+            bytes.truncate(bytes.len() - 8); // strip the EOS marker
+            let r = BufferStreamReader::try_new(Buffer::from_vec(bytes)).unwrap();
+            let collected: Vec<_> = r.map(Result::unwrap).collect();
+            assert_eq!(collected, vec![batch]);
+        }
     }
 
     #[test]
