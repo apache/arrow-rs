@@ -63,7 +63,7 @@ pub fn make_byte_view_array_reader(
             if let Some(threshold) = padding_threshold {
                 reader.set_padding_threshold(threshold);
             }
-            if data_type == ArrowType::Utf8View {
+            if data_type.is_string() {
                 reader.set_validate_utf8();
             }
             Ok(Box::new(ByteViewArrayReader::new(pages, data_type, reader)))

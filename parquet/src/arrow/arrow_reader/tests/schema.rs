@@ -635,80 +635,77 @@ fn test_read_binary_as_utf8() {
     );
 }
 
-#[test]
-fn test_read_binary_as_string_types_validates_utf8() {
-    // BINARY columns without the UTF8 annotation, read as every string type.
-    // Valid UTF-8 reads as strings, and invalid UTF-8 returns an error rather
-    // than an array holding invalid UTF-8.
-    let string_types = [
+/// Every string type an unannotated BINARY column can be read as
+fn string_types() -> Vec<ArrowDataType> {
+    let base = [
         ArrowDataType::Utf8,
         ArrowDataType::LargeUtf8,
         ArrowDataType::Utf8View,
-        ArrowDataType::Dictionary(
-            Box::new(ArrowDataType::Int32),
-            Box::new(ArrowDataType::Utf8),
-        ),
-        ArrowDataType::Dictionary(
-            Box::new(ArrowDataType::Int32),
-            Box::new(ArrowDataType::LargeUtf8),
-        ),
-        ArrowDataType::Dictionary(
-            Box::new(ArrowDataType::Int32),
-            Box::new(ArrowDataType::Utf8View),
-        ),
     ];
+    let dictionaries = base.iter().map(|value| {
+        ArrowDataType::Dictionary(Box::new(ArrowDataType::Int32), Box::new(value.clone()))
+    });
+    base.iter().cloned().chain(dictionaries).collect()
+}
 
-    for (values, valid) in [
-        (vec![b"one".as_ref(), b"two".as_ref()], true),
-        (vec![b"one".as_ref(), b"\xDE\x00\xFF".as_ref()], false),
-    ] {
-        let batch = RecordBatch::try_from_iter([(
-            "binary",
-            Arc::new(BinaryArray::from(values)) as ArrayRef,
-        )])
-        .unwrap();
+/// Write `values` as a BINARY column without the UTF8 annotation
+fn write_binary(values: Vec<&[u8]>, dictionary_enabled: bool) -> Bytes {
+    let batch =
+        RecordBatch::try_from_iter([("binary", Arc::new(BinaryArray::from(values)) as ArrayRef)])
+            .unwrap();
+    let props = WriterProperties::builder()
+        .set_dictionary_enabled(dictionary_enabled)
+        .build();
+    let mut buf = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+    Bytes::from(buf)
+}
 
-        for dictionary_enabled in [true, false] {
-            let props = WriterProperties::builder()
-                .set_dictionary_enabled(dictionary_enabled)
-                .build();
-            let mut buf = Vec::new();
-            let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
-            writer.write(&batch).unwrap();
-            writer.close().unwrap();
-            let buf = Bytes::from(buf);
+/// Read the first batch of `file` with its column as `data_type`
+fn read_binary_as(
+    file: Bytes,
+    data_type: &ArrowDataType,
+) -> Result<RecordBatch, arrow_schema::ArrowError> {
+    let schema = Schema::new(vec![Field::new("binary", data_type.clone(), false)]);
+    let options = ArrowReaderOptions::new().with_schema(Arc::new(schema));
+    ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
+        .unwrap()
+        .build()
+        .unwrap()
+        .next()
+        .unwrap()
+}
 
-            for data_type in &string_types {
-                let context = format!("{data_type}, dictionary_enabled = {dictionary_enabled}");
-                let schema = Arc::new(Schema::new(vec![Field::new(
-                    "binary",
-                    data_type.clone(),
-                    false,
-                )]));
-                let options = ArrowReaderOptions::new().with_schema(schema);
-                let mut reader =
-                    ParquetRecordBatchReaderBuilder::try_new_with_options(buf.clone(), options)
-                        .unwrap()
-                        .build()
-                        .unwrap();
-                let result = reader.next().unwrap();
-                if valid {
-                    let column = Arc::clone(result.unwrap().column(0));
-                    assert_eq!(column.data_type(), data_type, "{context}");
-                    let strings = arrow_cast::cast(&column, &ArrowDataType::Utf8).unwrap();
-                    assert_eq!(
-                        strings.as_string::<i32>().iter().collect::<Vec<_>>(),
-                        vec![Some("one"), Some("two")],
-                        "{context}"
-                    );
-                } else {
-                    let err = result.unwrap_err();
-                    assert!(
-                        err.to_string().contains("non UTF-8 data"),
-                        "{context}: {err}"
-                    );
-                }
-            }
+#[test]
+fn test_read_binary_as_string_types() {
+    for dictionary_enabled in [true, false] {
+        let file = write_binary(vec![b"one", b"two"], dictionary_enabled);
+        for data_type in string_types() {
+            let batch = read_binary_as(file.clone(), &data_type).unwrap();
+            let column = batch.column(0);
+            assert_eq!(column.data_type(), &data_type);
+            let strings = arrow_cast::cast(column, &ArrowDataType::Utf8).unwrap();
+            assert_eq!(
+                strings.as_string::<i32>().iter().collect::<Vec<_>>(),
+                vec![Some("one"), Some("two")],
+                "{data_type}, dictionary_enabled = {dictionary_enabled}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_read_non_utf8_binary_as_string_types() {
+    for dictionary_enabled in [true, false] {
+        let file = write_binary(vec![b"one", b"\xDE\x00\xFF"], dictionary_enabled);
+        for data_type in string_types() {
+            let err = read_binary_as(file.clone(), &data_type).unwrap_err();
+            assert!(
+                err.to_string().contains("non UTF-8 data"),
+                "{data_type}, dictionary_enabled = {dictionary_enabled}: {err}"
+            );
         }
     }
 }

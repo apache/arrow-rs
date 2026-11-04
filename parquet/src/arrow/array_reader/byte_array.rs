@@ -62,7 +62,7 @@ pub fn make_byte_array_reader(
             if let Some(threshold) = padding_threshold {
                 reader.set_padding_threshold(threshold);
             }
-            if data_type == ArrowType::Utf8 {
+            if data_type.is_string() {
                 reader.set_validate_utf8();
             }
             Ok(Box::new(ByteArrayReader::<i32>::new(
@@ -74,7 +74,7 @@ pub fn make_byte_array_reader(
             if let Some(threshold) = padding_threshold {
                 reader.set_padding_threshold(threshold);
             }
-            if data_type == ArrowType::LargeUtf8 {
+            if data_type.is_string() {
                 reader.set_validate_utf8();
             }
             Ok(Box::new(ByteArrayReader::<i64>::new(
