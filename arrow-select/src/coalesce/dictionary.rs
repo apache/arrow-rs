@@ -19,11 +19,10 @@ use super::{InProgressArray, generic::GenericInProgressArray};
 use crate::dictionary::merge_dictionary_values_with_masks;
 use ahash::RandomState;
 use arrow_array::cast::AsArray;
-use arrow_array::types::{
-    ArrowDictionaryKeyType, Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type, UInt16Type,
-    UInt32Type, UInt64Type,
+use arrow_array::types::ArrowDictionaryKeyType;
+use arrow_array::{
+    Array, ArrayRef, DictionaryArray, PrimitiveArray, downcast_integer, new_empty_array,
 };
-use arrow_array::{Array, ArrayRef, DictionaryArray, PrimitiveArray, new_empty_array};
 use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, ScalarBuffer};
 use arrow_schema::{ArrowError, DataType};
 use std::collections::HashMap;
@@ -41,30 +40,24 @@ struct KeyChunk<K: ArrowDictionaryKeyType> {
     source: usize,
 }
 
-fn create<K: ArrowDictionaryKeyType>(value_type: &DataType) -> Box<dyn InProgressArray> {
-    match value_type {
-        DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary => {
-            Box::new(InProgressDictionaryArray::<K>::new(value_type))
-        }
-        _ => Box::new(GenericInProgressArray::new()),
-    }
-}
-
 pub(crate) fn create_in_progress_dictionary(
     key_type: &DataType,
     value_type: &DataType,
-    _batch_size: usize,
 ) -> Box<dyn InProgressArray> {
-    match key_type {
-        DataType::Int8 => create::<Int8Type>(value_type),
-        DataType::Int16 => create::<Int16Type>(value_type),
-        DataType::Int32 => create::<Int32Type>(value_type),
-        DataType::Int64 => create::<Int64Type>(value_type),
-        DataType::UInt8 => create::<UInt8Type>(value_type),
-        DataType::UInt16 => create::<UInt16Type>(value_type),
-        DataType::UInt32 => create::<UInt32Type>(value_type),
-        DataType::UInt64 => create::<UInt64Type>(value_type),
-        _ => unreachable!("illegal dictionary key type {key_type}"),
+    macro_rules! create {
+        ($key:ty, $value_type:ident) => {
+            Box::new(InProgressDictionaryArray::<$key>::new($value_type))
+        };
+    }
+
+    match value_type {
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary => {
+            downcast_integer! {
+                key_type => (create, value_type),
+                _ => unreachable!("illegal dictionary key type {key_type}"),
+            }
+        }
+        _ => Box::new(GenericInProgressArray::new()),
     }
 }
 

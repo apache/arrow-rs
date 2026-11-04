@@ -362,7 +362,7 @@ pub(crate) fn merge_dictionary_values_with_masks<K: ArrowDictionaryKeyType>(
         .enumerate()
         .zip(value_slices)
         .map(|((dictionary_idx, value_array), values)| {
-            let zero = K::Native::from_usize(0).unwrap();
+            let zero = K::Native::ZERO;
             let mut mapping = vec![zero; value_array.len()];
 
             for (value_idx, value) in values {

@@ -828,7 +828,7 @@ fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn 
             Box::new(InProgressByteArray::<GenericBinaryType<i64>>::new(batch_size))
         }
         DataType::Dictionary(key, value) => {
-            create_in_progress_dictionary(key, value, batch_size)
+            create_in_progress_dictionary(key, value)
         }
         DataType::FixedSizeBinary(size) => {
             Box::new(InProgressFixedSizeBinaryArray::new(*size, batch_size))
