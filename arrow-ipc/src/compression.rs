@@ -467,25 +467,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "lz4")]
-    fn test_lz4_decompression_rejects_size_the_data_does_not_back() {
-        let codec = super::CompressionCodec::Lz4Frame;
-        let mut compressed = Vec::new();
-        codec
-            .compress(b"hello lz4", &mut compressed, &mut Default::default())
-            .unwrap();
-
-        let err = codec
-            .decompress(&compressed, usize::MAX, &mut Default::default())
-            .expect_err("a size the data does not back should fail");
-
-        assert!(
-            err.to_string().contains("Expected decompressed length"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
     #[cfg(feature = "zstd")]
     fn test_zstd_compression() {
         let input_bytes = b"hello zstd";
@@ -505,22 +486,39 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "zstd")]
-    fn test_zstd_decompression_rejects_size_the_data_does_not_back() {
-        // Without a recorded content size, zstd sizes its buffer from the advertised size.
-        let mut compressor = zstd::bulk::Compressor::new(0).unwrap();
-        compressor.include_contentsize(false).unwrap();
-        let compressed = compressor.compress(b"hello zstd").unwrap();
+    #[cfg(any(feature = "lz4", feature = "zstd"))]
+    fn test_decompression_rejects_size_the_data_does_not_back() {
+        for (codec, compressed) in [
+            #[cfg(feature = "lz4")]
+            (super::CompressionCodec::Lz4Frame, {
+                let mut compressed = Vec::new();
+                super::CompressionCodec::Lz4Frame
+                    .compress(b"hello lz4", &mut compressed, &mut Default::default())
+                    .unwrap();
+                compressed
+            }),
+            #[cfg(feature = "zstd")]
+            (
+                super::CompressionCodec::Zstd(super::DEFAULT_ZSTD_COMPRESSION_LEVEL),
+                // Without a recorded content size, the bulk decompressor reserves the advertised size.
+                {
+                    let mut compressor = zstd::bulk::Compressor::new(0).unwrap();
+                    compressor.include_contentsize(false).unwrap();
+                    compressor.compress(b"hello zstd").unwrap()
+                },
+            ),
+        ] {
+            let err = codec
+                .decompress(&compressed, usize::MAX, &mut Default::default())
+                .expect_err(&format!(
+                    "{codec:?}: a size the data does not back should fail"
+                ));
 
-        let codec = super::CompressionCodec::Zstd(super::DEFAULT_ZSTD_COMPRESSION_LEVEL);
-        let err = codec
-            .decompress(&compressed, usize::MAX, &mut Default::default())
-            .expect_err("a size the data does not back should fail");
-
-        assert!(
-            err.to_string().contains("Expected decompressed length"),
-            "unexpected error: {err}"
-        );
+            assert!(
+                err.to_string().contains("Expected decompressed length"),
+                "{codec:?}: unexpected error: {err}"
+            );
+        }
     }
 
     /// A buffer larger than `MAX_PREALLOC_BYTES` still decodes, into a buffer of exactly its size.
