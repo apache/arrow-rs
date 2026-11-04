@@ -359,7 +359,7 @@ fn page_index_benchmark(c: &mut Criterion) {
                 let mut builder = PageIndexBuilder::new(row_groups, num_columns);
                 for (rg, (_, bytes)) in column_indexes.iter().enumerate() {
                     let index = decode_column_index(bytes, physical_type).unwrap();
-                    builder.put_column_index(index, rg, column);
+                    builder.try_put_column_index(index, rg, column).unwrap();
                 }
                 let page_index = builder.build();
                 let _ = converter

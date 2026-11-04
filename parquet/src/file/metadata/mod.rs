@@ -2189,7 +2189,7 @@ mod tests {
             };
         }
 
-        page_index.put_column_index(column_index, 0, 0);
+        page_index.try_put_column_index(column_index, 0, 0).unwrap();
 
         // Now, add in OffsetIndex
         let mut offset_index = OffsetIndexBuilder::new();
@@ -2200,7 +2200,7 @@ mod tests {
         offset_index.append_offset_and_size(2, 3);
         offset_index.append_unencoded_byte_array_data_bytes(Some(10));
         let offset_index = offset_index.build();
-        page_index.put_offset_index(offset_index, 0, 0);
+        page_index.try_put_offset_index(offset_index, 0, 0).unwrap();
 
         let parquet_meta = ParquetMetaDataBuilder::new(file_metadata)
             .set_row_groups(row_group_meta)
@@ -2323,7 +2323,7 @@ mod tests {
         offset_idx_builder.append_row_count(50);
         offset_idx_builder.append_offset_and_size(1000, 500);
         let offset_idx = offset_idx_builder.build();
-        builder.put_offset_index(offset_idx, 0, 0);
+        builder.try_put_offset_index(offset_idx, 0, 0).unwrap();
 
         let page_index = builder.build();
 
@@ -2372,14 +2372,16 @@ mod tests {
         let mut col_idx_builder = ColumnIndexBuilder::new(Type::INT32);
         col_idx_builder.append(false, vec![1, 0, 0, 0], vec![100, 0, 0, 0], 10, None);
         let col_idx = col_idx_builder.build().unwrap();
-        builder.put_column_index(col_idx.clone(), 0, 0);
+        builder.try_put_column_index(col_idx.clone(), 0, 0).unwrap();
 
         // Add an offset index for first column
         let mut offset_idx_builder = OffsetIndexBuilder::new();
         offset_idx_builder.append_row_count(50);
         offset_idx_builder.append_offset_and_size(1000, 500);
         let offset_idx = offset_idx_builder.build();
-        builder.put_offset_index(offset_idx.clone(), 0, 0);
+        builder
+            .try_put_offset_index(offset_idx.clone(), 0, 0)
+            .unwrap();
 
         let page_index = builder.build();
 
@@ -2396,8 +2398,8 @@ mod tests {
         let mut builder = PageIndexBuilder::new_from(page_index);
 
         // Add indexes for second column
-        builder.put_column_index(col_idx, 0, 1);
-        builder.put_offset_index(offset_idx, 0, 1);
+        builder.try_put_column_index(col_idx, 0, 1).unwrap();
+        builder.try_put_offset_index(offset_idx, 0, 1).unwrap();
         let page_index = builder.build();
 
         // now all populated

@@ -578,7 +578,8 @@ impl PageIndexBuilder {
     ///
     /// The dimensions are used to validate inserted coordinates. Storage is allocated only for
     /// entries populated using
-    /// [`put_column_index`](Self::put_column_index) and [`put_offset_index`](Self::put_offset_index).
+    /// [`try_put_column_index`](Self::try_put_column_index) and
+    /// [`try_put_offset_index`](Self::try_put_offset_index).
     ///
     /// # Panics
     ///
@@ -629,7 +630,7 @@ impl PageIndexBuilder {
     ///
     /// This replaces any existing column indexes with an empty sparse map having the specified
     /// dimensions. It can then be populated using
-    /// [`put_column_index`](Self::put_column_index).
+    /// [`try_put_column_index`](Self::try_put_column_index).
     ///
     /// This can be used to add column index storage to a builder that lacks one
     /// (either a `Default` builder, or one created from a [`PageIndex`] without column indexes).
@@ -667,7 +668,7 @@ impl PageIndexBuilder {
     ///
     /// This replaces any existing offset indexes with an empty sparse map having the specified
     /// dimensions. It can then be populated using
-    /// [`put_offset_index`](Self::put_offset_index).
+    /// [`try_put_offset_index`](Self::try_put_offset_index).
     ///
     /// This can be used to add offset index storage to a builder that lacks one
     /// (either a `Default` builder, or one created from a [`PageIndex`] without offset indexes).
@@ -705,6 +706,10 @@ impl PageIndexBuilder {
     ///
     /// If column indexes were not allocated (see [`Self::allocate_column_indexes`]),
     /// or the row group or column index is out of bounds, this method does nothing.
+    #[deprecated(
+        since = "60.2.0",
+        note = "Use `try_put_column_index` to detect invalid coordinates or unavailable index storage"
+    )]
     pub fn put_column_index(
         &mut self,
         column_index: ColumnIndexMetaData,
@@ -748,6 +753,10 @@ impl PageIndexBuilder {
     ///
     /// If offset indexes were not allocated (see [`Self::allocate_offset_indexes`]),
     /// or the row group or column index is out of bounds, this method does nothing.
+    #[deprecated(
+        since = "60.2.0",
+        note = "Use `try_put_offset_index` to detect invalid coordinates or unavailable index storage"
+    )]
     pub fn put_offset_index(
         &mut self,
         offset_index: OffsetIndexMetaData,
@@ -986,18 +995,30 @@ mod tests {
                 .is_err()
         );
 
-        // Legacy insertion remains a no-op for unallocated storage and invalid coordinates.
-        let mut legacy_unallocated = PageIndexBuilder::default();
-        legacy_unallocated.put_column_index(col_index.clone(), 0, 0);
-        legacy_unallocated.put_offset_index(off_index.clone(), 0, 0);
-        let empty_page_index = legacy_unallocated.build();
-        assert!(!empty_page_index.has_column_indexes());
-        assert!(!empty_page_index.has_offset_indexes());
+        // Deprecated insertion still populates valid coordinates, and remains a no-op
+        // for unallocated storage and invalid coordinates.
+        #[expect(deprecated, reason = "verify the legacy insertion contract")]
+        {
+            let mut legacy_unallocated = PageIndexBuilder::default();
+            legacy_unallocated.put_column_index(col_index.clone(), 0, 0);
+            legacy_unallocated.put_offset_index(off_index.clone(), 0, 0);
+            let empty_page_index = legacy_unallocated.build();
+            assert!(!empty_page_index.has_column_indexes());
+            assert!(!empty_page_index.has_offset_indexes());
 
-        builder.put_column_index(col_index.clone(), 2, 0);
-        builder.put_column_index(col_index.clone(), 0, 3);
-        builder.put_offset_index(off_index.clone(), 2, 0);
-        builder.put_offset_index(off_index.clone(), 0, 3);
+            let mut legacy_builder = PageIndexBuilder::new(2, 3);
+            legacy_builder.put_column_index(col_index.clone(), 0, 0);
+            legacy_builder.put_offset_index(off_index.clone(), 0, 0);
+            legacy_builder.put_column_index(col_index.clone(), 2, 0);
+            legacy_builder.put_column_index(col_index.clone(), 0, 3);
+            legacy_builder.put_offset_index(off_index.clone(), 2, 0);
+            legacy_builder.put_offset_index(off_index.clone(), 0, 3);
+            let legacy_page_index = legacy_builder.build();
+            assert_eq!(legacy_page_index.column_index(0, 0), Some(&col_index));
+            assert_eq!(legacy_page_index.offset_index(0, 0), Some(&off_index));
+            assert_eq!(legacy_page_index.column_index(0, 1), None);
+            assert_eq!(legacy_page_index.offset_index(1, 0), None);
+        }
 
         let mut unallocated = PageIndexBuilder::default();
         assert!(unallocated.try_put_column_index(col_index, 0, 0).is_err());

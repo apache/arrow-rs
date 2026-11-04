@@ -3141,7 +3141,9 @@ mod test {
                     let last = offset_index.page_locations.last_mut().unwrap();
                     last.compressed_page_size += 1;
                 }
-                page_index.put_offset_index(offset_index, row_group, column);
+                page_index
+                    .try_put_offset_index(offset_index, row_group, column)
+                    .unwrap();
             }
         }
         let metadata = metadata
