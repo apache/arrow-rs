@@ -434,6 +434,11 @@ pub(crate) fn merge_dictionary_values_with_masks<K: ArrowDictionaryKeyType>(
     })
 }
 
+/// Returns the unique dictionary keys referenced by the selected rows.
+///
+/// Sorting makes repeated keys adjacent for deduplication and preserves the
+/// ascending dictionary-key order of the dense mask path. This keeps the sparse
+/// and dense paths' merged values ordered consistently.
 fn compute_referenced_keys<K: ArrowNativeType>(
     keys: &ScalarBuffer<K>,
     mask: Option<&BooleanBuffer>,
@@ -832,6 +837,15 @@ mod tests {
         let merged = merge_dictionary_values(&[&a], None).unwrap();
         let expected = StringArray::from(vec!["b"]);
         assert_eq!(merged.values.as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_compute_referenced_keys_preserves_dense_order() {
+        let keys = Int32Array::from_iter_values([999, 1, 500, 1, 999]);
+
+        let actual = compute_referenced_keys(keys.values(), None);
+
+        assert_eq!(actual, vec![1, 500, 999]);
     }
 
     #[test]
