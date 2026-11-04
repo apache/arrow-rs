@@ -442,7 +442,7 @@ where
 /// Collects the values of `iter`, returning `None` if any was flagged as overflowed.
 ///
 /// This intentional `inline(never)` keeps `overflow` in a register. Inlined
-/// into `integer_op` under thin LTO, LLVM keeps the flag in memory and loads
+/// into its caller under thin LTO, LLVM keeps the flag in memory and loads
 /// and stores it on every row, which serializes the loop and keeps it from
 /// vectorizing. The loop writes into the `Vec`'s spare capacity itself,
 /// because whether LLVM inlines the loop inside `collect` depends on the
@@ -461,9 +461,7 @@ fn collect_overflowing<N>(iter: impl ExactSizeIterator<Item = (N, bool)>) -> Opt
     debug_assert!(written <= values.capacity());
     // SAFETY: the loop initialized the first `written` slots of the spare
     // capacity, and `written` counts those writes, so it doesn't rely on
-    // `iter.len()`. With `collect`, rescaled `Decimal128` add was 1.2x slower
-    // on Apple M5 Max, and 0.83x as fast as `main` on Neoverse-V2, where the
-    // flag stayed in memory.
+    // `iter.len()`.
     unsafe { values.set_len(written) };
     (!overflow).then_some(values)
 }
