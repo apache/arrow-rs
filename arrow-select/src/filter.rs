@@ -869,6 +869,7 @@ fn filter_bits_compress(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> 
             continue;
         }
         if let Some(complete) = packer.push(value_chunks.chunk(index), mask) {
+            debug_assert!(idx < out.capacity());
             // SAFETY: `count` is the number of set bits in the filter, so at
             // most `count / 64` words are completed and the output has room
             unsafe { ptr.add(idx).write(complete) };
@@ -877,12 +878,14 @@ fn filter_bits_compress(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> 
     }
     if let Some(complete) = packer.push(value_chunks.remainder_bits(), mask_chunks.remainder_bits())
     {
+        debug_assert!(idx < out.capacity());
         // SAFETY: as above, the completed word fits in the output allocation
         unsafe { ptr.add(idx).write(complete) };
         idx += 1;
     }
 
     if let Some((pending, _)) = packer.finish() {
+        debug_assert!(idx < out.capacity());
         // SAFETY: `idx <= count / 64`, so the trailing partial word fits
         unsafe { ptr.add(idx).write(pending) };
         idx += 1;
