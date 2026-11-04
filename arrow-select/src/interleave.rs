@@ -344,35 +344,44 @@ fn interleave_merged_dictionaries<K: ArrowDictionaryKeyType>(
     Ok(Arc::new(array))
 }
 
+/// Returns the values array shared by every referenced, non-null dictionary key.
+///
+/// Inputs with no selected rows or only selected null keys are ignored because their
+/// values cannot affect the output. Returns `None` if two referenced sources use
+/// different values arrays. If every selected key is null, returns the values array
+/// for the first selected input.
+///
+/// [`interleave`] validates that `dictionaries` and `indices` are non-empty before
+/// this helper is reached.
+///
+/// The first pass rejects the common case where the first two referenced sources
+/// differ before allocating source tracking. The second checks each referenced source
+/// at most once.
 fn referenced_shared_dictionary_values<'a, K: ArrowDictionaryKeyType>(
     dictionaries: &[&'a DictionaryArray<K>],
     indices: &[(usize, usize)],
 ) -> Option<&'a ArrayRef> {
-    // Preserve the cheap rejection path for distinct mappings. This avoids
-    // allocating source tracking for the common mixed-dictionary case.
-    if dictionaries.len() > 1 {
-        let has_nulls = dictionaries
-            .iter()
-            .any(|dictionary| dictionary.null_count() != 0);
-        let mut first_source = None;
-        for &(array_idx, row_idx) in indices {
-            if has_nulls && dictionaries[array_idx].keys().is_null(row_idx) {
-                continue;
-            }
+    let has_nulls = dictionaries
+        .iter()
+        .any(|dictionary| dictionary.null_count() != 0);
+    let mut first_source = None;
+    for &(array_idx, row_idx) in indices {
+        if has_nulls && dictionaries[array_idx].keys().is_null(row_idx) {
+            continue;
+        }
 
-            match first_source {
-                None => first_source = Some(array_idx),
-                Some(first) if first != array_idx => {
-                    if !Arc::ptr_eq(
-                        dictionaries[first].values(),
-                        dictionaries[array_idx].values(),
-                    ) {
-                        return None;
-                    }
-                    break;
+        match first_source {
+            None => first_source = Some(array_idx),
+            Some(first) if first != array_idx => {
+                if !Arc::ptr_eq(
+                    dictionaries[first].values(),
+                    dictionaries[array_idx].values(),
+                ) {
+                    return None;
                 }
-                _ => {}
+                break;
             }
+            _ => {}
         }
     }
 
