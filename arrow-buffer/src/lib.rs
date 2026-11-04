@@ -54,10 +54,13 @@ pub mod builder;
 pub use builder::*;
 
 mod error;
-pub use error::OverflowError;
+pub use error::{OverflowError, SliceOutOfBoundsError};
 
 mod bigint;
 pub use bigint::i256;
+
+mod divisor;
+pub use divisor::*;
 
 mod bytes;
 

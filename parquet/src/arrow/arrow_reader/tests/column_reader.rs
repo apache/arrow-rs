@@ -20,6 +20,46 @@
 use super::*;
 
 #[test]
+fn test_truncated_definition_level_bitpacked_run_returns_error() {
+    let array: Int32Array = (0..1000).map(|i| (i % 2 == 0).then_some(i)).collect();
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "c",
+        ArrowDataType::Int32,
+        true,
+    )]));
+    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(array)]).unwrap();
+    let props = WriterProperties::builder()
+        .set_dictionary_enabled(false)
+        .build();
+
+    let mut buf = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut buf, schema, Some(props)).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+
+    // Shorten the definition-level payload while leaving its packed-run header intact.
+    let pattern = [0x7F, 0, 0, 0, 0x7F, 0x55];
+    let pos = buf
+        .windows(pattern.len())
+        .position(|w| w == pattern)
+        .unwrap();
+    buf[pos] = 3;
+
+    let mut reader = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(buf))
+        .unwrap()
+        .build()
+        .unwrap();
+    let error = reader.next().unwrap().unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("unexpected end of file whilst decoding definition levels bit-packed run"),
+        "{error}"
+    );
+}
+
+#[test]
 fn test_null_column_reader_test() {
     let mut file = tempfile::tempfile().unwrap();
 

@@ -17,6 +17,7 @@
 
 use crate::data_type::AsBytes;
 use hashbrown::HashTable;
+use std::fmt::Debug;
 
 const DEFAULT_DEDUP_CAPACITY: usize = 4096;
 
@@ -58,6 +59,13 @@ impl<S: Storage> Interner<S> {
     }
 
     /// Intern the value, returning the interned key, and if this was a new value
+    ///
+    /// The dictionary encoder calls this once per value, so it and the hash probe
+    /// of `HashTable::entry` must be inlined into the caller's loop. Without
+    /// `#[inline]` (and hashbrown's `inline-more` feature) each has a single copy,
+    /// and whether it is inlined depends on how rustc splits the crate into
+    /// codegen units, so unrelated changes can turn it into a call per value.
+    #[inline]
     pub fn intern(&mut self, value: &S::Value) -> S::Key {
         let hash = self.state.hash_one(value.as_bytes());
 
@@ -81,11 +89,5 @@ impl<S: Storage> Interner<S> {
     /// Returns the storage for this interner
     pub fn storage(&self) -> &S {
         &self.storage
-    }
-
-    /// Unwraps the inner storage
-    #[cfg(feature = "arrow")]
-    pub fn into_inner(self) -> S {
-        self.storage
     }
 }

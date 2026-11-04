@@ -109,8 +109,13 @@ where
     ///
     /// # Panics
     ///
+    /// Panics if the [`RunArray` invariants] are not satisfied:
+    ///
     /// - `run_ends` does not contain strictly increasing values greater than zero
-    /// - The last value of `run_ends` is less than `logical_offset + logical_length`
+    /// - `logical_length` is not 0 and the last value of `run_ends` is less than
+    ///   `logical_offset + logical_length` (an empty slice is always accepted)
+    ///
+    /// [`RunArray` invariants]: https://docs.rs/arrow/latest/arrow/array/struct.RunArray.html#offset-and-len
     pub fn new(run_ends: ScalarBuffer<E>, logical_offset: usize, logical_length: usize) -> Self {
         assert!(
             run_ends.windows(2).all(|w| w[0] < w[1]),
@@ -142,8 +147,13 @@ where
     ///
     /// # Safety
     ///
+    /// `run_ends` must satisfy the [`RunArray` invariants]:
+    ///
     /// - `run_ends` must contain strictly increasing values greater than zero
-    /// - The last value of `run_ends` must be greater than or equal to `logical_offset + logical_len`
+    /// - If `logical_length` is not 0, the last value of `run_ends` must be
+    ///   greater than or equal to `logical_offset + logical_length`
+    ///
+    /// [`RunArray` invariants]: https://docs.rs/arrow/latest/arrow/array/struct.RunArray.html#offset-and-len
     pub unsafe fn new_unchecked(
         run_ends: ScalarBuffer<E>,
         logical_offset: usize,

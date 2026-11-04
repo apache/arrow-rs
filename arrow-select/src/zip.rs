@@ -168,14 +168,24 @@ fn should_use_interleave(mask: &BooleanBuffer) -> bool {
 fn interleave_arrays(
     mask: &BooleanBuffer,
     truthy: &ArrayData,
+    truthy_is_scalar: bool,
     falsy: &ArrayData,
+    falsy_is_scalar: bool,
 ) -> Result<ArrayRef, ArrowError> {
     let truthy = make_array(truthy.clone());
     let falsy = make_array(falsy.clone());
     let indices: Vec<_> = mask
         .iter()
         .enumerate()
-        .map(|(idx, selected)| (usize::from(!selected), idx))
+        .map(|(idx, selected)| {
+            let is_scalar = if selected {
+                truthy_is_scalar
+            } else {
+                falsy_is_scalar
+            };
+            // A scalar is a single row array, so every row reads its first value
+            (usize::from(!selected), if is_scalar { 0 } else { idx })
+        })
         .collect();
     crate::interleave::interleave(&[truthy.as_ref(), falsy.as_ref()], &indices)
 }
@@ -189,10 +199,25 @@ fn zip_impl(
 ) -> Result<ArrayRef, ArrowError> {
     let mask_buffer = maybe_prep_null_mask_filter(mask);
     if !truthy_is_scalar && !falsy_is_scalar && should_use_interleave(&mask_buffer) {
-        return interleave_arrays(&mask_buffer, truthy, falsy);
+        return interleave_arrays(&mask_buffer, truthy, false, falsy, false);
     }
 
-    let mut mutable = MutableArrayData::new(vec![truthy, falsy], false, truthy.len());
+    let mut mutable = match MutableArrayData::try_new(vec![truthy, falsy], false, truthy.len()) {
+        Ok(mutable) => mutable,
+        // `MutableArrayData` concatenates the two dictionaries, which can overflow
+        // the key type even when their merged values fit, so let `interleave`
+        // merge them instead
+        Err(ArrowError::DictionaryKeyOverflowError) => {
+            return interleave_arrays(
+                &mask_buffer,
+                truthy,
+                truthy_is_scalar,
+                falsy,
+                falsy_is_scalar,
+            );
+        }
+        Err(e) => return Err(e),
+    };
 
     // the SlicesIterator slices only the true values. So the gaps left by this iterator we need to
     // fill with falsy values
@@ -923,7 +948,7 @@ impl<T: ByteViewType> ZipImpl for ByteViewScalarImpl<T> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use arrow_array::types::Int32Type;
+    use arrow_array::types::{Int8Type, Int32Type};
 
     #[test]
     fn test_count_true_runs() {
@@ -949,6 +974,45 @@ mod test {
         offset_values[3..133].copy_from_slice(&values);
         let offset_mask: BooleanBuffer = offset_values.into_iter().collect();
         assert_eq!(count_true_runs(&offset_mask.slice(3, 130)), 3);
+    }
+
+    #[test]
+    fn test_zip_dictionaries_whose_combined_values_overflow_the_key_type() {
+        // Concatenating two dictionaries of 100 values overflows Int8 keys, but
+        // the values are the same in both, so the merged dictionary fits
+        let values: Vec<String> = (0..100).map(|i| format!("v{i}")).collect();
+        let dictionary = |keys: Vec<i8>| -> ArrayRef {
+            Arc::new(
+                DictionaryArray::<Int8Type>::try_new(
+                    Int8Array::from(keys),
+                    Arc::new(StringArray::from(values.clone())),
+                )
+                .unwrap(),
+            )
+        };
+        let mask = BooleanArray::from(vec![Some(true), Some(false), None, Some(true)]);
+        let truthy = dictionary(vec![0, 1, 2, 3]);
+        let falsy = dictionary(vec![10, 20, 30, 40]);
+        let truthy_scalar = Scalar::new(dictionary(vec![7]));
+        let falsy_scalar = Scalar::new(dictionary(vec![5]));
+
+        let cases: [(&dyn Datum, &dyn Datum, [&str; 4]); 4] = [
+            (&truthy, &falsy, ["v0", "v20", "v30", "v3"]),
+            (&truthy, &falsy_scalar, ["v0", "v5", "v5", "v3"]),
+            (&truthy_scalar, &falsy, ["v7", "v20", "v30", "v7"]),
+            (&truthy_scalar, &falsy_scalar, ["v7", "v5", "v5", "v7"]),
+        ];
+        for (truthy_datum, falsy_datum, expected) in cases {
+            let actual = zip(&mask, truthy_datum, falsy_datum).unwrap();
+            assert_eq!(actual.data_type(), truthy.data_type());
+            let actual: Vec<_> = actual
+                .as_dictionary::<Int8Type>()
+                .downcast_dict::<StringArray>()
+                .unwrap()
+                .into_iter()
+                .collect();
+            assert_eq!(actual, expected.map(Some));
+        }
     }
 
     #[test]
@@ -989,7 +1053,7 @@ mod test {
         let falsy = Int32Array::from(vec![Some(10), Some(20), None, Some(40)]).to_data();
         let expected = Int32Array::from(vec![Some(1), Some(20), Some(3), Some(40)]);
 
-        let actual = interleave_arrays(&mask, &truthy, &falsy).unwrap();
+        let actual = interleave_arrays(&mask, &truthy, false, &falsy, false).unwrap();
         assert_eq!(actual.as_primitive::<Int32Type>(), &expected);
     }
 

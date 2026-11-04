@@ -31,10 +31,10 @@ permissions:
   contents: read
 
 jobs:
-  # Check workspace wide compile and test with default features for
-  # mac
+  # Check workspace wide compile and test with default features for macOS.
+  # Fork macOS runners frequently time out, so keep this testing upstream.
   macos:
-    if: ${{ !inputs.lint-only }}
+    if: ${{ !inputs.lint-only && github.repository == 'apache/arrow-rs' }}
     name: Test on Mac
     runs-on: macos-latest
     steps:
@@ -55,10 +55,10 @@ jobs:
           # PyArrow tests happen in integration.yml.
           cargo test --workspace
 
-  # Check workspace wide compile and test with default features for
-  # windows
+  # Check workspace wide compile and test with default features for Windows.
+  # Keep this testing upstream to reduce compute in forks.
   windows:
-    if: ${{ !inputs.lint-only }}
+    if: ${{ !inputs.lint-only && github.repository == 'apache/arrow-rs' }}
     name: Test on Windows
     runs-on: windows-latest
     steps:
@@ -109,7 +109,7 @@ jobs:
         uses: ./.github/actions/setup-rustup
       - name: Install cargo-shear
         id: install-shear
-        uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177  # v2.87.30
+        uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68  # v2.88.1
         with:
           tool: cargo-shear
       - name: Check workspace dependencies
@@ -133,7 +133,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv
-        uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177  # v2.87.30
+        uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68  # v2.88.1
         with:
           tool: cargo-msrv
       - name: Check all packages
