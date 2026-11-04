@@ -18,7 +18,7 @@
 #[macro_use]
 extern crate criterion;
 
-use arrow::array::ArrayRef;
+use arrow::array::{ArrayRef, DictionaryArray, Int32Array, StringArray};
 use arrow::datatypes::{Int64Type, UInt64Type};
 use arrow::row::{RowConverter, SortField};
 use arrow::util::bench_util::{
@@ -281,6 +281,34 @@ fn row_bench(c: &mut Criterion) {
     let dict = create_dict_from_values::<Int32Type>(4096, 0., &values);
     let cols = vec![Arc::new(dict) as ArrayRef];
     do_bench(c, "4096 string_dictionary_low_cardinality(100, 0)", cols);
+
+    const ROWS: usize = 8_192;
+    for values_len in [1_000_000, 4_000_000] {
+        let values = Arc::new(StringArray::from_iter_values(
+            (0..values_len).map(|idx| format!("value_{idx}")),
+        ));
+        let chunks = (0..values_len / ROWS)
+            .map(|chunk| {
+                let start = chunk * ROWS;
+                let keys =
+                    Int32Array::from_iter_values((start..start + ROWS).map(|key| key as i32));
+                let dictionary =
+                    DictionaryArray::<Int32Type>::try_new(keys, values.clone()).unwrap();
+                vec![Arc::new(dictionary) as ArrayRef]
+            })
+            .collect::<Vec<_>>();
+        let converter =
+            RowConverter::new(vec![SortField::new(chunks[0][0].data_type().clone())]).unwrap();
+        let mut chunks = chunks.iter().cycle();
+        c.bench_function(
+            &format!("convert_columns_prepared {ROWS} string_dictionary({values_len} values)"),
+            |b| {
+                b.iter(|| {
+                    hint::black_box(converter.convert_columns(chunks.next().unwrap()).unwrap())
+                })
+            },
+        );
+    }
 
     let cols = vec![
         Arc::new(create_string_array_with_len::<i32>(4096, 0.5, 20)) as ArrayRef,
