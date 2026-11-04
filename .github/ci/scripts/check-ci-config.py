@@ -136,7 +136,7 @@ def validate_config(root=ROOT):
     assert set(events) == {"pull_request", "push", "merge_group", "workflow_dispatch"}, "Unexpected CI triggers"
     assert events["pull_request"] is None, "Required CI must run on every PR"
     assert events["merge_group"] == {"types": ["checks_requested"]}, "Missing queue trigger"
-    assert events["push"] == {"branches-ignore": ["asf-site", "gh-readonly-queue/**"]}, "Fork branches must trigger CI without queue-branch push runs"
+    assert events["push"] == {"branches-ignore": ["asf-site", "gh-readonly-queue/**", "dependabot/**"]}, "Fork branches must trigger CI without queue-branch or Dependabot push runs"
     validate_fork_ci(workflows, ci)
 
     gate = jobs["required-checks"]
