@@ -451,10 +451,19 @@ impl ValueDecoder {
                     return Ok(0);
                 }
 
+                let dict_len = dict.len() / self.byte_length;
                 decoder.read(num_values, |keys| {
                     out.reserve(keys.len() * self.byte_length);
                     for key in keys {
-                        let offset = *key as usize * self.byte_length;
+                        let index = *key as usize;
+                        if index >= dict_len {
+                            return Err(general_err!(
+                                "dictionary index out of bounds: the len is {} but the index is {}",
+                                dict_len,
+                                key
+                            ));
+                        }
+                        let offset = index * self.byte_length;
                         out.extend_from_slice(&dict.as_ref()[offset..offset + self.byte_length]);
                     }
                     Ok(())
@@ -639,6 +648,7 @@ mod tests {
     };
     use crate::data_type::{FixedLenByteArray, FixedLenByteArrayType};
     use crate::file::writer::SerializedFileWriter;
+    use crate::schema::types::{ColumnDescriptor, ColumnPath};
     use arrow::datatypes::{Field, Schema};
     use arrow::error::Result as ArrowResult;
     use arrow_array::{Array, ListArray};
@@ -656,6 +666,45 @@ mod tests {
 
         buffer.reserve_exact(12);
         assert_eq!(buffer.values_capacity, Some(12));
+    }
+
+    #[test]
+    fn test_dictionary_index_out_of_bounds() {
+        let t = crate::schema::types::Type::primitive_type_builder(
+            "col",
+            crate::basic::Type::FIXED_LEN_BYTE_ARRAY,
+        )
+        .with_length(4)
+        .build()
+        .unwrap();
+        let column_desc = Arc::new(ColumnDescriptor::new(
+            Arc::new(t),
+            0,
+            0,
+            ColumnPath::new(vec![]),
+        ));
+        let mut decoder = ValueDecoder::new(&column_desc);
+        decoder
+            .set_dict(
+                Bytes::from_static(b"aaaabbbb"),
+                2,
+                Encoding::PLAIN_DICTIONARY,
+                false,
+            )
+            .unwrap();
+
+        // Bit width 8, then an RLE run of one value with dictionary index 2
+        let page = Bytes::from_static(&[8, 0b10, 2]);
+        decoder
+            .set_data(Encoding::RLE_DICTIONARY, page, 1, Some(1))
+            .unwrap();
+
+        let mut output = FixedLenByteArrayBuffer::with_capacity(4);
+        let err = decoder.read(&mut output, 1).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: dictionary index out of bounds: the len is 2 but the index is 2"
+        );
     }
 
     #[test]
