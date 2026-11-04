@@ -787,11 +787,15 @@ impl Codec {
                     && values.len() >= dictionary.len().saturating_mul(DICTIONARY_GATHER_RATIO)
                 {
                     let values = downcast_dictionary_array! {
-                        array => gather_dictionary_values(array)?,
+                        array => gather_dictionary_values(array),
                         _ => unreachable!(),
                     };
-                    let rows = converter.convert_columns(&[values])?;
-                    return Ok(Encoder::DictionaryRows(rows, nulls.row()));
+                    // Gathering can overflow nested offsets or run ends even when
+                    // encoding the original dictionary values would succeed.
+                    if let Ok(values) = values {
+                        let rows = converter.convert_columns(&[values])?;
+                        return Ok(Encoder::DictionaryRows(rows, nulls.row()));
+                    }
                 }
 
                 let values = Arc::clone(values);
@@ -3394,6 +3398,32 @@ mod tests {
         }
         let decoded = converter.convert_rows(&actual_rows).unwrap();
         dictionary_eq(&decoded[0], &expected);
+    }
+
+    #[test]
+    fn test_sparse_dictionary_gather_overflow_falls_back() {
+        let inner = RunArray::<Int16Type>::try_new(
+            &PrimitiveArray::from(vec![1_i16]),
+            &Int32Array::from(vec![1]),
+        )
+        .unwrap();
+        let values = RunArray::<Int64Type>::try_new(
+            &PrimitiveArray::from(vec![
+                (DICTIONARY_GATHER_MIN_VALUES * DICTIONARY_GATHER_RATIO) as i64,
+            ]),
+            &inner,
+        )
+        .unwrap();
+        let keys = Int32Array::from(vec![0; DICTIONARY_GATHER_MIN_VALUES]);
+        let dictionary = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap();
+
+        let input = Arc::new(dictionary) as ArrayRef;
+        let converter = RowConverter::new(vec![SortField::new(input.data_type().clone())]).unwrap();
+        let rows = converter.convert_columns(&[input]).unwrap();
+
+        assert_eq!(rows.num_rows(), DICTIONARY_GATHER_MIN_VALUES);
+        let first = rows.row(0);
+        assert!(rows.iter().all(|row| row == first));
     }
 
     #[test]
