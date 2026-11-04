@@ -930,7 +930,7 @@ enum Encoder<'a> {
     Stateless,
     /// The encoding of the child array and the encoding of a null row
     Dictionary(Rows, Row<'a>),
-    /// The encoding of one dictionary value per input row and a null row
+    /// The encoding of the flattened dictionary array and a null row
     DictionaryRows(Rows, Row<'a>),
     /// The row encoding of the child arrays and the encoding of a null row
     ///
