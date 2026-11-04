@@ -192,6 +192,8 @@ pub(crate) use array_reader::ByteArrayDecoderPlain;
 pub mod arrow_reader;
 pub mod arrow_writer;
 mod buffer;
+#[cfg(feature = "file_experimental")]
+pub mod file_type;
 pub(crate) use buffer::offset_buffer::OffsetBuffer;
 mod decoder;
 
