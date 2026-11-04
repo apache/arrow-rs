@@ -660,7 +660,7 @@ mod tests {
     #[test]
     fn test_packed_decoder_truncated_run_returns_error() {
         // The header declares 504 levels (63 bytes), but only three packed bytes follow.
-        let mut decoder = PackedDecoder::new();
+        let mut decoder = PackedDecoder::new(1);
         decoder.set_data(Encoding::RLE, Bytes::from_static(&[0x7F, 0x55, 0x55, 0x55]));
 
         let mut decoded = BooleanBufferBuilder::new(504);
@@ -672,7 +672,7 @@ mod tests {
     #[test]
     fn test_packed_decoder_skip_truncated_run_returns_error() {
         // The skip path must validate the same source range as the read path.
-        let mut decoder = PackedDecoder::new();
+        let mut decoder = PackedDecoder::new(1);
         decoder.set_data(Encoding::RLE, Bytes::from_static(&[0x7F, 0x55, 0x55, 0x55]));
 
         let result = decoder.skip(504);
