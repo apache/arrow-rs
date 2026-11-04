@@ -15,12 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::builder::{Date32Builder, Decimal128Builder, Int32Builder};
-use arrow_array::{
-    ArrayRef, DictionaryArray, FixedSizeBinaryArray, Int32Array, ListArray, RecordBatch,
-    StringArray, builder::StringBuilder,
+use arrow_array::builder::{
+    Date32Builder, Decimal128Builder, Int32Builder, ListBuilder, StringDictionaryBuilder,
 };
-use arrow_buffer::{Buffer, OffsetBuffer};
+use arrow_array::types::Int32Type;
+use arrow_array::{
+    ArrayRef, DictionaryArray, FixedSizeBinaryArray, RecordBatch, builder::StringBuilder,
+};
+use arrow_buffer::Buffer;
 use arrow_ipc::convert::try_fb_to_schema;
 use arrow_ipc::reader::{FileDecoder, FileReader, StreamReader, read_footer_length};
 use arrow_ipc::writer::{FileWriter, IpcWriteOptions, StreamWriter};
@@ -208,19 +210,27 @@ fn criterion_benchmark(c: &mut Criterion) {
     }
 }
 
-/// Return an IPC stream with one record batch of `num_columns` string dictionary columns, so the
-/// stream holds `num_columns` dictionary batches of `num_values` distinct values each. With
-/// `nested`, each row is a 2-element list of dictionary values.
+/// Return an IPC stream with one record batch of `num_columns` string dictionary columns, each
+/// with `num_values` distinct values. With `nested`, each row is a list of 0 to 4 values.
 fn dictionary_ipc_stream(num_columns: usize, num_values: usize, nested: bool) -> Vec<u8> {
-    let keys = Int32Array::from_iter_values(0..num_values as i32);
-    let values = StringArray::from_iter_values((0..num_values).map(|i| format!("value_{i}")));
-    let dictionary: ArrayRef = Arc::new(DictionaryArray::new(keys, Arc::new(values)));
-    let column = if nested {
-        let item = Arc::new(Field::new_list_field(dictionary.data_type().clone(), true));
-        let offsets = OffsetBuffer::from_lengths(std::iter::repeat_n(2, num_values / 2));
-        Arc::new(ListArray::new(item, offsets, dictionary, None)) as ArrayRef
+    const NUM_ROWS: usize = 4096;
+    let distinct: Vec<String> = (0..num_values).map(|i| format!("value_{i}")).collect();
+    let mut values = distinct.iter().map(String::as_str).cycle();
+    let column: ArrayRef = if nested {
+        let mut builder = ListBuilder::new(StringDictionaryBuilder::<Int32Type>::new());
+        for row in 0..NUM_ROWS {
+            for value in values.by_ref().take(row % 5) {
+                builder.values().append_value(value);
+            }
+            builder.append(true);
+        }
+        Arc::new(builder.finish())
     } else {
-        dictionary
+        Arc::new(
+            values
+                .take(NUM_ROWS)
+                .collect::<DictionaryArray<Int32Type>>(),
+        )
     };
     let batch = RecordBatch::try_from_iter(
         (0..num_columns).map(|i| (format!("c{i}"), Arc::clone(&column))),
