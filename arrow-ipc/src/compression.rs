@@ -24,6 +24,12 @@ const LENGTH_NO_COMPRESSED_DATA: i64 = -1;
 const LENGTH_OF_PREFIX_DATA: i64 = 8;
 const DEFAULT_ZSTD_COMPRESSION_LEVEL: i32 = 3;
 
+/// Most output bytes one LZ4 input byte can produce: a match-length continuation byte adds 255.
+const LZ4_MAX_EXPANSION_RATIO: usize = 255;
+
+/// Most output bytes one ZSTD input byte can produce: a 4-byte RLE block emits up to 128 KiB.
+const ZSTD_MAX_EXPANSION_RATIO: usize = 128 * 1024 / 4;
+
 /// Additional context that may be needed for compression.
 ///
 /// In the case of zstd, this will contain the zstd context, which can be reused between subsequent
@@ -274,6 +280,17 @@ impl CompressionCodec {
         decompressed_size: usize,
         context: &mut DecompressionContext,
     ) -> Result<Vec<u8>, ArrowError> {
+        let (max_expansion_ratio, codec_name) = match self {
+            CompressionCodec::Lz4Frame => (LZ4_MAX_EXPANSION_RATIO, "LZ4"),
+            CompressionCodec::Zstd(_) => (ZSTD_MAX_EXPANSION_RATIO, "ZSTD"),
+        };
+        // Refuse a size the input cannot expand to before allocating for it.
+        if decompressed_size > input.len().saturating_mul(max_expansion_ratio) {
+            return Err(ArrowError::IpcError(format!(
+                "Advertised decompressed size of {decompressed_size} exceeds what {} bytes of {codec_name} data can expand to",
+                input.len()
+            )));
+        }
         let ret = match self {
             CompressionCodec::Lz4Frame => decompress_lz4(input, decompressed_size)?,
             CompressionCodec::Zstd(_) => decompress_zstd(input, decompressed_size, context)?,
@@ -445,6 +462,25 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "lz4")]
+    fn test_lz4_decompression_rejects_size_beyond_expansion_limit() {
+        let codec = super::CompressionCodec::Lz4Frame;
+        let mut compressed = Vec::new();
+        codec
+            .compress(b"hello lz4", &mut compressed, &mut Default::default())
+            .unwrap();
+
+        let err = codec
+            .decompress(&compressed, usize::MAX, &mut Default::default())
+            .expect_err("a size the input cannot expand to should fail");
+
+        assert!(
+            err.to_string().contains("bytes of LZ4 data can expand to"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     #[cfg(feature = "zstd")]
     fn test_zstd_compression() {
         let input_bytes = b"hello zstd";
@@ -461,6 +497,25 @@ mod tests {
             )
             .unwrap();
         assert_eq!(input_bytes, result.as_slice());
+    }
+
+    #[test]
+    #[cfg(feature = "zstd")]
+    fn test_zstd_decompression_rejects_size_beyond_expansion_limit() {
+        // Without a recorded content size, zstd sizes its buffer from the advertised size.
+        let mut compressor = zstd::bulk::Compressor::new(0).unwrap();
+        compressor.include_contentsize(false).unwrap();
+        let compressed = compressor.compress(b"hello zstd").unwrap();
+
+        let codec = super::CompressionCodec::Zstd(super::DEFAULT_ZSTD_COMPRESSION_LEVEL);
+        let err = codec
+            .decompress(&compressed, usize::MAX, &mut Default::default())
+            .expect_err("a size the input cannot expand to should fail");
+
+        assert!(
+            err.to_string().contains("bytes of ZSTD data can expand to"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
