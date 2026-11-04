@@ -121,6 +121,8 @@ jobs:
         run: cargo check -p parquet --no-default-features --features flate2 --features flate2-zlib-rs
       - name: Check compilation --no-default-features --features variant_experimental
         run: cargo check -p parquet --no-default-features --features variant_experimental
+      - name: Check compilation --no-default-features --features file_experimental
+        run: cargo check -p parquet --no-default-features --features file_experimental
       - name: Check compilation (parquet-variant)
         run: cargo check -p parquet-variant
       - name: Check compilation (parquet-variant-json)
