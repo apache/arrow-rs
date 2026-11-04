@@ -130,18 +130,16 @@ pub(crate) fn has_extension_type(parquet_type: &Type) -> bool {
     }
 }
 
-/// Return the Parquet logical type to use for the specified Arrow Struct field, if any.
-///
-/// The Parquet specification requires the `VARIANT` logical type annotation to
-/// carry the version number (`VARIANT(1)`); readers such as Apache Spark reject
-/// files whose annotation does not carry version 1. The value written is
-/// [`parquet_variant::VARIANT_SPEC_VERSION`], the same version stamped into
-/// every metadata header.
+/// Return the Parquet logical type to use for the specified Arrow Struct field, if any:
+/// `VARIANT` for the Variant extension type and `FILE` for `FileType`.
 #[cfg(any(feature = "variant_experimental", feature = "file_experimental"))]
 pub(crate) fn logical_type_for_struct(field: &Field) -> Option<LogicalType> {
     #[cfg(feature = "variant_experimental")]
     if field.has_valid_extension_type::<parquet_variant_compute::VariantType>() {
-        // The 4-bit header version always fits the thrift `i8` field.
+        // The Parquet specification requires the annotation to carry the version
+        // (`VARIANT(1)`), and readers such as Apache Spark reject files without it.
+        // Write the version stamped into every metadata header; the 4-bit header
+        // version always fits the thrift `i8` field.
         return Some(LogicalType::variant(Some(
             parquet_variant::VARIANT_SPEC_VERSION as i8,
         )));

@@ -68,8 +68,13 @@ impl ExtensionType for FileType {
         Some(String::new())
     }
 
-    fn deserialize_metadata(_metadata: Option<&str>) -> Result<Self::Metadata, ArrowError> {
-        Ok("")
+    fn deserialize_metadata(metadata: Option<&str>) -> Result<Self::Metadata, ArrowError> {
+        match metadata {
+            None | Some("") => Ok(""),
+            Some(_) => Err(ArrowError::InvalidArgumentError(
+                "FileType extension type expects no metadata".to_owned(),
+            )),
+        }
     }
 
     fn supports_data_type(&self, data_type: &DataType) -> Result<(), ArrowError> {
@@ -268,6 +273,29 @@ mod tests {
             true,
         )]);
         let parquet_schema = ArrowSchemaConverter::new().convert(&arrow_schema).unwrap();
+        assert_eq!(
+            parquet_schema.root_schema().get_fields()[0]
+                .get_basic_info()
+                .logical_type_ref(),
+            None
+        );
+    }
+
+    #[test]
+    fn struct_with_unknown_metadata_is_not_annotated() {
+        let field = Field::new("f", DataType::Struct(file_fields(None)), true).with_metadata(
+            HashMap::from([
+                (
+                    "ARROW:extension:name".to_string(),
+                    FileType::NAME.to_string(),
+                ),
+                ("ARROW:extension:metadata".to_string(), "v2".to_string()),
+            ]),
+        );
+        assert!(field.try_extension_type::<FileType>().is_err());
+        let parquet_schema = ArrowSchemaConverter::new()
+            .convert(&Schema::new(vec![field]))
+            .unwrap();
         assert_eq!(
             parquet_schema.root_schema().get_fields()[0]
                 .get_basic_info()
