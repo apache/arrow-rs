@@ -1,4 +1,21 @@
 #!/usr/bin/env bash
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
 #
 # Script
 #
@@ -7,22 +24,41 @@
 
 set -e
 
+CRATES="
+    -p arrow
+    -p arrow-arith
+    -p arrow-array
+    -p arrow-avro
+    -p arrow-buffer
+    -p arrow-cast
+    -p arrow-csv
+    -p arrow-data
+    -p arrow-ipc
+    -p arrow-json
+    -p arrow-cmp
+    -p arrow-ord
+    -p arrow-row
+    -p arrow-schema
+    -p arrow-select
+    -p arrow-string
+    -p parquet
+"
+
 setup_miri() {
-    export MIRIFLAGS="-Zmiri-disable-isolation"
+    export MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-no-extra-rounding-error"
+    export INSTA_WORKSPACE_ROOT="$PWD"
     cargo miri setup
     cargo clean
 }
 
 
-case $# in 
+case $# in
     0)
         setup_miri
 
         echo "Starting Arrow MIRI run..."
         cargo miri nextest run \
-        -p arrow-buffer -p arrow-data \
-        -p arrow-schema -p arrow-ord \
-        -p arrow-array -p arrow-arith \
+        $CRATES \
         --features ffi --no-fail-fast
     ;;
     2)
@@ -34,9 +70,7 @@ case $# in
         echo "Starting Arrow MIRI run partition ${partition} out of ${total}..."
         cargo miri nextest run \
         --partition slice:"${partition}"/"${total}" \
-        -p arrow-buffer -p arrow-data \
-        -p arrow-schema -p arrow-ord \
-        -p arrow-array -p arrow-arith \
+        $CRATES \
         --features ffi --no-fail-fast
     ;;
     *)

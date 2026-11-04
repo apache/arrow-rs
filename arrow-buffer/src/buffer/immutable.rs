@@ -23,7 +23,7 @@ use std::sync::Arc;
 use crate::BufferBuilder;
 use crate::alloc::{Allocation, Deallocation};
 use crate::util::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
-use crate::{bit_util, bytes::Bytes, native::ArrowNativeType};
+use crate::{SliceOutOfBoundsError, bit_util, bytes::Bytes, native::ArrowNativeType};
 
 #[cfg(feature = "pool")]
 use crate::pool::MemoryPool;
@@ -66,6 +66,18 @@ use super::{MutableBuffer, ScalarBuffer};
 /// # use arrow_buffer::Buffer;
 /// let bytes = bytes::Bytes::from("hello");
 /// let buffer = Buffer::from(bytes);
+///```
+///
+/// # Example: Create a [`bytes::Bytes`] from a `Buffer` (without copying)
+///
+/// [`bytes::Bytes::from_owner`] can also wrap a `Buffer` again without copying.
+/// This made generically available via a `From` implementation.
+///
+/// ```
+/// # use arrow_buffer::Buffer;
+/// # let bytes = bytes::Bytes::from("hello");
+/// # let buffer = Buffer::from(bytes);
+/// let bytes = bytes::Bytes::from(buffer);
 ///```
 #[derive(Clone, Debug)]
 pub struct Buffer {
@@ -209,20 +221,19 @@ impl Buffer {
             // For realloc to work, we cannot free the elements before the offset
             offset + self.len()
         };
-        if desired_capacity < self.capacity() {
-            if let Some(bytes) = Arc::get_mut(&mut self.data) {
-                if bytes.try_realloc(desired_capacity).is_ok() {
-                    // Realloc complete - update our pointer into `bytes`:
+        if desired_capacity < self.capacity()
+            && let Some(bytes) = Arc::get_mut(&mut self.data)
+        {
+            bytes
+                .try_realloc(desired_capacity, |base| {
                     self.ptr = if is_empty {
-                        bytes.as_ptr()
+                        base.as_ptr()
                     } else {
                         // SAFETY: we kept all elements leading up to the offset
-                        unsafe { bytes.as_ptr().add(offset) }
-                    }
-                } else {
-                    // Failure to reallocate is fine; we just failed to free up memory.
-                }
-            }
+                        unsafe { base.as_ptr().add(offset) }
+                    };
+                })
+                .ok(); // Failure to reallocate is fine; we just failed to free up memory.
         }
     }
 
@@ -285,19 +296,31 @@ impl Buffer {
     /// # Panics
     /// Panics iff `(offset + length)` is larger than the existing length.
     pub fn slice_with_length(&self, offset: usize, length: usize) -> Self {
-        assert!(
-            offset.saturating_add(length) <= self.length,
-            "the offset of the new Buffer cannot exceed the existing length: slice offset={offset} length={length} selflen={}",
-            self.length
-        );
+        self.try_slice_with_length(offset, length)
+            .unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// Returns a new [Buffer] that is a slice of this buffer starting at `offset`,
+    /// with `length` bytes, or an error if `(offset + length)` is larger than the
+    /// existing length.
+    ///
+    /// This is the non-panicking version of [`Self::slice_with_length`].
+    pub fn try_slice_with_length(
+        &self,
+        offset: usize,
+        length: usize,
+    ) -> Result<Self, SliceOutOfBoundsError> {
+        if offset.saturating_add(length) > self.length {
+            return Err(SliceOutOfBoundsError::new(offset, length, self.length));
+        }
         // Safety:
         // offset + length <= self.length
         let ptr = unsafe { self.ptr.add(offset) };
-        Self {
+        Ok(Self {
             data: self.data.clone(),
             ptr,
             length,
-        }
+        })
     }
 
     /// Returns a pointer to the start of this buffer.
@@ -327,8 +350,12 @@ impl Buffer {
     /// Returns a slice of this buffer starting at a certain bit offset.
     /// If the offset is byte-aligned the returned buffer is a shallow clone,
     /// otherwise a new buffer is allocated and filled with a copy of the bits in the range.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `offset + len` is larger than the length of this buffer in bits
     pub fn bit_slice(&self, offset: usize, len: usize) -> Self {
-        if offset % 8 == 0 {
+        if offset.is_multiple_of(8) {
             return self.slice_with_length(offset / 8, bit_util::ceil(len, 8));
         }
 
@@ -413,6 +440,9 @@ impl Buffer {
     ///
     /// This can be used to reuse / mutate the underlying data.
     ///
+    /// With the `pool` feature enabled, a successful conversion releases the buffer's
+    /// memory reservation. The returned `Vec` is not tracked by the memory pool.
+    ///
     /// # Errors
     ///
     /// Returns `Err(self)` if
@@ -422,7 +452,7 @@ impl Buffer {
     pub fn into_vec<T: ArrowNativeType>(self) -> Result<Vec<T>, Self> {
         let layout = match self.data.deallocation() {
             Deallocation::Standard(l) => l,
-            _ => return Err(self), // Custom allocation
+            Deallocation::Custom(..) => return Err(self),
         };
 
         if self.ptr != self.data.as_ptr() {
@@ -441,7 +471,9 @@ impl Buffer {
 
         Arc::try_unwrap(self.data)
             .map(|bytes| unsafe {
-                let ptr = bytes.ptr().as_ptr() as _;
+                let ptr = bytes.ptr().as_ptr().cast();
+                #[cfg(feature = "pool")]
+                drop(bytes.reservation.take());
                 std::mem::forget(bytes);
                 // Safety
                 // Verified that bytes layout matches that of Vec
@@ -534,6 +566,13 @@ impl From<bytes::Bytes> for Buffer {
     }
 }
 
+/// Convert a `Buffer` into a [`bytes::Bytes`]
+impl From<Buffer> for bytes::Bytes {
+    fn from(buffer: Buffer) -> Self {
+        Self::from_owner(buffer)
+    }
+}
+
 /// Create a `Buffer` instance by storing the boolean values into the buffer
 impl FromIterator<bool> for Buffer {
     fn from_iter<I>(iter: I) -> Self
@@ -552,7 +591,7 @@ impl std::ops::Deref for Buffer {
     }
 }
 
-impl AsRef<[u8]> for &Buffer {
+impl AsRef<[u8]> for Buffer {
     fn as_ref(&self) -> &[u8] {
         self.as_slice()
     }
@@ -626,6 +665,8 @@ impl<T: ArrowNativeType> FromIterator<T> for Buffer {
 #[cfg(test)]
 mod tests {
     use crate::i256;
+    #[cfg(feature = "pool")]
+    use crate::pool::{MemoryPool, TrackingMemoryPool};
     use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::thread;
 
@@ -686,18 +727,41 @@ mod tests {
     }
 
     #[test]
+    fn test_try_slice_with_length() {
+        let buf = Buffer::from(&[2, 4, 6, 8, 10]);
+        assert_eq!(
+            [4, 6, 8],
+            buf.try_slice_with_length(1, 3).unwrap().as_slice()
+        );
+        assert!(buf.try_slice_with_length(5, 0).unwrap().is_empty());
+        assert!(buf.try_slice_with_length(6, 0).is_err());
+        assert!(buf.try_slice_with_length(usize::MAX, 1).is_err());
+        assert_eq!(
+            buf.try_slice_with_length(3, 3).unwrap_err().to_string(),
+            "the offset of the new Buffer cannot exceed the existing length: slice offset=3 length=3 selflen=5"
+        );
+
+        let buf2 = buf.slice(2);
+        assert_eq!(
+            [8, 10],
+            buf2.try_slice_with_length(1, 2).unwrap().as_slice()
+        );
+        assert!(buf2.try_slice_with_length(1, 3).is_err());
+    }
+
+    #[test]
     fn test_slice() {
         let buf = Buffer::from(&[2, 4, 6, 8, 10]);
         let buf2 = buf.slice(2);
 
         assert_eq!([6, 8, 10], buf2.as_slice());
         assert_eq!(3, buf2.len());
-        assert_eq!(unsafe { buf.as_ptr().offset(2) }, buf2.as_ptr());
+        assert_eq!(unsafe { buf.as_ptr().add(2) }, buf2.as_ptr());
 
         let buf3 = buf2.slice_with_length(1, 2);
         assert_eq!([8, 10], buf3.as_slice());
         assert_eq!(2, buf3.len());
-        assert_eq!(unsafe { buf.as_ptr().offset(3) }, buf3.as_ptr());
+        assert_eq!(unsafe { buf.as_ptr().add(3) }, buf3.as_ptr());
 
         let buf4 = buf.slice(5);
         let empty_slice: [u8; 0] = [];
@@ -767,7 +831,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::float_cmp)]
+    #[expect(clippy::float_cmp_const)]
     fn test_as_typed_data() {
         check_as_typed_data!(&[1i8, 3i8, 6i8], i8);
         check_as_typed_data!(&[1u8, 3u8, 6u8], u8);
@@ -883,7 +947,7 @@ mod tests {
         let mut vector = vec![1_i32, 2, 3, 4, 5];
         let buffer = unsafe {
             Buffer::from_custom_allocation(
-                NonNull::new_unchecked(vector.as_mut_ptr() as *mut u8),
+                NonNull::new_unchecked(vector.as_mut_ptr().cast::<u8>()),
                 vector.len() * std::mem::size_of::<i32>(),
                 Arc::new(vector),
             )
@@ -903,6 +967,29 @@ mod tests {
     fn slice_overflow() {
         let buffer = Buffer::from(MutableBuffer::from_len_zeroed(12));
         buffer.slice_with_length(2, usize::MAX);
+    }
+
+    #[test]
+    #[cfg(feature = "pool")]
+    fn test_into_vec_releases_reservation() {
+        let pool = TrackingMemoryPool::default();
+        let buffer = Buffer::from_vec(vec![1_u8, 2, 3]);
+        buffer.claim(&pool);
+        assert_eq!(pool.used(), 3);
+
+        let shared = buffer.clone();
+        let buffer = buffer.into_vec::<u8>().unwrap_err();
+        assert_eq!(pool.used(), 3);
+        drop(shared);
+
+        let ptr = buffer.as_ptr();
+        let values = buffer.into_vec::<u8>().unwrap();
+        assert_eq!(values.as_ptr(), ptr);
+        assert_eq!(values, [1, 2, 3]);
+        assert_eq!(pool.used(), 0);
+
+        drop(values);
+        assert_eq!(pool.used(), 0);
     }
 
     #[test]
@@ -1047,7 +1134,7 @@ mod tests {
             // (since the `offset` value inside a Buffer is byte-granular, not bit-granular), so
             // checking the offset should always return 0 if so. If the offset IS byte-aligned, we
             // want to make sure it doesn't unnecessarily create a deep copy.
-            if offset % 8 == 0 {
+            if offset.is_multiple_of(8) {
                 assert_eq!(new_buf.ptr_offset(), offset / 8);
             } else {
                 assert_eq!(new_buf.ptr_offset(), 0);
@@ -1061,7 +1148,7 @@ mod tests {
             // so we use the map to ensure it's in range.
             for l in (o..=64).map(|l| l - o) {
                 // and we just want to make sure every one of these keeps its offset and length
-                // when neeeded
+                // when needed
                 assert_preserved(o, l);
             }
         }
@@ -1134,5 +1221,59 @@ mod tests {
             let expected = Buffer::from(original_buffer_data).slice_with_length(0, slice_length);
             assert_eq!(buffer_back.as_slice(), expected.as_slice());
         }
+    }
+
+    #[test]
+    #[cfg(feature = "pool")]
+    fn test_shrink_to_fit_panicking_reservation() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        use crate::pool::{MemoryPool, MemoryReservation};
+
+        #[derive(Debug)]
+        struct PanicPool;
+
+        #[derive(Debug)]
+        struct PanicReservation {
+            panicked: bool,
+        }
+
+        impl MemoryReservation for PanicReservation {
+            fn size(&self) -> usize {
+                0
+            }
+            fn resize(&mut self, _: usize) {
+                if !self.panicked {
+                    self.panicked = true;
+                    panic!("intentional panic in resize");
+                }
+            }
+        }
+
+        impl MemoryPool for PanicPool {
+            fn reserve(&self, _: usize) -> Box<dyn MemoryReservation> {
+                Box::new(PanicReservation { panicked: false })
+            }
+            fn available(&self) -> isize {
+                isize::MAX
+            }
+            fn used(&self) -> usize {
+                0
+            }
+            fn capacity(&self) -> usize {
+                usize::MAX
+            }
+        }
+
+        let pool = PanicPool;
+        let data: Vec<u8> = (0..8).collect();
+        let mut buf = Buffer::from_slice_ref(data.as_slice());
+        buf.claim(&pool);
+
+        // shrink_to_fit panics because PanicReservation::resize panics, but
+        // Buffer::ptr must stay consistent with Bytes::ptr (no use-after-free).
+        let _ = catch_unwind(AssertUnwindSafe(|| buf.shrink_to_fit()));
+
+        assert_eq!(buf.as_slice(), data.as_slice());
     }
 }

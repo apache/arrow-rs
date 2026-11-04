@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// The unused_crate_dependencies lint does not work well for crates defining additional examples/bin targets
-#![allow(unused_crate_dependencies)]
+//! Converts an Arrow IPC file to an Arrow IPC stream.
 
 use arrow::error::Result;
 use arrow::ipc::reader::FileReader;

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::coalesce::InProgressArray;
+use crate::coalesce::{InProgressArray, check_filter_len};
 use crate::filter::{FilterPredicate, FilterSelection};
 use arrow_array::cast::AsArray;
 use arrow_array::types::ByteViewType;
@@ -41,13 +41,13 @@ pub(crate) struct InProgressByteViewArray<B: ByteViewType> {
     source: Option<Source>,
     /// the target batch size (and thus size for views allocation)
     batch_size: usize,
-    /// The in progress views
+    /// The in progress views (guaranteed to be valid)
     views: Vec<u128>,
     /// In progress nulls
     nulls: NullBufferBuilder,
     /// current buffer
     current: Option<Vec<u8>>,
-    /// completed buffers
+    /// completed buffers (corresponding to content of views)
     completed: Vec<Buffer>,
     /// Allocates new buffers of increasing size as needed
     buffer_source: BufferSource,
@@ -121,13 +121,19 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
         self.completed.push(buffer);
     }
 
-    fn append_views_by_filter(&mut self, views: &[u128], filter: &FilterPredicate) {
+    /// # Safety
+    ///
+    /// `filter.filter_len()` must not exceed `views.len()`.
+    unsafe fn append_views_by_filter(&mut self, views: &[u128], filter: &FilterPredicate) {
         let selected_count = filter.count();
         let current_len = self.views.len();
         self.views.reserve(selected_count);
 
         let mut written = 0;
 
+        // SAFETY: the caller guarantees that selected rows are in bounds,
+        // `FilterPredicate` yields `selected_count` rows, and capacity was
+        // reserved above.
         unsafe {
             let mut out = self.views.spare_capacity_mut().as_mut_ptr().cast::<u128>();
 
@@ -173,8 +179,16 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
     }
 
     /// Append views to self.views, updating the buffer index if necessary
+    ///
+    /// # Safety
+    ///
+    /// [`B::validate`](ByteViewType::validate) must succeed for `views` and
+    /// `buffers`.
+    ///
+    /// Note: this function performs no unsafe operations itself, but it assumes
+    /// `views` are valid views for self.views and `buffers` for self.buffers
     #[inline(never)]
-    fn append_views_and_update_buffer_index(
+    unsafe fn append_views_and_update_buffer_index(
         &mut self,
         views: &[u128],
         buffers: &[Buffer],
@@ -194,8 +208,12 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
             self.size_of_completed_buffers_from_current_source += buffers_size;
         }
 
-        let starting_buffer: u32 = self.completed.len().try_into().expect("too many buffers");
+        let starting_buffer = self.completed.len() as u32;
         self.completed.extend_from_slice(buffers);
+        assert!(
+            u32::try_from(self.completed.len()).is_ok(),
+            "too many buffers"
+        );
 
         if starting_buffer == 0 {
             // If there are no buffers, we can just use the views as is
@@ -203,12 +221,19 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
         } else {
             // If there are buffers, we need to update the buffer index
             let updated_views = views.iter().map(|v| {
-                let mut byte_view = ByteView::from(*v);
-                if byte_view.length > MAX_INLINE_VIEW_LEN {
-                    // Small views (<=12 bytes) are inlined, so only need to update large views
-                    byte_view.buffer_index += starting_buffer;
+                // A view of a string of 12 bytes or fewer stores the string
+                // inline and has no buffer index, so adding 0 leaves it
+                // unchanged.
+                let offset = if *v as u32 > MAX_INLINE_VIEW_LEN {
+                    starting_buffer
+                } else {
+                    0
                 };
-                byte_view.as_u128()
+                // The buffer index is bits 64 to 95 of a view. Adding
+                // `starting_buffer` gives the string's buffer index in the
+                // output, which fits in 32 bits, so the sum never carries into
+                // bit 96.
+                v + ((offset as u128) << 64)
             });
 
             self.views.extend(updated_views);
@@ -222,9 +247,14 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
     /// - `views` - the views to append
     /// - `view_buffer_size` - the total number of bytes pointed to by all
     ///   views (used to allocate new buffers if needed)
-    /// - `buffers` - the buffers the reviews point to
+    /// - `buffers` - the buffers the views point to
+    ///
+    /// # Safety
+    ///
+    /// [`B::validate`](ByteViewType::validate) must succeed for `views` and
+    /// `buffers`.
     #[inline(never)]
-    fn append_views_and_copy_strings(
+    unsafe fn append_views_and_copy_strings(
         &mut self,
         views: &[u128],
         view_buffer_size: usize,
@@ -237,7 +267,8 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
         // If there is no current buffer, allocate a new one
         let Some(current) = self.current.take() else {
             let new_buffer = self.buffer_source.next_buffer(view_buffer_size);
-            self.append_views_and_copy_strings_inner(views, new_buffer, buffers);
+            // SAFETY: the caller guarantees the views and buffers are valid.
+            unsafe { self.append_views_and_copy_strings_inner(views, new_buffer, buffers) };
             return;
         };
 
@@ -245,7 +276,8 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
         // copy the strings into the existing buffer.
         let mut remaining_capacity = current.capacity() - current.len();
         if view_buffer_size <= remaining_capacity {
-            self.append_views_and_copy_strings_inner(views, current, buffers);
+            // SAFETY: the caller guarantees the views and buffers are valid.
+            unsafe { self.append_views_and_copy_strings_inner(views, current, buffers) };
             return;
         }
 
@@ -271,7 +303,8 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
         let string_bytes_to_copy = current.capacity() - current.len() - remaining_capacity;
         let remaining_view_buffer_size = view_buffer_size - string_bytes_to_copy;
 
-        self.append_views_and_copy_strings_inner(first_views, current, buffers);
+        // SAFETY: `first_views` is a subset of the caller-validated views.
+        unsafe { self.append_views_and_copy_strings_inner(first_views, current, buffers) };
         let completed: Buffer = self.current.take().expect("completed").into();
         self.completed_buffers_size += completed.capacity();
         self.completed.push(completed);
@@ -279,7 +312,8 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
         // Copy any remaining views into a new buffer
         let remaining_views = &views[num_view_to_current..];
         let new_buffer = self.buffer_source.next_buffer(remaining_view_buffer_size);
-        self.append_views_and_copy_strings_inner(remaining_views, new_buffer, buffers);
+        // SAFETY: `remaining_views` is a subset of the caller-validated views.
+        unsafe { self.append_views_and_copy_strings_inner(remaining_views, new_buffer, buffers) };
     }
 
     /// Append views to self.views, copying data from the buffers into
@@ -288,9 +322,14 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
     /// # Panics:
     /// If `self.current` is `Some`
     ///
+    /// # Safety
+    ///
+    /// [`B::validate`](ByteViewType::validate) must succeed for `views` and
+    /// `buffers`.
+    ///
     /// See `append_views_and_copy_strings` for more details
     #[inline(never)]
-    fn append_views_and_copy_strings_inner(
+    unsafe fn append_views_and_copy_strings_inner(
         &mut self,
         views: &[u128],
         mut dst_buffer: Vec<u8>,
@@ -369,14 +408,22 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
                 (false, 0)
             } else {
                 let ideal_buffer_size = s.total_buffer_bytes_used();
-                // We don't use get_buffer_memory_size here, because gc is for the contents of the
-                // data buffers, not views and nulls.
-                let actual_buffer_size =
-                    s.data_buffers().iter().map(|b| b.capacity()).sum::<usize>();
                 // copying strings is expensive, so only do it if the array is
                 // sparse (uses at least 2x the memory it needs)
-                let need_gc =
-                    ideal_buffer_size != 0 && actual_buffer_size > (ideal_buffer_size * 2);
+                let need_gc = if ideal_buffer_size != 0 {
+                    let mut is_sparse = false;
+                    let mut curr_buffer_size = 0;
+                    for buffer in s.data_buffers().iter() {
+                        curr_buffer_size += buffer.capacity();
+                        if curr_buffer_size > ideal_buffer_size * 2 {
+                            is_sparse = true;
+                            break;
+                        }
+                    }
+                    is_sparse
+                } else {
+                    false
+                };
                 (need_gc, ideal_buffer_size)
             };
 
@@ -405,11 +452,10 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
             self.nulls.append_buffer(&nulls);
         } else {
             self.nulls.append_n_non_nulls(len);
-        };
+        }
 
         let buffers = s.data_buffers();
-        // SAFETY: copy_rows is called with ranges derived from the source array.
-        let views = unsafe { s.views().as_ref().get_unchecked(offset..offset + len) };
+        let views = &s.views().as_ref()[offset..offset + len];
 
         // If there are no data buffers in s (all inlined views), can append the
         // views/nulls and done
@@ -422,9 +468,11 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
         // Copying the strings into a buffer can be time-consuming so
         // only do it if the array is sparse
         if source.need_gc {
-            self.append_views_and_copy_strings(views, source.ideal_buffer_size, buffers);
+            // SAFETY: `views` and `buffers` come from the same valid byte-view array.
+            unsafe { self.append_views_and_copy_strings(views, source.ideal_buffer_size, buffers) };
         } else {
-            self.append_views_and_update_buffer_index(views, buffers, true);
+            // SAFETY: `views` and `buffers` come from the same valid byte-view array.
+            unsafe { self.append_views_and_update_buffer_index(views, buffers, true) };
         }
         self.source = Some(source);
         Ok(())
@@ -449,8 +497,16 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
             ));
         }
 
+        if let Err(e) = check_filter_len(filter, s.len()) {
+            // Restore the source taken above before returning the error.
+            self.source = Some(source);
+            return Err(e);
+        }
+
         self.append_nulls_by_filter(filter, s.nulls());
-        self.append_views_by_filter(s.views(), filter);
+        // SAFETY: `check_filter_len` verified the filter is no longer than
+        // `s.views()`.
+        unsafe { self.append_views_by_filter(s.views(), filter) };
 
         self.source = Some(source);
         Ok(())
@@ -462,14 +518,21 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
         filter: &FilterPredicate,
     ) -> Result<(), ArrowError> {
         let s = source.as_byte_view::<B>();
+        // The source views reference no external buffers, so they must all be
+        // inline and we can copy just the nulls and views.
         if s.data_buffers().is_empty() {
+            check_filter_len(filter, s.len())?;
             self.ensure_capacity();
             self.append_nulls_by_filter(filter, s.nulls());
-            self.append_views_by_filter(s.views(), filter);
+            // SAFETY: `check_filter_len` verified the filter is no longer than
+            // `s.views()`.
+            unsafe { self.append_views_by_filter(s.views(), filter) };
             return Ok(());
         }
 
-        // Match the filter kernel: filter views/nulls, but reuse data buffers.
+        // The views reference external buffers, so match the filter kernel:
+        // filter the views/nulls, but reuse the source's data buffers rather
+        // than copying the referenced string data.
         let filtered = filter.filter(source.as_ref())?;
         let filtered = filtered.as_byte_view::<B>();
 
@@ -479,7 +542,14 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
         } else {
             self.nulls.append_n_non_nulls(filter.count());
         }
-        self.append_views_and_update_buffer_index(filtered.views(), filtered.data_buffers(), false);
+        // SAFETY: the views and buffers come from the same valid filtered array.
+        unsafe {
+            self.append_views_and_update_buffer_index(
+                filtered.views(),
+                filtered.data_buffers(),
+                false,
+            )
+        };
         Ok(())
     }
 
@@ -497,8 +567,9 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
 
         // Safety: we created valid views and buffers above and the
         // input arrays had value data and nulls
-        let new_array =
-            unsafe { GenericByteViewArray::<B>::new_unchecked(views.into(), buffers, nulls) };
+        let new_array = unsafe {
+            GenericByteViewArray::<B>::new_unchecked(views.into(), buffers.into(), nulls)
+        };
         Ok(Arc::new(new_array))
     }
 

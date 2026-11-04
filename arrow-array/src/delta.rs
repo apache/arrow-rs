@@ -62,7 +62,7 @@ pub(crate) fn add_days_datetime<Tz: TimeZone>(dt: DateTime<Tz>, days: i32) -> Op
     }
 }
 
-/// Substract the given number of months to the given datetime.
+/// Subtract the given number of months to the given datetime.
 ///
 /// Returns `None` when it will result in overflow.
 pub(crate) fn sub_months_datetime<Tz: TimeZone>(
@@ -76,7 +76,7 @@ pub(crate) fn sub_months_datetime<Tz: TimeZone>(
     }
 }
 
-/// Substract the given number of days to the given datetime.
+/// Subtract the given number of days to the given datetime.
 ///
 /// Returns `None` when it will result in overflow.
 pub(crate) fn sub_days_datetime<Tz: TimeZone>(dt: DateTime<Tz>, days: i32) -> Option<DateTime<Tz>> {
@@ -95,7 +95,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_add_monts_months() {
+    fn test_add_months_date() {
         let base = NaiveDate::from_ymd_opt(2020, 1, 31).unwrap();
 
         assert_eq!(

@@ -32,7 +32,8 @@ pub(super) fn byte_view_equal(
     for (idx, (l, r)) in lhs_views.iter().zip(rhs_views).enumerate() {
         // Only checking one null mask here because by the time the control flow reaches
         // this point, the equality of the two masks would have already been verified.
-        if lhs.is_null(idx) {
+        // `idx` counts from `lhs_start`, so offset it to index the null mask.
+        if lhs.is_null(lhs_start + idx) {
             continue;
         }
 

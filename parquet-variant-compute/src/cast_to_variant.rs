@@ -1059,7 +1059,7 @@ mod tests {
             vec![Some(1), Some(1001), Some(123_456_789_012), None].into();
         run_test(
             Arc::new(array),
-            // as we can only present with micro second, so the nano second will round donw to 0
+            // as we can only present with micro second, so the nano second will round down to 0
             vec![
                 Some(Variant::Time(
                     NaiveTime::from_num_seconds_from_midnight_opt(0, 0).unwrap(),
@@ -1811,7 +1811,7 @@ mod tests {
                     );
                     field_arrays.push(Arc::new(array));
                     fields.push(Field::new(
-                        format!("int_field_{}", field_idx),
+                        format!("int_field_{field_idx}"),
                         DataType::Int64,
                         false,
                     ));
@@ -1825,7 +1825,7 @@ mod tests {
                     );
                     field_arrays.push(Arc::new(array));
                     fields.push(Field::new(
-                        format!("int32_field_{}", field_idx),
+                        format!("int32_field_{field_idx}"),
                         DataType::Int32,
                         false,
                     ));
@@ -1839,7 +1839,7 @@ mod tests {
                     );
                     field_arrays.push(Arc::new(array));
                     fields.push(Field::new(
-                        format!("float_field_{}", field_idx),
+                        format!("float_field_{field_idx}"),
                         DataType::Float64,
                         false,
                     ));
@@ -1859,7 +1859,7 @@ mod tests {
                     let array = BinaryArray::from(binary_data);
                     field_arrays.push(Arc::new(array));
                     fields.push(Field::new(
-                        format!("binary_field_{}", field_idx),
+                        format!("binary_field_{field_idx}"),
                         DataType::Binary,
                         false,
                     ));

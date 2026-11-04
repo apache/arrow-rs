@@ -17,9 +17,6 @@
 
 #[macro_use]
 extern crate criterion;
-use criterion::Criterion;
-use std::sync::Arc;
-extern crate arrow;
 use arrow::compute::kernels::sort::{SortColumn, lexsort};
 use arrow::util::bench_util::*;
 use arrow::{
@@ -27,17 +24,9 @@ use arrow::{
     datatypes::{Float64Type, UInt8Type},
 };
 use arrow_ord::partition::partition;
-use rand::distr::{Distribution, StandardUniform};
+use criterion::Criterion;
 use std::hint;
-
-fn create_array<T: ArrowPrimitiveType>(size: usize, with_nulls: bool) -> ArrayRef
-where
-    StandardUniform: Distribution<T::Native>,
-{
-    let null_density = if with_nulls { 0.5 } else { 0.0 };
-    let array = create_primitive_array::<T>(size, null_density);
-    Arc::new(array)
-}
+use std::sync::Arc;
 
 fn bench_partition(sorted_columns: &[ArrayRef]) {
     hint::black_box(partition(sorted_columns).unwrap().ranges());
@@ -61,14 +50,16 @@ fn create_sorted_low_cardinality_data(length: usize) -> Vec<ArrayRef> {
 }
 
 fn create_sorted_float_data(pow: u32, with_nulls: bool) -> Vec<ArrayRef> {
+    let size = 2u64.pow(pow) as usize;
+    let null_density = if with_nulls { 0.5 } else { 0.0 };
     lexsort(
         &[
             SortColumn {
-                values: create_array::<Float64Type>(2u64.pow(pow) as usize, with_nulls),
+                values: Arc::new(create_primitive_array::<Float64Type>(size, null_density)),
                 options: None,
             },
             SortColumn {
-                values: create_array::<Float64Type>(2u64.pow(pow) as usize, with_nulls),
+                values: Arc::new(create_primitive_array::<Float64Type>(size, null_density)),
                 options: None,
             },
         ],
@@ -78,14 +69,16 @@ fn create_sorted_float_data(pow: u32, with_nulls: bool) -> Vec<ArrayRef> {
 }
 
 fn create_sorted_data(pow: u32, with_nulls: bool) -> Vec<ArrayRef> {
+    let size = 2u64.pow(pow) as usize;
+    let null_density = if with_nulls { 0.5 } else { 0.0 };
     lexsort(
         &[
             SortColumn {
-                values: create_array::<UInt8Type>(2u64.pow(pow) as usize, with_nulls),
+                values: Arc::new(create_primitive_array::<UInt8Type>(size, null_density)),
                 options: None,
             },
             SortColumn {
-                values: create_array::<UInt8Type>(2u64.pow(pow) as usize, with_nulls),
+                values: Arc::new(create_primitive_array::<UInt8Type>(size, null_density)),
                 options: None,
             },
         ],

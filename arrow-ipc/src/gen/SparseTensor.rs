@@ -234,11 +234,11 @@ pub enum SparseTensorIndexCOOOffset {}
 /// EXPERIMENTAL: Data structures for sparse tensors
 /// Coordinate (COO) format of sparse tensor index.
 ///
-/// COO's index list are represented as a NxM matrix,
+/// COO's index list is represented as an NxM matrix,
 /// where N is the number of non-zero values,
 /// and M is the number of dimensions of a sparse tensor.
 ///
-/// indicesBuffer stores the location and size of the data of this indices
+/// indicesBuffer stores the location and size of the data of these indices
 /// matrix.  The value type and the stride of the indices matrix is
 /// specified in indicesType and indicesStrides fields.
 ///
@@ -259,7 +259,7 @@ pub enum SparseTensorIndexCOOOffset {}
 ///    [2, 2, 3, 1, 2, 0],
 ///    [0, 1, 0, 0, 3, 4]]
 /// ```
-/// When isCanonical is true, the indices is sorted in lexicographical order
+/// When isCanonical is true, the indices are sorted in lexicographical order
 /// (row-major order), and it does not have duplicated entries.  Otherwise,
 /// the indices may not be sorted, or may have duplicated entries.
 pub struct SparseTensorIndexCOO<'a> {
@@ -601,7 +601,7 @@ impl<'a> SparseMatrixIndexCSX<'a> {
     /// contains the column indices of the corresponding non-zero values.
     /// The type of index value is long.
     ///
-    /// For example, the indices of the above X is:
+    /// For example, the indices of the above X are:
     /// ```text
     ///   indices(X) = [1, 2, 2, 1, 3, 0, 2, 3, 1].
     /// ```
@@ -800,7 +800,7 @@ impl<'a> SparseTensorIndexCSF<'a> {
     /// CSF index recursively compresses each dimension of a tensor into a set
     /// of prefix trees. Each path from a root to leaf forms one tensor
     /// non-zero index. CSF is implemented with two arrays of buffers and one
-    /// arrays of integers.
+    /// array of integers.
     ///
     /// For example, let X be a 2x3x4x5 tensor and let it have the following
     /// 8 non-zero values:
@@ -842,7 +842,7 @@ impl<'a> SparseTensorIndexCSF<'a> {
     /// and `indptrBuffers[dim][i + 1]` signify a range of nodes in
     /// `indicesBuffers[dim + 1]` who are children of `indicesBuffers[dim][i]` node.
     ///
-    /// For example, the indptrBuffers for the above X is:
+    /// For example, the indptrBuffers for the above X are:
     /// ```text
     ///   indptrBuffer(X) = [
     ///                       [0, 2, 3],
@@ -881,7 +881,7 @@ impl<'a> SparseTensorIndexCSF<'a> {
     }
     /// indicesBuffers stores values of nodes.
     /// Each tensor dimension corresponds to a buffer in indicesBuffers.
-    /// For example, the indicesBuffers for the above X is:
+    /// For example, the indicesBuffers for the above X are:
     /// ```text
     ///   indicesBuffer(X) = [
     ///                        [0, 1],
@@ -1073,6 +1073,11 @@ impl core::fmt::Debug for SparseTensorIndexCSF<'_> {
 pub enum SparseTensorOffset {}
 #[derive(Copy, Clone, PartialEq)]
 
+/// DEPRECATED. Unlike dense tensors (see Tensor.fbs), the SparseTensor message
+/// currently doesn't have a recommended replacement as a RecordBatch column type.
+/// Feel free to discuss this on the development mailing-list (*) if this use case
+/// is important to you.
+/// (*) see <https://arrow.apache.org/community/>
 pub struct SparseTensor<'a> {
     pub _tab: flatbuffers::Table<'a>,
 }

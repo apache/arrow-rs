@@ -126,7 +126,7 @@ impl LevelEncoder {
     /// Finalizes level encoder, flush all intermediate buffers and return resulting
     /// encoded buffer. Returned buffer is already truncated to encoded bytes only.
     #[inline]
-    #[allow(unused)]
+    #[cfg_attr(all(not(feature = "experimental"), not(test)), expect(unused))]
     pub fn consume(self) -> Vec<u8> {
         match self {
             LevelEncoder::Rle(encoder) => {

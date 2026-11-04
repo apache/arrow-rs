@@ -115,7 +115,7 @@ impl GeometryBounder {
         // Check if our wraparound bounds are any better than our Cartesian bounds
         // If the Cartesian bounds are tighter, return them.
         let out_width = (self.x_left.hi() - self.wraparound_hint.lo())
-            + (self.wraparound_hint.hi() - self.x_right.hi());
+            + (self.wraparound_hint.hi() - self.x_right.lo());
         if out_all.width() < out_width {
             return out_all.into();
         }
@@ -146,7 +146,7 @@ impl GeometryBounder {
     /// for PointZ). The output is always returned sorted.
     pub fn geometry_types(&self) -> Vec<i32> {
         let mut out = self.geometry_types.iter().copied().collect::<Vec<_>>();
-        out.sort();
+        out.sort_unstable();
         out
     }
 
@@ -200,9 +200,7 @@ fn visit_intervals(
     dimension: char,
     func: &mut impl FnMut(Interval),
 ) -> Result<(), ArrowError> {
-    let n = if let Some(n) = dimension_index(geom.dim(), dimension) {
-        n
-    } else {
+    let Some(n) = dimension_index(geom.dim(), dimension) else {
         return Ok(());
     };
 
@@ -585,6 +583,16 @@ mod test {
         // Wraparound where the wrapped box *is* better
         let bounds = wkt_bounds_with_wraparound(geoms, (-180, 180)).unwrap();
         assert_eq!(bounds.x(), (170, -170).into());
+
+        // The Cartesian bounds are tighter than the wraparound bounds.
+        let geoms = [
+            "POINT (-10 0)",
+            "POINT (-2 0)",
+            "POINT (170 0)",
+            "POINT (175 0)",
+        ];
+        let bounds = wkt_bounds_with_wraparound(geoms, (-180, 180)).unwrap();
+        assert_eq!(bounds.x(), (-10, 175).into());
     }
 
     #[test]

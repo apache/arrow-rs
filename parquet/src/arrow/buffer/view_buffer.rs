@@ -57,14 +57,15 @@ impl ViewBuffer {
         let len = self.views.len();
         let views = ScalarBuffer::from(self.views);
         let nulls = null_buffer.and_then(|b| NullBuffer::from_unsliced_buffer(b, len));
+        let buffers = self.buffers.into();
         match data_type {
             ArrowType::Utf8View => {
                 // Safety: views were created correctly, and checked that the data is utf8 when building the buffer
-                unsafe { Arc::new(StringViewArray::new_unchecked(views, self.buffers, nulls)) }
+                unsafe { Arc::new(StringViewArray::new_unchecked(views, buffers, nulls)) }
             }
             ArrowType::BinaryView => {
                 // Safety: views were created correctly
-                unsafe { Arc::new(BinaryViewArray::new_unchecked(views, self.buffers, nulls)) }
+                unsafe { Arc::new(BinaryViewArray::new_unchecked(views, buffers, nulls)) }
             }
             _ => panic!("Unsupported data type: {data_type}"),
         }

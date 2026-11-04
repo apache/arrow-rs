@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 fn make_record_batch(column_count: usize, row_count: usize) -> RecordBatch {
     let fields = (0..column_count)
-        .map(|i| Field::new(format!("col_{}", i), DataType::Int64, i.is_even()))
+        .map(|i| Field::new(format!("col_{i}"), DataType::Int64, i.is_even()))
         .collect::<Vec<_>>();
 
     let columns = fields

@@ -15,10 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::builder::{Date32Builder, Decimal128Builder, Int32Builder};
-use arrow_array::{RecordBatch, builder::StringBuilder};
+use arrow_array::builder::{
+    Date32Builder, Decimal128Builder, Int32Builder, ListBuilder, StringDictionaryBuilder,
+};
+use arrow_array::types::Int32Type;
+use arrow_array::{ArrayRef, FixedSizeBinaryArray, RecordBatch, builder::StringBuilder};
 use arrow_buffer::Buffer;
-use arrow_ipc::convert::fb_to_schema;
+use arrow_ipc::convert::try_fb_to_schema;
 use arrow_ipc::reader::{FileDecoder, FileReader, StreamReader, read_footer_length};
 use arrow_ipc::writer::{FileWriter, IpcWriteOptions, StreamWriter};
 use arrow_ipc::{Block, CompressionType, root_as_footer};
@@ -63,6 +66,22 @@ fn criterion_benchmark(c: &mut Criterion) {
         let buffer = ipc_stream(
             IpcWriteOptions::default()
                 .try_with_compression(Some(CompressionType::ZSTD))
+                .unwrap(),
+        );
+        b.iter(move || {
+            let projection = None;
+            let mut reader = StreamReader::try_new(buffer.as_slice(), projection).unwrap();
+            for _ in 0..10 {
+                reader.next().unwrap().unwrap();
+            }
+            assert!(reader.next().is_none());
+        })
+    });
+
+    group.bench_function("StreamReader/read_10/lz4", |b| {
+        let buffer = ipc_stream(
+            IpcWriteOptions::default()
+                .try_with_compression(Some(CompressionType::LZ4_FRAME))
                 .unwrap(),
         );
         b.iter(move || {
@@ -169,6 +188,52 @@ fn criterion_benchmark(c: &mut Criterion) {
             }
         })
     });
+
+    let num_columns = 1000;
+    for num_distinct in [4, 4096] {
+        for (layout, list) in [("flat", false), ("list", true)] {
+            let buffer = dictionary_ipc_stream(num_columns, num_distinct, list);
+            let name = format!(
+                "StreamReader/dictionaries/{num_columns}_columns/{num_distinct}_distinct/{layout}"
+            );
+            group.bench_function(name, |b| {
+                b.iter(|| {
+                    let mut reader = StreamReader::try_new(buffer.as_slice(), None).unwrap();
+                    reader.next().unwrap().unwrap();
+                    assert!(reader.next().is_none());
+                })
+            });
+        }
+    }
+}
+
+/// Return an IPC stream with one record batch of `num_columns` string dictionary columns. Each
+/// column holds the same 4096 values with `num_distinct` distinct values, either directly or, with
+/// `list`, grouped into lists of 4.
+fn dictionary_ipc_stream(num_columns: usize, num_distinct: usize, list: bool) -> Vec<u8> {
+    let values: Vec<String> = (0..4096)
+        .map(|i| format!("value_{}", i % num_distinct))
+        .collect();
+    let column: ArrayRef = if list {
+        let mut builder = ListBuilder::new(StringDictionaryBuilder::<Int32Type>::new());
+        for chunk in values.chunks(4) {
+            builder.append_value(chunk.iter().map(Some));
+        }
+        Arc::new(builder.finish())
+    } else {
+        let mut builder = StringDictionaryBuilder::<Int32Type>::new();
+        builder.extend(values.iter().map(Some));
+        Arc::new(builder.finish())
+    };
+    let batch = RecordBatch::try_from_iter(
+        (0..num_columns).map(|i| (format!("c{i}"), Arc::clone(&column))),
+    )
+    .unwrap();
+    let mut buffer = Vec::new();
+    let mut writer = StreamWriter::try_new(&mut buffer, batch.schema().as_ref()).unwrap();
+    writer.write(&batch).unwrap();
+    writer.finish().unwrap();
+    buffer
 }
 
 /// Return an IPC stream with 10 record batches
@@ -215,7 +280,7 @@ impl IPCBufferDecoder {
         let footer_len = read_footer_length(buffer[trailer_start..].try_into().unwrap()).unwrap();
         let footer = root_as_footer(&buffer[trailer_start - footer_len..trailer_start]).unwrap();
 
-        let schema = fb_to_schema(footer.schema().unwrap());
+        let schema = try_fb_to_schema(footer.schema().unwrap()).unwrap();
 
         let mut decoder = FileDecoder::new(Arc::new(schema), footer.version());
 
@@ -267,6 +332,7 @@ fn create_batch(num_rows: usize, allow_nulls: bool) -> RecordBatch {
         Field::new("c1", DataType::Utf8, true),
         Field::new("c2", DataType::Date32, true),
         Field::new("c3", DataType::Decimal128(11, 2), true),
+        Field::new("c4", DataType::FixedSizeBinary(16), false),
     ]));
     let mut a = Int32Builder::new();
     let mut b = StringBuilder::new();
@@ -274,6 +340,7 @@ fn create_batch(num_rows: usize, allow_nulls: bool) -> RecordBatch {
     let mut d = Decimal128Builder::new()
         .with_precision_and_scale(11, 2)
         .unwrap();
+    let fixed_value = [0xa5; 16];
     for i in 0..num_rows {
         a.append_value(i as i32);
         c.append_value(i as i32);
@@ -288,9 +355,17 @@ fn create_batch(num_rows: usize, allow_nulls: bool) -> RecordBatch {
     let b = b.finish();
     let c = c.finish();
     let d = d.finish();
+    let e =
+        FixedSizeBinaryArray::try_from_iter((0..num_rows).map(|_| fixed_value.as_slice())).unwrap();
     RecordBatch::try_new(
         schema.clone(),
-        vec![Arc::new(a), Arc::new(b), Arc::new(c), Arc::new(d)],
+        vec![
+            Arc::new(a),
+            Arc::new(b),
+            Arc::new(c),
+            Arc::new(d),
+            Arc::new(e),
+        ],
     )
     .unwrap()
 }

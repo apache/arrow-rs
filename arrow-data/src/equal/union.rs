@@ -20,7 +20,7 @@ use arrow_schema::{DataType, UnionFields, UnionMode};
 
 use super::equal_range;
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn equal_dense(
     lhs: &ArrayData,
     rhs: &ArrayData,
@@ -59,25 +59,37 @@ fn equal_dense(
         })
 }
 
+/// Compares `type_ids.len()` slots of two sparse unions whose type ids over that
+/// range are already known to be equal.
+///
+/// Only the child selected by each slot's type id contributes to the logical
+/// value of a sparse union; the values held by the other children at that slot
+/// are arbitrary and must not affect equality. Consecutive slots that select the
+/// same child are compared as a single range of that child.
 fn equal_sparse(
     lhs: &ArrayData,
     rhs: &ArrayData,
+    type_ids: &[i8],
+    fields: &UnionFields,
     lhs_start: usize,
     rhs_start: usize,
-    len: usize,
 ) -> bool {
-    lhs.child_data()
-        .iter()
-        .zip(rhs.child_data())
-        .all(|(lhs_values, rhs_values)| {
-            equal_range(
-                lhs_values,
-                rhs_values,
-                lhs_start + lhs.offset(),
-                rhs_start + rhs.offset(),
-                len,
-            )
-        })
+    let mut run_start = 0;
+    type_ids.chunk_by(|a, b| a == b).all(|run| {
+        let start = run_start;
+        run_start += run.len();
+
+        // Both sides share the same `UnionFields` (checked when comparing the
+        // data types), so the type id maps to the same child index on each side.
+        let child_index = fields.iter().position(|(id, _)| id == run[0]).unwrap();
+        equal_range(
+            &lhs.child_data()[child_index],
+            &rhs.child_data()[child_index],
+            lhs_start + lhs.offset() + start,
+            rhs_start + rhs.offset() + start,
+            run.len(),
+        )
+    })
 }
 
 pub(super) fn union_equal(
@@ -116,9 +128,9 @@ pub(super) fn union_equal(
                     rhs_fields,
                 )
         }
-        (DataType::Union(_, UnionMode::Sparse), DataType::Union(_, UnionMode::Sparse)) => {
+        (DataType::Union(fields, UnionMode::Sparse), DataType::Union(_, UnionMode::Sparse)) => {
             lhs_type_id_range == rhs_type_id_range
-                && equal_sparse(lhs, rhs, lhs_start, rhs_start, len)
+                && equal_sparse(lhs, rhs, lhs_type_id_range, fields, lhs_start, rhs_start)
         }
         _ => unimplemented!(
             "Logical equality not yet implemented between dense and sparse union arrays"

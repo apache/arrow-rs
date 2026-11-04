@@ -261,6 +261,8 @@ mod primitive_run_builder;
 pub use primitive_run_builder::*;
 mod struct_builder;
 pub use struct_builder::*;
+mod struct_array_assembler;
+pub use struct_array_assembler::*;
 mod generic_bytes_dictionary_builder;
 pub use generic_bytes_dictionary_builder::*;
 mod generic_byte_run_builder;
@@ -445,6 +447,10 @@ pub type LargeStringBuilder = GenericStringBuilder<i64>;
 ///
 /// See comments on [StructBuilder] for retrieving collection builders built by
 /// make_builder.
+///
+/// # Panics
+///
+/// Panics if `datatype` is not supported, see [`ArrayBuilder`] implementations
 pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilder> {
     use crate::builder::*;
     match datatype {

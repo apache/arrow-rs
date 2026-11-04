@@ -208,9 +208,9 @@ impl AvroDataType {
         resolution: Option<ResolutionInfo>,
     ) -> Self {
         Self {
-            codec,
-            metadata,
             nullability,
+            metadata,
+            codec,
             resolution,
         }
     }
@@ -218,12 +218,10 @@ impl AvroDataType {
     /// Returns an arrow [`Field`] with the given name
     pub(crate) fn field_with_name(&self, name: &str) -> Field {
         let mut nullable = self.nullability.is_some();
-        if !nullable {
-            if let Codec::Union(children, _, _) = self.codec() {
-                // If any encoded branch is `null`, mark field as nullable
-                if children.iter().any(|c| matches!(c.codec(), Codec::Null)) {
-                    nullable = true;
-                }
+        if !nullable && let Codec::Union(children, _, _) = self.codec() {
+            // If any encoded branch is `null`, mark field as nullable
+            if children.iter().any(|c| matches!(c.codec(), Codec::Null)) {
+                nullable = true;
             }
         }
         let data_type = self.codec.data_type();
@@ -282,13 +280,13 @@ impl AvroDataType {
                 }
                 out.push(cp as u8);
             }
-            if let Some(len) = expected_len {
-                if out.len() != len {
-                    return Err(ArrowError::SchemaError(format!(
-                        "Default length {} does not match expected fixed size {len}",
-                        out.len(),
-                    )));
-                }
+            if let Some(len) = expected_len
+                && out.len() != len
+            {
+                return Err(ArrowError::SchemaError(format!(
+                    "Default length {} does not match expected fixed size {len}",
+                    out.len(),
+                )));
             }
             Ok(out)
         }
@@ -602,7 +600,7 @@ impl AvroField {
     /// converted to use `Utf8View` instead of `Utf8`.
     pub(crate) fn with_utf8view(&self) -> Self {
         let mut field = self.clone();
-        if let Codec::Utf8 = field.data_type.codec {
+        if field.data_type.codec == Codec::Utf8 {
             field.data_type.codec = Codec::Utf8View;
         }
         field
@@ -962,8 +960,16 @@ impl Codec {
                     _ => unreachable!(),
                 };
                 DataType::RunEndEncoded(
-                    Arc::new(Field::new("run_ends", run_ends_dt, false)),
-                    Arc::new(Field::new("values", values.codec().data_type(), true)),
+                    Arc::new(Field::new(
+                        Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                        run_ends_dt,
+                        false,
+                    )),
+                    Arc::new(Field::new(
+                        Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                        values.codec().data_type(),
+                        true,
+                    )),
                 )
             }
             #[cfg(feature = "avro_custom_types")]
@@ -1091,8 +1097,7 @@ fn parse_decimal_attributes(
     }
     if precision > DECIMAL256_MAX_PRECISION as usize {
         return Err(ArrowError::ParseError(format!(
-            "Decimal precision {precision} exceeds maximum supported by Arrow ({})",
-            DECIMAL256_MAX_PRECISION
+            "Decimal precision {precision} exceeds maximum supported by Arrow ({DECIMAL256_MAX_PRECISION})"
         )));
     }
     if let Some(sz) = size {
@@ -1200,14 +1205,14 @@ impl From<&Codec> for UnionFieldKind {
 
 fn union_branch_name(dt: &AvroDataType) -> String {
     if let Some(name) = dt.metadata.get(AVRO_NAME_METADATA_KEY) {
-        if name.contains(".") {
+        if name.contains('.') {
             // Full name
-            return name.to_string();
+            return name.clone();
         }
         if let Some(ns) = dt.metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
             return format!("{ns}.{name}");
         }
-        return name.to_string();
+        return name.clone();
     }
     dt.codec.union_field_name()
 }
@@ -1231,7 +1236,10 @@ struct Resolver<'a> {
 
 impl<'a> Resolver<'a> {
     fn register(&mut self, name: &'a str, namespace: Option<&'a str>, schema: AvroDataType) {
-        self.map.insert((namespace.unwrap_or(""), name), schema);
+        let (namespace, name) = name
+            .rsplit_once('.')
+            .unwrap_or_else(|| (namespace.unwrap_or(""), name));
+        self.map.insert((namespace, name), schema);
     }
 
     fn resolve(&self, name: &str, namespace: Option<&'a str>) -> Result<AvroDataType, ArrowError> {
@@ -1242,6 +1250,23 @@ impl<'a> Resolver<'a> {
             .get(&(namespace, name))
             .ok_or_else(|| ArrowError::ParseError(format!("Failed to resolve {namespace}.{name}")))
             .cloned()
+    }
+}
+
+/// Returns the namespace of a named type.
+///
+/// A name containing a dot is a full name, so its namespace is taken from the name and both
+/// the `namespace` attribute and the enclosing namespace are ignored.
+///
+/// See <https://avro.apache.org/docs/1.11.1/specification/#names>
+fn named_type_namespace<'a>(
+    name: &'a str,
+    namespace: Option<&'a str>,
+    enclosing_ns: Option<&'a str>,
+) -> Option<&'a str> {
+    match name.rsplit_once('.') {
+        Some((ns, _)) => Some(ns),
+        None => namespace.or(enclosing_ns),
     }
 }
 
@@ -1362,16 +1387,16 @@ fn union_first_duplicate<'a>(
 ) -> Option<String> {
     let mut seen = HashSet::with_capacity(branches.len());
     for schema in branches {
-        if let Some(key) = branch_key_of(schema, enclosing_ns) {
-            if !seen.insert(key.clone()) {
-                let msg = match key {
-                    UnionBranchKey::Named(full) => format!("named type {full}"),
-                    UnionBranchKey::Primitive(p) => format!("primitive {}", p.as_ref()),
-                    UnionBranchKey::Array => "array".to_string(),
-                    UnionBranchKey::Map => "map".to_string(),
-                };
-                return Some(msg);
-            }
+        if let Some(key) = branch_key_of(schema, enclosing_ns)
+            && !seen.insert(key.clone())
+        {
+            let msg = match key {
+                UnionBranchKey::Named(full) => format!("named type {full}"),
+                UnionBranchKey::Primitive(p) => format!("primitive {}", p.as_ref()),
+                UnionBranchKey::Array => "array".to_string(),
+                UnionBranchKey::Map => "map".to_string(),
+            };
+            return Some(msg);
         }
     }
     None
@@ -1497,7 +1522,7 @@ impl<'a> Maker<'a> {
             }
             Schema::Complex(c) => match c {
                 ComplexType::Record(r) => {
-                    let namespace = r.namespace.or(namespace);
+                    let namespace = named_type_namespace(r.name, r.namespace, namespace);
                     let mut metadata = r.attributes.field_metadata();
                     let fields = r
                         .fields
@@ -1535,7 +1560,7 @@ impl<'a> Maker<'a> {
                     let size = f.size.try_into().map_err(|e| {
                         ArrowError::ParseError(format!("Overflow converting size to i32: {e}"))
                     })?;
-                    let namespace = f.namespace.or(namespace);
+                    let namespace = named_type_namespace(f.name, f.namespace, namespace);
                     let mut metadata = f.attributes.field_metadata();
                     metadata.insert(AVRO_NAME_METADATA_KEY.to_string(), f.name.to_string());
                     if let Some(ns) = namespace {
@@ -1557,7 +1582,7 @@ impl<'a> Maker<'a> {
                                 return Err(ArrowError::ParseError(format!(
                                     "Invalid fixed size for Duration: {size}, must be 12"
                                 )));
-                            };
+                            }
                             AvroDataType {
                                 nullability: None,
                                 metadata,
@@ -1625,7 +1650,7 @@ impl<'a> Maker<'a> {
                     Ok(field)
                 }
                 ComplexType::Enum(e) => {
-                    let namespace = e.namespace.or(namespace);
+                    let namespace = named_type_namespace(e.name, e.namespace, namespace);
                     let symbols = e
                         .symbols
                         .iter()
@@ -1777,17 +1802,15 @@ impl<'a> Maker<'a> {
                     }
                     (None, _) => {}
                 }
-                if matches!(field.codec, Codec::Int64) {
-                    if let Some(unit) = t
+                if matches!(field.codec, Codec::Int64)
+                    && let Some(unit) = t
                         .attributes
                         .additional
                         .get("arrowTimeUnit")
                         .and_then(|v| v.as_str())
-                    {
-                        if unit == "nanosecond" {
-                            field.codec = Codec::TimestampNanos(Some(self.tz));
-                        }
-                    }
+                    && unit == "nanosecond"
+                {
+                    field.codec = Codec::TimestampNanos(Some(self.tz));
                 }
                 if !t.attributes.additional.is_empty() {
                     for (k, v) in &t.attributes.additional {
@@ -1967,7 +1990,7 @@ impl<'a> Maker<'a> {
                             first_resolution = Some((reader_index, dt));
                         }
                     }
-                };
+                }
             }
         }
         first_resolution
@@ -2221,7 +2244,7 @@ impl<'a> Maker<'a> {
             mapping: Arc::from(mapping),
             default_index,
         }));
-        let reader_ns = reader_enum.namespace.or(namespace);
+        let reader_ns = named_type_namespace(reader_enum.name, reader_enum.namespace, namespace);
         self.resolver
             .register(reader_enum.name, reader_ns, dt.clone());
         Ok(dt)
@@ -2247,7 +2270,7 @@ impl<'a> Maker<'a> {
                     Entry::Vacant(e) => {
                         e.insert(idx);
                     }
-                    _ => {}
+                    Entry::Occupied(_) => {}
                 }
             }
         }
@@ -2269,8 +2292,10 @@ impl<'a> Maker<'a> {
             reader_record.namespace,
             &reader_record.aliases,
         )?;
-        let writer_ns = writer_record.namespace.or(namespace);
-        let reader_ns = reader_record.namespace.or(namespace);
+        let writer_ns =
+            named_type_namespace(writer_record.name, writer_record.namespace, namespace);
+        let reader_ns =
+            named_type_namespace(reader_record.name, reader_record.namespace, namespace);
         let mut reader_md = reader_record.attributes.field_metadata();
         reader_md.insert(
             AVRO_NAME_METADATA_KEY.to_string(),
@@ -3279,6 +3304,58 @@ mod tests {
         } else {
             panic!("Top-level schema is not a struct");
         }
+    }
+
+    #[test]
+    fn test_named_type_reuse_with_full_name() {
+        // A name containing a dot is a full name, and types nested in a record
+        // with a full name inherit the namespace from that name.
+        let schema_str = r#"
+        {
+          "type": "record",
+          "name": "record_ns.Record",
+          "fields": [
+            {
+              "name": "status",
+              "type": {
+                "type": "enum",
+                "name": "enum_ns.Status",
+                "symbols": ["ACTIVE", "INACTIVE"]
+              }
+            },
+            { "name": "backupStatus", "type": "enum_ns.Status" },
+            {
+              "name": "nested",
+              "type": {
+                "type": "record",
+                "name": "Nested",
+                "fields": [{ "name": "nested_int", "type": "int" }]
+              }
+            },
+            { "name": "nestedAgain", "type": "record_ns.Nested" }
+          ]
+        }
+        "#;
+
+        let schema: Schema = serde_json::from_str(schema_str).unwrap();
+
+        let mut maker = Maker::new(false, false, Tz::default());
+        let avro_data_type = maker.make_data_type(&schema, None, None).unwrap();
+
+        let Codec::Struct(fields) = avro_data_type.codec() else {
+            panic!("Top-level schema is not a struct");
+        };
+        assert_eq!(fields.len(), 4);
+        assert!(matches!(fields[1].data_type().codec(), Codec::Enum(_)));
+        assert_eq!(
+            fields[1].data_type().codec().data_type(),
+            fields[0].data_type().codec().data_type()
+        );
+        assert!(matches!(fields[3].data_type().codec(), Codec::Struct(_)));
+        assert_eq!(
+            fields[3].data_type().codec().data_type(),
+            fields[2].data_type().codec().data_type()
+        );
     }
 
     #[test]

@@ -15,11 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use arrow_array::{RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use once_cell::sync::Lazy;
 
 use crate::error::Result;
 use crate::sql::CommandGetCatalogs;
@@ -92,7 +91,7 @@ fn get_catalogs_schema() -> SchemaRef {
 }
 
 /// The schema for GetCatalogs
-static GET_CATALOG_SCHEMA: Lazy<SchemaRef> = Lazy::new(|| {
+static GET_CATALOG_SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
     Arc::new(Schema::new(vec![Field::new(
         "catalog_name",
         DataType::Utf8,

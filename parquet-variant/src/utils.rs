@@ -14,7 +14,8 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-use std::{array::TryFromSliceError, ops::Range, str};
+
+use std::{array::TryFromSliceError, borrow::Cow, ops::Range, str};
 
 use crate::VariantPathElement;
 use arrow_schema::ArrowError;
@@ -102,7 +103,7 @@ pub(crate) fn string_from_slice(
 }
 
 /// Performs a binary search over a range using a fallible key extraction function; a failed key
-/// extraction immediately terminats the search.
+/// extraction immediately terminates the search.
 ///
 /// This is similar to the standard library's `binary_search_by`, but generalized to ranges instead
 /// of slices.
@@ -138,7 +139,6 @@ where
 }
 
 /// Verifies the expected size of type T, for a type that should only grow if absolutely necessary.
-#[allow(unused)]
 pub(crate) const fn expect_size_of<T>(expected: usize) {
     let size = std::mem::size_of::<T>();
     if size != expected {
@@ -158,6 +158,7 @@ pub(crate) const fn expect_size_of<T>(expected: usize) {
 /// - `\\` -> literal `\`
 /// - `\]` -> literal `]`
 /// - Any other `\x` -> literal `x`
+/// - An unescaped `]` inside a quoted field is literal
 ///
 /// Outside brackets, no escaping is supported.
 ///
@@ -170,6 +171,7 @@ pub(crate) const fn expect_size_of<T>(expected: usize) {
 /// - `"foo[1].bar"` -> field `foo`, index 1, field `bar`
 /// - `"['a.b']"` -> field `a.b` (dot is literal inside bracket)
 /// - `"['a\]b']"` -> field `a]b` (escaped `]`
+/// - `"['a]b']"` -> field `a]b` (`]` is literal inside quotes)
 /// - etc.
 ///
 /// # Errors
@@ -177,7 +179,7 @@ pub(crate) const fn expect_size_of<T>(expected: usize) {
 /// - Trailing `.` (e.g., `"foo."`)
 /// - Unclosed '[' (e.g., `"foo[1"`)
 /// - Unexpected ']' (e.g., `"foo]"`)
-/// - Trailing '`' inside bracket (treated as unclosed bracket)
+/// - Trailing `\` inside bracket (treated as unclosed bracket)
 #[inline]
 pub(crate) fn parse_path(s: &str) -> Result<Vec<VariantPathElement<'_>>, ArrowError> {
     let scan_field = |start: usize| {
@@ -187,7 +189,7 @@ pub(crate) fn parse_path(s: &str) -> Result<Vec<VariantPathElement<'_>>, ArrowEr
     };
 
     let bytes = s.as_bytes();
-    if let Some(b'.') = bytes.first() {
+    if bytes.first() == Some(&b'.') {
         return Err(ArrowError::ParseError("Unexpected leading '.'".into()));
     }
 
@@ -233,55 +235,83 @@ pub(crate) fn parse_path(s: &str) -> Result<Vec<VariantPathElement<'_>>, ArrowEr
 fn parse_in_bracket(s: &str, i: usize) -> Result<(VariantPathElement<'_>, usize), ArrowError> {
     let start = i + 1; // skip '['
 
-    let mut unescaped = String::new();
-    let mut chars = s[start..].char_indices().peekable();
+    let mut unescaped = None;
+    let mut chars = s[start..].char_indices();
     let mut end = None;
+    let mut quote = None;
 
     while let Some((offset, c)) = chars.next() {
         match c {
             // Escape: take next char literally
             '\\' => {
+                let unescaped =
+                    unescaped.get_or_insert_with(|| String::from(&s[start..start + offset]));
                 if let Some((_, next)) = chars.next() {
                     unescaped.push(next);
                 }
                 // Trailing backslash will be handled as 'unclosed [' below
             }
-            ']' => {
-                // Unescaped ']' ends the bracket
+            '\'' | '"' if quote == Some(c) => {
+                quote = None;
+                if let Some(unescaped) = &mut unescaped {
+                    unescaped.push(c);
+                }
+            }
+            // Every consumed char advances the offset, so a quote can only
+            // open the bracket content at offset 0
+            '\'' | '"' if quote.is_none() && offset == 0 => {
+                quote = Some(c);
+            }
+            ']' if quote.is_none() => {
+                // An unescaped ']' outside quotes ends the bracket
                 end = Some(start + offset);
                 break;
             }
             _ => {
-                unescaped.push(c);
+                if let Some(unescaped) = &mut unescaped {
+                    unescaped.push(c);
+                }
             }
         }
     }
 
-    let end = match end {
-        Some(e) => e,
-        None => {
-            return Err(ArrowError::ParseError(format!("Unclosed '[' at byte {i}")));
-        }
+    let Some(end) = end else {
+        return Err(ArrowError::ParseError(format!("Unclosed '[' at byte {i}")));
     };
 
-    let element = if let Some(inner) = unescaped
-        .strip_prefix('\'')
-        .and_then(|s| s.strip_suffix('\''))
-        .or_else(|| {
-            unescaped
-                .strip_prefix('"')
-                .and_then(|s| s.strip_suffix('"'))
-        }) {
+    let value = match unescaped {
+        Some(value) => Cow::Owned(value),
+        None => Cow::Borrowed(&s[start..end]),
+    };
+    let element = parse_bracket_element(value)?;
+
+    Ok((element, end + 1))
+}
+
+fn parse_bracket_element(value: Cow<'_, str>) -> Result<VariantPathElement<'_>, ArrowError> {
+    let quoted = matches!(value.as_bytes(), [b'\'', .., b'\''] | [b'"', .., b'"']);
+
+    if quoted {
         // Quoted field name, e.g., ['field'] or ['123'] or ["123"]
-        VariantPathElement::field(inner.to_string())
+        return Ok(VariantPathElement::field(match value {
+            Cow::Borrowed(value) => Cow::Borrowed(&value[1..value.len() - 1]),
+            Cow::Owned(mut value) => {
+                value.pop();
+                value.remove(0);
+                Cow::Owned(value)
+            }
+        }));
+    }
+
+    let element = if value == "*" {
+        VariantPathElement::list_element()
     } else {
-        let Ok(idx) = unescaped.parse() else {
+        let Ok(idx) = value.parse() else {
             return Err(ArrowError::ParseError(format!(
-                "Invalid token in bracket request: `{unescaped}`. Expected a quoted string or a number(e.g., `['field']` or `[123]`)"
+                "Invalid token in bracket request: `{value}`. Expected `*`, a quoted string, or a number(e.g., `[*]`, `['field']`, or `[123]`)"
             )));
         };
         VariantPathElement::index(idx)
     };
-
-    Ok((element, end + 1))
+    Ok(element)
 }

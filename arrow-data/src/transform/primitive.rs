@@ -53,6 +53,9 @@ pub(super) fn extend_nulls<T: ArrowNativeType>(
     mutable: &mut _MutableArrayData,
     len: usize,
 ) -> Result<(), arrow_schema::ArrowError> {
-    mutable.buffer1.extend_zeros(len * size_of::<T>());
+    mutable
+        .buffer1
+        .try_extend_zeros(len * size_of::<T>())
+        .map_err(|e| arrow_schema::ArrowError::MemoryError(e.to_string()))?;
     Ok(())
 }

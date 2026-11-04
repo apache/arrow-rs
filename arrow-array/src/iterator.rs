@@ -67,10 +67,7 @@ impl<T: ArrayAccessor> ArrayIter<T> {
 
     #[inline]
     fn is_null(&self, idx: usize) -> bool {
-        self.logical_nulls
-            .as_ref()
-            .map(|x| x.is_null(idx))
-            .unwrap_or_default()
+        self.logical_nulls.as_ref().is_some_and(|x| x.is_null(idx))
     }
 }
 
@@ -201,7 +198,7 @@ mod tests {
     use crate::array::{ArrayRef, BinaryArray, BooleanArray, Int32Array, StringArray};
     use crate::iterator::ArrayIter;
     use rand::rngs::StdRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
     use std::fmt::Debug;
     use std::sync::Arc;
 
@@ -737,9 +734,9 @@ mod tests {
                 let mut actual = actual.clone();
                 let mut expected = expected.clone();
                 for _ in 0..expected.len() {
-                    #[allow(clippy::iter_nth_zero)]
+                    #[expect(clippy::iter_nth_zero)]
                     let actual_val = actual.nth(0);
-                    #[allow(clippy::iter_nth_zero)]
+                    #[expect(clippy::iter_nth_zero)]
                     let expected_val = expected.nth(0);
                     assert_eq!(actual_val, expected_val, "Failed on nth(0)");
                 }
@@ -776,9 +773,7 @@ mod tests {
                 let mut actual = actual.clone();
                 let mut expected = expected.clone();
                 for _ in 0..expected.len() {
-                    #[allow(clippy::iter_nth_zero)]
                     let actual_val = actual.nth_back(0);
-                    #[allow(clippy::iter_nth_zero)]
                     let expected_val = expected.nth_back(0);
                     assert_eq!(actual_val, expected_val, "Failed on nth_back(0)");
                 }
@@ -895,7 +890,7 @@ mod tests {
                 let mut items = Vec::with_capacity(iter.len());
 
                 let cb = |acc, item| {
-                    items.push(CallArgs { item, acc });
+                    items.push(CallArgs { acc, item });
 
                     item.map(|val| val + 100)
                 };
@@ -903,7 +898,6 @@ mod tests {
                 let result = if self.reverse {
                     iter.rfold(Some(1), cb)
                 } else {
-                    #[allow(clippy::manual_try_fold)]
                     iter.fold(Some(1), cb)
                 };
 

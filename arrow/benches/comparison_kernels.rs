@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate arrow;
 #[macro_use]
 extern crate criterion;
 
@@ -26,8 +25,8 @@ use arrow::{array::*, datatypes::Float32Type, datatypes::Int32Type};
 use arrow_buffer::IntervalMonthDayNano;
 use arrow_string::like::*;
 use arrow_string::regexp::regexp_is_match_scalar;
-use criterion::Criterion;
-use rand::Rng;
+use criterion::{Criterion, Throughput};
+use rand::RngExt;
 use rand::rngs::StdRng;
 use std::hint;
 
@@ -460,6 +459,42 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_nilike_utf8_scalar(&arr_string, "%xx_xX%xXX"))
     });
 
+    // Array/array LIKE: low-cardinality pattern reuse vs unique patterns.
+    const LIKE_ARRAY_SIZE: usize = 1024;
+    let like_haystack = StringArray::from(vec!["xxxxxxxx"; LIKE_ARRAY_SIZE]);
+    let like_complex_consecutive = StringArray::from(vec!["%x_x%x"; LIKE_ARRAY_SIZE]);
+    let like_complex_alternating = StringArray::from(
+        (0..LIKE_ARRAY_SIZE)
+            .map(|i| if i % 2 == 0 { "%x_x%x" } else { "x%_x%" })
+            .collect::<Vec<_>>(),
+    );
+    let like_simple_alternating = StringArray::from(
+        (0..LIKE_ARRAY_SIZE)
+            .map(|i| if i % 2 == 0 { "x%" } else { "%x" })
+            .collect::<Vec<_>>(),
+    );
+    let like_complex_unique = StringArray::from(
+        (0..LIKE_ARRAY_SIZE)
+            .map(|i| format!("%x_{i}x%"))
+            .collect::<Vec<_>>(),
+    );
+
+    c.bench_function("like_utf8 array complex consecutive", |b| {
+        b.iter(|| like(&like_haystack, &like_complex_consecutive).unwrap())
+    });
+    c.bench_function("like_utf8 array complex alternating", |b| {
+        b.iter(|| like(&like_haystack, &like_complex_alternating).unwrap())
+    });
+    c.bench_function("ilike_utf8 array complex alternating", |b| {
+        b.iter(|| ilike(&like_haystack, &like_complex_alternating).unwrap())
+    });
+    c.bench_function("like_utf8 array simple alternating", |b| {
+        b.iter(|| like(&like_haystack, &like_simple_alternating).unwrap())
+    });
+    c.bench_function("like_utf8 array complex unique", |b| {
+        b.iter(|| like(&like_haystack, &like_complex_unique).unwrap())
+    });
+
     // StringArray: regexp_matches_utf8 scalar benchmarks
     let mut group =
         c.benchmark_group("StringArray: regexp_matches_utf8 scalar benchmarks".to_string());
@@ -530,6 +565,23 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("eq dictionary[10] string[4])", |b| {
         b.iter(|| eq(&dict_arr_a, &dict_arr_b).unwrap())
     });
+
+    // eq scalar benchmarks across sizes: 16 bytes of view a row, so the largest is bandwidth-bound
+
+    let mut group = c.benchmark_group("stringview_scalar_eq");
+
+    for rows in [65_536usize, 1024 * 1024, 1024 * 1024 * 8] {
+        let mut rng = seedable_rng();
+        let values = StringViewArray::from_iter(make_string_array(rows, &mut rng));
+        let scalar = StringViewArray::new_scalar("xxxx");
+
+        group.throughput(Throughput::Elements(rows as u64));
+        group.bench_function(format!("eq_scalar(rows={rows})"), |b| {
+            b.iter(|| eq(&values, &scalar).unwrap())
+        });
+    }
+
+    group.finish();
 
     // RunEndEncoded benchmarks
 

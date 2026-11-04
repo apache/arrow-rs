@@ -22,7 +22,7 @@ use crate::{FlightData, FlightDescriptor, SchemaAsIpc, error::Result};
 use arrow_array::{Array, ArrayRef, RecordBatch, RecordBatchOptions, UnionArray};
 use arrow_ipc::writer::{DictionaryTracker, IpcDataGenerator, IpcWriteContext, IpcWriteOptions};
 
-use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef, UnionMode};
+use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, Schema, SchemaRef, UnionMode};
 use bytes::Bytes;
 use futures::{Stream, StreamExt, ready, stream::BoxStream};
 
@@ -38,7 +38,11 @@ use futures::{Stream, StreamExt, ready, stream::BoxStream};
 /// several have already been successfully produced.
 ///
 /// # Caveats
-/// 1. When [`DictionaryHandling`] is [`DictionaryHandling::Hydrate`],
+///
+/// 1. All input record batches must have the same schema. The first batch sets the
+///    expected schema unless [`FlightDataEncoderBuilder::with_schema`] supplies it.
+///    A batch with a different schema produces an error and ends the stream.
+/// 2. When [`DictionaryHandling`] is [`DictionaryHandling::Hydrate`],
 ///    [`DictionaryArray`]s are converted to their underlying types prior to
 ///    transport.
 ///    When [`DictionaryHandling`] is [`DictionaryHandling::Resend`], Dictionary [`FlightData`] is sent with every
@@ -223,6 +227,7 @@ impl FlightDataEncoderBuilder {
     /// is not specified, an encoded Schema message will be sent when
     /// the first [`RecordBatch`], if any, is encoded. Some clients
     /// expect a Schema message even if there is no data sent.
+    /// Every input batch must match this schema.
     pub fn with_schema(mut self, schema: SchemaRef) -> Self {
         self.schema = Some(schema);
         self
@@ -269,6 +274,8 @@ impl FlightDataEncoderBuilder {
 pub struct FlightDataEncoder {
     /// Input stream
     inner: BoxStream<'static, Result<RecordBatch>>,
+    /// Schema of input batches before dictionary handling
+    input_schema: Option<SchemaRef>,
     /// schema, set after the first batch
     schema: Option<SchemaRef>,
     /// Target maximum size of flight data
@@ -301,6 +308,7 @@ impl FlightDataEncoder {
     ) -> Self {
         let mut encoder = Self {
             inner,
+            input_schema: schema.clone(),
             schema: None,
             max_flight_data_size,
             encoder: FlightIpcEncoder::new(
@@ -362,6 +370,17 @@ impl FlightDataEncoder {
 
     /// Encodes batch into one or more `FlightData` messages in self.queue
     fn encode_batch(&mut self, batch: RecordBatch) -> Result<()> {
+        match &self.input_schema {
+            Some(expected) if expected.as_ref() != batch.schema_ref().as_ref() => {
+                return Err(ArrowError::SchemaError(
+                    "Record batch schema does not match input schema".to_string(),
+                )
+                .into());
+            }
+            None => self.input_schema = Some(batch.schema()),
+            _ => {}
+        }
+
         let schema = match &self.schema {
             Some(schema) => schema.clone(),
             // encode the schema if this is the first time we have seen it
@@ -442,7 +461,7 @@ impl Stream for FlightDataEncoder {
 /// [`DictionaryArray`]: arrow_array::DictionaryArray
 ///
 /// In the arrow flight protocol dictionary values and keys are sent as two separate messages.
-/// When a sender is encoding a [`RecordBatch`] containing ['DictionaryArray'] columns, it will
+/// When a sender is encoding a [`RecordBatch`] containing [`DictionaryArray`] columns, it will
 /// first send a dictionary batch (a batch with header `MessageHeader::DictionaryBatch`) containing
 /// the dictionary values. The receiver is responsible for reading this batch and maintaining state that associates
 /// those dictionary values with the corresponding array using the `dict_id` as a key.
@@ -463,7 +482,7 @@ impl Stream for FlightDataEncoder {
 ///
 /// For clients which may not support `DictionaryEncoding`, the `DictionaryHandling::Hydrate` method will bypass the process defined above
 /// and "hydrate" any `DictionaryArray` in the batch to their underlying value type (e.g. `TypedDictionaryArray<'_, UInt32Type, Utf8Type>` will
-/// be sent as a `StringArray`). With this method all data will be sent in ``MessageHeader::RecordBatch` messages and the batch schema
+/// be sent as a `StringArray`). With this method all data will be sent in `MessageHeader::RecordBatch` messages and the batch schema
 /// will be adjusted so that all dictionary encoded fields are changed to fields of the dictionary value type.
 #[derive(Debug, PartialEq)]
 pub enum DictionaryHandling {
@@ -499,7 +518,7 @@ fn prepare_field_for_flight(
             field.is_nullable(),
         )
         .with_metadata(field.metadata().clone()),
-        DataType::LargeList(inner) => Field::new_list(
+        DataType::LargeList(inner) => Field::new_large_list(
             field.name(),
             prepare_field_for_flight(inner, dictionary_tracker, send_dictionaries),
             field.is_nullable(),
@@ -551,7 +570,7 @@ fn prepare_field_for_flight(
                     send_dictionaries,
                 );
                 dictionary_tracker.next_dict_id();
-                #[allow(deprecated)]
+                #[expect(deprecated)]
                 Field::new_dict(
                     field.name(),
                     field.data_type().clone(),
@@ -789,8 +808,8 @@ fn hydrate_dictionary(array: &ArrayRef, data_type: &DataType) -> Result<ArrayRef
 mod tests {
     use crate::decode::{DecodedPayload, FlightDataDecoder};
     use arrow_array::builder::{
-        FixedSizeListBuilder, GenericByteDictionaryBuilder, GenericListViewBuilder, ListBuilder,
-        StringDictionaryBuilder, StructBuilder,
+        FixedSizeListBuilder, GenericByteDictionaryBuilder, GenericListViewBuilder, Int32Builder,
+        LargeListBuilder, ListBuilder, StringDictionaryBuilder, StructBuilder,
     };
     use arrow_array::*;
     use arrow_array::{cast::downcast_array, types::*};
@@ -1235,7 +1254,7 @@ mod tests {
 
         let arr1 = builder.finish();
 
-        let type_id_buffer = [0].into_iter().collect::<ScalarBuffer<i8>>();
+        let type_id_buffer = std::iter::once(0).collect::<ScalarBuffer<i8>>();
         let arr1 = UnionArray::try_new(
             union_fields.clone(),
             type_id_buffer,
@@ -1253,7 +1272,7 @@ mod tests {
         let arr2 = Arc::new(builder.finish());
         let arr2 = StructArray::new(struct_fields.clone().into(), vec![arr2], None);
 
-        let type_id_buffer = [1].into_iter().collect::<ScalarBuffer<i8>>();
+        let type_id_buffer = std::iter::once(1).collect::<ScalarBuffer<i8>>();
         let arr2 = UnionArray::try_new(
             union_fields.clone(),
             type_id_buffer,
@@ -1266,7 +1285,7 @@ mod tests {
         )
         .unwrap();
 
-        let type_id_buffer = [2].into_iter().collect::<ScalarBuffer<i8>>();
+        let type_id_buffer = std::iter::once(2).collect::<ScalarBuffer<i8>>();
         let arr3 = UnionArray::try_new(
             union_fields.clone(),
             type_id_buffer,
@@ -1409,7 +1428,7 @@ mod tests {
 
         let arr1 = builder.finish();
 
-        let type_id_buffer = [0].into_iter().collect::<ScalarBuffer<i8>>();
+        let type_id_buffer = std::iter::once(0).collect::<ScalarBuffer<i8>>();
         let arr1 = UnionArray::try_new(
             union_fields.clone(),
             type_id_buffer,
@@ -1427,7 +1446,7 @@ mod tests {
         let arr2 = Arc::new(builder.finish());
         let arr2 = StructArray::new(struct_fields.clone().into(), vec![arr2], None);
 
-        let type_id_buffer = [1].into_iter().collect::<ScalarBuffer<i8>>();
+        let type_id_buffer = std::iter::once(1).collect::<ScalarBuffer<i8>>();
         let arr2 = UnionArray::try_new(
             union_fields.clone(),
             type_id_buffer,
@@ -1440,7 +1459,7 @@ mod tests {
         )
         .unwrap();
 
-        let type_id_buffer = [2].into_iter().collect::<ScalarBuffer<i8>>();
+        let type_id_buffer = std::iter::once(2).collect::<ScalarBuffer<i8>>();
         let arr3 = UnionArray::try_new(
             union_fields.clone(),
             type_id_buffer,
@@ -1793,7 +1812,7 @@ mod tests {
     /// Encode `batches` through a [`FlightDataEncoderBuilder`] using `options`, decode them
     /// again, and assert the decoded batches match the originals.
     async fn verify_flight_round_trip_with_options(
-        mut batches: Vec<RecordBatch>,
+        batches: Vec<RecordBatch>,
         options: IpcWriteOptions,
     ) {
         let expected_schema = batches.first().unwrap().schema();
@@ -1803,7 +1822,7 @@ mod tests {
             .with_dictionary_handling(DictionaryHandling::Resend)
             .build(futures::stream::iter(batches.clone().into_iter().map(Ok)));
 
-        let mut expected_batches = batches.drain(..);
+        let mut expected_batches = batches.into_iter();
 
         let mut decoder = FlightDataDecoder::new(encoder);
         while let Some(decoded) = decoder.next().await {
@@ -1829,6 +1848,69 @@ mod tests {
 
         let got = prepare_schema_for_flight(&schema, &mut dictionary_tracker, false);
         assert!(got.metadata().contains_key("some_key"));
+    }
+
+    #[tokio::test]
+    async fn test_list_schema_round_trip() {
+        let list_item = Field::new("list_item", DataType::Int32, false).with_metadata(
+            HashMap::from([("level".to_owned(), "list_item".to_owned())]),
+        );
+        let mut list_builder = ListBuilder::new(Int32Builder::new()).with_field(list_item);
+        list_builder.append_value([Some(1), Some(2)]);
+        list_builder.append_value([Some(3)]);
+        let list = Arc::new(list_builder.finish()) as ArrayRef;
+        let list_field = Field::new("list", list.data_type().clone(), false)
+            .with_metadata(HashMap::from([("level".to_owned(), "list".to_owned())]));
+
+        let nested_item = Field::new("nested_item", DataType::Int32, true).with_metadata(
+            HashMap::from([("level".to_owned(), "nested_item".to_owned())]),
+        );
+        let nested_list_builder =
+            ListBuilder::new(Int32Builder::new()).with_field(nested_item.clone());
+        let nested_list = Field::new_list("nested_list", nested_item, false).with_metadata(
+            HashMap::from([("level".to_owned(), "nested_list".to_owned())]),
+        );
+        let mut large_list_builder =
+            LargeListBuilder::new(nested_list_builder).with_field(nested_list);
+        large_list_builder.values().append_value([Some(4), None]);
+        large_list_builder.values().append_value([Some(5)]);
+        large_list_builder.append(true);
+        large_list_builder.append(false);
+        let large_list = Arc::new(large_list_builder.finish()) as ArrayRef;
+        let large_list_field =
+            Field::new("large_list", large_list.data_type().clone(), true).with_metadata(
+                HashMap::from([("level".to_owned(), "large_list".to_owned())]),
+            );
+
+        let fixed_size_item = Field::new("fixed_size_item", DataType::Int32, true).with_metadata(
+            HashMap::from([("level".to_owned(), "fixed_size_item".to_owned())]),
+        );
+        let mut fixed_size_list_builder =
+            FixedSizeListBuilder::new(Int32Builder::new(), 2).with_field(fixed_size_item);
+        fixed_size_list_builder.values().append_value(6);
+        fixed_size_list_builder.values().append_null();
+        fixed_size_list_builder.append(true);
+        fixed_size_list_builder.values().append_value(7);
+        fixed_size_list_builder.values().append_value(8);
+        fixed_size_list_builder.append(true);
+        let fixed_size_list = Arc::new(fixed_size_list_builder.finish()) as ArrayRef;
+        let fixed_size_list_field = Field::new(
+            "fixed_size_list",
+            fixed_size_list.data_type().clone(),
+            false,
+        )
+        .with_metadata(HashMap::from([(
+            "level".to_owned(),
+            "fixed_size_list".to_owned(),
+        )]));
+
+        let schema = Arc::new(
+            Schema::new(vec![list_field, large_list_field, fixed_size_list_field])
+                .with_metadata(HashMap::from([("level".to_owned(), "schema".to_owned())])),
+        );
+        let batch = RecordBatch::try_new(schema, vec![list, large_list, fixed_size_list]).unwrap();
+
+        verify_flight_round_trip(vec![batch]).await;
     }
 
     #[test]
@@ -1962,7 +2044,7 @@ mod tests {
         ])
         .unwrap();
 
-        verify_encoded_split(batch, 120).await;
+        verify_encoded_split(batch, 88).await;
     }
 
     #[tokio::test]
@@ -1973,7 +2055,7 @@ mod tests {
 
         // overage is much higher than ideal
         // https://github.com/apache/arrow-rs/issues/3478
-        verify_encoded_split(batch, 4312).await;
+        verify_encoded_split(batch, 4304).await;
     }
 
     #[tokio::test]
@@ -2009,7 +2091,7 @@ mod tests {
         // 5k over limit (which is 2x larger than limit of 5k)
         // overage is much higher than ideal
         // https://github.com/apache/arrow-rs/issues/3478
-        verify_encoded_split(batch, 5808).await;
+        verify_encoded_split(batch, 5784).await;
     }
 
     #[tokio::test]
@@ -2039,7 +2121,7 @@ mod tests {
 
         // overage is much higher than ideal
         // https://github.com/apache/arrow-rs/issues/3478
-        verify_encoded_split(batch, 3336).await;
+        verify_encoded_split(batch, 3328).await;
     }
 
     #[tokio::test]
@@ -2053,7 +2135,7 @@ mod tests {
 
         // overage is much higher than ideal
         // https://github.com/apache/arrow-rs/issues/3478
-        verify_encoded_split(batch, 5288).await;
+        verify_encoded_split(batch, 5280).await;
     }
 
     #[tokio::test]
@@ -2078,7 +2160,7 @@ mod tests {
 
         // overage is much higher than ideal
         // https://github.com/apache/arrow-rs/issues/3478
-        verify_encoded_split(batch, 4136).await;
+        verify_encoded_split(batch, 4112).await;
     }
 
     /// Return size, in memory of flight data
@@ -2145,7 +2227,7 @@ mod tests {
             }
         }
 
-        // ensure that the specified overage is exactly the maxmium so
+        // ensure that the specified overage is exactly the maximum so
         // that when the splitting logic improves, the tests must be
         // updated to reflect the better logic
         assert_eq!(

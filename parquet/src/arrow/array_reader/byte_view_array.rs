@@ -501,7 +501,7 @@ impl ByteViewArrayDecoderDictionary {
         };
 
         if need_to_create_new_buffer {
-            for b in dict.buffers.iter() {
+            for b in &dict.buffers {
                 output.buffers.push(b.clone());
             }
         }
@@ -529,7 +529,6 @@ impl ByteViewArrayDecoderDictionary {
                             0
                         }
                     }));
-                Ok(())
             } else {
                 output
                     .views
@@ -551,8 +550,8 @@ impl ByteViewArrayDecoderDictionary {
                             0
                         }
                     }));
-                Ok(())
             }
+            Ok(())
         })?;
         if let Some(e) = error {
             return Err(e);
@@ -588,7 +587,7 @@ impl ByteViewArrayDecoderDeltaLength {
 
         let mut total_bytes = 0;
 
-        for l in lengths.iter() {
+        for l in &lengths {
             if *l < 0 {
                 return Err(ParquetError::General(
                     "negative delta length byte array length".to_string(),
@@ -802,7 +801,7 @@ mod tests {
             assert_eq!(output.views.len(), 4);
 
             let valid = [false, false, true, true, false, true, true, false, false];
-            let valid_buffer = Buffer::from_iter(valid.iter().cloned());
+            let valid_buffer = Buffer::from_iter(valid.iter().copied());
 
             output
                 .pad_nulls(0, 4, valid.len(), valid_buffer.as_slice())

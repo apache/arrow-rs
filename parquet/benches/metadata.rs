@@ -15,14 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fmt::Write as _;
 use std::hint::black_box;
 use std::sync::Arc;
 
 use parquet::basic::{Encoding, PageType, Type as PhysicalType};
 use parquet::file::metadata::{
-    ColumnChunkMetaData, FileMetaData, LevelHistogram, PageEncodingStats, ParquetMetaData,
-    ParquetMetaDataOptions, ParquetMetaDataReader, ParquetMetaDataWriter, ParquetStatisticsPolicy,
-    RowGroupMetaData,
+    ColumnChunkMask, ColumnChunkMetaData, FileMetaData, LevelHistogram, PageEncodingStats,
+    PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataReader,
+    ParquetMetaDataWriter, ParquetStatisticsPolicy, RowGroupMetaData,
 };
 use parquet::file::statistics::Statistics;
 use parquet::file::writer::TrackedWrite;
@@ -30,24 +31,24 @@ use parquet::schema::parser::parse_message_type;
 use parquet::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescriptor, Type as SchemaType,
 };
-use rand::Rng;
+use rand::{RngExt, SeedableRng};
 
-use arrow::util::test_util::seedable_rng;
 use bytes::Bytes;
 use criterion::{Criterion, criterion_group, criterion_main};
 use parquet::file::reader::SerializedFileReader;
 use parquet::file::serialized_reader::ReadOptionsBuilder;
+use rand::rngs::StdRng;
 
 const NUM_COLUMNS: usize = 10_000;
 const NUM_ROW_GROUPS: usize = 10;
 
 fn encoded_meta(is_nullable: bool, has_lists: bool, write_path_in_schema: bool) -> Vec<u8> {
-    let mut rng = seedable_rng();
+    let mut rng = StdRng::seed_from_u64(42);
 
     let mut column_desc_ptrs: Vec<ColumnDescPtr> = Vec::with_capacity(NUM_COLUMNS);
     let mut message_type = "message test_schema {".to_string();
     for i in 0..NUM_COLUMNS {
-        message_type.push_str(&format!("REQUIRED FLOAT {};", i));
+        write!(message_type, "REQUIRED FLOAT {i};").ok();
         column_desc_ptrs.push(ColumnDescPtr::new(ColumnDescriptor::new(
             Arc::new(
                 SchemaType::primitive_type_builder(&i.to_string(), PhysicalType::FLOAT)
@@ -124,7 +125,7 @@ fn encoded_meta(is_nullable: bool, has_lists: bool, write_path_in_schema: bool) 
                 .set_column_metadata(columns)
                 .set_total_byte_size(rng.random_range(1..2000000000))
                 .set_num_rows(rng.random_range(1..10000000000))
-                .set_ordinal(i as i16)
+                .set_ordinal(i as i32)
                 .build()
                 .unwrap()
         })
@@ -157,9 +158,9 @@ fn encoded_meta(is_nullable: bool, has_lists: bool, write_path_in_schema: bool) 
 fn get_footer_bytes(data: Bytes) -> Bytes {
     let footer_bytes = data.slice(data.len() - 8..);
     let footer_len = footer_bytes[0] as u32
-        | (footer_bytes[1] as u32) << 8
-        | (footer_bytes[2] as u32) << 16
-        | (footer_bytes[3] as u32) << 24;
+        | ((footer_bytes[1] as u32) << 8)
+        | ((footer_bytes[2] as u32) << 16)
+        | ((footer_bytes[3] as u32) << 24);
     let meta_start = data.len() - footer_len as usize - 8;
     let meta_end = data.len() - 8;
     data.slice(meta_start..meta_end)
@@ -187,6 +188,28 @@ fn criterion_benchmark(c: &mut Criterion) {
                 .with_encoding_stats_as_mask(false)
                 .build();
             SerializedFileReader::new_with_options(data.clone(), options).unwrap()
+        })
+    });
+
+    let metadata = ParquetMetaDataReader::new()
+        .with_page_index_policy(PageIndexPolicy::Skip)
+        .parse_and_finish(&data)
+        .unwrap();
+    let mut reader = ParquetMetaDataReader::new_with_metadata(metadata.clone())
+        .with_page_index_policy(PageIndexPolicy::Required);
+    c.bench_function("read page index", |b| {
+        b.iter(|| {
+            reader.read_page_indexes(&data).unwrap();
+        })
+    });
+
+    let mut reader = ParquetMetaDataReader::new_with_metadata(metadata)
+        .with_page_index_policy(PageIndexPolicy::Required)
+        .with_column_index_mask(ColumnChunkMask::columns([0]))
+        .with_offset_index_mask(ColumnChunkMask::columns([0, 1, 4]));
+    c.bench_function("read page index reduced columns", |b| {
+        b.iter(|| {
+            reader.read_page_indexes(&data).unwrap();
         })
     });
 

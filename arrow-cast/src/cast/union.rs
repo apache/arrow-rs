@@ -131,9 +131,8 @@ pub fn union_extract_by_type(
     target_type: &DataType,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
-    let fields = match union_array.data_type() {
-        DataType::Union(fields, _) => fields,
-        _ => unreachable!("union_extract_by_type called on non-union array"),
+    let DataType::Union(fields, _) = union_array.data_type() else {
+        unreachable!("union_extract_by_type called on non-union array")
     };
 
     let Some((type_id, _)) = resolve_child_array(fields, target_type) else {

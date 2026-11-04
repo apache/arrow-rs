@@ -47,6 +47,68 @@ use std::fs::File;
 use std::sync::Arc;
 
 #[test]
+fn test_encryption_properties_key_debug_redaction() {
+    let footer_key = b"SYNTHETIC-FOOTER".to_vec();
+    let column_key = b"SYNTHETIC-COLUMN".to_vec();
+    let footer_key_metadata = b"footer-key-id".to_vec();
+    let column_key_metadata = b"column-key-id".to_vec();
+    let properties = FileEncryptionProperties::builder(footer_key.clone())
+        .with_footer_key_metadata(footer_key_metadata.clone())
+        .with_column_key_and_metadata(
+            "private_column",
+            column_key.clone(),
+            column_key_metadata.clone(),
+        )
+        .build()
+        .unwrap();
+
+    for output in [format!("{properties:?}"), format!("{properties:#?}")] {
+        let compact: String = output.split_whitespace().collect();
+        for key in [&footer_key, &column_key] {
+            let key_debug: String = format!("{key:?}").split_whitespace().collect();
+            assert!(!compact.contains(&key_debug));
+        }
+        assert!(output.contains("FileEncryptionProperties"));
+        assert!(output.contains("private_column"));
+    }
+
+    assert_eq!(properties.footer_key(), &footer_key);
+    assert_eq!(properties.footer_key_metadata(), Some(&footer_key_metadata));
+    assert_eq!(
+        properties.column_keys(),
+        (
+            vec!["private_column".to_string()],
+            vec![column_key],
+            vec![column_key_metadata],
+        )
+    );
+}
+
+#[test]
+fn test_writer_properties_key_debug_redaction() {
+    let footer_key = b"SYNTHETIC-FOOTER".to_vec();
+    let column_key = b"SYNTHETIC-COLUMN".to_vec();
+    let encryption = FileEncryptionProperties::builder(footer_key.clone())
+        .with_column_key("private_column", column_key.clone())
+        .build()
+        .unwrap();
+    let builder = WriterProperties::builder().with_file_encryption_properties(encryption);
+    let builder_debug = [format!("{builder:?}"), format!("{builder:#?}")];
+    let properties = builder.build();
+    for output in builder_debug
+        .into_iter()
+        .chain([format!("{properties:?}"), format!("{properties:#?}")])
+    {
+        let compact: String = output.split_whitespace().collect();
+        for key in [&footer_key, &column_key] {
+            let key_debug: String = format!("{key:?}").split_whitespace().collect();
+            assert!(!compact.contains(&key_debug));
+        }
+        assert!(output.contains("private_column"));
+    }
+}
+
+#[test]
 fn test_non_uniform_encryption_plaintext_footer() {
     fn non_uniform_encryption_plaintext_footer(footer_key: &[u8], column_keys: &[(&str, &[u8])]) {
         let path = encryption_util::encrypted_data_path(
@@ -264,7 +326,7 @@ fn test_aes_ctr_encryption() {
             _ => {
                 panic!("Expected ParquetError::NYI");
             }
-        };
+        }
     }
 
     aes_ctr_encryption(AES_128_FOOTER_KEY, AES_128_COLUMN_NAME_KEYS);
@@ -631,7 +693,7 @@ fn uniform_encryption_roundtrip(
                 .unwrap()
                 .values()
                 .iter()
-                .cloned()
+                .copied()
         })
         .collect();
 
@@ -644,7 +706,7 @@ fn uniform_encryption_roundtrip(
                 .unwrap()
                 .values()
                 .iter()
-                .cloned()
+                .copied()
         })
         .collect();
 
@@ -743,7 +805,7 @@ fn uniform_encryption_page_skipping(page_index: bool) -> parquet::errors::Result
                 .unwrap()
                 .values()
                 .iter()
-                .cloned()
+                .copied()
         })
         .collect();
 
@@ -756,7 +818,7 @@ fn uniform_encryption_page_skipping(page_index: bool) -> parquet::errors::Result
                 .unwrap()
                 .values()
                 .iter()
-                .cloned()
+                .copied()
         })
         .collect();
 
@@ -783,7 +845,7 @@ fn test_write_non_uniform_encryption() {
         let file = File::open(path).unwrap();
 
         let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
-            .with_column_keys(column_names.to_vec(), column_keys.clone())
+            .with_column_keys(column_names.clone(), column_keys.clone())
             .unwrap()
             .build()
             .unwrap();
@@ -1089,7 +1151,7 @@ fn write_and_read_stats(
 
     // Check column statistics produced at write time are available in full
     let row_group = metadata.row_group(0);
-    for column in row_group.columns().iter() {
+    for column in row_group.columns() {
         check_column_stats(column, true);
     }
 
@@ -1136,8 +1198,8 @@ fn test_write_uniform_encryption() {
 }
 
 #[test]
-fn test_write_non_uniform_encryption_column_missmatch() {
-    fn write_non_uniform_encryption_column_missmatch(
+fn test_write_non_uniform_encryption_column_mismatch() {
+    fn write_non_uniform_encryption_column_mismatch(
         footer_key: &[u8],
         column_keys: &[(&str, &[u8])],
         encryption_column_keys: &[(&str, &[u8])],
@@ -1187,13 +1249,13 @@ fn test_write_non_uniform_encryption_column_missmatch() {
         );
     }
 
-    write_non_uniform_encryption_column_missmatch(
+    write_non_uniform_encryption_column_mismatch(
         AES_128_FOOTER_KEY,
         AES_128_COLUMN_NAME_KEYS,
         AES_128_COLUMN_NAME_KEYS,
     );
 
-    write_non_uniform_encryption_column_missmatch(
+    write_non_uniform_encryption_column_mismatch(
         AES_256_FOOTER_KEY,
         AES_256_COLUMN_NAME_KEYS,
         AES_256_COLUMN_NAME_KEYS,

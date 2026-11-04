@@ -29,14 +29,19 @@ use parquet::arrow::arrow_reader::{
     ParquetRecordBatchReaderBuilder, RowSelection, RowSelectionPolicy, RowSelector,
 };
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 
 const TOTAL_ROWS: usize = 1 << 20;
 const BATCH_SIZE: usize = 1 << 10;
 const BASE_SEED: u64 = 0xA55AA55A;
-const AVG_SELECTOR_LENGTHS: &[usize] = &[4, 8, 12, 16, 20, 24, 28, 32, 36, 40];
-const COLUMN_WIDTHS: &[usize] = &[2, 4, 8, 16, 32];
-const UTF8VIEW_LENS: &[usize] = &[4, 8, 16, 32, 64, 128, 256];
+// 4 exercises fragmented selections; 28, 32, and 40 cover average run lengths
+// below, at, and above the default Auto threshold of 32.
+const AVG_SELECTOR_LENGTHS: &[usize] = &[4, 28, 32, 40];
+// 2, 8, and 32 exercise narrow, medium, and wide projections.
+const COLUMN_WIDTHS: &[usize] = &[2, 8, 32];
+// 8 exercises inline Utf8View values, 16 crosses the 12-byte inline limit,
+// and 256 exercises longer strings.
+const UTF8VIEW_LENS: &[usize] = &[8, 16, 256];
 const BENCH_MODES: &[BenchMode] = &[BenchMode::Selector, BenchMode::Mask, BenchMode::Auto];
 const BACKINGS: &[Backing] = &[Backing::Selectors, Backing::Mask];
 
@@ -46,10 +51,6 @@ struct DataProfile {
 }
 
 const DATA_PROFILES: &[DataProfile] = &[
-    DataProfile {
-        name: "int32",
-        build_batch: build_int32_batch,
-    },
     DataProfile {
         name: "float64",
         build_batch: build_float64_batch,
@@ -181,7 +182,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     for (offset, &column_count) in COLUMN_WIDTHS.iter().enumerate() {
         let parquet_data = write_parquet_batch(build_int32_columns_batch(TOTAL_ROWS, column_count));
-        let variant_label = format!("C{:02}", column_count);
+        let variant_label = format!("C{column_count:02}");
         bench_over_lengths(
             c,
             "columns",
@@ -195,7 +196,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     for (offset, &len) in UTF8VIEW_LENS.iter().enumerate() {
         let batch = build_utf8view_batch_with_len(TOTAL_ROWS, len);
         let parquet_data = write_parquet_batch(batch);
-        let variant_label = format!("utf8view-L{:03}", len);
+        let variant_label = format!("utf8view-L{len:03}");
         bench_over_lengths(
             c,
             "utf8view-len",
@@ -253,7 +254,13 @@ fn bench_over_lengths(
     }
 }
 
-criterion_group!(benches, criterion_benchmark);
+criterion_group! {
+    name = benches;
+    config = Criterion::default()
+        .warm_up_time(std::time::Duration::from_secs(2))
+        .sample_size(50);
+    targets = criterion_benchmark
+}
 criterion_main!(benches);
 
 struct BenchInput {
@@ -316,7 +323,7 @@ fn build_utf8view_batch(total_rows: usize) -> RecordBatch {
 
 fn build_utf8view_batch_with_len(total_rows: usize, len: usize) -> RecordBatch {
     let mut builder = StringViewBuilder::new();
-    let value: String = "a".repeat(len);
+    let value = "a".repeat(len);
     for _ in 0..total_rows {
         builder.append_value(&value);
     }
@@ -331,7 +338,7 @@ fn build_int32_columns_batch(total_rows: usize, num_columns: usize) -> RecordBat
     let mut fields = Vec::with_capacity(num_columns);
     let mut columns = Vec::with_capacity(num_columns);
     for idx in 0..num_columns {
-        fields.push(Field::new(format!("value{}", idx), DataType::Int32, false));
+        fields.push(Field::new(format!("value{idx}"), DataType::Int32, false));
         columns.push(base_values.clone());
     }
     let schema = Arc::new(Schema::new(fields));

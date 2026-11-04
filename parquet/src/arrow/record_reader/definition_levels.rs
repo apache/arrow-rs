@@ -18,6 +18,7 @@
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_buffer::Buffer;
 use arrow_buffer::bit_chunk_iterator::UnalignedBitChunk;
+use arrow_buffer::bit_util::compress;
 use bytes::Bytes;
 
 use crate::arrow::buffer::bit_util::count_set_bits;
@@ -25,6 +26,7 @@ use crate::basic::Encoding;
 use crate::column::reader::decoder::{
     ColumnLevelDecoder, DefinitionLevelDecoder, DefinitionLevelDecoderImpl,
 };
+use crate::encodings::rle::run_len;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 
@@ -145,10 +147,10 @@ pub(crate) fn build_filtered_validity_bitmap(
     value_level: i16,
     bitmap: &mut BooleanBufferBuilder,
 ) -> usize {
+    const CHUNKS: usize = u64::BITS as usize;
     // Fast path: no filtering — every def level produces a bit.
     if include_threshold.is_none() && rep_filter.is_none() {
-        let chunks = def_levels.chunks_exact(u64::BITS as usize);
-        let remainder = chunks.remainder();
+        let (chunks, remainder) = def_levels.as_chunks::<CHUNKS>();
         for chunk in chunks {
             let mut word: u64 = 0;
             for (i, &d) in chunk.iter().enumerate() {
@@ -164,27 +166,16 @@ pub(crate) fn build_filtered_validity_bitmap(
 
     // Filtered path: build include mask + value mask per chunk, compress.
     let mut item_count: usize = 0;
-    let chunks = def_levels.chunks_exact(u64::BITS as usize);
-    let remainder_offset = def_levels.len() - chunks.remainder().len();
+    let (chunks, remainder) = def_levels.as_chunks::<CHUNKS>();
+    let remainder_offset = def_levels.len() - remainder.len();
 
-    for (chunk_idx, chunk) in chunks.enumerate() {
+    for (chunk_idx, chunk) in chunks.iter().enumerate() {
         let base = chunk_idx * u64::BITS as usize;
         let mut include_mask: u64 = 0;
         let mut value_mask: u64 = 0;
         for (i, &d) in chunk.iter().enumerate() {
-            let mut include = true;
-            if let Some(threshold) = include_threshold {
-                if d < threshold {
-                    include = false;
-                }
-            }
-            if include {
-                if let Some((reps, max_rep)) = rep_filter {
-                    if reps[base + i] > max_rep {
-                        include = false;
-                    }
-                }
-            }
+            let include = include_threshold.is_none_or(|threshold| threshold <= d)
+                && rep_filter.is_none_or(|(reps, max_rep)| reps[base + i] <= max_rep);
             include_mask |= (include as u64) << i;
             value_mask |= ((d >= value_level) as u64) << i;
         }
@@ -197,15 +188,15 @@ pub(crate) fn build_filtered_validity_bitmap(
 
     for idx in remainder_offset..def_levels.len() {
         let d = def_levels[idx];
-        if let Some(threshold) = include_threshold {
-            if d < threshold {
-                continue;
-            }
+        if let Some(threshold) = include_threshold
+            && d < threshold
+        {
+            continue;
         }
-        if let Some((reps, max_rep)) = rep_filter {
-            if reps[idx] > max_rep {
-                continue;
-            }
+        if let Some((reps, max_rep)) = rep_filter
+            && reps[idx] > max_rep
+        {
+            continue;
         }
         bitmap.append(d >= value_level);
         item_count += 1;
@@ -213,8 +204,6 @@ pub(crate) fn build_filtered_validity_bitmap(
 
     item_count
 }
-
-use crate::util::bit_util::compress;
 
 enum MaybePacked {
     Packed(PackedDecoder),
@@ -244,7 +233,7 @@ impl ColumnLevelDecoder for DefinitionLevelBufferDecoder {
         match &mut self.decoder {
             MaybePacked::Packed(d) => d.set_data(encoding, data),
             MaybePacked::Fallback(d) => d.set_data(encoding, data)?,
-        };
+        }
         Ok(())
     }
 }
@@ -269,10 +258,19 @@ impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
                 let start = levels.len();
                 let (values_read, levels_read) = decoder.read_def_levels(levels, num_levels)?;
 
-                // Safety: slice iterator has a trusted length
-                unsafe {
-                    nulls
-                        .extend_trusted_len(levels[start..].iter().map(|level| level == max_level));
+                if values_read == levels_read {
+                    // Every level is at `max_level`
+                    nulls.append_n(levels_read, true);
+                } else if values_read == 0 {
+                    // No level is at `max_level`
+                    nulls.append_n(levels_read, false);
+                } else {
+                    // Safety: slice iterator has a trusted length
+                    unsafe {
+                        nulls.extend_trusted_len(
+                            levels[start..].iter().map(|level| level == max_level),
+                        );
+                    }
                 }
 
                 Ok((values_read, levels_read))
@@ -333,12 +331,21 @@ struct PackedDecoder {
 impl PackedDecoder {
     fn next_rle_block(&mut self) -> Result<()> {
         let indicator_value = self.decode_header()?;
+        let num_values = run_len(indicator_value as u64)? as usize;
         if indicator_value & 1 == 1 {
-            let len = (indicator_value >> 1) as usize;
-            self.packed_count = len * 8;
+            let packed_bytes = num_values / 8;
+            // For a bit width of 1, each group of 8 levels occupies one byte.
+            // Validate the whole run before either read() or skip() accesses it.
+            let remaining = self.data.len().saturating_sub(self.data_offset);
+            if packed_bytes > remaining {
+                return Err(ParquetError::EOF(format!(
+                    "unexpected end of file whilst decoding definition levels bit-packed run: expected {packed_bytes} bytes, found {remaining}"
+                )));
+            }
+            self.packed_count = num_values;
             self.packed_offset = 0;
         } else {
-            self.rle_left = (indicator_value >> 1) as usize;
+            self.rle_left = num_values;
             let byte = *self.data.as_ref().get(self.data_offset).ok_or_else(|| {
                 ParquetError::EOF(
                     "unexpected end of file whilst decoding definition levels rle value".into(),
@@ -396,7 +403,7 @@ impl PackedDecoder {
         self.packed_offset = 0;
         self.packed_count = match encoding {
             Encoding::RLE => 0,
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             Encoding::BIT_PACKED => data.len() * 8,
             _ => unreachable!("invalid level encoding: {}", encoding),
         };
@@ -502,7 +509,8 @@ mod tests {
     use super::*;
 
     use crate::encodings::rle::RleEncoder;
-    use rand::{Rng, rng};
+    use crate::util::bit_util::BitWriter;
+    use rand::{RngExt, rng};
 
     #[test]
     fn test_build_validity_bitmap_unfiltered_word_chunk() {
@@ -618,6 +626,29 @@ mod tests {
     }
 
     #[test]
+    fn test_packed_decoder_truncated_run_returns_error() {
+        // The header declares 504 levels (63 bytes), but only three packed bytes follow.
+        let mut decoder = PackedDecoder::new();
+        decoder.set_data(Encoding::RLE, Bytes::from_static(&[0x7F, 0x55, 0x55, 0x55]));
+
+        let mut decoded = BooleanBufferBuilder::new(504);
+        let result = decoder.read(&mut decoded, 504);
+
+        assert!(matches!(result, Err(ParquetError::EOF(_))));
+    }
+
+    #[test]
+    fn test_packed_decoder_skip_truncated_run_returns_error() {
+        // The skip path must validate the same source range as the read path.
+        let mut decoder = PackedDecoder::new();
+        decoder.set_data(Encoding::RLE, Bytes::from_static(&[0x7F, 0x55, 0x55, 0x55]));
+
+        let result = decoder.skip(504);
+
+        assert!(matches!(result, Err(ParquetError::EOF(_))));
+    }
+
+    #[test]
     fn test_try_consume_all_valid() {
         // Test with all-valid data (all 1s) - single RLE run
         let len = 100;
@@ -685,5 +716,20 @@ mod tests {
         // Now the valid run is exhausted, next call should parse the null run and return None
         let result = decoder.try_consume_all_valid(5).unwrap();
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_packed_decoder_invalid_run_len() {
+        let mut writer = BitWriter::new(16);
+        writer.put_vlq_int(u64::MAX);
+        let mut decoder = PackedDecoder::new();
+        decoder.set_data(Encoding::RLE, writer.consume().into());
+
+        let mut decoded = BooleanBufferBuilder::new(8);
+        let err = decoder.read(&mut decoded, 8).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Invalid or corrupted RLE run length 18446744073709551615. Max allowed is 2147483647"
+        );
     }
 }

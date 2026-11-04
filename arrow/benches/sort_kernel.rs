@@ -21,27 +21,12 @@ use criterion::Criterion;
 
 use std::sync::Arc;
 
-extern crate arrow;
-
 use arrow::compute::{SortColumn, lexsort, sort, sort_to_indices};
 use arrow::datatypes::{Int16Type, Int32Type};
 use arrow::util::bench_util::*;
 use arrow::{array::*, datatypes::Float32Type};
 use arrow_ord::rank::rank;
 use std::hint;
-
-fn create_f32_array(size: usize, with_nulls: bool) -> ArrayRef {
-    let null_density = if with_nulls { 0.5 } else { 0.0 };
-    let array = create_primitive_array::<Float32Type>(size, null_density);
-    Arc::new(array)
-}
-
-fn create_bool_array(size: usize, with_nulls: bool) -> ArrayRef {
-    let null_density = if with_nulls { 0.5 } else { 0.0 };
-    let true_density = 0.5;
-    let array = create_boolean_array(size, null_density, true_density);
-    Arc::new(array)
-}
 
 fn bench_sort(array: &dyn Array) {
     hint::black_box(sort(array, None).unwrap());
@@ -91,13 +76,13 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_sort_to_indices(&arr, None))
     });
 
-    let arr = create_f32_array(2_usize.pow(12), false);
+    let arr: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2_usize.pow(12), 0.0));
     c.bench_function("sort f32 2^12", |b| b.iter(|| bench_sort(&arr)));
     c.bench_function("sort f32 to indices 2^12", |b| {
         b.iter(|| bench_sort_to_indices(&arr, None))
     });
 
-    let arr = create_f32_array(2usize.pow(12), true);
+    let arr: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(12), 0.5));
     c.bench_function("sort f32 nulls 2^12", |b| b.iter(|| bench_sort(&arr)));
     c.bench_function("sort f32 nulls to indices 2^12", |b| {
         b.iter(|| bench_sort_to_indices(&arr, None))
@@ -221,72 +206,72 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_sort_to_indices(&run_encoded_array, None))
     });
 
-    let arr_a = create_f32_array(2usize.pow(10), false);
-    let arr_b = create_f32_array(2usize.pow(10), false);
+    let arr_a: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(10), 0.0));
+    let arr_b: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(10), 0.0));
 
     c.bench_function("lexsort (f32, f32) 2^10", |b| {
         b.iter(|| bench_lexsort(&arr_a, &arr_b, None))
     });
 
-    let arr_a = create_f32_array(2usize.pow(12), false);
-    let arr_b = create_f32_array(2usize.pow(12), false);
+    let arr_a: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(12), 0.0));
+    let arr_b: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(12), 0.0));
 
     c.bench_function("lexsort (f32, f32) 2^12", |b| {
         b.iter(|| bench_lexsort(&arr_a, &arr_b, None))
     });
 
-    let arr_a = create_f32_array(2usize.pow(10), true);
-    let arr_b = create_f32_array(2usize.pow(10), true);
+    let arr_a: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(10), 0.5));
+    let arr_b: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(10), 0.5));
 
     c.bench_function("lexsort (f32, f32) nulls 2^10", |b| {
         b.iter(|| bench_lexsort(&arr_a, &arr_b, None))
     });
 
-    let arr_a = create_f32_array(2usize.pow(12), true);
-    let arr_b = create_f32_array(2usize.pow(12), true);
+    let arr_a: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(12), 0.5));
+    let arr_b: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(12), 0.5));
 
     c.bench_function("lexsort (f32, f32) nulls 2^12", |b| {
         b.iter(|| bench_lexsort(&arr_a, &arr_b, None))
     });
 
-    let arr_a = create_bool_array(2usize.pow(12), false);
-    let arr_b = create_bool_array(2usize.pow(12), false);
+    let arr_a: ArrayRef = Arc::new(create_boolean_array(2usize.pow(12), 0.0, 0.5));
+    let arr_b: ArrayRef = Arc::new(create_boolean_array(2usize.pow(12), 0.0, 0.5));
     c.bench_function("lexsort (bool, bool) 2^12", |b| {
         b.iter(|| bench_lexsort(&arr_a, &arr_b, None))
     });
 
-    let arr_a = create_bool_array(2usize.pow(12), true);
-    let arr_b = create_bool_array(2usize.pow(12), true);
+    let arr_a: ArrayRef = Arc::new(create_boolean_array(2usize.pow(12), 0.5, 0.5));
+    let arr_b: ArrayRef = Arc::new(create_boolean_array(2usize.pow(12), 0.5, 0.5));
     c.bench_function("lexsort (bool, bool) nulls 2^12", |b| {
         b.iter(|| bench_lexsort(&arr_a, &arr_b, None))
     });
 
-    let arr_a = create_f32_array(2usize.pow(12), false);
-    let arr_b = create_f32_array(2usize.pow(12), false);
+    let arr_a: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(12), 0.0));
+    let arr_b: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(12), 0.0));
     c.bench_function("lexsort (f32, f32) 2^12 limit 10", |b| {
         b.iter(|| bench_lexsort(&arr_a, &arr_b, Some(10)))
     });
 
-    let arr_a = create_f32_array(2usize.pow(12), false);
-    let arr_b = create_f32_array(2usize.pow(12), false);
+    let arr_a: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(12), 0.0));
+    let arr_b: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(12), 0.0));
     c.bench_function("lexsort (f32, f32) 2^12 limit 100", |b| {
         b.iter(|| bench_lexsort(&arr_a, &arr_b, Some(100)))
     });
 
-    let arr_a = create_f32_array(2usize.pow(12), false);
-    let arr_b = create_f32_array(2usize.pow(12), false);
+    let arr_a: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(12), 0.0));
+    let arr_b: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(12), 0.0));
     c.bench_function("lexsort (f32, f32) 2^12 limit 1000", |b| {
         b.iter(|| bench_lexsort(&arr_a, &arr_b, Some(1000)))
     });
 
-    let arr_a = create_f32_array(2usize.pow(12), false);
-    let arr_b = create_f32_array(2usize.pow(12), false);
+    let arr_a: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(12), 0.0));
+    let arr_b: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(12), 0.0));
     c.bench_function("lexsort (f32, f32) 2^12 limit 2^12", |b| {
         b.iter(|| bench_lexsort(&arr_a, &arr_b, Some(2usize.pow(12))))
     });
 
-    let arr_a = create_f32_array(2usize.pow(12), true);
-    let arr_b = create_f32_array(2usize.pow(12), true);
+    let arr_a: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(12), 0.5));
+    let arr_b: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(12), 0.5));
 
     c.bench_function("lexsort (f32, f32) nulls 2^12 limit 10", |b| {
         b.iter(|| bench_lexsort(&arr_a, &arr_b, Some(10)))
@@ -301,12 +286,12 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_lexsort(&arr_a, &arr_b, Some(2usize.pow(12))))
     });
 
-    let arr = create_f32_array(2usize.pow(12), false);
+    let arr: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(12), 0.0));
     c.bench_function("rank f32 2^12", |b| {
         b.iter(|| hint::black_box(rank(&arr, None).unwrap()))
     });
 
-    let arr = create_f32_array(2usize.pow(12), true);
+    let arr: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(2usize.pow(12), 0.5));
     c.bench_function("rank f32 nulls 2^12", |b| {
         b.iter(|| hint::black_box(rank(&arr, None).unwrap()))
     });
@@ -318,6 +303,69 @@ fn add_benchmark(c: &mut Criterion) {
 
     let arr = create_string_array_with_len::<i32>(2usize.pow(12), 0.5, 10);
     c.bench_function("rank string[10] nulls 2^12", |b| {
+        b.iter(|| hint::black_box(rank(&arr, None).unwrap()))
+    });
+
+    let arr = create_string_view_array_with_fixed_len(2usize.pow(12), 0.0, 10);
+    c.bench_function("rank string_view[10] 2^12", |b| {
+        b.iter(|| hint::black_box(rank(&arr, None).unwrap()))
+    });
+
+    let arr = create_string_view_array_with_fixed_len(2usize.pow(12), 0.5, 10);
+    c.bench_function("rank string_view[10] nulls 2^12", |b| {
+        b.iter(|| hint::black_box(rank(&arr, None).unwrap()))
+    });
+
+    // Mostly-inline values with enough 13-byte values to retain a backing
+    // buffer and therefore exercise the mixed view path.
+    let arr = create_string_view_array_with_len_range_and_seed(2usize.pow(12), 0.0, 0..14, 42);
+    c.bench_function("rank string_view[0-13] sparse long 2^12", |b| {
+        b.iter(|| hint::black_box(rank(&arr, None).unwrap()))
+    });
+
+    let arr = create_string_view_array(2usize.pow(12), 0.0);
+    c.bench_function("rank string_view[0-400] 2^12", |b| {
+        b.iter(|| hint::black_box(rank(&arr, None).unwrap()))
+    });
+
+    let arr = create_string_view_array(2usize.pow(12), 0.5);
+    c.bench_function("rank string_view[0-400] nulls 2^12", |b| {
+        b.iter(|| hint::black_box(rank(&arr, None).unwrap()))
+    });
+
+    // All values are longer than the inline capacity and share a 7-byte
+    // prefix, exercising collisions beyond the 4 bytes stored in the view.
+    let arr = create_longer_string_view_array_with_same_prefix(2usize.pow(12), 0.0);
+    c.bench_function("rank string_view[13-100] same prefix 2^12", |b| {
+        b.iter(|| hint::black_box(rank(&arr, None).unwrap()))
+    });
+
+    let arr = create_longer_string_view_array_with_same_prefix(2usize.pow(12), 0.5);
+    c.bench_function("rank string_view[13-100] same prefix nulls 2^12", |b| {
+        b.iter(|| hint::black_box(rank(&arr, None).unwrap()))
+    });
+
+    // All values share the same first 16 bytes, providing a worst-case
+    // collision input for prefix-key rank implementations.
+    let arr: StringViewArray = (0..2_u32.pow(12))
+        .map(|i| {
+            let suffix = i.wrapping_mul(2_654_435_761);
+            Some(format!("abcdefghijklmnop{suffix:08x}"))
+        })
+        .collect();
+    c.bench_function("rank string_view[24] same 16-byte prefix 2^12", |b| {
+        b.iter(|| hint::black_box(rank(&arr, None).unwrap()))
+    });
+
+    let arr: StringViewArray = (0..2_u32.pow(12))
+        .map(|i| {
+            (i % 2 == 0).then(|| {
+                let suffix = i.wrapping_mul(2_654_435_761);
+                format!("abcdefghijklmnop{suffix:08x}")
+            })
+        })
+        .collect();
+    c.bench_function("rank string_view[24] same 16-byte prefix nulls 2^12", |b| {
         b.iter(|| hint::black_box(rank(&arr, None).unwrap()))
     });
 }

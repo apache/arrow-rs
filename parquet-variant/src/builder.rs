@@ -14,6 +14,7 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+
 use crate::decoder::{OffsetSizeBytes, VariantBasicType, VariantPrimitiveType};
 use crate::{
     ShortString, Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16, VariantList,
@@ -36,11 +37,11 @@ pub(crate) const UNIX_EPOCH_DATE: chrono::NaiveDate =
     chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
 
 fn primitive_header(primitive_type: VariantPrimitiveType) -> u8 {
-    (primitive_type as u8) << 2 | VariantBasicType::Primitive as u8
+    ((primitive_type as u8) << 2) | VariantBasicType::Primitive as u8
 }
 
 fn short_string_header(len: usize) -> u8 {
-    (len as u8) << 2 | VariantBasicType::ShortString as u8
+    ((len as u8) << 2) | VariantBasicType::ShortString as u8
 }
 
 pub(crate) fn int_size(v: usize) -> OffsetSizeBytes {
@@ -769,8 +770,8 @@ impl VariantBuilder {
     /// Enables validation of unique field keys in nested objects.
     ///
     /// This setting is propagated to all [`ObjectBuilder`]s created through this [`VariantBuilder`]
-    /// (including via any [`ListBuilder`]), and causes [`ObjectBuilder::finish()`] to return
-    /// an error if duplicate keys were inserted.
+    /// (including via any [`ListBuilder`]); see [`ObjectBuilder::with_validate_unique_fields`]
+    /// for how a duplicate key is reported.
     pub fn with_validate_unique_fields(mut self, validate_unique_fields: bool) -> Self {
         self.validate_unique_fields = validate_unique_fields;
         self

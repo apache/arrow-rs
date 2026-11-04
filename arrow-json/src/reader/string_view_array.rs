@@ -78,13 +78,11 @@ impl ArrayDecoder for StringViewArrayDecoder {
                 TapeElement::I64(_) if coerce => {
                     match tape.get(p + 1) {
                         TapeElement::I32(_) => {
-                            let high = match tape.get(p) {
-                                TapeElement::I64(h) => h,
-                                _ => unreachable!(),
+                            let TapeElement::I64(high) = tape.get(p) else {
+                                unreachable!()
                             };
-                            let low = match tape.get(p + 1) {
-                                TapeElement::I32(l) => l,
-                                _ => unreachable!(),
+                            let TapeElement::I32(low) = tape.get(p + 1) else {
+                                unreachable!()
                             };
                             let val = ((high as i64) << 32) | (low as u32) as i64;
                             if val.abs() > 999_999_999_999 {

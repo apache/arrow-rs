@@ -39,7 +39,7 @@
 //! ```
 //!
 //! SBBFs use eight hash functions to cleanly fit in SIMD lanes<sup>[2][sbbf-paper]</sup>, therefore
-//! `k` is set to 8. The SBBF will spread those `m` bits accross a set of `b` blocks that
+//! `k` is set to 8. The SBBF will spread those `m` bits across a set of `b` blocks that
 //! are each 256 bits, i.e., 32 bytes, in size. The number of blocks is chosen as:
 //!
 //! ```text
@@ -112,6 +112,8 @@
 //! [sbbf-paper]: https://arxiv.org/pdf/2101.01719
 //! [bf-formulae]: http://tfk.mit.edu/pdf/bloom.pdf
 
+#[cfg(all(feature = "arrow", feature = "async"))]
+use crate::arrow::async_reader::AsyncFileReader;
 use crate::basic::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
 use crate::data_type::AsBytes;
 use crate::errors::{ParquetError, Result};
@@ -121,10 +123,14 @@ use crate::parquet_thrift::{
     ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol, ThriftCompactOutputProtocol,
     ThriftSliceInputProtocol, WriteThrift, WriteThriftField,
 };
-use crate::thrift_struct;
+use crate::{DecodeResult, thrift_struct};
 use bytes::Bytes;
 use std::io::Write;
+use std::ops::Range;
 use twox_hash::XxHash64;
+
+mod push;
+pub use push::SbbfPushDecoder;
 
 /// Salt as defined in the [spec](https://github.com/apache/parquet-format/blob/master/BloomFilter.md#technical-approach).
 const SALT: [u32; 8] = [
@@ -320,40 +326,6 @@ impl Block {
 #[derive(Debug, Clone)]
 pub struct Sbbf(Vec<Block>);
 
-pub(crate) const SBBF_HEADER_SIZE_ESTIMATE: usize = 20;
-
-/// given an initial offset, and a byte buffer, try to read out a bloom filter header and return
-/// both the header and the offset after it (for bitset).
-pub(crate) fn chunk_read_bloom_filter_header_and_offset(
-    offset: u64,
-    buffer: Bytes,
-) -> Result<(BloomFilterHeader, u64), ParquetError> {
-    let (header, length) = read_bloom_filter_header_and_length(buffer)?;
-    Ok((header, offset + length))
-}
-
-/// given a [Bytes] buffer, try to read out a bloom filter header and return both the header and
-/// length of the header.
-#[inline]
-pub(crate) fn read_bloom_filter_header_and_length(
-    buffer: Bytes,
-) -> Result<(BloomFilterHeader, u64), ParquetError> {
-    read_bloom_filter_header_and_length_from_bytes(buffer.as_ref())
-}
-
-/// Given a byte slice, try to read out a bloom filter header and return both the header and
-/// length of the header.
-#[inline]
-fn read_bloom_filter_header_and_length_from_bytes(
-    buffer: &[u8],
-) -> Result<(BloomFilterHeader, u64), ParquetError> {
-    let total_length = buffer.len();
-    let mut prot = ThriftSliceInputProtocol::new(buffer);
-    let header = BloomFilterHeader::read_thrift(&mut prot)
-        .map_err(|e| ParquetError::General(format!("Could not read bloom filter header: {e}")))?;
-    Ok((header, (total_length - prot.as_slice().len()) as u64))
-}
-
 /// The minimum number of bytes for a bloom filter bitset.
 pub const BITSET_MIN_LENGTH: usize = 32;
 /// The maximum number of bytes for a bloom filter bitset.
@@ -402,11 +374,14 @@ impl Sbbf {
     /// Creates a new [Sbbf] from a raw byte slice.
     pub fn new(bitset: &[u8]) -> Self {
         let data = bitset
-            .chunks_exact(4 * 8)
+            .as_chunks::<32>()
+            .0
+            .iter()
             .map(|chunk| {
                 let mut block = Block::ZERO;
-                for (i, word) in chunk.chunks_exact(4).enumerate() {
-                    block[i] = u32::from_le_bytes(word.try_into().unwrap());
+                let (words, _remainder) = chunk.as_chunks::<4>();
+                for (i, word) in words.iter().enumerate() {
+                    block[i] = u32::from_le_bytes(*word);
                 }
                 block
             })
@@ -446,7 +421,7 @@ impl Sbbf {
         // Safety: Block is repr(transparent) and [u32; 8] can be reinterpreted as [u8; 32].
         let slice = unsafe {
             std::slice::from_raw_parts(
-                self.0.as_ptr() as *const u8,
+                self.0.as_ptr().cast::<u8>(),
                 self.0.len() * size_of::<Block>(),
             )
         };
@@ -467,54 +442,72 @@ impl Sbbf {
         }
     }
 
-    /// Read a new bloom filter from the given offset in the given reader.
+    /// Read a Bloom filter from existing column-chunk metadata.
+    ///
+    /// The metadata and reader must refer to the same file. A missing offset
+    /// returns `None` without I/O. Invalid metadata, malformed filters, and read
+    /// failures return an error.
+    ///
+    /// When the total filter length is present, one range is fetched. Otherwise,
+    /// the header prefix and bitset are fetched separately.
     pub fn read_from_column_chunk<R: ChunkReader>(
         column_metadata: &ColumnChunkMetaData,
         reader: &R,
-    ) -> Result<Option<Self>, ParquetError> {
-        let offset: u64 = if let Some(offset) = column_metadata.bloom_filter_offset() {
-            offset
-                .try_into()
-                .map_err(|_| ParquetError::General("Bloom filter offset is invalid".to_string()))?
-        } else {
+    ) -> Result<Option<Self>> {
+        let Some(mut decoder) = SbbfPushDecoder::try_new(column_metadata)? else {
             return Ok(None);
         };
 
-        let buffer = match column_metadata.bloom_filter_length() {
-            Some(length) => reader.get_bytes(offset, length as usize),
-            None => reader.get_bytes(offset, SBBF_HEADER_SIZE_ESTIMATE),
-        }?;
-
-        let (header, bitset_offset) =
-            chunk_read_bloom_filter_header_and_offset(offset, buffer.clone())?;
-
-        match header.algorithm {
-            BloomFilterAlgorithm::BLOCK => {
-                // this match exists to future proof the singleton algorithm enum
+        loop {
+            let result = decoder.try_decode()?;
+            match result {
+                DecodeResult::NeedsData(ranges) => {
+                    for range in ranges {
+                        let buffer = read_bloom_filter_bytes(reader, &range)?;
+                        decoder.push_range(range, buffer)?;
+                    }
+                }
+                DecodeResult::Data(sbbf) => return Ok(Some(sbbf)),
+                DecodeResult::Finished => {
+                    return Err(general_err!("invalid value returned from SbbfPushDecoder"));
+                }
             }
         }
-        match header.compression {
-            BloomFilterCompression::UNCOMPRESSED => {
-                // this match exists to future proof the singleton compression enum
-            }
-        }
-        match header.hash {
-            BloomFilterHash::XXHASH => {
-                // this match exists to future proof the singleton hash enum
-            }
-        }
+    }
 
-        let bitset = match column_metadata.bloom_filter_length() {
-            Some(_) => buffer.slice((bitset_offset - offset) as usize..),
-            None => {
-                let bitset_length: usize = header.num_bytes.try_into().map_err(|_| {
-                    ParquetError::General("Bloom filter length is invalid".to_string())
-                })?;
-                reader.get_bytes(bitset_offset, bitset_length)?
-            }
+    /// Read a Bloom filter asynchronously from existing column-chunk metadata.
+    ///
+    /// The metadata and reader must refer to the same file.
+    ///
+    /// A missing Bloom filter offset returns `None` without performing I/O. Invalid
+    /// metadata, malformed filters, and read failures return an error.
+    ///
+    /// When the total filter length is present, one range is fetched. Otherwise,
+    /// this may perform additional fetches.
+    #[cfg(all(feature = "arrow", feature = "async"))]
+    pub async fn read_from_column_chunk_async<R: AsyncFileReader + ?Sized>(
+        column_metadata: &ColumnChunkMetaData,
+        reader: &mut R,
+    ) -> Result<Option<Self>> {
+        let Some(mut decoder) = SbbfPushDecoder::try_new(column_metadata)? else {
+            return Ok(None);
         };
 
-        Ok(Some(Self::new(&bitset)))
+        loop {
+            let result = decoder.try_decode()?;
+            match result {
+                DecodeResult::NeedsData(ranges) => {
+                    for range in ranges {
+                        let buffer = read_bloom_filter_bytes_async(reader, &range).await?;
+                        decoder.push_range(range, buffer)?;
+                    }
+                }
+                DecodeResult::Data(sbbf) => return Ok(Some(sbbf)),
+                DecodeResult::Finished => {
+                    return Err(general_err!("invalid value returned from SbbfPushDecoder"));
+                }
+            }
+        }
     }
 
     /// Map a 64-bit hash to a block index in `[0, num_blocks)`.
@@ -573,6 +566,26 @@ impl Sbbf {
     /// Returns the number of blocks in this bloom filter.
     pub fn num_blocks(&self) -> usize {
         self.0.len()
+    }
+
+    /// Estimate the false positive probability (FPP) of this filter at its current size.
+    ///
+    /// This is the same estimate [`Self::fold_to_target_fpp`] uses to choose how far to fold.
+    ///
+    /// This lets a caller inspect a filter before folding or writing it, for example to
+    /// discard a filter that already exceeds its target FPP. Returns `1.0` for a filter
+    /// with no blocks.
+    pub fn estimated_fpp(&self) -> f64 {
+        if self.0.is_empty() {
+            return 1.0;
+        }
+        self.average_fill().powi(8)
+    }
+
+    /// Average fraction of bits set per block. The filter must have at least one block.
+    fn average_fill(&self) -> f64 {
+        let total_set_bits: u64 = self.0.iter().map(|b| u64::from(b.count_ones())).sum();
+        total_set_bits as f64 / (self.0.len() as f64 * 256.0)
     }
 
     /// Fold the bloom filter down to the smallest size that still meets the target FPP
@@ -643,8 +656,7 @@ impl Sbbf {
         }
 
         // Single pass: compute average per-block fill rate.
-        let total_set_bits: u64 = self.0.iter().map(|b| u64::from(b.count_ones())).sum();
-        let avg_fill = total_set_bits as f64 / (len as f64 * 256.0);
+        let avg_fill = self.average_fill();
 
         // Empty filter: can fold all the way down.
         if avg_fill == 0.0 {
@@ -702,9 +714,15 @@ impl Sbbf {
             self.0[i] = merged;
         }
         self.0.truncate(new_len);
+        // `truncate` keeps the capacity; release it so filters retained until the file is closed
+        // (e.g. `BloomFilterPosition::End`) only hold their folded size.
+        self.0.shrink_to_fit();
     }
 
-    /// Reads a Sbff from Thrift encoded bytes
+    /// Reads an Sbbf from Thrift encoded bytes.
+    ///
+    /// Returns an error if the header is malformed, the bitset is not a positive
+    /// multiple of 32 bytes, or its size does not match the header.
     ///
     /// # Examples
     ///
@@ -727,29 +745,8 @@ impl Sbbf {
     /// # }
     /// ```
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ParquetError> {
-        let (header, header_len) = read_bloom_filter_header_and_length_from_bytes(bytes)?;
-
-        let bitset_length: u64 = header
-            .num_bytes
-            .try_into()
-            .map_err(|_| ParquetError::General("Bloom filter length is invalid".to_string()))?;
-
-        // Validate that bitset consumes all remaining bytes
-        if header_len + bitset_length != bytes.len() as u64 {
-            return Err(ParquetError::General(format!(
-                "Bloom filter data contains extra bytes: expected {} total bytes, got {}",
-                header_len + bitset_length,
-                bytes.len()
-            )));
-        }
-
-        let start = header_len as usize;
-        let end = (header_len + bitset_length) as usize;
-        let bitset = bytes
-            .get(start..end)
-            .ok_or_else(|| ParquetError::General("Bloom filter bitset is invalid".to_string()))?;
-
-        Ok(Self::new(bitset))
+        let range = bloom_filter_bitset_range(bytes, Some(bytes.len()))?;
+        Ok(Self::new(&bytes[range]))
     }
 }
 
@@ -761,9 +758,94 @@ fn hash_as_bytes<A: AsBytes + ?Sized>(value: &A) -> u64 {
     XxHash64::oneshot(SEED, value.as_bytes())
 }
 
+const SBBF_HEADER_SIZE_ESTIMATE: usize = 20;
+
+fn read_bloom_filter_bytes<R: ChunkReader>(reader: &R, range: &Range<u64>) -> Result<Bytes> {
+    let length = usize::try_from(range.end - range.start)?;
+    validate_bloom_filter_read(reader.get_bytes(range.start, length)?, length)
+}
+
+#[cfg(all(feature = "arrow", feature = "async"))]
+async fn read_bloom_filter_bytes_async<R: AsyncFileReader + ?Sized>(
+    reader: &mut R,
+    range: &Range<u64>,
+) -> Result<Bytes> {
+    let length = usize::try_from(range.end - range.start)?;
+    validate_bloom_filter_read(reader.get_bytes(range.clone()).await?, length)
+}
+
+/// Parses the header and returns the bitset's range relative to the filter start.
+/// When the complete filter length is known, the bitset must consume it exactly.
+fn bloom_filter_bitset_range(buffer: &[u8], length: Option<usize>) -> Result<Range<usize>> {
+    let (header, header_length) = read_bloom_filter_header_and_length(buffer)?;
+
+    // Force an explicit decision if supported variants change.
+    match header.algorithm {
+        BloomFilterAlgorithm::BLOCK => {}
+    }
+    match header.hash {
+        BloomFilterHash::XXHASH => {}
+    }
+    match header.compression {
+        BloomFilterCompression::UNCOMPRESSED => {}
+    }
+
+    let bitset_length = usize::try_from(header.num_bytes)
+        .map_err(|_| general_err!("Bloom filter bitset length is invalid"))?;
+    if bitset_length < BITSET_MIN_LENGTH || !bitset_length.is_multiple_of(size_of::<Block>()) {
+        return Err(general_err!(
+            "Bloom filter bitset length must be a positive multiple of 32"
+        ));
+    }
+    let end = header_length
+        .checked_add(bitset_length)
+        .ok_or_else(|| general_err!("Bloom filter length overflow"))?;
+    if length.is_some_and(|length| length != end) {
+        return Err(general_err!(
+            "Bloom filter length does not match its header"
+        ));
+    }
+    Ok(header_length..end)
+}
+
+/// Converts a filter-relative range to a file range without overflowing.
+fn bloom_filter_read_range(offset: u64, range: Range<usize>) -> Result<Range<u64>> {
+    let start = offset
+        .checked_add(range.start as u64)
+        .ok_or_else(|| general_err!("Bloom filter read range overflow"))?;
+    let end = offset
+        .checked_add(range.end as u64)
+        .ok_or_else(|| general_err!("Bloom filter read range overflow"))?;
+    Ok(start..end)
+}
+
+fn validate_bloom_filter_read(bytes: Bytes, length: usize) -> Result<Bytes> {
+    if bytes.len() != length {
+        return Err(general_err!(
+            "Bloom filter read length mismatch: expected {length} bytes, got {}",
+            bytes.len()
+        ));
+    }
+    Ok(bytes)
+}
+
+/// Parses a Bloom filter header and returns the number of bytes consumed.
+fn read_bloom_filter_header_and_length(buffer: &[u8]) -> Result<(BloomFilterHeader, usize)> {
+    let mut prot = ThriftSliceInputProtocol::new(buffer);
+    let header = BloomFilterHeader::read_thrift(&mut prot)
+        .map_err(|e| ParquetError::General(format!("Could not read bloom filter header: {e}")))?;
+    Ok((header, buffer.len() - prot.as_slice().len()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_bloom_filter_read_range_overflow() {
+        assert!(bloom_filter_read_range(u64::MAX, 0..1).is_err());
+        assert!(bloom_filter_read_range(u64::MAX, 1..2).is_err());
+    }
 
     #[test]
     fn test_hash_bytes() {
@@ -771,6 +853,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_mask_set_quick_check() {
         for i in 0..1_000_000 {
             let result = Block::mask(i);
@@ -779,6 +862,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_block_insert_and_check() {
         for i in 0..1_000_000 {
             let mut block = Block::ZERO;
@@ -788,6 +872,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_sbbf_insert_and_check() {
         let mut sbbf = Sbbf(vec![Block::ZERO; 1_000]);
         for i in 0..1_000_000 {
@@ -824,7 +909,7 @@ mod tests {
                 num_bytes,
             },
             read_length,
-        ) = read_bloom_filter_header_and_length(Bytes::copy_from_slice(buffer)).unwrap();
+        ) = read_bloom_filter_header_and_length(buffer).unwrap();
         assert_eq!(read_length, 15);
         assert_eq!(algorithm, BloomFilterAlgorithm::BLOCK);
         assert_eq!(compression, BloomFilterCompression::UNCOMPRESSED);
@@ -882,8 +967,10 @@ mod tests {
         assert_eq!(sbbf.num_blocks(), 32);
         sbbf.fold_n(1);
         assert_eq!(sbbf.num_blocks(), 16);
+        assert_eq!(sbbf.0.capacity(), 16);
         sbbf.fold_n(1);
         assert_eq!(sbbf.num_blocks(), 8);
+        assert_eq!(sbbf.0.capacity(), 8);
     }
 
     #[test]
@@ -907,8 +994,7 @@ mod tests {
         for v in &values {
             assert!(
                 sbbf.check(v.as_str()),
-                "Value '{}' missing after folding (false negative!)",
-                v
+                "Value '{v}' missing after folding (false negative!)"
             );
         }
     }
@@ -947,6 +1033,51 @@ mod tests {
         let mut sbbf = Sbbf::new_with_num_of_bytes(1024); // 32 blocks
         sbbf.fold_to_target_fpp(0.01);
         assert_eq!(sbbf.num_blocks(), 1);
+    }
+
+    #[test]
+    fn test_estimated_fpp_matches_serialized_bitset() {
+        for num_bytes in [BITSET_MIN_LENGTH, 1024, 64 * 1024] {
+            for ndv in [0u64, 1, 10, 100, 1_000, 10_000, 100_000] {
+                let mut sbbf = Sbbf::new_with_num_of_bytes(num_bytes);
+                for i in 0..ndv {
+                    sbbf.insert(&i);
+                }
+
+                let mut bitset = Vec::new();
+                sbbf.write_bitset(&mut bitset).unwrap();
+                let set_bits: u64 = bitset.iter().map(|b| u64::from(b.count_ones())).sum();
+                let expected = (set_bits as f64 / (bitset.len() as f64 * 8.0)).powi(8);
+
+                assert_eq!(
+                    sbbf.estimated_fpp().to_bits(),
+                    expected.to_bits(),
+                    "{num_bytes} bytes, {ndv} values"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_estimated_fpp_bounds() {
+        assert_eq!(Sbbf::new_with_num_of_bytes(1024).estimated_fpp(), 0.0);
+        assert_eq!(Sbbf::new(&[0xFF; 1024]).estimated_fpp(), 1.0);
+        assert_eq!(Sbbf::new(&[]).estimated_fpp(), 1.0);
+    }
+
+    #[test]
+    fn test_estimated_fpp_increases_when_folded() {
+        let mut sbbf = Sbbf::new_with_num_of_bytes(64 * 1024);
+        for i in 0..1_000 {
+            sbbf.insert(&i);
+        }
+        let before = sbbf.estimated_fpp();
+        sbbf.fold_n(3);
+        assert!(
+            sbbf.estimated_fpp() > before,
+            "folding must not lower the estimate: {before} -> {}",
+            sbbf.estimated_fpp()
+        );
     }
 
     #[test]
@@ -989,8 +1120,7 @@ mod tests {
         for value in &test_values {
             assert!(
                 reconstructed.check(value),
-                "Value '{}' should be present after round-trip",
-                value
+                "Value '{value}' should be present after round-trip"
             );
         }
     }
@@ -1032,6 +1162,7 @@ mod tests {
     /// Combined: every hash sets the *same bits* in the *same destination
     /// block* whether you fold or build fresh → filters are bit-identical.
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_sbbf_folded_equals_fresh() {
         let values = (0..5000).map(|i| format!("elem_{i}")).collect::<Vec<_>>();
         let hashes = values
@@ -1050,7 +1181,7 @@ mod tests {
             }
 
             // --- Per-hash verification of the two lemmas ---
-            for &h in hashes.iter() {
+            for &h in &hashes {
                 // mask(h as u32) gives the 8-bit pattern that this hash sets
                 // inside whichever block it lands in. It uses only the lower
                 // 32 bits of h, so it's the same regardless of filter size.
@@ -1129,6 +1260,7 @@ mod tests {
     /// At each intermediate size we build a fresh filter and assert
     /// bit-equality, confirming the lemma composes across folds.
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_multi_step_fold() {
         let values = (0..3000).map(|i| format!("x_{i}")).collect::<Vec<_>>();
 
@@ -1158,6 +1290,7 @@ mod tests {
     ///
     /// compare the final size after folding against the theoretical optimal size
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_fold_size_vs_optimal_fixed_size() {
         for (ndv, target_fpp) in [
             (1000, 0.05),
@@ -1192,6 +1325,7 @@ mod tests {
     /// we measure fpp empirically by probing with values that were never inserted
     /// and counting how many are incorrectly marked as present
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_folded_fpp_matches_fresh_fpp() {
         let ndv = 2000;
         let num_probes = 50_000;

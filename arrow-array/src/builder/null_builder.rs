@@ -85,9 +85,10 @@ impl NullBuilder {
 
     /// Builds the [NullArray] and reset this builder.
     pub fn finish(&mut self) -> NullArray {
-        let len = self.len();
+        let len = std::mem::take(&mut self.len);
         let builder = ArrayData::new_null(&DataType::Null, len).into_builder();
 
+        // SAFETY: ArrayData::new_null produces valid null array data, so all builder invariants hold
         let array_data = unsafe { builder.build_unchecked() };
         NullArray::from(array_data)
     }
@@ -97,6 +98,7 @@ impl NullBuilder {
         let len = self.len();
         let builder = ArrayData::new_null(&DataType::Null, len).into_builder();
 
+        // SAFETY: ArrayData::new_null produces valid null array data, so all builder invariants hold
         let array_data = unsafe { builder.build_unchecked() };
         NullArray::from(array_data)
     }
@@ -166,5 +168,21 @@ mod tests {
         builder.append_empty_values(5);
         array = builder.finish();
         assert_eq!(10, array.len());
+    }
+
+    #[test]
+    fn test_null_array_builder_finish_resets() {
+        let mut builder = NullBuilder::new();
+        builder.append_nulls(10);
+
+        let array = builder.finish();
+        assert_eq!(10, array.len());
+        assert_eq!(0, builder.len());
+        assert!(builder.is_empty());
+
+        builder.append_nulls(3);
+        let array = builder.finish();
+        assert_eq!(3, array.len());
+        assert_eq!(0, builder.len());
     }
 }

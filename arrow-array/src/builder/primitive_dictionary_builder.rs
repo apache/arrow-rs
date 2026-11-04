@@ -25,6 +25,7 @@ use arrow_schema::{ArrowError, DataType};
 use num_traits::NumCast;
 use std::any::Any;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
 /// Wraps a type implementing `ToByteSlice` implementing `Hash` and `Eq` for it
@@ -35,7 +36,7 @@ struct Value<T>(T);
 
 impl<T: ToByteSlice> std::hash::Hash for Value<T> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0.to_byte_slice().hash(state)
+        state.write(self.0.to_byte_slice())
     }
 }
 
@@ -87,7 +88,7 @@ where
 {
     keys_builder: PrimitiveBuilder<K>,
     values_builder: PrimitiveBuilder<V>,
-    map: HashMap<Value<V::Native>, usize>,
+    map: HashMap<Value<V::Native>, usize, ahash::RandomState>,
 }
 
 impl<K, V> Default for PrimitiveDictionaryBuilder<K, V>
@@ -110,7 +111,7 @@ where
         Self {
             keys_builder: PrimitiveBuilder::new(),
             values_builder: PrimitiveBuilder::new(),
-            map: HashMap::new(),
+            map: HashMap::default(),
         }
     }
 
@@ -131,7 +132,7 @@ where
         Self {
             keys_builder,
             values_builder,
-            map: HashMap::with_capacity(values_capacity),
+            map: HashMap::with_capacity_and_hasher(values_capacity, Default::default()),
         }
     }
 
@@ -146,7 +147,7 @@ where
     ) -> Self {
         let keys = keys_builder.values_slice();
         let values = values_builder.values_slice();
-        let mut map = HashMap::with_capacity(values.len());
+        let mut map = HashMap::with_capacity_and_hasher(values.len(), Default::default());
 
         keys.iter().zip(values.iter()).for_each(|(key, value)| {
             map.insert(Value(*value), K::Native::to_usize(*key).unwrap());
@@ -167,7 +168,7 @@ where
         Self {
             keys_builder: PrimitiveBuilder::with_capacity(keys_capacity),
             values_builder: PrimitiveBuilder::with_capacity(values_capacity),
-            map: HashMap::with_capacity(values_capacity),
+            map: HashMap::with_capacity_and_hasher(values_capacity, Default::default()),
         }
     }
 
@@ -197,6 +198,7 @@ where
     /// let keys = dictionary_array.keys();
     ///
     /// assert_eq!(keys, &UInt16Array::from_iter(0..256));
+    /// ```
     pub fn try_new_from_builder<K2>(
         mut source: PrimitiveDictionaryBuilder<K2, V>,
     ) -> Result<Self, ArrowError>
@@ -226,9 +228,13 @@ where
 
         Ok(Self {
             map,
-            keys_builder: new_keys
-                .into_builder()
-                .expect("underlying buffer has no references"),
+            keys_builder: new_keys.into_builder().map_err(|_| {
+                ArrowError::ComputeError(
+                    "Internal Error: the keys just derived from the source builder are \
+                     unexpectedly shared, so they cannot be reused as a builder"
+                        .to_string(),
+                )
+            })?,
             values_builder,
         })
     }
@@ -281,17 +287,15 @@ where
 {
     #[inline]
     fn get_or_insert_key(&mut self, value: V::Native) -> Result<K::Native, ArrowError> {
-        match self.map.get(&Value(value)) {
-            Some(&key) => {
-                Ok(K::Native::from_usize(key).ok_or(ArrowError::DictionaryKeyOverflowError)?)
-            }
-            None => {
+        let key = match self.map.entry(Value(value)) {
+            Entry::Occupied(entry) => *entry.get(),
+            Entry::Vacant(entry) => {
                 let key = self.values_builder.len();
                 self.values_builder.append_value(value);
-                self.map.insert(Value(value), key);
-                Ok(K::Native::from_usize(key).ok_or(ArrowError::DictionaryKeyOverflowError)?)
+                *entry.insert(key)
             }
-        }
+        };
+        K::Native::from_usize(key).ok_or(ArrowError::DictionaryKeyOverflowError)
     }
 
     /// Append a primitive value to the array. Return an existing index
@@ -357,7 +361,7 @@ where
         match value {
             None => self.append_null(),
             Some(v) => self.append_value(v),
-        };
+        }
     }
 
     /// Append an `Option` value into the builder repeatedly `count` times.
@@ -370,7 +374,7 @@ where
         match value {
             None => self.keys_builder.append_nulls(count),
             Some(v) => self.append_values(v, count),
-        };
+        }
     }
 
     /// Extends builder with dictionary
@@ -445,6 +449,7 @@ where
             .data_type(data_type)
             .child_data(vec![values.into_data()]);
 
+        // SAFETY: builder is constructed from valid key/value arrays produced by the builder
         DictionaryArray::from(unsafe { builder.build_unchecked() })
     }
 
@@ -453,7 +458,8 @@ where
         let values = self.values_builder.finish_cloned();
         let keys = self.keys_builder.finish_cloned();
 
-        let data_type = DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(V::DATA_TYPE));
+        let data_type =
+            DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(values.data_type().clone()));
 
         let builder = keys
             .into_data()
@@ -461,6 +467,7 @@ where
             .data_type(data_type)
             .child_data(vec![values.into_data()]);
 
+        // SAFETY: builder is constructed from valid key/value arrays produced by the builder
         DictionaryArray::from(unsafe { builder.build_unchecked() })
     }
 
@@ -485,7 +492,8 @@ where
         let values = self.values_builder.finish_cloned();
         let keys = self.keys_builder.finish();
 
-        let data_type = DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(V::DATA_TYPE));
+        let data_type =
+            DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(values.data_type().clone()));
 
         let builder = keys
             .into_data()
@@ -493,6 +501,7 @@ where
             .data_type(data_type)
             .child_data(vec![values.into_data()]);
 
+        // SAFETY: builder is constructed from valid key/value arrays produced by the builder
         DictionaryArray::from(unsafe { builder.build_unchecked() })
     }
 
@@ -596,15 +605,16 @@ mod tests {
                 keys_builder,
                 values_builder,
             );
+        let expected = DataType::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(DataType::Decimal128(1, 2)),
+        );
+        assert_eq!(builder.finish_cloned().data_type(), &expected);
+        assert_eq!(builder.finish_preserve_values().data_type(), &expected);
+
         let dict_array = builder.finish();
         assert_eq!(dict_array.value_type(), DataType::Decimal128(1, 2));
-        assert_eq!(
-            dict_array.data_type(),
-            &DataType::Dictionary(
-                Box::new(DataType::Int32),
-                Box::new(DataType::Decimal128(1, 2)),
-            )
-        );
+        assert_eq!(dict_array.data_type(), &expected);
     }
 
     #[test]

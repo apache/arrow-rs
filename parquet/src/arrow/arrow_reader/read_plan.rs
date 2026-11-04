@@ -20,16 +20,15 @@
 
 use crate::arrow::array_reader::ArrayReader;
 use crate::arrow::arrow_reader::selection::{
-    LoadedRowRanges, RowSelectionInner, RowSelectionPolicy, RowSelectionStrategy, mask_to_selectors,
+    LoadedRowRanges, RowSelectionPolicy, RowSelectionStrategy,
 };
 use crate::arrow::arrow_reader::{
     ArrowPredicate, ParquetRecordBatchReader, RowSelection, RowSelectionCursor, RowSelector,
 };
 use crate::errors::{ParquetError, Result};
 use arrow_array::{Array, BooleanArray};
-use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
+use arrow_buffer::BooleanBuffer;
 use arrow_select::filter::prep_null_mask_filter;
-use std::collections::VecDeque;
 use std::sync::Arc;
 
 /// Options for [`ReadPlanBuilder::with_predicate_options`].
@@ -158,18 +157,7 @@ impl ReadPlanBuilder {
     ///
     /// Guarantees to return either `Selectors` or `Mask`, never `Auto`.
     pub(crate) fn resolve_selection_strategy(&self) -> RowSelectionStrategy {
-        match self.row_selection_policy {
-            RowSelectionPolicy::Selectors => RowSelectionStrategy::Selectors,
-            RowSelectionPolicy::Mask => RowSelectionStrategy::Mask,
-            RowSelectionPolicy::Auto { threshold, .. } => {
-                let selection = match self.selection.as_ref() {
-                    Some(selection) => selection,
-                    None => return RowSelectionStrategy::Selectors,
-                };
-
-                selection.auto_selection_strategy(threshold)
-            }
-        }
+        self.row_selection_policy.resolve(self.selection.as_ref())
     }
 
     /// Evaluates an [`ArrowPredicate`], updating this plan's `selection`
@@ -259,11 +247,11 @@ impl ReadPlanBuilder {
         // reader would have produced — rows past the early break are marked
         // "not selected". When no limit is set the loop always exhausts and
         // no padding is needed.
-        if let Some(expected) = expected_rows {
-            if processed_rows < expected {
-                let pad_len = expected - processed_rows;
-                filters.push(BooleanArray::new(BooleanBuffer::new_unset(pad_len), None));
-            }
+        if let Some(expected) = expected_rows
+            && processed_rows < expected
+        {
+            let pad_len = expected - processed_rows;
+            filters.push(BooleanArray::new(BooleanBuffer::new_unset(pad_len), None));
         }
 
         // If the predicate selected all rows, applying it is a no-op. With no
@@ -274,14 +262,14 @@ impl ReadPlanBuilder {
         if all_selected {
             return Ok(self);
         }
-        let raw = if self
-            .selection
-            .as_ref()
-            .is_some_and(|s| s.as_mask().is_some())
-        {
-            RowSelection::from_boolean_buffer(filters_to_boolean_buffer(&filters))
-        } else {
-            RowSelection::from_filters(&filters)
+        let raw = match (self.selection.as_ref(), self.row_selection_policy) {
+            (Some(selection), _) if selection.as_mask().is_some() => {
+                RowSelection::from_filters_mask(&filters)
+            }
+            (None, RowSelectionPolicy::Auto { threshold }) => {
+                RowSelection::from_filters_auto(&filters, threshold)
+            }
+            _ => RowSelection::from_filters(&filters),
         };
         self.selection = match self.selection.take() {
             Some(selection) => Some(selection.and_then(&raw)),
@@ -308,34 +296,12 @@ impl ReadPlanBuilder {
         } = self;
 
         let row_selection_cursor = selection
-            .map(|s| build_cursor(s.trim(), selection_strategy, loaded_row_ranges))
-            .unwrap_or(RowSelectionCursor::new_all());
+            .map(|s| selection_strategy.build_cursor(s.trim(), loaded_row_ranges))
+            .unwrap_or_else(RowSelectionCursor::new_all);
 
         ReadPlan {
             batch_size,
             row_selection_cursor,
-        }
-    }
-}
-
-/// Lower a [`RowSelection`] to the cursor form requested by the resolved strategy.
-fn build_cursor(
-    selection: RowSelection,
-    strategy: RowSelectionStrategy,
-    loaded_row_ranges: Option<Arc<LoadedRowRanges>>,
-) -> RowSelectionCursor {
-    match (strategy, selection.into_inner()) {
-        (RowSelectionStrategy::Mask, RowSelectionInner::Mask(mask)) => {
-            RowSelectionCursor::new_mask_from_buffer((*mask).into_mask(), loaded_row_ranges)
-        }
-        (RowSelectionStrategy::Mask, RowSelectionInner::Selectors(selectors)) => {
-            RowSelectionCursor::new_mask_from_selectors(selectors, loaded_row_ranges)
-        }
-        (RowSelectionStrategy::Selectors, RowSelectionInner::Selectors(selectors)) => {
-            RowSelectionCursor::new_selectors(selectors)
-        }
-        (RowSelectionStrategy::Selectors, RowSelectionInner::Mask(mask)) => {
-            RowSelectionCursor::new_selectors(mask_to_selectors(mask.mask()))
         }
     }
 }
@@ -425,16 +391,6 @@ impl LimitedReadPlanBuilder {
     }
 }
 
-fn filters_to_boolean_buffer(filters: &[BooleanArray]) -> BooleanBuffer {
-    let total_rows = filters.iter().map(|f| f.len()).sum();
-    let mut builder = BooleanBufferBuilder::new(total_rows);
-    for filter in filters {
-        assert_eq!(filter.null_count(), 0);
-        builder.append_buffer(filter.values());
-    }
-    builder.finish()
-}
-
 /// A plan reading specific rows from a Parquet Row Group.
 ///
 /// See [`ReadPlanBuilder`] to create `ReadPlan`s
@@ -447,16 +403,6 @@ pub struct ReadPlan {
 }
 
 impl ReadPlan {
-    /// Returns a mutable reference to the selection selectors, if any
-    #[deprecated(since = "57.1.0", note = "Use `row_selection_cursor_mut` instead")]
-    pub fn selection_mut(&mut self) -> Option<&mut VecDeque<RowSelector>> {
-        if let RowSelectionCursor::Selectors(selectors_cursor) = &mut self.row_selection_cursor {
-            Some(selectors_cursor.selectors_mut())
-        } else {
-            None
-        }
-    }
-
     /// Returns a mutable reference to the row selection cursor
     pub fn row_selection_cursor_mut(&mut self) -> &mut RowSelectionCursor {
         &mut self.row_selection_cursor
@@ -473,8 +419,88 @@ impl ReadPlan {
 mod tests {
     use super::*;
 
+    const DEFAULT_AUTO_THRESHOLD: usize = 32;
+
     fn builder_with_selection(selection: RowSelection) -> ReadPlanBuilder {
         ReadPlanBuilder::new(1024).with_selection(Some(selection))
+    }
+
+    fn predicate_plan(
+        pattern: Vec<bool>,
+        batch_size: usize,
+        limit: Option<usize>,
+    ) -> ReadPlanBuilder {
+        use crate::arrow::ProjectionMask;
+        use crate::arrow::array_reader::StructArrayReader;
+        use crate::arrow::array_reader::test_util::make_int32_page_reader;
+        use crate::arrow::arrow_reader::ArrowPredicateFn;
+        use arrow_schema::{DataType as ArrowType, Field, Fields};
+
+        let total_rows = pattern.len();
+        let data: Vec<i32> = (0..total_rows as i32).collect();
+        let levels = vec![0; total_rows];
+        let leaf = make_int32_page_reader(&data, &levels, &levels, 0, 0, None);
+        let struct_type = ArrowType::Struct(Fields::from(vec![Field::new(
+            "c0",
+            ArrowType::Int32,
+            false,
+        )]));
+        let struct_reader = StructArrayReader::new(struct_type, vec![leaf], 0, 0, false, None);
+
+        let mut offset = 0usize;
+        let mut predicate = ArrowPredicateFn::new(ProjectionMask::all(), move |batch| {
+            let end = offset + batch.num_rows();
+            let filter = BooleanArray::from(pattern[offset..end].to_vec());
+            offset = end;
+            Ok(filter)
+        });
+        let options = PredicateOptions::new(Box::new(struct_reader), &mut predicate);
+        let options = match limit {
+            Some(limit) => options.with_limit(limit, total_rows),
+            None => options,
+        };
+
+        ReadPlanBuilder::new(batch_size)
+            .with_predicate_options(options)
+            .unwrap()
+    }
+
+    fn first_n_matches(pattern: &[bool], limit: usize) -> Vec<bool> {
+        let mut remaining = limit;
+        pattern
+            .iter()
+            .map(|selected| {
+                if *selected && remaining != 0 {
+                    remaining -= 1;
+                    true
+                } else {
+                    false
+                }
+            })
+            .collect()
+    }
+
+    fn assert_limit_case(name: &str, pattern: Vec<bool>, batch_size: usize, limit: usize) {
+        let expected_bits = first_n_matches(&pattern, limit);
+        let expected = RowSelection::from_filters(&[BooleanArray::from(expected_bits)]);
+        let builder = predicate_plan(pattern, batch_size, Some(limit));
+        let actual = builder
+            .selection()
+            .unwrap_or_else(|| panic!("{name}: limited mixed predicate must produce a selection"));
+
+        assert_eq!(actual, &expected, "{name}: logical selection");
+
+        let current_strategy = expected.auto_selection_strategy(DEFAULT_AUTO_THRESHOLD);
+        assert_eq!(
+            builder.resolve_selection_strategy(),
+            current_strategy,
+            "{name}: Auto strategy"
+        );
+        assert_eq!(
+            actual.as_mask().is_some(),
+            current_strategy == RowSelectionStrategy::Mask,
+            "{name}: backing selected by capped Auto"
+        );
     }
 
     #[test]
@@ -558,8 +584,9 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn preferred_selection_strategy_mask_matches_selector_backing() {
-        use rand::{Rng, rng};
+        use rand::{RngExt, rng};
 
         let mut rand = rng();
         for _ in 0..200 {
@@ -645,19 +672,34 @@ mod tests {
             panic!("expected a Mask cursor");
         };
 
-        // The first chunk must end at the loaded range boundary (row 4), not
-        // continue into the unloaded gap.
+        // The first chunk stops at its final selected row instead of carrying
+        // trailing skipped rows to the loaded range boundary.
         let first = cursor.next_chunk(12).unwrap();
         assert_eq!(first.initial_skip, 0);
-        assert_eq!(first.chunk_rows, 4);
+        assert_eq!(first.chunk_rows, 1);
         assert_eq!(first.selected_rows, 1);
 
-        // The second chunk skips the gap and decodes only within [10, 12).
+        // The second chunk skips directly to the next selected row.
         let second = cursor.next_chunk(12).unwrap();
-        assert_eq!(second.initial_skip, 7);
+        assert_eq!(second.initial_skip, 10);
         assert_eq!(second.chunk_rows, 1);
         assert_eq!(second.selected_rows, 1);
         assert!(cursor.is_empty());
+    }
+
+    #[test]
+    fn with_predicate_options_capped_auto_preserves_limit_and_padding_boundaries() {
+        let fragmented_early_limit = (0..37)
+            .map(|row| matches!(row, 0 | 3 | 7 | 9 | 12 | 18 | 24 | 36))
+            .collect();
+        assert_limit_case("fragmented early limit", fragmented_early_limit, 16, 3);
+
+        assert_limit_case(
+            "selector-friendly padded tail",
+            vec![true; 4_097],
+            1_024,
+            1_024,
+        );
     }
 
     #[test]
@@ -705,9 +747,9 @@ mod tests {
 
         // Total rows covered (selects + skips) must equal the full row group
         // so downstream offset/limit math stays in absolute-row space.
-        let total: usize = selection.iter().map(|s| s.row_count).sum();
         assert_eq!(
-            total, TOTAL_ROWS,
+            selection.total_row_count(),
+            TOTAL_ROWS,
             "selection must span the full row group, not only the prefix evaluated before the limit"
         );
     }
@@ -800,7 +842,6 @@ mod tests {
 
         assert_eq!(selection.row_count(), LIMIT);
 
-        let total: usize = selection.iter().map(|s| s.row_count).sum();
-        assert_eq!(total, TOTAL_ROWS);
+        assert_eq!(selection.total_row_count(), TOTAL_ROWS);
     }
 }

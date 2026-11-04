@@ -19,8 +19,12 @@
 //!
 //! Uses `try_next_reader` to build row group readers without decoding any
 //! pages, isolating PushBuffers operations (has_range, get_bytes, clearing).
+//!
+//! The `scan_plan` group measures `ParquetPushDecoder::scan_plan` for wide
+//! schemas with a page index.
 
 use std::hint::black_box;
+use std::ops::Range;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -29,8 +33,12 @@ use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use parquet::DecodeResult;
 use parquet::arrow::ArrowWriter;
+use parquet::arrow::ProjectionMask;
+use parquet::arrow::arrow_reader::{
+    ArrowReaderMetadata, ArrowReaderOptions, RowSelection, RowSelector,
+};
 use parquet::arrow::push_decoder::ParquetPushDecoderBuilder;
-use parquet::file::metadata::ParquetMetaDataPushDecoder;
+use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataPushDecoder};
 use parquet::file::properties::WriterProperties;
 
 fn make_wide_schema(num_columns: usize) -> SchemaRef {
@@ -42,8 +50,16 @@ fn make_wide_schema(num_columns: usize) -> SchemaRef {
 
 /// Write a Parquet file with `num_columns` columns, 10 row groups of 100 rows.
 fn make_test_file(num_columns: usize) -> Bytes {
-    let num_rows = 1_000;
-    let rows_per_rg = 100;
+    make_test_file_with_row_groups(num_columns, 1_000, 100)
+}
+
+/// Write a Parquet file with `num_columns` columns and `num_rows` rows, in row
+/// groups of `rows_per_rg` rows.
+fn make_test_file_with_row_groups(
+    num_columns: usize,
+    num_rows: usize,
+    rows_per_rg: usize,
+) -> Bytes {
     let schema = make_wide_schema(num_columns);
     let columns: Vec<Arc<dyn arrow_array::Array>> = (0..num_columns)
         .map(|_| Arc::new(Float32Array::from(vec![0.0f32; num_rows])) as _)
@@ -122,6 +138,47 @@ fn build_readers_exact_ranges(
     }
 }
 
+/// Push one buffer per column chunk of the whole file before the first row
+/// group is read, then build all row group readers.
+///
+/// All buffers of the later row groups stay buffered while the decoder
+/// releases the bytes of each row group that it finished. Thus, this measures
+/// a release from many buffers.
+fn build_readers_prefetched(
+    file_data: &Bytes,
+    metadata: &Arc<parquet::file::metadata::ParquetMetaData>,
+) {
+    let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(metadata.clone())
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let ranges: Vec<Range<u64>> = metadata
+        .row_groups()
+        .iter()
+        .flat_map(|rg| rg.columns())
+        .map(|column| {
+            let (start, len) = column.byte_range();
+            start..start + len
+        })
+        .collect();
+    let buffers: Vec<Bytes> = ranges
+        .iter()
+        .map(|r| file_data.slice(r.start as usize..r.end as usize))
+        .collect();
+    decoder.push_ranges(ranges, buffers).unwrap();
+
+    loop {
+        match decoder.try_next_reader().unwrap() {
+            DecodeResult::Data(reader) => {
+                black_box(reader);
+            }
+            DecodeResult::Finished => break,
+            DecodeResult::NeedsData(r) => panic!("unexpected NeedsData: {r:?}"),
+        }
+    }
+}
+
 fn bench_1buf(c: &mut Criterion) {
     let mut group = c.benchmark_group("push_decoder/1buf");
 
@@ -166,5 +223,112 @@ fn bench_nbuf(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_1buf, bench_nbuf);
+fn bench_prefetch(c: &mut Criterion) {
+    let mut group = c.benchmark_group("push_decoder/prefetch");
+
+    // 10 columns, one row in each row group.
+    for num_row_groups in [100, 1_000, 3_000] {
+        let file_data = make_test_file_with_row_groups(10, num_row_groups, 1);
+        let metadata = decode_metadata(&file_data);
+        let num_ranges: usize = metadata
+            .row_groups()
+            .iter()
+            .map(|rg| rg.columns().len())
+            .sum();
+
+        group.bench_with_input(
+            BenchmarkId::from_parameter(format!("{num_ranges}ranges")),
+            &(&file_data, &metadata),
+            |b, &(data, meta)| b.iter(|| build_readers_prefetched(data, meta)),
+        );
+    }
+
+    group.finish();
+}
+
+/// Write a Parquet file with `num_columns` columns and one row group of
+/// 1,000 rows, with `pages_per_column` data pages per column chunk.
+fn make_paged_test_file(num_columns: usize, pages_per_column: usize) -> Bytes {
+    let num_rows = 1_000;
+    let schema = make_wide_schema(num_columns);
+    let columns: Vec<Arc<dyn arrow_array::Array>> = (0..num_columns)
+        .map(|_| {
+            Arc::new(Float32Array::from_iter_values(
+                (0..num_rows).map(|v| v as f32),
+            )) as _
+        })
+        .collect();
+    let batch = RecordBatch::try_new(schema.clone(), columns).unwrap();
+
+    let page_rows = num_rows / pages_per_column;
+    let mut buf = Vec::new();
+    let props = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(num_rows))
+        .set_data_page_row_count_limit(page_rows)
+        // Page limits are checked between write batches.
+        .set_write_batch_size(page_rows)
+        .set_dictionary_enabled(false)
+        .build();
+    let mut writer = ArrowWriter::try_new(&mut buf, schema, Some(props)).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+    Bytes::from(buf)
+}
+
+/// Plan a wide file with a page index: the first range (what a read-ahead
+/// caller waits for) and the whole scan, which is one row group.
+///
+/// `all` reads every column and row. `selection` keeps 10 rows of every 100,
+/// so each column chunk reads every other page. `narrow` reads 10 columns.
+fn bench_scan_plan(c: &mut Criterion) {
+    let mut group = c.benchmark_group("push_decoder/scan_plan");
+
+    for (num_cols, pages) in [
+        (100, 10),
+        (1_000, 10),
+        (10_000, 10),
+        (100_000, 10),
+        (1_000, 100),
+    ] {
+        let file_data = make_paged_test_file(num_cols, pages);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
+        let metadata = ArrowReaderMetadata::load(&file_data, options).unwrap();
+        let selection = RowSelection::from(
+            (0..10)
+                .flat_map(|_| [RowSelector::select(10), RowSelector::skip(90)])
+                .collect::<Vec<_>>(),
+        );
+        let narrow = ProjectionMask::leaves(metadata.parquet_schema(), 0..10);
+        let builder = || ParquetPushDecoderBuilder::new_with_metadata(metadata.clone());
+        let variants = [
+            ("all", builder()),
+            ("selection", builder().with_row_selection(selection)),
+            ("narrow", builder().with_projection(narrow)),
+        ];
+
+        for (variant, builder) in variants {
+            let decoder = builder.build().unwrap();
+            let id = format!("{variant}/{num_cols}cols_{pages}pages");
+
+            group.bench_function(BenchmarkId::new("first_range", &id), |b| {
+                b.iter(|| black_box(decoder.scan_plan().next()))
+            });
+            // The plan is lazy: `next` plans only the first range, and
+            // `count` forces the planning of every range.
+            group.bench_function(BenchmarkId::new("whole_scan", &id), |b| {
+                b.iter(|| black_box(decoder.scan_plan().count()))
+            });
+        }
+    }
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_1buf,
+    bench_nbuf,
+    bench_prefetch,
+    bench_scan_plan
+);
 criterion_main!(benches);

@@ -20,8 +20,6 @@ extern crate criterion;
 
 use criterion::{Criterion, Throughput};
 
-extern crate arrow;
-
 use arrow::buffer::{Buffer, MutableBuffer, buffer_bin_and, buffer_bin_or, buffer_unary_not};
 use std::hint;
 
@@ -30,7 +28,9 @@ fn create_buffer(size: usize) -> Buffer {
     let mut result = MutableBuffer::new(size).with_bitset(size, false);
 
     for i in 0..size {
-        result.as_slice_mut()[i] = 0b01010101 << i << (i % 4);
+        result.as_slice_mut()[i] = 0b01010101u8
+            .wrapping_shl(i as u32)
+            .wrapping_shl((i % 4) as u32);
     }
 
     result.into()

@@ -42,7 +42,7 @@ macro_rules! triplet_enum_func {
 
 /// High level API wrapper on column reader.
 /// Provides per-element access for each primitive column.
-#[allow(clippy::enum_variant_names)]
+#[expect(clippy::enum_variant_names)]
 pub enum TripletIter {
     BoolTripletIter(TypedTripletIter<BoolType>),
     Int32TripletIter(TypedTripletIter<Int32Type>),
@@ -396,6 +396,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_triplet_required_column() {
         let path = vec!["ID"];
         let values = vec![Field::Long(8)];
@@ -411,6 +412,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_triplet_optional_column() {
         let path = vec!["nested_struct", "A"];
         let values = vec![Field::Int(1), Field::Int(7)];
@@ -426,6 +428,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_triplet_optional_list_column() {
         let path = vec!["a", "list", "element", "list", "element", "list", "element"];
         let values = vec![
@@ -457,6 +460,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_triplet_optional_map_column() {
         let path = vec!["a", "key_value", "value", "key_value", "key"];
         let values = vec![
@@ -555,7 +559,7 @@ mod tests {
         assert_eq!(iter.max_def_level(), descr.max_def_level());
         assert_eq!(iter.max_rep_level(), descr.max_rep_level());
 
-        while let Ok(true) = iter.read_next() {
+        while matches!(iter.read_next(), Ok(true)) {
             assert!(iter.has_next());
             if !iter.is_null() {
                 values.push(iter.current_value().unwrap());
@@ -589,7 +593,7 @@ mod tests {
     #[test]
     fn test_current_def_level_safe_after_exhaustion() {
         let mut iter = open_triplet_iter("nulls.snappy.parquet", &["b_struct", "b_c_int"], 256);
-        while let Ok(true) = iter.read_next() {}
+        while matches!(iter.read_next(), Ok(true)) {}
         assert!(!iter.has_next());
         assert_eq!(iter.current_def_level(), 0);
     }
@@ -601,7 +605,7 @@ mod tests {
             &["a", "list", "element", "list", "element", "list", "element"],
             256,
         );
-        while let Ok(true) = iter.read_next() {}
+        while matches!(iter.read_next(), Ok(true)) {}
         assert!(!iter.has_next());
         assert_eq!(iter.current_rep_level(), 0);
     }

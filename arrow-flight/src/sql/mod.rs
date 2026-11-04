@@ -42,9 +42,10 @@ use arrow_schema::ArrowError;
 use bytes::Bytes;
 use prost::Message;
 
+// This code is generated so we don't want to fix any lint violations manually
+#[allow(clippy::allow_attributes)]
 #[allow(clippy::all)]
 mod r#gen {
-    // Since this file is auto-generated, we suppress all warnings
     #![allow(missing_docs)]
     include!("arrow.flight.protocol.sql.rs");
 }

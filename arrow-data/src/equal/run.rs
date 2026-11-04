@@ -18,6 +18,7 @@
 use crate::data::ArrayData;
 use arrow_buffer::ArrowNativeType;
 use arrow_buffer::RunEndBuffer;
+use arrow_buffer::ScalarBuffer;
 use arrow_schema::DataType;
 use num_traits::ToPrimitive;
 
@@ -63,8 +64,12 @@ impl<'a, T: ArrowNativeType + ToPrimitive> RunArrayData<'a, T> {
         // SAFETY: we're reconstructing RunEndBuffer from a known valid RunArray
         let run_ends = unsafe {
             RunEndBuffer::<T>::new_unchecked(
-                raw_run_ends_buffer.clone().into(),
-                run_ends_data.offset() + data.offset() + start,
+                ScalarBuffer::new(
+                    raw_run_ends_buffer.clone(),
+                    run_ends_data.offset(),
+                    run_ends_data.len(),
+                ),
+                data.offset() + start,
                 len,
             )
         };

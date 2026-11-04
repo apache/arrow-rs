@@ -19,7 +19,6 @@
 name = "arrow-json"
 version = { workspace = true }
 description = "Support for parsing JSON format to and from the Arrow format"
-homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
 license = { workspace = true }
@@ -55,13 +54,16 @@ ryu = "1.0"
 itoa = "1.0"
 
 [dev-dependencies]
+# Enable `chrono-tz` so that tests can exercise IANA (named) timezones such as
+# `America/New_York`, which is where DST transitions can be observed.
+arrow-array = { workspace = true, features = ["chrono-tz"] }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 futures = "0.3"
 tokio = { version = "1.27", default-features = false, features = ["io-util"] }
 bytes = "1.4"
 criterion = { workspace = true, default-features = false }
-rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
+rand = { version = "0.10", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 arbitrary = { version = "1.4.2", features = ["derive"] }
 
 [[bench]]
@@ -75,3 +77,6 @@ harness = false
 [[bench]]
 name = "json_writer"
 harness = false
+
+[lints]
+workspace = true

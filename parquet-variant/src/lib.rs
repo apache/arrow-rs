@@ -30,6 +30,13 @@
 //! If you are interested in helping, you can find more information on the GitHub [Variant issue]
 //!
 //! [Variant issue]: https://github.com/apache/arrow-rs/issues/6736
+//!
+//! # Platform Support
+//!
+//! Only little-endian platforms are officially supported and tested in CI.
+//! Big-endian platforms are not tested in CI and may not work correctly.
+//! Fixes for big-endian platforms are welcome and handled on a best-effort basis,
+//! but compatibility is not guaranteed.
 
 mod builder;
 mod decoder;
@@ -37,6 +44,7 @@ mod path;
 mod utils;
 mod variant;
 
+pub use arrow_schema::extension::VariantType;
 pub use builder::*;
 pub use path::{VariantPath, VariantPathElement};
 pub use variant::*;

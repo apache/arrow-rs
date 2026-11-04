@@ -156,7 +156,7 @@ impl ContentDefinedChunker {
             ));
         }
 
-        let avg_chunk_size = (min_chunk_size + max_chunk_size) / 2;
+        let avg_chunk_size = min_chunk_size.midpoint(max_chunk_size);
         // Target size after subtracting the min-size skip window and dividing by the
         // number of hash tables (for central-limit-theorem normalization).
         let target_size = (avg_chunk_size - min_chunk_size) / NUM_GEARHASH_TABLES as i64;
@@ -324,7 +324,6 @@ impl ContentDefinedChunker {
             //   def_levels:    [1, 0, 1, 0, 1]
             //   level:          0  1  2  3  4
             //   value_offset:   0     1     2  (only increments on def==1)
-            #[allow(clippy::needless_range_loop)]
             for offset in 0..num_levels {
                 let def_level = def_levels
                     .value_at(offset)
@@ -715,9 +714,7 @@ mod tests {
         let num_levels = 20;
         // def_level=1 means non-null, def_level=0 means null
         // Pattern: null at indices 0, 3, 6, 9, 12, 15, 18 → 7 nulls, 13 non-null
-        let def_levels: Vec<i16> = (0..num_levels)
-            .map(|i| if i % 3 == 0 { 0 } else { 1 })
-            .collect();
+        let def_levels: Vec<i16> = (0..num_levels).map(|i| i16::from(i % 3 != 0)).collect();
         let expected_non_null: usize = def_levels.iter().filter(|&&d| d == 1).count();
 
         let chunks = chunker.calculate(
@@ -744,6 +741,7 @@ mod tests {
 #[cfg(all(test, feature = "arrow"))]
 mod arrow_tests {
     use std::borrow::Borrow;
+    use std::cmp::Ordering;
     use std::sync::Arc;
 
     use arrow::util::data_gen::create_random_batch;
@@ -756,7 +754,9 @@ mod arrow_tests {
     use crate::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use crate::arrow::arrow_writer::ArrowWriter;
     use crate::column::writer::LevelDataRef;
-    use crate::file::properties::{CdcOptions, WriterProperties};
+    use crate::file::properties::{
+        CdcOptions, WriterProperties, WriterPropertiesBuilder, WriterVersion,
+    };
     use crate::file::reader::{FileReader, SerializedFileReader};
 
     // --- Constants matching C++ TestCDCSingleRowGroup ---
@@ -811,17 +811,17 @@ mod arrow_tests {
                     let arr: BooleanArray = (0..length)
                         .map(|i| {
                             let val = test_hash(seed, i as u64);
-                            if val % 10 == 0 {
+                            if val.is_multiple_of(10) {
                                 None
                             } else {
-                                Some(val % 2 == 0)
+                                Some(val.is_multiple_of(2))
                             }
                         })
                         .collect();
                     Arc::new(arr)
                 } else {
                     let arr: BooleanArray = (0..length)
-                        .map(|i| Some(test_hash(seed, i as u64) % 2 == 0))
+                        .map(|i| Some(test_hash(seed, i as u64).is_multiple_of(2)))
                         .collect();
                     Arc::new(arr)
                 }
@@ -839,7 +839,7 @@ mod arrow_tests {
                     (0..length)
                         .map(|i| {
                             let val = test_hash(seed, i as u64);
-                            if val % 10 == 0 {
+                            if val.is_multiple_of(10) {
                                 None
                             } else {
                                 Some(format!("str_{val}"))
@@ -858,7 +858,7 @@ mod arrow_tests {
                     (0..length)
                         .map(|i| {
                             let val = test_hash(seed, i as u64);
-                            if val % 10 == 0 {
+                            if val.is_multiple_of(10) {
                                 None
                             } else {
                                 Some(format!("bin_{val}").into_bytes())
@@ -877,7 +877,7 @@ mod arrow_tests {
                 let mut builder = arrow_array::builder::FixedSizeBinaryBuilder::new(size);
                 for i in 0..length {
                     let val = test_hash(seed, i as u64);
-                    if nullable && val % 10 == 0 {
+                    if nullable && val.is_multiple_of(10) {
                         builder.append_null();
                     } else {
                         let s = format!("bin_{val}");
@@ -1025,7 +1025,7 @@ mod arrow_tests {
                     crate::basic::PageType::DICTIONARY_PAGE => {
                         info.has_dictionary_page = true;
                     }
-                    _ => {}
+                    crate::basic::PageType::INDEX_PAGE => {}
                 }
             }
             result.push(info);
@@ -1043,9 +1043,9 @@ mod arrow_tests {
         max_chunk_size: usize,
         expect_dictionary_page: bool,
     ) {
-        // Boolean and FixedSizeBinary never produce dictionary pages (matching C++)
+        // Boolean columns never produce dictionary pages.
         let expect_dict = match array.data_type() {
-            DataType::Boolean | DataType::FixedSizeBinary(_) => false,
+            DataType::Boolean => false,
             _ => expect_dictionary_page,
         };
         assert_eq!(
@@ -1134,6 +1134,71 @@ mod arrow_tests {
         }
 
         buf
+    }
+
+    /// Write a batch with common CDC settings and test-specific writer properties.
+    fn write_cdc_batch(batch: &RecordBatch, builder: WriterPropertiesBuilder) -> Vec<u8> {
+        let props = builder
+            .set_writer_version(WriterVersion::PARQUET_2_0)
+            .set_content_defined_chunking(Some(CdcOptions {
+                min_chunk_size: 8 * 1024,
+                max_chunk_size: 16 * 1024,
+                norm_level: 0,
+            }))
+            .build();
+
+        let mut buf = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+        writer.write(batch).unwrap();
+        writer.close().unwrap();
+        buf
+    }
+
+    fn assert_multiple_nonempty_data_pages(data: &[u8]) {
+        let info = get_column_info(data, 0);
+        let total: usize = info.iter().map(|c| c.page_lengths.len()).sum();
+        let empty = info
+            .iter()
+            .flat_map(|c| c.page_lengths.iter())
+            .filter(|&&n| n == 0)
+            .count();
+
+        assert!(
+            total > 1,
+            "CDC should produce multiple data pages, got {total}"
+        );
+        assert_eq!(empty, 0, "forced CDC page breaks must not emit empty pages");
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // large enough to hit CDC chunk boundaries
+    fn cdc_boolean_small_pages_does_not_panic() {
+        let num_rows = 32_768;
+        let values: Vec<bool> = (0..num_rows).map(|i| i % 7 == 0).collect();
+        let col = Arc::new(BooleanArray::from(values)) as ArrayRef;
+        let batch = RecordBatch::try_from_iter([("flag", col)]).unwrap();
+
+        let props = WriterProperties::builder().set_data_page_size_limit(1024);
+        let data = write_cdc_batch(&batch, props);
+        assert_multiple_nonempty_data_pages(&data);
+
+        let readback = read_batches(&data);
+        let rows: usize = readback.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(rows, num_rows);
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // large enough to hit CDC chunk boundaries
+    fn cdc_int32_row_count_limit_does_not_emit_empty_pages() {
+        let values: Vec<i32> = (0..8_192).map(|i| i % 97).collect();
+        let col = Arc::new(Int32Array::from(values)) as ArrayRef;
+        let batch = RecordBatch::try_from_iter([("a", col)]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(false)
+            .set_data_page_row_count_limit(128);
+        let data = write_cdc_batch(&batch, props);
+        assert_multiple_nonempty_data_pages(&data);
     }
 
     #[test]
@@ -1263,22 +1328,24 @@ mod arrow_tests {
         for (left, right) in &diffs {
             let left_sum: i64 = left.iter().sum();
             let right_sum: i64 = right.iter().sum();
-            if left_sum == right_sum {
-                eq += 1;
-            } else if left_sum < right_sum {
-                larger += 1;
-                assert_eq!(
-                    left_sum + edit_length,
-                    right_sum,
-                    "Larger diff mismatch: {left_sum} + {edit_length} != {right_sum}"
-                );
-            } else {
-                smaller += 1;
-                assert_eq!(
-                    left_sum,
-                    right_sum + edit_length,
-                    "Smaller diff mismatch: {left_sum} != {right_sum} + {edit_length}"
-                );
+            match left_sum.cmp(&right_sum) {
+                Ordering::Equal => eq += 1,
+                Ordering::Less => {
+                    larger += 1;
+                    assert_eq!(
+                        left_sum + edit_length,
+                        right_sum,
+                        "Larger diff mismatch: {left_sum} + {edit_length} != {right_sum}"
+                    );
+                }
+                Ordering::Greater => {
+                    smaller += 1;
+                    assert_eq!(
+                        left_sum,
+                        right_sum + edit_length,
+                        "Smaller diff mismatch: {left_sum} != {right_sum} + {edit_length}"
+                    );
+                }
             }
         }
 
@@ -1390,6 +1457,7 @@ mod arrow_tests {
                 }
 
                 #[test]
+                #[cfg_attr(miri, ignore)] // Takes too long
                 fn delete_once() {
                     let (dtype, nullable, part_length, edit_length) = config();
                     let schema = make_schema(&dtype, nullable);
@@ -1451,6 +1519,7 @@ mod arrow_tests {
                 }
 
                 #[test]
+                #[cfg_attr(miri, ignore)] // Takes too long
                 fn delete_twice() {
                     let (dtype, nullable, part_length, edit_length) = config();
                     let schema = make_schema(&dtype, nullable);
@@ -1514,6 +1583,7 @@ mod arrow_tests {
                 }
 
                 #[test]
+                #[cfg_attr(miri, ignore)] // Takes too long
                 fn insert_once() {
                     let (dtype, nullable, part_length, edit_length) = config();
                     let schema = make_schema(&dtype, nullable);
@@ -1575,6 +1645,7 @@ mod arrow_tests {
                 }
 
                 #[test]
+                #[cfg_attr(miri, ignore)] // Takes too long
                 fn insert_twice() {
                     let (dtype, nullable, part_length, edit_length) = config();
                     let schema = make_schema(&dtype, nullable);
@@ -1638,6 +1709,7 @@ mod arrow_tests {
                 }
 
                 #[test]
+                #[cfg_attr(miri, ignore)] // Takes too long
                 fn update_once() {
                     let (dtype, nullable, part_length, edit_length) = config();
                     let schema = make_schema(&dtype, nullable);
@@ -1693,6 +1765,7 @@ mod arrow_tests {
                 }
 
                 #[test]
+                #[cfg_attr(miri, ignore)] // Takes too long
                 fn update_twice() {
                     let (dtype, nullable, part_length, edit_length) = config();
                     let schema = make_schema(&dtype, nullable);
@@ -1751,6 +1824,7 @@ mod arrow_tests {
                 }
 
                 #[test]
+                #[cfg_attr(miri, ignore)] // Takes too long
                 fn prepend() {
                     let (dtype, nullable, part_length, edit_length) = config();
                     let schema = make_schema(&dtype, nullable);
@@ -1818,6 +1892,7 @@ mod arrow_tests {
                 }
 
                 #[test]
+                #[cfg_attr(miri, ignore)] // Takes too long
                 fn append() {
                     let (dtype, nullable, part_length, edit_length) = config();
                     let schema = make_schema(&dtype, nullable);
@@ -1901,6 +1976,7 @@ mod arrow_tests {
                 }
 
                 #[test]
+                #[cfg_attr(miri, ignore)] // Takes too long
                 fn array_offsets() {
                     let (dtype, nullable, part_length, edit_length) = config();
                     let schema = make_schema(&dtype, nullable);
@@ -1974,6 +2050,7 @@ mod arrow_tests {
         }
 
         #[test]
+        #[cfg_attr(miri, ignore)] // Takes too long
         fn insert_once() {
             let s = schema();
             let part1 = generate_table(&s, PART_LENGTH, 0);
@@ -2036,6 +2113,7 @@ mod arrow_tests {
         }
 
         #[test]
+        #[cfg_attr(miri, ignore)] // Takes too long
         fn delete_once() {
             let s = schema();
             let part1 = generate_table(&s, PART_LENGTH, 0);
@@ -2094,6 +2172,7 @@ mod arrow_tests {
         }
 
         #[test]
+        #[cfg_attr(miri, ignore)] // Takes too long
         fn update_once() {
             let s = schema();
             let part1 = generate_table(&s, PART_LENGTH, 0);
@@ -2153,6 +2232,7 @@ mod arrow_tests {
         }
 
         #[test]
+        #[cfg_attr(miri, ignore)] // Takes too long
         fn append() {
             let s = schema();
             let part1 = generate_table(&s, PART_LENGTH, 0);
@@ -2216,6 +2296,7 @@ mod arrow_tests {
     // --- Direct chunker test (kept from original) ---
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_cdc_array_offsets_direct() {
         use crate::basic::Type as PhysicalType;
         use crate::schema::types::{ColumnDescriptor, ColumnPath, Type};
@@ -2271,6 +2352,7 @@ mod arrow_tests {
     /// Writing nested list data with CDC enabled panicked with an out-of-bounds
     /// slice access when null list entries had non-zero child ranges.
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_cdc_list_roundtrip() {
         let schema = Arc::new(Schema::new(vec![
             Field::new(
@@ -2301,6 +2383,7 @@ mod arrow_tests {
 
     /// Test CDC with deeply nested types: List<List<Int32>>, List<Struct<List<Int32>>>
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_cdc_deeply_nested_roundtrip() {
         let inner_field = Field::new_list_field(DataType::Int32, true);
         let inner_type = DataType::List(Arc::new(inner_field));

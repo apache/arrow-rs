@@ -21,6 +21,13 @@
 //! Please see the [arrow crates.io](https://crates.io/crates/arrow)
 //! page for feature flags and tips to improve performance.
 //!
+//! # Platform Support
+//!
+//! Only little-endian platforms are officially supported and tested in CI.
+//! Big-endian platforms are not tested in CI and may not work correctly.
+//! Fixes for big-endian platforms are welcome and handled on a best-effort basis,
+//! but compatibility is not guaranteed.
+//!
 //! # Columnar Format
 //!
 //! The [`array`] module provides statically typed implementations of all the array types as defined

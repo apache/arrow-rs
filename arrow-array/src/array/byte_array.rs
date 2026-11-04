@@ -135,15 +135,15 @@ impl<T: ByteArrayType> GenericByteArray<T> {
         // Verify that each pair of offsets is a valid slices of values
         T::validate(&offsets, &values)?;
 
-        if let Some(n) = nulls.as_ref() {
-            if n.len() != len {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Incorrect length of null buffer for {}{}Array, expected {len} got {}",
-                    T::Offset::PREFIX,
-                    T::PREFIX,
-                    n.len(),
-                )));
-            }
+        if let Some(n) = nulls.as_ref()
+            && n.len() != len
+        {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Incorrect length of null buffer for {}{}Array, expected {len} got {}",
+                T::Offset::PREFIX,
+                T::PREFIX,
+                n.len(),
+            )));
         }
 
         Ok(Self {
@@ -214,16 +214,25 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     }
 
     /// Creates a [`GenericByteArray`] based on an iterator of values without nulls
+    ///
+    /// # Panics
+    /// Panics if the total length of the values exceeds `T::Offset::MAX`
     pub fn from_iter_values<Ptr, I>(iter: I) -> Self
     where
         Ptr: AsRef<T::Native>,
         I: IntoIterator<Item = Ptr>,
     {
         let iter = iter.into_iter();
-        let (_, data_len) = iter.size_hint();
-        let data_len = data_len.expect("Iterator must be sized"); // panic if no upper bound.
+        // The size hint is only used to pre-allocate: an iterator is free to yield
+        // a different number of items than it reports.
+        let (lower, upper) = iter.size_hint();
+        let capacity = upper.unwrap_or(lower);
 
-        let mut offsets = MutableBuffer::new((data_len + 1) * std::mem::size_of::<T::Offset>());
+        let mut offsets = MutableBuffer::new(
+            capacity
+                .saturating_add(1)
+                .saturating_mul(std::mem::size_of::<T::Offset>()),
+        );
         offsets.push(T::Offset::usize_as(0));
 
         let mut values = MutableBuffer::new(0);
@@ -273,23 +282,26 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     /// Returns the values of this array
     ///
     /// Unlike [`Self::value_data`] this returns the [`Buffer`]
-    /// allowing for zero-copy cloning
+    /// allowing for zero-copy cloning. Like [`Self::value_data`], it can
+    /// include bytes that are not part of any value.
     #[inline]
     pub fn values(&self) -> &Buffer {
         &self.value_data
     }
 
     /// Returns the raw value data
+    ///
+    /// This can include bytes before the first offset or after the last one,
+    /// for example when the array is a slice of a larger array. Those bytes are
+    /// not part of any value, and in a string array they need not be valid UTF-8.
     pub fn value_data(&self) -> &[u8] {
         self.value_data.as_slice()
     }
 
     /// Returns true if all data within this array is ASCII
     pub fn is_ascii(&self) -> bool {
-        let offsets = self.value_offsets();
-        let start = offsets.first().unwrap();
-        let end = offsets.last().unwrap();
-        self.value_data()[start.as_usize()..end.as_usize()].is_ascii()
+        let offsets = &self.value_offsets;
+        self.value_data()[offsets.first().as_usize()..offsets.last().as_usize()].is_ascii()
     }
 
     /// Returns the offset values in the offsets buffer
@@ -359,6 +371,9 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
+    ///
+    /// # Panics
+    /// Panics if `offset + length > self.len()`
     pub fn slice(&self, offset: usize, length: usize) -> Self {
         Self {
             data_type: T::DATA_TYPE,
@@ -368,95 +383,64 @@ impl<T: ByteArrayType> GenericByteArray<T> {
         }
     }
 
-    /// Returns `GenericByteBuilder` of this byte array for mutating its values if the underlying
-    /// offset and data buffers are not shared by others.
+    /// Converts this array into a [`GenericByteBuilder`] that reuses its buffers,
+    /// if possible.
+    ///
+    /// Returns `Err(self)` if the offsets or values cannot be reused, for
+    /// example because they are shared with another array, or because this is a
+    /// sliced array with a non-zero first offset.
+    ///
+    /// The null buffer is copied if it cannot be reused.
     pub fn into_builder(self) -> Result<GenericByteBuilder<T>, Self> {
-        let len = self.len();
-        let value_len = T::Offset::as_usize(self.value_offsets()[len] - self.value_offsets()[0]);
+        let (offsets, values, nulls) = self.into_parts();
 
-        let data = self.into_data();
-        let null_bit_buffer = data.nulls().map(|b| b.inner().sliced());
-
-        let element_len = std::mem::size_of::<T::Offset>();
-        let offset_buffer = data.buffers()[0]
-            .slice_with_length(data.offset() * element_len, (len + 1) * element_len);
-
-        let element_len = std::mem::size_of::<u8>();
-        let value_buffer = data.buffers()[1]
-            .slice_with_length(data.offset() * element_len, value_len * element_len);
-
-        drop(data);
-
-        let try_mutable_null_buffer = match null_bit_buffer {
-            None => Ok(None),
-            Some(null_buffer) => {
-                // Null buffer exists, tries to make it mutable
-                null_buffer.into_mutable().map(Some)
+        // Puts the parts back together into the original array
+        let rebuild = |offsets: Buffer, values: Buffer, nulls: Option<NullBuffer>| {
+            // SAFETY: the parts come unchanged from `self`
+            unsafe {
+                Self::new_unchecked(OffsetBuffer::new_unchecked(offsets.into()), values, nulls)
             }
         };
 
-        let try_mutable_buffers = match try_mutable_null_buffer {
-            Ok(mutable_null_buffer) => {
-                // Got mutable null buffer, tries to get mutable value buffer
-                let try_mutable_offset_buffer = offset_buffer.into_mutable();
-                let try_mutable_value_buffer = value_buffer.into_mutable();
-
-                // try_mutable_offset_buffer.map(...).map_err(...) doesn't work as the compiler complains
-                // mutable_null_buffer is moved into map closure.
-                match (try_mutable_offset_buffer, try_mutable_value_buffer) {
-                    (Ok(mutable_offset_buffer), Ok(mutable_value_buffer)) => unsafe {
-                        Ok(GenericByteBuilder::<T>::new_from_buffer(
-                            mutable_offset_buffer,
-                            mutable_value_buffer,
-                            mutable_null_buffer,
-                        ))
-                    },
-                    (Ok(mutable_offset_buffer), Err(value_buffer)) => Err((
-                        mutable_offset_buffer.into(),
-                        value_buffer,
-                        mutable_null_buffer.map(|b| b.into()),
-                    )),
-                    (Err(offset_buffer), Ok(mutable_value_buffer)) => Err((
-                        offset_buffer,
-                        mutable_value_buffer.into(),
-                        mutable_null_buffer.map(|b| b.into()),
-                    )),
-                    (Err(offset_buffer), Err(value_buffer)) => Err((
-                        offset_buffer,
-                        value_buffer,
-                        mutable_null_buffer.map(|b| b.into()),
-                    )),
-                }
-            }
-            Err(mutable_null_buffer) => {
-                // Unable to get mutable null buffer
-                Err((offset_buffer, value_buffer, Some(mutable_null_buffer)))
-            }
+        // A buffer can be reused only if this array is its only owner and it
+        // starts at the beginning of its allocation. Otherwise, the original
+        // array is returned.
+        let offsets = match offsets.into_inner().into_inner().into_mutable() {
+            Ok(offsets) => offsets,
+            Err(offsets) => return Err(rebuild(offsets, values, nulls)),
+        };
+        let values = match values.into_mutable() {
+            Ok(values) => values,
+            Err(values) => return Err(rebuild(offsets.into(), values, nulls)),
         };
 
-        match try_mutable_buffers {
-            Ok(builder) => Ok(builder),
-            Err((offset_buffer, value_buffer, null_bit_buffer)) => {
-                let builder = ArrayData::builder(T::DATA_TYPE)
-                    .len(len)
-                    .add_buffer(offset_buffer)
-                    .add_buffer(value_buffer)
-                    .null_bit_buffer(null_bit_buffer);
-
-                let array_data = unsafe { builder.build_unchecked() };
-                let array = GenericByteArray::<T>::from(array_data);
-
-                Err(array)
+        // The builder needs a null buffer whose first bit is for the first row.
+        // That is the case when the bit offset is 0, and then the buffer is reused
+        // if this array is its only owner. Otherwise, the bits are copied, which is
+        // cheap as there is one bit per row.
+        let nulls = nulls.map(|nulls| {
+            let bits = nulls.into_inner();
+            if bits.offset() == 0 {
+                let len = bits.len();
+                bits.into_inner()
+                    .into_mutable()
+                    .unwrap_or_else(|buffer| buffer[..len.div_ceil(8)].to_vec().into())
+            } else {
+                // `sliced` returns the bits starting at the first row
+                bits.sliced().to_vec().into()
             }
-        }
+        });
+
+        // SAFETY: the buffers come from a valid array
+        Ok(unsafe { GenericByteBuilder::new_from_buffer(offsets, values, nulls) })
     }
 }
 
 impl<T: ByteArrayType> std::fmt::Debug for GenericByteArray<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{}{}Array\n[\n", T::Offset::PREFIX, T::PREFIX)?;
-        print_long_array(self, f, |array, index, f| {
-            std::fmt::Debug::fmt(&array.value(index), f)
+        print_long_array(self, f, &mut |index, f| {
+            std::fmt::Debug::fmt(&self.value(index), f)
         })?;
         write!(f, "]")
     }
@@ -574,9 +558,9 @@ impl<T: ByteArrayType> From<ArrayData> for GenericByteArray<T> {
         // ArrayData is valid, and verified type above
         let value_offsets = unsafe { get_offsets_from_buffer(offset_buffer, offset, len) };
         Self {
+            data_type,
             value_offsets,
             value_data,
-            data_type,
             nulls,
         }
     }
@@ -632,6 +616,26 @@ where
 mod tests {
     use crate::{Array, BinaryArray, StringArray};
     use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer};
+
+    /// `from_iter_values` must work with iterators that report no upper size bound,
+    /// and must not trust the size hint it does get.
+    #[test]
+    fn from_iter_values_untrusted_size_hint() {
+        // No upper bound at all:
+        let no_upper_bound = (0..20).filter(|i| i % 2 == 0).map(|i| format!("v{i}"));
+        assert_eq!(no_upper_bound.size_hint(), (0, Some(20)));
+        let array = StringArray::from_iter_values(no_upper_bound);
+        assert_eq!(array.len(), 10);
+        assert_eq!(array.value(0), "v0");
+        assert_eq!(array.value(9), "v18");
+
+        // Upper bound larger than the number of yielded values:
+        let too_large_upper_bound = (0..).map(|i| format!("v{i}")).take_while(|v| v != "v3");
+        assert_eq!(too_large_upper_bound.size_hint(), (0, None));
+        let array = StringArray::from_iter_values(too_large_upper_bound);
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.value(2), "v2");
+    }
 
     #[test]
     fn try_new() {
@@ -704,13 +708,13 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "usize overflow")]
+    #[should_panic(expected = "total length overflow: does not fit in usize")]
     fn create_repeated_usize_overflow_1() {
         let _arr = BinaryArray::new_repeated(b"hello", (usize::MAX / "hello".len()) + 1);
     }
 
     #[test]
-    #[should_panic(expected = "usize overflow")]
+    #[should_panic(expected = "total length overflow: does not fit in usize")]
     fn create_repeated_usize_overflow_2() {
         let _arr = BinaryArray::new_repeated(b"hello", usize::MAX);
     }

@@ -24,7 +24,7 @@ generate readers or writers for arbitrarily nested structures. It only works for
 generic structures and various levels of reference. Please see features checklist for what is currently
 supported.
 
-Derive also has some support for the chrono time library. You must must enable the `chrono` feature to get this support.
+Derive also has some support for the chrono time library. You must enable the `chrono` feature to get this support.
 
 ## Usage
 

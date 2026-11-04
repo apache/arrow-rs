@@ -21,6 +21,7 @@ use crate::ArrowPrimitiveType;
 use crate::timezone::Tz;
 use arrow_schema::{DataType, TimeUnit};
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Timelike, Utc};
+use std::mem::ManuallyDrop;
 
 /// Number of seconds in a day
 pub const SECONDS_IN_DAY: i64 = 86_400;
@@ -73,7 +74,7 @@ pub fn date64_to_datetime(v: i64) -> Option<NaiveDateTime> {
 /// converts a `i32` representing a `time32(s)` to [`NaiveDateTime`]
 #[inline]
 pub fn time32s_to_time(v: i32) -> Option<NaiveTime> {
-    NaiveTime::from_num_seconds_from_midnight_opt(v as u32, 0)
+    NaiveTime::from_num_seconds_from_midnight_opt(u32::try_from(v).ok()?, 0)
 }
 
 /// converts a `i32` representing a `time32(ms)` to [`NaiveDateTime`]
@@ -82,10 +83,10 @@ pub fn time32ms_to_time(v: i32) -> Option<NaiveTime> {
     let v = v as i64;
     NaiveTime::from_num_seconds_from_midnight_opt(
         // extract seconds from milliseconds
-        (v / MILLISECONDS) as u32,
+        u32::try_from(v / MILLISECONDS).ok()?,
         // discard extracted seconds and convert milliseconds to
         // nanoseconds
-        (v % MILLISECONDS * MICROSECONDS) as u32,
+        u32::try_from(v % MILLISECONDS * MICROSECONDS).ok()?,
     )
 }
 
@@ -94,10 +95,10 @@ pub fn time32ms_to_time(v: i32) -> Option<NaiveTime> {
 pub fn time64us_to_time(v: i64) -> Option<NaiveTime> {
     NaiveTime::from_num_seconds_from_midnight_opt(
         // extract seconds from microseconds
-        (v / MICROSECONDS) as u32,
+        u32::try_from(v / MICROSECONDS).ok()?,
         // discard extracted seconds and convert microseconds to
         // nanoseconds
-        (v % MICROSECONDS * MILLISECONDS) as u32,
+        u32::try_from(v % MICROSECONDS * MILLISECONDS).ok()?,
     )
 }
 
@@ -106,9 +107,9 @@ pub fn time64us_to_time(v: i64) -> Option<NaiveTime> {
 pub fn time64ns_to_time(v: i64) -> Option<NaiveTime> {
     NaiveTime::from_num_seconds_from_midnight_opt(
         // extract seconds from nanoseconds
-        (v / NANOSECONDS) as u32,
+        u32::try_from(v / NANOSECONDS).ok()?,
         // discard extracted seconds
-        (v % NANOSECONDS) as u32,
+        u32::try_from(v % NANOSECONDS).ok()?,
     )
 }
 
@@ -241,7 +242,20 @@ pub fn duration_ns_to_duration(v: i64) -> Duration {
 
 /// Converts an [`ArrowPrimitiveType`] to [`NaiveDateTime`]
 pub fn as_datetime<T: ArrowPrimitiveType>(v: i64) -> Option<NaiveDateTime> {
-    match T::DATA_TYPE {
+    // Dropping the `DATA_TYPE` temporary calls `DataType`'s drop glue, which
+    // LLVM doesn't inline, on every value. A const owns no heap memory, so
+    // skipping the drop leaks nothing.
+    as_datetime_with_data_type(&ManuallyDrop::new(T::DATA_TYPE), v)
+}
+
+/// Converts a value of the given [`DataType`] to [`NaiveDateTime`]
+///
+/// Non-generic counterpart of [`as_datetime`], driven by the runtime
+/// [`DataType`] so callers that already dispatch on the data type (e.g. `Debug`
+/// impls) do not monomorphize this logic for every primitive type
+#[inline]
+pub(crate) fn as_datetime_with_data_type(data_type: &DataType, v: i64) -> Option<NaiveDateTime> {
+    match data_type {
         DataType::Date32 => date32_to_datetime(v as i32),
         DataType::Date64 => date64_to_datetime(v),
         DataType::Time32(_) | DataType::Time64(_) => None,
@@ -259,7 +273,21 @@ pub fn as_datetime<T: ArrowPrimitiveType>(v: i64) -> Option<NaiveDateTime> {
 
 /// Converts an [`ArrowPrimitiveType`] to [`DateTime<Tz>`]
 pub fn as_datetime_with_timezone<T: ArrowPrimitiveType>(v: i64, tz: Tz) -> Option<DateTime<Tz>> {
-    let naive = as_datetime::<T>(v)?;
+    // See `as_datetime` for why the temporary is not dropped
+    as_datetime_with_timezone_and_data_type(&ManuallyDrop::new(T::DATA_TYPE), v, tz)
+}
+
+/// Converts a value of the given [`DataType`] to [`DateTime<Tz>`]
+///
+/// Non-generic counterpart of [`as_datetime_with_timezone`], see
+/// [`as_datetime_with_data_type`]
+#[inline]
+pub(crate) fn as_datetime_with_timezone_and_data_type(
+    data_type: &DataType,
+    v: i64,
+    tz: Tz,
+) -> Option<DateTime<Tz>> {
+    let naive = as_datetime_with_data_type(data_type, v)?;
     Some(Utc.from_utc_datetime(&naive).with_timezone(&tz))
 }
 
@@ -270,7 +298,16 @@ pub fn as_date<T: ArrowPrimitiveType>(v: i64) -> Option<NaiveDate> {
 
 /// Converts an [`ArrowPrimitiveType`] to [`NaiveTime`]
 pub fn as_time<T: ArrowPrimitiveType>(v: i64) -> Option<NaiveTime> {
-    match T::DATA_TYPE {
+    // See `as_datetime` for why the temporary is not dropped
+    as_time_with_data_type(&ManuallyDrop::new(T::DATA_TYPE), v)
+}
+
+/// Converts a value of the given [`DataType`] to [`NaiveTime`]
+///
+/// Non-generic counterpart of [`as_time`], see [`as_datetime_with_data_type`]
+#[inline]
+pub(crate) fn as_time_with_data_type(data_type: &DataType, v: i64) -> Option<NaiveTime> {
+    match data_type {
         DataType::Time32(unit) => {
             // safe to immediately cast to u32 as `self.value(i)` is positive i32
             let v = v as u32;
@@ -285,7 +322,9 @@ pub fn as_time<T: ArrowPrimitiveType>(v: i64) -> Option<NaiveTime> {
             TimeUnit::Nanosecond => time64ns_to_time(v),
             _ => None,
         },
-        DataType::Timestamp(_, _) => as_datetime::<T>(v).map(|datetime| datetime.time()),
+        DataType::Timestamp(_, _) => {
+            as_datetime_with_data_type(data_type, v).map(|datetime| datetime.time())
+        }
         DataType::Date32 | DataType::Date64 => NaiveTime::from_hms_opt(0, 0, 0),
         DataType::Interval(_) => None,
         _ => None,
@@ -294,7 +333,8 @@ pub fn as_time<T: ArrowPrimitiveType>(v: i64) -> Option<NaiveTime> {
 
 /// Converts an [`ArrowPrimitiveType`] to [`Duration`]
 pub fn as_duration<T: ArrowPrimitiveType>(v: i64) -> Option<Duration> {
-    match T::DATA_TYPE {
+    // See `as_datetime` for why the temporary is not dropped
+    match &*ManuallyDrop::new(T::DATA_TYPE) {
         DataType::Duration(unit) => match unit {
             TimeUnit::Second => try_duration_s_to_duration(v),
             TimeUnit::Millisecond => try_duration_ms_to_duration(v),
@@ -308,9 +348,10 @@ pub fn as_duration<T: ArrowPrimitiveType>(v: i64) -> Option<Duration> {
 #[cfg(test)]
 mod tests {
     use crate::temporal_conversions::{
-        NANOSECONDS, date64_to_datetime, split_second, timestamp_ms_to_datetime,
-        timestamp_ns_to_datetime, timestamp_s_to_date, timestamp_s_to_datetime,
-        timestamp_s_to_time, timestamp_us_to_datetime,
+        NANOSECONDS, date64_to_datetime, split_second, time32ms_to_time, time32s_to_time,
+        time64ns_to_time, time64us_to_time, timestamp_ms_to_datetime, timestamp_ns_to_datetime,
+        timestamp_s_to_date, timestamp_s_to_datetime, timestamp_s_to_time,
+        timestamp_us_to_datetime,
     };
     use chrono::DateTime;
 
@@ -400,5 +441,21 @@ mod tests {
         let (sec, nano_sec) = split_second(-123_000_000_001, NANOSECONDS);
         assert_eq!(sec, -124);
         assert_eq!(nano_sec, 999_999_999);
+    }
+
+    #[test]
+    fn test_time_conversions_out_of_bounds_no_wrapping() {
+        let wrapped = (1_i64 << 32) + 5;
+        assert_eq!(time64us_to_time(wrapped * 1_000_000), None);
+        assert_eq!(time64ns_to_time(wrapped * 1_000_000_000), None);
+
+        assert_eq!(time32s_to_time(86_400), None);
+        assert_eq!(time32s_to_time(-1), None);
+        assert_eq!(time32ms_to_time(86_400_000), None);
+        assert_eq!(time32ms_to_time(-1), None);
+        assert_eq!(time64us_to_time(86_400_000_000), None);
+        assert_eq!(time64us_to_time(-1), None);
+        assert_eq!(time64ns_to_time(86_400_000_000_000), None);
+        assert_eq!(time64ns_to_time(-1), None);
     }
 }

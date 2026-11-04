@@ -87,6 +87,9 @@ pub struct CachedArrayReader {
     local_cache: HashMap<BatchID, ArrayRef>,
     /// Statistics to report on the Cache behavior
     metrics: ArrowReaderMetrics,
+    /// Exclusive upper bound of the batch ids already removed from the shared
+    /// cache by [`Self::cleanup_consumed_batches`].
+    cleaned_up_to: usize,
 }
 
 impl CachedArrayReader {
@@ -111,6 +114,7 @@ impl CachedArrayReader {
             role,
             local_cache: HashMap::new(),
             metrics,
+            cleaned_up_to: 0,
         }
     }
 
@@ -135,6 +139,9 @@ impl CachedArrayReader {
             self.inner_position += skipped;
         }
 
+        // For sparse mask reads, this full-batch fallback relies on `MaskCursor`
+        // ending every chunk at a selected row. Predicate fetch expands cached
+        // columns to batch boundaries, so the batch containing that row is loaded.
         let read = self.inner.read_records(self.batch_size)?;
 
         // If there are no remaining records (EOF), return immediately without
@@ -167,20 +174,26 @@ impl CachedArrayReader {
     /// This is only called for Consumer role readers
     fn cleanup_consumed_batches(&mut self) {
         let current_batch_id = self.get_batch_id_from_position(self.outer_position);
+        // `outer_position` only moves forward, so the watermark can never run
+        // ahead of the batch the reader is currently on.
+        debug_assert!(current_batch_id.val >= self.cleaned_up_to);
 
         // Remove batches that are at least one batch behind the current position
         // This ensures we don't remove batches that might still be needed for the current batch
         // We can safely remove batch_id if current_batch_id > batch_id + 1
-        if current_batch_id.val > 1 {
-            let mut cache = self.shared_cache.write().unwrap();
-            for batch_id_to_remove in 0..(current_batch_id.val - 1) {
-                cache.remove(
-                    self.column_idx,
-                    BatchID {
-                        val: batch_id_to_remove,
-                    },
-                );
-            }
+        if current_batch_id.val <= 1 {
+            return;
+        }
+        let end = current_batch_id.val - 1;
+        // Everything below `cleaned_up_to` was removed by an earlier call.
+        if end <= self.cleaned_up_to {
+            return;
+        }
+        let start = self.cleaned_up_to;
+        self.cleaned_up_to = end;
+        let mut cache = self.shared_cache.write().unwrap();
+        for val in start..end {
+            cache.remove(self.column_idx, BatchID { val });
         }
     }
 }
@@ -601,6 +614,8 @@ mod tests {
         // After first consume_batch, batch 0 should still be in cache
         // (current_batch_id = 3/3 = 1, cleanup only happens if current_batch_id > 1)
         assert!(cache.read().unwrap().get(0, BatchID { val: 0 }).is_some());
+        // Nothing was removed, so the watermark has not moved
+        assert_eq!(consumer_reader.cleaned_up_to, 0);
 
         // Read second batch (positions 3-5, batch 1)
         let read2 = consumer_reader.read_records(3).unwrap();
@@ -613,6 +628,8 @@ mod tests {
         // (current_batch_id = 6/3 = 2, cleanup removes batches 0..(2-1) = 0..1, so removes batch 0)
         assert!(cache.read().unwrap().get(0, BatchID { val: 0 }).is_none());
         assert!(cache.read().unwrap().get(0, BatchID { val: 1 }).is_some());
+        // Watermark records that batch 0 is gone
+        assert_eq!(consumer_reader.cleaned_up_to, 1);
 
         // Read third batch (positions 6-8, batch 2)
         let read3 = consumer_reader.read_records(3).unwrap();
@@ -626,6 +643,82 @@ mod tests {
         assert!(cache.read().unwrap().get(0, BatchID { val: 0 }).is_none());
         assert!(cache.read().unwrap().get(0, BatchID { val: 1 }).is_none());
         assert!(cache.read().unwrap().get(0, BatchID { val: 2 }).is_some());
+        // Watermark advanced by exactly one batch: only batch 1 was newly removed
+        assert_eq!(consumer_reader.cleaned_up_to, 2);
+
+        // Read one more record (position 9, still batch 3) and consume again.
+        // current_batch_id is unchanged, so cleanup has nothing new to remove:
+        // the watermark must stay put and batch 2 must remain cached.
+        let read4 = consumer_reader.read_records(1).unwrap();
+        assert_eq!(read4, 1);
+        assert_eq!(consumer_reader.outer_position, 10);
+        let array4 = consumer_reader.consume_batch().unwrap();
+        assert_eq!(array4.len(), 1);
+        assert_eq!(consumer_reader.cleaned_up_to, 2);
+        assert!(cache.read().unwrap().get(0, BatchID { val: 2 }).is_some());
+    }
+
+    #[test]
+    fn test_consumer_cleanup_after_skip() {
+        // A consumer that skips several batches (e.g. rows filtered out by a
+        // predicate) must still remove the skipped batches from the shared
+        // cache, even though it never fetched them itself: one cleanup call
+        // covers the whole skipped range.
+        let metrics = ArrowReaderMetrics::disabled();
+        let cache = Arc::new(RwLock::new(RowGroupCache::new(3, usize::MAX))); // Batch size 3
+
+        // Producer populates batches 0..=3 (12 values).
+        let producer_values: Vec<i32> = (1..=12).collect();
+        let mut producer = CachedArrayReader::new(
+            Box::new(MockArrayReader::new(producer_values.clone())),
+            cache.clone(),
+            0,
+            CacheRole::Producer,
+            metrics.clone(),
+        );
+        for _ in 0..4 {
+            producer.read_records(3).unwrap();
+            producer.consume_batch().unwrap();
+        }
+        for batch in 0..4 {
+            assert!(
+                cache
+                    .read()
+                    .unwrap()
+                    .get(0, BatchID { val: batch })
+                    .is_some()
+            );
+        }
+
+        // Consumer skips batches 0..=2 outright and reads batch 3.
+        let mut consumer = CachedArrayReader::new(
+            Box::new(MockArrayReader::new(producer_values)),
+            cache.clone(),
+            0,
+            CacheRole::Consumer,
+            metrics,
+        );
+        assert_eq!(consumer.skip_records(9).unwrap(), 9);
+        assert_eq!(consumer.read_records(3).unwrap(), 3);
+        // Skipping and reading do not touch the shared cache; only consume does
+        assert_eq!(consumer.cleaned_up_to, 0);
+        let array = consumer.consume_batch().unwrap();
+        assert_eq!(array.len(), 3);
+
+        // current_batch_id = 12 / 3 = 4, so cleanup covers batches 0..3 in a
+        // single call, including the ones the consumer never fetched.
+        for batch in 0..3 {
+            assert!(
+                cache
+                    .read()
+                    .unwrap()
+                    .get(0, BatchID { val: batch })
+                    .is_none()
+            );
+        }
+        assert!(cache.read().unwrap().get(0, BatchID { val: 3 }).is_some());
+        // Watermark jumped over the skipped batches in one step
+        assert_eq!(consumer.cleaned_up_to, 3);
     }
 
     #[test]

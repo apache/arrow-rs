@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate arrow;
 #[macro_use]
 extern crate criterion;
 
@@ -23,7 +22,7 @@ use criterion::Criterion;
 
 use arrow::array::*;
 use arrow::util::bench_util::*;
-use arrow_string::concat_elements::concat_elements_dyn;
+use arrow_string::concat_elements::{concat_elements_dyn, concat_elements_utf8_many};
 use std::hint;
 
 fn bench_concat(v1: &dyn Array, v2: &dyn Array) {
@@ -68,6 +67,21 @@ fn add_benchmark(c: &mut Criterion) {
             );
             c.bench_function(&id, |b| b.iter(|| bench_concat(&array, &array)));
         }
+    }
+
+    // A slice whose values buffer extends far past its last row, compared with
+    // a compact copy of the same rows
+    let sliced = create_string_array_with_len::<i32>(131_072, 0.1, 32).slice(8_192, 8_192);
+    let compact = StringArray::from_iter(sliced.iter());
+    for (name, array) in [("compact", compact), ("sliced", sliced)] {
+        c.bench_function(&format!("concat str {name} 8192"), |b| {
+            b.iter(|| bench_concat(&array, &array))
+        });
+        c.bench_function(&format!("concat str many {name} 8192"), |b| {
+            b.iter(|| {
+                hint::black_box(concat_elements_utf8_many(&[&array, &array, &array]).unwrap())
+            })
+        });
     }
 }
 

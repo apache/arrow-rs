@@ -19,8 +19,6 @@
 extern crate criterion;
 use criterion::Criterion;
 
-extern crate arrow;
-
 use arrow::array::*;
 use arrow::compute::kernels::substring::*;
 use arrow::util::bench_util::*;

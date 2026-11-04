@@ -22,8 +22,6 @@
 extern crate criterion;
 use criterion::Criterion;
 
-extern crate arrow;
-
 use arrow::util::bench_util::*;
 use arrow::{array::*, datatypes::Float32Type};
 use std::hint;

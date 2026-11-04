@@ -174,7 +174,7 @@ where
     }
 
     /// Returns number of records stored in buffer.
-    #[allow(unused)]
+    #[cfg_attr(not(test), expect(unused))]
     pub fn num_records(&self) -> usize {
         self.num_records
     }
@@ -191,7 +191,7 @@ where
     /// definition level values that have already been read into memory but not counted
     /// as record values, e.g. those from `self.num_values` to `self.values_written`.
     pub fn consume_def_levels(&mut self) -> Option<Vec<i16>> {
-        self.def_levels.as_mut().and_then(|x| x.consume_levels())
+        self.def_levels.as_mut()?.consume_levels()
     }
 
     /// Return repetition level data.
@@ -308,27 +308,34 @@ where
                 values,
                 |values, values_to_read, levels_to_read, def_levels| {
                     let output_slots = if let Some(threshold) = padding_threshold {
-                        let def_levels = def_levels.ok_or_else(|| {
-                            general_err!(
-                                "Definition levels should exist when data is less than levels!"
-                            )
-                        })?;
-                        let all_levels = def_levels.levels().ok_or_else(|| {
-                            general_err!(
-                                "Raw definition levels must be available for selective padding"
-                            )
-                        })?;
-                        let batch_levels = &all_levels[all_levels.len() - levels_to_read..];
                         let bitmap =
                             compact_bitmap.get_or_insert_with(|| BooleanBufferBuilder::new(0));
+                        if values_to_read == levels_to_read {
+                            // Every level is at `max_def`, so each one is a non-null
+                            // child value and no level needs to be filtered out
+                            bitmap.append_n(levels_to_read, true);
+                            levels_to_read
+                        } else {
+                            let def_levels = def_levels.ok_or_else(|| {
+                                general_err!(
+                                    "Definition levels should exist when data is less than levels!"
+                                )
+                            })?;
+                            let all_levels = def_levels.levels().ok_or_else(|| {
+                                general_err!(
+                                    "Raw definition levels must be available for selective padding"
+                                )
+                            })?;
+                            let batch_levels = &all_levels[all_levels.len() - levels_to_read..];
 
-                        definition_levels::build_filtered_validity_bitmap(
-                            batch_levels,
-                            None,
-                            Some(threshold),
-                            max_def,
-                            bitmap,
-                        )
+                            definition_levels::build_filtered_validity_bitmap(
+                                batch_levels,
+                                None,
+                                Some(threshold),
+                                max_def,
+                                bitmap,
+                            )
+                        }
                     } else {
                         levels_to_read
                     };
@@ -605,7 +612,7 @@ mod tests {
 
         // Verify bitmap
         let expected_valid = &[false, true, false, true, true, false, true];
-        let expected_buffer = Buffer::from_iter(expected_valid.iter().cloned());
+        let expected_buffer = Buffer::from_iter(expected_valid.iter().copied());
         assert_eq!(Some(expected_buffer), record_reader.consume_bitmap());
 
         // Verify result record data
@@ -711,7 +718,7 @@ mod tests {
 
         // Verify bitmap
         let expected_valid = &[true, false, false, true, true, true, true, true, true];
-        let expected_buffer = Buffer::from_iter(expected_valid.iter().cloned());
+        let expected_buffer = Buffer::from_iter(expected_valid.iter().copied());
         assert_eq!(Some(expected_buffer), record_reader.consume_bitmap());
 
         // Verify result record data
@@ -818,6 +825,100 @@ mod tests {
     }
 
     #[test]
+    fn test_selective_padding_alternating_null_pages() {
+        let message_type = "
+        message test_schema {
+          OPTIONAL GROUP my_list (LIST) {
+            REPEATED GROUP list {
+              OPTIONAL INT32 element;
+            }
+          }
+        }
+        ";
+
+        let desc = parse_message_type(message_type)
+            .map(|t| SchemaDescriptor::new(Arc::new(t)))
+            .map(|s| s.column(0))
+            .unwrap();
+
+        // Pages with no nulls alternate with pages that have null lists, empty
+        // lists and null elements. Every page boundary falls in the middle of a
+        // byte of the child validity bitmap, and the last page crosses into its
+        // third byte.
+        let pages: &[(&[i16], &[i16], &[i32])] = &[
+            // [1, 2, 3], [4, 5]
+            (&[3, 3, 3, 3, 3], &[0, 1, 1, 0, 1], &[1, 2, 3, 4, 5]),
+            // null, [6, null], [], [null, 7, 8]
+            (&[0, 3, 2, 1, 2, 3, 3], &[0, 0, 1, 0, 0, 1, 1], &[6, 7, 8]),
+            // [9], [10, 11]
+            (&[3, 3, 3], &[0, 0, 1], &[9, 10, 11]),
+            // [12, null], null
+            (&[3, 2, 0], &[0, 1, 0], &[12]),
+            // [13, 14, 15, 16]
+            (&[3, 3, 3, 3], &[0, 1, 1, 1], &[13, 14, 15, 16]),
+        ];
+        let expected_valid = [
+            true, true, true, true, true, true, false, false, true, true, true, true, true, true,
+            false, true, true, true, true,
+        ];
+        let expected_values = [
+            1, 2, 3, 4, 5, 6, 0, 0, 7, 8, 9, 10, 11, 12, 0, 13, 14, 15, 16,
+        ];
+        let num_records = 11;
+        let num_levels = 22;
+
+        let page_vec = pages
+            .iter()
+            .map(|(def_levels, rep_levels, values)| {
+                let mut pb = DataPageBuilderImpl::new(desc.clone(), def_levels.len() as u32, true);
+                pb.add_rep_levels(1, rep_levels);
+                pb.add_def_levels(3, def_levels);
+                pb.add_values::<Int32Type>(Encoding::PLAIN, values);
+                pb.consume()
+            })
+            .collect::<Vec<_>>();
+
+        // Read all records in one batch, then one record per batch
+        for batch_size in [num_records, 1] {
+            let mut record_reader =
+                RecordReader::<Int32Type>::new(desc.clone(), DEFAULT_BATCH_SIZE);
+            record_reader.set_padding_threshold(2);
+            record_reader
+                .set_page_reader(Box::new(InMemoryPageReader::new(page_vec.clone())))
+                .unwrap();
+
+            for _ in 0..num_records / batch_size {
+                assert_eq!(record_reader.read_records(batch_size).unwrap(), batch_size);
+            }
+            assert_eq!(record_reader.num_records(), num_records);
+            assert_eq!(record_reader.num_values(), num_levels);
+            assert_eq!(record_reader.values_written(), expected_values.len());
+
+            assert_eq!(
+                record_reader.consume_compact_bitmap(),
+                Some(Buffer::from_iter(expected_valid)),
+                "batch_size {batch_size}"
+            );
+
+            // Only compare the valid values
+            let actual = record_reader.consume_record_data();
+            assert_eq!(
+                actual.len(),
+                expected_values.len(),
+                "batch_size {batch_size}"
+            );
+            for (i, valid) in expected_valid.iter().enumerate() {
+                if *valid {
+                    assert_eq!(
+                        actual[i], expected_values[i],
+                        "batch_size {batch_size}, index {i}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_read_more_than_one_batch() {
         // Construct column schema
         let message_type = "
@@ -835,7 +936,7 @@ mod tests {
         let mut record_reader = RecordReader::<Int32Type>::new(desc.clone(), DEFAULT_BATCH_SIZE);
 
         {
-            let values = [100; 5000];
+            let values = vec![100; 5000];
             let def_levels = [1i16; 5000];
             let mut rep_levels = [1i16; 5000];
             for idx in 0..1000 {
@@ -1063,7 +1164,7 @@ mod tests {
 
         // Verify bitmap
         let expected_valid = &[false, true, true];
-        let expected_buffer = Buffer::from_iter(expected_valid.iter().cloned());
+        let expected_buffer = Buffer::from_iter(expected_valid.iter().copied());
         assert_eq!(Some(expected_buffer), record_reader.consume_bitmap());
 
         // Verify result record data

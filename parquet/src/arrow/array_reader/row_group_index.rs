@@ -73,8 +73,7 @@ impl RowGroupIndexReader {
                 })
                 .ok_or_else(|| {
                     ParquetError::General(format!(
-                        "Row group with ordinal {} not found in metadata",
-                        ordinal
+                        "Row group with ordinal {ordinal} not found in metadata"
                     ))
                 })?;
 
@@ -90,7 +89,7 @@ impl RowGroupIndexReader {
         // general path: many row groups
         // builds a mapping from ordinal to row group index
         // this is O(n) where n is the total number of row groups in the file
-        let ordinal_to_index: HashMap<i16, i64> =
+        let ordinal_to_index: HashMap<i32, i64> =
             HashMap::from_iter(parquet_metadata.row_groups().iter().enumerate().filter_map(
                 |(row_group_index, rg)| {
                     rg.ordinal()
@@ -112,8 +111,7 @@ impl RowGroupIndexReader {
 
                 let row_group_index = ordinal_to_index.get(&ordinal).ok_or_else(|| {
                     ParquetError::General(format!(
-                        "Row group with ordinal {} not found in metadata",
-                        ordinal
+                        "Row group with ordinal {ordinal} not found in metadata"
                     ))
                 })?;
 
@@ -215,7 +213,7 @@ mod tests {
         Arc::new(SchemaDescriptor::new(Arc::new(schema)))
     }
 
-    fn create_test_parquet_metadata(row_groups: Vec<(i16, i64)>) -> ParquetMetaData {
+    fn create_test_parquet_metadata(row_groups: Vec<(i32, i64)>) -> ParquetMetaData {
         let schema_descr = create_test_schema();
 
         let mut row_group_metas = vec![];

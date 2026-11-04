@@ -20,8 +20,9 @@ use crate::arrow::array_reader::RowGroups;
 use crate::arrow::arrow_reader::RowSelection;
 use crate::column::page::{PageIterator, PageReader};
 use crate::errors::ParquetError;
+use crate::file::metadata::page_index::RowGroupPageIndex;
 use crate::file::metadata::{ParquetMetaData, RowGroupMetaData};
-use crate::file::page_index::offset_index::OffsetIndexMetaData;
+use crate::file::page_index::offset_index::PageLocation;
 use crate::file::reader::{ChunkReader, Length, SerializedPageReader};
 use bytes::{Buf, Bytes};
 use std::ops::Range;
@@ -30,7 +31,7 @@ use std::sync::Arc;
 /// An in-memory collection of column chunks
 #[derive(Debug)]
 pub(crate) struct InMemoryRowGroup<'a> {
-    pub(crate) offset_index: Option<&'a [OffsetIndexMetaData]>,
+    pub(crate) page_index: Option<RowGroupPageIndex>,
     /// Column chunks for this row group
     pub(crate) column_chunks: Vec<Option<Arc<ColumnChunkData>>>,
     pub(crate) row_count: usize,
@@ -43,8 +44,9 @@ pub(crate) struct InMemoryRowGroup<'a> {
 pub(crate) struct FetchRanges {
     /// The byte ranges to fetch
     pub(crate) ranges: Vec<Range<u64>>,
-    /// If `Some`, the start offsets of each page for each column chunk
-    pub(crate) page_start_offsets: Option<Vec<Vec<u64>>>,
+    /// If `Some`, the start offsets of each page for each column chunk, or
+    /// `None` for a column chunk without an offset index (fetched in full)
+    pub(crate) page_start_offsets: Option<Vec<Option<Vec<u64>>>>,
 }
 
 impl InMemoryRowGroup<'_> {
@@ -55,6 +57,8 @@ impl InMemoryRowGroup<'_> {
     /// [`RowGroupCache`](crate::arrow::array_reader::RowGroupCache).
     /// The `selection` for Cached columns is expanded to batch boundaries to simplify
     /// accounting for what data is cached.
+    ///
+    /// The ranges of each column chunk come from [`ColumnFetch`].
     pub(crate) fn fetch_ranges(
         &self,
         projection: &ProjectionMask,
@@ -63,70 +67,42 @@ impl InMemoryRowGroup<'_> {
         cache_mask: Option<&ProjectionMask>,
     ) -> FetchRanges {
         let metadata = self.metadata.row_group(self.row_group_idx);
-        if let Some((selection, offset_index)) = selection.zip(self.offset_index) {
-            let expanded_selection =
-                selection.expand_to_batch_boundaries(batch_size, self.row_count);
+        // With a `RowSelection` and an `OffsetIndex`, only fetch the pages
+        // required for the `RowSelection`
+        let page_index = self.page_index.as_ref().filter(|_| selection.is_some());
+        let expanded_selection = selection
+            .filter(|_| page_index.is_some() && cache_mask.is_some())
+            .map(|selection| selection.expand_to_batch_boundaries(batch_size, self.row_count));
 
-            // If we have a `RowSelection` and an `OffsetIndex` then only fetch
-            // pages required for the `RowSelection`
-            // Consider preallocating outer vec: https://github.com/apache/arrow-rs/issues/8667
-            let mut page_start_offsets: Vec<Vec<u64>> = vec![];
-
-            let ranges = self
-                .column_chunks
-                .iter()
-                .zip(metadata.columns())
-                .enumerate()
-                .filter(|&(idx, (chunk, _chunk_meta))| {
-                    chunk.is_none() && projection.leaf_included(idx)
-                })
-                .flat_map(|(idx, (_chunk, chunk_meta))| {
-                    // If the first page does not start at the beginning of the column,
-                    // then we need to also fetch a dictionary page.
-                    let mut ranges: Vec<Range<u64>> = vec![];
-                    let (start, _len) = chunk_meta.byte_range();
-                    match offset_index[idx].page_locations.first() {
-                        Some(first) if first.offset as u64 != start => {
-                            ranges.push(start..first.offset as u64);
-                        }
-                        _ => (),
+        // Consider preallocating outer vec: https://github.com/apache/arrow-rs/issues/8667
+        let mut page_start_offsets: Option<Vec<Option<Vec<u64>>>> = page_index.map(|_| vec![]);
+        let mut ranges = vec![];
+        let columns = columns_to_fetch(projection, self.column_chunks.len(), |idx| {
+            self.column_chunks[idx].is_some()
+        });
+        for idx in columns {
+            let locations = page_index
+                .and_then(|page_index| page_index.offset_index(idx))
+                .map(|offset_index| offset_index.page_locations().as_slice());
+            let column_selection =
+                column_selection(selection, expanded_selection.as_ref(), cache_mask, idx);
+            let (start, len) = metadata.column(idx).byte_range();
+            let fetch = ColumnFetch::new(start..start + len, locations, column_selection);
+            let first = ranges.len();
+            ranges.extend(fetch.ranges());
+            if let Some(page_start_offsets) = page_start_offsets.as_mut() {
+                page_start_offsets.push(match fetch {
+                    // No offset index for this column, fetch the entire column
+                    ColumnFetch::Chunk { .. } => None,
+                    ColumnFetch::Pages { .. } => {
+                        Some(ranges[first..].iter().map(|range| range.start).collect())
                     }
-
-                    // Expand selection to batch boundaries if needed for caching
-                    // (see doc comment for this function for details on `cache_mask`)
-                    let use_expanded = cache_mask.map(|m| m.leaf_included(idx)).unwrap_or(false);
-                    if use_expanded {
-                        ranges.extend(
-                            expanded_selection.scan_ranges(&offset_index[idx].page_locations),
-                        );
-                    } else {
-                        ranges.extend(selection.scan_ranges(&offset_index[idx].page_locations));
-                    }
-                    page_start_offsets.push(ranges.iter().map(|range| range.start).collect());
-
-                    ranges
-                })
-                .collect();
-            FetchRanges {
-                ranges,
-                page_start_offsets: Some(page_start_offsets),
+                });
             }
-        } else {
-            let ranges = self
-                .column_chunks
-                .iter()
-                .enumerate()
-                .filter(|&(idx, chunk)| chunk.is_none() && projection.leaf_included(idx))
-                .map(|(idx, _chunk)| {
-                    let column = metadata.column(idx);
-                    let (start, length) = column.byte_range();
-                    start..(start + length)
-                })
-                .collect();
-            FetchRanges {
-                ranges,
-                page_start_offsets: None,
-            }
+        }
+        FetchRanges {
+            ranges,
+            page_start_offsets,
         }
     }
 
@@ -137,7 +113,7 @@ impl InMemoryRowGroup<'_> {
     pub(crate) fn fill_column_chunks<I>(
         &mut self,
         projection: &ProjectionMask,
-        page_start_offsets: Option<Vec<Vec<u64>>>,
+        page_start_offsets: Option<Vec<Option<Vec<u64>>>>,
         chunk_data: I,
     ) where
         I: IntoIterator<Item = Bytes>,
@@ -154,20 +130,32 @@ impl InMemoryRowGroup<'_> {
                     continue;
                 }
 
-                if let Some(offsets) = page_start_offsets.next() {
-                    let mut chunks = Vec::with_capacity(offsets.len());
-                    for _ in 0..offsets.len() {
-                        chunks.push(chunk_data.next().unwrap());
+                match page_start_offsets.next() {
+                    // No offset index: `fetch_ranges` requested the whole chunk
+                    Some(None) => {
+                        if let Some(data) = chunk_data.next() {
+                            *chunk = Some(Arc::new(ColumnChunkData::Dense {
+                                offset: metadata.column(idx).byte_range().0 as usize,
+                                data,
+                            }));
+                        }
                     }
+                    Some(Some(offsets)) => {
+                        let mut chunks = Vec::with_capacity(offsets.len());
+                        for _ in 0..offsets.len() {
+                            chunks.push(chunk_data.next().unwrap());
+                        }
 
-                    *chunk = Some(Arc::new(ColumnChunkData::Sparse {
-                        length: metadata.column(idx).byte_range().1 as usize,
-                        data: offsets
-                            .into_iter()
-                            .map(|x| x as usize)
-                            .zip(chunks)
-                            .collect(),
-                    }))
+                        *chunk = Some(Arc::new(ColumnChunkData::Sparse {
+                            length: metadata.column(idx).byte_range().1 as usize,
+                            data: offsets
+                                .into_iter()
+                                .map(|x| x as usize)
+                                .zip(chunks)
+                                .collect(),
+                        }))
+                    }
+                    None => {}
                 }
             }
         } else {
@@ -187,6 +175,127 @@ impl InMemoryRowGroup<'_> {
     }
 }
 
+/// The leaf columns in `projection` that are not yet read, in column order.
+///
+/// A decoding stage of a row group does not fetch a column that an earlier
+/// stage of the same row group read.
+#[inline]
+pub(crate) fn columns_to_fetch<'a>(
+    projection: &'a ProjectionMask,
+    num_columns: usize,
+    is_read: impl Fn(usize) -> bool + 'a,
+) -> impl Iterator<Item = usize> + 'a {
+    (0..num_columns).filter(move |&idx| projection.leaf_included(idx) && !is_read(idx))
+}
+
+/// The selection that [`InMemoryRowGroup::fetch_ranges`] uses to choose the
+/// pages of column `idx`: `expanded_selection` (the selection expanded to
+/// batch boundaries) if `cache_mask` includes the column, else `selection`.
+#[inline]
+pub(crate) fn column_selection<'a>(
+    selection: Option<&'a RowSelection>,
+    expanded_selection: Option<&'a RowSelection>,
+    cache_mask: Option<&ProjectionMask>,
+    idx: usize,
+) -> Option<&'a RowSelection> {
+    match expanded_selection {
+        Some(expanded) if cache_mask.is_some_and(|mask| mask.leaf_included(idx)) => Some(expanded),
+        _ => selection,
+    }
+}
+
+/// What [`InMemoryRowGroup::fetch_ranges`] fetches for one column chunk.
+///
+/// This is the one place that decides which bytes of a column chunk are
+/// requested, so other users of this rule cannot differ from the decoder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ColumnFetch<'a> {
+    /// The whole column chunk, as one range. This is the case if there is
+    /// no selection or the column has no offset index.
+    Chunk {
+        /// Byte range of the column chunk.
+        range: Range<u64>,
+    },
+    /// The dictionary page, if any, and the data pages that contain a
+    /// selected row.
+    Pages {
+        /// Byte range of the dictionary page, if the column chunk has one.
+        dictionary: Option<Range<u64>>,
+        /// The page locations of the column chunk.
+        locations: &'a [PageLocation],
+        /// Indexes in `locations` of the data pages to fetch, in page order.
+        pages: Vec<usize>,
+    },
+}
+
+impl<'a> ColumnFetch<'a> {
+    /// The fetch of the column chunk at byte range `chunk`, with page
+    /// locations `locations` from its offset index, if any, and row
+    /// selection `selection`, if any.
+    #[inline]
+    pub(crate) fn new(
+        chunk: Range<u64>,
+        locations: Option<&'a [PageLocation]>,
+        selection: Option<&RowSelection>,
+    ) -> Self {
+        let (Some(selection), Some(locations)) = (selection, locations) else {
+            return Self::Chunk { range: chunk };
+        };
+        // `scan_ranges` returns the ranges of the selected pages in page
+        // order. Map them back to page indexes.
+        let fetched = selection.scan_ranges(locations);
+        let mut fetched = fetched.iter().peekable();
+        let pages = locations
+            .iter()
+            .enumerate()
+            .filter(|(_, location)| {
+                fetched
+                    .next_if(|range| range.start == location.offset as u64)
+                    .is_some()
+            })
+            .map(|(idx, _)| idx)
+            .collect();
+        Self::Pages {
+            dictionary: dictionary_range(chunk.start, locations),
+            locations,
+            pages,
+        }
+    }
+
+    /// The byte ranges to fetch, in file order.
+    pub(crate) fn ranges(&self) -> impl Iterator<Item = Range<u64>> + '_ {
+        let (chunk, dictionary, pages) = match self {
+            Self::Chunk { range, .. } => (Some(range.clone()), None, None),
+            Self::Pages {
+                dictionary,
+                locations,
+                pages,
+            } => (None, dictionary.clone(), Some((*locations, pages))),
+        };
+        let data_pages = pages
+            .into_iter()
+            .flat_map(|(locations, pages)| pages.iter().map(|&page| page_range(&locations[page])));
+        chunk.into_iter().chain(dictionary).chain(data_pages)
+    }
+}
+
+/// Byte range of the dictionary page of a column chunk that starts at
+/// `chunk_start`: the bytes before the first data page, if any.
+#[inline]
+pub(crate) fn dictionary_range(chunk_start: u64, locations: &[PageLocation]) -> Option<Range<u64>> {
+    match locations.first() {
+        Some(first) if first.offset as u64 != chunk_start => Some(chunk_start..first.offset as u64),
+        _ => None,
+    }
+}
+
+/// Byte range of a data page.
+#[inline]
+pub(crate) fn page_range(location: &PageLocation) -> Range<u64> {
+    let start = location.offset as u64;
+    start..start + location.compressed_page_size as u64
+}
+
 impl RowGroups for InMemoryRowGroup<'_> {
     fn num_rows(&self) -> usize {
         self.row_count
@@ -200,10 +309,9 @@ impl RowGroups for InMemoryRowGroup<'_> {
             ))),
             Some(data) => {
                 let page_locations = self
-                    .offset_index
-                    // filter out empty offset indexes (old versions specified Some(vec![]) when no present)
-                    .filter(|index| !index.is_empty())
-                    .map(|index| index[i].page_locations.clone());
+                    .page_index
+                    .as_ref()
+                    .and_then(|pi| pi.page_locations(i).cloned());
                 let column_chunk_metadata = self.metadata.row_group(self.row_group_idx).column(i);
                 let page_reader = SerializedPageReader::new(
                     data.clone(),
@@ -297,7 +405,14 @@ impl ChunkReader for ColumnChunkData {
     }
 
     fn get_bytes(&self, start: u64, length: usize) -> crate::errors::Result<Bytes> {
-        Ok(self.get(start)?.slice(..length))
+        let data = self.get(start)?;
+        if data.len() < length {
+            return Err(general_err!(
+                "column chunk data at offset {start} has {} bytes, expected {length}",
+                data.len()
+            ));
+        }
+        Ok(data.slice(..length))
     }
 }
 
@@ -315,3 +430,22 @@ impl Iterator for ColumnChunkIterator {
 }
 
 impl PageIterator for ColumnChunkIterator {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn get_bytes_errors_on_short_data() {
+        let dense = ColumnChunkData::Dense {
+            offset: 100,
+            data: Bytes::from_static(b"0123456789"),
+        };
+        assert_eq!(
+            dense.get_bytes(105, 5).unwrap(),
+            Bytes::from_static(b"56789")
+        );
+        let err = dense.get_bytes(105, 6).unwrap_err().to_string();
+        assert!(err.contains("has 5 bytes, expected 6"), "{err}");
+    }
+}

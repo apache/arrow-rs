@@ -24,9 +24,7 @@ pub(crate) fn cast_map_values(
     cast_options: &CastOptions,
     to_ordered: bool,
 ) -> Result<ArrayRef, ArrowError> {
-    let entries_field = if let DataType::Map(entries_field, _) = to_data_type {
-        entries_field
-    } else {
+    let DataType::Map(entries_field, _) = to_data_type else {
         return Err(ArrowError::CastError(
             "Internal Error: to_data_type is not a map type.".to_string(),
         ));
@@ -39,16 +37,22 @@ pub(crate) fn cast_map_values(
         "map is missing value field".to_string(),
     ))?;
 
-    let key_array = cast_with_options(from.keys(), key_field.data_type(), cast_options)?;
-    let value_array = cast_with_options(from.values(), value_field.data_type(), cast_options)?;
+    let offsets = from.offsets();
+    let first = offsets.first();
+    // Only the entries that the offsets refer to, which excludes entries outside a slice
+    let entries = from
+        .entries()
+        .slice(first.as_usize(), (offsets.last() - first).as_usize());
+    let key_array = cast_with_options(entries.column(0), key_field.data_type(), cast_options)?;
+    let value_array = cast_with_options(entries.column(1), value_field.data_type(), cast_options)?;
 
     Ok(Arc::new(MapArray::try_new(
         entries_field.clone(),
-        from.offsets().clone(),
+        offsets.clone().subtract(first),
         StructArray::try_new(
             Fields::from(vec![key_field, value_field]),
             vec![key_array, value_array],
-            from.entries().nulls().cloned(),
+            entries.nulls().cloned(),
         )?,
         from.nulls().cloned(),
         to_ordered,

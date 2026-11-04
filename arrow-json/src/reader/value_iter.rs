@@ -66,10 +66,10 @@ impl<R: BufRead> Iterator for ValueIter<R> {
     type Item = Result<Value, ArrowError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some(max) = self.max_read_records {
-            if self.record_count >= max {
-                return None;
-            }
+        if let Some(max) = self.max_read_records
+            && self.record_count >= max
+        {
+            return None;
         }
 
         loop {

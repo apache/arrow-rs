@@ -76,7 +76,7 @@ fn mem(system: &mut System) -> String {
     system
         .process(pid)
         .map(|proc| format!("{}MB", proc.memory() / 1_000_000))
-        .unwrap_or("N/A".to_string())
+        .unwrap_or_else(|| "N/A".to_string())
 }
 
 fn main() -> Result<()> {
@@ -97,7 +97,7 @@ fn main() -> Result<()> {
     let file = File::create(args.path).unwrap();
     let mut writer = ParquetWriter::try_new(file, schema.clone(), Some(properties))?;
 
-    let mut system = System::new_with_specifics(RefreshKind::everything());
+    let mut system = System::new_with_specifics(RefreshKind::everything()).unwrap();
     eprintln!(
         "{} Writing {} batches of {} rows. RSS = {}",
         now(),
@@ -109,7 +109,7 @@ fn main() -> Result<()> {
     let mut array_builder = UInt64Builder::new();
     let mut last_log = Instant::now();
     for i in 0..args.iterations {
-        if Instant::now() - last_log > Duration::new(10, 0) {
+        if last_log.elapsed() > Duration::new(10, 0) {
             last_log = Instant::now();
             eprintln!(
                 "{} Iteration {}/{}. RSS = {}",
