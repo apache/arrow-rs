@@ -30,7 +30,7 @@
 //! assert_eq!(arr.len(), 3);
 //! ```
 
-use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values};
+use crate::dictionary::{KeyMapping, merge_dictionary_values, should_merge_dictionary_values};
 use arrow_array::builder::{
     BooleanBuilder, GenericByteBuilder, GenericByteViewBuilder, PrimitiveBuilder,
 };
@@ -119,9 +119,19 @@ fn concat_dictionaries<K: ArrowDictionaryKeyType>(
     let mut has_nulls = false;
     for (d, mapping) in dictionaries.iter().zip(merged.key_mappings) {
         has_nulls |= d.null_count() != 0;
-        for key in d.keys().values() {
-            // Use get to safely handle nulls
-            key_values.push(mapping.get(key.as_usize()).unwrap_or_default())
+        match mapping {
+            KeyMapping::Dense(mapping) => key_values.extend(
+                d.keys()
+                    .values()
+                    .iter()
+                    .map(|key| mapping.get(key.as_usize()).copied().unwrap_or_default()),
+            ),
+            KeyMapping::Sparse(mapping) => key_values.extend(
+                d.keys()
+                    .values()
+                    .iter()
+                    .map(|key| mapping.get(&key.as_usize()).copied().unwrap_or_default()),
+            ),
         }
     }
 
