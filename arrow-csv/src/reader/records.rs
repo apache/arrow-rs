@@ -254,9 +254,12 @@ impl RecordDecoder {
             invalid_utf8(idx)
         })?;
 
-        // Invalid bytes on either side of a field boundary can join into a valid sequence
-        if let Some(idx) = offsets.iter().position(|x| !data.is_char_boundary(*x)) {
-            return Err(invalid_utf8(idx - 1));
+        // Invalid bytes on either side of a field boundary can join into a valid sequence.
+        // ASCII data has no multi-byte sequences, so only scan the offsets otherwise
+        if !data.is_ascii()
+            && let Some(idx) = split_char_field(offsets, data)
+        {
+            return Err(invalid_utf8(idx));
         }
 
         let num_rows = self.num_rows;
@@ -275,6 +278,13 @@ impl RecordDecoder {
             data,
         })
     }
+}
+
+/// Returns the index of the first field that ends in the middle of a multi-byte character
+#[inline(never)]
+fn split_char_field(offsets: &[usize], data: &str) -> Option<usize> {
+    let idx = offsets.iter().position(|x| !data.is_char_boundary(*x))?;
+    Some(idx - 1)
 }
 
 /// A collection of parsed, UTF-8 CSV records
