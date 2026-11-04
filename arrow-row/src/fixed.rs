@@ -356,11 +356,6 @@ fn split_off<'a>(src: &mut &'a [u8], len: usize) -> &'a [u8] {
 }
 
 /// Decodes a `BooleanArray` from rows
-#[expect(dead_code, reason = "Preserve the existing infallible decoder API")]
-pub fn decode_bool(rows: &mut [&[u8]], options: SortOptions) -> BooleanArray {
-    try_decode_bool(rows, options).unwrap()
-}
-
 pub(crate) fn try_decode_bool(
     rows: &mut [&[u8]],
     options: SortOptions,
@@ -422,11 +417,6 @@ pub(crate) fn try_decode_bool(
 /// Decodes a single byte from each row, interpreting `0x01` as a valid value
 /// and all other values as a null. Optionally returns `None` if there are no
 /// null values.
-#[expect(dead_code, reason = "Preserve the existing infallible decoder API")]
-pub fn decode_nulls(rows: &[&[u8]]) -> Option<NullBuffer> {
-    try_decode_nulls(rows).unwrap()
-}
-
 pub(crate) fn try_decode_nulls(rows: &[&[u8]]) -> Result<Option<NullBuffer>, ArrowError> {
     let nulls = MutableBuffer::try_collect_bool(rows.len(), |idx| rows[idx][0] == 1)
         .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
@@ -436,18 +426,6 @@ pub(crate) fn try_decode_nulls(rows: &[&[u8]]) -> Result<Option<NullBuffer>, Arr
 }
 
 /// Decodes a `PrimitiveArray` from rows
-#[expect(dead_code, reason = "Preserve the existing infallible decoder API")]
-pub fn decode_primitive<T: ArrowPrimitiveType>(
-    rows: &mut [&[u8]],
-    data_type: DataType,
-    options: SortOptions,
-) -> PrimitiveArray<T>
-where
-    T::Native: FixedLengthEncoding,
-{
-    try_decode_primitive(rows, data_type, options).unwrap()
-}
-
 pub(crate) fn try_decode_primitive<T: ArrowPrimitiveType>(
     rows: &mut [&[u8]],
     data_type: DataType,
@@ -478,15 +456,6 @@ where
 ///
 /// # Panics:
 /// Panics if `size` is negative
-#[expect(dead_code, reason = "Preserve the existing infallible decoder API")]
-pub fn decode_fixed_size_binary(
-    rows: &mut [&[u8]],
-    size: i32,
-    options: SortOptions,
-) -> FixedSizeBinaryArray {
-    try_decode_fixed_size_binary(rows, size, options).unwrap()
-}
-
 pub(crate) fn try_decode_fixed_size_binary(
     rows: &mut [&[u8]],
     size: i32,
