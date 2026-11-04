@@ -19,6 +19,8 @@
 
 # Native Rust implementation of Apache Arrow and Apache Parquet
 
+[![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://codspeed.io/apache/arrow-rs?utm_source=badge)
+
 Welcome to the [Rust][rust] implementation of [Apache Arrow], a popular
 in-memory columnar format and [Apache Parquet], a popular columnar file
 format.
