@@ -233,16 +233,8 @@ impl RecordDecoder {
                 })
             })?;
 
-        // Need to truncate data t1o the actual amount of data read
-        let data = std::str::from_utf8(&self.data[..self.data_len]).map_err(|e| {
-            let valid_up_to = e.valid_up_to();
-
-            // We can't use binary search because of empty fields
-            let idx = self.offsets[..self.offsets_len]
-                .iter()
-                .rposition(|x| *x <= valid_up_to)
-                .unwrap();
-
+        let offsets = &self.offsets[..self.offsets_len];
+        let invalid_utf8 = |idx: usize| {
             let field = idx % self.num_columns + 1;
             let line_offset = self.line_number - self.num_rows;
             let line = line_offset + idx / self.num_columns;
@@ -250,9 +242,23 @@ impl RecordDecoder {
             ArrowError::CsvError(format!(
                 "Encountered invalid UTF-8 data for line {line} and field {field}"
             ))
+        };
+
+        // Need to truncate data t1o the actual amount of data read
+        let data = std::str::from_utf8(&self.data[..self.data_len]).map_err(|e| {
+            let valid_up_to = e.valid_up_to();
+
+            // We can't use binary search because of empty fields
+            let idx = offsets.iter().rposition(|x| *x <= valid_up_to).unwrap();
+
+            invalid_utf8(idx)
         })?;
 
-        let offsets = &self.offsets[..self.offsets_len];
+        // Invalid bytes on either side of a field boundary can join into a valid sequence
+        if let Some(idx) = offsets.iter().position(|x| !data.is_char_boundary(*x)) {
+            return Err(invalid_utf8(idx - 1));
+        }
+
         let num_rows = self.num_rows;
 
         // Reset state
