@@ -16,9 +16,9 @@
 // under the License.
 
 use arrow_array::builder::{Date32Builder, Decimal128Builder, Int32Builder};
-use arrow_array::types::Int32Type;
 use arrow_array::{
-    ArrayRef, DictionaryArray, FixedSizeBinaryArray, ListArray, RecordBatch, builder::StringBuilder,
+    ArrayRef, DictionaryArray, FixedSizeBinaryArray, Int32Array, ListArray, RecordBatch,
+    StringArray, builder::StringBuilder,
 };
 use arrow_buffer::{Buffer, OffsetBuffer};
 use arrow_ipc::convert::try_fb_to_schema;
@@ -189,34 +189,36 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    for (name, nested) in [("flat", false), ("nested", true)] {
-        let buffer = wide_dictionary_ipc_stream(1000, nested);
-        group.bench_function(format!("StreamReader/dictionaries_1000/{name}"), |b| {
-            b.iter(|| {
-                let mut reader = StreamReader::try_new(buffer.as_slice(), None).unwrap();
-                reader.next().unwrap().unwrap();
-                assert!(reader.next().is_none());
-            })
-        });
+    for num_columns in [10, 1000] {
+        for num_values in [4, 4096] {
+            for (layout, nested) in [("flat", false), ("nested", true)] {
+                let buffer = dictionary_ipc_stream(num_columns, num_values, nested);
+                let name = format!(
+                    "StreamReader/dictionaries/{num_columns}_columns/{num_values}_values/{layout}"
+                );
+                group.bench_function(name, |b| {
+                    b.iter(|| {
+                        let mut reader = StreamReader::try_new(buffer.as_slice(), None).unwrap();
+                        reader.next().unwrap().unwrap();
+                        assert!(reader.next().is_none());
+                    })
+                });
+            }
+        }
     }
 }
 
-/// Return an IPC stream with one small record batch of `num_columns` dictionary columns, so the
-/// stream holds `num_columns` dictionary batches. With `nested`, each dictionary is a list item.
-fn wide_dictionary_ipc_stream(num_columns: usize, nested: bool) -> Vec<u8> {
-    let dictionary: ArrayRef = Arc::new(
-        ["a", "b", "a", "c"]
-            .into_iter()
-            .collect::<DictionaryArray<Int32Type>>(),
-    );
+/// Return an IPC stream with one record batch of `num_columns` string dictionary columns, so the
+/// stream holds `num_columns` dictionary batches of `num_values` distinct values each. With
+/// `nested`, each row is a 2-element list of dictionary values.
+fn dictionary_ipc_stream(num_columns: usize, num_values: usize, nested: bool) -> Vec<u8> {
+    let keys = Int32Array::from_iter_values(0..num_values as i32);
+    let values = StringArray::from_iter_values((0..num_values).map(|i| format!("value_{i}")));
+    let dictionary: ArrayRef = Arc::new(DictionaryArray::new(keys, Arc::new(values)));
     let column = if nested {
-        let item = Arc::new(Field::new("item", dictionary.data_type().clone(), true));
-        Arc::new(ListArray::new(
-            item,
-            OffsetBuffer::from_lengths([2, 2]),
-            dictionary,
-            None,
-        )) as ArrayRef
+        let item = Arc::new(Field::new_list_field(dictionary.data_type().clone(), true));
+        let offsets = OffsetBuffer::from_lengths(std::iter::repeat_n(2, num_values / 2));
+        Arc::new(ListArray::new(item, offsets, dictionary, None)) as ArrayRef
     } else {
         dictionary
     };
