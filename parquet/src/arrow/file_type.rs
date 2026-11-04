@@ -41,10 +41,17 @@ use arrow_schema::{ArrowError, DataType};
 /// extension type. When writing, a struct field with this extension type is
 /// written as a `FILE`-annotated group.
 ///
+/// If the file has an embedded Arrow schema, a reader takes each field's
+/// metadata from it rather than from the Parquet annotation. A `FILE`-annotated
+/// group that the embedded schema describes as a plain struct is then read
+/// without this extension type. To get the extension type in that case, read
+/// with [`ArrowReaderOptions::with_skip_arrow_metadata`] set to `true`.
+///
 /// The extension name is `arrow.parquet.file`, which is the intended name for
 /// a canonical Arrow extension type; it is not yet standardized.
 ///
 /// [`FILE`]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#file
+/// [`ArrowReaderOptions::with_skip_arrow_metadata`]: crate::arrow::arrow_reader::ArrowReaderOptions::with_skip_arrow_metadata
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct FileType;
 
