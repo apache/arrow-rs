@@ -26,7 +26,10 @@ use arrow_array::temporal_conversions::{NANOSECONDS, SECONDS_IN_DAY};
 use arrow_array::timezone::Tz;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, IntervalDayTime, IntervalMonthDayNano};
+use arrow_buffer::{
+    ArrowNativeType, DivisorI32, DivisorI64, DivisorU32, DivisorU64, IntervalDayTime,
+    IntervalMonthDayNano,
+};
 use arrow_schema::{ArrowError, DataType, IntervalUnit, TimeUnit};
 use num_traits::{CheckedMul, ToPrimitive};
 
@@ -235,6 +238,18 @@ fn arithmetic_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<ArrayRef, A
 
     let (l, l_scalar) = lhs.get();
     let (r, r_scalar) = rhs.get();
+    if matches!(op, Op::Div | Op::Rem) && !l_scalar && r_scalar {
+        let array = match (l.data_type(), r.data_type()) {
+            (Int32, Int32) => divisor_op_i32(op, l, r),
+            (Int64, Int64) => divisor_op_i64(op, l, r),
+            (UInt32, UInt32) => divisor_op_u32(op, l, r),
+            (UInt64, UInt64) => divisor_op_u64(op, l, r),
+            _ => None,
+        };
+        if let Some(array) = array {
+            return Ok(array);
+        }
+    }
     downcast_integer! {
         l.data_type(), r.data_type() => (integer_helper, op, l, l_scalar, r, r_scalar),
         (Float16, Float16) => float_op::<Float16Type>(op, l, l_scalar, r, r_scalar),
@@ -323,6 +338,72 @@ macro_rules! try_op_ref {
         Arc::new(array)
     }};
 }
+
+/// Defines `$fn`, which computes `/` or `%` of an array by a scalar with a precomputed divisor.
+/// It returns `None` for an op other than `/` and `%`, when the scalar is null, or when a value
+/// could fail to divide by it (zero, or `$fallible` for `/`), so that `integer_op` returns an
+/// error only for a valid value that fails. Otherwise no value can fail, and `unary` divides
+/// every slot, null or not
+macro_rules! divisor_op {
+    ($fn:ident, $t:ty, $divisor:ident, |$d:ident| $fallible:expr, [$($variant:ident),+]) => {
+        fn $fn(op: Op, l: &dyn Array, r: &dyn Array) -> Option<ArrayRef> {
+            let r = r.as_primitive::<$t>();
+            if r.null_count() != 0 {
+                return None;
+            }
+            let $d = r.value(0);
+            if matches!(op, Op::Div) && $fallible {
+                return None;
+            }
+            let divisor = $divisor::new($d)?;
+            let l = l.as_primitive::<$t>();
+            // Match on the variant once, outside the loop, and move it into the closure, so the
+            // loop doesn't branch on the variant. The `Op::Div` and `Op::Rem` arms after the
+            // variants cover variants that arrow-buffer may add later
+            let array: PrimitiveArray<$t> = match (op, divisor) {
+                $(
+                    (Op::Div, $divisor::$variant(d)) => l.unary(move |n| d.wrapping_div_rem(n).0),
+                    (Op::Rem, $divisor::$variant(d)) => l.unary(move |n| d.wrapping_div_rem(n).1),
+                )+
+                (Op::Div, d) => l.unary(move |n| d.wrapping_div_rem(n).0),
+                (Op::Rem, d) => l.unary(move |n| d.wrapping_div_rem(n).1),
+                _ => return None,
+            };
+            Some(Arc::new(array))
+        }
+    };
+}
+
+// `MIN / -1` overflows, but `%` by -1 doesn't, because `integer_op` computes `%` with
+// `mod_wrapping`
+divisor_op!(
+    divisor_op_i32,
+    Int32Type,
+    DivisorI32,
+    |d| d == -1,
+    [PowerOfTwo, AddIndicator]
+);
+divisor_op!(
+    divisor_op_i64,
+    Int64Type,
+    DivisorI64,
+    |d| d == -1,
+    [PowerOfTwo, AddIndicator]
+);
+divisor_op!(
+    divisor_op_u32,
+    UInt32Type,
+    DivisorU32,
+    |_d| false,
+    [PowerOfTwo, Up, Down, AddIndicator]
+);
+divisor_op!(
+    divisor_op_u64,
+    UInt64Type,
+    DivisorU64,
+    |_d| false,
+    [PowerOfTwo, Up, AddIndicator]
+);
 
 /// Perform an arithmetic operation on integers
 fn integer_op<T: ArrowPrimitiveType>(
@@ -1177,7 +1258,7 @@ where
 mod tests {
     use super::*;
     use arrow_array::temporal_conversions::{as_date, as_datetime};
-    use arrow_buffer::{ScalarBuffer, i256};
+    use arrow_buffer::{NullBuffer, ScalarBuffer, i256};
     use chrono::{DateTime, NaiveDate};
 
     // The valid date range of NaiveDate is from January 1, -262143 to December 31, 262142 (Gregorian calendar).
@@ -1196,6 +1277,115 @@ mod tests {
 
     const fn date_to_days(date: NaiveDate) -> i32 {
         date.signed_duration_since(EPOCH).num_days() as i32
+    }
+
+    fn assert_kernel_result<T: ArrowPrimitiveType>(
+        actual: Result<ArrayRef, ArrowError>,
+        expected: Result<Vec<Option<T::Native>>, ArrowError>,
+        context: &str,
+    ) {
+        match (actual, expected) {
+            (Ok(actual), Ok(expected)) => {
+                let actual: Vec<_> = actual.as_primitive::<T>().iter().collect();
+                assert_eq!(actual, expected, "{context}");
+            }
+            (Err(actual), Err(expected)) => {
+                assert_eq!(actual.to_string(), expected.to_string(), "{context}")
+            }
+            (actual, expected) => panic!("{context}: {actual:?} != {expected:?}"),
+        }
+    }
+
+    /// Checks `div` and `rem` of `values` by each of `divisors` and by a null divisor, against
+    /// `div_checked` and `mod_wrapping` on each valid value, as `integer_op` computes them.
+    /// `values` is repeated to 64 values so that the vectorized loop runs, and is also checked
+    /// sliced to 50 values, which leaves a remainder for the scalar loop, all null, and empty
+    fn test_div_rem_by_scalar<T: ArrowPrimitiveType>(
+        values: &[Option<T::Native>],
+        divisors: &[T::Native],
+    ) {
+        let values: PrimitiveArray<T> = values.iter().cycle().take(64).collect();
+        let arrays = [
+            values.slice(3, 50),
+            values.slice(0, 0),
+            PrimitiveArray::new_null(2),
+            values,
+        ];
+        for array in &arrays {
+            for &d in divisors {
+                let divisor = PrimitiveArray::<T>::new_scalar(d);
+                let expected = array
+                    .iter()
+                    .map(|v| v.map(|v| v.div_checked(d)).transpose())
+                    .collect();
+                assert_kernel_result::<T>(div(array, &divisor), expected, &format!("/ {d:?}"));
+                let expected = array
+                    .iter()
+                    .map(|v| {
+                        v.map(|v| match d.is_zero() {
+                            true => Err(ArrowError::DivideByZero),
+                            false => Ok(v.mod_wrapping(d)),
+                        })
+                        .transpose()
+                    })
+                    .collect();
+                assert_kernel_result::<T>(rem(array, &divisor), expected, &format!("% {d:?}"));
+            }
+            // A null divisor gives a null result, whatever its slot holds
+            for slot in [0, 7] {
+                let slot = vec![T::Native::usize_as(slot)].into();
+                let divisor = Scalar::new(PrimitiveArray::<T>::new(
+                    slot,
+                    Some(NullBuffer::new_null(1)),
+                ));
+                assert_eq!(div(array, &divisor).unwrap().null_count(), array.len());
+                assert_eq!(rem(array, &divisor).unwrap().null_count(), array.len());
+            }
+        }
+    }
+
+    #[test]
+    fn test_div_rem_by_scalar_integer() {
+        // 16, 13 and 7 reach each variant of the precomputed divisor. 0, and -1 for `/`, fall back
+        // to `integer_op`, which returns an error for a valid value and `Ok` otherwise
+        let values = [
+            Some(i32::MIN),
+            Some(i32::MIN + 1),
+            Some(-7),
+            None,
+            Some(0),
+            Some(13),
+            Some(i32::MAX),
+        ];
+        test_div_rem_by_scalar::<Int32Type>(&values, &[16, 13, 7, 0, -1]);
+        let values = [
+            Some(i64::MIN),
+            Some(i64::MIN + 1),
+            Some(-7),
+            None,
+            Some(0),
+            Some(13),
+            Some(i64::MAX),
+        ];
+        test_div_rem_by_scalar::<Int64Type>(&values, &[16, 13, 7, 0, -1]);
+        let values = [
+            Some(0),
+            Some(1),
+            None,
+            Some(13),
+            Some(u32::MAX - 1),
+            Some(u32::MAX),
+        ];
+        test_div_rem_by_scalar::<UInt32Type>(&values, &[16, 13, 7, 0]);
+        let values = [
+            Some(0),
+            Some(1),
+            None,
+            Some(13),
+            Some(u64::MAX - 1),
+            Some(u64::MAX),
+        ];
+        test_div_rem_by_scalar::<UInt64Type>(&values, &[16, 13, 7, 0]);
     }
 
     fn test_neg_primitive<T: ArrowPrimitiveType>(
