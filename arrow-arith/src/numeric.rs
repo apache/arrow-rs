@@ -18,6 +18,7 @@
 //! Defines numeric arithmetic kernels on [`PrimitiveArray`], such as [`add`]
 
 use std::cmp::Ordering;
+use std::convert::Infallible;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
@@ -343,7 +344,8 @@ macro_rules! try_op_ref {
 /// It returns `None` for an op other than `/` and `%`, when the scalar is null, or when a value
 /// could fail to divide by it (zero, or `$fallible` for `/`), so that `integer_op` returns an
 /// error only for a valid value that fails. Otherwise no value can fail, and `unary` divides
-/// every slot, null or not
+/// every slot, null or not, unless the array has so many nulls that dividing only the valid
+/// values with `try_unary` costs less
 macro_rules! divisor_op {
     ($fn:ident, $t:ty, $divisor:ident, |$d:ident| $fallible:expr, [$($variant:ident),+]) => {
         fn $fn(op: Op, l: &dyn Array, r: &dyn Array) -> Option<ArrayRef> {
@@ -357,6 +359,23 @@ macro_rules! divisor_op {
             }
             let divisor = $divisor::new($d)?;
             let l = l.as_primitive::<$t>();
+            // Experiment: every array with nulls divides only its valid values, so that the
+            // benchmark bot can compare this path with `unary` at each share of nulls. The
+            // threshold follows from those numbers
+            if l.null_count() > 0 {
+                // The divisor matches on its variant for each value, which costs a predictable
+                // branch and keeps this to one loop per op
+                let Ok(array) = match op {
+                    Op::Div => l.try_unary::<_, $t, Infallible>(move |n| {
+                        Ok(divisor.wrapping_div_rem(n).0)
+                    }),
+                    Op::Rem => l.try_unary::<_, $t, Infallible>(move |n| {
+                        Ok(divisor.wrapping_div_rem(n).1)
+                    }),
+                    _ => return None,
+                };
+                return Some(Arc::new(array));
+            }
             // Match on the variant once, outside the loop, and move it into the closure, so the
             // loop doesn't branch on the variant. The `Op::Div` and `Op::Rem` arms after the
             // variants cover variants that arrow-buffer may add later
@@ -1299,14 +1318,17 @@ mod tests {
     /// Checks `div` and `rem` of `values` by each of `divisors` and by a null divisor, against
     /// `div_checked` and `mod_wrapping` on each valid value, as `integer_op` computes them.
     /// `values` is repeated to 64 values so that the vectorized loop runs, and is also checked
-    /// sliced to 50 values, which leaves a remainder for the scalar loop, all null, and empty
+    /// sliced to 50 values, which leaves a remainder for the scalar loop, with seven in eight
+    /// values null, all null, and empty
     fn test_div_rem_by_scalar<T: ArrowPrimitiveType>(
         values: &[Option<T::Native>],
         divisors: &[T::Native],
     ) {
         let values: PrimitiveArray<T> = values.iter().cycle().take(64).collect();
+        let mostly_null = NullBuffer::from_iter((0..values.len()).map(|i| i % 8 == 0));
         let arrays = [
             values.slice(3, 50),
+            PrimitiveArray::new(values.values().clone(), Some(mostly_null)),
             values.slice(0, 0),
             PrimitiveArray::new_null(2),
             values,
