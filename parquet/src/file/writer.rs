@@ -161,9 +161,11 @@ pub struct SerializedFileWriter<W: Write> {
     descr: SchemaDescPtr,
     props: WriterPropertiesPtr,
     row_groups: Vec<RowGroupMetaData>,
-    bloom_filters: Vec<Vec<Option<Sbbf>>>,
-    column_indexes: Vec<Vec<Option<ColumnIndexMetaData>>>,
-    offset_indexes: Vec<Vec<Option<OffsetIndexMetaData>>>,
+    // Per row group bloom filters and page indexes, `None` if the row group has none,
+    // so that files written without them retain no per-column storage until close.
+    bloom_filters: Vec<Option<Vec<Option<Sbbf>>>>,
+    column_indexes: Vec<Option<Vec<Option<ColumnIndexMetaData>>>>,
+    offset_indexes: Vec<Option<Vec<Option<OffsetIndexMetaData>>>>,
     row_group_index: usize,
     // kv_metadatas will be appended to `props` when `write_metadata`
     kv_metadatas: Vec<KeyValue>,
@@ -273,9 +275,9 @@ impl<W: Write + Send> SerializedFileWriter<W> {
                              row_group_bloom_filter,
                              row_group_column_index,
                              row_group_offset_index| {
-            row_bloom_filters.push(row_group_bloom_filter);
-            row_column_indexes.push(row_group_column_index);
-            row_offset_indexes.push(row_group_offset_index);
+            row_bloom_filters.push(none_if_all_none(row_group_bloom_filter));
+            row_column_indexes.push(none_if_all_none(row_group_column_index));
+            row_offset_indexes.push(none_if_all_none(row_group_offset_index));
             // write bloom filters out immediately after the row group if requested
             match bloom_filter_position {
                 BloomFilterPosition::AfterRowGroup => {
@@ -379,21 +381,18 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             encoder = encoder.with_key_value_metadata(key_value_metadata)
         }
 
+        let num_columns = self.descr.num_columns();
         // check for empty column index
-        let column_indexes = if column_indexes.is_empty()
-            || column_indexes
-                .iter()
-                .all(|cis| cis.iter().all(|ci| ci.is_none()))
-        {
+        let column_indexes = if column_indexes.iter().all(Option::is_none) {
             None
         } else {
-            Some(column_indexes)
+            Some(expand_row_groups(column_indexes, num_columns))
         };
         // offset index will always be created unless explicitly disabled
         let offset_indexes = if self.props.offset_index_disabled() {
             None
         } else {
-            Some(offset_indexes)
+            Some(expand_row_groups(offset_indexes, num_columns))
         };
         if column_indexes.is_some() || offset_indexes.is_some() {
             let page_index = PageIndex::new(column_indexes, offset_indexes);
@@ -491,11 +490,29 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     }
 }
 
+/// Returns `None` if no column of a row group has an entry, so that nothing
+/// is retained per column for the row group
+fn none_if_all_none<T>(columns: Vec<Option<T>>) -> Option<Vec<Option<T>>> {
+    columns.iter().any(Option::is_some).then_some(columns)
+}
+
+/// Converts per row group entries back to one entry per column for each row group,
+/// as expected by [`PageIndex`]
+fn expand_row_groups<T>(
+    row_groups: Vec<Option<Vec<Option<T>>>>,
+    num_columns: usize,
+) -> Vec<Vec<Option<T>>> {
+    row_groups
+        .into_iter()
+        .map(|columns| columns.unwrap_or_else(|| (0..num_columns).map(|_| None).collect()))
+        .collect()
+}
+
 /// Serialize all the bloom filters of the given row group to the given buffer,
 /// and returns the updated row group metadata.
 fn write_bloom_filters<W: Write + Send>(
     buf: &mut TrackedWrite<W>,
-    bloom_filters: &mut [Vec<Option<Sbbf>>],
+    bloom_filters: &mut [Option<Vec<Option<Sbbf>>>],
     row_group: &mut RowGroupMetaData,
 ) -> Result<()> {
     // iter row group
@@ -513,8 +530,15 @@ fn write_bloom_filters<W: Write + Send>(
             ))
         })?;
     let row_group_idx = row_group_idx as usize;
-    for (column_idx, column_chunk) in row_group.columns_mut().iter_mut().enumerate() {
-        if let Some(bloom_filter) = bloom_filters[row_group_idx][column_idx].take() {
+    let Some(row_group_bloom_filters) = bloom_filters[row_group_idx].take() else {
+        return Ok(());
+    };
+    for (column_chunk, bloom_filter) in row_group
+        .columns_mut()
+        .iter_mut()
+        .zip(row_group_bloom_filters)
+    {
+        if let Some(bloom_filter) = bloom_filter {
             let start_offset = buf.bytes_written();
             bloom_filter.write(&mut *buf)?;
             let end_offset = buf.bytes_written();
@@ -1186,6 +1210,7 @@ mod tests {
     use crate::column::reader::get_typed_column_reader;
     use crate::compression::{Codec, CodecOptionsBuilder, create_codec};
     use crate::data_type::{BoolType, ByteArrayType, Int32Type, Int96, Int96Type};
+    use crate::file::metadata::page_index::PageIndexBuilder;
     use crate::file::page_index::column_index::ColumnIndexMetaData;
     use crate::file::properties::EnabledStatistics;
     use crate::file::serialized_reader::ReadOptionsBuilder;
@@ -2871,5 +2896,196 @@ mod tests {
         assert_eq!(col_meta.data_page_offset(), 0);
         // No pages written: no encodings recorded.
         assert_eq!(col_meta.encodings().collect::<Vec<_>>(), vec![]);
+    }
+
+    /// Returns a [`SerializedFileWriter`] with `num_row_groups` row groups of two INT32
+    /// columns added with [`SerializedRowGroupWriter::append_column`]. Each column chunk
+    /// is written with a bloom filter, column index and offset index, which are only
+    /// appended if `has_indexes(row_group_idx, column_idx)`.
+    fn append_row_groups(
+        props: WriterProperties,
+        num_row_groups: usize,
+        has_indexes: impl Fn(usize, usize) -> bool,
+    ) -> SerializedFileWriter<Vec<u8>> {
+        let message_type = "
+            message test_schema {
+                REQUIRED INT32 a;
+                REQUIRED INT32 b;
+            }
+        ";
+        let schema = Arc::new(parse_message_type(message_type).unwrap());
+        let mut file_writer =
+            SerializedFileWriter::new(Vec::new(), schema, Arc::new(props)).unwrap();
+        let chunk_props = Arc::new(
+            WriterProperties::builder()
+                .set_statistics_enabled(EnabledStatistics::Page)
+                .set_bloom_filter_enabled(true)
+                .build(),
+        );
+
+        let descr = file_writer.descr.clone();
+        for row_group_idx in 0..num_row_groups {
+            let mut row_group_writer = file_writer.next_row_group().unwrap();
+            for (column_idx, column) in descr.columns().iter().enumerate() {
+                let mut buf = TrackedWrite::new(Vec::new());
+                let page_writer = Box::new(SerializedPageWriter::new(&mut buf));
+                let mut column_writer =
+                    get_column_writer(column.clone(), chunk_props.clone(), page_writer);
+                let value = (row_group_idx * 2 + column_idx) as i32;
+                get_typed_column_writer_mut::<Int32Type>(&mut column_writer)
+                    .write_batch(&[value], None, None)
+                    .unwrap();
+                let mut close = column_writer.close().unwrap();
+                if !has_indexes(row_group_idx, column_idx) {
+                    close.bloom_filter = None;
+                    close.column_index = None;
+                    close.offset_index = None;
+                }
+                let buf = Bytes::from(buf.into_inner().unwrap());
+                row_group_writer.append_column(&buf, close).unwrap();
+            }
+            row_group_writer.close().unwrap();
+        }
+        file_writer
+    }
+
+    #[test]
+    fn test_append_without_bloom_filters_or_page_indexes() {
+        for offset_index_disabled in [false, true] {
+            let props = WriterProperties::builder()
+                .set_statistics_enabled(EnabledStatistics::Chunk)
+                .set_offset_index_disabled(offset_index_disabled)
+                .build();
+            let mut file_writer = append_row_groups(props, 3, |_, _| false);
+
+            // nothing is retained per column for row groups without bloom filters or indexes
+            assert_eq!(file_writer.bloom_filters.len(), 3);
+            assert!(file_writer.bloom_filters.iter().all(Option::is_none));
+            assert_eq!(file_writer.column_indexes, vec![None, None, None]);
+            assert_eq!(file_writer.offset_indexes, vec![None, None, None]);
+
+            let metadata = file_writer.finish().unwrap();
+            // unless disabled, the returned metadata has an offset index without entries
+            let expected = (!offset_index_disabled)
+                .then(|| PageIndex::new(None, Some(vec![vec![None, None]; 3])));
+            let page_index = metadata
+                .page_index()
+                .map(|pi| pi.as_any().downcast_ref::<PageIndex>().unwrap());
+            assert_eq!(page_index, expected.as_ref());
+
+            let file = Bytes::from(file_writer.inner().clone());
+            let options = ReadOptionsBuilder::new().with_page_index().build();
+            let reader = SerializedFileReader::new_with_options(file, options).unwrap();
+            assert!(reader.metadata().page_index().is_none());
+            for row_group in metadata.row_groups() {
+                for column in row_group.columns() {
+                    assert!(column.bloom_filter_offset().is_none());
+                    assert!(column.column_index_offset().is_none());
+                    assert!(column.offset_index_offset().is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_append_with_some_bloom_filters_and_page_indexes() {
+        // row group 1 has no bloom filters or page indexes, the others have them for one column
+        let has_indexes = |row_group_idx: usize, column_idx: usize| {
+            row_group_idx != 1 && (row_group_idx + column_idx).is_multiple_of(2)
+        };
+        for position in [BloomFilterPosition::AfterRowGroup, BloomFilterPosition::End] {
+            for offset_index_disabled in [false, true] {
+                let props = WriterProperties::builder()
+                    .set_statistics_enabled(EnabledStatistics::Chunk)
+                    .set_bloom_filter_position(position)
+                    .set_offset_index_disabled(offset_index_disabled)
+                    .build();
+                let mut file_writer = append_row_groups(props, 4, has_indexes);
+
+                let retained = |row_groups: Vec<bool>| match position {
+                    // bloom filters already written after each row group are not retained
+                    BloomFilterPosition::AfterRowGroup => vec![false; 4],
+                    BloomFilterPosition::End => row_groups,
+                };
+                let bloom_filters: Vec<_> = file_writer
+                    .bloom_filters
+                    .iter()
+                    .map(Option::is_some)
+                    .collect();
+                assert_eq!(bloom_filters, retained(vec![true, false, true, true]));
+                let column_indexes: Vec<_> = file_writer
+                    .column_indexes
+                    .iter()
+                    .map(Option::is_some)
+                    .collect();
+                assert_eq!(column_indexes, [true, false, true, true]);
+                let offset_indexes: Vec<_> = file_writer
+                    .offset_indexes
+                    .iter()
+                    .map(Option::is_some)
+                    .collect();
+                assert_eq!(offset_indexes, [true, false, true, true]);
+
+                let metadata = file_writer.finish().unwrap();
+                let file = Bytes::from(file_writer.inner().clone());
+                let read_metadata = ParquetMetaDataReader::new()
+                    .with_page_index_policy(PageIndexPolicy::Optional)
+                    .parse_and_finish(&file)
+                    .unwrap();
+                let read_page_index = read_metadata.page_index().unwrap();
+                let options = ReadOptionsBuilder::new()
+                    .with_reader_properties(
+                        ReaderProperties::builder()
+                            .set_read_bloom_filter(true)
+                            .build(),
+                    )
+                    .build();
+                let reader = SerializedFileReader::new_with_options(file, options).unwrap();
+
+                // the returned page index has an entry for every column of every row group
+                let mut expected = PageIndexBuilder::new(4, 2);
+                for row_group_idx in 0..4 {
+                    let row_group = reader.get_row_group(row_group_idx).unwrap();
+                    for column_idx in 0..2 {
+                        let has_indexes = has_indexes(row_group_idx, column_idx);
+                        let column = metadata.row_group(row_group_idx).column(column_idx);
+                        assert_eq!(column.bloom_filter_offset().is_some(), has_indexes);
+                        assert_eq!(column.column_index_offset().is_some(), has_indexes);
+                        assert_eq!(
+                            column.offset_index_offset().is_some(),
+                            has_indexes && !offset_index_disabled
+                        );
+
+                        let bloom_filter = row_group.get_column_bloom_filter(column_idx);
+                        assert_eq!(bloom_filter.is_some(), has_indexes);
+                        if let Some(bloom_filter) = bloom_filter {
+                            assert!(bloom_filter.check(&((row_group_idx * 2 + column_idx) as i32)));
+                        }
+
+                        if let Some(column_index) =
+                            read_page_index.column_index(row_group_idx, column_idx)
+                        {
+                            expected.put_column_index(
+                                column_index.clone(),
+                                row_group_idx,
+                                column_idx,
+                            );
+                        }
+                        if let Some(offset_index) =
+                            read_page_index.offset_index(row_group_idx, column_idx)
+                        {
+                            expected.put_offset_index(
+                                offset_index.clone(),
+                                row_group_idx,
+                                column_idx,
+                            );
+                        }
+                    }
+                }
+                let page_index = metadata.page_index().unwrap();
+                let page_index = page_index.as_any().downcast_ref::<PageIndex>().unwrap();
+                assert_eq!(page_index, &expected.build());
+            }
+        }
     }
 }
