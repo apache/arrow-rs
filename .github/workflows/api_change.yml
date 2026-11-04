@@ -53,7 +53,7 @@ jobs:
       - name: Install cargo-semver-checks
         uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177  # v2.87.30
         with:
-          tool: cargo-semver-checks@0.51.0
+          tool: cargo-semver-checks
       - name: Compare public APIs with the target commit
         id: compare
         shell: bash
@@ -73,8 +73,10 @@ jobs:
             esac
           }
           check_api --workspace --exclude parquet --all-features
-          # With async enabled, 0.51 confuses the sync (&self) and async (&mut self)
-          # get_row_group_column_bloom_filter methods on identical source.
+          # With async enabled, cargo-semver-checks confuses the sync (&self) and async
+          # (&mut self) get_row_group_column_bloom_filter methods on identical source.
+          # Scan parquet with the rest of the workspace once this is fixed:
+          # https://github.com/obi1kenobi/cargo-semver-checks/issues/1781
           check_api -p parquet --default-features
       # dev_pr.yml reads this step's conclusion through the Actions API.
       - name: API changes detected
