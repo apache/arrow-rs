@@ -344,10 +344,17 @@ macro_rules! try_op_ref {
 /// It returns `None` for an op other than `/` and `%`, when the scalar is null, or when a value
 /// could fail to divide by it (zero, or `$fallible` for `/`), so that `integer_op` returns an
 /// error only for a valid value that fails. Otherwise no value can fail, and `unary` divides
-/// every slot, null or not, unless the array has so many nulls that dividing only the valid
-/// values with `try_unary` costs less
+/// every slot, null or not, unless the array has more than `$max_nulls` nulls, where dividing
+/// only the valid values with `try_unary` costs less
 macro_rules! divisor_op {
-    ($fn:ident, $t:ty, $divisor:ident, |$d:ident| $fallible:expr, [$($variant:ident),+]) => {
+    (
+        $fn:ident,
+        $t:ty,
+        $divisor:ident,
+        |$d:ident| $fallible:expr,
+        |$len:ident| $max_nulls:expr,
+        [$($variant:ident),+]
+    ) => {
         fn $fn(op: Op, l: &dyn Array, r: &dyn Array) -> Option<ArrayRef> {
             let r = r.as_primitive::<$t>();
             if r.null_count() != 0 {
@@ -359,10 +366,8 @@ macro_rules! divisor_op {
             }
             let divisor = $divisor::new($d)?;
             let l = l.as_primitive::<$t>();
-            // `unary` costs the same whatever the nulls, and `try_unary` visits only the valid
-            // values. On x86, `unary` is slower than `try_unary` with a hardware divide above
-            // roughly 60% nulls, so more than half null takes `try_unary`
-            if l.null_count() > l.len() / 2 {
+            let $len = l.len();
+            if l.null_count() > $max_nulls {
                 // Calling the enum's `wrapping_div_rem`, which matches on the variant, keeps this
                 // to one `try_unary` per op
                 let Ok(array) = match op {
@@ -394,12 +399,19 @@ macro_rules! divisor_op {
 }
 
 // `MIN / -1` overflows, but `%` by -1 doesn't, because `integer_op` computes `%` with
-// `mod_wrapping`
+// `mod_wrapping`.
+//
+// `unary` costs the same whatever the nulls, and `try_unary` visits only the valid values. On x86,
+// `unary` is slower than `integer_op`'s `try_unary` with a hardware divide above roughly 60% nulls
+// for `Int32` and `Int64`, so more than half null takes `try_unary`. `UInt32`'s `unary` loop is
+// the cheapest, and on x86 its `try_unary` costs about as much as `integer_op`'s, so it stays on
+// `unary` up to three quarters null. Its `%` on `unary` falls behind `integer_op`'s at roughly 80%
 divisor_op!(
     divisor_op_i32,
     Int32Type,
     DivisorI32,
     |d| d == -1,
+    |len| len / 2,
     [PowerOfTwo, AddIndicator]
 );
 divisor_op!(
@@ -407,6 +419,7 @@ divisor_op!(
     Int64Type,
     DivisorI64,
     |d| d == -1,
+    |len| len / 2,
     [PowerOfTwo, AddIndicator]
 );
 divisor_op!(
@@ -414,6 +427,7 @@ divisor_op!(
     UInt32Type,
     DivisorU32,
     |_d| false,
+    |len| len / 4 * 3,
     [PowerOfTwo, Up, Down, AddIndicator]
 );
 divisor_op!(
@@ -421,6 +435,7 @@ divisor_op!(
     UInt64Type,
     DivisorU64,
     |_d| false,
+    |len| len / 2,
     [PowerOfTwo, Up, AddIndicator]
 );
 
