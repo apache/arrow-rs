@@ -85,8 +85,7 @@ pub struct GenericRecordReader<V, CV> {
     /// as the valid_mask for `pad_nulls` (via `as_slice()`) and as the null
     /// bitmap consumed by the leaf reader (via `consume_compact_bitmap`).
     compact_bitmap: Option<BooleanBufferBuilder>,
-    /// Whether the value decoders must validate UTF-8 regardless of the
-    /// column's annotation, see [`Self::set_validate_utf8`].
+    /// See [`Self::set_validate_utf8`]
     validate_utf8: bool,
 }
 
@@ -121,9 +120,8 @@ where
         }
     }
 
-    /// Validate that the decoded values are UTF-8 even if the column is not
-    /// annotated `UTF8`. Byte array readers set this when they produce an
-    /// Arrow string type.
+    /// Validate UTF-8 even if the column is not annotated `UTF8`, for readers
+    /// that produce a string type.
     pub fn set_validate_utf8(&mut self) {
         self.validate_utf8 = true;
     }

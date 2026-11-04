@@ -87,10 +87,8 @@ pub trait ColumnValueDecoder {
     /// Create a new [`ColumnValueDecoder`]
     fn new(col: &ColumnDescPtr) -> Self;
 
-    /// Validate that decoded byte arrays are UTF-8 even if the column is not
-    /// annotated `UTF8`, because they are read as an Arrow string type.
-    ///
-    /// Only byte array decoders validate UTF-8, so the default does nothing.
+    /// Validate UTF-8 even if the column is not annotated `UTF8`. Only byte
+    /// array decoders validate UTF-8, so the default does nothing.
     fn set_validate_utf8(&mut self) {}
 
     /// Set the current dictionary page

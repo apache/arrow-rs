@@ -298,7 +298,7 @@ struct DictionaryDecoder<K, V> {
     /// Dictionary decoder
     decoder: Option<MaybeDictionaryDecoder>,
 
-    /// Whether the values are UTF-8, which also makes them decode as strings
+    /// Also selects string rather than binary values
     validate_utf8: bool,
 
     /// `Some` only for `FIXED_LEN_BYTE_ARRAY` columns, selecting fixed-width
@@ -309,7 +309,6 @@ struct DictionaryDecoder<K, V> {
 }
 
 impl<K, V: OffsetSizeTrait> DictionaryDecoder<K, V> {
-    /// The type of the dictionary values: strings when they are validated as UTF-8
     fn value_type(validate_utf8: bool) -> ArrowType {
         match (V::IS_LARGE, validate_utf8) {
             (true, true) => ArrowType::LargeUtf8,
