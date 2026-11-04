@@ -127,8 +127,8 @@ impl<'a, V> Interner<'a, V> {
     }
 }
 
-// Avoid dense mappings when the dictionary is much larger than the selected rows.
-const MAX_DENSE_MAPPING_VALUES_PER_ROW: usize = 16;
+// Sparse hashing pays off only when retained values greatly outnumber selected rows.
+const MAX_DENSE_MAPPING_VALUES_PER_ROW: usize = 128;
 
 pub(crate) enum KeyMapping<K: ArrowDictionaryKeyType> {
     Dense(Vec<K::Native>),
@@ -156,6 +156,7 @@ impl<K: ArrowDictionaryKeyType> KeyMapping<K> {
         }
     }
 
+    #[inline]
     pub fn get(&self, old_key: usize) -> Option<K::Native> {
         match self {
             Self::Dense(mapping) => mapping.get(old_key).copied(),
@@ -303,16 +304,15 @@ pub(crate) fn merge_dictionary_values<K: ArrowDictionaryKeyType>(
         let use_sparse_mapping =
             values.len() > selected_rows.saturating_mul(MAX_DENSE_MAPPING_VALUES_PER_ROW);
 
-        let referenced_keys;
-        let values_mask;
-        let selection = if use_sparse_mapping {
-            referenced_keys = compute_referenced_keys(keys, key_mask);
-            ValueSelection::Indices(&referenced_keys)
+        let selected_values = if use_sparse_mapping {
+            let referenced_keys = compute_referenced_keys(keys, key_mask);
+            let len = referenced_keys.len();
+            get_selected_values(values, referenced_keys.into_iter(), len)
         } else {
-            values_mask = compute_values_mask(keys, key_mask, values.len());
-            ValueSelection::Mask(&values_mask)
+            let values_mask = compute_values_mask(keys, key_mask, values.len());
+            let len = values_mask.count_set_bits();
+            get_selected_values(values, values_mask.set_indices(), len)
         };
-        let selected_values = get_selected_values(values, selection);
         num_values += selected_values.len();
         value_slices.push((selected_values, use_sparse_mapping));
         values_arrays.push(values)
@@ -476,77 +476,58 @@ fn compute_values_mask<K: ArrowNativeType>(
     builder.finish()
 }
 
-#[derive(Clone, Copy)]
-enum ValueSelection<'a> {
-    Mask(&'a BooleanBuffer),
-    Indices(&'a [usize]),
-}
-
-impl ValueSelection<'_> {
-    fn len(&self) -> usize {
-        match self {
-            Self::Mask(mask) => mask.count_set_bits(),
-            Self::Indices(indices) => indices.len(),
-        }
-    }
-
-    fn for_each(&self, f: impl FnMut(usize)) {
-        match self {
-            Self::Mask(mask) => mask.set_indices().for_each(f),
-            Self::Indices(indices) => indices.iter().copied().for_each(f),
-        }
-    }
-}
-
-fn selected_primitives_to_bytes<'a, T: ArrowPrimitiveType>(
-    array: &'a PrimitiveArray<T>,
-    selection: ValueSelection<'_>,
-) -> Vec<(usize, Option<&'a [u8]>)>
+fn selected_primitives_to_bytes<T: ArrowPrimitiveType, I: Iterator<Item = usize>>(
+    array: &PrimitiveArray<T>,
+    indices: I,
+    len: usize,
+) -> Vec<(usize, Option<&[u8]>)>
 where
     T::Native: ToByteSlice,
 {
-    let mut out = Vec::with_capacity(selection.len());
+    let mut out = Vec::with_capacity(len);
     let values = array.values();
-    selection.for_each(|idx| {
+    for idx in indices {
         out.push((
             idx,
             array.is_valid(idx).then_some(values[idx].to_byte_slice()),
         ))
-    });
+    }
     out
 }
 
 macro_rules! selected_primitive_to_bytes_helper {
-    ($t:ty, $array:expr, $selection:expr) => {
-        selected_primitives_to_bytes::<$t>($array.as_primitive(), $selection)
+    ($t:ty, $array:expr, $indices:expr, $len:expr) => {
+        selected_primitives_to_bytes::<$t, _>($array.as_primitive(), $indices, $len)
     };
 }
 
-fn get_selected_values<'a>(
-    array: &'a dyn Array,
-    selection: ValueSelection<'_>,
-) -> Vec<(usize, Option<&'a [u8]>)> {
+fn get_selected_values<I: Iterator<Item = usize>>(
+    array: &dyn Array,
+    indices: I,
+    len: usize,
+) -> Vec<(usize, Option<&[u8]>)> {
     downcast_primitive! {
-        array.data_type() => (selected_primitive_to_bytes_helper, array, selection),
-        DataType::Utf8 => selected_bytes(array.as_string::<i32>(), selection),
-        DataType::LargeUtf8 => selected_bytes(array.as_string::<i64>(), selection),
-        DataType::Binary => selected_bytes(array.as_binary::<i32>(), selection),
-        DataType::LargeBinary => selected_bytes(array.as_binary::<i64>(), selection),
+        array.data_type() => (selected_primitive_to_bytes_helper, array, indices, len),
+        DataType::Utf8 => selected_bytes(array.as_string::<i32>(), indices, len),
+        DataType::LargeUtf8 => selected_bytes(array.as_string::<i64>(), indices, len),
+        DataType::Binary => selected_bytes(array.as_binary::<i32>(), indices, len),
+        DataType::LargeBinary => selected_bytes(array.as_binary::<i64>(), indices, len),
         _ => unimplemented!("Dictionary merging for type {} is not implemented", array.data_type()),
     }
 }
 
-fn selected_bytes<'a, T: ByteArrayType>(
-    array: &'a GenericByteArray<T>,
-    selection: ValueSelection<'_>,
-) -> Vec<(usize, Option<&'a [u8]>)> {
-    let mut out = Vec::with_capacity(selection.len());
-    selection.for_each(|idx| {
+fn selected_bytes<T: ByteArrayType, I: Iterator<Item = usize>>(
+    array: &GenericByteArray<T>,
+    indices: I,
+    len: usize,
+) -> Vec<(usize, Option<&[u8]>)> {
+    let mut out = Vec::with_capacity(len);
+    for idx in indices {
         out.push((
             idx,
             array.is_valid(idx).then_some(array.value(idx).as_ref()),
         ))
-    });
+    }
     out
 }
 
