@@ -23,7 +23,9 @@ use arrow_array::types::ArrowDictionaryKeyType;
 use arrow_array::{
     Array, ArrayRef, DictionaryArray, PrimitiveArray, downcast_integer, new_empty_array,
 };
-use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, ScalarBuffer};
+use arrow_buffer::{
+    ArrowNativeType, BooleanBufferBuilder, NullBuffer, NullBufferBuilder, ScalarBuffer,
+};
 use arrow_schema::{ArrowError, DataType};
 use std::collections::HashMap;
 use std::mem::size_of;
@@ -34,8 +36,6 @@ struct KeyChunk<K: ArrowDictionaryKeyType> {
     keys: ScalarBuffer<K::Native>,
     /// Shared validity buffer from the source keys, if present.
     nulls: Option<NullBuffer>,
-    /// Position in `nulls` corresponding to `keys[0]`.
-    null_offset: usize,
     /// Index of the values array in `InProgressDictionaryArray::sources`.
     source: usize,
 }
@@ -132,7 +132,6 @@ impl<K: ArrowDictionaryKeyType> InProgressDictionaryArray<K> {
             match &chunk.nulls {
                 Some(nulls) => nulls
                     .inner()
-                    .slice(chunk.null_offset, chunk.keys.len())
                     .set_indices()
                     .for_each(|offset| mask.set_bit(chunk.keys[offset].as_usize(), true)),
                 None => chunk
@@ -157,7 +156,7 @@ impl<K: ArrowDictionaryKeyType> InProgressDictionaryArray<K> {
             let mapping = &merged.key_mappings[chunk.source];
             match &chunk.nulls {
                 Some(nulls) => keys.extend(chunk.keys.iter().enumerate().map(|(offset, key)| {
-                    if nulls.is_valid(chunk.null_offset + offset) {
+                    if nulls.is_valid(offset) {
                         mapping[key.as_usize()]
                     } else {
                         K::Native::default()
@@ -171,20 +170,14 @@ impl<K: ArrowDictionaryKeyType> InProgressDictionaryArray<K> {
 
     /// Concatenates chunk validity in output order, omitting it when all keys are valid.
     fn build_nulls(chunks: &[KeyChunk<K>], len: usize) -> Option<NullBuffer> {
-        chunks.iter().any(|chunk| chunk.nulls.is_some()).then(|| {
-            let mut nulls = BooleanBufferBuilder::new(len);
-            for chunk in chunks {
-                match &chunk.nulls {
-                    Some(chunk_nulls) => nulls.append_buffer(
-                        &chunk_nulls
-                            .inner()
-                            .slice(chunk.null_offset, chunk.keys.len()),
-                    ),
-                    None => nulls.append_n(chunk.keys.len(), true),
-                }
+        let mut nulls = NullBufferBuilder::new(len);
+        for chunk in chunks {
+            match &chunk.nulls {
+                Some(chunk_nulls) => nulls.append_buffer(chunk_nulls),
+                None => nulls.append_n_non_nulls(chunk.keys.len()),
             }
-            NullBuffer::new(nulls.finish())
-        })
+        }
+        nulls.finish()
     }
 }
 
@@ -207,8 +200,7 @@ impl<K: ArrowDictionaryKeyType> InProgressArray for InProgressDictionaryArray<K>
         let source = self.source_id(Arc::clone(dictionary.values()));
         self.chunks.push(KeyChunk {
             keys: keys.values().slice(offset, len),
-            nulls: keys.nulls().cloned(),
-            null_offset: offset,
+            nulls: keys.nulls().map(|nulls| nulls.slice(offset, len)),
             source,
         });
         self.len += len;
