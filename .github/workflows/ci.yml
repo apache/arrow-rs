@@ -29,6 +29,9 @@ on:
       # Merge queue commits are validated by the merge_group event, not push.
       # A skipped Required Checks job on a queue-branch push can satisfy the gate early.
       - 'gh-readonly-queue/**'
+      # Dependabot branches live upstream, so their push runs skip Required Checks.
+      # That skip can let the PR enter the merge queue before its PR run finishes.
+      - 'dependabot/**'
   workflow_dispatch:
 
 concurrency:
