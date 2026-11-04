@@ -189,21 +189,20 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    for num_columns in [10, 1000] {
-        for num_distinct in [4, 4096] {
-            for (layout, list) in [("flat", false), ("list", true)] {
-                let buffer = dictionary_ipc_stream(num_columns, num_distinct, list);
-                let name = format!(
-                    "StreamReader/dictionaries/{num_columns}_columns/{num_distinct}_distinct/{layout}"
-                );
-                group.bench_function(name, |b| {
-                    b.iter(|| {
-                        let mut reader = StreamReader::try_new(buffer.as_slice(), None).unwrap();
-                        reader.next().unwrap().unwrap();
-                        assert!(reader.next().is_none());
-                    })
-                });
-            }
+    let num_columns = 1000;
+    for num_distinct in [4, 4096] {
+        for (layout, list) in [("flat", false), ("list", true)] {
+            let buffer = dictionary_ipc_stream(num_columns, num_distinct, list);
+            let name = format!(
+                "StreamReader/dictionaries/{num_columns}_columns/{num_distinct}_distinct/{layout}"
+            );
+            group.bench_function(name, |b| {
+                b.iter(|| {
+                    let mut reader = StreamReader::try_new(buffer.as_slice(), None).unwrap();
+                    reader.next().unwrap().unwrap();
+                    assert!(reader.next().is_none());
+                })
+            });
         }
     }
 }
