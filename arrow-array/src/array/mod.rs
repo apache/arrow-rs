@@ -432,6 +432,18 @@ pub unsafe trait Array: std::fmt::Debug + Send + Sync {
 /// A reference-counted reference to a generic `Array`
 pub type ArrayRef = Arc<dyn Array>;
 
+/// Returns `true` if two child value arrays have the same layout and backing buffers.
+///
+/// This is useful for recognizing shared values in [`DictionaryArray`] and [`RunArray`].
+/// It first checks whether the [`ArrayRef`]s point to the same allocation, then falls back
+/// to [`ArrayData::ptr_eq`] to recognize shallow clones such as `Arc::new(array.clone())`.
+///
+/// This checks storage identity, not logical equality: arrays with equal values but
+/// different buffers return `false`.
+pub fn child_values_ptr_eq(left: &ArrayRef, right: &ArrayRef) -> bool {
+    Arc::ptr_eq(left, right) || left.to_data().ptr_eq(&right.to_data())
+}
+
 /// Ergonomics: Allow use of an ArrayRef as an `&dyn Array`
 unsafe impl Array for ArrayRef {
     fn as_any(&self) -> &dyn Any {
@@ -1093,8 +1105,33 @@ mod tests {
     use super::*;
     use crate::cast::{as_union_array, downcast_array};
     use crate::downcast_run_array;
+    use crate::types::Int8Type;
     use arrow_buffer::MutableBuffer;
     use arrow_schema::{Field, Fields, UnionFields, UnionMode};
+
+    #[test]
+    fn test_child_values_ptr_eq_same_arc() {
+        let dictionary = DictionaryArray::<Int8Type>::new(
+            Int8Array::from(vec![0, 1]),
+            Arc::new(StringArray::from(vec!["a", "b"])),
+        );
+        let values = Arc::clone(dictionary.values());
+
+        assert!(Arc::ptr_eq(dictionary.values(), &values));
+        assert!(child_values_ptr_eq(dictionary.values(), &values));
+    }
+
+    #[test]
+    fn test_child_values_ptr_eq_shared_buffers() {
+        let values = StringArray::from(vec!["a", "b"]);
+        let first =
+            DictionaryArray::<Int8Type>::new(Int8Array::from(vec![0, 1]), Arc::new(values.clone()));
+        let second =
+            DictionaryArray::<Int8Type>::new(Int8Array::from(vec![0, 1]), Arc::new(values));
+
+        assert!(!Arc::ptr_eq(first.values(), second.values()));
+        assert!(child_values_ptr_eq(first.values(), second.values()));
+    }
 
     #[test]
     fn test_empty_primitive() {
