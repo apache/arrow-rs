@@ -486,7 +486,7 @@ mod tests {
     #[test]
     #[cfg(any(feature = "lz4", feature = "zstd"))]
     fn test_decompression_beyond_prealloc() {
-        let input = vec![7u8; crate::reader::MAX_PREALLOC_BYTES + 1];
+        let input = vec![7u8; crate::reader::MAX_PREALLOC_BYTES + 2];
         for codec in [
             #[cfg(feature = "lz4")]
             super::CompressionCodec::Lz4Frame,
@@ -499,6 +499,7 @@ mod tests {
                 .unwrap();
             let decompress = |len| codec.decompress(&compressed, len, &mut Default::default());
             assert_eq!(decompress(input.len()).unwrap(), input, "{codec:?}");
+            assert!(decompress(input.len() - 1).is_err(), "{codec:?}");
             assert!(decompress(usize::MAX).is_err(), "{codec:?}");
         }
     }
