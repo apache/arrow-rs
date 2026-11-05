@@ -36,6 +36,38 @@ pub struct BooleanBufferBuilder {
     len: usize,
 }
 
+/// Packs the 8 booleans in `bools` into a byte, with `bools[0]` in the least significant bit
+///
+/// This is a lookup-free way of gathering the low bit of 8 consecutive bytes: multiplying by
+/// `0x0102040810204080` sums `bools[i] << (56 - 7 * i)`, so the most significant byte of the
+/// product holds the packed bits.
+#[inline]
+fn pack_8_bools(bools: &[bool; 8]) -> u8 {
+    let bytes = [
+        bools[0] as u8,
+        bools[1] as u8,
+        bools[2] as u8,
+        bools[3] as u8,
+        bools[4] as u8,
+        bools[5] as u8,
+        bools[6] as u8,
+        bools[7] as u8,
+    ];
+    (u64::from_le_bytes(bytes).wrapping_mul(0x0102_0408_1020_4080) >> 56) as u8
+}
+
+/// Packs at most 8 booleans into the low bits of a byte, with `bools[0]` in the least
+/// significant bit. Any remaining high bits are zero.
+#[inline]
+fn pack_bools(bools: &[bool]) -> u8 {
+    debug_assert!(bools.len() <= 8);
+    let mut packed = 0;
+    for (i, &v) in bools.iter().enumerate() {
+        packed |= (v as u8) << i;
+    }
+    packed
+}
+
 impl BooleanBufferBuilder {
     /// Creates a new `BooleanBufferBuilder` with sufficient space for
     /// `capacity` bits (not bytes).
@@ -260,13 +292,40 @@ impl BooleanBufferBuilder {
     #[inline]
     pub fn append_slice(&mut self, slice: &[bool]) {
         let additional = slice.len();
+        if additional == 0 {
+            return;
+        }
+
+        let offset = self.len;
         self.advance(additional);
 
-        let offset = self.len() - additional;
-        for (i, v) in slice.iter().enumerate() {
-            if *v {
-                unsafe { bit_util::set_bit_raw(self.buffer.as_mut_ptr(), offset + i) }
-            }
+        let buf = self.buffer.as_slice_mut();
+        let mut byte_idx = offset / 8;
+        let mut remaining = slice;
+
+        // Pack the head into the trailing partial byte, if `offset` is not byte aligned
+        let bit_offset = offset % 8;
+        if bit_offset != 0 {
+            let head_len = (8 - bit_offset).min(remaining.len());
+            let head = pack_bools(&remaining[..head_len]);
+            // Bits below `bit_offset` are already initialized. Everything above is
+            // either overwritten below, or padding that must be zeroed.
+            let keep = (1_u8 << bit_offset) - 1;
+            buf[byte_idx] = (buf[byte_idx] & keep) | (head << bit_offset);
+            remaining = &remaining[head_len..];
+            byte_idx += 1;
+        }
+
+        // Pack the middle a whole byte at a time
+        let (chunks, tail) = remaining.as_chunks::<8>();
+        for (dst, chunk) in buf[byte_idx..].iter_mut().zip(chunks) {
+            *dst = pack_8_bools(chunk);
+        }
+        byte_idx += chunks.len();
+
+        // Pack the tail.
+        if !tail.is_empty() {
+            buf[byte_idx] = pack_bools(tail);
         }
     }
 
@@ -775,6 +834,110 @@ mod tests {
             for (i, &v) in bools.iter().enumerate() {
                 assert_eq!(finished.value(i), v, "at index {i} for len {len}");
             }
+        }
+    }
+
+    /// Reference packing of `bits` into bytes, LSB-first, with zeroed padding
+    fn reference_bytes(bits: &[bool]) -> Vec<u8> {
+        let mut bytes = vec![0; bits.len().div_ceil(8)];
+        for (i, &v) in bits.iter().enumerate() {
+            if v {
+                bytes[i / 8] |= 1 << (i % 8);
+            }
+        }
+        bytes
+    }
+
+    /// Appends `appended` after `initial` and checks the bytes, length, padding and bits
+    fn check_append_slice(initial: &[bool], appended: &[bool]) {
+        let mut expected = initial.to_vec();
+        expected.extend_from_slice(appended);
+
+        let mut builder = BooleanBufferBuilder::new(0);
+        builder.append_slice(initial);
+        builder.append_slice(appended);
+
+        assert_eq!(builder.len(), expected.len());
+        assert_eq!(
+            builder.as_slice(),
+            reference_bytes(&expected).as_slice(),
+            "after appending {} bits at offset {}",
+            appended.len(),
+            initial.len()
+        );
+
+        let finished = builder.finish();
+        assert_eq!(finished.len(), expected.len());
+        for (i, &v) in expected.iter().enumerate() {
+            assert_eq!(finished.value(i), v, "at index {i}");
+        }
+    }
+
+    #[test]
+    fn test_append_slice_unaligned() {
+        let data: Vec<bool> = (0..200).map(|i| i % 3 == 0 || i % 7 == 1).collect();
+        for offset in 0..=17 {
+            for len in [0, 1, 2, 3, 7, 8, 9, 14, 15, 16, 17, 33, 64, 65, 127, 129] {
+                check_append_slice(&data[..offset], &data[offset..offset + len]);
+            }
+        }
+    }
+
+    #[test]
+    fn test_append_slice_all_true_and_all_false() {
+        // Every start offset and length exercises a different combination of head,
+        // middle and tail bytes
+        for offset in 0..=7 {
+            for len in 0..=64 {
+                check_append_slice(&[true; 7][..offset], &[true; 64][..len]);
+                check_append_slice(&[true; 7][..offset], &[false; 64][..len]);
+                check_append_slice(&[false; 7][..offset], &[true; 64][..len]);
+            }
+        }
+    }
+
+    #[test]
+    fn test_append_slice_empty() {
+        let mut builder = BooleanBufferBuilder::new(0);
+        builder.append_slice(&[]);
+        assert_eq!(builder.len(), 0);
+        assert!(builder.as_slice().is_empty());
+
+        builder.append_slice(&[true, false, true]);
+        builder.append_slice(&[]);
+        assert_eq!(builder.len(), 3);
+        assert_eq!(builder.as_slice(), &[0b0000_0101]);
+    }
+
+    #[test]
+    fn test_append_slice_zeroes_padding() {
+        let mut builder = BooleanBufferBuilder::new(0);
+        builder.append_n(3, true);
+        builder.append_slice(&[true; 10]);
+        assert_eq!(builder.len(), 13);
+        assert_eq!(builder.as_slice(), &[0xFF, 0b0001_1111]);
+
+        // Bits left over from a longer buffer must not leak into the appended bits
+        let mut builder = BooleanBufferBuilder::new(0);
+        builder.append(false);
+        builder.set_bit(5, true);
+        builder.append_slice(&[false, false]);
+        assert_eq!(builder.len(), 3);
+        assert_eq!(builder.as_slice(), &[0]);
+    }
+
+    #[test]
+    fn test_append_slice_fuzz() {
+        use rand::prelude::*;
+
+        let mut rng = rand::rng();
+        for _ in 0..200 {
+            let initial_len = rng.random_range(0..200);
+            let appended_len = rng.random_range(0..200);
+            let bits: Vec<bool> = std::iter::from_fn(|| Some(rng.next_u32() & 1 == 0))
+                .take(initial_len + appended_len)
+                .collect();
+            check_append_slice(&bits[..initial_len], &bits[initial_len..]);
         }
     }
 }
