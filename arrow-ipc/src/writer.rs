@@ -3438,15 +3438,18 @@ mod tests {
     }
 
     fn write_union_file(options: IpcWriteOptions) {
-        let schema = Schema::new(vec![Field::new_union(
-            "union",
-            vec![0, 1],
-            vec![
-                Field::new("a", DataType::Int32, false),
-                Field::new("c", DataType::Float64, false),
-            ],
-            UnionMode::Sparse,
-        )]);
+        let schema = Schema::new(vec![
+            Field::new_union(
+                "union",
+                vec![0, 1],
+                vec![
+                    Field::new("a", DataType::Int32, false),
+                    Field::new("c", DataType::Float64, false),
+                ],
+                UnionMode::Sparse,
+            )
+            .with_nullable(true),
+        ]);
         let mut builder = UnionBuilder::with_capacity_sparse(5);
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append_null::<Int32Type>("a").unwrap();
@@ -4615,7 +4618,7 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "union",
             DataType::Union(union_fields, UnionMode::Dense),
-            false,
+            true,
         )]));
         let input_batch = RecordBatch::try_new(schema, vec![Arc::new(union)]).unwrap();
 

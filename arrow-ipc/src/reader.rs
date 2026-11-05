@@ -2081,7 +2081,7 @@ mod tests {
             Field::new("f7", DataType::FixedSizeBinary(3), true),
             Field::new("f8", fixed_size_list_data_type, false),
             Field::new("f9", struct_data_type, false),
-            Field::new("f10", run_encoded_data_type, false),
+            Field::new("f10", run_encoded_data_type, true),
             Field::new("f11", DataType::Boolean, false),
             Field::new_dictionary("f12", DataType::Int8, DataType::Utf8, false),
             Field::new("f13", DataType::Utf8, false),
@@ -3057,7 +3057,7 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "union",
             union.data_type().clone(),
-            false,
+            true,
         )]));
 
         let union_array = Arc::new(union) as ArrayRef;
@@ -3115,7 +3115,7 @@ mod tests {
                 run_array_1_sliced.data_type().clone(),
                 false,
             ),
-            Field::new("run_array_2", run_array_2.data_type().clone(), false),
+            Field::new("run_array_2", run_array_2.data_type().clone(), true),
         ]));
         let input_batch = RecordBatch::try_new(
             schema,
