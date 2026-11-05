@@ -2213,15 +2213,17 @@ mod tests {
             err.to_string(),
             "Parquet error: Invalid BYTE_STREAM_SPLIT data length 63 for values of size 8"
         );
-
     }
 
     #[test]
     fn test_byte_stream_split_flba_uses_encoded_value_count() {
         for width in [5, 16] {
-            let mut decoder = VariableWidthByteStreamSplitDecoder::<FixedLenByteArrayType>::new(width);
+            let mut decoder =
+                VariableWidthByteStreamSplitDecoder::<FixedLenByteArrayType>::new(width);
             for count in [0, 8, 63, usize::MAX] {
-                decoder.set_data(Bytes::from(vec![0; 8 * width as usize]), count).unwrap();
+                decoder
+                    .set_data(Bytes::from(vec![0; 8 * width as usize]), count)
+                    .unwrap();
                 assert_eq!(decoder.values_left(), 8);
                 let mut values = vec![FixedLenByteArray::default(); 63];
                 assert_eq!(decoder.get(&mut values[..3]).unwrap(), 3);
