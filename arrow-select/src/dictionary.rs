@@ -151,8 +151,29 @@ fn bytes_ptr_eq<T: ByteArrayType>(a: &dyn Array, b: &dyn Array) -> bool {
     }
 }
 
-/// A type-erased function that compares two array for pointer equality
-type PtrEq = fn(&dyn Array, &dyn Array) -> bool;
+/// Returns `true` if two child value arrays have the same layout and backing buffers.
+///
+/// This first checks whether the [`ArrayRef`]s point to the same allocation, then uses
+/// direct buffer comparisons for byte arrays and [`arrow_data::ArrayData::ptr_eq`] for
+/// other types.
+///
+/// This checks storage identity, not logical equality. Arrays with equal values in
+/// different buffers return `false`. Arrays with no allocated storage, such as two empty
+/// primitive arrays built from empty `Vec`s or two [`arrow_array::NullArray`]s of the same
+/// length, return `true`.
+pub(crate) fn child_values_ptr_eq(left: &ArrayRef, right: &ArrayRef) -> bool {
+    if Arc::ptr_eq(left, right) {
+        return true;
+    }
+
+    match left.data_type() {
+        DataType::Utf8 => bytes_ptr_eq::<Utf8Type>(left.as_ref(), right.as_ref()),
+        DataType::LargeUtf8 => bytes_ptr_eq::<LargeUtf8Type>(left.as_ref(), right.as_ref()),
+        DataType::Binary => bytes_ptr_eq::<BinaryType>(left.as_ref(), right.as_ref()),
+        DataType::LargeBinary => bytes_ptr_eq::<LargeBinaryType>(left.as_ref(), right.as_ref()),
+        _ => left.to_data().ptr_eq(&right.to_data()),
+    }
+}
 
 /// A weak heuristic of whether to merge dictionary values that aims to only
 /// perform the expensive merge computation when it is likely to yield at least
@@ -167,32 +188,25 @@ pub(crate) fn should_merge_dictionary_values<K: ArrowDictionaryKeyType>(
     dictionaries: &[&DictionaryArray<K>],
     len: usize,
 ) -> (bool, bool) {
-    use DataType::*;
-    let first_values = dictionaries[0].values().as_ref();
-    let ptr_eq: PtrEq = match first_values.data_type() {
-        Utf8 => bytes_ptr_eq::<Utf8Type>,
-        LargeUtf8 => bytes_ptr_eq::<LargeUtf8Type>,
-        Binary => bytes_ptr_eq::<BinaryType>,
-        LargeBinary => bytes_ptr_eq::<LargeBinaryType>,
-        dt => {
-            if !dt.is_primitive() {
-                return (
-                    false,
-                    K::Native::from_usize(dictionaries.iter().map(|d| d.values().len()).sum())
-                        .is_none(),
-                );
-            }
-            |a, b| a.to_data().ptr_eq(&b.to_data())
-        }
-    };
+    let first_values = dictionaries[0].values();
+    if !matches!(
+        first_values.data_type(),
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary
+    ) && !first_values.data_type().is_primitive()
+    {
+        return (
+            false,
+            K::Native::from_usize(dictionaries.iter().map(|d| d.values().len()).sum()).is_none(),
+        );
+    }
 
     let mut single_dictionary = true;
     let mut total_values = first_values.len();
     for dict in dictionaries.iter().skip(1) {
-        let values = dict.values().as_ref();
+        let values = dict.values();
         total_values += values.len();
         if single_dictionary {
-            single_dictionary = ptr_eq(first_values, values)
+            single_dictionary = child_values_ptr_eq(first_values, values)
         }
     }
 
@@ -363,9 +377,101 @@ mod tests {
     use arrow_array::cast::as_string_array;
     use arrow_array::types::Int8Type;
     use arrow_array::types::Int32Type;
-    use arrow_array::{DictionaryArray, Int8Array, Int32Array, StringArray};
+    use arrow_array::{
+        ArrayRef, DictionaryArray, Int8Array, Int32Array, ListArray, NullArray, RunArray,
+        StringArray, StringViewArray,
+    };
     use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer, OffsetBuffer};
+    use arrow_schema::Field;
     use std::sync::Arc;
+
+    #[test]
+    fn test_child_values_ptr_eq_shared_storage() {
+        let dictionary = DictionaryArray::<Int8Type>::new(
+            Int8Array::from(vec![0, 1]),
+            Arc::new(StringArray::from(vec!["a", "b"])),
+        );
+        let values = Arc::clone(dictionary.values());
+
+        assert!(Arc::ptr_eq(dictionary.values(), &values));
+        assert!(child_values_ptr_eq(dictionary.values(), &values));
+
+        let values = StringArray::from(vec!["a", "b"]);
+        let first =
+            DictionaryArray::<Int8Type>::new(Int8Array::from(vec![0, 1]), Arc::new(values.clone()));
+        let second =
+            DictionaryArray::<Int8Type>::new(Int8Array::from(vec![0, 1]), Arc::new(values));
+
+        assert!(!Arc::ptr_eq(first.values(), second.values()));
+        assert!(child_values_ptr_eq(first.values(), second.values()));
+
+        let values = StringArray::from(vec!["a", "b"]);
+        let first = RunArray::<Int32Type>::try_new(&Int32Array::from(vec![1, 3]), &values).unwrap();
+        let second =
+            RunArray::<Int32Type>::try_new(&Int32Array::from(vec![2, 3]), &values).unwrap();
+
+        assert!(!Arc::ptr_eq(first.values(), second.values()));
+        assert!(child_values_ptr_eq(first.values(), second.values()));
+
+        let first: ArrayRef = Arc::new(Int32Array::from(Vec::<i32>::new()));
+        let second: ArrayRef = Arc::new(Int32Array::from(Vec::<i32>::new()));
+        assert!(child_values_ptr_eq(&first, &second));
+
+        let first: ArrayRef = Arc::new(NullArray::new(3));
+        let second: ArrayRef = Arc::new(NullArray::new(3));
+        assert!(child_values_ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn test_child_values_ptr_eq_different_storage_or_layout() {
+        let first: ArrayRef = Arc::new(StringArray::from(vec!["a", "b"]));
+        let second: ArrayRef = Arc::new(StringArray::from(vec!["a", "b"]));
+
+        assert!(!child_values_ptr_eq(&first, &second));
+
+        let values = Int32Array::from(vec![1, 2, 3]);
+        let first: ArrayRef = Arc::new(values.slice(0, 2));
+        let shifted: ArrayRef = Arc::new(values.slice(1, 2));
+        let shorter: ArrayRef = Arc::new(values.slice(0, 1));
+
+        assert!(!child_values_ptr_eq(&first, &shifted));
+        assert!(!child_values_ptr_eq(&first, &shorter));
+    }
+
+    #[test]
+    fn test_child_values_ptr_eq_different_nested_and_view_buffers() {
+        let field = Arc::new(Field::new_list_field(DataType::Int32, false));
+        let offsets = OffsetBuffer::new(vec![0_i32, 2].into());
+        let first: ArrayRef = Arc::new(ListArray::new(
+            Arc::clone(&field),
+            offsets.clone(),
+            Arc::new(Int32Array::from(vec![1, 2])),
+            None,
+        ));
+        let second: ArrayRef = Arc::new(ListArray::new(
+            field,
+            offsets,
+            Arc::new(Int32Array::from(vec![1, 3])),
+            None,
+        ));
+        assert!(!child_values_ptr_eq(&first, &second));
+
+        let first_payload: &[u8] = b"same payload one";
+        let second_payload: &[u8] = b"same payload two";
+        let view = arrow_data::ByteView::new(first_payload.len() as u32, &first_payload[..4]);
+        let views = ScalarBuffer::from(vec![view.into()]);
+        let first: ArrayRef = Arc::new(StringViewArray::new(
+            views.clone(),
+            vec![Buffer::from_slice_ref(first_payload)],
+            None,
+        ));
+        let second: ArrayRef = Arc::new(StringViewArray::new(
+            views,
+            vec![Buffer::from_slice_ref(second_payload)],
+            None,
+        ));
+        assert!(!child_values_ptr_eq(&first, &second));
+    }
 
     #[test]
     fn test_garbage_collect_i32_dictionary() {
