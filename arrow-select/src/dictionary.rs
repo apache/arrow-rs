@@ -179,6 +179,17 @@ pub(crate) fn child_values_ptr_eq(left: &ArrayRef, right: &ArrayRef) -> bool {
     }
 }
 
+/// Returns whether two byte arrays share the same backing buffers.
+pub(crate) fn byte_array_ptr_eq(a: &dyn Array, b: &dyn Array) -> bool {
+    match a.data_type() {
+        DataType::Utf8 => bytes_ptr_eq::<Utf8Type>(a, b),
+        DataType::LargeUtf8 => bytes_ptr_eq::<LargeUtf8Type>(a, b),
+        DataType::Binary => bytes_ptr_eq::<BinaryType>(a, b),
+        DataType::LargeBinary => bytes_ptr_eq::<LargeBinaryType>(a, b),
+        _ => false,
+    }
+}
+
 /// A type-erased function that compares two array for pointer equality
 type PtrEq = fn(&dyn Array, &dyn Array) -> bool;
 

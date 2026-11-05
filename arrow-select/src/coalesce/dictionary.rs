@@ -16,7 +16,7 @@
 // under the License.
 
 use super::{InProgressArray, generic::GenericInProgressArray};
-use crate::dictionary::merge_dictionary_values_with_masks;
+use crate::dictionary::{byte_array_ptr_eq, merge_dictionary_values_with_masks};
 use ahash::RandomState;
 use arrow_array::cast::AsArray;
 use arrow_array::types::ArrowDictionaryKeyType;
@@ -68,7 +68,7 @@ struct InProgressDictionaryArray<K: ArrowDictionaryKeyType> {
     len: usize,
     /// Typed empty values array used when finishing without any rows.
     empty_values: ArrayRef,
-    /// Distinct dictionary values arrays retained by `Arc` identity.
+    /// Distinct dictionary values arrays retained by buffer identity.
     sources: Vec<ArrayRef>,
     /// Maps each retained values `Arc` address to its index in `sources`.
     source_ids: HashMap<usize, usize, RandomState>,
@@ -94,15 +94,23 @@ impl<K: ArrowDictionaryKeyType> InProgressDictionaryArray<K> {
         }
     }
 
-    /// Returns a stable index for `values`, reusing it when the same `Arc` appears again.
+    /// Returns a stable index for `values`, reusing arrays backed by the same buffers.
     fn source_id(&mut self, values: ArrayRef) -> usize {
         if let Some(last) = self.chunks.last()
-            && Arc::ptr_eq(&self.sources[last.source], &values)
+            && (Arc::ptr_eq(&self.sources[last.source], &values)
+                || byte_array_ptr_eq(self.sources[last.source].as_ref(), values.as_ref()))
         {
             return last.source;
         }
         let values_id = Arc::as_ptr(&values).cast::<()>() as usize;
         if let Some(&source) = self.source_ids.get(&values_id) {
+            return source;
+        }
+        if let Some(source) = self
+            .sources
+            .iter()
+            .position(|existing| byte_array_ptr_eq(existing.as_ref(), values.as_ref()))
+        {
             return source;
         }
         let source = self.sources.len();
@@ -310,6 +318,31 @@ mod tests {
         let output = coalescer.next_completed_batch().unwrap();
         let output = output.column(0).as_dictionary::<Int32Type>();
         assert!(Arc::ptr_eq(output.values(), &values));
+    }
+
+    #[test]
+    fn reuses_values_with_shared_buffers() {
+        let values = StringArray::from_iter_values((0..128).map(|i| format!("value-{i}")));
+        let first_values = Arc::new(values.clone()) as ArrayRef;
+        let second_values = Arc::new(values) as ArrayRef;
+        let make_batch = |values| {
+            let dictionary =
+                DictionaryArray::<Int8Type>::new(Int8Array::from_iter_values(0..=127), values);
+            RecordBatch::try_from_iter([("dict", Arc::new(dictionary) as ArrayRef)]).unwrap()
+        };
+
+        let first = make_batch(Arc::clone(&first_values));
+        let mut coalescer = BatchCoalescer::new(first.schema(), 256);
+        coalescer.push_batch(first).unwrap();
+        coalescer.push_batch(make_batch(second_values)).unwrap();
+
+        let output = coalescer.next_completed_batch().unwrap();
+        let output = output.column(0).as_dictionary::<Int8Type>();
+        assert!(Arc::ptr_eq(output.values(), &first_values));
+        assert_eq!(
+            output.keys().values(),
+            &(0..=127).chain(0..=127).collect::<Vec<_>>()
+        );
     }
 
     #[test]
