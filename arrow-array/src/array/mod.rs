@@ -1105,7 +1105,7 @@ mod tests {
     use super::*;
     use crate::cast::{as_union_array, downcast_array};
     use crate::downcast_run_array;
-    use crate::types::Int8Type;
+    use crate::types::{Int8Type, Int32Type};
     use arrow_buffer::MutableBuffer;
     use arrow_schema::{Field, Fields, UnionFields, UnionMode};
 
@@ -1128,6 +1128,71 @@ mod tests {
             DictionaryArray::<Int8Type>::new(Int8Array::from(vec![0, 1]), Arc::new(values.clone()));
         let second =
             DictionaryArray::<Int8Type>::new(Int8Array::from(vec![0, 1]), Arc::new(values));
+
+        assert!(!Arc::ptr_eq(first.values(), second.values()));
+        assert!(child_values_ptr_eq(first.values(), second.values()));
+    }
+
+    #[test]
+    fn test_child_values_ptr_eq_equal_values_different_buffers() {
+        let first: ArrayRef = Arc::new(StringArray::from(vec!["a", "b"]));
+        let second: ArrayRef = Arc::new(StringArray::from(vec!["a", "b"]));
+
+        assert!(!child_values_ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn test_child_values_ptr_eq_different_slices() {
+        let values = Int32Array::from(vec![1, 2, 3]);
+        let first: ArrayRef = Arc::new(values.slice(0, 2));
+        let shifted: ArrayRef = Arc::new(values.slice(1, 2));
+        let shorter: ArrayRef = Arc::new(values.slice(0, 1));
+
+        assert!(!child_values_ptr_eq(&first, &shifted));
+        assert!(!child_values_ptr_eq(&first, &shorter));
+    }
+
+    #[test]
+    fn test_child_values_ptr_eq_different_nested_and_view_buffers() {
+        let field = Arc::new(Field::new_list_field(DataType::Int32, false));
+        let offsets = OffsetBuffer::new(vec![0_i32, 2].into());
+        let first: ArrayRef = Arc::new(ListArray::new(
+            Arc::clone(&field),
+            offsets.clone(),
+            Arc::new(Int32Array::from(vec![1, 2])),
+            None,
+        ));
+        let second: ArrayRef = Arc::new(ListArray::new(
+            field,
+            offsets,
+            Arc::new(Int32Array::from(vec![1, 3])),
+            None,
+        ));
+        assert!(!child_values_ptr_eq(&first, &second));
+
+        let first_payload: &[u8] = b"same payload one";
+        let second_payload: &[u8] = b"same payload two";
+        let view = arrow_data::ByteView::new(first_payload.len() as u32, &first_payload[..4]);
+        let views = ScalarBuffer::from(vec![view.into()]);
+        let first: ArrayRef = Arc::new(StringViewArray::new(
+            views.clone(),
+            vec![Buffer::from_slice_ref(first_payload)],
+            None,
+        ));
+        let second: ArrayRef = Arc::new(StringViewArray::new(
+            views,
+            vec![Buffer::from_slice_ref(second_payload)],
+            None,
+        ));
+        assert!(!child_values_ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn test_child_values_ptr_eq_shared_run_values() {
+        let values = StringArray::from(vec!["a", "b"]);
+        let first = RunArray::<Int32Type>::try_new(&Int32Array::from(vec![1, 3]), &values).unwrap();
+        let second =
+            RunArray::<Int32Type>::try_new(&Int32Array::from(vec![2, 3]), &values).unwrap();
 
         assert!(!Arc::ptr_eq(first.values(), second.values()));
         assert!(child_values_ptr_eq(first.values(), second.values()));
