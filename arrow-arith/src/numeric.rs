@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Defines numeric arithmetic kernels on [`PrimitiveArray`], such as [`add`]
 
@@ -2861,5 +2848,30 @@ mod tests {
     fn test_date_month_day_nano_operations() {
         test_month_day_nano_ops!(Date32Type, date_to_days);
         test_month_day_nano_ops!(Date64Type, date_to_millis);
+    }
+
+    #[test]
+    fn test_date_sub_interval_min_months() {
+        // Subtracting i32::MIN months requires negating i32::MIN, which
+        // overflows i32: the date kernels must return the Date arithmetic
+        // overflow error instead of panicking in debug builds
+        // https://github.com/apache/arrow-rs/issues/11600
+        let dates: [ArrayRef; 2] = [
+            Arc::new(Date32Array::from(vec![0])),
+            Arc::new(Date64Array::from(vec![0])),
+        ];
+        let year_month = IntervalYearMonthArray::from(vec![i32::MIN]);
+        let month_day_nano =
+            IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNano::new(i32::MIN, 0, 0)]);
+        for dates in &dates {
+            assert_eq!(
+                sub(dates, &year_month).unwrap_err().to_string(),
+                "Compute error: Date arithmetic overflow: 0 - -2147483648 months"
+            );
+            assert_eq!(
+                sub(dates, &month_day_nano).unwrap_err().to_string(),
+                "Compute error: Date arithmetic overflow: 0 - IntervalMonthDayNano { months: -2147483648, days: 0, nanoseconds: 0 }"
+            );
+        }
     }
 }

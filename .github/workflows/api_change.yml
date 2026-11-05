@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+name: API changes
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - '**/*.rs'
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - rust-toolchain.toml
+      - .cargo/**
+      - .github/workflows/api_change.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.event.pull_request.number }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    if: '!github.event.pull_request.draft'
+    name: Detect API changes
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+      - name: Install cargo-semver-checks
+        uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177  # v2.87.30
+        with:
+          tool: cargo-semver-checks
+      - name: Compare public APIs with the target commit
+        id: compare
+        shell: bash
+        # The event's base SHA can lag behind the checked-out PR merge commit.
+        # Its first parent is the exact target commit used for this merge.
+        # Force detection even if the PR bumps Cargo versions.
+        run: |
+          base_sha=$(git rev-parse HEAD^1)
+          check_api() {
+            local status=0
+            cargo semver-checks check-release --baseline-rev "$base_sha" \
+              --release-type minor "$@" || status=$?
+            case "$status" in
+              0) ;;
+              100) echo 'breaking=true' >> "$GITHUB_OUTPUT" ;;
+              *) return "$status" ;;
+            esac
+          }
+          check_api --workspace --exclude parquet --all-features
+          # With async enabled, cargo-semver-checks confuses the sync (&self) and async
+          # (&mut self) get_row_group_column_bloom_filter methods on identical source.
+          # Scan parquet with the rest of the workspace once this is fixed:
+          # https://github.com/obi1kenobi/cargo-semver-checks/issues/1781
+          check_api -p parquet --default-features
+      # dev_pr.yml reads this step's conclusion through the Actions API.
+      - name: API changes detected
+        if: steps.compare.outputs.breaking == 'true'
+        run: echo 'Breaking API changes detected; dev_pr will add api-change.'

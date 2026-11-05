@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Contains codec interface and supported codec implementations.
 //!
@@ -538,18 +525,20 @@ mod zstd_codec {
     /// Uses `zstd::bulk` API with reusable compressor/decompressor contexts
     /// to avoid the overhead of reinitializing contexts for each operation.
     pub struct ZSTDCodec {
-        compressor: zstd::bulk::Compressor<'static>,
-        decompressor: zstd::bulk::Decompressor<'static>,
+        level: ZstdLevel,
+        // Created on first use, because writers only compress and readers only
+        // decompress.
+        compressor: Option<zstd::bulk::Compressor<'static>>,
+        decompressor: Option<zstd::bulk::Decompressor<'static>>,
     }
 
     impl ZSTDCodec {
         /// Creates new Zstandard compression codec.
         pub(crate) fn new(level: ZstdLevel) -> Self {
             Self {
-                compressor: zstd::bulk::Compressor::new(level.compression_level())
-                    .expect("valid zstd compression level"),
-                decompressor: zstd::bulk::Decompressor::new()
-                    .expect("can create zstd decompressor"),
+                level,
+                compressor: None,
+                decompressor: None,
             }
         }
     }
@@ -577,6 +566,9 @@ mod zstd_codec {
             cursor.set_position(offset as u64);
             let len = self
                 .decompressor
+                .get_or_insert_with(|| {
+                    zstd::bulk::Decompressor::new().expect("can create zstd decompressor")
+                })
                 .decompress_to_buffer(input_buf, &mut cursor)?;
             Ok(len)
         }
@@ -588,7 +580,13 @@ mod zstd_codec {
 
             let mut cursor = Cursor::new(output_buf);
             cursor.set_position(offset as u64);
-            let _written = self.compressor.compress_to_buffer(input_buf, &mut cursor)?;
+            let _written = self
+                .compressor
+                .get_or_insert_with(|| {
+                    zstd::bulk::Compressor::new(self.level.compression_level())
+                        .expect("valid zstd compression level")
+                })
+                .compress_to_buffer(input_buf, &mut cursor)?;
             Ok(())
         }
     }

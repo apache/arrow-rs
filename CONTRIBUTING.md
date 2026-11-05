@@ -1,20 +1,7 @@
 <!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+  SPDX-License-Identifier: Apache-2.0
+  SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+  SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 ## Introduction
@@ -72,6 +59,27 @@ and to help reviewers focus on them, users without write access are limited to
 When possible, we recommend splitting your contributions into multiple smaller
 focused PRs rather than large PRs, because they are more likely to be reviewed
 quickly and are easier to understand and review.
+
+### Pull Requests from Forks
+
+To reduce load on ASF's shared runners, pull requests from forks to `main`
+run CPU-intensive tests on your fork using your fork's GitHub runners, with
+lightweight checks upstream. To enable Actions in your fork:
+
+1. Open the **Actions** tab in your fork and enable workflows before pushing.
+2. Sync your fork and rebase your branch onto upstream `main` to include the
+   current CI workflows.
+3. Push your branch, or manually run `CI` from your fork's **Actions** tab.
+   View results and rerun failed jobs there; the PR's `CI (fork)` check may lag.
+
+Fork branch pushes and manual runs execute all regular suites, excluding macOS
+tests, Windows tests, and Miri. macOS tests are skipped in forks to avoid frequent
+runner timeouts, and Windows tests to reduce compute.
+The `CI (fork)` check links to the fork run and is informational. When your PR is
+approved and added to the merge queue, the final CI checks, including macOS and
+Windows tests, run using ASF's runners against the proposed merge with `main`.
+Same-repository and release-branch PRs retain upstream testing. Miri runs
+separately on a daily schedule and on demand.
 
 ## Developer's guide to Arrow Rust
 
@@ -168,7 +176,7 @@ Our CI uses `rustfmt` to check code formatting. Before submitting a
 PR be sure to run the following and check for lint issues:
 
 ```bash
-cargo +stable fmt --all -- --check
+cargo fmt --all -- --check
 ```
 
 ## Miri
@@ -211,6 +219,10 @@ Our [release schedule] allows breaking API changes only in major releases.
 This means that if your PR has a breaking API change, it should be marked as
 `api-change` and it will not be merged until development opens for the next
 major release. See [this ticket] for details.
+
+CI uses `cargo-semver-checks` to add `api-change` for detected breakage without
+failing the check. Manual review is still needed, especially for Parquet features
+outside its defaults.
 
 [release schedule]: README.md#release-versioning-and-schedule
 [this ticket]: https://github.com/apache/arrow-rs/issues/5907

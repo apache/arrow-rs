@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Contains implementations of the reader traits FileReader, RowGroupReader and PageReader
 //! Also contains implementations of the ChunkReader for files (with buffering) and byte arrays (RAM)
@@ -246,27 +233,29 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
     /// Creates file reader from a Parquet file with read options.
     /// Returns an error if the Parquet file does not exist or is corrupt.
     pub fn new_with_options(chunk_reader: R, options: ReadOptions) -> Result<Self> {
-        let mut metadata_builder = ParquetMetaDataReader::new()
+        let mut metadata = ParquetMetaDataReader::new()
             .with_metadata_options(Some(options.metadata_options.clone()))
-            .parse_and_finish(&chunk_reader)?
-            .into_builder();
+            .parse_and_finish(&chunk_reader)?;
         let mut predicates = options.predicates;
 
-        // Filter row groups based on the predicates
-        for (i, rg_meta) in metadata_builder.take_row_groups().into_iter().enumerate() {
-            let mut keep = true;
-            for predicate in &mut predicates {
-                if !predicate(&rg_meta, i) {
-                    keep = false;
-                    break;
+        if !predicates.is_empty() {
+            let row_groups = metadata.row_groups();
+            let mut filtered = None;
+
+            // Only clone retained row groups if a predicate rejects a row group.
+            for (i, rg_meta) in row_groups.iter().enumerate() {
+                let keep = predicates.iter_mut().all(|predicate| predicate(rg_meta, i));
+                if !keep {
+                    filtered.get_or_insert_with(|| row_groups[..i].to_vec());
+                } else if let Some(kept) = &mut filtered {
+                    kept.push(rg_meta.clone());
                 }
             }
-            if keep {
-                metadata_builder = metadata_builder.add_row_group(rg_meta);
+
+            if let Some(row_groups) = filtered {
+                metadata = metadata.into_builder().set_row_groups(row_groups).build();
             }
         }
-
-        let mut metadata = metadata_builder.build();
 
         // If page indexes are desired, build them with the filtered set of row groups
         if options.enable_page_index {
@@ -1298,7 +1287,9 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
     use std::collections::HashSet;
+    use std::rc::Rc;
 
     use bytes::Buf;
 
@@ -2890,6 +2881,56 @@ mod tests {
 
         assert_eq!(file_metadata.file_metadata().num_rows(), 25);
         assert_eq!(file_metadata.num_row_groups(), 5);
+
+        // Stateful predicates must run once per group in order, with short-circuiting
+        // and original indexes, whether or not any groups are rejected.
+        for filter in [false, true] {
+            let calls = Rc::new(RefCell::new(Vec::new()));
+            let first_calls = Rc::clone(&calls);
+            let second_calls = Rc::clone(&calls);
+            let mut next_index = 0;
+            let read_options = ReadOptionsBuilder::new()
+                .with_page_index()
+                .with_predicate(Box::new(move |rg_meta, i| {
+                    assert_eq!(i, next_index);
+                    assert_eq!(rg_meta.ordinal(), Some(i as i32));
+                    next_index += 1;
+                    first_calls.borrow_mut().push((i, 0));
+                    !filter || i != 1
+                }))
+                .with_predicate(Box::new(move |_, i| {
+                    second_calls.borrow_mut().push((i, 1));
+                    !filter || i != 3
+                }))
+                .build();
+            let reader =
+                SerializedFileReader::new_with_options(file.try_clone().unwrap(), read_options)
+                    .unwrap();
+            let metadata = reader.metadata();
+            let expected_ordinals = if filter {
+                vec![0, 2, 4]
+            } else {
+                vec![0, 1, 2, 3, 4]
+            };
+            let ordinals: Vec<_> = metadata
+                .row_groups()
+                .iter()
+                .map(|rg| rg.ordinal().unwrap())
+                .collect();
+            assert_eq!(ordinals, expected_ordinals);
+            assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
+
+            let expected_calls: Vec<_> = (0..5)
+                .flat_map(|i| {
+                    if filter && i == 1 {
+                        vec![(i, 0)]
+                    } else {
+                        vec![(i, 0), (i, 1)]
+                    }
+                })
+                .collect();
+            assert_eq!(*calls.borrow(), expected_calls);
+        }
 
         // read only the 3rd row group
         let read_options = ReadOptionsBuilder::new()

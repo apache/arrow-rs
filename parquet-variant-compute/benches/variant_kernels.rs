@@ -1,26 +1,13 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::array::{
     Array, ArrayRef, BinaryViewArray, BinaryViewBuilder, Int32Array, StringArray, StructArray,
     StructArrayAssembler,
 };
 use arrow::buffer::Buffer;
-use arrow::compute::CastOptions;
+use arrow::compute::{CastOptions, cast};
 use arrow_schema::{DataType, Field, FieldRef, Fields};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime};
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
@@ -29,7 +16,8 @@ use parquet_variant::{
     VariantPath, VariantPathElement,
 };
 use parquet_variant_compute::{
-    GetOptions, VariantArray, VariantArrayBuilder, json_to_variant, shred_variant, variant_get,
+    GetOptions, VariantArray, VariantArrayBuilder, json_to_variant, shred_variant, unshred_variant,
+    variant_get, variant_to_json,
 };
 use parquet_variant_json::append_json;
 use rand::RngExt;
@@ -42,7 +30,7 @@ use std::sync::Arc;
 
 const VARIANT_GET_UNSHREDDED_OBJECT_ROWS: usize = 262_144;
 const VARIANT_ARRAY_BUILD_ROWS: usize = 262_144;
-const SHRED_VARIANT_OBJECT_ROWS: usize = 8_192;
+const VARIANT_BATCH_ROWS: usize = 8_192;
 
 fn variant_array_builder_build_bench(c: &mut Criterion) {
     c.bench_function("variant_array_builder_build_262k_small_values", |b| {
@@ -203,6 +191,60 @@ fn benchmark_batch_json_string_to_variant(c: &mut Criterion) {
     }
 }
 
+pub fn variant_to_json_primitive_bench(c: &mut Criterion) {
+    let primitive = create_primitive_variant_array(VARIANT_BATCH_ROWS);
+    let input = ArrayRef::from(primitive.clone());
+
+    // Little JSON writing makes per-row binary column dispatch visible.
+    c.bench_function("variant_to_json_primitive", |b| {
+        b.iter(|| variant_to_json(&input).unwrap())
+    });
+
+    // Read the same integers from typed_value rather than binary Variant values.
+    let shredded = shred_variant(&primitive, &DataType::Int64).unwrap();
+    let input = ArrayRef::from(shredded);
+    c.bench_function("variant_to_json_shredded_primitive", |b| {
+        b.iter(|| variant_to_json(&input).unwrap())
+    });
+}
+
+pub fn variant_to_json_bench(c: &mut Criterion) {
+    // Object iteration resolves metadata field names and recursively writes scalar values.
+    let objects = create_object_variant_array(VARIANT_BATCH_ROWS);
+    let input = ArrayRef::from(objects.clone());
+    c.bench_function("variant_to_json_object", |b| {
+        b.iter(|| variant_to_json(&input).unwrap())
+    });
+
+    // Same documents and BinaryView values, with dictionary lookup or run-end lookup added.
+    let (dictionary, ree) = create_encoded_metadata_variant_arrays(&objects);
+    for (name, input) in [
+        ("variant_to_json_dictionary_metadata", dictionary),
+        ("variant_to_json_ree_metadata", ree),
+    ] {
+        c.bench_function(name, |b| b.iter(|| variant_to_json(&input).unwrap()));
+    }
+
+    // Wide objects exercise field-name lookup and JSON key serialization for every field.
+    let json: ArrayRef = Arc::new(StringArray::from_iter_values(random_structure(
+        VARIANT_BATCH_ROWS,
+        200,
+    )));
+    let input = ArrayRef::from(json_to_variant(&json).unwrap());
+    c.bench_function("variant_to_json_wide_object", |b| {
+        b.iter(|| variant_to_json(&input).unwrap())
+    });
+
+    // Lists recurse through elements without metadata field-name lookups.
+    let json: ArrayRef = Arc::new(StringArray::from_iter_values(json_repeated_list(
+        VARIANT_BATCH_ROWS,
+    )));
+    let input = ArrayRef::from(json_to_variant(&json).unwrap());
+    c.bench_function("variant_to_json_list", |b| {
+        b.iter(|| variant_to_json(&input).unwrap())
+    });
+}
+
 pub fn variant_get_bench(c: &mut Criterion) {
     let variant_array = create_primitive_variant_array(8192);
     let input = ArrayRef::from(variant_array);
@@ -301,7 +343,7 @@ pub fn variant_get_unshredded_object_path_bench(c: &mut Criterion) {
 }
 
 pub fn variant_get_object_path_metadata_bench(c: &mut Criterion) {
-    let size = SHRED_VARIANT_OBJECT_ROWS;
+    let size = VARIANT_BATCH_ROWS;
     let num_fields = 300;
     let field = Arc::new(Field::new("typed_value", DataType::Int32, true));
     let path = VariantPath::from(vec![VariantPathElement::field("attr.140")]);
@@ -370,22 +412,8 @@ pub fn variant_get_object_path_metadata_bench(c: &mut Criterion) {
 /// dictionary. The source array's dictionary holds 300 field names, so the cost of that name
 /// lookup is visible.
 pub fn shred_variant_partial_object_bench(c: &mut Criterion) {
-    let variant_array = create_unshredded_object_variant_array(SHRED_VARIANT_OBJECT_ROWS);
-
-    // The source objects have 15 fields (`attr.000`, `attr.020`, ... `attr.280`). Shred the first
-    // 5 of them, leaving the other 10 to be written to the leftover `value` column.
-    let shredded_fields = (0..300)
-        .step_by(20)
-        .take(5)
-        .map(|index| {
-            Arc::new(Field::new(
-                format!("attr.{index:03}"),
-                DataType::Int32,
-                true,
-            ))
-        })
-        .collect::<Vec<FieldRef>>();
-    let as_type = DataType::Struct(Fields::from(shredded_fields));
+    let variant_array = create_unshredded_object_variant_array(VARIANT_BATCH_ROWS);
+    let as_type = partial_object_shredding_type();
 
     c.bench_function("shred_variant_partial_object_8k_rows", |b| {
         b.iter(|| std::hint::black_box(shred_variant(&variant_array, &as_type).unwrap()))
@@ -395,7 +423,7 @@ pub fn shred_variant_partial_object_bench(c: &mut Criterion) {
 /// Same as [`shred_variant_partial_object_bench`], but no field of the source objects is covered
 /// by the shredding schema, so all 15 fields per row take the leftover `value` column path.
 pub fn shred_variant_unmatched_object_bench(c: &mut Criterion) {
-    let variant_array = create_unshredded_object_variant_array(SHRED_VARIANT_OBJECT_ROWS);
+    let variant_array = create_unshredded_object_variant_array(VARIANT_BATCH_ROWS);
 
     let shredded_fields = (0..5)
         .map(|index| {
@@ -411,6 +439,84 @@ pub fn shred_variant_unmatched_object_bench(c: &mut Criterion) {
     c.bench_function("shred_variant_unmatched_object_8k_rows", |b| {
         b.iter(|| std::hint::black_box(shred_variant(&variant_array, &as_type).unwrap()))
     });
+}
+
+pub fn unshred_variant_bench(c: &mut Criterion) {
+    // Little work per row makes the row loop and metadata validation visible.
+    bench_unshred_variant(
+        c,
+        "unshred_variant_primitive",
+        create_primitive_variant_array(VARIANT_BATCH_ROWS),
+        DataType::Int64,
+    );
+
+    // Every field comes from a typed column and is looked up in a small dictionary.
+    bench_unshred_variant(
+        c,
+        "unshred_variant_object",
+        create_variant_array_from_json(json_repeated_struct(VARIANT_BATCH_ROWS)),
+        DataType::Struct(Fields::from(vec![
+            Field::new("first", DataType::Utf8, true),
+            Field::new("last", DataType::Utf8, true),
+            Field::new("age", DataType::Int64, true),
+        ])),
+    );
+
+    // Typed fields merge with leftover fields, and all rows share a 300-name dictionary.
+    bench_unshred_variant(
+        c,
+        "unshred_variant_partial_object",
+        create_unshredded_object_variant_array(VARIANT_BATCH_ROWS),
+        partial_object_shredding_type(),
+    );
+
+    // Same documents, but an unsorted dictionary makes every field name lookup a linear scan.
+    bench_unshred_variant(
+        c,
+        "unshred_variant_partial_object_unsorted_metadata",
+        create_unshredded_object_variant_array_with_names(VARIANT_BATCH_ROWS, (0..300).rev()),
+        partial_object_shredding_type(),
+    );
+
+    // `a` holds an object instead of its shredded Int64, and rebuilding it visits every level.
+    let json = format!(r#"{{"a":{}}}"#, json_nested_object(5));
+    bench_unshred_variant(
+        c,
+        "unshred_variant_nested_fallback",
+        create_variant_array_from_json(std::iter::repeat_n(json, VARIANT_BATCH_ROWS)),
+        DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int64, true)])),
+    );
+
+    // Lists recurse through elements without metadata field-name lookups.
+    bench_unshred_variant(
+        c,
+        "unshred_variant_list",
+        create_variant_array_from_json(json_repeated_list(VARIANT_BATCH_ROWS)),
+        DataType::List(Arc::new(Field::new("item", DataType::Float64, true))),
+    );
+
+    // Field name lookups repeat for each of the 8 objects in a row.
+    let json = format!("[{}]", [r#"{"id":1,"name":"n"}"#; 8].join(","));
+    let element = DataType::Struct(Fields::from(vec![
+        Field::new("id", DataType::Int64, true),
+        Field::new("name", DataType::Utf8, true),
+    ]));
+    bench_unshred_variant(
+        c,
+        "unshred_variant_list_of_objects",
+        create_variant_array_from_json(std::iter::repeat_n(json, VARIANT_BATCH_ROWS)),
+        DataType::List(Arc::new(Field::new("item", element, true))),
+    );
+}
+
+fn bench_unshred_variant(
+    c: &mut Criterion,
+    name: &str,
+    variant_array: VariantArray,
+    as_type: DataType,
+) {
+    let input = shred_variant(&variant_array, &as_type).unwrap();
+    c.bench_function(name, |b| b.iter(|| unshred_variant(&input).unwrap()));
 }
 
 pub fn variant_get_utf8_from_int_bench(c: &mut Criterion) {
@@ -819,8 +925,11 @@ criterion_group!(
     variant_get_object_path_metadata_bench,
     shred_variant_partial_object_bench,
     shred_variant_unmatched_object_bench,
+    unshred_variant_bench,
     variant_array_builder_build_bench,
     benchmark_batch_json_string_to_variant,
+    variant_to_json_bench,
+    variant_to_json_primitive_bench,
     variant_get_utf8_from_unshredded_string_bench,
     variant_get_binary_from_unshredded_binary_bench,
     variant_get_utf8_from_int_bench,
@@ -854,6 +963,44 @@ fn create_primitive_variant_array(size: usize) -> VariantArray {
     }
 
     variant_builder.build()
+}
+
+/// Reuses the person generator, alternating schemas in runs of 64 rows for metadata encoding.
+fn create_object_variant_array(size: usize) -> VariantArray {
+    let json = json_repeated_struct(size).enumerate().map(|(i, json)| {
+        if i / 64 % 2 == 0 {
+            json
+        } else {
+            json.replace("\"age\":", "\"years\":")
+        }
+    });
+    create_variant_array_from_json(json)
+}
+
+/// Encodes the two metadata dictionaries from `create_object_variant_array` while
+/// preserving BinaryView storage and the value column. Run-end encoding uses 64-row runs.
+fn create_encoded_metadata_variant_arrays(objects: &VariantArray) -> (ArrayRef, ArrayRef) {
+    let metadata = objects.metadata_column();
+    let dictionary_type =
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::BinaryView));
+    let dictionary = cast(metadata, &dictionary_type).unwrap();
+
+    let ree_type = DataType::RunEndEncoded(
+        Arc::new(Field::new("run_ends", DataType::Int32, false)),
+        Arc::new(Field::new("values", DataType::BinaryView, false)),
+    );
+    let ree = cast(metadata, &ree_type).unwrap();
+
+    let with_metadata = |metadata: ArrayRef| -> ArrayRef {
+        Arc::new(
+            StructArrayAssembler::new()
+                .with_field("metadata", metadata, false)
+                .with_field("value", objects.value_column().clone(), false)
+                .build()
+                .unwrap(),
+        )
+    };
+    (with_metadata(dictionary), with_metadata(ree))
 }
 
 /// Creates a `VariantArray` where the values are already shredded as UTF8.
@@ -912,7 +1059,14 @@ fn create_per_row_metadata_variant_array(json_templates: &[Value], size: usize) 
 }
 
 fn create_unshredded_object_variant_array(size: usize) -> VariantArray {
-    let field_names = (0..300)
+    create_unshredded_object_variant_array_with_names(size, 0..300)
+}
+
+fn create_unshredded_object_variant_array_with_names(
+    size: usize,
+    names: impl Iterator<Item = usize>,
+) -> VariantArray {
+    let field_names = names
         .map(|index| format!("attr.{index:03}"))
         .collect::<Vec<_>>();
     let mut builder =
@@ -943,6 +1097,37 @@ fn create_unshredded_object_variant_array(size: usize) -> VariantArray {
 
     VariantArray::try_new(input.as_ref())
         .expect("created struct should be a valid unshredded variant")
+}
+
+fn partial_object_shredding_type() -> DataType {
+    // The source objects have 15 fields (`attr.000`, `attr.020`, ... `attr.280`). Shred the first
+    // 5 of them, leaving the other 10 to be written to the leftover `value` column.
+    let shredded_fields = (0..300)
+        .step_by(20)
+        .take(5)
+        .map(|index| {
+            Arc::new(Field::new(
+                format!("attr.{index:03}"),
+                DataType::Int32,
+                true,
+            ))
+        })
+        .collect::<Vec<FieldRef>>();
+    DataType::Struct(Fields::from(shredded_fields))
+}
+
+fn create_variant_array_from_json(json: impl IntoIterator<Item = String>) -> VariantArray {
+    let input: ArrayRef = Arc::new(StringArray::from_iter_values(json));
+    json_to_variant(&input).unwrap()
+}
+
+/// Return a JSON object nested `depth` levels deep with two fields per object.
+fn json_nested_object(depth: usize) -> String {
+    if depth == 0 {
+        return "1".to_string();
+    }
+    let child = json_nested_object(depth - 1);
+    format!(r#"{{"l{depth}":{child},"r{depth}":{child}}}"#)
 }
 
 /// Return an iterator off JSON strings, each representing a person

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! A comparable row-oriented representation of a collection of [`Array`].
 //!
@@ -176,6 +163,7 @@ use arrow_array::cast::*;
 use arrow_array::types::{ArrowDictionaryKeyType, ByteArrayType, ByteViewType};
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, Buffer, OffsetBuffer, ScalarBuffer};
+use arrow_data::transform::MutableArrayData;
 use arrow_schema::*;
 use variable::{decode_binary_view, decode_string_view};
 
@@ -188,6 +176,11 @@ mod fixed;
 mod list;
 mod run;
 mod variable;
+
+// Gathering copies one value per row before encoding, so only use it when the
+// dictionary is large and sparse enough for skipping unused values to pay off.
+const DICTIONARY_GATHER_MIN_VALUES: usize = 32 * 1024;
+const DICTIONARY_GATHER_RATIO: usize = 4;
 
 /// Converts [`ArrayRef`] columns into a [row-oriented](self) format.
 ///
@@ -775,7 +768,24 @@ impl Codec {
         match self {
             Codec::Stateless => Ok(Encoder::Stateless),
             Codec::Dictionary(converter, nulls) => {
-                let values = array.as_any_dictionary().values().clone();
+                let dictionary = array.as_any_dictionary();
+                let values = dictionary.values();
+                if values.len() >= DICTIONARY_GATHER_MIN_VALUES
+                    && values.len() >= dictionary.len().saturating_mul(DICTIONARY_GATHER_RATIO)
+                {
+                    let values = downcast_dictionary_array! {
+                        array => gather_dictionary_values(array),
+                        _ => unreachable!(),
+                    };
+                    // Gathering can overflow nested offsets or run ends even when
+                    // encoding the original dictionary values would succeed.
+                    if let Ok(values) = values {
+                        let rows = converter.convert_columns(&[values])?;
+                        return Ok(Encoder::DictionaryRows(rows, nulls.row()));
+                    }
+                }
+
+                let values = Arc::clone(values);
                 let rows = converter.convert_columns(&[values])?;
                 Ok(Encoder::Dictionary(rows, nulls.row()))
             }
@@ -911,6 +921,8 @@ enum Encoder<'a> {
     Stateless,
     /// The encoding of the child array and the encoding of a null row
     Dictionary(Rows, Row<'a>),
+    /// The encoding of the flattened dictionary array and a null row
+    DictionaryRows(Rows, Row<'a>),
     /// The row encoding of the child arrays and the encoding of a null row
     ///
     /// It is necessary to encode to a temporary [`Rows`] to avoid serializing
@@ -1893,6 +1905,17 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
                     _ => unreachable!(),
                 }
             }
+            Encoder::DictionaryRows(values, null) => {
+                downcast_dictionary_array! {
+                    array => tracker.push_variable(
+                        array.keys().iter().enumerate().map(|(row, key)| match key {
+                            Some(_) => values.row_len(row),
+                            None => null.data.len(),
+                        })
+                    ),
+                    _ => unreachable!(),
+                }
+            }
             Encoder::Struct(rows, null) => {
                 let array = as_struct_array(array);
                 if rows.num_rows() > 0 {
@@ -2121,6 +2144,12 @@ fn encode_column(
                 _ => unreachable!()
             }
         }
+        Encoder::DictionaryRows(values, nulls) => {
+            downcast_dictionary_array! {
+                column => encode_dictionary_rows(data, offsets, column, values, nulls),
+                _ => unreachable!()
+            }
+        }
         Encoder::Struct(rows, null) => {
             fn struct_encode_helper<const NO_CHILD_FIELDS: bool>(
                 array: &StructArray,
@@ -2258,6 +2287,36 @@ pub fn encode_dictionary_values<K: ArrowDictionaryKeyType>(
         };
         let end_offset = *offset + row.len();
         data[*offset..end_offset].copy_from_slice(row);
+        *offset = end_offset;
+    }
+}
+
+fn gather_dictionary_values<K: ArrowDictionaryKeyType>(
+    array: &DictionaryArray<K>,
+) -> Result<ArrayRef, ArrowError> {
+    let data = array.values().to_data();
+    let mut mutable = MutableArrayData::new(vec![&data], false, array.len());
+    for key in array.keys() {
+        let index = key.map(|key| key.as_usize()).unwrap_or_default();
+        mutable.try_extend(0, index, index + 1)?;
+    }
+    Ok(make_array(mutable.freeze()))
+}
+
+fn encode_dictionary_rows<K: ArrowDictionaryKeyType>(
+    data: &mut [u8],
+    offsets: &mut [usize],
+    column: &DictionaryArray<K>,
+    values: &Rows,
+    null: &Row<'_>,
+) {
+    for (row, (offset, key)) in offsets.iter_mut().skip(1).zip(column.keys()).enumerate() {
+        let value = match key {
+            Some(_) => values.row(row).data,
+            None => null.data,
+        };
+        let end_offset = *offset + value.len();
+        data[*offset..end_offset].copy_from_slice(value);
         *offset = end_offset;
     }
 }
@@ -3293,6 +3352,65 @@ mod tests {
         assert_eq!(rows.row(3), rows.row(4));
         assert_eq!(rows.row(4), rows.row(5));
         assert!(rows.row(3) < rows.row(0));
+    }
+
+    #[test]
+    fn test_sparse_dictionary_values() {
+        let values = StringArray::from_iter_values((0..100_000).map(|i| format!("value-{i}")));
+        let keys = Int32Array::from(vec![
+            Some(0),
+            Some(99_999),
+            None,
+            Some(7),
+            Some(99_999),
+            Some(3),
+        ]);
+        let dictionary = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap();
+        let sparse = Arc::new(dictionary.slice(1, 4)) as ArrayRef;
+
+        let expected = Arc::new(DictionaryArray::<Int32Type>::from_iter([
+            Some("value-99999"),
+            None,
+            Some("value-7"),
+            Some("value-99999"),
+        ])) as ArrayRef;
+
+        let converter =
+            RowConverter::new(vec![SortField::new(sparse.data_type().clone())]).unwrap();
+        let actual_rows = converter.convert_columns(&[sparse]).unwrap();
+        let expected_rows = converter.convert_columns(&[Arc::clone(&expected)]).unwrap();
+
+        for (actual, expected) in actual_rows.iter().zip(&expected_rows) {
+            assert_eq!(actual, expected);
+        }
+        let decoded = converter.convert_rows(&actual_rows).unwrap();
+        dictionary_eq(&decoded[0], &expected);
+    }
+
+    #[test]
+    fn test_sparse_dictionary_gather_overflow_falls_back() {
+        let inner = RunArray::<Int16Type>::try_new(
+            &PrimitiveArray::from(vec![1_i16]),
+            &Int32Array::from(vec![1]),
+        )
+        .unwrap();
+        let values = RunArray::<Int64Type>::try_new(
+            &PrimitiveArray::from(vec![
+                (DICTIONARY_GATHER_MIN_VALUES * DICTIONARY_GATHER_RATIO) as i64,
+            ]),
+            &inner,
+        )
+        .unwrap();
+        let keys = Int32Array::from(vec![0; DICTIONARY_GATHER_MIN_VALUES]);
+        let dictionary = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap();
+
+        let input = Arc::new(dictionary) as ArrayRef;
+        let converter = RowConverter::new(vec![SortField::new(input.data_type().clone())]).unwrap();
+        let rows = converter.convert_columns(&[input]).unwrap();
+
+        assert_eq!(rows.num_rows(), DICTIONARY_GATHER_MIN_VALUES);
+        let first = rows.row(0);
+        assert!(rows.iter().all(|row| row == first));
     }
 
     #[test]
