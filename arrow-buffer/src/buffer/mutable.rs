@@ -415,6 +415,7 @@ impl MutableBuffer {
             if self.layout.size() != 0 {
                 // Safety: data was allocated with layout
                 unsafe { std::alloc::dealloc(self.as_mut_ptr(), self.layout) };
+                self.data = dangling_ptr();
                 self.layout = new_layout;
             }
             return Ok(());
@@ -927,23 +928,23 @@ impl MutableBuffer {
     }
 }
 
-/// Creates a non-null pointer with alignment of [`ALIGNMENT`]
-///
-/// This is similar to [`NonNull::dangling`]
+#[repr(align(256))]
+struct ZeroSizeArea {
+    _data: [u8; 1],
+}
+
+/// The address of all buffers without an allocation. A dangling pointer such as
+/// [`NonNull::dangling`] is in the unmapped first page, and glibc's AVX-512 `memcmp`
+/// and `bcmp` are slow at an unmapped address also for length 0, which Rust uses to
+/// compare empty slices. Arrow C++ uses a static in the same way (`zero_size_area`).
+static ZERO_SIZE_AREA: ZeroSizeArea = ZeroSizeArea { _data: [0] };
+
+const _: () = assert!(mem::align_of::<ZeroSizeArea>() >= ALIGNMENT);
+
+/// Returns the pointer of buffers without an allocation, see `ZERO_SIZE_AREA`
 #[inline]
 pub(crate) fn dangling_ptr() -> NonNull<u8> {
-    // SAFETY: ALIGNMENT is a non-zero usize which is then cast
-    // to a *mut u8. Therefore, `ptr` is not null and the conditions for
-    // calling new_unchecked() are respected.
-    #[cfg(miri)]
-    {
-        // Since miri implies a nightly rust version we can use the unstable strict_provenance feature
-        unsafe { NonNull::new_unchecked(std::ptr::without_provenance_mut(ALIGNMENT)) }
-    }
-    #[cfg(not(miri))]
-    {
-        unsafe { NonNull::new_unchecked(ALIGNMENT as *mut u8) }
-    }
+    NonNull::from(&ZERO_SIZE_AREA).cast()
 }
 
 impl<A: ArrowNativeType> Extend<A> for MutableBuffer {
@@ -956,9 +957,13 @@ impl<A: ArrowNativeType> Extend<A> for MutableBuffer {
 
 impl<T: ArrowNativeType> From<Vec<T>> for MutableBuffer {
     fn from(mut value: Vec<T>) -> Self {
-        // Safety
-        // Vec::as_mut_ptr guaranteed to not be null and ArrowNativeType are trivially transmutable
-        let data = unsafe { NonNull::new_unchecked(value.as_mut_ptr().cast()) };
+        let data = match value.capacity() {
+            // A Vec without an allocation has a dangling pointer, see `ZERO_SIZE_AREA`
+            0 => dangling_ptr(),
+            // Safety
+            // Vec::as_mut_ptr guaranteed to not be null and ArrowNativeType are trivially transmutable
+            _ => unsafe { NonNull::new_unchecked(value.as_mut_ptr().cast()) },
+        };
         let len = value.len() * mem::size_of::<T>();
         // Safety
         // Vec guaranteed to have a valid layout matching that of `Layout::array`
@@ -1289,6 +1294,16 @@ impl<T: ArrowNativeType> std::iter::FromIterator<T> for MutableBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_buffers_without_allocation_point_to_zero_size_area() {
+        let area = (&raw const ZERO_SIZE_AREA).cast::<u8>();
+        assert_eq!(MutableBuffer::new(0).as_ptr(), area);
+        assert_eq!(MutableBuffer::from(Vec::<u8>::new()).as_ptr(), area);
+        let mut shrunk = MutableBuffer::with_capacity(64);
+        shrunk.shrink_to_fit();
+        assert_eq!(shrunk.as_ptr(), area);
+    }
 
     #[test]
     fn test_mutable_new() {
