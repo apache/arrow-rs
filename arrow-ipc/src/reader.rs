@@ -2405,6 +2405,52 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_offsets_buffer_with_trailing_bytes() {
+        use crate::r#gen::Message::*;
+        use flatbuffers::FlatBufferBuilder;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+
+        // The offsets buffer is 14 bytes: three i32 offsets and two trailing
+        // bytes, which is more than the array needs but not a whole number
+        // of offsets.
+        let mut fbb = FlatBufferBuilder::new();
+        let nodes = fbb.create_vector(&[FieldNode::new(2, 0)]);
+        let buffers = fbb.create_vector(&[
+            crate::Buffer::new(0, 0),
+            crate::Buffer::new(0, 14),
+            crate::Buffer::new(16, 5),
+        ]);
+        let batch_offset = RecordBatch::create(
+            &mut fbb,
+            &RecordBatchArgs {
+                length: 2,
+                nodes: Some(nodes),
+                buffers: Some(buffers),
+                compression: None,
+                variadicBufferCounts: None,
+            },
+        );
+        fbb.finish_minimal(batch_offset);
+        let batch_bytes = fbb.finished_data().to_vec();
+        let batch = flatbuffers::root::<RecordBatch>(&batch_bytes).unwrap();
+
+        let mut body = Buffer::from_slice_ref([0_i32, 2, 5]).as_slice().to_vec();
+        body.extend_from_slice(&[0; 4]);
+        body.extend_from_slice(b"hello\0\0\0");
+        let data_buffer = Buffer::from_slice_ref(&body);
+        let dictionaries: HashMap<i64, ArrayRef> = HashMap::new();
+        let metadata = MetadataVersion::V5;
+
+        let decoder =
+            RecordBatchDecoder::try_new(&data_buffer, batch, schema, &dictionaries, &metadata)
+                .unwrap();
+        let batch = decoder.read_record_batch().unwrap();
+        let col = batch.column(0).as_any().downcast_ref::<StringArray>();
+        assert_eq!(col.unwrap(), &StringArray::from(vec!["he", "llo"]));
+    }
+
     /// A `Utf8View` batch whose variadic buffer count is `count`, with two buffers
     /// in the message. Returns the error from reading it with the given projection.
     fn read_batch_with_variadic_count(count: i64, projection: Option<&[usize]>) -> ArrowError {

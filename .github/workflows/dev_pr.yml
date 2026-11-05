@@ -18,19 +18,23 @@
 name: dev_pr
 
 concurrency:
-  group: ${{ github.repository }}-${{ github.event.pull_request.number }}-${{ github.workflow }}
+  group: ${{ github.repository }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.workflow_run.id }}-${{ github.workflow }}
   cancel-in-progress: true
 
-# Trigger whenever a PR is changed (title as well as new / changed commits)
+# Process PR changes and completed API scans.
 on:
   pull_request_target:
     types:
       - opened
       - edited
       - synchronize
+  workflow_run:
+    workflows: [API changes]
+    types: [completed]
 
 jobs:
   process:
+    if: github.event_name == 'pull_request_target'
     name: Process
     runs-on: ubuntu-slim
     permissions:
@@ -40,10 +44,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Assign GitHub labels
-        if: |
-          github.event_name == 'pull_request_target' &&
-            (github.event.action == 'opened' ||
-             github.event.action == 'synchronize')
+        if: github.event.action == 'opened' || github.event.action == 'synchronize'
         uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13  # v7.0.0
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
@@ -90,5 +91,43 @@ jobs:
               await github.rest.issues.addLabels({
                 ...context.repo, issue_number: context.issue.number,
                 labels: labelsToCopy,
+              });
+            }
+
+  label-api-change:
+    name: Label API changes
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-slim
+    permissions:
+      actions: read
+      pull-requests: write
+    steps:
+      # Never check out PR code in this job: it has permission to add labels.
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        with:
+          script: |
+            const run = context.payload.workflow_run;
+            if (run.path !== '.github/workflows/api_change.yml' || !run.head_repository) return;
+            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+              ...context.repo, run_id: run.id, filter: 'latest', per_page: 100,
+            });
+            if (!jobs.some(job => job.steps?.some(step =>
+                step.name === 'API changes detected' && step.conclusion === 'success'))) return;
+
+            // Fork PRs may be missing from workflow_run.pull_requests. Resolve
+            // them through the API and ignore runs for an outdated PR head.
+            const prs = await github.paginate(github.rest.pulls.list, {
+              ...context.repo, state: 'open',
+              head: run.head_repository.owner.login + ':' + run.head_branch,
+              per_page: 100,
+            });
+            for (const pr of prs) {
+              if (pr.head.sha !== run.head_sha ||
+                  pr.head.repo?.full_name !== run.head_repository.full_name) continue;
+              await github.rest.issues.addLabels({
+                ...context.repo, issue_number: pr.number, labels: ['api-change'],
               });
             }

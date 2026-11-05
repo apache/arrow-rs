@@ -44,6 +44,7 @@ mod path;
 mod utils;
 mod variant;
 
+pub use arrow_schema::extension::VariantType;
 pub use builder::*;
 pub use path::{VariantPath, VariantPathElement};
 pub use variant::*;

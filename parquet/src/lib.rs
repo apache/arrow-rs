@@ -122,6 +122,16 @@
 //!
 //! [Variant Binary Encoding]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md
 //!
+//! ## FILE Logical Type (`file_experimental` feature)
+//!
+//! The [`FileType`] Arrow extension type maps to the Parquet [FILE] logical
+//! type: a `FILE`-annotated group is read as a struct with this extension
+//! type, and a struct field with this extension type is written as a
+//! `FILE`-annotated group.
+//!
+//! [`FileType`]: arrow::file_type::FileType
+//! [FILE]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#file
+//!
 //! ## Read/Write Parquet Directly
 //!
 //! Workloads needing finer-grained control, or to avoid a dependence on arrow,

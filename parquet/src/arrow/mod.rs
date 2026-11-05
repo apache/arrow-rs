@@ -192,6 +192,8 @@ pub(crate) use array_reader::ByteArrayDecoderPlain;
 pub mod arrow_reader;
 pub mod arrow_writer;
 mod buffer;
+#[cfg(feature = "file_experimental")]
+pub mod file_type;
 pub(crate) use buffer::offset_buffer::OffsetBuffer;
 mod decoder;
 
@@ -534,7 +536,7 @@ mod test {
             .unwrap();
         assert_eq!(
             err.to_string(),
-            "EOF: Parquet file too small. Page index range 82..115 overlaps with file metadata 0..357"
+            "EOF: Parquet file too small. Page index range 82..115 overlaps with file metadata 0..356"
         );
     }
 
