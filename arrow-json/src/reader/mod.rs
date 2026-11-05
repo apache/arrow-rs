@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! JSON reader
 //!
@@ -208,6 +195,7 @@ pub struct ReaderBuilder {
     coerce_primitive: bool,
     strict_mode: bool,
     ignore_type_conflicts: bool,
+    allow_non_finite_floats: bool,
     is_field: bool,
     struct_mode: StructMode,
     flatten_top_level_arrays: bool,
@@ -230,6 +218,7 @@ impl ReaderBuilder {
             coerce_primitive: false,
             strict_mode: false,
             ignore_type_conflicts: false,
+            allow_non_finite_floats: false,
             is_field: false,
             struct_mode: Default::default(),
             flatten_top_level_arrays: false,
@@ -274,6 +263,7 @@ impl ReaderBuilder {
             coerce_primitive: false,
             strict_mode: false,
             ignore_type_conflicts: false,
+            allow_non_finite_floats: false,
             is_field: true,
             struct_mode: Default::default(),
             flatten_top_level_arrays: false,
@@ -292,6 +282,18 @@ impl ReaderBuilder {
     pub fn with_coerce_primitive(self, coerce_primitive: bool) -> Self {
         Self {
             coerce_primitive,
+            ..self
+        }
+    }
+
+    /// Accepts the nonstandard number literals `NaN`, `Infinity`, and `-Infinity`.
+    ///
+    /// Disabled by default. Floating-point columns preserve their IEEE values;
+    /// other types follow the existing coercion and type-conflict options.
+    /// Applies to known-schema readers only, not schema inference.
+    pub fn with_allow_non_finite_floats(self, allow_non_finite_floats: bool) -> Self {
+        Self {
+            allow_non_finite_floats,
             ..self
         }
     }
@@ -406,6 +408,7 @@ impl ReaderBuilder {
                 batch_size: self.batch_size,
                 num_fields,
                 flatten_top_level_arrays: self.flatten_top_level_arrays,
+                allow_non_finite_floats: self.allow_non_finite_floats,
             }),
             batch_size: self.batch_size,
             schema: self.schema,
@@ -4515,5 +4518,41 @@ mod tests {
 
         let err = read(false);
         assert!(err.contains("returned 0 values for 1 rows"), "{err}");
+    }
+
+    #[test]
+    fn test_non_finite_floats() {
+        let schema = infer_json_schema_from_iterator(std::iter::once(Ok(json!({
+            "metadata": {"year": 0.0}, "values": [0.0], "text": ""
+        }))))
+        .unwrap();
+        let builder = ReaderBuilder::new(Arc::new(schema));
+        let input = r#"{"metadata":{"year":NaN},"values":[Infinity,-Infinity,null],"text":"NaN \"Infinity\""}"#;
+        let mut reader = builder.clone().build(input.as_bytes()).unwrap();
+        assert!(reader.next().unwrap().is_err());
+
+        // Existing helper covers small I/O buffers and multiple batch sizes.
+        let builder = builder.with_allow_non_finite_floats(true);
+        let batches = do_read_config(&format!("{input}\n{input}"), builder.clone());
+        let batch = &batches[0];
+        let year = batch
+            .column_by_name("metadata")
+            .unwrap()
+            .as_struct()
+            .column_by_name("year")
+            .unwrap()
+            .as_primitive::<Float64Type>();
+        assert_eq!(year.null_count(), 0);
+        assert!(year.values().iter().all(|value| value.is_nan()));
+        let lists = batch.column_by_name("values").unwrap().as_list::<i32>();
+        let text = batch.column_by_name("text").unwrap().as_string::<i32>();
+        for row in 0..batch.num_rows() {
+            let values = lists.value(row);
+            let values = values.as_primitive::<Float64Type>();
+            assert_eq!(values.value(0), f64::INFINITY);
+            assert_eq!(values.value(1), f64::NEG_INFINITY);
+            assert!(values.is_null(2));
+            assert_eq!(text.value(row), r#"NaN "Infinity""#);
+        }
     }
 }
