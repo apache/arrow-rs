@@ -485,7 +485,6 @@ mod tests {
     /// A buffer larger than `MAX_PREALLOC_BYTES` round-trips, and a size its data does not back fails.
     #[test]
     #[cfg(any(feature = "lz4", feature = "zstd"))]
-    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_decompression_beyond_prealloc() {
         let input = vec![7u8; crate::reader::MAX_PREALLOC_BYTES + 1];
         for codec in [
