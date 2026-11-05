@@ -384,27 +384,7 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
                 .expect("decoder should have been inserted")
         };
 
-        // V1 pages omit the non-null count (`num_values == None`) and `num_levels`
-        // includes nulls. BYTE_STREAM_SPLIT stores only non-null values, so pass
-        // the count implied by the buffer. An explicit count is checked as-is.
-        let value_count = match num_values {
-            Some(num_values) => num_values,
-            None if encoding == Encoding::BYTE_STREAM_SPLIT
-                && matches!(
-                    T::get_physical_type(),
-                    Type::INT32 | Type::INT64 | Type::FLOAT | Type::DOUBLE
-                ) =>
-            {
-                let type_size = T::get_type_size();
-                if type_size > 0 && data.len().is_multiple_of(type_size) {
-                    data.len() / type_size
-                } else {
-                    num_levels
-                }
-            }
-            None => num_levels,
-        };
-        decoder.set_data(data, value_count)?;
+        decoder.set_data(data, num_values.unwrap_or(num_levels))?;
         self.current_encoding = Some(encoding);
         Ok(())
     }
@@ -735,19 +715,17 @@ mod tests {
         let mut out = Vec::new();
         assert_eq!(decoder.read(&mut out, 2).unwrap(), 2);
 
-        // V2 passes the non-null count explicitly. A short buffer is an error.
-        let err = decoder
+        // A corrupt count cannot make the decoder read past the encoded values.
+        decoder
             .set_data(
                 Encoding::BYTE_STREAM_SPLIT,
                 Bytes::from(vec![0; 16]),
                 3,
                 Some(3),
             )
-            .unwrap_err();
-        assert!(
-            err.to_string().contains("expected at least 24 bytes"),
-            "{err}"
-        );
+            .unwrap();
+        let mut out = Vec::new();
+        assert_eq!(decoder.read(&mut out, 3).unwrap(), 2);
     }
 
     #[test]
