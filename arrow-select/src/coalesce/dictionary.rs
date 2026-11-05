@@ -94,7 +94,8 @@ impl<K: ArrowDictionaryKeyType> InProgressDictionaryArray<K> {
         }
     }
 
-    /// Returns a stable index for `values`, reusing arrays backed by the same buffers.
+    /// Returns a stable index for `values`, reusing a source when either its `Arc`
+    /// pointer or its backing buffer pointers match.
     fn source_id(&mut self, values: ArrayRef) -> usize {
         if let Some(last) = self.chunks.last()
             && (Arc::ptr_eq(&self.sources[last.source], &values)
