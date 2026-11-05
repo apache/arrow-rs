@@ -101,7 +101,7 @@ To import an array, unsafely create an `ArrowArray` from two pointers using [Arr
 To export an array, create an `ArrowArray` using [ArrowArray::try_new].
 */
 
-use std::{mem::size_of, ptr::NonNull, sync::Arc};
+use std::{borrow::Cow, mem::size_of, ptr::NonNull, sync::Arc};
 
 use arrow_buffer::{Buffer, MutableBuffer, bit_util};
 pub use arrow_data::ffi::FFI_ArrowArray;
@@ -389,7 +389,7 @@ impl ImportedArrowArray<'_> {
         let buffer_begin = can_contain_null_mask as usize;
         let buffer_end = self.array.num_buffers() - usize::from(variadic);
 
-        let variadic_buffer_lens: Vec<i64> = if variadic {
+        let variadic_buffer_lens: Cow<'_, [i64]> = if variadic {
             // Each views array has 1 (optional) null buffer, 1 views buffer, 1 lengths buffer.
             // Rest are variadic.
             let num_variadic_buffers =
@@ -400,12 +400,22 @@ impl ImportedArrowArray<'_> {
                 .array
                 .buffer(self.array.num_buffers() - 1)
                 .cast::<i64>();
-            // SAFETY: if lengths is non-null, then it must be valid for up to num_variadic_buffers.
-            (0..num_variadic_buffers)
-                .map(|i| unsafe { lengths.add(i).read_unaligned() })
-                .collect()
+            if num_variadic_buffers == 0 {
+                // the lengths buffer may be null when there are no variadic buffers.
+                Cow::Borrowed(&[])
+            } else if lengths.is_aligned() {
+                // SAFETY: lengths is non-null, aligned and valid for up to num_variadic_buffers.
+                Cow::Borrowed(unsafe { std::slice::from_raw_parts(lengths, num_variadic_buffers) })
+            } else {
+                // SAFETY: lengths is non-null and valid for up to num_variadic_buffers.
+                Cow::Owned(
+                    (0..num_variadic_buffers)
+                        .map(|i| unsafe { lengths.add(i).read_unaligned() })
+                        .collect(),
+                )
+            }
         } else {
-            Vec::new()
+            Cow::Borrowed(&[])
         };
 
         (buffer_begin..buffer_end)
