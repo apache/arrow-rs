@@ -308,7 +308,21 @@ fn compress_lz4(_input: &[u8], _output: &mut Vec<u8>) -> Result<(), ArrowError> 
 
 #[cfg(feature = "lz4")]
 fn decompress_lz4(input: &[u8], decompressed_size: usize) -> Result<Vec<u8>, ArrowError> {
-    read_to_end_bounded(lz4_flex::frame::FrameDecoder::new(input), decompressed_size)
+    use std::io::Read;
+    let mut output = Vec::with_capacity(decompressed_size.min(crate::reader::MAX_PREALLOC_BYTES));
+    let mut decoder = lz4_flex::frame::FrameDecoder::new(input);
+    decoder
+        .by_ref()
+        .take(decompressed_size as u64)
+        .read_to_end(&mut output)?;
+
+    // Probe without growing `output` to reject data exceeding the advertised size.
+    if decoder.read(&mut [0])? != 0 {
+        return Err(ArrowError::IpcError(format!(
+            "LZ4 decompressed buffer exceeds advertised size of {decompressed_size}"
+        )));
+    }
+    Ok(output)
 }
 
 #[cfg(not(feature = "lz4"))]
@@ -357,8 +371,22 @@ fn decompress_zstd(
 ) -> Result<Vec<u8>, ArrowError> {
     if decompressed_size > crate::reader::MAX_PREALLOC_BYTES {
         // The bulk decompressor writes into a buffer reserved up front, so stream instead.
-        let decoder = zstd::stream::read::Decoder::with_buffer(input)?;
-        return read_to_end_bounded(decoder, decompressed_size);
+        use std::io::Read;
+        let mut output =
+            Vec::with_capacity(decompressed_size.min(crate::reader::MAX_PREALLOC_BYTES));
+        let mut decoder = zstd::stream::read::Decoder::with_buffer(input)?;
+        decoder
+            .by_ref()
+            .take(decompressed_size as u64)
+            .read_to_end(&mut output)?;
+
+        // Probe without growing `output` to reject data exceeding the advertised size.
+        if decoder.read(&mut [0])? != 0 {
+            return Err(ArrowError::IpcError(format!(
+                "ZSTD decompressed buffer exceeds advertised size of {decompressed_size}"
+            )));
+        }
+        return Ok(output);
     }
     let output = context
         .zstd_decompressor()
@@ -375,37 +403,6 @@ fn decompress_zstd(
     Err(ArrowError::InvalidArgumentError(
         "zstd IPC decompression requires the zstd feature".to_string(),
     ))
-}
-
-/// Reads `decoder` to its end, expecting `len` bytes, without reserving `len` up front.
-///
-/// `len` comes from the sender, so the buffer starts at no more than `MAX_PREALLOC_BYTES` and
-/// doubles, capped at `len`, only as the decoder fills it: a length the data does not back costs
-/// one bounded allocation, and the buffer never runs more than a factor of two ahead of the
-/// decompressed bytes.
-#[cfg(any(feature = "lz4", feature = "zstd"))]
-fn read_to_end_bounded(mut decoder: impl std::io::Read, len: usize) -> Result<Vec<u8>, ArrowError> {
-    use std::io::Read;
-    let mut output = Vec::with_capacity(len.min(crate::reader::MAX_PREALLOC_BYTES));
-    loop {
-        let target = output.capacity().min(len);
-        decoder
-            .by_ref()
-            .take((target - output.len()) as u64)
-            .read_to_end(&mut output)?;
-        if output.len() < target || target == len {
-            break;
-        }
-        output.reserve_exact(target.min(len - target));
-    }
-
-    // Probe without growing `output` to reject data exceeding the advertised size.
-    if decoder.read(&mut [0])? != 0 {
-        return Err(ArrowError::IpcError(format!(
-            "Decompressed buffer exceeds advertised size of {len}"
-        )));
-    }
-    Ok(output)
 }
 
 /// Get the uncompressed length
