@@ -4,6 +4,7 @@
 
 #[cfg(feature = "async")]
 mod r#async;
+mod metadata;
 mod push;
 mod sync;
 

@@ -4,6 +4,7 @@
 
 #[cfg(feature = "arrow")]
 use crate::arrow::ProjectionMask;
+use crate::bloom_filter::Sbbf;
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
@@ -14,7 +15,8 @@ use crate::file::metadata::page_index::{PageIndex, PageIndexProvider};
 use crate::file::metadata::parser::decode_metadata;
 use crate::file::metadata::thrift::parquet_schema_from_bytes;
 use crate::file::metadata::{
-    FooterTail, ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataPushDecoder,
+    ColumnChunkMetaData, FooterTail, ParquetMetaData, ParquetMetaDataOptions,
+    ParquetMetaDataPushDecoder,
 };
 use crate::file::reader::ChunkReader;
 use crate::schema::types::SchemaDescriptor;
@@ -49,7 +51,9 @@ use crate::arrow::async_reader::{MetadataFetch, MetadataSuffixFetch};
 /// Parquet metadata.
 ///
 /// This reader handles reading the footer as well as the non contiguous parts
-/// of the metadata (`PageIndex` and `ColumnIndex`). It does not handle reading Bloom Filters.
+/// of the metadata (`PageIndex` and `ColumnIndex`). Bloom filters are read separately
+/// using [`Self::read_column_bloom_filter`]; footer and page index reads do not load them.
+/// For caller-managed I/O and prefetched bytes, use [`crate::bloom_filter::SbbfPushDecoder`].
 ///
 /// # Example
 /// ```no_run
@@ -801,6 +805,77 @@ impl ParquetMetaDataReader {
         self.load_page_index_with_remainder_impl(fetch, None).await
     }
 
+    /// Reads the Bloom filter for one physical leaf column in a row group.
+    ///
+    /// The metadata and reader must refer to the same file. `column_idx` is a
+    /// physical Parquet leaf index, not a top-level Arrow field index.
+    ///
+    /// Returns `Ok(None)` without I/O when the column chunk has no Bloom filter.
+    /// Invalid coordinates, invalid Bloom metadata, malformed filters, and read
+    /// failures return an error. The filter is returned separately; the supplied
+    /// metadata is neither modified nor reloaded.
+    ///
+    /// Prefer reading filters after other pruning has narrowed the row groups and
+    /// columns of interest. Footer and page index reads never load Bloom filters.
+    ///
+    /// # Example
+    ///
+    /// Read footer metadata first, then request a filter only when needed:
+    ///
+    /// ```rust
+    /// use bytes::Bytes;
+    /// use parquet::errors::Result;
+    /// use parquet::file::metadata::ParquetMetaDataReader;
+    /// # use std::sync::Arc;
+    /// # use parquet::data_type::Int32Type;
+    /// # use parquet::file::properties::WriterProperties;
+    /// # use parquet::file::writer::SerializedFileWriter;
+    /// # use parquet::schema::parser::parse_message_type;
+    /// # fn main() -> Result<()> {
+    /// # let schema = Arc::new(parse_message_type("message schema { REQUIRED INT32 value; }")?);
+    /// # let properties = Arc::new(WriterProperties::builder().set_bloom_filter_enabled(true).build());
+    /// # let mut writer = SerializedFileWriter::new(Vec::new(), schema, properties)?;
+    /// # let mut row_group = writer.next_row_group()?;
+    /// # let mut column = row_group.next_column()?.unwrap();
+    /// # column.typed::<Int32Type>().write_batch(&[42], None, None)?;
+    /// # column.close()?;
+    /// # row_group.close()?;
+    /// # let data = Bytes::from(writer.into_inner()?);
+    /// let metadata = ParquetMetaDataReader::new().parse_and_finish(&data)?;
+    /// let filter = ParquetMetaDataReader::read_column_bloom_filter(&data, &metadata, 0, 0)?;
+    /// assert!(filter.unwrap().check(&42_i32));
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn read_column_bloom_filter<R: ChunkReader>(
+        reader: &R,
+        metadata: &ParquetMetaData,
+        row_group_idx: usize,
+        column_idx: usize,
+    ) -> Result<Option<Sbbf>> {
+        let column = bloom_filter_column(metadata, row_group_idx, column_idx)?;
+        Sbbf::read_from_column_chunk(column, reader)
+    }
+
+    /// Asynchronous version of [`Self::read_column_bloom_filter`].
+    ///
+    /// Accepts a [`MetadataFetch`] byte source without requiring an Arrow reader
+    /// builder or an [`crate::arrow::async_reader::AsyncFileReader`] implementation.
+    /// Existing async file readers can be passed by mutable reference and reused
+    /// for subsequent reads. For a boxed trait-object reader, pass `&mut reader`
+    /// rather than `reader.as_mut()`. Only the requested column chunk's filter is read;
+    /// absence and errors have the same behavior as the synchronous method.
+    #[cfg(all(feature = "async", feature = "arrow"))]
+    pub async fn read_column_bloom_filter_async<F: MetadataFetch>(
+        fetch: F,
+        metadata: &ParquetMetaData,
+        row_group_idx: usize,
+        column_idx: usize,
+    ) -> Result<Option<Sbbf>> {
+        let column = bloom_filter_column(metadata, row_group_idx, column_idx)?;
+        Sbbf::read_from_column_chunk_with_fetch(column, fetch).await
+    }
+
     /// Reads and decodes the dictionary page of a column chunk into an Arrow array.
     ///
     /// Returns `Ok(None)` if the column chunk has no dictionary page, or if
@@ -1231,6 +1306,25 @@ fn parse_page_index_data(
         DecodeResult::Data(page_index) => Ok(page_index),
         DecodeResult::Finished => Err(general_err!("Internal error: decoder was finished")),
     }
+}
+
+fn bloom_filter_column(
+    metadata: &ParquetMetaData,
+    row_group_idx: usize,
+    column_idx: usize,
+) -> Result<&ColumnChunkMetaData> {
+    let row_group = metadata.row_groups().get(row_group_idx).ok_or_else(|| {
+        general_err!(
+            "Row group index {row_group_idx} out of bounds for file with {} row groups",
+            metadata.num_row_groups()
+        )
+    })?;
+    row_group.columns().get(column_idx).ok_or_else(|| {
+        general_err!(
+            "Column index {column_idx} out of bounds for row group {row_group_idx} with {} columns",
+            row_group.num_columns()
+        )
+    })
 }
 
 /// Returns the `[start, end)` byte range of a column chunk's dictionary

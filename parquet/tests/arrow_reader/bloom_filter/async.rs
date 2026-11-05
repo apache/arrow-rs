@@ -12,7 +12,8 @@ use parquet::{
     arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, async_reader::AsyncFileReader},
     bloom_filter::Sbbf,
     file::{
-        properties::WriterProperties, reader::FileReader, serialized_reader::SerializedFileReader,
+        metadata::ParquetMetaDataReader, properties::WriterProperties, reader::FileReader,
+        serialized_reader::SerializedFileReader,
     },
 };
 use std::sync::Arc;
@@ -56,7 +57,30 @@ async fn test_standalone_bloom_filter_after_nested_columns() {
         .unwrap();
     assert!(filter.check("present"));
     assert!(filter.check("other"));
-    assert_eq!(reader.requests().lock().unwrap().len(), 1);
+    let requested = ParquetMetaDataReader::read_column_bloom_filter_async(
+        &mut reader,
+        metadata_reader.metadata(),
+        0,
+        2,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(requested.check("present"));
+    assert!(requested.check("other"));
+    // Logical field 1 is a nested leaf without a Bloom filter, not the value column.
+    assert!(
+        ParquetMetaDataReader::read_column_bloom_filter_async(
+            &mut reader,
+            metadata_reader.metadata(),
+            0,
+            1,
+        )
+        .await
+        .unwrap()
+        .is_none()
+    );
+    assert_eq!(reader.requests().lock().unwrap().len(), 2);
 }
 
 #[tokio::test]
@@ -120,6 +144,19 @@ async fn test_get_row_group_column_bloom_filter(data: Bytes, with_length: bool) 
     assert_eq!(standalone.num_blocks(), sync.num_blocks());
     assert!(standalone.check(&"Hello"));
     assert!(!standalone.check(&"Hello_Not_Exists"));
+    let mut metadata_reader = TestReader::new(data.clone());
+    let requested =
+        ParquetMetaDataReader::read_column_bloom_filter_async(&mut metadata_reader, metadata, 0, 0)
+            .await
+            .unwrap()
+            .unwrap();
+    assert!(requested.check("Hello"));
+    assert!(!requested.check("Hello_Not_Exists"));
+    assert_eq!(requested.num_blocks(), standalone.num_blocks());
+    assert_eq!(
+        *metadata_reader.requests().lock().unwrap(),
+        *reader.requests().lock().unwrap()
+    );
 
     let sbbf = builder
         .get_row_group_column_bloom_filter(0, 0)
