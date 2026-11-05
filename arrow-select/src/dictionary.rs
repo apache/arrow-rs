@@ -161,6 +161,10 @@ fn bytes_ptr_eq<T: ByteArrayType>(a: &dyn Array, b: &dyn Array) -> bool {
 /// different buffers return `false`. Arrays with no allocated storage, such as two empty
 /// primitive arrays built from empty `Vec`s or two [`arrow_array::NullArray`]s of the same
 /// length, return `true`.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the dictionary coalescer in #11743")
+)]
 pub(crate) fn child_values_ptr_eq(left: &ArrayRef, right: &ArrayRef) -> bool {
     if Arc::ptr_eq(left, right) {
         return true;
@@ -175,6 +179,9 @@ pub(crate) fn child_values_ptr_eq(left: &ArrayRef, right: &ArrayRef) -> bool {
     }
 }
 
+/// A type-erased function that compares two array for pointer equality
+type PtrEq = fn(&dyn Array, &dyn Array) -> bool;
+
 /// A weak heuristic of whether to merge dictionary values that aims to only
 /// perform the expensive merge computation when it is likely to yield at least
 /// some return over the naive approach used by MutableArrayData
@@ -188,25 +195,32 @@ pub(crate) fn should_merge_dictionary_values<K: ArrowDictionaryKeyType>(
     dictionaries: &[&DictionaryArray<K>],
     len: usize,
 ) -> (bool, bool) {
-    let first_values = dictionaries[0].values();
-    if !matches!(
-        first_values.data_type(),
-        DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary
-    ) && !first_values.data_type().is_primitive()
-    {
-        return (
-            false,
-            K::Native::from_usize(dictionaries.iter().map(|d| d.values().len()).sum()).is_none(),
-        );
-    }
+    use DataType::*;
+    let first_values = dictionaries[0].values().as_ref();
+    let ptr_eq: PtrEq = match first_values.data_type() {
+        Utf8 => bytes_ptr_eq::<Utf8Type>,
+        LargeUtf8 => bytes_ptr_eq::<LargeUtf8Type>,
+        Binary => bytes_ptr_eq::<BinaryType>,
+        LargeBinary => bytes_ptr_eq::<LargeBinaryType>,
+        dt => {
+            if !dt.is_primitive() {
+                return (
+                    false,
+                    K::Native::from_usize(dictionaries.iter().map(|d| d.values().len()).sum())
+                        .is_none(),
+                );
+            }
+            |a, b| a.to_data().ptr_eq(&b.to_data())
+        }
+    };
 
     let mut single_dictionary = true;
     let mut total_values = first_values.len();
     for dict in dictionaries.iter().skip(1) {
-        let values = dict.values();
+        let values = dict.values().as_ref();
         total_values += values.len();
         if single_dictionary {
-            single_dictionary = child_values_ptr_eq(first_values, values)
+            single_dictionary = ptr_eq(first_values, values)
         }
     }
 
