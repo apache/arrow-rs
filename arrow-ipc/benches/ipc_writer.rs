@@ -81,6 +81,34 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
+    for (rows, threads) in [(8192, 1), (65536, 1), (8192, 16), (65536, 16)] {
+        group.bench_function(
+            format!("StreamEncoder/encode_10/lz4/rows={rows}/threads={threads}"),
+            |b| {
+                let batch = create_batch(rows, true);
+                b.iter(|| {
+                    std::thread::scope(|s| {
+                        for _ in 0..threads {
+                            s.spawn(|| {
+                                let options = IpcWriteOptions::default()
+                                    .try_with_compression(Some(CompressionType::LZ4_FRAME))
+                                    .unwrap();
+                                let mut encoder = StreamEncoder::try_new_with_options(
+                                    batch.schema().as_ref(),
+                                    options,
+                                )
+                                .unwrap();
+                                for _ in 0..10 {
+                                    black_box(encoder.encode(&batch).unwrap());
+                                }
+                            });
+                        }
+                    })
+                })
+            },
+        );
+    }
+
     group.bench_function("StreamEncoder/encode_10", |b| {
         let batch = create_batch(8192, true);
         b.iter(move || {
