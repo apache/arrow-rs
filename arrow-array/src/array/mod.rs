@@ -1110,7 +1110,7 @@ mod tests {
     use arrow_schema::{Field, Fields, UnionFields, UnionMode};
 
     #[test]
-    fn test_child_values_ptr_eq_same_arc() {
+    fn test_child_values_ptr_eq_shared_storage() {
         let dictionary = DictionaryArray::<Int8Type>::new(
             Int8Array::from(vec![0, 1]),
             Arc::new(StringArray::from(vec!["a", "b"])),
@@ -1119,10 +1119,7 @@ mod tests {
 
         assert!(Arc::ptr_eq(dictionary.values(), &values));
         assert!(child_values_ptr_eq(dictionary.values(), &values));
-    }
 
-    #[test]
-    fn test_child_values_ptr_eq_shared_buffers() {
         let values = StringArray::from(vec!["a", "b"]);
         let first =
             DictionaryArray::<Int8Type>::new(Int8Array::from(vec![0, 1]), Arc::new(values.clone()));
@@ -1131,18 +1128,23 @@ mod tests {
 
         assert!(!Arc::ptr_eq(first.values(), second.values()));
         assert!(child_values_ptr_eq(first.values(), second.values()));
+
+        let values = StringArray::from(vec!["a", "b"]);
+        let first = RunArray::<Int32Type>::try_new(&Int32Array::from(vec![1, 3]), &values).unwrap();
+        let second =
+            RunArray::<Int32Type>::try_new(&Int32Array::from(vec![2, 3]), &values).unwrap();
+
+        assert!(!Arc::ptr_eq(first.values(), second.values()));
+        assert!(child_values_ptr_eq(first.values(), second.values()));
     }
 
     #[test]
-    fn test_child_values_ptr_eq_equal_values_different_buffers() {
+    fn test_child_values_ptr_eq_different_storage_or_layout() {
         let first: ArrayRef = Arc::new(StringArray::from(vec!["a", "b"]));
         let second: ArrayRef = Arc::new(StringArray::from(vec!["a", "b"]));
 
         assert!(!child_values_ptr_eq(&first, &second));
-    }
 
-    #[test]
-    fn test_child_values_ptr_eq_different_slices() {
         let values = Int32Array::from(vec![1, 2, 3]);
         let first: ArrayRef = Arc::new(values.slice(0, 2));
         let shifted: ArrayRef = Arc::new(values.slice(1, 2));
@@ -1185,17 +1187,6 @@ mod tests {
             None,
         ));
         assert!(!child_values_ptr_eq(&first, &second));
-    }
-
-    #[test]
-    fn test_child_values_ptr_eq_shared_run_values() {
-        let values = StringArray::from(vec!["a", "b"]);
-        let first = RunArray::<Int32Type>::try_new(&Int32Array::from(vec![1, 3]), &values).unwrap();
-        let second =
-            RunArray::<Int32Type>::try_new(&Int32Array::from(vec![2, 3]), &values).unwrap();
-
-        assert!(!Arc::ptr_eq(first.values(), second.values()));
-        assert!(child_values_ptr_eq(first.values(), second.values()));
     }
 
     #[test]
