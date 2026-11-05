@@ -1230,13 +1230,9 @@ mod tests {
     }
 
     #[test]
-    fn test_indexed_copy_threshold() {
+    fn test_indexed_copy_thresholds() {
         assert!(should_use_indexed_copy(8192, 4096));
         assert!(!should_use_indexed_copy(8192, 4097));
-    }
-
-    #[test]
-    fn test_byte_view_indexed_copy_threshold() {
         assert!(should_use_byte_view_indexed_copy(8192, 512));
         assert!(!should_use_byte_view_indexed_copy(8192, 513));
         assert!(!should_use_byte_view_indexed_copy(8192, 819));
@@ -3496,57 +3492,7 @@ mod tests {
     }
 
     #[test]
-    fn test_push_batch_with_indices_rejects_oob_before_mutation() {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("c0", DataType::Int32, false),
-            Field::new("c1", DataType::Utf8View, false),
-        ]));
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![
-                Arc::new(Int32Array::from_iter_values(0..16i32)),
-                Arc::new(StringViewArray::from(vec!["a"; 16])),
-            ],
-        )
-        .unwrap();
-        let indices = UInt32Array::from(vec![0u32, 1, 2, 3, 0, 1, 2, 99]);
-        let expected_err = "take index 99 out of bounds for array of 16 rows";
-
-        let mut coalescer = BatchCoalescer::new(schema, 4);
-        let err = coalescer
-            .push_batch_with_indices(batch, &indices)
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains(expected_err), "unexpected error: {err}");
-        assert_eq!(coalescer.get_buffered_rows(), 0);
-        assert!(!coalescer.has_completed_batch());
-    }
-
-    #[test]
-    fn test_push_batch_with_indices_rejects_oob_in_direct_copy_chunk() {
-        let schema = Arc::new(Schema::new(vec![Field::new("c0", DataType::Int32, false)]));
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(Int32Array::from_iter_values(0..64i32))],
-        )
-        .unwrap();
-        let indices = UInt32Array::from(vec![0u32, 1, 99]);
-
-        let mut coalescer = BatchCoalescer::new(schema, 2);
-        let err = coalescer
-            .push_batch_with_indices(batch, &indices)
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("take index 99 out of bounds for array of 64 rows"),
-            "unexpected error: {err}"
-        );
-        assert_eq!(coalescer.get_buffered_rows(), 0);
-        assert!(!coalescer.has_completed_batch());
-    }
-
-    #[test]
-    fn test_push_batch_with_indices_oob_error_is_uniform_across_schemas() {
+    fn test_push_batch_with_indices_oob_is_atomic_and_uniform() {
         let int_only_schema = Arc::new(Schema::new(vec![Field::new("c0", DataType::Int32, false)]));
         let int_batch = RecordBatch::try_new(
             Arc::clone(&int_only_schema),
@@ -3564,6 +3510,18 @@ mod tests {
             vec![Arc::new(StringViewArray::from(vec!["a"; 64]))],
         )
         .unwrap();
+        let mixed_schema = Arc::new(Schema::new(vec![
+            Field::new("c0", DataType::Int32, false),
+            Field::new("c1", DataType::Utf8View, false),
+        ]));
+        let mixed_batch = RecordBatch::try_new(
+            Arc::clone(&mixed_schema),
+            vec![
+                Arc::new(Int32Array::from_iter_values(0..16i32)),
+                Arc::new(StringViewArray::from(vec!["a"; 16])),
+            ],
+        )
+        .unwrap();
 
         let short_indices = UInt32Array::from(vec![0u32, 1, 99]);
         let long_indices = {
@@ -3571,24 +3529,35 @@ mod tests {
             values.push(99);
             UInt32Array::from(values)
         };
+        let mixed_indices = UInt32Array::from(vec![0u32, 1, 2, 3, 0, 1, 2, 99]);
 
-        let expected_err = "take index 99 out of bounds for array of 64 rows";
-        for (schema, batch, indices) in [
+        for (schema, batch, indices, target_batch_size, source_len) in [
             (
-                Arc::clone(&int_only_schema),
+                int_only_schema.clone(),
                 int_batch.clone(),
                 &short_indices,
+                2,
+                64,
             ),
-            (Arc::clone(&int_only_schema), int_batch, &long_indices),
-            (Arc::clone(&view_schema), view_batch.clone(), &short_indices),
-            (Arc::clone(&view_schema), view_batch, &long_indices),
+            (int_only_schema, int_batch, &long_indices, 100, 64),
+            (
+                view_schema.clone(),
+                view_batch.clone(),
+                &short_indices,
+                2,
+                64,
+            ),
+            (view_schema, view_batch, &long_indices, 100, 64),
+            (mixed_schema, mixed_batch, &mixed_indices, 4, 16),
         ] {
-            let mut coalescer = BatchCoalescer::new(schema, 100);
+            let mut coalescer = BatchCoalescer::new(schema, target_batch_size);
             let err = coalescer
                 .push_batch_with_indices(batch, indices)
                 .unwrap_err()
                 .to_string();
-            assert!(err.contains(expected_err), "unexpected error: {err}");
+            let expected_err =
+                format!("take index 99 out of bounds for array of {source_len} rows");
+            assert!(err.contains(&expected_err), "unexpected error: {err}");
             assert_eq!(coalescer.get_buffered_rows(), 0);
             assert!(!coalescer.has_completed_batch());
         }
