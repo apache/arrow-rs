@@ -1836,6 +1836,7 @@ mod tests_from_ffi {
     ///
     /// <https://github.com/apache/arrow-rs/issues/7136>
     #[test]
+    #[cfg(not(feature = "force_validate"))]
     fn test_bytes_with_unaligned_offsets() -> Result<()> {
         let arrays: [ArrayRef; 4] = [
             Arc::new(StringArray::from(vec!["a", "bb", "ccc"])),
@@ -1848,15 +1849,18 @@ mod tests_from_ffi {
             // The same offsets, one byte past an aligned address.
             let mut offsets = arrow_buffer::MutableBuffer::from_len_zeroed(1);
             offsets.extend_from_slice(data.buffers()[0].as_slice());
-            let offsets = &offsets[1..];
+            let offsets = Buffer::from(offsets).slice(1);
             assert_ne!(offsets.as_ptr().align_offset(4), 0);
 
-            let mut buffers = [
-                std::ptr::null(),
-                offsets.as_ptr().cast(),
-                data.buffers()[1].as_ptr().cast(),
-            ];
-            let imported = import_raw(&data, &mut buffers)?;
+            // SAFETY: the offsets are valid, only not aligned for their type.
+            let unaligned = unsafe {
+                data.clone()
+                    .into_builder()
+                    .buffers(vec![offsets, data.buffers()[1].clone()])
+                    .build_unchecked()
+            };
+            let (array, schema) = to_ffi(&unaligned)?;
+            let imported = unsafe { from_ffi(array, &schema) }?;
 
             imported.validate_full()?;
             assert_eq!(imported, data);
