@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
 [default.extend-words]
 # String values in tests that are the subject of the test and cannot be renamed
 ba = "ba"       # sort/comparison test data e.g. vec!["ab", "ba", ...]

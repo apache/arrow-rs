@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
 use crate::bit_util::apply_bitwise_binary_op;
 use crate::{BooleanBuffer, Buffer, MutableBuffer, NullBuffer, bit_util};
 use std::ops::Range;

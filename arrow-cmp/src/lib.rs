@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
 //! Basic comparator factories shared by Arrow crates that need to compare
 //! arbitrary array slots without pulling in the full `arrow-ord` crate.
 //!

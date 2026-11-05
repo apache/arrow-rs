@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
 // These macros are adapted from Jörn Horstmann's thrift macros at
 // https://github.com/jhorstmann/compact-thrift
 // They allow for pasting sections of the Parquet thrift IDL file

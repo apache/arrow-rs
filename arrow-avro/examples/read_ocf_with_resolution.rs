@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
 //! Read an Avro **Object Container File (OCF)** using an inline **reader schema**
 //! that differs from the writer schema, demonstrating Avro **schema resolution**
 //! (field projection and legal type promotion) without ever fetching the writer

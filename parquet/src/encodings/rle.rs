@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
 //! Rle/Bit-Packing Hybrid Encoding
 //! The grammar for this encoding looks like the following (copied verbatim
 //! from <https://github.com/Parquet/parquet-format/blob/master/Encodings.md>):

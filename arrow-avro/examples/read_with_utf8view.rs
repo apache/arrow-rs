@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
 //! This example demonstrates how to use Utf8View support in the Arrow Avro reader
 //!
 //! It reads an Avro file with string data twice - once with regular StringArray

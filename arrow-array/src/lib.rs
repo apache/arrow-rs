@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
 //! The central type in Apache Arrow are arrays, which are a known-length sequence of values
 //! all having the same type. This crate provides concrete implementations of each type, as
 //! well as an [`Array`] trait that can be used for type-erasure.

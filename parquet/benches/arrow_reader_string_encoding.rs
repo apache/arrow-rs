@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
 //! Benchmark comparing reading the SAME dictionary-encoded parquet string column
 //! back as two different Arrow logical types:
 //!   1. `Dictionary(Int32, Utf8)`

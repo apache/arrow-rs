@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
 /// Derives `std::ops::$t` for `$ty` calling `$wrapping` or `$checked` variants
 /// based on if debug_assertions enabled
 macro_rules! derive_arith {

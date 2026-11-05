@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
 use arrow::compute::{SortColumn, lexsort_to_indices};
 use arrow::row::{RowConverter, SortField};
 use arrow::util::bench_util::{

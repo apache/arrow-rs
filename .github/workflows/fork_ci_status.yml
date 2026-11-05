@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
 # Mirror fork results as the informational CI (fork) check after upstream PR CI
 # completes and through scheduled polling for late runs and reruns. Read fork
 # runs and write upstream checks using reviewed default-branch code.

@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
 //! Compatibility with the malformed ARROW-RS-GH-11261-FLBA-DICT.parquet fixture.
 //! See [arrow-rs #11261](https://github.com/apache/arrow-rs/issues/11261) for the defect.
 //! The cases and expected values are defined by `ROW_GROUPS` and `expected` below.

@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
 //! Interoperability test for https://github.com/apache/parquet-format/pull/514.
 //! Demonstrate reading NaN statistics and counts from a file generated with
 //! parquet-java, and show that on write we produce the same statistics.

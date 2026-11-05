@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
 //! The bitmap backed representation of a [`RowSelection`] and the primitives
 //! operating on it: conversion to and from the run length ([`RowSelector`])
 //! form, and the transforms backing `split_off`, `trim`, `offset` and `limit`.

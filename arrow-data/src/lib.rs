@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
 //! Low-level array data abstractions for [Apache Arrow Rust](https://docs.rs/arrow)
 //!
 //! For a higher-level, strongly-typed interface see [arrow_array](https://docs.rs/arrow_array)

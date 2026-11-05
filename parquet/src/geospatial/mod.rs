@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
 //! This module provides functionality for working with geospatial data in Parquet file as defined in the [spec][parquet-geo-spec].
 //!
 //! * [`GeospatialStatistics`]: describes the geospatial statistics for a Parquet column.

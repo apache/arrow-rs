@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
 //! Benchmark for evaluating row filters and projections using the [ClickBench] queries and data.
 //!
 //! While the actual ClickBench queries often also include some sort of aggregation

@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
 //! Maximum and minimum values for [`Decimal256`], [`Decimal128`], [`Decimal64`] and [`Decimal32`].
 //!
 //! Also provides functions to validate if a given decimal value is within

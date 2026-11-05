@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
 //! Mapping row selections onto ranges: the byte ranges
 //! of the data pages that must be fetched ([`RowSelection::scan_ranges`]) and
 //! the expansion of a selection to batch boundaries.

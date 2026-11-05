@@ -1,3 +1,9 @@
+<!---
+  SPDX-License-Identifier: Apache-2.0
+  SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+  SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+-->
+
 CI selects checks for pull requests according to their source and changed files.
 See the [contributor guide](../../CONTRIBUTING.md#pull-requests-from-forks) for fork CI setup.
 Fork pushes and manual runs execute the regular suites except macOS tests, Windows tests, and Miri.

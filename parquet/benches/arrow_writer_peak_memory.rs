@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
 //! Criterion benchmark measuring the *memory footprint* of `ArrowWriter` when
 //! encoding an Arrow `RecordBatch` to Parquet.
 //!

@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
 //! Which row groups a scan reads next, with their selections and budget.
 
 use crate::arrow::arrow_reader::{RowGroupPlan, RowGroupSelection, RowSelection};

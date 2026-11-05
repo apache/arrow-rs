@@ -1,4 +1,8 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
 # This script creates a signed tarball in
 # dev/dist/apache-arrow-rs-<version>-<sha>.tar.gz and uploads it to
 # the "dev" area of the dist.apache.arrow repository and prepares an

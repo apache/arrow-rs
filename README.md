@@ -1,3 +1,9 @@
+<!---
+  SPDX-License-Identifier: Apache-2.0
+  SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+  SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+-->
+
 # Native Rust implementation of Apache Arrow and Apache Parquet
 
 Welcome to the [Rust][rust] implementation of [Apache Arrow], a popular

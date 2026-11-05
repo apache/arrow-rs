@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
 pub(crate) const ROWS_PER_GROUP: usize = 65_536;
 pub(crate) const BATCH_SIZE: usize = 8_192;
 pub(crate) const PAYLOAD_COLUMNS: usize = 8;
