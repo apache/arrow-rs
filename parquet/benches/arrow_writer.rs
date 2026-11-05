@@ -765,6 +765,17 @@ fn create_string_bench_batch_non_null(
     )?)
 }
 
+fn create_empty_string_bench_batch(size: usize) -> Result<RecordBatch> {
+    let schema = Schema::new(vec![Field::new("_1", DataType::Utf8, false)]);
+    // Like `concat`, `take` and `interleave`, `from_iter_values` gives an
+    // all-empty array a values buffer without an allocation.
+    let array = StringArray::from_iter_values(std::iter::repeat_n("", size));
+    Ok(RecordBatch::try_new(
+        Arc::new(schema),
+        vec![Arc::new(array)],
+    )?)
+}
+
 fn create_bool_bench_batch(
     size: usize,
     null_density: f32,
@@ -1285,6 +1296,11 @@ fn create_batches() -> Vec<BatchBenchmark> {
     push_batch!(
         "string_non_null",
         create_string_bench_batch_non_null(BATCH_SIZE, 0.25, 0.75).unwrap()
+    );
+
+    push_batch!(
+        "string_empty",
+        create_empty_string_bench_batch(BATCH_SIZE).unwrap()
     );
 
     // Run-end-encoded — high-cardinality / short-run regime (random runs).
