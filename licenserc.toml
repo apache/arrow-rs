@@ -45,20 +45,13 @@ excludes = [
   # format/FlightSql.proto; the generated files have no ASF header.
   "arrow-flight/src/arrow.flight.protocol.rs",
   "arrow-flight/src/sql/arrow.flight.protocol.sql.rs",
-  # These Markdown, TOML, and shell files have no ASF header.
-  ".config/nextest.toml",
+  # We don't want license showing up on templates
   ".github/pull_request_template.md",
-  # Preserve the existing header state of GitHub templates and configuration.
   ".github/ISSUE_TEMPLATE/bug_report.yml",
   ".github/ISSUE_TEMPLATE/config.yml",
   ".github/ISSUE_TEMPLATE/feature_request.yml",
-  ".github/dependabot.yml",
-  # Follow DataFusion in omitting ASF headers from agent guidance files.
-  "AGENTS.md",
-  "CLAUDE.md",
+  # TODO: figure out this provenance
   "arrow-flight/examples/data/gen_certs.sh",
-  # Config file only for release process
-  "cliff.toml",
 ]
 
 [styles.markdown_asf]
