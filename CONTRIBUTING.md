@@ -307,6 +307,8 @@ identifier that can be changed without affecting test semantics.
 
 Pull requests that improve performance, especially those that add non-trivial complexity or use `unsafe`, should include evidence of the improvement, such as benchmarks.
 
+A benchmark that improves is not enough on its own. State which part of the change produces the gain, for example by removing it and rerunning. Cover both well-predicted input (constant lengths, all valid) and poorly predicted input (random), because branchless code wins on the second and can lose on the first. Name the inputs that get slower and say whether real workloads are likely to hit them.
+
 As benchmarks usually take a long time to run, we recommend running targeted tests instead of the full suite.
 
 ```bash
