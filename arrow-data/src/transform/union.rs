@@ -5,6 +5,11 @@
 use super::{_MutableArrayData, Extend};
 use crate::ArrayData;
 use arrow_schema::{ArrowError, DataType};
+use std::mem::size_of;
+
+fn dense_offset(value: usize) -> Result<i32, ArrowError> {
+    i32::try_from(value).map_err(|_| ArrowError::OffsetOverflowError(value))
+}
 
 fn nullable_union_field(fields: &arrow_schema::UnionFields) -> Result<(usize, i8), ArrowError> {
     fields
@@ -31,7 +36,8 @@ pub(super) fn build_extend_sparse(array: &ArrayData) -> Extend<'_> {
             // extends type_ids
             mutable
                 .buffer1
-                .extend_from_slice(&type_ids[start..start + len]);
+                .try_extend_from_slice(&type_ids[start..start + len])
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
             let child_start = start.checked_add(offset).ok_or_else(|| {
                 ArrowError::InvalidArgumentError(format!(
@@ -63,7 +69,15 @@ pub(super) fn build_extend_dense(array: &ArrayData) -> Extend<'_> {
             // extends type_ids
             mutable
                 .buffer1
-                .extend_from_slice(&type_ids[start..start + len]);
+                .try_extend_from_slice(&type_ids[start..start + len])
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+            let offsets_len = len
+                .checked_mul(size_of::<i32>())
+                .ok_or_else(|| ArrowError::MemoryError("union offset size overflow".into()))?;
+            mutable
+                .buffer2
+                .try_reserve(offsets_len)
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
             for i in start..start + len {
                 let type_id = type_ids[i];
@@ -73,10 +87,10 @@ pub(super) fn build_extend_dense(array: &ArrayData) -> Extend<'_> {
                     .expect("invalid union type ID");
                 let src_offset = offsets[i] as usize;
                 let child_data = &mut mutable.child_data[child_index];
-                let dst_offset = child_data.len();
+                let dst_offset = dense_offset(child_data.len())?;
 
                 // Extend offsets
-                mutable.buffer2.push(dst_offset as i32);
+                mutable.buffer2.push(dst_offset);
                 mutable.child_data[child_index].try_extend(index, src_offset, src_offset + 1)?;
             }
             Ok(())
@@ -93,17 +107,35 @@ pub(super) fn extend_nulls_dense(
     };
     let (child_index, null_type_id) = nullable_union_field(fields)?;
 
-    // Extend type_ids buffer
-    mutable
-        .buffer1
-        .try_extend_from_slice(&vec![null_type_id; len])
-        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
-
     // Dense: point into a nullable child and extend its values with nulls.
     let child_offset = mutable.child_data[child_index].len();
-    let (start, end) = (child_offset as i32, (child_offset + len) as i32);
-    mutable.buffer2.extend(start..end);
+    let child_end = child_offset
+        .checked_add(len)
+        .ok_or(ArrowError::OffsetOverflowError(usize::MAX))?;
+    let offsets = if len == 0 {
+        None
+    } else {
+        Some(dense_offset(child_offset)?..=dense_offset(child_end - 1)?)
+    };
+    let offsets_len = len
+        .checked_mul(size_of::<i32>())
+        .ok_or_else(|| ArrowError::MemoryError("union offset size overflow".into()))?;
+    mutable
+        .buffer1
+        .try_reserve(len)
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+    mutable
+        .buffer2
+        .try_reserve(offsets_len)
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+
     mutable.child_data[child_index].try_extend_nulls(len)?;
+    for _ in 0..len {
+        mutable.buffer1.push(null_type_id);
+    }
+    if let Some(offsets) = offsets {
+        mutable.buffer2.extend(offsets);
+    }
     Ok(())
 }
 
@@ -116,15 +148,31 @@ pub(super) fn extend_nulls_sparse(
     };
     let (_, null_type_id) = nullable_union_field(fields)?;
 
-    // Extend type_ids buffer
     mutable
         .buffer1
-        .try_extend_from_slice(&vec![null_type_id; len])
+        .try_reserve(len)
         .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
     // Sparse: extend nulls in ALL children
     for child in &mut mutable.child_data {
         child.try_extend_nulls(len)?;
     }
+    for _ in 0..len {
+        mutable.buffer1.push(null_type_id);
+    }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dense_offset_overflow() {
+        assert_eq!(dense_offset(i32::MAX as usize).unwrap(), i32::MAX);
+        assert!(matches!(
+            dense_offset(i32::MAX as usize + 1),
+            Err(ArrowError::OffsetOverflowError(_))
+        ));
+    }
 }

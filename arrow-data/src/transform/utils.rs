@@ -9,11 +9,17 @@ use num_traits::CheckedAdd;
 
 /// extends the `buffer` to be able to hold `len` bits, setting all bits of the new size to zero.
 #[inline]
-pub(super) fn resize_for_bits(buffer: &mut MutableBuffer, len: usize) {
+pub(super) fn try_resize_for_bits(
+    buffer: &mut MutableBuffer,
+    len: usize,
+) -> Result<(), ArrowError> {
     let needed_bytes = bit_util::ceil(len, 8);
     if buffer.len() < needed_bytes {
-        buffer.resize(needed_bytes, 0);
+        buffer
+            .try_resize(needed_bytes, 0)
+            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
     }
+    Ok(())
 }
 
 /// Extends `buffer` with the re-based offsets from `offsets`, returning an error on overflow.
