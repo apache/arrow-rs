@@ -50,8 +50,6 @@ excludes = [
   ".github/ISSUE_TEMPLATE/bug_report.yml",
   ".github/ISSUE_TEMPLATE/config.yml",
   ".github/ISSUE_TEMPLATE/feature_request.yml",
-  # TODO: figure out this provenance
-  "arrow-flight/examples/data/gen_certs.sh",
 ]
 
 [styles.markdown_asf]
