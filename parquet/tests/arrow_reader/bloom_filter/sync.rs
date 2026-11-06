@@ -12,7 +12,7 @@ use parquet::{
         arrow_reader::{ArrowReaderMetadata, ParquetRecordBatchReaderBuilder},
     },
     bloom_filter::Sbbf,
-    file::properties::WriterProperties,
+    file::{metadata::ParquetMetaDataReader, properties::WriterProperties},
 };
 
 #[test]
@@ -61,6 +61,15 @@ fn test_get_row_group_column_bloom_filter(data: Bytes, with_length: bool) {
         .unwrap()
         .unwrap();
     assert!(standalone.check("Hello"));
+    let footer = ParquetMetaDataReader::new()
+        .parse_and_finish(&data)
+        .unwrap();
+    let requested = ParquetMetaDataReader::read_column_bloom_filter(&data, &footer, 0, 0)
+        .unwrap()
+        .unwrap();
+    assert!(requested.check("Hello"));
+    assert!(!requested.check("Hello_Not_Exists"));
+    assert_eq!(requested.num_blocks(), standalone.num_blocks());
 
     let sbbf = builder
         .get_row_group_column_bloom_filter(0, 0)
