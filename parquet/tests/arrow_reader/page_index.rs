@@ -75,6 +75,92 @@ fn test_parse_with_page_index_mask() {
 }
 
 #[test]
+fn test_sparse_page_index_missing_ranges_preserve_coordinates() {
+    let file = create_test_file();
+    let original = ParquetMetaDataReader::new()
+        .with_page_index_policy(PageIndexPolicy::Required)
+        .parse_and_finish(&file)
+        .unwrap();
+    let metadata = ParquetMetaDataReader::new()
+        .with_page_index_policy(PageIndexPolicy::Skip)
+        .parse_and_finish(&file)
+        .unwrap();
+    let mut builder = metadata.into_builder();
+    let row_groups = builder
+        .take_row_groups()
+        .into_iter()
+        .enumerate()
+        .map(|(rg_idx, rg)| {
+            let columns = rg
+                .columns()
+                .iter()
+                .enumerate()
+                .map(|(col_idx, column)| {
+                    let mut column = column.clone().into_builder();
+                    if matches!((rg_idx, col_idx), (0, 0) | (2, 3)) {
+                        column = column
+                            .set_column_index_offset(None)
+                            .set_column_index_length(None);
+                    }
+                    if matches!((rg_idx, col_idx), (0, 1) | (1, 2)) {
+                        column = column
+                            .set_offset_index_offset(None)
+                            .set_offset_index_length(None);
+                    }
+                    column.build().unwrap()
+                })
+                .collect();
+            rg.into_builder()
+                .set_column_metadata(columns)
+                .build()
+                .unwrap()
+        })
+        .collect();
+    let metadata = builder.set_row_groups(row_groups).build();
+
+    // Masks canonicalize unordered, duplicate, and out-of-bounds coordinates.
+    // Missing ranges must leave holes in coordinate space, not vector positions.
+    let mut reader = ParquetMetaDataReader::new_with_metadata(metadata.clone())
+        .with_page_index_policy(PageIndexPolicy::Optional)
+        .with_column_index_mask(ColumnChunkMask::row_groups_and_columns(
+            [2, 0, 2, 99],
+            [3, 0, 1, 3, 99],
+        ));
+    reader.read_page_indexes(&file).unwrap();
+    let read = reader.finish().unwrap();
+    assert_page_index_cells(
+        &read,
+        |rg, col| {
+            matches!(rg, 0 | 2) && matches!(col, 0 | 1 | 3) && !matches!((rg, col), (0, 0) | (2, 3))
+        },
+        |rg, col| !matches!((rg, col), (0, 1) | (1, 2)),
+    );
+    let index = read.page_index().unwrap();
+    let expected = original.page_index().unwrap();
+    for rg in 0..3 {
+        for col in 0..4 {
+            if let Some(ci) = index.column_index(rg, col) {
+                assert_eq!(Some(ci), expected.column_index(rg, col));
+            }
+            if let Some(oi) = index.offset_index(rg, col) {
+                assert_eq!(Some(oi), expected.offset_index(rg, col));
+            }
+        }
+    }
+
+    // Column index absence is still tolerated under Required, but an absent
+    // selected offset index remains an error.
+    let mut reader = ParquetMetaDataReader::new_with_metadata(metadata.clone())
+        .with_column_index_policy(PageIndexPolicy::Required)
+        .with_offset_index_policy(PageIndexPolicy::Skip);
+    reader.read_page_indexes(&file).unwrap();
+    let mut reader = ParquetMetaDataReader::new_with_metadata(metadata)
+        .with_page_index_policy(PageIndexPolicy::Required);
+    let error = reader.read_page_indexes(&file).unwrap_err();
+    assert_eq!(error.to_string(), "Parquet error: missing offset index");
+}
+
+#[test]
 fn test_repeated_page_index_reads_replace() {
     // verify that repeated calls to read_page_indexes replace existing indexes
     let file = create_test_file();
@@ -369,9 +455,9 @@ fn test_page_index_sizes() {
     let metadata = reader.finish().unwrap();
     assert!(metadata.page_index().is_some());
     #[cfg(not(feature = "encryption"))]
-    assert_eq!(metadata.memory_size(), 13929);
+    assert_eq!(metadata.memory_size(), 13993);
     #[cfg(feature = "encryption")]
-    assert_eq!(metadata.memory_size(), 14353);
+    assert_eq!(metadata.memory_size(), 14417);
 
     // populate column 0 for column index and all columns for offset index
     let mut reader = ParquetMetaDataReader::new()
@@ -384,9 +470,9 @@ fn test_page_index_sizes() {
     let metadata = reader.finish().unwrap();
     assert!(metadata.page_index().is_some());
     #[cfg(not(feature = "encryption"))]
-    assert_eq!(metadata.memory_size(), 12808);
+    assert_eq!(metadata.memory_size(), 10712);
     #[cfg(feature = "encryption")]
-    assert_eq!(metadata.memory_size(), 13232);
+    assert_eq!(metadata.memory_size(), 11136);
 
     // populate column 0 for column index and columns 0 & 2 for the offset index
     let mut reader = ParquetMetaDataReader::new()
@@ -399,9 +485,9 @@ fn test_page_index_sizes() {
     let metadata = reader.finish().unwrap();
     assert!(metadata.page_index().is_some());
     #[cfg(not(feature = "encryption"))]
-    assert_eq!(metadata.memory_size(), 12088);
+    assert_eq!(metadata.memory_size(), 9656);
     #[cfg(feature = "encryption")]
-    assert_eq!(metadata.memory_size(), 12512);
+    assert_eq!(metadata.memory_size(), 10080);
 
     // populate only row group 1, column index gets column 0, offset index gets
     // columns 0 and 2.
@@ -415,7 +501,7 @@ fn test_page_index_sizes() {
     let metadata = reader.finish().unwrap();
     assert!(metadata.page_index().is_some());
     #[cfg(not(feature = "encryption"))]
-    assert_eq!(metadata.memory_size(), 11358);
+    assert_eq!(metadata.memory_size(), 8222);
     #[cfg(feature = "encryption")]
-    assert_eq!(metadata.memory_size(), 11782);
+    assert_eq!(metadata.memory_size(), 8646);
 }
