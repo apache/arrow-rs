@@ -151,6 +151,34 @@ fn bytes_ptr_eq<T: ByteArrayType>(a: &dyn Array, b: &dyn Array) -> bool {
     }
 }
 
+/// Returns `true` if two child value arrays have the same layout and backing buffers.
+///
+/// This first checks whether the [`ArrayRef`]s point to the same allocation, then uses
+/// direct buffer comparisons for byte arrays and [`arrow_data::ArrayData::ptr_eq`] for
+/// other types.
+///
+/// This checks storage identity, not logical equality. Arrays with equal values in
+/// different buffers return `false`. Arrays with no allocated storage, such as two empty
+/// primitive arrays built from empty `Vec`s or two [`arrow_array::NullArray`]s of the same
+/// length, return `true`.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the dictionary coalescer in #11743")
+)]
+pub(crate) fn child_values_ptr_eq(left: &ArrayRef, right: &ArrayRef) -> bool {
+    if Arc::ptr_eq(left, right) {
+        return true;
+    }
+
+    match left.data_type() {
+        DataType::Utf8 => bytes_ptr_eq::<Utf8Type>(left.as_ref(), right.as_ref()),
+        DataType::LargeUtf8 => bytes_ptr_eq::<LargeUtf8Type>(left.as_ref(), right.as_ref()),
+        DataType::Binary => bytes_ptr_eq::<BinaryType>(left.as_ref(), right.as_ref()),
+        DataType::LargeBinary => bytes_ptr_eq::<LargeBinaryType>(left.as_ref(), right.as_ref()),
+        _ => left.to_data().ptr_eq(&right.to_data()),
+    }
+}
+
 /// A type-erased function that compares two array for pointer equality
 type PtrEq = fn(&dyn Array, &dyn Array) -> bool;
 
@@ -363,9 +391,116 @@ mod tests {
     use arrow_array::cast::as_string_array;
     use arrow_array::types::Int8Type;
     use arrow_array::types::Int32Type;
-    use arrow_array::{DictionaryArray, Int8Array, Int32Array, StringArray};
+    use arrow_array::{
+        ArrayRef, DictionaryArray, Int8Array, Int32Array, ListArray, NullArray, RunArray,
+        StringArray, StringViewArray,
+    };
     use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer, OffsetBuffer};
+    use arrow_schema::Field;
     use std::sync::Arc;
+
+    #[test]
+    fn test_child_values_ptr_eq_accepts_reusable_value_mapping() {
+        let dictionary = DictionaryArray::<Int8Type>::new(
+            Int8Array::from(vec![0, 1]),
+            Arc::new(StringArray::from(vec!["a", "b"])),
+        );
+        let same_values = Arc::clone(dictionary.values());
+
+        assert!(Arc::ptr_eq(dictionary.values(), &same_values));
+        assert!(child_values_ptr_eq(dictionary.values(), &same_values));
+
+        let shared_values = StringArray::from(vec!["a", "b"]);
+        let first_dictionary = DictionaryArray::<Int8Type>::new(
+            Int8Array::from(vec![0, 1]),
+            Arc::new(shared_values.clone()),
+        );
+        let cloned_dictionary =
+            DictionaryArray::<Int8Type>::new(Int8Array::from(vec![0, 1]), Arc::new(shared_values));
+
+        assert!(!Arc::ptr_eq(
+            first_dictionary.values(),
+            cloned_dictionary.values()
+        ));
+        assert!(child_values_ptr_eq(
+            first_dictionary.values(),
+            cloned_dictionary.values()
+        ));
+
+        // Run boundaries do not affect whether the child value mapping can be reused.
+        let run_values = StringArray::from(vec!["a", "b"]);
+        let first_runs =
+            RunArray::<Int32Type>::try_new(&Int32Array::from(vec![1, 3]), &run_values).unwrap();
+        let second_runs =
+            RunArray::<Int32Type>::try_new(&Int32Array::from(vec![2, 3]), &run_values).unwrap();
+
+        assert!(!Arc::ptr_eq(first_runs.values(), second_runs.values()));
+        assert!(child_values_ptr_eq(
+            first_runs.values(),
+            second_runs.values()
+        ));
+
+        // Arrays without allocated buffers still have a reusable value mapping.
+        let empty_left: ArrayRef = Arc::new(Int32Array::from(Vec::<i32>::new()));
+        let empty_right: ArrayRef = Arc::new(Int32Array::from(Vec::<i32>::new()));
+        assert!(child_values_ptr_eq(&empty_left, &empty_right));
+
+        let null_left: ArrayRef = Arc::new(NullArray::new(3));
+        let null_right: ArrayRef = Arc::new(NullArray::new(3));
+        assert!(child_values_ptr_eq(&null_left, &null_right));
+    }
+
+    #[test]
+    fn test_child_values_ptr_eq_rejects_different_storage_or_layout() {
+        let independent_left: ArrayRef = Arc::new(StringArray::from(vec!["a", "b"]));
+        let independent_right: ArrayRef = Arc::new(StringArray::from(vec!["a", "b"]));
+
+        assert!(!child_values_ptr_eq(&independent_left, &independent_right));
+
+        let storage = Int32Array::from(vec![1, 2, 3]);
+        let prefix: ArrayRef = Arc::new(storage.slice(0, 2));
+        let shifted: ArrayRef = Arc::new(storage.slice(1, 2));
+        let shorter: ArrayRef = Arc::new(storage.slice(0, 1));
+
+        assert!(!child_values_ptr_eq(&prefix, &shifted));
+        assert!(!child_values_ptr_eq(&prefix, &shorter));
+    }
+
+    #[test]
+    fn test_child_values_ptr_eq_rejects_different_nested_or_view_storage() {
+        // Shared parent metadata is insufficient when child or payload storage differs.
+        let list_field = Arc::new(Field::new_list_field(DataType::Int32, false));
+        let shared_offsets = OffsetBuffer::new(vec![0_i32, 2].into());
+        let first_list: ArrayRef = Arc::new(ListArray::new(
+            Arc::clone(&list_field),
+            shared_offsets.clone(),
+            Arc::new(Int32Array::from(vec![1, 2])),
+            None,
+        ));
+        let second_list: ArrayRef = Arc::new(ListArray::new(
+            list_field,
+            shared_offsets,
+            Arc::new(Int32Array::from(vec![1, 3])),
+            None,
+        ));
+        assert!(!child_values_ptr_eq(&first_list, &second_list));
+
+        let first_payload: &[u8] = b"same payload one";
+        let second_payload: &[u8] = b"same payload two";
+        let view = arrow_data::ByteView::new(first_payload.len() as u32, &first_payload[..4]);
+        let shared_views = ScalarBuffer::from(vec![view.into()]);
+        let first_view: ArrayRef = Arc::new(StringViewArray::new(
+            shared_views.clone(),
+            vec![Buffer::from_slice_ref(first_payload)],
+            None,
+        ));
+        let second_view: ArrayRef = Arc::new(StringViewArray::new(
+            shared_views,
+            vec![Buffer::from_slice_ref(second_payload)],
+            None,
+        ));
+        assert!(!child_values_ptr_eq(&first_view, &second_view));
+    }
 
     #[test]
     fn test_garbage_collect_i32_dictionary() {
