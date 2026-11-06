@@ -1082,7 +1082,7 @@ where
         Utf8 => value_to_string::<i32>(array, cast_options),
         LargeUtf8 => value_to_string::<i64>(array, cast_options),
         Null => Ok(new_null_array(to_type, array.len())),
-        _ => Err(ArrowError::NotYetImplemented(format!(
+        _ => Err(ArrowError::InvalidArgumentError(format!(
             "Casting from {from_type} to {to_type} not supported"
         ))),
     }
@@ -1174,7 +1174,7 @@ where
         }
         LargeUtf8 => cast_string_to_decimal::<D, i64>(array, *precision, *scale, cast_options),
         Null => Ok(new_null_array(to_type, array.len())),
-        _ => Err(ArrowError::NotYetImplemented(format!(
+        _ => Err(ArrowError::InvalidArgumentError(format!(
             "Casting from {from_type} to {to_type} not supported"
         ))),
     }

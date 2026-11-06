@@ -80,7 +80,7 @@ pub(crate) fn resolve_child_array<'a>(
 ///
 /// # Errors
 ///
-/// Returns [`ArrowError::NotYetImplemented`] if no child type can be selected for
+/// Returns [`ArrowError::InvalidArgumentError`] if no child type can be selected for
 /// the target type, or conversion from the selected child type is unsupported.
 ///
 /// [`ArrowError::CastError`] indicates that the conversion is supported, but a
@@ -132,7 +132,7 @@ pub fn union_extract_by_type(
     };
 
     let Some((type_id, _)) = resolve_child_array(fields, target_type) else {
-        return Err(ArrowError::NotYetImplemented(format!(
+        return Err(ArrowError::InvalidArgumentError(format!(
             "cannot cast Union with fields {} to {}",
             fields
                 .iter()

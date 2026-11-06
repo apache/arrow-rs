@@ -190,7 +190,7 @@ pub(crate) fn cast_timestamp_to_time<T: ArrowTimestampType>(
         DataType::Time64(TimeUnit::Nanosecond) => {
             timestamp_to_time::<T, Time64NanosecondType>(array, cast_options)
         }
-        _ => Err(ArrowError::NotYetImplemented(format!(
+        _ => Err(ArrowError::InvalidArgumentError(format!(
             "Casting from {} to {to_type} not supported",
             array.data_type()
         ))),

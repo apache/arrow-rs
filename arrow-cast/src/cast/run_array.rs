@@ -47,7 +47,7 @@ pub(crate) fn run_end_encoded_cast<K: RunEndIndexType>(
                             Arc::new(RunArray::<Int64Type>::try_new(re, cast_values.as_ref())?)
                         }
                         _ => {
-                            return Err(ArrowError::NotYetImplemented(
+                            return Err(ArrowError::InvalidArgumentError(
                                 "Run-end type must be i16, i32, or i64".to_string(),
                             ));
                         }
