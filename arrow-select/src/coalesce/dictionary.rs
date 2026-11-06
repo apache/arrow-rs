@@ -3,7 +3,7 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use super::{InProgressArray, generic::GenericInProgressArray};
-use crate::dictionary::{byte_array_ptr_eq, merge_dictionary_values_with_masks};
+use crate::dictionary::{child_values_ptr_eq, merge_dictionary_values_with_masks};
 use ahash::RandomState;
 use arrow_array::cast::AsArray;
 use arrow_array::types::ArrowDictionaryKeyType;
@@ -85,8 +85,7 @@ impl<K: ArrowDictionaryKeyType> InProgressDictionaryArray<K> {
     /// pointer or its backing buffer pointers match.
     fn source_id(&mut self, values: ArrayRef) -> usize {
         if let Some(last) = self.chunks.last()
-            && (Arc::ptr_eq(&self.sources[last.source], &values)
-                || byte_array_ptr_eq(self.sources[last.source].as_ref(), values.as_ref()))
+            && child_values_ptr_eq(&self.sources[last.source], &values)
         {
             return last.source;
         }
@@ -97,7 +96,7 @@ impl<K: ArrowDictionaryKeyType> InProgressDictionaryArray<K> {
         if let Some(source) = self
             .sources
             .iter()
-            .position(|existing| byte_array_ptr_eq(existing.as_ref(), values.as_ref()))
+            .position(|existing| child_values_ptr_eq(existing, &values))
         {
             return source;
         }
