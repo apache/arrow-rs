@@ -11,9 +11,10 @@ set -eu
 cert_tmp=$(mktemp -d)
 trap 'rm -rf "$cert_tmp"' EXIT
 trap 'exit 1' HUP INT TERM
+printf '[req]\ndistinguished_name = dn\n[dn]\n' >"$cert_tmp/req.cnf"
 
 openssl req -new -x509 -newkey rsa:2048 -nodes -sha256 -days 1825 \
-  -config /dev/null -subj "/CN=Arrow Flight Test CA" \
+  -config "$cert_tmp/req.cnf" -subj "/CN=Arrow Flight Test CA" \
   -addext "basicConstraints=critical,CA:TRUE" \
   -addext "keyUsage=critical,keyCertSign,cRLSign" \
   -addext "subjectKeyIdentifier=hash" \
@@ -21,7 +22,7 @@ openssl req -new -x509 -newkey rsa:2048 -nodes -sha256 -days 1825 \
 
 for identity in client server; do
   openssl req -new -newkey rsa:2048 -nodes -sha256 \
-    -config /dev/null -subj "/CN=Arrow Flight Test $identity" \
+    -config "$cert_tmp/req.cnf" -subj "/CN=Arrow Flight Test $identity" \
     -keyout "$identity.key" -out "$cert_tmp/request.csr"
 
   cat >"$cert_tmp/extensions.cnf" <<EOF
