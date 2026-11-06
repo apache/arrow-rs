@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Dictionary utilities for Arrow arrays
 
@@ -164,6 +151,30 @@ fn bytes_ptr_eq<T: ByteArrayType>(a: &dyn Array, b: &dyn Array) -> bool {
     }
 }
 
+/// Returns `true` if two child value arrays have the same layout and backing buffers.
+///
+/// This first checks whether the [`ArrayRef`]s point to the same allocation, then uses
+/// direct buffer comparisons for byte arrays and [`arrow_data::ArrayData::ptr_eq`] for
+/// other types.
+///
+/// This checks storage identity, not logical equality. Arrays with equal values in
+/// different buffers return `false`. Arrays with no allocated storage, such as two empty
+/// primitive arrays built from empty `Vec`s or two [`arrow_array::NullArray`]s of the same
+/// length, return `true`.
+pub(crate) fn child_values_ptr_eq(left: &ArrayRef, right: &ArrayRef) -> bool {
+    if Arc::ptr_eq(left, right) {
+        return true;
+    }
+
+    match left.data_type() {
+        DataType::Utf8 => bytes_ptr_eq::<Utf8Type>(left.as_ref(), right.as_ref()),
+        DataType::LargeUtf8 => bytes_ptr_eq::<LargeUtf8Type>(left.as_ref(), right.as_ref()),
+        DataType::Binary => bytes_ptr_eq::<BinaryType>(left.as_ref(), right.as_ref()),
+        DataType::LargeBinary => bytes_ptr_eq::<LargeBinaryType>(left.as_ref(), right.as_ref()),
+        _ => left.to_data().ptr_eq(&right.to_data()),
+    }
+}
+
 /// A type-erased function that compares two array for pointer equality
 type PtrEq = fn(&dyn Array, &dyn Array) -> bool;
 
@@ -291,6 +302,83 @@ pub(crate) fn merge_dictionary_values<K: ArrowDictionaryKeyType>(
     })
 }
 
+/// Merges referenced entries from multiple dictionary values arrays.
+///
+/// `values_masks[i]` corresponds to `values_arrays[i]`, with each set bit identifying a
+/// value to retain. Returns the merged values and a mapping from each source value index
+/// to its index in the merged array. Mapping entries for unreferenced values are zero and
+/// must not be used.
+///
+/// Referenced values are gathered without hashing when their count fits in `K`'s key space,
+/// preserving duplicates across sources. Otherwise, values are deduplicated on a best-effort
+/// basis to avoid key overflow.
+pub(crate) fn merge_dictionary_values_with_masks<K: ArrowDictionaryKeyType>(
+    values_arrays: &[&dyn Array],
+    values_masks: &[BooleanBuffer],
+) -> Result<MergedDictionaries<K>, ArrowError> {
+    assert_eq!(values_arrays.len(), values_masks.len());
+    let num_values = values_masks.iter().map(BooleanBuffer::count_set_bits).sum();
+
+    // Dictionary values need not be unique. Avoid hashing when the referenced value count
+    // fits in `K`'s key space, and only deduplicate to avoid overflow.
+    if num_values == 0 || K::Native::from_usize(num_values - 1).is_some() {
+        let zero = K::Native::from_usize(0).unwrap();
+        let mut indices = Vec::with_capacity(num_values);
+        let key_mappings = values_arrays
+            .iter()
+            .zip(values_masks)
+            .enumerate()
+            .map(|(dictionary_idx, (values, mask))| {
+                let mut mapping = vec![zero; values.len()];
+                for value_idx in mask.set_indices() {
+                    mapping[value_idx] = K::Native::from_usize(indices.len()).unwrap();
+                    indices.push((dictionary_idx, value_idx));
+                }
+                mapping
+            })
+            .collect();
+        return Ok(MergedDictionaries {
+            key_mappings,
+            values: interleave(values_arrays, &indices)?,
+        });
+    }
+
+    let value_slices = values_arrays
+        .iter()
+        .zip(values_masks)
+        .map(|(values, mask)| get_masked_values(*values, mask))
+        .collect::<Vec<_>>();
+    let mut interner = Interner::new(num_values);
+    let mut indices = Vec::with_capacity(num_values);
+
+    let key_mappings = values_arrays
+        .iter()
+        .enumerate()
+        .zip(value_slices)
+        .map(|((dictionary_idx, value_array), values)| {
+            let zero = K::Native::ZERO;
+            let mut mapping = vec![zero; value_array.len()];
+
+            for (value_idx, value) in values {
+                mapping[value_idx] =
+                    *interner.intern(value, || match K::Native::from_usize(indices.len()) {
+                        Some(idx) => {
+                            indices.push((dictionary_idx, value_idx));
+                            Ok(idx)
+                        }
+                        None => Err(ArrowError::DictionaryKeyOverflowError),
+                    })?;
+            }
+            Ok(mapping)
+        })
+        .collect::<Result<Vec<_>, ArrowError>>()?;
+
+    Ok(MergedDictionaries {
+        key_mappings,
+        values: interleave(values_arrays, &indices)?,
+    })
+}
+
 /// Return a mask identifying the values that are referenced by keys in `dictionary`
 /// at the positions indicated by `selection`
 fn compute_values_mask<K: ArrowNativeType>(
@@ -376,9 +464,116 @@ mod tests {
     use arrow_array::cast::as_string_array;
     use arrow_array::types::Int8Type;
     use arrow_array::types::Int32Type;
-    use arrow_array::{DictionaryArray, Int8Array, Int32Array, StringArray};
+    use arrow_array::{
+        ArrayRef, DictionaryArray, Int8Array, Int32Array, ListArray, NullArray, RunArray,
+        StringArray, StringViewArray,
+    };
     use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer, OffsetBuffer};
+    use arrow_schema::Field;
     use std::sync::Arc;
+
+    #[test]
+    fn test_child_values_ptr_eq_accepts_reusable_value_mapping() {
+        let dictionary = DictionaryArray::<Int8Type>::new(
+            Int8Array::from(vec![0, 1]),
+            Arc::new(StringArray::from(vec!["a", "b"])),
+        );
+        let same_values = Arc::clone(dictionary.values());
+
+        assert!(Arc::ptr_eq(dictionary.values(), &same_values));
+        assert!(child_values_ptr_eq(dictionary.values(), &same_values));
+
+        let shared_values = StringArray::from(vec!["a", "b"]);
+        let first_dictionary = DictionaryArray::<Int8Type>::new(
+            Int8Array::from(vec![0, 1]),
+            Arc::new(shared_values.clone()),
+        );
+        let cloned_dictionary =
+            DictionaryArray::<Int8Type>::new(Int8Array::from(vec![0, 1]), Arc::new(shared_values));
+
+        assert!(!Arc::ptr_eq(
+            first_dictionary.values(),
+            cloned_dictionary.values()
+        ));
+        assert!(child_values_ptr_eq(
+            first_dictionary.values(),
+            cloned_dictionary.values()
+        ));
+
+        // Run boundaries do not affect whether the child value mapping can be reused.
+        let run_values = StringArray::from(vec!["a", "b"]);
+        let first_runs =
+            RunArray::<Int32Type>::try_new(&Int32Array::from(vec![1, 3]), &run_values).unwrap();
+        let second_runs =
+            RunArray::<Int32Type>::try_new(&Int32Array::from(vec![2, 3]), &run_values).unwrap();
+
+        assert!(!Arc::ptr_eq(first_runs.values(), second_runs.values()));
+        assert!(child_values_ptr_eq(
+            first_runs.values(),
+            second_runs.values()
+        ));
+
+        // Arrays without allocated buffers still have a reusable value mapping.
+        let empty_left: ArrayRef = Arc::new(Int32Array::from(Vec::<i32>::new()));
+        let empty_right: ArrayRef = Arc::new(Int32Array::from(Vec::<i32>::new()));
+        assert!(child_values_ptr_eq(&empty_left, &empty_right));
+
+        let null_left: ArrayRef = Arc::new(NullArray::new(3));
+        let null_right: ArrayRef = Arc::new(NullArray::new(3));
+        assert!(child_values_ptr_eq(&null_left, &null_right));
+    }
+
+    #[test]
+    fn test_child_values_ptr_eq_rejects_different_storage_or_layout() {
+        let independent_left: ArrayRef = Arc::new(StringArray::from(vec!["a", "b"]));
+        let independent_right: ArrayRef = Arc::new(StringArray::from(vec!["a", "b"]));
+
+        assert!(!child_values_ptr_eq(&independent_left, &independent_right));
+
+        let storage = Int32Array::from(vec![1, 2, 3]);
+        let prefix: ArrayRef = Arc::new(storage.slice(0, 2));
+        let shifted: ArrayRef = Arc::new(storage.slice(1, 2));
+        let shorter: ArrayRef = Arc::new(storage.slice(0, 1));
+
+        assert!(!child_values_ptr_eq(&prefix, &shifted));
+        assert!(!child_values_ptr_eq(&prefix, &shorter));
+    }
+
+    #[test]
+    fn test_child_values_ptr_eq_rejects_different_nested_or_view_storage() {
+        // Shared parent metadata is insufficient when child or payload storage differs.
+        let list_field = Arc::new(Field::new_list_field(DataType::Int32, false));
+        let shared_offsets = OffsetBuffer::new(vec![0_i32, 2].into());
+        let first_list: ArrayRef = Arc::new(ListArray::new(
+            Arc::clone(&list_field),
+            shared_offsets.clone(),
+            Arc::new(Int32Array::from(vec![1, 2])),
+            None,
+        ));
+        let second_list: ArrayRef = Arc::new(ListArray::new(
+            list_field,
+            shared_offsets,
+            Arc::new(Int32Array::from(vec![1, 3])),
+            None,
+        ));
+        assert!(!child_values_ptr_eq(&first_list, &second_list));
+
+        let first_payload: &[u8] = b"same payload one";
+        let second_payload: &[u8] = b"same payload two";
+        let view = arrow_data::ByteView::new(first_payload.len() as u32, &first_payload[..4]);
+        let shared_views = ScalarBuffer::from(vec![view.into()]);
+        let first_view: ArrayRef = Arc::new(StringViewArray::new(
+            shared_views.clone(),
+            vec![Buffer::from_slice_ref(first_payload)],
+            None,
+        ));
+        let second_view: ArrayRef = Arc::new(StringViewArray::new(
+            shared_views,
+            vec![Buffer::from_slice_ref(second_payload)],
+            None,
+        ));
+        assert!(!child_values_ptr_eq(&first_view, &second_view));
+    }
 
     #[test]
     fn test_garbage_collect_i32_dictionary() {
@@ -490,6 +685,23 @@ mod tests {
         assert_eq!(merged.key_mappings.len(), 2);
         assert_eq!(&merged.key_mappings[0], &[0, 0, 1, 0, 0]);
         assert_eq!(&merged.key_mappings[1], &[2, 3, 1, 4]);
+    }
+
+    #[test]
+    fn test_merge_dictionary_values_with_masks() {
+        let first = StringArray::from_iter_values(["a", "unused-a", "shared"]);
+        let second = StringArray::from_iter_values(["shared", "b", "unused-b"]);
+        let values = [&first as &dyn Array, &second as &dyn Array];
+        let masks = [
+            BooleanBuffer::from_iter([true, false, true]),
+            BooleanBuffer::from_iter([true, true, false]),
+        ];
+
+        let merged = merge_dictionary_values_with_masks::<Int32Type>(&values, &masks).unwrap();
+
+        let expected = StringArray::from_iter_values(["a", "shared", "shared", "b"]);
+        assert_eq!(merged.values.as_ref(), &expected);
+        assert_eq!(merged.key_mappings, vec![vec![0, 0, 1], vec![2, 3, 0]]);
     }
 
     #[test]

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Bloom filter implementation specific to Parquet, as described
 //! in the [spec][parquet-bf-spec].
@@ -123,10 +110,14 @@ use crate::parquet_thrift::{
     ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol, ThriftCompactOutputProtocol,
     ThriftSliceInputProtocol, WriteThrift, WriteThriftField,
 };
-use crate::thrift_struct;
+use crate::{DecodeResult, thrift_struct};
 use bytes::Bytes;
 use std::io::Write;
+use std::ops::Range;
 use twox_hash::XxHash64;
+
+mod push;
+pub use push::SbbfPushDecoder;
 
 /// Salt as defined in the [spec](https://github.com/apache/parquet-format/blob/master/BloomFilter.md#technical-approach).
 const SALT: [u32; 8] = [
@@ -322,40 +313,6 @@ impl Block {
 #[derive(Debug, Clone)]
 pub struct Sbbf(Vec<Block>);
 
-pub(crate) const SBBF_HEADER_SIZE_ESTIMATE: usize = 20;
-
-/// given an initial offset, and a byte buffer, try to read out a bloom filter header and return
-/// both the header and the offset after it (for bitset).
-pub(crate) fn chunk_read_bloom_filter_header_and_offset(
-    offset: u64,
-    buffer: Bytes,
-) -> Result<(BloomFilterHeader, u64), ParquetError> {
-    let (header, length) = read_bloom_filter_header_and_length(buffer)?;
-    Ok((header, offset + length))
-}
-
-/// given a [Bytes] buffer, try to read out a bloom filter header and return both the header and
-/// length of the header.
-#[inline]
-pub(crate) fn read_bloom_filter_header_and_length(
-    buffer: Bytes,
-) -> Result<(BloomFilterHeader, u64), ParquetError> {
-    read_bloom_filter_header_and_length_from_bytes(buffer.as_ref())
-}
-
-/// Given a byte slice, try to read out a bloom filter header and return both the header and
-/// length of the header.
-#[inline]
-fn read_bloom_filter_header_and_length_from_bytes(
-    buffer: &[u8],
-) -> Result<(BloomFilterHeader, u64), ParquetError> {
-    let total_length = buffer.len();
-    let mut prot = ThriftSliceInputProtocol::new(buffer);
-    let header = BloomFilterHeader::read_thrift(&mut prot)
-        .map_err(|e| ParquetError::General(format!("Could not read bloom filter header: {e}")))?;
-    Ok((header, (total_length - prot.as_slice().len()) as u64))
-}
-
 /// The minimum number of bytes for a bloom filter bitset.
 pub const BITSET_MIN_LENGTH: usize = 32;
 /// The maximum number of bytes for a bloom filter bitset.
@@ -472,54 +429,37 @@ impl Sbbf {
         }
     }
 
-    /// Read a new bloom filter from the given offset in the given reader.
+    /// Read a Bloom filter from existing column-chunk metadata.
+    ///
+    /// The metadata and reader must refer to the same file. A missing offset
+    /// returns `None` without I/O. Invalid metadata, malformed filters, and read
+    /// failures return an error.
+    ///
+    /// When the total filter length is present, one range is fetched. Otherwise,
+    /// the header prefix and bitset are fetched separately.
     pub fn read_from_column_chunk<R: ChunkReader>(
         column_metadata: &ColumnChunkMetaData,
         reader: &R,
-    ) -> Result<Option<Self>, ParquetError> {
-        let offset: u64 = if let Some(offset) = column_metadata.bloom_filter_offset() {
-            offset
-                .try_into()
-                .map_err(|_| ParquetError::General("Bloom filter offset is invalid".to_string()))?
-        } else {
+    ) -> Result<Option<Self>> {
+        let Some(mut decoder) = SbbfPushDecoder::try_new(column_metadata)? else {
             return Ok(None);
         };
 
-        let buffer = match column_metadata.bloom_filter_length() {
-            Some(length) => reader.get_bytes(offset, length as usize),
-            None => reader.get_bytes(offset, SBBF_HEADER_SIZE_ESTIMATE),
-        }?;
-
-        let (header, bitset_offset) =
-            chunk_read_bloom_filter_header_and_offset(offset, buffer.clone())?;
-
-        match header.algorithm {
-            BloomFilterAlgorithm::BLOCK => {
-                // this match exists to future proof the singleton algorithm enum
+        loop {
+            let result = decoder.try_decode()?;
+            match result {
+                DecodeResult::NeedsData(ranges) => {
+                    for range in ranges {
+                        let buffer = read_bloom_filter_bytes(reader, &range)?;
+                        decoder.push_range(range, buffer)?;
+                    }
+                }
+                DecodeResult::Data(sbbf) => return Ok(Some(sbbf)),
+                DecodeResult::Finished => {
+                    return Err(general_err!("invalid value returned from SbbfPushDecoder"));
+                }
             }
         }
-        match header.compression {
-            BloomFilterCompression::UNCOMPRESSED => {
-                // this match exists to future proof the singleton compression enum
-            }
-        }
-        match header.hash {
-            BloomFilterHash::XXHASH => {
-                // this match exists to future proof the singleton hash enum
-            }
-        }
-
-        let bitset = match column_metadata.bloom_filter_length() {
-            Some(_) => buffer.slice((bitset_offset - offset) as usize..),
-            None => {
-                let bitset_length: usize = header.num_bytes.try_into().map_err(|_| {
-                    ParquetError::General("Bloom filter length is invalid".to_string())
-                })?;
-                reader.get_bytes(bitset_offset, bitset_length)?
-            }
-        };
-
-        Ok(Some(Self::new(&bitset)))
     }
 
     /// Read a Bloom filter asynchronously from existing column-chunk metadata.
@@ -536,66 +476,25 @@ impl Sbbf {
         column_metadata: &ColumnChunkMetaData,
         reader: &mut R,
     ) -> Result<Option<Self>> {
-        let Some(offset) = column_metadata.bloom_filter_offset() else {
+        let Some(mut decoder) = SbbfPushDecoder::try_new(column_metadata)? else {
             return Ok(None);
         };
-        let offset =
-            u64::try_from(offset).map_err(|_| general_err!("Bloom filter offset is invalid"))?;
-        let length = column_metadata
-            .bloom_filter_length()
-            .map(|length| {
-                usize::try_from(length)
-                    .ok()
-                    .filter(|length| *length > 0)
-                    .ok_or_else(|| general_err!("Bloom filter length is invalid"))
-            })
-            .transpose()?;
-        let buffer = read_bloom_filter_bytes_async(
-            reader,
-            offset,
-            length.unwrap_or(SBBF_HEADER_SIZE_ESTIMATE),
-        )
-        .await?;
-        let (header, header_length) = read_bloom_filter_header_and_length(buffer.clone())?;
 
-        // The following matches are present to force an explicit decision
-        // if supported variants change.
-        match header.algorithm {
-            BloomFilterAlgorithm::BLOCK => {}
-        }
-        match header.hash {
-            BloomFilterHash::XXHASH => {}
-        }
-        match header.compression {
-            BloomFilterCompression::UNCOMPRESSED => {}
-        }
-
-        let bitset_length = usize::try_from(header.num_bytes)
-            .map_err(|_| general_err!("Bloom filter bitset length is invalid"))?;
-        if bitset_length < BITSET_MIN_LENGTH || !bitset_length.is_multiple_of(32) {
-            return Err(general_err!(
-                "Bloom filter bitset length must be a positive multiple of 32"
-            ));
-        }
-        let bitset_offset = offset
-            .checked_add(header_length)
-            .ok_or_else(|| general_err!("Bloom filter offset overflow"))?;
-        let bitset = if let Some(length) = length {
-            let header_length = usize::try_from(header_length)
-                .map_err(|_| general_err!("Bloom filter header length is invalid"))?;
-            let total = header_length
-                .checked_add(bitset_length)
-                .ok_or_else(|| general_err!("Bloom filter length overflow"))?;
-            if total != length {
-                return Err(general_err!(
-                    "Bloom filter length does not match its header"
-                ));
+        loop {
+            let result = decoder.try_decode()?;
+            match result {
+                DecodeResult::NeedsData(ranges) => {
+                    for range in ranges {
+                        let buffer = read_bloom_filter_bytes_async(reader, &range).await?;
+                        decoder.push_range(range, buffer)?;
+                    }
+                }
+                DecodeResult::Data(sbbf) => return Ok(Some(sbbf)),
+                DecodeResult::Finished => {
+                    return Err(general_err!("invalid value returned from SbbfPushDecoder"));
+                }
             }
-            buffer.slice(header_length..total)
-        } else {
-            read_bloom_filter_bytes_async(reader, bitset_offset, bitset_length).await?
-        };
-        Ok(Some(Self::new(&bitset)))
+        }
     }
 
     /// Map a 64-bit hash to a block index in `[0, num_blocks)`.
@@ -807,7 +706,10 @@ impl Sbbf {
         self.0.shrink_to_fit();
     }
 
-    /// Reads a Sbff from Thrift encoded bytes
+    /// Reads an Sbbf from Thrift encoded bytes.
+    ///
+    /// Returns an error if the header is malformed, the bitset is not a positive
+    /// multiple of 32 bytes, or its size does not match the header.
     ///
     /// # Examples
     ///
@@ -830,49 +732,9 @@ impl Sbbf {
     /// # }
     /// ```
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ParquetError> {
-        let (header, header_len) = read_bloom_filter_header_and_length_from_bytes(bytes)?;
-
-        let bitset_length: u64 = header
-            .num_bytes
-            .try_into()
-            .map_err(|_| ParquetError::General("Bloom filter length is invalid".to_string()))?;
-
-        // Validate that bitset consumes all remaining bytes
-        if header_len + bitset_length != bytes.len() as u64 {
-            return Err(ParquetError::General(format!(
-                "Bloom filter data contains extra bytes: expected {} total bytes, got {}",
-                header_len + bitset_length,
-                bytes.len()
-            )));
-        }
-
-        let start = header_len as usize;
-        let end = (header_len + bitset_length) as usize;
-        let bitset = bytes
-            .get(start..end)
-            .ok_or_else(|| ParquetError::General("Bloom filter bitset is invalid".to_string()))?;
-
-        Ok(Self::new(bitset))
+        let range = bloom_filter_bitset_range(bytes, Some(bytes.len()))?;
+        Ok(Self::new(&bytes[range]))
     }
-}
-
-#[cfg(all(feature = "arrow", feature = "async"))]
-async fn read_bloom_filter_bytes_async<R: AsyncFileReader + ?Sized>(
-    reader: &mut R,
-    offset: u64,
-    length: usize,
-) -> Result<Bytes> {
-    let end = offset
-        .checked_add(length as u64)
-        .ok_or_else(|| general_err!("Bloom filter read range overflow"))?;
-    let bytes = reader.get_bytes(offset..end).await?;
-    if bytes.len() != length {
-        return Err(general_err!(
-            "Bloom filter read length mismatch: expected {length} bytes, got {}",
-            bytes.len()
-        ));
-    }
-    Ok(bytes)
 }
 
 // per spec we use xxHash with seed=0
@@ -883,23 +745,93 @@ fn hash_as_bytes<A: AsBytes + ?Sized>(value: &A) -> u64 {
     XxHash64::oneshot(SEED, value.as_bytes())
 }
 
+const SBBF_HEADER_SIZE_ESTIMATE: usize = 20;
+
+fn read_bloom_filter_bytes<R: ChunkReader>(reader: &R, range: &Range<u64>) -> Result<Bytes> {
+    let length = usize::try_from(range.end - range.start)?;
+    validate_bloom_filter_read(reader.get_bytes(range.start, length)?, length)
+}
+
+#[cfg(all(feature = "arrow", feature = "async"))]
+async fn read_bloom_filter_bytes_async<R: AsyncFileReader + ?Sized>(
+    reader: &mut R,
+    range: &Range<u64>,
+) -> Result<Bytes> {
+    let length = usize::try_from(range.end - range.start)?;
+    validate_bloom_filter_read(reader.get_bytes(range.clone()).await?, length)
+}
+
+/// Parses the header and returns the bitset's range relative to the filter start.
+/// When the complete filter length is known, the bitset must consume it exactly.
+fn bloom_filter_bitset_range(buffer: &[u8], length: Option<usize>) -> Result<Range<usize>> {
+    let (header, header_length) = read_bloom_filter_header_and_length(buffer)?;
+
+    // Force an explicit decision if supported variants change.
+    match header.algorithm {
+        BloomFilterAlgorithm::BLOCK => {}
+    }
+    match header.hash {
+        BloomFilterHash::XXHASH => {}
+    }
+    match header.compression {
+        BloomFilterCompression::UNCOMPRESSED => {}
+    }
+
+    let bitset_length = usize::try_from(header.num_bytes)
+        .map_err(|_| general_err!("Bloom filter bitset length is invalid"))?;
+    if bitset_length < BITSET_MIN_LENGTH || !bitset_length.is_multiple_of(size_of::<Block>()) {
+        return Err(general_err!(
+            "Bloom filter bitset length must be a positive multiple of 32"
+        ));
+    }
+    let end = header_length
+        .checked_add(bitset_length)
+        .ok_or_else(|| general_err!("Bloom filter length overflow"))?;
+    if length.is_some_and(|length| length != end) {
+        return Err(general_err!(
+            "Bloom filter length does not match its header"
+        ));
+    }
+    Ok(header_length..end)
+}
+
+/// Converts a filter-relative range to a file range without overflowing.
+fn bloom_filter_read_range(offset: u64, range: Range<usize>) -> Result<Range<u64>> {
+    let start = offset
+        .checked_add(range.start as u64)
+        .ok_or_else(|| general_err!("Bloom filter read range overflow"))?;
+    let end = offset
+        .checked_add(range.end as u64)
+        .ok_or_else(|| general_err!("Bloom filter read range overflow"))?;
+    Ok(start..end)
+}
+
+fn validate_bloom_filter_read(bytes: Bytes, length: usize) -> Result<Bytes> {
+    if bytes.len() != length {
+        return Err(general_err!(
+            "Bloom filter read length mismatch: expected {length} bytes, got {}",
+            bytes.len()
+        ));
+    }
+    Ok(bytes)
+}
+
+/// Parses a Bloom filter header and returns the number of bytes consumed.
+fn read_bloom_filter_header_and_length(buffer: &[u8]) -> Result<(BloomFilterHeader, usize)> {
+    let mut prot = ThriftSliceInputProtocol::new(buffer);
+    let header = BloomFilterHeader::read_thrift(&mut prot)
+        .map_err(|e| ParquetError::General(format!("Could not read bloom filter header: {e}")))?;
+    Ok((header, buffer.len() - prot.as_slice().len()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[cfg(all(feature = "arrow", feature = "async"))]
-    #[tokio::test]
-    async fn test_async_bloom_filter_range_overflow_before_io() {
-        let mut reader = std::io::Cursor::new(Vec::<u8>::new());
-        let error = read_bloom_filter_bytes_async(&mut reader, u64::MAX, 1)
-            .await
-            .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("Bloom filter read range overflow")
-        );
-        assert_eq!(reader.position(), 0);
+    #[test]
+    fn test_bloom_filter_read_range_overflow() {
+        assert!(bloom_filter_read_range(u64::MAX, 0..1).is_err());
+        assert!(bloom_filter_read_range(u64::MAX, 1..2).is_err());
     }
 
     #[test]
@@ -964,7 +896,7 @@ mod tests {
                 num_bytes,
             },
             read_length,
-        ) = read_bloom_filter_header_and_length(Bytes::copy_from_slice(buffer)).unwrap();
+        ) = read_bloom_filter_header_and_length(buffer).unwrap();
         assert_eq!(read_length, 15);
         assert_eq!(algorithm, BloomFilterAlgorithm::BLOCK);
         assert_eq!(compression, BloomFilterCompression::UNCOMPRESSED);

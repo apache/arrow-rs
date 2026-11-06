@@ -1,24 +1,11 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`VariantType`] Arrow extension type
 
-use arrow_schema::extension::ExtensionType;
-use arrow_schema::{ArrowError, DataType};
+use crate::extension::ExtensionType;
+use crate::{ArrowError, DataType};
 
 /// Arrow Variant [`ExtensionType`].
 ///
@@ -27,6 +14,7 @@ use arrow_schema::{ArrowError, DataType};
 /// of using this extension type.
 ///
 /// [`VariantArray`]: https://docs.rs/parquet-variant-compute/latest/parquet_variant_compute/struct.VariantArray.html
+#[derive(Debug, Clone, PartialEq)]
 pub struct VariantType;
 
 impl ExtensionType for VariantType {
@@ -71,13 +59,18 @@ impl ExtensionType for VariantType {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_schema::{Field, Fields};
+    use crate::extension::CanonicalExtensionType;
+    use crate::{Field, Fields};
 
     #[test]
     fn variant_type_requires_struct() {
         let field = Field::new("v", DataType::Struct(Fields::empty()), true)
             .with_extension_type(VariantType);
         assert!(field.has_valid_extension_type::<VariantType>());
+        assert_eq!(
+            field.try_canonical_extension_type().unwrap(),
+            CanonicalExtensionType::Variant(VariantType),
+        );
 
         let err = Field::new("v", DataType::Binary, true)
             .try_with_extension_type(VariantType)

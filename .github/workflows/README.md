@@ -1,27 +1,15 @@
 <!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+  SPDX-License-Identifier: Apache-2.0
+  SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+  SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 CI selects checks for pull requests according to their source and changed files.
 See the [contributor guide](../../CONTRIBUTING.md#pull-requests-from-forks) for fork CI setup.
-Fork pushes and manual runs execute the regular suites except macOS tests and Miri.
-macOS tests run only upstream to avoid frequent timeouts on fork runners; they remain
-enabled for same-repository and release-branch PRs, upstream manual runs, and the merge queue.
+Fork pushes and manual runs execute the regular suites except macOS tests, Windows tests, and Miri.
+macOS tests run only upstream to avoid frequent timeouts on fork runners, and Windows tests
+to reduce compute in forks. Both remain enabled for same-repository and release-branch PRs,
+upstream manual runs, and the merge queue.
 The merge queue runs the full test suite, except Miri, against the proposed merge result.
 Pushes to upstream `main` populate caches and publish documentation without repeating tests.
 A single required status check combines the results and blocks merging on failure.

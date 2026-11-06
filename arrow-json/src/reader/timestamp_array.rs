@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -24,6 +11,7 @@ use arrow_array::types::ArrowTimestampType;
 use arrow_cast::parse::string_to_datetime;
 use arrow_schema::{ArrowError, DataType, TimeUnit};
 use chrono::TimeZone;
+use num_traits::NumCast;
 
 use crate::reader::tape::{Tape, TapeElement};
 use crate::reader::{ArrayDecoder, DecoderContext};
@@ -87,8 +75,10 @@ where
                     let s = tape.get_string(idx);
                     let b = s.as_bytes();
                     lexical_core::parse::<i64>(b)
-                        .or_else(|_| lexical_core::parse::<f64>(b).map(|x| x as i64))
-                        .map_err(|_| {
+                        .ok()
+                        // a float outside the i64 range must not saturate to i64::MIN/MAX
+                        .or_else(|| lexical_core::parse::<f64>(b).ok().and_then(NumCast::from))
+                        .ok_or_else(|| {
                             ArrowError::JsonError(format!(
                                 "failed to parse {s} as {}",
                                 self.data_type
