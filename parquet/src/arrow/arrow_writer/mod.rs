@@ -1256,36 +1256,6 @@ struct ArrowTopLevelWriterSpec {
     leaf_range: Range<usize>,
 }
 
-/// Replayable schema-planning errors kept only for the deprecated
-/// [`ArrowRowGroupWriterFactory::new`] constructor. It cannot return errors,
-/// and repeated `create_column_writers(&self)` calls need fresh owned errors.
-/// [`ArrowRowGroupWriterFactory::try_new`] returns the original error directly.
-#[derive(Debug)]
-enum ArrowWriteSchemaPlanError {
-    General(String),
-    Nyi(String),
-    ArrowError(String),
-}
-
-impl ArrowWriteSchemaPlanError {
-    fn to_parquet_error(&self) -> ParquetError {
-        match self {
-            Self::General(message) => ParquetError::General(message.clone()),
-            Self::Nyi(message) => ParquetError::NYI(message.clone()),
-            Self::ArrowError(message) => ParquetError::ArrowError(message.clone()),
-        }
-    }
-
-    fn from_parquet_error(error: ParquetError) -> Self {
-        match error {
-            ParquetError::NYI(message) => Self::Nyi(message),
-            ParquetError::General(message) => Self::General(message),
-            ParquetError::ArrowError(message) => Self::ArrowError(message),
-            error => Self::General(error.to_string()),
-        }
-    }
-}
-
 /// Immutable schema glue shared by every row group.
 ///
 /// This deliberately caches only schema fields and Parquet descriptors, never
@@ -1446,11 +1416,7 @@ impl ArrowRowGroupWriter {
 /// See the example on [`ArrowColumnWriter`] for how to encode columns in parallel
 #[derive(Debug)]
 pub struct ArrowRowGroupWriterFactory {
-    // Only deprecated `new` can store an Err; `try_new` always stores an Ok.
-    // TODO: When removing `new`, store Arc<ArrowWriteSchemaPlan> directly,
-    // remove ArrowWriteSchemaPlanError and schema_plan(), and simplify
-    // from_schema_plan to accept the plan without a Result.
-    schema_plan: std::result::Result<Arc<ArrowWriteSchemaPlan>, ArrowWriteSchemaPlanError>,
+    schema_plan: Arc<ArrowWriteSchemaPlan>,
     props: WriterPropertiesPtr,
     page_store_factory: Arc<dyn PageStoreFactory>,
     #[cfg(feature = "encryption")]
@@ -1458,25 +1424,6 @@ pub struct ArrowRowGroupWriterFactory {
 }
 
 impl ArrowRowGroupWriterFactory {
-    /// Create a new [`ArrowRowGroupWriterFactory`] for the provided file writer and Arrow schema.
-    ///
-    /// Schema-planning errors are deferred until [`Self::create_column_writers`] is called.
-    /// Use [`Self::try_new`] to return these errors during construction instead.
-    #[deprecated(
-        since = "60.2.0",
-        note = "Use `ArrowRowGroupWriterFactory::try_new` instead"
-    )]
-    pub fn new<W: Write + Send>(
-        file_writer: &SerializedFileWriter<W>,
-        arrow_schema: SchemaRef,
-    ) -> Self {
-        let schema_plan =
-            ArrowWriteSchemaPlan::try_new(file_writer.schema_descr_ptr().as_ref(), &arrow_schema)
-                .map(Arc::new)
-                .map_err(ArrowWriteSchemaPlanError::from_parquet_error);
-        Self::from_schema_plan(file_writer, schema_plan)
-    }
-
     /// Try to create a new [`ArrowRowGroupWriterFactory`] for the provided file writer and Arrow schema.
     ///
     /// Validates and caches the schema-only field-to-leaf mapping for reuse across row groups.
@@ -1491,24 +1438,13 @@ impl ArrowRowGroupWriterFactory {
     ) -> Result<Self> {
         let schema_plan =
             ArrowWriteSchemaPlan::try_new(file_writer.schema_descr_ptr().as_ref(), &arrow_schema)?;
-        Ok(Self::from_schema_plan(
-            file_writer,
-            Ok(Arc::new(schema_plan)),
-        ))
-    }
-
-    fn from_schema_plan<W: Write + Send>(
-        file_writer: &SerializedFileWriter<W>,
-        schema_plan: std::result::Result<Arc<ArrowWriteSchemaPlan>, ArrowWriteSchemaPlanError>,
-    ) -> Self {
-        let props = Arc::clone(file_writer.properties());
-        Self {
-            schema_plan,
-            props,
+        Ok(Self {
+            schema_plan: Arc::new(schema_plan),
+            props: Arc::clone(file_writer.properties()),
             page_store_factory: Arc::new(InMemoryPageStoreFactory),
             #[cfg(feature = "encryption")]
             file_encryptor: file_writer.file_encryptor(),
-        }
+        })
     }
 
     /// Set the [`PageStoreFactory`] used to allocate the buffer for each column
@@ -1523,28 +1459,14 @@ impl ArrowRowGroupWriterFactory {
     }
 
     fn create_row_group_writer(&self, row_group_index: usize) -> Result<ArrowRowGroupWriter> {
-        let schema_plan = Arc::clone(self.schema_plan()?);
-        let writers = self.create_column_writers_from_plan(row_group_index, &schema_plan)?;
+        let schema_plan = Arc::clone(&self.schema_plan);
+        let writers = self.create_column_writers(row_group_index)?;
         Ok(ArrowRowGroupWriter::new(writers, schema_plan))
     }
 
     /// Create column writers for a new row group, with the given row group index
     pub fn create_column_writers(&self, row_group_index: usize) -> Result<Vec<ArrowColumnWriter>> {
-        self.create_column_writers_from_plan(row_group_index, self.schema_plan()?)
-    }
-
-    fn schema_plan(&self) -> Result<&Arc<ArrowWriteSchemaPlan>> {
-        match &self.schema_plan {
-            Ok(plan) => Ok(plan),
-            Err(error) => Err(error.to_parquet_error()),
-        }
-    }
-
-    fn create_column_writers_from_plan(
-        &self,
-        row_group_index: usize,
-        schema_plan: &ArrowWriteSchemaPlan,
-    ) -> Result<Vec<ArrowColumnWriter>> {
+        let schema_plan = &self.schema_plan;
         let mut writers = Vec::with_capacity(schema_plan.leaves.len());
         let mut leaves = schema_plan.leaves.iter();
         let column_factory = self.column_writer_factory(row_group_index);
@@ -3381,15 +3303,9 @@ mod tests {
             SerializedFileWriter::new(Vec::new(), parquet.root_schema_ptr(), Arc::clone(&props))
                 .unwrap();
 
-        let eager_error =
+        let err =
             ArrowRowGroupWriterFactory::try_new(&file_writer, Arc::clone(&two_fields)).unwrap_err();
-        assert!(matches!(&eager_error, ParquetError::General(_)));
-        #[expect(deprecated)] // Verify that the legacy constructor still defers errors.
-        let factory = ArrowRowGroupWriterFactory::new(&file_writer, Arc::clone(&two_fields));
-        let Err(err) = factory.create_column_writers(0) else {
-            panic!("mismatched schemas should not create column writers")
-        };
-        assert_eq!(err.to_string(), eager_error.to_string());
+        assert!(matches!(&err, ParquetError::General(_)));
         assert!(
             err.to_string()
                 .contains("Arrow schema maps to 2 leaf columns but Parquet schema has 1"),
@@ -3399,15 +3315,8 @@ mod tests {
         let parquet = ArrowSchemaConverter::new().convert(&two_fields).unwrap();
         let file_writer =
             SerializedFileWriter::new(Vec::new(), parquet.root_schema_ptr(), props).unwrap();
-        let eager_error =
-            ArrowRowGroupWriterFactory::try_new(&file_writer, Arc::clone(&one_field)).unwrap_err();
-        assert!(matches!(&eager_error, ParquetError::General(_)));
-        #[expect(deprecated)] // Verify that the legacy constructor still defers errors.
-        let factory = ArrowRowGroupWriterFactory::new(&file_writer, one_field);
-        let Err(err) = factory.create_column_writers(0) else {
-            panic!("mismatched schemas should not create column writers")
-        };
-        assert_eq!(err.to_string(), eager_error.to_string());
+        let err = ArrowRowGroupWriterFactory::try_new(&file_writer, one_field).unwrap_err();
+        assert!(matches!(&err, ParquetError::General(_)));
         assert!(
             err.to_string()
                 .contains("Arrow schema maps to 1 leaf columns but Parquet schema has 2"),
@@ -3591,25 +3500,12 @@ mod tests {
                 Arc::new(WriterProperties::default()),
             )
             .unwrap();
-            let eager_error =
-                ArrowRowGroupWriterFactory::try_new(&file, Arc::clone(&schema)).unwrap_err();
-            assert!(matches!(&eager_error, ParquetError::ArrowError(_)));
+            let err = ArrowRowGroupWriterFactory::try_new(&file, schema).unwrap_err();
+            assert!(matches!(&err, ParquetError::ArrowError(_)));
             assert_eq!(
-                eager_error.to_string(),
+                err.to_string(),
                 "Arrow: Map key field 'key' must be non-nullable, including its encoded values"
             );
-            #[expect(deprecated)] // Verify that the legacy constructor still defers errors.
-            let factory = ArrowRowGroupWriterFactory::new(&file, schema);
-            for row_group_index in 0..2 {
-                let Err(err) = factory.create_column_writers(row_group_index) else {
-                    panic!("nullable map-key schema should not create column writers")
-                };
-                assert!(matches!(&err, ParquetError::ArrowError(_)), "{err:?}");
-                assert_eq!(
-                    err.to_string(),
-                    "Arrow: Map key field 'key' must be non-nullable, including its encoded values"
-                );
-            }
         }
     }
 
@@ -3638,24 +3534,6 @@ mod tests {
                 .contains("column writers")
         );
         assert_eq!(group.buffered_rows, 0);
-    }
-
-    #[test]
-    fn arrow_write_schema_plan_preserves_error_variants() {
-        for error in [
-            ParquetError::General("schema mismatch".to_owned()),
-            ParquetError::NYI("unsupported type".to_owned()),
-            ParquetError::ArrowError("invalid schema".to_owned()),
-        ] {
-            let expected_variant = std::mem::discriminant(&error);
-            let expected_message = error.to_string();
-            let cached = ArrowWriteSchemaPlanError::from_parquet_error(error);
-            for _ in 0..2 {
-                let error = cached.to_parquet_error();
-                assert_eq!(std::mem::discriminant(&error), expected_variant);
-                assert_eq!(error.to_string(), expected_message);
-            }
-        }
     }
 
     #[test]
