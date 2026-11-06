@@ -17,7 +17,7 @@
 //! assert_eq!(arr.len(), 3);
 //! ```
 
-use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values};
+use crate::dictionary::{KeyMapping, merge_dictionary_values, should_merge_dictionary_values};
 use arrow_array::builder::{
     BooleanBuilder, GenericByteBuilder, GenericByteViewBuilder, PrimitiveBuilder,
 };
@@ -106,9 +106,19 @@ fn concat_dictionaries<K: ArrowDictionaryKeyType>(
     let mut has_nulls = false;
     for (d, mapping) in dictionaries.iter().zip(merged.key_mappings) {
         has_nulls |= d.null_count() != 0;
-        for key in d.keys().values() {
-            // Use get to safely handle nulls
-            key_values.push(mapping.get(key.as_usize()).copied().unwrap_or_default())
+        match mapping {
+            KeyMapping::Dense(mapping) => key_values.extend(
+                d.keys()
+                    .values()
+                    .iter()
+                    .map(|key| mapping.get(key.as_usize()).copied().unwrap_or_default()),
+            ),
+            KeyMapping::Sparse(mapping) => key_values.extend(
+                d.keys()
+                    .values()
+                    .iter()
+                    .map(|key| mapping.get(&key.as_usize()).copied().unwrap_or_default()),
+            ),
         }
     }
 
@@ -1544,6 +1554,35 @@ mod tests {
         // Not 30 as this is done on a best-effort basis
         let values_len = dictionary.values().len();
         assert!((30..40).contains(&values_len), "{values_len}")
+    }
+
+    #[test]
+    fn test_concat_oversized_dictionary_slices() {
+        let make_dictionary = |prefix| {
+            let values = StringArray::from_iter_values(
+                (0..1_000).map(|idx| format!("{prefix}_value_{idx}")),
+            );
+            let keys = Int32Array::from_iter_values(0..1_000);
+            DictionaryArray::<Int32Type>::new(keys, Arc::new(values))
+        };
+        let a = make_dictionary("a").slice(997, 3);
+        let b = make_dictionary("b").slice(1, 3);
+
+        let result = concat(&[&a, &b]).unwrap();
+        let actual = collect_string_dictionary(result.as_dictionary::<Int32Type>());
+
+        assert_eq!(
+            actual,
+            [
+                "a_value_997",
+                "a_value_998",
+                "a_value_999",
+                "b_value_1",
+                "b_value_2",
+                "b_value_3",
+            ]
+            .map(Some)
+        );
     }
 
     #[test]
