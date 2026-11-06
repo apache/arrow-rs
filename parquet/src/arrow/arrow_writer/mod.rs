@@ -1799,7 +1799,9 @@ fn write_leaf(
 /// [`visit_i32`] and [`visit_i64`] hold the conversion from each Arrow type, and
 /// call [`Self::slice`] when the Arrow values are stored as they are, or
 /// [`Self::map`] when each value is converted. This lets the writer borrow the
-/// Arrow buffer when no conversion is needed.
+/// Arrow buffer when no conversion is needed, and lets
+/// [`ArrowSbbf`](crate::arrow::bloom_filter::ArrowSbbf) check converted values
+/// one at a time without collecting them.
 pub(crate) trait PrimitiveVisitor<T> {
     type Output;
 
@@ -1922,6 +1924,13 @@ pub(crate) fn visit_i64<V: PrimitiveVisitor<i64>>(
                 visitor.slice(column.as_primitive::<DurationNanosecondType>().values())
             }
         },
+        ArrowDataType::Decimal32(_, _) => {
+            // ArrowWriter stores Decimal32 as INT32, but ArrowSbbf can check
+            // Decimal32 values against an INT64 decimal column
+            visitor.map(column.as_primitive::<Decimal32Type>().values(), |v| {
+                v as i64
+            })
+        }
         ArrowDataType::Decimal64(_, _) => {
             visitor.slice(column.as_primitive::<Decimal64Type>().values())
         }
@@ -2047,25 +2056,39 @@ pub(crate) fn visit_fixed_len_byte_array<V: FixedLenByteArrayVisitor>(
 
 /// Passes the big-endian two's complement bytes of the values of `array` to `visitor`
 ///
-/// The values are truncated to their low [`FixedLenByteArrayVisitor::decimal_length`]
-/// bytes, which must not be more than the length of the Arrow decimal type. A value
-/// too large for the length is truncated, as [`ArrowWriter`] has always done, since
-/// Arrow does not validate precision.
+/// The values are resized to [`FixedLenByteArrayVisitor::decimal_length`] bytes:
+/// sign-extended if that is longer than the Arrow decimal type, or truncated to
+/// the low bytes if it is shorter. A value too large for the length is truncated,
+/// as [`ArrowWriter`] has always done, since Arrow does not validate precision.
 fn visit_decimal<T: NativeDecimalType, V: FixedLenByteArrayVisitor>(
     array: &PrimitiveArray<T>,
     visitor: V,
 ) -> Result<V::Output> {
     let length = visitor.decimal_length(array.precision(), T::BYTE_LENGTH);
     let be_bytes = |i| T::to_be_bytes(array.value(i));
-    if length == T::BYTE_LENGTH {
-        // Special-case that allows inlining memcpy.
-        visitor.values(length, |i, value| {
+    // Compare the lengths once, not for each value
+    match length.checked_sub(T::BYTE_LENGTH) {
+        // Same length, which lets the compiler inline the copy
+        Some(0) => visitor.values(length, |i, value| {
             value.copy_from_slice(be_bytes(i).as_ref());
-        })
-    } else {
-        visitor.values(length, |i, value| {
+        }),
+        Some(extension) => visitor.values(length, |i, value| {
+            let bytes = be_bytes(i);
+            value[..extension].fill(sign_byte(bytes.as_ref()));
+            value[extension..].copy_from_slice(bytes.as_ref());
+        }),
+        None => visitor.values(length, |i, value| {
             value.copy_from_slice(&be_bytes(i).as_ref()[T::BYTE_LENGTH - length..]);
-        })
+        }),
+    }
+}
+
+/// Returns the byte that sign-extends the big-endian two's complement integer `bytes`
+fn sign_byte(bytes: &[u8]) -> u8 {
+    if bytes.first().is_some_and(|b| (*b as i8) < 0) {
+        0xFF
+    } else {
+        0
     }
 }
 

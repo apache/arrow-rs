@@ -95,6 +95,14 @@
 //! After inserting all values into a bloom filter it can be "folded" to minimize it's size.
 //! See [`Sbbf::fold_to_target_fpp`] for details  on the algorithm and its mathematical basis.
 //!
+//! # Checking with Arrow values
+//!
+//! [`Sbbf::check`] hashes the bytes of the Parquet physical value. [`ArrowWriter`]
+//! may store Arrow values as a different physical type (for example `Int8` as
+//! `INT32`), so use [`ArrowSbbf`] to check a filter with Arrow arrays.
+//!
+//! [`ArrowWriter`]: crate::arrow::ArrowWriter
+//! [`ArrowSbbf`]: crate::arrow::ArrowSbbf
 //! [parquet-bf-spec]: https://github.com/apache/parquet-format/blob/master/BloomFilter.md
 //! [sbbf-paper]: https://arxiv.org/pdf/2101.01719
 //! [bf-formulae]: http://tfk.mit.edu/pdf/bloom.pdf
@@ -533,6 +541,14 @@ impl Sbbf {
     }
 
     /// Check if an [AsBytes] value is probably present or definitely absent in the filter
+    ///
+    /// `value` must have the Parquet physical type of the column. To check a
+    /// filter written by [`ArrowWriter`] with Arrow values, which may have been
+    /// converted to a different type before they were written, use
+    /// [`ArrowSbbf`].
+    ///
+    /// [`ArrowWriter`]: crate::arrow::ArrowWriter
+    /// [`ArrowSbbf`]: crate::arrow::ArrowSbbf
     pub fn check<T: AsBytes + ?Sized>(&self, value: &T) -> bool {
         self.check_hash(hash_as_bytes(value))
     }

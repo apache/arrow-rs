@@ -178,6 +178,7 @@ mod array_reader;
 pub(crate) use array_reader::ByteArrayDecoderPlain;
 pub mod arrow_reader;
 pub mod arrow_writer;
+pub mod bloom_filter;
 mod buffer;
 #[cfg(feature = "file_experimental")]
 pub mod file_type;
@@ -207,6 +208,7 @@ pub use self::arrow_writer::ArrowWriter;
 pub use self::async_reader::ParquetRecordBatchStreamBuilder;
 #[cfg(feature = "async")]
 pub use self::async_writer::AsyncArrowWriter;
+pub use self::bloom_filter::ArrowSbbf;
 use crate::schema::types::SchemaDescriptor;
 use arrow_schema::{FieldRef, Schema};
 
