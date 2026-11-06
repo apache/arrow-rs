@@ -86,8 +86,8 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     group.finish();
 
-    // Many appends of 8 values each. At offset 3 every value goes to the head
-    // or the remainder, and none is packed.
+    // Many appends of 8 values each. Each append writes one byte at offset 0
+    // and spans two bytes at offset 3.
     let eight_inputs = [
         (
             "random",
