@@ -15,7 +15,9 @@ const DEFAULT_ZSTD_COMPRESSION_LEVEL: i32 = 3;
 ///
 /// In the case of zstd, this will contain the zstd context, which can be reused between subsequent
 /// compression calls to avoid the performance overhead of initialising a new context for every
-/// compression. Also holds a [`FlatBufferBuilder`] that is reused across IPC writes.
+/// compression. In the case of lz4, this will contain the lz4 frame encoder, whose hash table and
+/// block buffers are likewise reused. Also holds a [`FlatBufferBuilder`] that is reused across
+/// IPC writes.
 #[derive(Default)]
 pub struct IpcWriteContext {
     scratch: Vec<u8>,
@@ -23,6 +25,8 @@ pub struct IpcWriteContext {
     fbb: FlatBufferBuilder<'static>,
     #[cfg(feature = "zstd")]
     compressor: Option<zstd::bulk::Compressor<'static>>,
+    #[cfg(feature = "lz4")]
+    lz4_compressor: Option<Lz4Compressor>,
 }
 
 impl IpcWriteContext {
@@ -54,6 +58,11 @@ impl IpcWriteContext {
             zstd::bulk::Compressor::new(level).expect("can use default compression level")
         })
     }
+
+    #[cfg(feature = "lz4")]
+    fn lz4_compressor(&mut self) -> &mut Lz4Compressor {
+        self.lz4_compressor.get_or_insert_with(Lz4Compressor::new)
+    }
 }
 
 impl std::fmt::Debug for IpcWriteContext {
@@ -64,6 +73,12 @@ impl std::fmt::Debug for IpcWriteContext {
         ds.field(
             "compressor",
             &self.compressor.as_ref().map(|_| "zstd::bulk::Compressor"),
+        );
+
+        #[cfg(feature = "lz4")]
+        ds.field(
+            "lz4_compressor",
+            &self.lz4_compressor.as_ref().map(|_| "Lz4Compressor"),
         );
 
         ds.finish()
@@ -248,7 +263,7 @@ impl CompressionCodec {
         context: &mut IpcWriteContext,
     ) -> Result<(), ArrowError> {
         match self {
-            CompressionCodec::Lz4Frame => compress_lz4(input, output),
+            CompressionCodec::Lz4Frame => compress_lz4(input, output, context),
             CompressionCodec::Zstd(level) => compress_zstd(input, output, context, *level),
         }
     }
@@ -275,19 +290,68 @@ impl CompressionCodec {
     }
 }
 
+/// Reusable lz4 frame compressor, the lz4 counterpart of `zstd::bulk::Compressor`.
+///
+/// `lz4_flex` has no bulk frame API, so this wraps a [`lz4_flex::frame::FrameEncoder`] whose hash
+/// table and block buffers are retained across calls to [`Self::compress_to_buffer`].
 #[cfg(feature = "lz4")]
-fn compress_lz4(input: &[u8], output: &mut Vec<u8>) -> Result<(), ArrowError> {
-    use std::io::Write;
-    let mut encoder = lz4_flex::frame::FrameEncoder::new(output);
-    encoder.write_all(input)?;
-    encoder
-        .finish()
-        .map_err(|e| ArrowError::ExternalError(Box::new(e)))?;
-    Ok(())
+struct Lz4Compressor {
+    encoder: lz4_flex::frame::FrameEncoder<Vec<u8>>,
+}
+
+#[cfg(feature = "lz4")]
+impl Lz4Compressor {
+    fn new() -> Self {
+        // Pin the block size: with `BlockSize::Auto` the first buffer written would fix it for
+        // every subsequent frame of the reused encoder. 256KB keeps large buffers as fast as
+        // with bigger blocks while the encoder retains only ~0.5MB of buffers.
+        let frame_info =
+            lz4_flex::frame::FrameInfo::new().block_size(lz4_flex::frame::BlockSize::Max256KB);
+        Self {
+            encoder: lz4_flex::frame::FrameEncoder::with_frame_info(frame_info, Vec::new()),
+        }
+    }
+
+    /// Compresses `input` as a single lz4 frame appended to `output`.
+    fn compress_to_buffer(&mut self, input: &[u8], output: &mut Vec<u8>) -> Result<(), ArrowError> {
+        use std::io::Write;
+        // The encoder skips the frame header on empty input once it has written a frame.
+        debug_assert!(!input.is_empty());
+        // Lend `output` to the encoder so that the frame is written straight into it.
+        std::mem::swap(self.encoder.get_mut(), output);
+        let result = self
+            .encoder
+            .write_all(input)
+            .map_err(ArrowError::from)
+            .and_then(|()| {
+                self.encoder
+                    .try_finish()
+                    .map_err(|e| ArrowError::ExternalError(Box::new(e)))
+            });
+        std::mem::swap(self.encoder.get_mut(), output);
+        if result.is_err() {
+            // The encoder may be left mid-frame, start from a fresh one next time.
+            *self = Self::new();
+        }
+        result
+    }
+}
+
+#[cfg(feature = "lz4")]
+fn compress_lz4(
+    input: &[u8],
+    output: &mut Vec<u8>,
+    context: &mut IpcWriteContext,
+) -> Result<(), ArrowError> {
+    context.lz4_compressor().compress_to_buffer(input, output)
 }
 
 #[cfg(not(feature = "lz4"))]
-fn compress_lz4(_input: &[u8], _output: &mut Vec<u8>) -> Result<(), ArrowError> {
+fn compress_lz4(
+    _input: &[u8],
+    _output: &mut Vec<u8>,
+    _context: &mut IpcWriteContext,
+) -> Result<(), ArrowError> {
     Err(ArrowError::InvalidArgumentError(
         "lz4 IPC compression requires the lz4 feature".to_string(),
     ))
@@ -448,6 +512,27 @@ mod tests {
             err.to_string().contains("exceeds advertised size"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    #[cfg(feature = "lz4")]
+    fn test_lz4_compression_multiple_frames() {
+        let codec = super::CompressionCodec::Lz4Frame;
+        let mut context = super::IpcWriteContext::default();
+        // Spans several 256KB blocks, followed by a smaller frame.
+        let large: Vec<u8> = (0..200_000u32)
+            .flat_map(|i| (i % 1000).to_le_bytes())
+            .collect();
+        let small = b"hello lz4".to_vec();
+        for input in [&large, &small, &large] {
+            let mut output = b"prefix".to_vec();
+            codec.compress(input, &mut output, &mut context).unwrap();
+            assert_eq!(&output[..6], b"prefix");
+            let result = codec
+                .decompress(&output[6..], input.len(), &mut Default::default())
+                .unwrap();
+            assert_eq!(input, &result);
+        }
     }
 
     #[test]
