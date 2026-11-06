@@ -64,13 +64,23 @@ impl _MutableArrayData<'_> {
     }
 }
 
+#[inline]
+fn try_resize_for_bits(buffer: &mut MutableBuffer, len: usize) -> Result<(), ArrowError> {
+    let needed_bytes = bit_util::ceil(len, 8);
+    if buffer.len() < needed_bytes {
+        buffer
+            .try_resize(needed_bytes, 0)
+            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+    }
+    Ok(())
+}
+
 fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits<'_> {
     if let Some(nulls) = array.nulls() {
         let bytes = nulls.validity();
         Box::new(move |mutable, start, len| {
             let mutable_len = mutable.len;
             let out = mutable.null_buffer();
-            utils::resize_for_bits(out, mutable_len + len);
             mutable.null_count += set_bits(
                 out.as_slice_mut(),
                 bytes,
@@ -83,7 +93,6 @@ fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits<
         Box::new(|mutable, _, len| {
             let mutable_len = mutable.len;
             let out = mutable.null_buffer();
-            utils::resize_for_bits(out, mutable_len + len);
             let write_data = out.as_slice_mut();
             (0..len).for_each(|i| {
                 bit_util::set_bit(write_data, mutable_len + i);
@@ -212,23 +221,19 @@ fn build_extend_view(array: &ArrayData, buffer_offset: u32) -> Extend<'_> {
     let views = array.buffer::<u128>(0);
     Box::new(
         move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
+            let values = &views[start..start + len];
+            let dst_start = mutable.buffer1.len() / mem::size_of::<u128>();
             mutable
                 .buffer1
-                .extend(views[start..start + len].iter().map(|v| {
-                    // A view of a string of 12 bytes or fewer stores the
-                    // string inline and has no buffer index, so adding 0
-                    // leaves it unchanged.
-                    let offset = if *v as u32 > MAX_INLINE_VIEW_LEN {
-                        buffer_offset
-                    } else {
-                        0
-                    };
-                    // The buffer index is bits 64 to 95 of a view. Adding
-                    // `buffer_offset` gives the string's buffer index in the
-                    // output, which fits in 32 bits, so the sum never carries
-                    // into bit 96.
-                    v + ((offset as u128) << 64)
-                }));
+                .try_extend_from_slice(values)
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+            if buffer_offset != 0 {
+                for view in &mut mutable.buffer1.typed_data_mut::<u128>()[dst_start..] {
+                    if *view as u32 > MAX_INLINE_VIEW_LEN {
+                        *view += (buffer_offset as u128) << 64;
+                    }
+                }
+            }
             Ok(())
         },
     )
@@ -801,7 +806,8 @@ impl<'a> MutableArrayData<'a> {
     /// Returns an error if
     /// * `index` >= the number of source arrays,
     /// * `start..end` is not a valid range within the `index`th array, or
-    /// * offset arithmetic overflows the underlying integer type.
+    /// * offset arithmetic overflows the underlying integer type, or
+    /// * memory allocation fails.
     pub fn try_extend(&mut self, index: usize, start: usize, end: usize) -> Result<(), ArrowError> {
         let Some(array_len) = self.arrays.get(index).map(|array| array.len()) else {
             return Err(ArrowError::InvalidArgumentError(format!(
@@ -816,6 +822,14 @@ impl<'a> MutableArrayData<'a> {
         }
 
         let len = end - start;
+        let new_len = self
+            .data
+            .len
+            .checked_add(len)
+            .ok_or_else(|| ArrowError::MemoryError("length overflow".into()))?;
+        if let Some(nulls) = &mut self.data.null_buffer {
+            try_resize_for_bits(nulls, new_len)?;
+        }
         (self.extend_null_bits[index])(&mut self.data, start, len);
         // Snapshot buffer lengths before attempting the extend so we can roll
         // back to a consistent state if it fails.
@@ -828,7 +842,7 @@ impl<'a> MutableArrayData<'a> {
             self.data.buffer2.truncate(buf2_len);
             return Err(e);
         }
-        self.data.len += len;
+        self.data.len = new_len;
         Ok(())
     }
 
@@ -856,7 +870,8 @@ impl<'a> MutableArrayData<'a> {
     /// # Errors
     ///
     /// Returns an error if this [`MutableArrayData`] was not created with `use_nulls` and none
-    /// of the source arrays are nullable, or if the run-end counter overflows.
+    /// of the source arrays are nullable, the resulting length or run-end counter overflows, or
+    /// memory allocation fails.
     pub fn try_extend_nulls(&mut self, len: usize) -> Result<(), ArrowError> {
         if self.data.null_buffer.is_none() {
             return Err(ArrowError::InvalidArgumentError(
@@ -870,14 +885,19 @@ impl<'a> MutableArrayData<'a> {
             return Ok(());
         }
 
-        (self.extend_nulls)(&mut self.data, len)?;
-
-        self.data.len += len;
-        let bit_len = bit_util::ceil(self.data.len, 8);
-        let nulls = self.data.null_buffer();
-        nulls
+        let new_len = self
+            .data
+            .len
+            .checked_add(len)
+            .ok_or_else(|| ArrowError::MemoryError("length overflow".into()))?;
+        let bit_len = bit_util::ceil(new_len, 8);
+        self.data
+            .null_buffer()
             .try_resize(bit_len, 0)
             .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+        (self.extend_nulls)(&mut self.data, len)?;
+
+        self.data.len = new_len;
         self.data.null_count += len;
         Ok(())
     }
