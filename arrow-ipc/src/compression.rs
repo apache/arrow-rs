@@ -500,7 +500,7 @@ mod tests {
     fn test_lz4_compression_reuses_context() {
         let codec = super::CompressionCodec::Lz4Frame;
         let mut context = super::IpcWriteContext::default();
-        // Spans several 64KB blocks, followed by a smaller frame.
+        // Spans several 256KB blocks, followed by a smaller frame.
         let large: Vec<u8> = (0..200_000u32)
             .flat_map(|i| (i % 1000).to_le_bytes())
             .collect();
