@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Defines take kernel for [Array]
 
@@ -207,7 +194,14 @@ where
         };
     };
 
-    if indices.null_count() > 0 {
+    // Null slots usually hold in-bounds values, so first check every value with a loop that
+    // vectorizes, and look at validity only if that finds one out of bounds
+    let in_bounds = indices.values().iter().fold(true, |in_bounds, &i| {
+        in_bounds & (i >= T::Native::ZERO) & (i < len)
+    });
+    if in_bounds {
+        Ok(())
+    } else if indices.null_count() > 0 {
         indices.iter().flatten().try_for_each(|index| {
             if index >= len {
                 return Err(ArrowError::ComputeError(format!(
@@ -217,20 +211,13 @@ where
             Ok(())
         })
     } else {
-        let in_bounds = indices.values().iter().fold(true, |in_bounds, &i| {
-            in_bounds & (i >= T::Native::ZERO) & (i < len)
-        });
-
-        if !in_bounds {
-            for &index in indices.values() {
-                if index < T::Native::ZERO || index >= len {
-                    return Err(ArrowError::ComputeError(format!(
-                        "Array index out of bounds, cannot get item at index {index} from {len} entries"
-                    )));
-                }
+        for &index in indices.values() {
+            if index < T::Native::ZERO || index >= len {
+                return Err(ArrowError::ComputeError(format!(
+                    "Array index out of bounds, cannot get item at index {index} from {len} entries"
+                )));
             }
         }
-
         Ok(())
     }
 }
@@ -1046,7 +1033,9 @@ where
         let values_buf = &child_data.buffers()[0];
         let child_buf_offset = child_data.offset() * bytes_per_value;
 
-        let mut dst_buf = MutableBuffer::new(estimated_child_len.saturating_mul(bytes_per_value));
+        let capacity = estimated_child_len.saturating_mul(bytes_per_value);
+        let mut dst_buf = MutableBuffer::try_with_capacity(capacity)
+            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
         let mut child_len = OffsetType::Native::zero();
 
@@ -1056,7 +1045,9 @@ where
                     let row = idx.as_usize();
                     let start = child_buf_offset + src_offsets[row].as_usize() * bytes_per_value;
                     let end = child_buf_offset + src_offsets[row + 1].as_usize() * bytes_per_value;
-                    dst_buf.extend_from_slice(&values_buf[start..end]);
+                    dst_buf
+                        .try_extend_from_slice(&values_buf[start..end])
+                        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
                     child_len = child_len
                         .checked_add(&(src_offsets[row + 1] - src_offsets[row]))
                         .ok_or_else(|| ArrowError::OffsetOverflowError(child_len.as_usize()))?;
@@ -1089,7 +1080,9 @@ where
                             )
                         }
                     };
-                    dst_buf.extend_from_slice(&values_buf[start..end]);
+                    dst_buf
+                        .try_extend_from_slice(&values_buf[start..end])
+                        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
                     child_len = child_len
                         .checked_add(&(src_offsets[row + 1] - src_offsets[row]))
                         .ok_or_else(|| ArrowError::OffsetOverflowError(child_len.as_usize()))?;
@@ -1119,11 +1112,11 @@ where
         return GenericListArray::<OffsetType::Native>::try_new(field, offsets, child, nulls);
     }
 
-    let mut mutable = MutableArrayData::new(
+    let mut mutable = MutableArrayData::try_new(
         vec![&child_data],
         child_data.null_count() > 0,
         estimated_child_len,
-    );
+    )?;
 
     match nulls.as_ref().filter(|n| n.null_count() > 0) {
         None => {
@@ -1238,7 +1231,7 @@ fn take_fixed_size_list<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: b
             length as usize,
             element_size,
             nulls.as_ref(),
-        )
+        )?
     } else {
         let list_indices = take_value_indices_from_fixed_size_list(values, indices, length)?;
         take_impl::<UInt32Type, VALIDATE_INDICES>(child.as_ref(), &list_indices)?
@@ -1260,19 +1253,25 @@ fn take_fixed_size_list_primitive<IndexType: ArrowPrimitiveType>(
     list_size: usize,
     element_size: usize,
     taken_row_nulls: Option<&NullBuffer>,
-) -> ArrayRef {
-    let row_bytes = list_size * element_size;
+) -> Result<ArrayRef, ArrowError> {
+    let row_bytes = list_size
+        .checked_mul(element_size)
+        .ok_or_else(|| ArrowError::MemoryError("take output size overflow".into()))?;
     let child_data = child.to_data();
     let src = child_data.buffers()[0].as_slice();
     let child_byte_offset = child_data.offset() * element_size;
 
-    debug_assert!(
-        indices.len().checked_mul(row_bytes).is_some(),
-        "take_fixed_size_list_primitive: output buffer size overflows usize"
-    );
-    let out_len = indices.len() * list_size;
+    let out_len = indices
+        .len()
+        .checked_mul(list_size)
+        .ok_or_else(|| ArrowError::MemoryError("take output size overflow".into()))?;
+    let out_byte_len = indices
+        .len()
+        .checked_mul(row_bytes)
+        .ok_or_else(|| ArrowError::MemoryError("take output size overflow".into()))?;
 
-    let mut out = MutableBuffer::from_len_zeroed(indices.len() * row_bytes);
+    let mut out = MutableBuffer::try_from_len_zeroed(out_byte_len)
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
     let out_slice = out.as_slice_mut();
 
     if indices.null_count() == 0 {
@@ -1291,12 +1290,19 @@ fn take_fixed_size_list_primitive<IndexType: ArrowPrimitiveType>(
         }
     }
     // Expand the per-row null bitmap to per-element: each null row produces `list_size` null elements.
-    let child_null_buf = taken_row_nulls.map(|n| n.expand(list_size).buffer().clone());
+    let child_null_buf = taken_row_nulls
+        .map(|n| {
+            n.try_expand(list_size)
+                .map(|n| n.buffer().clone())
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))
+        })
+        .transpose()?;
 
     // SAFETY:
     // - The data buffer has `indices.len() * row_bytes` bytes = `out_len` elements of a
     //   primitive type, matching `.len(out_len)`.
-    // - The null buffer (when present) is `ceil(out_len, 8)` bytes via `expand(list_size).buffer()`.
+    // - The null buffer (when present) is `ceil(out_len, 8)` bytes via
+    //   `try_expand(list_size).buffer()`.
     // - Primitive types have exactly one value buffer.
     let array_data = unsafe {
         ArrayData::builder(child.data_type().clone())
@@ -1305,7 +1311,7 @@ fn take_fixed_size_list_primitive<IndexType: ArrowPrimitiveType>(
             .null_bit_buffer(child_null_buf)
             .build_unchecked()
     };
-    make_array(array_data)
+    Ok(make_array(array_data))
 }
 
 /// The take kernel implementation for `FixedSizeBinaryArray`.
@@ -1334,7 +1340,7 @@ fn take_fixed_size_binary<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES:
     let value_nulls = take_nulls::<_, VALIDATE_INDICES>(values.nulls(), indices);
     let final_nulls = NullBuffer::union(value_nulls.as_ref(), indices.nulls());
 
-    return FixedSizeBinaryArray::try_new(size, result_buffer, final_nulls);
+    return FixedSizeBinaryArray::try_new_with_len(size, result_buffer, final_nulls, indices.len());
 
     /// Implementation of the take kernel for fixed size binary arrays.
     #[inline(never)]
@@ -1671,6 +1677,12 @@ to_indices_reinterpret!(Int64Type, UInt64Type);
 ///
 /// This function will call [`take`] on each array of the [`RecordBatch`] and assemble a new [`RecordBatch`].
 ///
+/// # Errors
+/// This function errors whenever:
+/// * `indices` is not an integer array
+/// * A non-null index is not less than the number of rows
+/// * A taken column's offsets overflow, e.g. more than `i32::MAX` bytes of `Utf8` data
+///
 /// # Example
 /// ```
 /// # use std::sync::Arc;
@@ -1712,16 +1724,18 @@ pub fn take_record_batch(
     downcast_integer_array!(
         indices => {
             let indices = indices.to_indices();
-            let cols = record_batch.columns();
-            let mut columns = Vec::with_capacity(cols.len());
-            if let Some(first) = cols.first() {
-                columns.push(take_impl::<_, true>(first.as_ref(), &indices)?);
-                for col in &cols[1..] {
-                    columns.push(take_impl::<_, false>(col.as_ref(), &indices)?);
-                }
-            }
-            // Safety: indices were validated by the first take_impl call
-            Ok(unsafe { RecordBatch::new_unchecked(record_batch.schema(), columns, indices.len()) })
+            // Check once against the row count, which every column shares. A checked take of
+            // one column would not do: some types (e.g. `Null`) read no index.
+            check_bounds(record_batch.num_rows(), &indices)?;
+            let columns = record_batch
+                .columns()
+                .iter()
+                .map(|c| take_impl::<_, false>(c.as_ref(), &indices))
+                .collect::<Result<Vec<_>, _>>()?;
+            // Null indices can put nulls in non-nullable columns, which this rejects. The
+            // row count is needed for a batch with no columns.
+            let options = RecordBatchOptions::new().with_row_count(Some(indices.len()));
+            RecordBatch::try_new_with_options(record_batch.schema(), columns, &options)
         },
         d => Err(ArrowError::InvalidArgumentError(format!("Take only supported for integers, got {d:?}")))
     )
@@ -1732,7 +1746,7 @@ mod tests {
     use super::*;
     use arrow_array::builder::*;
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
-    use arrow_schema::{Field, Fields, TimeUnit, UnionFields};
+    use arrow_schema::{Field, Fields, Schema, TimeUnit, UnionFields};
     use num_traits::ToPrimitive;
 
     fn test_take_decimal_arrays(
@@ -4187,5 +4201,242 @@ mod tests {
         let result = take(&input, &indices, None).unwrap();
 
         assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_take_zero_sized_fixed_size_binary() {
+        let input =
+            FixedSizeBinaryArray::try_new_with_len(0, Buffer::from(Vec::<u8>::new()), None, 3)
+                .unwrap();
+
+        let indices = UInt32Array::from(vec![2, 0]);
+        let result = take(&input, &indices, None).unwrap();
+
+        assert_eq!(result.len(), 2);
+    }
+
+    /// Non-nullable columns of 3 rows, one per layout that represents a null differently
+    fn non_nullable_columns() -> Vec<ArrayRef> {
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(StringArray::from(vec!["a", "bb", "ccc"])),
+            Arc::new(DictionaryArray::<Int8Type>::from_iter(["x", "y", "x"])),
+            Arc::new(StructArray::from(vec![(
+                Arc::new(Field::new("c", DataType::Int32, false)),
+                Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+            )])),
+            Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+                vec![
+                    Some(vec![Some(1)]),
+                    Some(vec![Some(2)]),
+                    Some(vec![Some(3)]),
+                ],
+                1,
+            )),
+        ]
+    }
+
+    /// A batch with a nullable column followed by `column` in the non-nullable field "a"
+    fn batch_with_non_nullable(column: ArrayRef) -> RecordBatch {
+        let schema = Schema::new(vec![
+            Field::new("n", DataType::Int32, true),
+            Field::new("a", column.data_type().clone(), false),
+        ]);
+        let n = Arc::new(Int32Array::from(vec![Some(1), None, Some(3)]));
+        RecordBatch::try_new(Arc::new(schema), vec![n, column]).unwrap()
+    }
+
+    #[test]
+    fn test_take_record_batch_null_index_non_nullable_column() {
+        let indices = UInt32Array::from(vec![Some(2), None]);
+        for column in non_nullable_columns() {
+            let batch = batch_with_non_nullable(column);
+            let err = take_record_batch(&batch, &indices).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                "Invalid argument error: Column 'a' is declared as non-nullable but contains null values",
+                "{}",
+                batch.column(1).data_type()
+            );
+        }
+    }
+
+    #[test]
+    fn test_take_record_batch_non_nullable_column() {
+        let indices = [
+            UInt32Array::from(vec![2, 0, 2]),
+            // A validity buffer with no nulls
+            UInt32Array::new(vec![2, 0].into(), Some(NullBuffer::new_valid(2))),
+        ];
+        for column in non_nullable_columns() {
+            let batch = batch_with_non_nullable(column);
+            for indices in &indices {
+                let taken = take_record_batch(&batch, indices).unwrap();
+
+                assert_eq!(taken.schema(), batch.schema());
+                for (taken, column) in taken.columns().iter().zip(batch.columns()) {
+                    assert_eq!(taken, &take(column, indices, None).unwrap());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_take_record_batch_no_columns_row_count() {
+        let options = RecordBatchOptions::new().with_row_count(Some(3));
+        let batch =
+            RecordBatch::try_new_with_options(Arc::new(Schema::empty()), vec![], &options).unwrap();
+
+        let indices = UInt32Array::from(vec![Some(2), None, Some(0), Some(2)]);
+        let taken = take_record_batch(&batch, &indices).unwrap();
+        assert_eq!(taken.num_rows(), 4);
+    }
+
+    /// Columns whose `take` reads no index, so taking them alone does not check bounds
+    fn zero_width_columns(len: usize) -> Vec<ArrayRef> {
+        vec![
+            Arc::new(NullArray::new(len)),
+            Arc::new(StructArray::new_empty_fields(len, None)),
+            Arc::new(
+                FixedSizeListArray::try_new_with_length(
+                    Field::new_list_field(DataType::Int32, true).into(),
+                    0,
+                    Arc::new(Int32Array::new_null(0)),
+                    None,
+                    len,
+                )
+                .unwrap(),
+            ),
+            Arc::new(
+                FixedSizeBinaryArray::try_new_with_len(
+                    0,
+                    Buffer::from(Vec::<u8>::new()),
+                    None,
+                    len,
+                )
+                .unwrap(),
+            ),
+        ]
+    }
+
+    /// A batch of 3 rows with `first` followed by columns whose `take` reads every index
+    fn batch_with_first_column(first: ArrayRef) -> RecordBatch {
+        RecordBatch::try_from_iter_with_nullable([
+            ("first", first, true),
+            (
+                "i",
+                Arc::new(Int32Array::from(vec![Some(1), None, Some(3)])) as ArrayRef,
+                true,
+            ),
+            (
+                "s",
+                Arc::new(StringArray::from(vec!["a", "bb", "ccc"])),
+                true,
+            ),
+            (
+                "l",
+                Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                    Some(vec![Some(1)]),
+                    None,
+                    Some(vec![Some(3), None]),
+                ])),
+                true,
+            ),
+        ])
+        .unwrap()
+    }
+
+    #[test]
+    fn test_take_record_batch() {
+        let first: ArrayRef = Arc::new(BooleanArray::from(vec![true, false, true]));
+        let mut columns = vec![first];
+        columns.extend(zero_width_columns(3));
+        for first in columns {
+            let batch = batch_with_first_column(first);
+            let indices = UInt32Array::from(vec![Some(2), None, Some(0), Some(2)]);
+            let taken = take_record_batch(&batch, &indices).unwrap();
+
+            assert_eq!(taken.schema(), batch.schema());
+            assert_eq!(taken.num_rows(), 4);
+            for (taken, column) in taken.columns().iter().zip(batch.columns()) {
+                assert_eq!(taken, &take(column, &indices, None).unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn test_take_record_batch_out_of_bounds() {
+        let indices: [ArrayRef; 5] = [
+            // One past the end
+            Arc::new(UInt32Array::from(vec![0, 3])),
+            Arc::new(UInt32Array::from(vec![None, Some(3)])),
+            Arc::new(Int32Array::from(vec![-1])),
+            Arc::new(Int8Array::from(vec![i8::MAX])),
+            Arc::new(UInt64Array::from(vec![u64::MAX])),
+        ];
+        let first: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3]));
+        let mut columns = vec![first];
+        columns.extend(zero_width_columns(3));
+        for first in columns {
+            let batch = batch_with_first_column(first);
+            for indices in &indices {
+                let err = take_record_batch(&batch, indices).unwrap_err();
+                assert!(
+                    err.to_string().contains("Array index out of bounds"),
+                    "{}: {err}",
+                    batch.column(0).data_type()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_take_record_batch_null_index_out_of_bounds_value() {
+        // The value in a null index slot is never read, so it need not be in bounds
+        let indices = UInt32Array::new(
+            vec![2, u32::MAX, 0].into(),
+            Some(NullBuffer::from(vec![true, false, true])),
+        );
+        for first in zero_width_columns(3) {
+            let batch = batch_with_first_column(first);
+            let taken = take_record_batch(&batch, &indices).unwrap();
+
+            assert_eq!(taken.num_rows(), 3);
+            assert_eq!(
+                taken.column(1).as_primitive::<Int32Type>(),
+                &Int32Array::from(vec![Some(3), None, Some(1)])
+            );
+            assert_eq!(
+                taken.column(2).as_string::<i32>(),
+                &StringArray::from(vec![Some("ccc"), None, Some("a")])
+            );
+        }
+    }
+
+    #[test]
+    fn test_take_record_batch_empty() {
+        let batch = batch_with_first_column(Arc::new(NullArray::new(3))).slice(0, 0);
+
+        let taken = take_record_batch(&batch, &UInt32Array::from(Vec::<u32>::new())).unwrap();
+        assert_eq!(taken.num_rows(), 0);
+        assert_eq!(taken.schema(), batch.schema());
+
+        let taken = take_record_batch(&batch, &UInt32Array::from(vec![None, None])).unwrap();
+        assert_eq!(taken.num_rows(), 2);
+        assert_eq!(taken.column(1).null_count(), 2);
+
+        assert!(take_record_batch(&batch, &UInt32Array::from(vec![0])).is_err());
+    }
+
+    #[test]
+    fn test_take_record_batch_no_columns() {
+        let options = RecordBatchOptions::new().with_row_count(Some(3));
+        let batch =
+            RecordBatch::try_new_with_options(Arc::new(Schema::empty()), vec![], &options).unwrap();
+
+        let taken = take_record_batch(&batch, &UInt32Array::from(vec![2, 0, 2, 1])).unwrap();
+        assert_eq!(taken.num_rows(), 4);
+
+        assert!(take_record_batch(&batch, &UInt32Array::from(vec![3])).is_err());
     }
 }

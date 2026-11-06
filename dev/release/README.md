@@ -1,20 +1,7 @@
 <!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+  SPDX-License-Identifier: Apache-2.0
+  SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+  SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # Release Process
@@ -92,12 +79,30 @@ Note that when reviewing the change log, rather than editing the
 
 Merge this PR to `main` prior to the next step.
 
+## Verify Miri results (required)
+
+Before cutting a release candidate, run the
+[Miri workflow](https://github.com/apache/arrow-rs/actions/workflows/miri.yaml)
+on `main`:
+
+```shell
+gh workflow run miri.yaml --repo apache/arrow-rs --ref main
+```
+
+All partitions must pass before creating the RC tag. Review the results and
+link the run in the release tracking issue.
+
 ## Prepare release candidate tarball
 
 After you have merged the updates to the `CHANGELOG` and version,
 create a release candidate using the following steps. Note you need to
 be a committer to run these scripts as they upload to the apache `svn`
 distribution servers.
+
+Install HawkEye 7.0.0 (`cargo install hawkeye --version 7.0.0 --locked`)
+before running `create-tarball.sh`. The script checks license headers in the
+source tarball before signing it, using the file rules and exclusions in
+`licenserc.toml`. It does not audit the licenses of every file in the archive.
 
 ### Pick a Release Candidate (RC) number
 
@@ -217,7 +222,6 @@ Rust Arrow Crates:
 (cd arrow-ipc && cargo publish)
 (cd arrow-csv && cargo publish)
 (cd arrow-json && cargo publish)
-(cd arrow-avro && cargo publish)
 (cd arrow-arith && cargo publish)
 (cd arrow-string && cargo publish)
 (cd arrow-row && cargo publish)

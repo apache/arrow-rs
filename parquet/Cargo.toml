@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 [package]
 name = "parquet"
@@ -67,7 +54,9 @@ serde_json = { version = "1.0", default-features = false, features = ["std"], op
 seq-macro = { version = "0.3", default-features = false }
 futures = { version = "0.3", default-features = false, features = ["std"], optional = true }
 tokio = { version = "1.0", optional = true, default-features = false, features = ["macros", "rt", "io-util"] }
-hashbrown = { version = "0.17", default-features = false }
+# `inline-more` marks `HashTable::entry` `#[inline]`, so the dictionary encoder's
+# hash probe is compiled into `Interner::intern` (see the note there).
+hashbrown = { version = "0.17", default-features = false, features = ["inline-more"] }
 twox-hash = { version = "2.0", default-features = false, features = ["xxhash64"] }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
 crc32fast = { version = "1.4.2", optional = true, default-features = false }
@@ -75,11 +64,13 @@ simdutf8 = { workspace = true , optional = true }
 ring = { version = "0.17", default-features = false, features = ["std"], optional = true }
 
 [dev-dependencies]
+mimalloc = { version = "0.1", default-features = false }
 base64 = { version = "0.23", default-features = false, features = ["std"] }
 criterion = { workspace = true, default-features = false, features = ["async_futures"]  }
 snap = { version = "1.0", default-features = false }
 tempfile = { version = "3.0", default-features = false }
 insta = { workspace = true, default-features = true }
+proptest = { version = "1.0", default-features = false, features = ["std"] }
 brotli = { version = "9.0", default-features = false, features = ["std"] }
 flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
 lz4_flex = { version = "0.14", default-features = false, features = ["std", "frame"] }
@@ -91,7 +82,7 @@ tokio = { version = "1.0", default-features = false, features = ["macros", "rt-m
 rand = { version = "0.10", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 object_store = { workspace = true, features = ["azure", "fs"] }
 opendal = { version = "0.59.1", default-features = false, features = ["services-memory"] }
-sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
+sysinfo = { version = "0.40.1", default-features = false, features = ["system"] }
 
 [package.metadata.docs.rs]
 all-features = true
@@ -111,7 +102,7 @@ json = ["serde_json", "base64"]
 # Enable internal testing APIs
 test_common = ["arrow/test_utils"]
 # Experimental, unstable functionality primarily used for testing
-experimental = ["variant_experimental"]
+experimental = ["variant_experimental", "file_experimental"]
 # Enable async APIs
 async = ["futures", "tokio"]
 # Enable object_store integration
@@ -132,6 +123,8 @@ flate2-rust_backend = ["flate2/rust_backend"]
 flate2-zlib-rs = ["flate2/zlib-rs"]
 # Enable parquet variant support
 variant_experimental = ["arrow", "parquet-variant", "parquet-variant-compute"]
+# Enable parquet FILE logical type support
+file_experimental = ["arrow"]
 # Enable geospatial support
 geospatial = ["parquet-geospatial"]
 # Alias for typo. TODO: Remove in future major version bump.
@@ -295,6 +288,11 @@ required-features = ["experimental", "default"]
 harness = false
 
 [[bench]]
+name = "dictionary_skip"
+required-features = ["default"]
+harness = false
+
+[[bench]]
 name = "encoding"
 required-features = ["experimental", "default"]
 harness = false
@@ -326,7 +324,7 @@ required-features = ["arrow"]
 [[bench]]
 name = "row_selector_boolean_buffer"
 harness = false
-required-features = ["arrow"]
+required-features = ["arrow", "async"]
 
 [[bench]]
 name = "row_group_index_reader"

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! The bitmap backed representation of a [`RowSelection`] and the primitives
 //! operating on it: conversion to and from the run length ([`RowSelector`])
@@ -250,22 +237,17 @@ pub(super) fn split_off_mask(
     (head, tail)
 }
 
-/// Position of the highest set bit in `mask`, scanning bytes from the end.
+/// Position of the highest set bit in `mask`, scanning words from the end.
 fn last_set_bit_position(mask: &BooleanBuffer) -> Option<usize> {
-    let values = mask.values();
-    let offset = mask.offset();
-    let end = offset + mask.len();
-    for byte_idx in (offset / 8..end.div_ceil(8)).rev() {
-        let byte_start = byte_idx * 8;
-        let mut byte = values[byte_idx];
-        if end - byte_start < 8 {
-            byte &= (1u8 << (end - byte_start)) - 1;
-        }
-        if byte_start < offset {
-            byte &= !((1u8 << (offset - byte_start)) - 1);
-        }
-        if byte != 0 {
-            return Some(byte_start + 7 - byte.leading_zeros() as usize - offset);
+    let chunks = mask.bit_chunks();
+    let remainder = chunks.remainder_bits();
+    if remainder != 0 {
+        return Some(chunks.chunk_len() * 64 + 63 - remainder.leading_zeros() as usize);
+    }
+    for i in (0..chunks.chunk_len()).rev() {
+        let word = chunks.chunk(i);
+        if word != 0 {
+            return Some(i * 64 + 63 - word.leading_zeros() as usize);
         }
     }
     None

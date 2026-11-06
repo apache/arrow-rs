@@ -1,24 +1,11 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Round-trip tests for Arrow data written to Parquet.
 
 use super::roundtrip_helpers::{
-    RoundTripTest, SMALL_SIZE, required_and_optional, roundtrip, values_required,
+    RoundTripTest, SMALL_SIZE, required_and_optional, roundtrip, roundtrip_opts, values_required,
 };
 
 use std::collections::HashMap;
@@ -34,7 +21,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::{
     ArrowDictionaryKeyType, Date32Type, Date64Type, Decimal32Type, Decimal64Type, Decimal128Type,
     Decimal256Type, DecimalType, Float16Type, Int8Type, Int16Type, Int32Type, Int64Type,
-    Time32MillisecondType, Time64MicrosecondType, UInt8Type, UInt16Type, UInt32Type,
+    Time32MillisecondType, Time64MicrosecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 use arrow_array::{
     Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
@@ -59,9 +46,11 @@ use parquet::arrow::arrow_reader::{
     ArrowReaderOptions, ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder,
 };
 use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
-use parquet::basic::Type as PhysicalType;
+use parquet::basic::{Encoding, Type as PhysicalType};
+use parquet::column::reader::ColumnReader;
 use parquet::errors::Result;
 use parquet::file::properties::WriterProperties;
+use parquet::file::reader::{FileReader, SerializedFileReader};
 use tempfile::tempfile;
 
 #[test]
@@ -1023,17 +1012,65 @@ fn test_fixed_size_binary_in_dict() {
 
         let data = DictionaryArray::<K>::new(keys, Arc::new(values));
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data)]).unwrap();
-        roundtrip(batch, None);
+        for file in roundtrip(batch, None) {
+            let parquet = SerializedFileReader::new(file).unwrap();
+            let row_group = parquet.get_row_group(0).unwrap();
+            let ColumnReader::FixedLenByteArrayColumnReader(mut reader) =
+                row_group.get_column_reader(0).unwrap()
+            else {
+                panic!("dictionary FSB was not written as FIXED_LEN_BYTE_ARRAY")
+            };
+            let mut values = Vec::new();
+            reader.read_records(3, None, None, &mut values).unwrap();
+            assert_eq!(
+                values.iter().map(|value| value.data()).collect::<Vec<_>>(),
+                [b"\0\0\0\0".as_slice(), b"\0\0\0\0", b"\x01\x01\x01\x01"]
+            );
+        }
     }
 
     test_fixed_size_binary_in_dict_inner::<UInt8Type>();
     test_fixed_size_binary_in_dict_inner::<UInt16Type>();
     test_fixed_size_binary_in_dict_inner::<UInt32Type>();
-    test_fixed_size_binary_in_dict_inner::<UInt16Type>();
+    test_fixed_size_binary_in_dict_inner::<UInt64Type>();
     test_fixed_size_binary_in_dict_inner::<Int8Type>();
     test_fixed_size_binary_in_dict_inner::<Int16Type>();
     test_fixed_size_binary_in_dict_inner::<Int32Type>();
     test_fixed_size_binary_in_dict_inner::<Int64Type>();
+}
+
+#[test]
+fn test_fixed_size_binary_in_dict_dictionary_disabled() {
+    let field = Field::new(
+        "a",
+        ArrowDataType::Dictionary(
+            Box::new(ArrowDataType::UInt8),
+            Box::new(ArrowDataType::FixedSizeBinary(4)),
+        ),
+        true,
+    );
+    let schema = Arc::new(Schema::new(vec![field]));
+    let keys = UInt8Array::from(vec![Some(0), None, Some(1), Some(0)]);
+    let values =
+        FixedSizeBinaryArray::try_from_iter(vec![vec![0, 0, 0, 0], vec![1, 1, 1, 1]].into_iter())
+            .unwrap();
+    let data = DictionaryArray::<UInt8Type>::new(keys, Arc::new(values));
+    let batch = RecordBatch::try_new(schema, vec![Arc::new(data)]).unwrap();
+    for encoding in [
+        Encoding::PLAIN,
+        Encoding::DELTA_BYTE_ARRAY,
+        Encoding::BYTE_STREAM_SPLIT,
+    ] {
+        for dictionary in [false, true] {
+            let props = WriterProperties::builder()
+                .set_dictionary_enabled(dictionary)
+                .set_dictionary_page_size_limit(1)
+                .set_write_batch_size(1)
+                .set_encoding(encoding)
+                .build();
+            roundtrip_opts(&batch, props);
+        }
+    }
 }
 
 #[test]

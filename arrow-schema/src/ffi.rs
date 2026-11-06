@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Contains declarations to bind to the [C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html).
 //!
@@ -889,6 +876,10 @@ impl TryFrom<&Field> for FFI_ArrowSchema {
             flags |= Flags::DICTIONARY_ORDERED;
         }
 
+        if let DataType::Map(_, true) = field.data_type() {
+            flags |= Flags::MAP_KEYS_SORTED;
+        }
+
         let schema = FFI_ArrowSchema::try_from(field.data_type())?
             .with_name(field.name())?
             .with_flags(flags)?;
@@ -1066,6 +1057,56 @@ mod tests {
 
         let arrow_schema = FFI_ArrowSchema::try_from(map_data_type).unwrap();
         assert!(arrow_schema.map_keys_sorted());
+    }
+
+    fn map_type(keys_sorted: bool) -> DataType {
+        let entries = Field::new(
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+            DataType::Struct(Fields::from(vec![
+                Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int32, true),
+            ])),
+            false,
+        );
+        DataType::Map(Arc::new(entries), keys_sorted)
+    }
+
+    #[test]
+    fn test_map_keys_sorted_field() {
+        for keys_sorted in [false, true] {
+            for nullable in [false, true] {
+                let field = Field::new("m", map_type(keys_sorted), nullable);
+                let c_schema = FFI_ArrowSchema::try_from(&field).unwrap();
+                assert_eq!(c_schema.map_keys_sorted(), keys_sorted);
+                assert_eq!(c_schema.nullable(), nullable);
+                round_trip_field(field);
+            }
+        }
+    }
+
+    #[test]
+    fn test_map_keys_sorted_nested() {
+        let map = |keys_sorted| Field::new("m", map_type(keys_sorted), true);
+
+        for keys_sorted in [false, true] {
+            round_trip_type(DataType::Struct(Fields::from(vec![
+                Field::new("a", DataType::Int32, true),
+                map(keys_sorted),
+            ])));
+            round_trip_type(DataType::List(Arc::new(map(keys_sorted))));
+            round_trip_type(DataType::Union(
+                UnionFields::try_new(
+                    vec![0, 1],
+                    vec![Field::new("i", DataType::Int32, true), map(keys_sorted)],
+                )
+                .unwrap(),
+                UnionMode::Dense,
+            ));
+            round_trip_schema(Schema::new(vec![
+                Field::new("id", DataType::Int64, false),
+                map(keys_sorted),
+            ]));
+        }
     }
 
     #[test]

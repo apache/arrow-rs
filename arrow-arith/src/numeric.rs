@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Defines numeric arithmetic kernels on [`PrimitiveArray`], such as [`add`]
 
@@ -28,7 +15,7 @@ use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, IntervalDayTime, IntervalMonthDayNano};
 use arrow_schema::{ArrowError, DataType, IntervalUnit, TimeUnit};
-use num_traits::ToPrimitive;
+use num_traits::{CheckedMul, ToPrimitive};
 
 use crate::arity::{binary, try_binary};
 
@@ -982,8 +969,7 @@ fn scaled_div<T: DecimalType>(
     let dividend = abs_checked::<T>(l)?;
     let divisor = abs_checked::<T>(r)?;
 
-    let mut quotient = dividend.div_checked(divisor)?;
-    let mut remainder = dividend.mod_checked(divisor)?;
+    let (mut quotient, mut remainder) = dividend.div_rem_checked(divisor)?;
     for _ in 0..mul_pow {
         // `remainder * 10` overflows for divisors near `T::Native::MAX`, so add the remainder
         // ten times and take the divisor off whenever the running sum reaches it.
@@ -1026,7 +1012,10 @@ fn decimal_op<T: DecimalType>(
     l_s: bool,
     r: &dyn Array,
     r_s: bool,
-) -> Result<ArrayRef, ArrowError> {
+) -> Result<ArrayRef, ArrowError>
+where
+    T::Native: CheckedMul,
+{
     let l = l.as_primitive::<T>();
     let r = r.as_primitive::<T>();
 
@@ -1138,9 +1127,9 @@ fn decimal_op<T: DecimalType>(
                 l_s,
                 r,
                 r_s,
-                match l.mul_checked(l_mul) {
-                    Ok(scaled) => scaled.div_checked(r.mul_checked(r_mul)?),
-                    Err(_) => scaled_div::<T>(l, r, mul_pow),
+                match l.checked_mul(&l_mul) {
+                    Some(scaled) => scaled.div_checked(r.mul_checked(r_mul)?),
+                    None => scaled_div::<T>(l, r, mul_pow),
                 }
             )
             .with_precision_and_scale(result_precision, result_scale)?
@@ -1711,6 +1700,41 @@ mod tests {
                     let expected = expected.with_precision_and_scale(1, scale + 4).unwrap();
                     assert_eq!(div(&a, &b).unwrap().as_ref(), &expected);
                 }
+            }
+        }
+        check::<Decimal32Type>();
+        check::<Decimal64Type>();
+        check::<Decimal128Type>();
+        check::<Decimal256Type>();
+    }
+
+    #[test]
+    fn test_decimal_div_scaling_overflow_boundary() {
+        // `div` scales `l` by 10^6, which overflows just past `MAX / 10^6` and `MIN / 10^6`.
+        // Dividing by 10^6 returns each value, on either side of the boundary.
+        fn check<T: DecimalType>() {
+            let one = T::Native::ONE;
+            let pow = T::Native::usize_as(1_000_000);
+            let max = T::Native::MAX_TOTAL_ORDER.div_wrapping(pow);
+            let min = T::Native::MIN_TOTAL_ORDER.div_wrapping(pow);
+            let values = [
+                max,
+                max.add_wrapping(one),
+                min,
+                min.sub_wrapping(one),
+                T::Native::MAX_TOTAL_ORDER,
+                T::Native::MIN_TOTAL_ORDER.add_wrapping(one),
+            ];
+            let a = PrimitiveArray::<T>::from_iter_values(values)
+                .with_precision_and_scale(T::MAX_PRECISION, 2)
+                .unwrap();
+            for (divisor, negate) in [(pow, false), (pow.neg_wrapping(), true)] {
+                let b = PrimitiveArray::<T>::from_iter_values([divisor])
+                    .with_precision_and_scale(T::MAX_PRECISION, 2)
+                    .unwrap();
+                let result = div(&a, &Scalar::new(b)).unwrap();
+                let expected = values.map(|v| if negate { v.neg_wrapping() } else { v });
+                assert_eq!(result.as_primitive::<T>().values().as_ref(), expected);
             }
         }
         check::<Decimal32Type>();
@@ -2824,5 +2848,30 @@ mod tests {
     fn test_date_month_day_nano_operations() {
         test_month_day_nano_ops!(Date32Type, date_to_days);
         test_month_day_nano_ops!(Date64Type, date_to_millis);
+    }
+
+    #[test]
+    fn test_date_sub_interval_min_months() {
+        // Subtracting i32::MIN months requires negating i32::MIN, which
+        // overflows i32: the date kernels must return the Date arithmetic
+        // overflow error instead of panicking in debug builds
+        // https://github.com/apache/arrow-rs/issues/11600
+        let dates: [ArrayRef; 2] = [
+            Arc::new(Date32Array::from(vec![0])),
+            Arc::new(Date64Array::from(vec![0])),
+        ];
+        let year_month = IntervalYearMonthArray::from(vec![i32::MIN]);
+        let month_day_nano =
+            IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNano::new(i32::MIN, 0, 0)]);
+        for dates in &dates {
+            assert_eq!(
+                sub(dates, &year_month).unwrap_err().to_string(),
+                "Compute error: Date arithmetic overflow: 0 - -2147483648 months"
+            );
+            assert_eq!(
+                sub(dates, &month_day_nano).unwrap_err().to_string(),
+                "Compute error: Date arithmetic overflow: 0 - IntervalMonthDayNano { months: -2147483648, days: 0, nanoseconds: 0 }"
+            );
+        }
     }
 }

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::alloc::Layout;
 use std::fmt::Debug;
@@ -23,7 +10,7 @@ use std::sync::Arc;
 use crate::BufferBuilder;
 use crate::alloc::{Allocation, Deallocation};
 use crate::util::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
-use crate::{bit_util, bytes::Bytes, native::ArrowNativeType};
+use crate::{SliceOutOfBoundsError, bit_util, bytes::Bytes, native::ArrowNativeType};
 
 #[cfg(feature = "pool")]
 use crate::pool::MemoryPool;
@@ -296,19 +283,31 @@ impl Buffer {
     /// # Panics
     /// Panics iff `(offset + length)` is larger than the existing length.
     pub fn slice_with_length(&self, offset: usize, length: usize) -> Self {
-        assert!(
-            offset.saturating_add(length) <= self.length,
-            "the offset of the new Buffer cannot exceed the existing length: slice offset={offset} length={length} selflen={}",
-            self.length
-        );
+        self.try_slice_with_length(offset, length)
+            .unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// Returns a new [Buffer] that is a slice of this buffer starting at `offset`,
+    /// with `length` bytes, or an error if `(offset + length)` is larger than the
+    /// existing length.
+    ///
+    /// This is the non-panicking version of [`Self::slice_with_length`].
+    pub fn try_slice_with_length(
+        &self,
+        offset: usize,
+        length: usize,
+    ) -> Result<Self, SliceOutOfBoundsError> {
+        if offset.saturating_add(length) > self.length {
+            return Err(SliceOutOfBoundsError::new(offset, length, self.length));
+        }
         // Safety:
         // offset + length <= self.length
         let ptr = unsafe { self.ptr.add(offset) };
-        Self {
+        Ok(Self {
             data: self.data.clone(),
             ptr,
             length,
-        }
+        })
     }
 
     /// Returns a pointer to the start of this buffer.
@@ -428,6 +427,9 @@ impl Buffer {
     ///
     /// This can be used to reuse / mutate the underlying data.
     ///
+    /// With the `pool` feature enabled, a successful conversion releases the buffer's
+    /// memory reservation. The returned `Vec` is not tracked by the memory pool.
+    ///
     /// # Errors
     ///
     /// Returns `Err(self)` if
@@ -457,6 +459,8 @@ impl Buffer {
         Arc::try_unwrap(self.data)
             .map(|bytes| unsafe {
                 let ptr = bytes.ptr().as_ptr().cast();
+                #[cfg(feature = "pool")]
+                drop(bytes.reservation.take());
                 std::mem::forget(bytes);
                 // Safety
                 // Verified that bytes layout matches that of Vec
@@ -648,6 +652,8 @@ impl<T: ArrowNativeType> FromIterator<T> for Buffer {
 #[cfg(test)]
 mod tests {
     use crate::i256;
+    #[cfg(feature = "pool")]
+    use crate::pool::{MemoryPool, TrackingMemoryPool};
     use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::thread;
 
@@ -705,6 +711,29 @@ mod tests {
         assert_eq!(64, buf2.capacity());
         assert!(!buf2.as_ptr().is_null());
         assert_eq!([0, 1, 2, 3, 4], buf2.as_slice());
+    }
+
+    #[test]
+    fn test_try_slice_with_length() {
+        let buf = Buffer::from(&[2, 4, 6, 8, 10]);
+        assert_eq!(
+            [4, 6, 8],
+            buf.try_slice_with_length(1, 3).unwrap().as_slice()
+        );
+        assert!(buf.try_slice_with_length(5, 0).unwrap().is_empty());
+        assert!(buf.try_slice_with_length(6, 0).is_err());
+        assert!(buf.try_slice_with_length(usize::MAX, 1).is_err());
+        assert_eq!(
+            buf.try_slice_with_length(3, 3).unwrap_err().to_string(),
+            "the offset of the new Buffer cannot exceed the existing length: slice offset=3 length=3 selflen=5"
+        );
+
+        let buf2 = buf.slice(2);
+        assert_eq!(
+            [8, 10],
+            buf2.try_slice_with_length(1, 2).unwrap().as_slice()
+        );
+        assert!(buf2.try_slice_with_length(1, 3).is_err());
     }
 
     #[test]
@@ -925,6 +954,29 @@ mod tests {
     fn slice_overflow() {
         let buffer = Buffer::from(MutableBuffer::from_len_zeroed(12));
         buffer.slice_with_length(2, usize::MAX);
+    }
+
+    #[test]
+    #[cfg(feature = "pool")]
+    fn test_into_vec_releases_reservation() {
+        let pool = TrackingMemoryPool::default();
+        let buffer = Buffer::from_vec(vec![1_u8, 2, 3]);
+        buffer.claim(&pool);
+        assert_eq!(pool.used(), 3);
+
+        let shared = buffer.clone();
+        let buffer = buffer.into_vec::<u8>().unwrap_err();
+        assert_eq!(pool.used(), 3);
+        drop(shared);
+
+        let ptr = buffer.as_ptr();
+        let values = buffer.into_vec::<u8>().unwrap();
+        assert_eq!(values.as_ptr(), ptr);
+        assert_eq!(values, [1, 2, 3]);
+        assert_eq!(pool.used(), 0);
+
+        drop(values);
+        assert_eq!(pool.used(), 0);
     }
 
     #[test]

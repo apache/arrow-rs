@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Tests of selective page index population
 
@@ -370,9 +357,9 @@ fn test_page_index_sizes() {
     let metadata = reader.finish().unwrap();
     assert!(metadata.page_index().is_none());
     #[cfg(not(feature = "encryption"))]
-    assert_eq!(metadata.memory_size(), 7393);
+    assert_eq!(metadata.memory_size(), 7425);
     #[cfg(feature = "encryption")]
-    assert_eq!(metadata.memory_size(), 7817);
+    assert_eq!(metadata.memory_size(), 7849);
 
     // full index
     let mut reader = ParquetMetaDataReader::new().with_page_index_policy(PageIndexPolicy::Required);
@@ -382,9 +369,9 @@ fn test_page_index_sizes() {
     let metadata = reader.finish().unwrap();
     assert!(metadata.page_index().is_some());
     #[cfg(not(feature = "encryption"))]
-    assert_eq!(metadata.memory_size(), 13897);
+    assert_eq!(metadata.memory_size(), 13929);
     #[cfg(feature = "encryption")]
-    assert_eq!(metadata.memory_size(), 14321);
+    assert_eq!(metadata.memory_size(), 14353);
 
     // populate column 0 for column index and all columns for offset index
     let mut reader = ParquetMetaDataReader::new()
@@ -397,9 +384,9 @@ fn test_page_index_sizes() {
     let metadata = reader.finish().unwrap();
     assert!(metadata.page_index().is_some());
     #[cfg(not(feature = "encryption"))]
-    assert_eq!(metadata.memory_size(), 12776);
+    assert_eq!(metadata.memory_size(), 12808);
     #[cfg(feature = "encryption")]
-    assert_eq!(metadata.memory_size(), 13200);
+    assert_eq!(metadata.memory_size(), 13232);
 
     // populate column 0 for column index and columns 0 & 2 for the offset index
     let mut reader = ParquetMetaDataReader::new()
@@ -412,9 +399,9 @@ fn test_page_index_sizes() {
     let metadata = reader.finish().unwrap();
     assert!(metadata.page_index().is_some());
     #[cfg(not(feature = "encryption"))]
-    assert_eq!(metadata.memory_size(), 12056);
+    assert_eq!(metadata.memory_size(), 12088);
     #[cfg(feature = "encryption")]
-    assert_eq!(metadata.memory_size(), 12480);
+    assert_eq!(metadata.memory_size(), 12512);
 
     // populate only row group 1, column index gets column 0, offset index gets
     // columns 0 and 2.
@@ -428,7 +415,7 @@ fn test_page_index_sizes() {
     let metadata = reader.finish().unwrap();
     assert!(metadata.page_index().is_some());
     #[cfg(not(feature = "encryption"))]
-    assert_eq!(metadata.memory_size(), 11326);
+    assert_eq!(metadata.memory_size(), 11358);
     #[cfg(feature = "encryption")]
-    assert_eq!(metadata.memory_size(), 11750);
+    assert_eq!(metadata.memory_size(), 11782);
 }

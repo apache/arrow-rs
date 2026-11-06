@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 #![allow(dead_code)]
 #![allow(unused_imports)]
@@ -50,7 +37,11 @@ pub const ENUM_VALUES_COMPRESSION_TYPE: [CompressionType; 2] =
 pub struct CompressionType(pub i8);
 #[allow(non_upper_case_globals)]
 impl CompressionType {
+    /// LZ4 frame format, for portability, as provided by lz4frame.h or wrappers
+    /// thereof. Not to be confused with "raw" (also called "block") format
+    /// provided by lz4.h
     pub const LZ4_FRAME: Self = Self(0);
+    /// Zstandard
     pub const ZSTD: Self = Self(1);
 
     pub const ENUM_MIN: i8 = 0;
@@ -152,6 +143,8 @@ impl BodyCompressionMethod {
     /// uncompressed length may be set to -1 to indicate that the data that
     /// follows is not compressed, which can be useful for cases where
     /// compression does not yield appreciable savings.
+    /// Also, empty buffers can optionally be written out as 0-byte compressed
+    /// buffers, thereby omitting the 8-bytes length header.
     pub const BUFFER: Self = Self(0);
 
     pub const ENUM_MIN: i8 = 0;
@@ -250,7 +243,11 @@ pub const ENUM_VALUES_MESSAGE_HEADER: [MessageHeader; 6] = [
 ///
 /// Arrow implementations do not need to implement all of the message types,
 /// which may include experimental metadata types. For maximum compatibility,
-/// it is best to send data using RecordBatch
+/// it is best to send data using RecordBatch.
+///
+/// Tensor and SparseTensor are DEPRECATED. The recommended way to pass dense
+/// tensors over Arrow IPC is a RecordBatch field with the `arrow.fixed_shape_tensor`
+/// canonical type. Sparse tensors currently do not have a recommended replacement.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
 pub struct MessageHeader(pub u8);
@@ -744,7 +741,7 @@ impl<'a> RecordBatch<'a> {
     }
     /// Some types such as Utf8View are represented using a variable number of buffers.
     /// For each such Field in the pre-ordered flattened logical schema, there will be
-    /// an entry in variadicBufferCounts to indicate the number of number of variadic
+    /// an entry in variadicBufferCounts to indicate the number of variadic
     /// buffers which belong to that Field in the current RecordBatch.
     ///
     /// For example, the schema

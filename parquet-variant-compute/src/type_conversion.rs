@@ -1,28 +1,15 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Module for transforming a typed arrow `Array` to `VariantArray`.
 
 use arrow::array::ArrowNativeTypeOp;
 use arrow::compute::kernels::cast_utils::parse_decimal;
 use arrow::compute::{
-    CastOptions, DecimalCast, cast_num_to_bool, cast_single_string_to_boolean_default, num_cast,
-    rescale_decimal, single_bool_to_numeric, single_decimal_to_float_lossy,
-    single_float_to_decimal,
+    CastOptions, DecimalCast, cast_num_to_bool, cast_single_string_to_boolean_default,
+    float_to_decimal_opt, num_cast, rescale_decimal, single_bool_to_numeric,
+    single_decimal_to_float_lossy,
 };
 use arrow::datatypes::{
     self, ArrowPrimitiveType, ArrowTimestampType, Decimal32Type, Decimal64Type, Decimal128Type,
@@ -382,7 +369,7 @@ impl_timestamp_from_variant!(
 /// - Decimal variants (`Decimal4/8/16`) use their embedded precision and scale
 ///
 /// The value is rescaled to (`precision`, `scale`) using `rescale_decimal` for integers,
-/// `single_float_to_decimal` for floats, and `parse_decimal` for strings.
+/// `float_to_decimal_opt` for floats, and `parse_decimal` for strings.
 /// returns `None` if it cannot fit the requested precision.
 pub(crate) fn variant_to_unscaled_decimal<O>(
     variant: &Variant<'_, '_>,
@@ -393,8 +380,6 @@ where
     O: DecimalType,
     O::Native: DecimalCast,
 {
-    let mul = 10_f64.powi(scale as i32);
-
     match variant {
         Variant::Int8(i) => rescale_decimal::<Decimal32Type, O>(
             *i as i32,
@@ -424,8 +409,10 @@ where
             precision,
             scale,
         ),
-        Variant::Float(f) => single_float_to_decimal::<O>(<f64 as From<f32>>::from(*f), mul),
-        Variant::Double(f) => single_float_to_decimal::<O>(*f, mul),
+        Variant::Float(f) => {
+            float_to_decimal_opt::<O>(<f64 as From<f32>>::from(*f), precision, scale)
+        }
+        Variant::Double(f) => float_to_decimal_opt::<O>(*f, precision, scale),
         Variant::String(v) => parse_decimal::<O>(v, precision, scale).ok(),
         Variant::ShortString(v) => parse_decimal::<O>(v, precision, scale).ok(),
         Variant::Decimal4(d) => rescale_decimal::<Decimal32Type, O>(

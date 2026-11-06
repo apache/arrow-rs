@@ -1,3 +1,9 @@
+<!---
+  SPDX-License-Identifier: Apache-2.0
+  SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+  SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+-->
+
 # Agent Guidelines for Apache Arrow-rs
 
 This file is an entry point. Follow the detailed guidance in
@@ -23,7 +29,7 @@ Run the checks relevant to your change from the repository root:
 
 ```bash
 # Check Rust formatting and lints for code changes
-cargo +stable fmt --all -- --check
+cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 # Check spelling, including documentation changes
@@ -40,4 +46,3 @@ See the [testing](CONTRIBUTING.md#running-the-tests), [formatting](CONTRIBUTING.
 
 For performance work, see [benchmarks](CONTRIBUTING.md#performance-improvements). For memory-safety checks, see [Miri](CONTRIBUTING.md#miri).
 For public API changes, see [breaking changes](CONTRIBUTING.md#breaking-changes).
-

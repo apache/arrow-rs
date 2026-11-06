@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+name: Setup rustup
+description: "Install rustup and the rust-toolchain.toml toolchain on runners without Rust, such as ubuntu-slim"
+runs:
+  using: "composite"
+  steps:
+    - name: Install rustup
+      shell: bash
+      run: |
+        curl --proto '=https' --tlsv1.2 --retry 3 -sSf https://sh.rustup.rs \
+          | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
+        echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+    - name: Install toolchain
+      shell: bash
+      # Installs the toolchain and components listed in rust-toolchain.toml.
+      run: rustup toolchain install

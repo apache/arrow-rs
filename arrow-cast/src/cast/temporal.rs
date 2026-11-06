@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Cast support for temporal arrays: timestamps, dates, durations,
 //! intervals, and timezones.
@@ -21,10 +8,12 @@
 use arrow_array::{cast::*, temporal_conversions::*, timezone::Tz, types::*, *};
 use arrow_buffer::IntervalMonthDayNano;
 use arrow_schema::{ArrowError, DataType, TimeUnit};
-use chrono::{FixedOffset, LocalResult, NaiveDateTime, NaiveTime, Offset, TimeDelta, TimeZone};
+use chrono::{NaiveTime, Offset};
 use std::sync::Arc;
 
 use num_traits::AsPrimitive;
+
+use crate::local_time::resolve_local_offset;
 
 use super::{CastOptions, time_unit_multiple, units_per_day};
 
@@ -347,63 +336,53 @@ pub(crate) fn timestamp_to_date32<T: ArrowTimestampType>(
     Ok(Arc::new(array))
 }
 
-/// Returns the offset to use when interpreting `local` as a wall clock reading
-/// in `tz`, or `None` if it cannot be resolved.
+/// Casts a timestamp array to `Date64`.
 ///
-/// `None` is not expected in practice. With the current timezone database no
-/// reading reaches it, because every ambiguous or nonexistent reading resolves
-/// as described below. The `None` path is a safeguard against a future
-/// timezone database that breaks the assumptions of the gap handling. Callers
-/// then apply their usual error or null handling.
-///
-/// In an IANA timezone a wall clock reading does not always identify a unique
-/// instant, and this function picks one following the same rules as PostgreSQL
-/// and DuckDB:
-///
-/// * **Ambiguous** -- when the clocks go back ("fall back") the same reading
-///   occurs twice. The *later* instant is chosen, i.e. the offset in effect
-///   after the transition. For example `2024-11-03T01:30:00` in
-///   `America/New_York` is read as `-05:00` (EST), not `-04:00` (EDT).
-/// * **Nonexistent** -- when the clocks go forward ("spring forward") the
-///   reading never occurs. It is shifted forward by the length of the gap,
-///   which is the same as reading it with the offset in effect *before* the
-///   transition. For example `2024-03-10T02:30:00` in `America/New_York` is
-///   read as `-05:00` (EST) and therefore denotes `2024-03-10T03:30:00-04:00`.
-///
-/// Timezones with a fixed offset are never ambiguous and have no gaps.
-///
-/// See <https://github.com/apache/arrow-rs/issues/11037> for the PostgreSQL and
-/// ICU (DuckDB) sources these rules are taken from.
-fn resolve_local_offset(tz: &Tz, local: &NaiveDateTime) -> Option<FixedOffset> {
-    match tz.offset_from_local_datetime(local) {
-        LocalResult::Single(offset) => Some(offset.fix()),
-        LocalResult::Ambiguous(_earlier, later) => Some(later.fix()),
-        LocalResult::None => {
-            // The reading falls in a gap. Recover the offset in effect before
-            // the transition by probing 24 hours earlier.
-            //
-            // Two separate properties of the timezone database make this sound:
-            //
-            // 1. No local gap is longer than 24 hours, so the probe lands
-            //    outside this gap and is itself resolvable. Seven zones have a
-            //    gap of exactly 24 hours -- the dateline changes, such as
-            //    `Pacific/Apia` in 2011 and `Pacific/Kiritimati` in 1994. At the
-            //    last second of one of those the probe lands one second before
-            //    the gap starts, so the true margin here is one second, not a
-            //    comfortable one.
-            // 2. No two transitions are closer together than 24 hours, so the
-            //    offset the probe finds is the one in effect immediately before
-            //    this transition, and not some older offset. The smallest
-            //    observed interval is 167 hours (`America/Boa_Vista`, 2000).
-            //
-            // Property 1 is what makes the probe resolvable; property 2 is what
-            // makes the answer correct. If the probe is still unresolvable, give
-            // up and let the caller apply the usual error / null handling.
-            tz.offset_from_local_datetime(&(*local - TimeDelta::hours(24)))
-                .earliest()
-                .map(|offset| offset.fix())
+/// `Date64` values must be whole days, so this truncates to the start of the
+/// day the same way [`timestamp_to_date32`] does: in the array's timezone when it
+/// has one, otherwise rounding down so that a timestamp just before the epoch
+/// belongs to the preceding day.
+pub(crate) fn timestamp_to_date64<T: ArrowTimestampType>(
+    array: &PrimitiveArray<T>,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let err = |x: i64| {
+        ArrowError::CastError(format!(
+            "Cannot convert {} {x} to Date64",
+            std::any::type_name::<T>()
+        ))
+    };
+
+    let array: Date64Array = match array.timezone() {
+        Some(tz) => {
+            let tz: Tz = tz.parse()?;
+            // Chrono's date range is small enough that the product cannot overflow.
+            let date = |x: i64| {
+                as_datetime_with_timezone::<T>(x, tz).map(|d| {
+                    Date32Type::from_naive_date(d.date_naive()) as i64 * MILLISECONDS_IN_DAY
+                })
+            };
+            if cast_options.safe {
+                array.unary_opt(date)
+            } else {
+                array.try_unary(|x| date(x).ok_or_else(|| err(x)))?
+            }
         }
-    }
+        None => {
+            // Rescaling whole days to milliseconds can overflow for second and
+            // millisecond timestamps near the ends of the i64 range.
+            let date = |x: i64| {
+                x.div_euclid(units_per_day::<T>())
+                    .checked_mul(MILLISECONDS_IN_DAY)
+            };
+            if cast_options.safe {
+                array.unary_opt(date)
+            } else {
+                array.try_unary(|x| date(x).ok_or_else(|| err(x)))?
+            }
+        }
+    };
+    Ok(Arc::new(array))
 }
 
 pub(crate) fn adjust_timestamp_to_timezone<T: ArrowTimestampType>(
@@ -413,7 +392,7 @@ pub(crate) fn adjust_timestamp_to_timezone<T: ArrowTimestampType>(
 ) -> Result<PrimitiveArray<Int64Type>, ArrowError> {
     let adjust = |o| {
         let local = as_datetime::<T>(o)?;
-        let offset = resolve_local_offset(to_tz, &local)?;
+        let offset = resolve_local_offset(to_tz, &local)?.fix();
         T::from_naive_datetime(local - offset, None)
     };
     let adjusted = if cast_options.safe {
