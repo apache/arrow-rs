@@ -6,5 +6,6 @@ mod decimal;
 mod dictionary;
 mod list;
 mod map;
+mod run_array;
 mod string;
 mod r#struct;
