@@ -64,17 +64,6 @@ impl _MutableArrayData<'_> {
     }
 }
 
-#[inline]
-fn try_resize_for_bits(buffer: &mut MutableBuffer, len: usize) -> Result<(), ArrowError> {
-    let needed_bytes = bit_util::ceil(len, 8);
-    if buffer.len() < needed_bytes {
-        buffer
-            .try_resize(needed_bytes, 0)
-            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
-    }
-    Ok(())
-}
-
 fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits<'_> {
     if let Some(nulls) = array.nulls() {
         let bytes = nulls.validity();
@@ -828,7 +817,7 @@ impl<'a> MutableArrayData<'a> {
             .checked_add(len)
             .ok_or_else(|| ArrowError::MemoryError("length overflow".into()))?;
         if let Some(nulls) = &mut self.data.null_buffer {
-            try_resize_for_bits(nulls, new_len)?;
+            utils::try_resize_for_bits(nulls, new_len)?;
         }
         (self.extend_null_bits[index])(&mut self.data, start, len);
         // Snapshot buffer lengths before attempting the extend so we can roll
