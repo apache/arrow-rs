@@ -497,7 +497,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "lz4")]
-    fn test_lz4_compression_reuses_context() {
+    fn test_lz4_compression_multiple_frames() {
         let codec = super::CompressionCodec::Lz4Frame;
         let mut context = super::IpcWriteContext::default();
         // Spans several 256KB blocks, followed by a smaller frame.
