@@ -853,6 +853,10 @@ fn filter_bits_compress(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> 
     assert!(buffer.len() >= predicate.filter.len());
     let mask_chunks = predicate.filter.values().bit_chunks();
     let value_chunks = BitChunks::new(buffer.values(), buffer.offset(), predicate.filter.len());
+    // `predicate.count` is the filter's set bit count, which determines the
+    // output capacity and bounds the raw writes below. Both chunk views cover
+    // `predicate.filter.len()` bits, so indexing `value_chunks` by the
+    // position in `mask_chunks` stays in bounds.
     debug_assert_eq!(predicate.count, predicate.filter.true_count());
     debug_assert_eq!(mask_chunks.chunk_len(), value_chunks.chunk_len());
 
@@ -870,8 +874,9 @@ fn filter_bits_compress(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> 
         }
         if let Some(complete) = packer.push(value_chunks.chunk(index), mask) {
             debug_assert!(idx < out.capacity());
-            // SAFETY: `count` is the number of set bits in the filter, so at
-            // most `count / 64` words are completed and the output has room
+            // SAFETY: `complete` contains 64 of the `predicate.count` selected
+            // bits. Therefore `idx < predicate.count / 64` before this write,
+            // while `out` has capacity at least `predicate.count / 64 + 1`.
             unsafe { ptr.add(idx).write(complete) };
             idx += 1;
         }
@@ -879,14 +884,18 @@ fn filter_bits_compress(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> 
     if let Some(complete) = packer.push(value_chunks.remainder_bits(), mask_chunks.remainder_bits())
     {
         debug_assert!(idx < out.capacity());
-        // SAFETY: as above, the completed word fits in the output allocation
+        // SAFETY: this completed word also contains 64 of the
+        // `predicate.count` selected bits, so the same
+        // `idx < predicate.count / 64 < out.capacity()` bound applies.
         unsafe { ptr.add(idx).write(complete) };
         idx += 1;
     }
 
     if let Some((pending, _)) = packer.finish() {
         debug_assert!(idx < out.capacity());
-        // SAFETY: `idx <= count / 64`, so the trailing partial word fits
+        // SAFETY: `pending` exists only when the selected bit count is not a
+        // multiple of 64. All prior writes were complete words, so
+        // `idx == predicate.count / 64 < out.capacity()`.
         unsafe { ptr.add(idx).write(pending) };
         idx += 1;
     }
