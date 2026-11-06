@@ -1,0 +1,1213 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+//! Check Arrow arrays against Parquet bloom filters
+
+use arrow_array::builder::BooleanBuilder;
+use arrow_array::cast::AsArray;
+use arrow_array::types::{Float32Type, Float64Type, RunEndIndexType};
+use arrow_array::{Array, BooleanArray, RunArray, downcast_run_array};
+use arrow_buffer::{ArrowNativeType, BooleanBuffer};
+use arrow_schema::{DataType, Field};
+
+use crate::arrow::arrow_writer::{
+    FixedLenByteArrayVisitor, PrimitiveVisitor, visit_fixed_len_byte_array, visit_i32, visit_i64,
+};
+use crate::arrow::schema::arrow_to_parquet_type;
+use crate::basic::{ConvertedType, LogicalType, TimeUnit, Type as PhysicalType};
+use crate::bloom_filter::Sbbf;
+use crate::data_type::AsBytes;
+use crate::errors::{ParquetError, Result};
+use crate::schema::types::{ColumnDescriptor, Type};
+
+/// A Parquet bloom filter ([`Sbbf`]) that can be checked with Arrow arrays
+///
+/// [`ArrowWriter`] may store an Arrow value as a different Parquet value, and
+/// the bloom filter holds the stored value, so [`Sbbf::check`] with the Arrow
+/// value can report a value that is present as absent. [`ArrowSbbf::check`]
+/// converts Arrow values in the same way as [`ArrowWriter`] before checking the
+/// filter.
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use bytes::Bytes;
+/// # use arrow_array::{ArrayRef, Int8Array, RecordBatch};
+/// # use parquet::arrow::ArrowWriter;
+/// # use parquet::arrow::bloom_filter::ArrowSbbf;
+/// # use parquet::file::properties::{ReaderProperties, WriterProperties};
+/// # use parquet::file::reader::{FileReader, SerializedFileReader};
+/// # use parquet::file::serialized_reader::ReadOptionsBuilder;
+/// let array: ArrayRef = Arc::new(Int8Array::from(vec![1, 2, 3]));
+/// let batch = RecordBatch::try_from_iter([("c", array)]).unwrap();
+///
+/// let props = WriterProperties::builder()
+///     .set_bloom_filter_enabled(true)
+///     .build();
+/// let mut buffer = Vec::new();
+/// let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), Some(props)).unwrap();
+/// writer.write(&batch).unwrap();
+/// writer.close().unwrap();
+///
+/// let options = ReadOptionsBuilder::new()
+///     .with_reader_properties(
+///         ReaderProperties::builder()
+///             .set_read_bloom_filter(true)
+///             .build(),
+///     )
+///     .build();
+/// let reader = SerializedFileReader::new_with_options(Bytes::from(buffer), options).unwrap();
+/// let row_group = reader.get_row_group(0).unwrap();
+/// let sbbf = row_group.get_column_bloom_filter(0).unwrap();
+/// let column = reader.metadata().row_group(0).column(0).column_descr();
+///
+/// // The Int8 values were written as INT32, so checking an i8 misses them
+/// assert!(!sbbf.check(&1_i8));
+///
+/// // Use the column's Arrow type, here Int8, from the file's Arrow schema
+/// let arrow_type = batch.schema().field(0).data_type().clone();
+/// let sbbf = ArrowSbbf::try_new(sbbf, column, arrow_type).unwrap();
+/// let found = sbbf.check(&Int8Array::from(vec![1, 3, 4])).unwrap();
+/// assert_eq!(found, vec![Some(true), Some(true), Some(false)].into());
+/// ```
+///
+/// [`ArrowWriter`]: crate::arrow::ArrowWriter
+#[derive(Debug, Clone)]
+pub struct ArrowSbbf<'a> {
+    sbbf: &'a Sbbf,
+    /// The Arrow type of the arrays to check
+    arrow_type: DataType,
+    physical_type: PhysicalType,
+    /// The length of the column's values if it is a `FIXED_LEN_BYTE_ARRAY`
+    /// column, otherwise 0
+    ///
+    /// Decimals are converted to this length, as other writers can store
+    /// decimals in more bytes than their precision needs.
+    type_length: usize,
+}
+
+impl<'a> ArrowSbbf<'a> {
+    /// Create a new [`ArrowSbbf`] for the bloom filter `sbbf` of `column`
+    ///
+    /// `arrow_type` is the Arrow type of the arrays that will be checked, for
+    /// example the type of the column in the file's Arrow schema.
+    ///
+    /// Returns an error if values of `arrow_type` cannot be stored in `column`,
+    /// if `arrow_type` is a decimal and `column` is not a decimal of the same
+    /// scale, or the other way around, or if `arrow_type` is a time or timestamp
+    /// in a different unit than `column`.
+    pub fn try_new(
+        sbbf: &'a Sbbf,
+        column: &ColumnDescriptor,
+        arrow_type: DataType,
+    ) -> Result<Self> {
+        validate(column.self_type(), &arrow_type)?;
+        Ok(Self {
+            sbbf,
+            arrow_type,
+            physical_type: column.physical_type(),
+            // The schema checks that the length of a FIXED_LEN_BYTE_ARRAY column
+            // is positive, and other columns have no length
+            type_length: column.type_length().try_into().unwrap_or(0),
+        })
+    }
+
+    /// Returns the Arrow type of the arrays this [`ArrowSbbf`] checks
+    pub fn arrow_type(&self) -> &DataType {
+        &self.arrow_type
+    }
+
+    /// Check each value of `array` against the bloom filter
+    ///
+    /// Returns `true` if the value may be present, and `false` if it is
+    /// definitely absent. Nulls in `array` are null in the result.
+    ///
+    /// `array` must have the type returned by [`Self::arrow_type`], or be a
+    /// dictionary or run-end encoded array of values of that type, or a
+    /// [`NullArray`](arrow_array::NullArray).
+    pub fn check(&self, array: &dyn Array) -> Result<BooleanArray> {
+        if let Some(dictionary) = array.as_any_dictionary_opt() {
+            let values = self.check(dictionary.values().as_ref())?;
+            let found = arrow_select::take::take(&values, dictionary.keys(), None)?;
+            return Ok(found.as_boolean().clone());
+        }
+        let value_type = value_type(&self.arrow_type);
+        match array.data_type() {
+            DataType::Null => return Ok(BooleanArray::new_null(array.len())),
+            DataType::RunEndEncoded(_, _) => {
+                return downcast_run_array!(
+                    array => self.check_run_array(array),
+                    _ => unreachable!("RunEndEncoded array is not a RunArray"),
+                );
+            }
+            data_type if data_type != value_type => {
+                return Err(ParquetError::General(format!(
+                    "Cannot check {data_type} values with an ArrowSbbf for {value_type} values"
+                )));
+            }
+            _ => {}
+        }
+
+        // `try_new` checked that ArrowWriter stores values of this type in a
+        // column of this physical type, so the conversions below accept them
+        let sbbf = self.sbbf;
+        let found = match self.physical_type {
+            PhysicalType::INT32 => visit_i32(array, CheckPrimitive { sbbf })?,
+            PhysicalType::INT64 => visit_i64(array, CheckPrimitive { sbbf })?,
+            PhysicalType::FLOAT => {
+                CheckPrimitive { sbbf }.slice(array.as_primitive::<Float32Type>().values())?
+            }
+            PhysicalType::DOUBLE => {
+                CheckPrimitive { sbbf }.slice(array.as_primitive::<Float64Type>().values())?
+            }
+            PhysicalType::BOOLEAN => array
+                .as_boolean()
+                .values()
+                .iter()
+                .map(|v| sbbf.check(&v))
+                .collect(),
+            PhysicalType::BYTE_ARRAY => check_byte_array(sbbf, array),
+            PhysicalType::FIXED_LEN_BYTE_ARRAY => {
+                let visitor = CheckFixedLenByteArray {
+                    sbbf,
+                    len: array.len(),
+                    type_length: self.type_length,
+                };
+                visit_fixed_len_byte_array(array, visitor)?
+            }
+            PhysicalType::INT96 => unreachable!("ArrowWriter does not write INT96 columns"),
+        };
+        Ok(BooleanArray::new(found, array.logical_nulls()))
+    }
+
+    /// Checks the values of a run-end encoded array, and repeats each result for its run
+    fn check_run_array<R: RunEndIndexType>(&self, array: &RunArray<R>) -> Result<BooleanArray> {
+        let found = self.check(array.values_slice().as_ref())?;
+        let mut builder = BooleanBuilder::with_capacity(array.len());
+        let mut run_start = 0;
+        for (i, run_end) in array.run_ends().sliced_values().enumerate() {
+            let run_end = run_end.as_usize();
+            match found.is_valid(i) {
+                true => builder.append_n(run_end - run_start, found.value(i)),
+                false => builder.append_nulls(run_end - run_start),
+            }
+            run_start = run_end;
+        }
+        Ok(builder.finish())
+    }
+}
+
+/// Returns the type of the values of a dictionary or run-end encoded `data_type`,
+/// or `data_type` itself
+fn value_type(data_type: &DataType) -> &DataType {
+    match data_type {
+        DataType::Dictionary(_, values) => value_type(values),
+        DataType::RunEndEncoded(_, values) => value_type(values.data_type()),
+        _ => data_type,
+    }
+}
+
+/// Returns an error unless [`ArrowWriter`] stores values of `arrow_type` in the
+/// same way as values of `column`, so that they can be checked against its
+/// bloom filter
+///
+/// [`ArrowWriter`]: crate::arrow::ArrowWriter
+fn validate(column: &Type, arrow_type: &DataType) -> Result<()> {
+    if !arrow_type.is_nested() {
+        let field = Field::new(column.name(), arrow_type.clone(), true);
+        // Only Date64 depends on `coerce_types`, which is stored as INT32 days
+        // or INT64 milliseconds
+        for coerce_types in [false, true] {
+            let written = arrow_to_parquet_type(&field, coerce_types)?;
+            if is_stored_as(&written, column) {
+                return Ok(());
+            }
+        }
+    }
+    Err(type_mismatch(column, arrow_type))
+}
+
+fn type_mismatch(column: &Type, arrow_type: &DataType) -> ParquetError {
+    ParquetError::General(format!(
+        "Cannot check a bloom filter of type {} with {arrow_type} values",
+        describe(column)
+    ))
+}
+
+/// Returns whether values written to a column of type `written` can be checked
+/// against the bloom filter of a column of type `column`
+///
+/// Besides the physical type, the only type parameters that change the stored
+/// values are the scale of a decimal, the length of a `FIXED_LEN_BYTE_ARRAY`,
+/// and the unit of a time or timestamp, so these must match. Other parameters,
+/// such as a timestamp's timezone, do not change the stored values.
+fn is_stored_as(written: &Type, column: &Type) -> bool {
+    let physical_type = column.get_physical_type();
+    match (decimal_scale(written), decimal_scale(column)) {
+        // Decimals are stored as unscaled integers, which are converted to the
+        // column's physical type and length
+        (Some(written_scale), Some(scale)) => {
+            written_scale == scale && physical_type != PhysicalType::BYTE_ARRAY
+        }
+        (None, None) => {
+            written.get_physical_type() == physical_type
+                && (physical_type != PhysicalType::FIXED_LEN_BYTE_ARRAY
+                    || type_length(written) == type_length(column))
+                // The same values mean different instants in different units.
+                // ArrowWriter writes seconds without a unit, so seconds only
+                // match a column without one.
+                && time_unit(written) == time_unit(column)
+        }
+        _ => false,
+    }
+}
+
+/// Returns the scale of a decimal type, or `None` if `t` is not a decimal
+fn decimal_scale(t: &Type) -> Option<i32> {
+    let info = t.get_basic_info();
+    let decimal = matches!(info.logical_type_ref(), Some(LogicalType::Decimal(_)))
+        || info.converted_type() == ConvertedType::DECIMAL;
+    decimal.then(|| t.get_scale())
+}
+
+/// Returns the unit of a `TIME` or `TIMESTAMP` type, or `None` if `t` has no unit
+fn time_unit(t: &Type) -> Option<TimeUnit> {
+    let info = t.get_basic_info();
+    match info.logical_type_ref() {
+        Some(LogicalType::Time(time) | LogicalType::Timestamp(time)) => Some(time.unit),
+        _ => match info.converted_type() {
+            ConvertedType::TIME_MILLIS | ConvertedType::TIMESTAMP_MILLIS => Some(TimeUnit::MILLIS),
+            ConvertedType::TIME_MICROS | ConvertedType::TIMESTAMP_MICROS => Some(TimeUnit::MICROS),
+            _ => None,
+        },
+    }
+}
+
+fn type_length(t: &Type) -> i32 {
+    match t {
+        Type::PrimitiveType { type_length, .. } => *type_length,
+        Type::GroupType { .. } => -1,
+    }
+}
+
+/// Describes the parts of `column`'s type that determine how its values are stored
+fn describe(column: &Type) -> String {
+    let physical_type = column.get_physical_type();
+    let length = match physical_type {
+        PhysicalType::FIXED_LEN_BYTE_ARRAY => format!("({})", type_length(column)),
+        _ => String::new(),
+    };
+    let decimal = decimal_scale(column)
+        .map(|scale| format!(" DECIMAL({}, {scale})", column.get_precision()))
+        .unwrap_or_default();
+    let unit = time_unit(column)
+        .map(|unit| format!(" ({unit:?})"))
+        .unwrap_or_default();
+    format!("{physical_type}{length}{decimal}{unit}")
+}
+
+/// Checks the `INT32`, `INT64`, `FLOAT` or `DOUBLE` values passed to it against a bloom filter
+struct CheckPrimitive<'a> {
+    sbbf: &'a Sbbf,
+}
+
+impl<T: AsBytes> PrimitiveVisitor<T> for CheckPrimitive<'_> {
+    type Output = BooleanBuffer;
+
+    fn slice(self, values: &[T]) -> Result<BooleanBuffer> {
+        Ok(values.iter().map(|v| self.sbbf.check(v)).collect())
+    }
+
+    fn map<S: Copy>(self, values: &[S], convert: impl Fn(S) -> T) -> Result<BooleanBuffer> {
+        Ok(values
+            .iter()
+            .map(|v| self.sbbf.check(&convert(*v)))
+            .collect())
+    }
+}
+
+/// Checks the `FIXED_LEN_BYTE_ARRAY` values passed to it against a bloom filter
+struct CheckFixedLenByteArray<'a> {
+    sbbf: &'a Sbbf,
+    /// The number of values in the array
+    len: usize,
+    type_length: usize,
+}
+
+impl FixedLenByteArrayVisitor for CheckFixedLenByteArray<'_> {
+    type Output = BooleanBuffer;
+
+    fn decimal_length(&self, _precision: u8, _native_length: usize) -> usize {
+        // Decimals of any precision are converted to the column's length
+        self.type_length
+    }
+
+    fn values(self, length: usize, fill: impl Fn(usize, &mut [u8])) -> Result<BooleanBuffer> {
+        // `ArrowSbbf::try_new` checked that the Arrow type is stored in values
+        // of the column's length
+        debug_assert_eq!(length, self.type_length);
+        let mut value = vec![0; length];
+        Ok((0..self.len)
+            .map(|i| {
+                value.fill(0);
+                fill(i, &mut value);
+                self.sbbf.check(value.as_slice())
+            })
+            .collect())
+    }
+}
+
+/// Checks the values of a `BYTE_ARRAY` column, which are stored as they are
+fn check_byte_array(sbbf: &Sbbf, array: &dyn Array) -> BooleanBuffer {
+    match array.data_type() {
+        DataType::Utf8 => check_bytes(sbbf, array.as_string::<i32>()),
+        DataType::LargeUtf8 => check_bytes(sbbf, array.as_string::<i64>()),
+        DataType::Utf8View => check_bytes(sbbf, array.as_string_view()),
+        DataType::Binary => check_bytes(sbbf, array.as_binary::<i32>()),
+        DataType::LargeBinary => check_bytes(sbbf, array.as_binary::<i64>()),
+        DataType::BinaryView => check_bytes(sbbf, array.as_binary_view()),
+        d => unreachable!("ArrowWriter does not write {d} to BYTE_ARRAY columns"),
+    }
+}
+
+fn check_bytes<'a, T: AsRef<[u8]> + ?Sized + 'a>(
+    sbbf: &Sbbf,
+    values: impl arrow_array::ArrayAccessor<Item = &'a T>,
+) -> BooleanBuffer {
+    (0..values.len())
+        .map(|i| sbbf.check(values.value(i).as_ref()))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::arrow::ArrowWriter;
+    use crate::file::properties::{ReaderProperties, WriterProperties};
+    use crate::file::reader::{FileReader, SerializedFileReader};
+    use crate::file::serialized_reader::ReadOptionsBuilder;
+    use crate::schema::types::{ColumnDescPtr, ColumnPath};
+    use arrow_array::types::{Int16Type, Int32Type};
+    use arrow_array::*;
+    use arrow_buffer::{IntervalDayTime, i256};
+    use arrow_schema::{IntervalUnit, TimeUnit};
+    use bytes::Bytes;
+    use std::sync::Arc;
+
+    /// Writes `batch` with bloom filters, and returns the filter and descriptor of each column
+    fn write_and_read_bloom_filters(
+        batch: &RecordBatch,
+        coerce_types: bool,
+    ) -> Vec<(Sbbf, ColumnDescPtr)> {
+        let props = WriterProperties::builder()
+            .set_bloom_filter_enabled(true)
+            .set_coerce_types(coerce_types)
+            .build();
+        let mut buffer = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), Some(props)).unwrap();
+        writer.write(batch).unwrap();
+        writer.close().unwrap();
+
+        let options = ReadOptionsBuilder::new()
+            .with_reader_properties(
+                ReaderProperties::builder()
+                    .set_read_bloom_filter(true)
+                    .build(),
+            )
+            .build();
+        let reader = SerializedFileReader::new_with_options(Bytes::from(buffer), options).unwrap();
+        let row_group = reader.get_row_group(0).unwrap();
+        (0..batch.num_columns())
+            .map(|i| {
+                let sbbf = row_group.get_column_bloom_filter(i).unwrap().clone();
+                let column = reader.metadata().row_group(0).column(i).column_descr_ptr();
+                (sbbf, column)
+            })
+            .collect()
+    }
+
+    /// Writes `array` with a bloom filter and returns the filter and column descriptor
+    fn write_and_read_bloom_filter(array: ArrayRef, coerce_types: bool) -> (Sbbf, ColumnDescPtr) {
+        let batch = RecordBatch::try_from_iter([("c", array)]).unwrap();
+        write_and_read_bloom_filters(&batch, coerce_types)
+            .pop()
+            .unwrap()
+    }
+
+    /// A column written by [`ArrowWriter`] with a bloom filter
+    struct Written {
+        sbbf: Sbbf,
+        column: ColumnDescPtr,
+    }
+
+    impl Written {
+        /// Writes `array` with a bloom filter
+        fn new(array: impl Array + 'static) -> Self {
+            Self::with_coerce_types(Arc::new(array), false)
+        }
+
+        fn with_coerce_types(array: ArrayRef, coerce_types: bool) -> Self {
+            let (sbbf, column) = write_and_read_bloom_filter(array, coerce_types);
+            Self { sbbf, column }
+        }
+
+        /// Returns an [`ArrowSbbf`] that checks `arrow_type` values against this column
+        fn arrow_sbbf(&self, arrow_type: DataType) -> ArrowSbbf<'_> {
+            ArrowSbbf::try_new(&self.sbbf, &self.column, arrow_type).unwrap()
+        }
+
+        /// Checks `array` with an [`ArrowSbbf`] for the type of `array`
+        fn check(&self, array: &dyn Array) -> BooleanArray {
+            let arrow_type = array.data_type().clone();
+            self.arrow_sbbf(arrow_type).check(array).unwrap()
+        }
+
+        /// Asserts which values of `array` may be in the column
+        fn assert_found(&self, array: &dyn Array, expected: &[bool]) {
+            assert_eq!(self.check(array), BooleanArray::from(expected.to_vec()));
+        }
+
+        /// Asserts that `arrow_type` values cannot be checked against this column,
+        /// which has the type described by `column_type`
+        fn assert_rejects(&self, arrow_type: DataType, column_type: &str) {
+            let err = ArrowSbbf::try_new(&self.sbbf, &self.column, arrow_type.clone()).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                format!(
+                    "Parquet error: Cannot check a bloom filter of type {column_type} with {arrow_type} values"
+                )
+            );
+        }
+    }
+
+    /// Writes `written` and checks that every value is found and no value of `absent` is
+    fn assert_round_trip(written: ArrayRef, absent: ArrayRef, coerce_types: bool) {
+        let column = Written::with_coerce_types(written.clone(), coerce_types);
+        column.assert_found(written.as_ref(), &vec![true; written.len()]);
+        column.assert_found(absent.as_ref(), &vec![false; absent.len()]);
+    }
+
+    #[test]
+    fn time_units_must_match() {
+        let written = TimestampMillisecondArray::from(vec![1_000, 2_000]);
+        let column = Written::new(written.clone());
+        column.assert_found(&written, &[true, true]);
+
+        // The same instants in a different unit are different values, so
+        // checking them would report instants in the file as absent
+        for unit in [
+            TimeUnit::Second,
+            TimeUnit::Microsecond,
+            TimeUnit::Nanosecond,
+        ] {
+            column.assert_rejects(DataType::Timestamp(unit, None), "INT64 (MILLIS)");
+        }
+        // Integers have no unit
+        column.assert_rejects(DataType::Int64, "INT64 (MILLIS)");
+
+        let column = Written::new(Time64MicrosecondArray::from(vec![1_000]));
+        column.assert_rejects(DataType::Time64(TimeUnit::Nanosecond), "INT64 (MICROS)");
+
+        // ArrowWriter writes seconds without a unit, so they only match a
+        // column without one
+        let written = TimestampSecondArray::from(vec![1, 2]);
+        let column = Written::new(written.clone());
+        column.assert_found(&written, &[true, true]);
+        column.assert_rejects(DataType::Timestamp(TimeUnit::Millisecond, None), "INT64");
+        let column = Written::new(Time32SecondArray::from(vec![1, 2]));
+        column.assert_rejects(DataType::Time32(TimeUnit::Millisecond), "INT32");
+    }
+
+    #[test]
+    fn narrow_integers() {
+        assert_round_trip(
+            Arc::new(Int8Array::from(vec![i8::MIN, -1, 0, 1, i8::MAX])),
+            Arc::new(Int8Array::from(vec![-2, 2, 100])),
+            false,
+        );
+        assert_round_trip(
+            Arc::new(Int16Array::from(vec![i16::MIN, -1, 0, 1, i16::MAX])),
+            Arc::new(Int16Array::from(vec![-2, 2, 1000])),
+            false,
+        );
+        assert_round_trip(
+            Arc::new(UInt8Array::from(vec![0, 1, 128, u8::MAX])),
+            Arc::new(UInt8Array::from(vec![2, 127, 200])),
+            false,
+        );
+        assert_round_trip(
+            Arc::new(UInt16Array::from(vec![0, 1, 32768, u16::MAX])),
+            Arc::new(UInt16Array::from(vec![2, 32767, 60000])),
+            false,
+        );
+    }
+
+    #[test]
+    fn unsigned_integers_above_signed_max() {
+        assert_round_trip(
+            Arc::new(UInt32Array::from(vec![0, i32::MAX as u32 + 1, u32::MAX])),
+            Arc::new(UInt32Array::from(vec![1, u32::MAX - 1])),
+            false,
+        );
+        assert_round_trip(
+            Arc::new(UInt64Array::from(vec![0, i64::MAX as u64 + 1, u64::MAX])),
+            Arc::new(UInt64Array::from(vec![1, u64::MAX - 1])),
+            false,
+        );
+    }
+
+    #[test]
+    fn date64() {
+        let day = 86_400_000;
+        let written: ArrayRef = Arc::new(Date64Array::from(vec![0, day, 365 * day]));
+        let absent: ArrayRef = Arc::new(Date64Array::from(vec![2 * day, 366 * day]));
+        // Stored as INT64 milliseconds
+        assert_round_trip(written.clone(), absent.clone(), false);
+        // Stored as INT32 days
+        assert_round_trip(written, absent, true);
+    }
+
+    #[test]
+    fn date64_stored_as_days() {
+        // Milliseconds are divided by a day and rounded towards zero
+        let written: ArrayRef = Arc::new(Date64Array::from(vec![5 * 86_400_000, -1]));
+        let column = Written::with_coerce_types(written.clone(), true);
+        assert!(column.sbbf.check(&5_i32));
+        assert!(column.sbbf.check(&0_i32));
+        column.assert_found(written.as_ref(), &[true, true]);
+    }
+
+    #[test]
+    fn decimals() {
+        // Stored as INT32, INT64 and FIXED_LEN_BYTE_ARRAY depending on precision
+        for precision in [5, 15, 30] {
+            assert_round_trip(
+                Arc::new(decimal128(vec![-12345, 0, 12345], precision, 2)),
+                Arc::new(decimal128(vec![-1, 1, 54321], precision, 2)),
+                false,
+            );
+        }
+    }
+
+    fn decimal128(values: Vec<i128>, precision: u8, scale: i8) -> Decimal128Array {
+        Decimal128Array::from(values)
+            .with_precision_and_scale(precision, scale)
+            .unwrap()
+    }
+
+    #[test]
+    fn decimal_precision_differs_from_column() {
+        // Precision 30 is stored as a 13 byte FIXED_LEN_BYTE_ARRAY
+        let column = Written::new(decimal128(vec![12345, -12345], 30, 2));
+        assert_eq!(column.column.type_length(), 13);
+
+        // The values are converted to the column's width, whatever the array's precision
+        for precision in [20, 30, 38] {
+            let values = decimal128(vec![12345, -12345, 54321], precision, 2);
+            column.assert_found(&values, &[true, true, false]);
+        }
+        let decimal256 = Decimal256Array::from(vec![i256::from(12345), i256::from(-12345)])
+            .with_precision_and_scale(76, 2)
+            .unwrap();
+        column.assert_found(&decimal256, &[true, true]);
+
+        // Narrower decimal types are sign-extended to 13 bytes
+        let decimal32 = Decimal32Array::from(vec![12345, -12345, 54321])
+            .with_precision_and_scale(9, 2)
+            .unwrap();
+        column.assert_found(&decimal32, &[true, true, false]);
+        let decimal64 = Decimal64Array::from(vec![12345, -12345, 54321])
+            .with_precision_and_scale(18, 2)
+            .unwrap();
+        column.assert_found(&decimal64, &[true, true, false]);
+
+        // Values that need more than 13 bytes are truncated to their low 13
+        // bytes, like ArrowWriter does. These are the bytes of 12345 and -12345
+        let wide = 1_i128 << 104;
+        let values = decimal128(vec![12345 + wide, -12345 - wide], 38, 2);
+        column.assert_found(&values, &[true, true]);
+    }
+
+    #[test]
+    fn decimal_column_longer_than_i256() {
+        // ArrowWriter stores decimals in at most 32 bytes, but another writer can
+        // use a longer FIXED_LEN_BYTE_ARRAY, to which values are sign-extended
+        let column = Type::primitive_type_builder("c", PhysicalType::FIXED_LEN_BYTE_ARRAY)
+            .with_length(33)
+            .with_logical_type(Some(LogicalType::decimal(2, 10)))
+            .with_precision(10)
+            .with_scale(2)
+            .build()
+            .unwrap();
+        let column = ColumnDescriptor::new(Arc::new(column), 1, 0, ColumnPath::from("c"));
+        let mut sbbf = Sbbf::new_with_ndv_fpp(10, 0.01).unwrap();
+        for (sign, value) in [(0, 12345), (0xFF, -12345)] {
+            let mut bytes = vec![sign];
+            bytes.extend_from_slice(&i256::from(value).to_be_bytes());
+            sbbf.insert(bytes.as_slice());
+        }
+        let column = Written {
+            sbbf,
+            column: Arc::new(column),
+        };
+        column.assert_found(
+            &decimal128(vec![12345, -12345, 54321], 10, 2),
+            &[true, true, false],
+        );
+    }
+
+    #[test]
+    fn narrower_decimal_type_than_column() {
+        // Precision 12 is stored as INT64
+        let written = Decimal64Array::from(vec![12345, -12345])
+            .with_precision_and_scale(12, 2)
+            .unwrap();
+        let column = Written::new(written);
+        assert_eq!(column.column.physical_type(), PhysicalType::INT64);
+
+        let decimal32 = Decimal32Array::from(vec![12345, -12345, 54321])
+            .with_precision_and_scale(9, 2)
+            .unwrap();
+        column.assert_found(&decimal32, &[true, true, false]);
+    }
+
+    #[test]
+    fn decimal_too_large_for_precision() {
+        // Arrow does not validate precision, so these values need more bytes than
+        // the column has. They are truncated in the same way as ArrowWriter
+        // truncates them, for INT32, INT64 and FIXED_LEN_BYTE_ARRAY columns.
+        for precision in [5, 15, 20] {
+            let written = decimal128(vec![i128::MAX / 3, -(i128::MAX / 3)], precision, 2);
+            Written::new(written.clone()).assert_found(&written, &[true, true]);
+        }
+    }
+
+    #[test]
+    fn decimal_scale_differs_from_column() {
+        // Stored as INT32, INT64 and FIXED_LEN_BYTE_ARRAY depending on precision
+        for (precision, column_type) in [
+            (5, "INT32 DECIMAL(5, 2)"),
+            (15, "INT64 DECIMAL(15, 2)"),
+            (30, "FIXED_LEN_BYTE_ARRAY(13) DECIMAL(30, 2)"),
+        ] {
+            let written = decimal128(vec![12345], precision, 2);
+            let column = Written::new(written.clone());
+            column.assert_found(&written, &[true]);
+
+            // 123.45 at scale 3 is 123450, so checking 12345 would check 12.345
+            column.assert_rejects(DataType::Decimal128(precision, 3), column_type);
+        }
+
+        // Nor can decimal values be checked against a column that is not a decimal
+        let column = Written::new(Int32Array::from(vec![12345]));
+        column.assert_rejects(DataType::Decimal128(5, 0), "INT32");
+    }
+
+    #[test]
+    fn decimal_column_requires_decimal_values() {
+        // Stored as INT32, INT64 and FIXED_LEN_BYTE_ARRAY depending on precision
+        for (precision, column_type) in [
+            (5, "INT32 DECIMAL(5, 2)"),
+            (15, "INT64 DECIMAL(15, 2)"),
+            (30, "FIXED_LEN_BYTE_ARRAY(13) DECIMAL(30, 2)"),
+        ] {
+            let column = Written::new(decimal128(vec![500], precision, 2));
+            // 500 at scale 2 is 5.00, so checking the integer 500 or 5 would be ambiguous
+            column.assert_rejects(DataType::Int32, column_type);
+        }
+
+        let column = Written::new(decimal128(vec![500], 30, 2));
+        column.assert_rejects(
+            DataType::FixedSizeBinary(13),
+            "FIXED_LEN_BYTE_ARRAY(13) DECIMAL(30, 2)",
+        );
+    }
+
+    #[test]
+    fn fixed_size_binary_length_differs_from_column() {
+        let written = FixedSizeBinaryArray::try_from_iter([b"abcd", b"efgh"].into_iter()).unwrap();
+        let column = Written::new(written.clone());
+        column.assert_found(&written, &[true, true]);
+        column.assert_rejects(DataType::FixedSizeBinary(3), "FIXED_LEN_BYTE_ARRAY(4)");
+    }
+
+    #[test]
+    fn float16() {
+        let f16 = half::f16::from_f32;
+        assert_round_trip(
+            Arc::new(Float16Array::from(vec![f16(-1.5), f16(0.0), f16(2.25)])),
+            Arc::new(Float16Array::from(vec![f16(1.5), f16(3.0)])),
+            false,
+        );
+    }
+
+    #[test]
+    fn intervals() {
+        assert_round_trip(
+            Arc::new(IntervalYearMonthArray::from(vec![-1, 0, 13])),
+            Arc::new(IntervalYearMonthArray::from(vec![1, 12])),
+            false,
+        );
+        let interval = IntervalDayTime::new;
+        assert_round_trip(
+            Arc::new(IntervalDayTimeArray::from(vec![
+                interval(1, 2),
+                interval(-3, 4),
+            ])),
+            Arc::new(IntervalDayTimeArray::from(vec![
+                interval(2, 1),
+                interval(0, 0),
+            ])),
+            false,
+        );
+    }
+
+    #[test]
+    fn strings() {
+        assert_round_trip(
+            Arc::new(StringArray::from(vec!["a", "bc", ""])),
+            Arc::new(StringArray::from(vec!["b", "abc"])),
+            false,
+        );
+    }
+
+    #[test]
+    fn dictionary_and_nulls() {
+        let column = Written::new(Int8Array::from(vec![1, 2, 3]));
+        let sbbf = column.arrow_sbbf(DataType::Int8);
+
+        let found = sbbf
+            .check(&Int8Array::from(vec![Some(1), None, Some(4)]))
+            .unwrap();
+        assert_eq!(
+            found,
+            BooleanArray::from(vec![Some(true), None, Some(false)])
+        );
+
+        let dictionary = DictionaryArray::<Int32Type>::new(
+            Int32Array::from(vec![Some(1), None, Some(0), Some(1)]),
+            Arc::new(Int8Array::from(vec![4, 3])),
+        );
+        let found = sbbf.check(&dictionary).unwrap();
+        assert_eq!(
+            found,
+            BooleanArray::from(vec![Some(true), None, Some(false), Some(true)])
+        );
+
+        let found = sbbf.check(&NullArray::new(2)).unwrap();
+        assert_eq!(found, BooleanArray::new_null(2));
+    }
+
+    #[test]
+    fn null_array() {
+        let columns: [ArrayRef; 2] = [
+            Arc::new(Float64Array::from(vec![1.5])),
+            Arc::new(StringArray::from(vec!["a"])),
+        ];
+        for written in columns {
+            let arrow_type = written.data_type().clone();
+            let column = Written::with_coerce_types(written, false);
+            let found = column
+                .arrow_sbbf(arrow_type)
+                .check(&NullArray::new(2))
+                .unwrap();
+            assert_eq!(found, BooleanArray::from(vec![None, None]));
+        }
+    }
+
+    #[test]
+    fn run_end_encoded() {
+        let run_ends = Int32Array::from(vec![2, 3, 5, 6]);
+        let values = Int16Array::from(vec![1, -2, 7, 3]);
+        let written = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+        let column = Written::new(written);
+        let sbbf = column.arrow_sbbf(DataType::Int16);
+
+        let values = Int16Array::from(vec![Some(-2), Some(4), None, Some(1)]);
+        let array =
+            RunArray::<Int16Type>::try_new(&Int16Array::from(vec![1, 3, 4, 6]), &values).unwrap();
+        let found = sbbf.check(&array).unwrap();
+        assert_eq!(
+            found,
+            BooleanArray::from(vec![
+                Some(true),
+                Some(false),
+                Some(false),
+                None,
+                Some(true),
+                Some(true)
+            ])
+        );
+
+        let found = sbbf.check(&array.slice(2, 3)).unwrap();
+        assert_eq!(
+            found,
+            BooleanArray::from(vec![Some(false), None, Some(true)])
+        );
+    }
+
+    #[test]
+    fn unsupported_type() {
+        let column = Written::new(Int8Array::from(vec![1, 2, 3]));
+        column.assert_rejects(DataType::Utf8, "INT32");
+        column.assert_rejects(DataType::new_list(DataType::Int8, true), "INT32");
+
+        let column =
+            Written::new(FixedSizeBinaryArray::try_from_iter([b"abcd"].into_iter()).unwrap());
+        column.assert_rejects(DataType::Int32, "FIXED_LEN_BYTE_ARRAY(4)");
+        column.assert_rejects(
+            DataType::Interval(IntervalUnit::MonthDayNano),
+            "FIXED_LEN_BYTE_ARRAY(4)",
+        );
+    }
+
+    #[test]
+    fn array_type_differs_from_arrow_type() {
+        let column = Written::new(Int8Array::from(vec![1, 2, 3]));
+        let err = column
+            .arrow_sbbf(DataType::Int8)
+            .check(&Int16Array::from(vec![1]))
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Cannot check Int16 values with an ArrowSbbf for Int8 values"
+        );
+
+        // A dictionary or run-end encoded type is checked by its values
+        let dictionary = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Int8));
+        let found = column
+            .arrow_sbbf(dictionary)
+            .check(&Int8Array::from(vec![1, 4]))
+            .unwrap();
+        assert_eq!(found, BooleanArray::from(vec![true, false]));
+    }
+
+    /// Returns `values` with a null inserted at index 2
+    fn with_null<T>(values: [T; 4]) -> Vec<Option<T>> {
+        let mut values: Vec<_> = values.into_iter().map(Some).collect();
+        values.insert(2, None);
+        values
+    }
+
+    /// Returns a column of each Arrow type that [`ArrowWriter`] can write to a
+    /// primitive column, with edge values and a null in the third row
+    fn writer_type_columns() -> Vec<(&'static str, ArrayRef)> {
+        let day = 86_400_000;
+        let f16 = half::f16::from_f32;
+        let fsb = |values: Vec<Option<&[u8; 4]>>| -> ArrayRef {
+            Arc::new(
+                FixedSizeBinaryArray::try_from_sparse_iter_with_size(values.into_iter(), 4)
+                    .unwrap(),
+            )
+        };
+        // The last value is too large for the precision, so the writer truncates
+        // it. No value is 0, which a wrong truncation could produce.
+        let decimal32 = |precision| -> ArrayRef {
+            let values = with_null([-12345, 1, 12345, i32::MAX / 3]);
+            Arc::new(
+                Decimal32Array::from(values)
+                    .with_precision_and_scale(precision, 2)
+                    .unwrap(),
+            )
+        };
+        let decimal64 = |precision| -> ArrayRef {
+            let values = with_null([-12345, 1, 12345, i64::MAX / 3]);
+            Arc::new(
+                Decimal64Array::from(values)
+                    .with_precision_and_scale(precision, 2)
+                    .unwrap(),
+            )
+        };
+        let decimal128 = |precision| -> ArrayRef {
+            let values = with_null([-12345, 1, 12345, i128::MAX / 3]);
+            Arc::new(
+                Decimal128Array::from(values)
+                    .with_precision_and_scale(precision, 2)
+                    .unwrap(),
+            )
+        };
+        let decimal256 = |precision| -> ArrayRef {
+            let large = i256::MAX.wrapping_div(i256::from(3));
+            let values = with_null([i256::from(-12345), i256::from(1), i256::from(12345), large]);
+            Arc::new(
+                Decimal256Array::from(values)
+                    .with_precision_and_scale(precision, 2)
+                    .unwrap(),
+            )
+        };
+        let strings = with_null(["", "a", "longer than twelve bytes", "é"]);
+        let binaries: Vec<_> = strings.iter().map(|s| s.map(str::as_bytes)).collect();
+        let interval = IntervalDayTime::new;
+        let day_times = with_null([
+            interval(1, 2),
+            interval(-3, 4),
+            interval(0, 0),
+            interval(i32::MAX, i32::MIN),
+        ]);
+        let int16s = Int16Array::from(vec![
+            Some(9),
+            Some(-7),
+            None,
+            Some(3),
+            Some(i16::MIN),
+            Some(5),
+        ]);
+        // The dictionaries have no repeated values, so the last rows have
+        // values that are not in the first rows
+        let keys = Int32Array::from(with_null([0, 1, 2, 3]));
+        let ree_int8 = RunArray::<Int32Type>::try_new(
+            &Int32Array::from(vec![2, 3, 5]),
+            &Int8Array::from(vec![Some(-3), None, Some(i8::MAX)]),
+        );
+        let ree_utf8 = RunArray::<Int16Type>::try_new(
+            &Int16Array::from(vec![1, 3, 5]),
+            &StringArray::from(vec![Some("a"), None, Some("b")]),
+        );
+
+        let time32s = with_null([0, 1, 3600, 86399]);
+        let time64s = with_null([0, 1, 3600, 86399]);
+        let i64s = with_null([-1, 0, 1, i64::MAX]);
+        let float16s = with_null([f16(-1.5), f16(0.0), f16(-0.0), half::f16::NAN]);
+        // Stored as days, rounded towards zero, with coerce_types
+        let date64s = with_null([-1, 0, 5 * day + 1, -5 * day - 1]);
+        let timestamp_ms = TimestampMillisecondArray::from(i64s.clone()).with_timezone("+01:00");
+
+        vec![
+            (
+                "int8",
+                Arc::new(Int8Array::from(with_null([i8::MIN, -1, 1, i8::MAX]))),
+            ),
+            (
+                "int16",
+                Arc::new(Int16Array::from(with_null([i16::MIN, -1, 1, i16::MAX]))),
+            ),
+            (
+                "int32",
+                Arc::new(Int32Array::from(with_null([i32::MIN, -1, 1, i32::MAX]))),
+            ),
+            (
+                "int64",
+                Arc::new(Int64Array::from(with_null([i64::MIN, -1, 1, i64::MAX]))),
+            ),
+            (
+                "uint8",
+                Arc::new(UInt8Array::from(with_null([0, 1, 128, u8::MAX]))),
+            ),
+            (
+                "uint16",
+                Arc::new(UInt16Array::from(with_null([0, 1, 32768, u16::MAX]))),
+            ),
+            (
+                "uint32",
+                Arc::new(UInt32Array::from(with_null([0, 1, 1 << 31, u32::MAX]))),
+            ),
+            (
+                "uint64",
+                Arc::new(UInt64Array::from(with_null([0, 1, 1 << 63, u64::MAX]))),
+            ),
+            ("float16", Arc::new(Float16Array::from(float16s))),
+            (
+                "float32",
+                Arc::new(Float32Array::from(with_null([-1.5, 0.0, -0.0, f32::NAN]))),
+            ),
+            (
+                "float64",
+                Arc::new(Float64Array::from(with_null([
+                    -1.5,
+                    0.0,
+                    f64::INFINITY,
+                    f64::NAN,
+                ]))),
+            ),
+            (
+                "bool",
+                Arc::new(BooleanArray::from(with_null([true, false, true, false]))),
+            ),
+            (
+                "date32",
+                Arc::new(Date32Array::from(with_null([-1, 0, 1, 20000]))),
+            ),
+            ("date64", Arc::new(Date64Array::from(date64s))),
+            (
+                "time32_s",
+                Arc::new(Time32SecondArray::from(time32s.clone())),
+            ),
+            ("time32_ms", Arc::new(Time32MillisecondArray::from(time32s))),
+            (
+                "time64_us",
+                Arc::new(Time64MicrosecondArray::from(time64s.clone())),
+            ),
+            ("time64_ns", Arc::new(Time64NanosecondArray::from(time64s))),
+            (
+                "timestamp_s",
+                Arc::new(TimestampSecondArray::from(i64s.clone())),
+            ),
+            ("timestamp_ms", Arc::new(timestamp_ms)),
+            (
+                "timestamp_us",
+                Arc::new(TimestampMicrosecondArray::from(i64s.clone())),
+            ),
+            (
+                "timestamp_ns",
+                Arc::new(TimestampNanosecondArray::from(i64s.clone())),
+            ),
+            (
+                "duration_s",
+                Arc::new(DurationSecondArray::from(i64s.clone())),
+            ),
+            (
+                "duration_ms",
+                Arc::new(DurationMillisecondArray::from(i64s.clone())),
+            ),
+            (
+                "duration_us",
+                Arc::new(DurationMicrosecondArray::from(i64s.clone())),
+            ),
+            ("duration_ns", Arc::new(DurationNanosecondArray::from(i64s))),
+            // Stored as INT32, INT64 or FIXED_LEN_BYTE_ARRAY depending on precision
+            ("decimal32_5", decimal32(5)),
+            ("decimal32_9", decimal32(9)),
+            ("decimal64_5", decimal64(5)),
+            ("decimal64_18", decimal64(18)),
+            ("decimal128_5", decimal128(5)),
+            ("decimal128_15", decimal128(15)),
+            ("decimal128_20", decimal128(20)),
+            ("decimal128_38", decimal128(38)),
+            ("decimal256_5", decimal256(5)),
+            ("decimal256_15", decimal256(15)),
+            ("decimal256_30", decimal256(30)),
+            ("decimal256_76", decimal256(76)),
+            (
+                "interval_year_month",
+                Arc::new(IntervalYearMonthArray::from(with_null([
+                    -1,
+                    0,
+                    13,
+                    i32::MAX,
+                ]))),
+            ),
+            (
+                "interval_day_time",
+                Arc::new(IntervalDayTimeArray::from(day_times)),
+            ),
+            (
+                "fixed_size_binary",
+                fsb(with_null([
+                    b"abcd",
+                    b"\0\0\0\0",
+                    b"\xff\xfe\xfd\xfc",
+                    b"abce",
+                ])),
+            ),
+            ("utf8", Arc::new(StringArray::from(strings.clone()))),
+            (
+                "large_utf8",
+                Arc::new(LargeStringArray::from(strings.clone())),
+            ),
+            ("utf8_view", Arc::new(StringViewArray::from(strings))),
+            ("binary", Arc::new(BinaryArray::from(binaries.clone()))),
+            (
+                "large_binary",
+                Arc::new(LargeBinaryArray::from(binaries.clone())),
+            ),
+            ("binary_view", Arc::new(BinaryViewArray::from(binaries))),
+            ("sliced_int16", Arc::new(int16s.slice(1, 5))),
+            // Dictionary and run-end encoded arrays are written as their values
+            (
+                "dictionary_int16",
+                Arc::new(DictionaryArray::new(
+                    keys.clone(),
+                    Arc::new(Int16Array::from(vec![-1, i16::MAX, 7, i16::MIN])),
+                )),
+            ),
+            (
+                "dictionary_decimal",
+                Arc::new(DictionaryArray::new(
+                    keys.clone(),
+                    Arc::new(
+                        Decimal128Array::from(vec![-12345, 1, 12345, i128::MAX / 3])
+                            .with_precision_and_scale(30, 2)
+                            .unwrap(),
+                    ),
+                )),
+            ),
+            (
+                "dictionary_fixed_size_binary",
+                Arc::new(DictionaryArray::new(
+                    keys.clone(),
+                    fsb(vec![
+                        Some(b"abcd"),
+                        Some(b"wxyz"),
+                        Some(b"efgh"),
+                        Some(b"ijkl"),
+                    ]),
+                )),
+            ),
+            (
+                "dictionary_utf8",
+                Arc::new(DictionaryArray::new(
+                    keys,
+                    Arc::new(StringArray::from(vec![
+                        "a",
+                        "longer than twelve bytes",
+                        "b",
+                        "c",
+                    ])),
+                )),
+            ),
+            ("ree_int8", Arc::new(ree_int8.unwrap())),
+            ("ree_utf8", Arc::new(ree_utf8.unwrap())),
+        ]
+    }
+
+    /// Writes a column of each Arrow type that [`ArrowWriter`] can write to a
+    /// primitive column, and checks that [`ArrowSbbf`] finds every written value
+    /// and does not find values that were not written
+    #[test]
+    fn every_writer_type() {
+        let columns = writer_type_columns();
+        let batch = RecordBatch::try_from_iter(columns.clone()).unwrap();
+        // The last two rows of each column have values that are not in the
+        // first three rows, except for booleans, which only have two values
+        let (head, tail) = (batch.slice(0, 3), batch.slice(3, 2));
+        for coerce_types in [false, true] {
+            let all = write_and_read_bloom_filters(&batch, coerce_types);
+            let first_rows = write_and_read_bloom_filters(&head, coerce_types);
+            for (i, (name, _)) in columns.iter().enumerate() {
+                let context = format!("{name} with coerce_types {coerce_types}");
+                let check = |(sbbf, column): &(Sbbf, ColumnDescPtr), array: &ArrayRef| {
+                    ArrowSbbf::try_new(sbbf, column, array.data_type().clone())
+                        .and_then(|sbbf| sbbf.check(array.as_ref()))
+                        .unwrap_or_else(|e| panic!("{context}: {e}"))
+                };
+                // Every value is found, and nulls are null
+                let array = batch.column(i);
+                let found = check(&all[i], array);
+                let nulls = array.logical_nulls();
+                let valid = |i| nulls.as_ref().is_none_or(|nulls| nulls.is_valid(i));
+                let expected: BooleanArray =
+                    (0..array.len()).map(|i| valid(i).then_some(true)).collect();
+                assert_eq!(found, expected, "{context}");
+
+                // Values that were not written are not found
+                if *name != "bool" {
+                    let found = check(&first_rows[i], tail.column(i));
+                    assert_eq!(found, BooleanArray::from(vec![false, false]), "{context}");
+                }
+            }
+        }
+    }
+}
