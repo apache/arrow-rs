@@ -45,15 +45,16 @@ pub fn cast_to_variant_with_options(
     input: &dyn Array,
     options: &CastOptions,
 ) -> Result<VariantArray, ArrowError> {
+    // Validate type support first so empty and all-null arrays of unsupported
+    // (including nested) types fail consistently with populated ones.
+    let mut row_builder = make_arrow_to_variant_row_builder(input.data_type(), input, options)?;
+
     // Fast path: any all-null input maps to an all-null VariantArray.
     if input.null_count() == input.len() {
         let mut array_builder = VariantArrayBuilder::new(input.len());
         array_builder.append_nulls(input.len());
         return Ok(array_builder.build());
     }
-
-    // Create row builder for the input array type
-    let mut row_builder = make_arrow_to_variant_row_builder(input.data_type(), input, options)?;
 
     // Create output array builder
     let mut array_builder = VariantArrayBuilder::new(input.len());
@@ -96,7 +97,7 @@ mod tests {
         StructArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
         Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
         TimestampNanosecondArray, TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array,
-        UInt64Array, UnionArray,
+        UInt64Array, UnionArray, new_empty_array, new_null_array,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow::datatypes::{
@@ -107,7 +108,7 @@ mod tests {
     use arrow_schema::{
         DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION, DECIMAL128_MAX_PRECISION,
     };
-    use arrow_schema::{DataType, Field, Fields, UnionFields};
+    use arrow_schema::{DataType, Field, Fields, IntervalUnit, TimeUnit, UnionFields};
     use chrono::{DateTime, NaiveDate, NaiveTime};
     use half::f16;
     use parquet_variant::{
@@ -1127,19 +1128,56 @@ mod tests {
         ];
 
         for array in arrays {
-            let result = cast_to_variant(array.as_ref());
-            assert!(result.is_err());
-            match result.unwrap_err() {
-                ArrowError::InvalidArgumentError(msg) => {
-                    assert!(
-                        msg.contains("Casting duration/interval types to Variant is not supported")
-                    );
-                    assert!(
-                        msg.contains("The Variant format does not define duration/interval types")
-                    );
-                }
-                _ => panic!("Expected InvalidArgumentError"),
+            assert_duration_interval_cast_err(array.as_ref());
+        }
+
+        // Empty and all-null arrays of the same unsupported types must also fail
+        // (#11946); previously the all-null shortcut skipped type validation.
+        let unsupported_types = [
+            DataType::Duration(TimeUnit::Second),
+            DataType::Duration(TimeUnit::Millisecond),
+            DataType::Duration(TimeUnit::Microsecond),
+            DataType::Duration(TimeUnit::Nanosecond),
+            DataType::Interval(IntervalUnit::YearMonth),
+            DataType::Interval(IntervalUnit::DayTime),
+            DataType::Interval(IntervalUnit::MonthDayNano),
+        ];
+        for dt in unsupported_types {
+            assert_duration_interval_cast_err(new_empty_array(&dt).as_ref());
+            assert_duration_interval_cast_err(new_null_array(&dt, 1).as_ref());
+
+            let child = Arc::new(Field::new("item", dt.clone(), true));
+            let list_type = DataType::List(child.clone());
+            assert_duration_interval_cast_err(new_empty_array(&list_type).as_ref());
+            assert_duration_interval_cast_err(new_null_array(&list_type, 1).as_ref());
+
+            let struct_type =
+                DataType::Struct(Fields::from(vec![Field::new("f", dt.clone(), true)]));
+            assert_duration_interval_cast_err(new_empty_array(&struct_type).as_ref());
+            assert_duration_interval_cast_err(new_null_array(&struct_type, 1).as_ref());
+        }
+
+        // Supported empty / all-null controls still succeed.
+        assert!(cast_to_variant(new_empty_array(&DataType::Int64).as_ref()).is_ok());
+        assert!(cast_to_variant(new_null_array(&DataType::Int64, 1).as_ref()).is_ok());
+        assert!(cast_to_variant(new_empty_array(&DataType::Null).as_ref()).is_ok());
+    }
+
+    fn assert_duration_interval_cast_err(array: &dyn Array) {
+        let result = cast_to_variant(array);
+        assert!(
+            result.is_err(),
+            "expected cast failure for {:?}",
+            array.data_type()
+        );
+        match result.unwrap_err() {
+            ArrowError::InvalidArgumentError(msg) => {
+                assert!(
+                    msg.contains("Casting duration/interval types to Variant is not supported")
+                );
+                assert!(msg.contains("The Variant format does not define duration/interval types"));
             }
+            other => panic!("Expected InvalidArgumentError, got {other:?}"),
         }
     }
 
