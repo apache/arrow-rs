@@ -850,10 +850,34 @@ pub fn read_dictionary_impl(
 ) -> Result<(), ArrowError> {
     let id = batch.id();
 
+    let value_type = dictionary_value_type(schema, id)?;
+
+    read_dictionary_impl_with_value_type(
+        buf,
+        batch,
+        value_type,
+        dictionaries_by_id,
+        metadata,
+        require_alignment,
+        skip_validation,
+    )
+}
+
+fn read_dictionary_impl_with_value_type(
+    buf: &Buffer,
+    batch: crate::DictionaryBatch,
+    value_type: &DataType,
+    dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
+    metadata: &MetadataVersion,
+    require_alignment: bool,
+    skip_validation: UnsafeFlag,
+) -> Result<(), ArrowError> {
+    let id = batch.id();
+
     let dictionary_values = get_dictionary_values(
         buf,
         batch,
-        schema,
+        value_type,
         dictionaries_by_id,
         metadata,
         require_alignment,
@@ -937,57 +961,94 @@ fn child_field_with_dict_id(data_type: &DataType, id: i64) -> Option<&Field> {
     }
 }
 
-/// Given a dictionary batch IPC message/body along with the full state of a
-/// stream including schema, dictionary cache, metadata, and other flags, this
-/// function will parse the buffer into an array of dictionary values.
+fn dictionary_value_type(schema: &Schema, id: i64) -> Result<&DataType, ArrowError> {
+    let field = first_field_with_dict_id(schema.fields(), id).ok_or_else(|| {
+        ArrowError::InvalidArgumentError(format!("dictionary id {id} not found in schema"))
+    })?;
+
+    match field.data_type() {
+        DataType::Dictionary(_, value_type) => Ok(value_type),
+        _ => Err(ArrowError::InvalidArgumentError(format!(
+            "dictionary id {id} not found in schema"
+        ))),
+    }
+}
+
+/// Avoids collecting the schema for streams with zero or one dictionary ID, while preventing a
+/// full schema traversal for every dictionary batch in streams with many IDs.
+#[derive(Debug, Default)]
+struct DictionaryValueTypes {
+    value_types: HashMap<i64, DataType>,
+    complete: bool,
+}
+
+impl DictionaryValueTypes {
+    fn get(&mut self, schema: &Schema, id: i64) -> Result<&DataType, ArrowError> {
+        if self.complete {
+            return self.value_types.get(&id).ok_or_else(|| {
+                ArrowError::InvalidArgumentError(format!("dictionary id {id} not found in schema"))
+            });
+        }
+
+        if !self.value_types.contains_key(&id) {
+            if self.value_types.is_empty() {
+                self.value_types
+                    .insert(id, dictionary_value_type(schema, id)?.clone());
+            } else {
+                self.value_types = collect_dictionary_value_types(schema);
+                self.complete = true;
+            }
+        }
+
+        self.value_types.get(&id).ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!("dictionary id {id} not found in schema"))
+        })
+    }
+}
+
+fn collect_dictionary_value_types(schema: &Schema) -> HashMap<i64, DataType> {
+    let mut value_types = HashMap::with_capacity(schema.fields().len());
+
+    for field in schema.flattened_fields() {
+        let DataType::Dictionary(_, value_type) = field.data_type() else {
+            continue;
+        };
+        #[expect(deprecated)]
+        if let Some(id) = field.dict_id() {
+            value_types
+                .entry(id)
+                .or_insert_with(|| value_type.as_ref().clone());
+        }
+    }
+
+    value_types
+}
+
+/// Parse a dictionary batch using its value type from the stream schema.
 fn get_dictionary_values(
     buf: &Buffer,
     batch: crate::DictionaryBatch,
-    schema: &Schema,
+    value_type: &DataType,
     dictionaries_by_id: &HashMap<i64, ArrayRef>,
     metadata: &MetadataVersion,
     require_alignment: bool,
     skip_validation: UnsafeFlag,
 ) -> Result<ArrayRef, ArrowError> {
-    let id = batch.id();
-    let first_field = first_field_with_dict_id(schema.fields(), id).ok_or_else(|| {
-        ArrowError::InvalidArgumentError(format!("dictionary id {id} not found in schema"))
-    })?;
-
-    // As the dictionary batch does not contain the type of the
-    // values array, we need to retrieve this from the schema.
-    // Get an array representing this dictionary's values.
-    let dictionary_values: ArrayRef = match first_field.data_type() {
-        DataType::Dictionary(_, value_type) => {
-            // Make a fake schema for the dictionary batch.
-            let value = value_type.as_ref().clone();
-            let schema = Schema::new(vec![Field::new("", value, true)]);
-            // Read a single column
-            let Some(data) = batch.data() else {
-                return Err(ArrowError::ParseError(
-                    "Dictionary batch is missing its data".to_string(),
-                ));
-            };
-            let record_batch = RecordBatchDecoder::try_new(
-                buf,
-                data,
-                Arc::new(schema),
-                dictionaries_by_id,
-                metadata,
-            )?
+    // Dictionary batches omit the value type, so decode their single column with a synthetic
+    // schema containing the type found in the stream schema.
+    let schema = Schema::new(vec![Field::new("", value_type.clone(), true)]);
+    let Some(data) = batch.data() else {
+        return Err(ArrowError::ParseError(
+            "Dictionary batch is missing its data".to_string(),
+        ));
+    };
+    let record_batch =
+        RecordBatchDecoder::try_new(buf, data, Arc::new(schema), dictionaries_by_id, metadata)?
             .with_require_alignment(require_alignment)
             .with_skip_validation(skip_validation)
             .read_record_batch()?;
 
-            Some(record_batch.column(0).clone())
-        }
-        _ => None,
-    }
-    .ok_or_else(|| {
-        ArrowError::InvalidArgumentError(format!("dictionary id {id} not found in schema"))
-    })?;
-
-    Ok(dictionary_values)
+    Ok(record_batch.column(0).clone())
 }
 
 /// Read the data for a given block
@@ -1115,6 +1176,7 @@ pub fn read_footer_length(buf: [u8; 10]) -> Result<usize, ArrowError> {
 #[derive(Debug)]
 pub struct FileDecoder {
     schema: SchemaRef,
+    dictionary_value_types: DictionaryValueTypes,
     dictionaries: HashMap<i64, ArrayRef>,
     version: MetadataVersion,
     projection: Option<Vec<usize>>,
@@ -1127,6 +1189,7 @@ impl FileDecoder {
     pub fn new(schema: SchemaRef, version: MetadataVersion) -> Self {
         Self {
             schema,
+            dictionary_value_types: Default::default(),
             version,
             dictionaries: Default::default(),
             projection: None,
@@ -1191,10 +1254,11 @@ impl FileDecoder {
         match message.header_type() {
             crate::MessageHeader::DictionaryBatch => {
                 let batch = message.header_as_dictionary_batch().unwrap();
-                read_dictionary_impl(
+                let value_type = self.dictionary_value_types.get(&self.schema, batch.id())?;
+                read_dictionary_impl_with_value_type(
                     &buf.slice(block.metaDataLength() as _),
                     batch,
-                    &self.schema,
+                    value_type,
                     &mut self.dictionaries,
                     &message.version(),
                     self.require_alignment,
@@ -1628,6 +1692,9 @@ pub struct StreamReader<R> {
     /// The schema that is read from the stream's first message
     schema: SchemaRef,
 
+    /// Lazily populated when dictionary batches are read.
+    dictionary_value_types: DictionaryValueTypes,
+
     /// Optional dictionaries for each schema field.
     ///
     /// Dictionaries may be appended to in the streaming format.
@@ -1718,6 +1785,7 @@ impl<R: Read> StreamReader<R> {
         Ok(Self {
             reader: msg_reader,
             schema: Arc::new(schema),
+            dictionary_value_types: Default::default(),
             finished: false,
             dictionaries_by_id,
             projection,
@@ -1816,10 +1884,11 @@ impl<R: Read> StreamReader<R> {
                 })?;
 
                 let version = message.version();
+                let value_type = self.dictionary_value_types.get(&self.schema, dict.id())?;
                 let dict_values = get_dictionary_values(
                     &body.into(),
                     dict,
-                    &self.schema,
+                    value_type,
                     &self.dictionaries_by_id,
                     &version,
                     false,
@@ -3904,7 +3973,7 @@ mod tests {
 
     #[test]
     #[expect(deprecated)]
-    fn test_first_field_with_dict_id_matches_fields_with_dict_id() {
+    fn test_dictionary_field_lookups_match_fields_with_dict_id() {
         let dict = |name: &str, id: i64| {
             let data_type =
                 DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
@@ -3954,11 +4023,63 @@ mod tests {
             dict_of_list_of_dict("same_outer_and_inner_id", 9, 9),
         ]);
 
+        let value_types = collect_dictionary_value_types(&schema);
         for id in -1..=10 {
-            let expected = schema.fields_with_dict_id(id).first().map(|f| f.name());
+            let fields = schema.fields_with_dict_id(id);
+            let expected = fields.first().map(|f| f.name());
             let actual = first_field_with_dict_id(schema.fields(), id).map(|f| f.name());
             assert_eq!(actual, expected, "dictionary id {id}");
+
+            let expected_value_type = fields.first().and_then(|field| match field.data_type() {
+                DataType::Dictionary(_, value_type) => Some(value_type.as_ref()),
+                _ => None,
+            });
+            assert_eq!(
+                value_types.get(&id),
+                expected_value_type,
+                "dictionary value type {id}"
+            );
         }
+    }
+
+    #[test]
+    #[expect(deprecated)]
+    fn test_dictionary_value_types_cache() {
+        let dict = |name, id, value_type| {
+            Field::new_dict(
+                name,
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(value_type)),
+                true,
+                id,
+                false,
+            )
+        };
+        let schema = Schema::new(vec![
+            dict("a", 1, DataType::Utf8),
+            dict("b", 2, DataType::Int64),
+        ]);
+        let mut cache = DictionaryValueTypes::default();
+
+        assert_eq!(cache.get(&schema, 1).unwrap(), &DataType::Utf8);
+        assert_eq!(cache.get(&schema, 1).unwrap(), &DataType::Utf8);
+        assert!(!cache.complete);
+        assert_eq!(cache.value_types.len(), 1);
+
+        assert_eq!(cache.get(&schema, 2).unwrap(), &DataType::Int64);
+        assert!(cache.complete);
+        assert_eq!(cache.value_types.len(), 2);
+    }
+
+    #[test]
+    fn test_dictionary_value_types_missing_id() {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let err = DictionaryValueTypes::default()
+            .get(&schema, 42)
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: dictionary id 42 not found in schema"
+        );
     }
 
     #[test]

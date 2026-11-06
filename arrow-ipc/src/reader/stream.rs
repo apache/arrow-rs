@@ -12,7 +12,10 @@ use arrow_data::UnsafeFlag;
 use arrow_schema::{ArrowError, SchemaRef};
 
 use crate::convert::MessageBuffer;
-use crate::reader::{MAX_PREALLOC_BYTES, RecordBatchDecoder, read_dictionary_impl};
+use crate::reader::{
+    DictionaryValueTypes, MAX_PREALLOC_BYTES, RecordBatchDecoder,
+    read_dictionary_impl_with_value_type,
+};
 use crate::{CONTINUATION_MARKER, MessageHeader};
 
 /// A low-level interface for reading [`RecordBatch`] data from a stream of bytes
@@ -24,6 +27,8 @@ pub struct StreamDecoder {
     schema: Option<SchemaRef>,
     /// Lookup table for dictionaries by ID
     dictionaries: HashMap<i64, ArrayRef>,
+    /// Lazily populated when dictionary batches are read.
+    dictionary_value_types: DictionaryValueTypes,
     /// The decoder state
     state: DecoderState,
     /// A scratch buffer when a read is split across multiple `Buffer`
@@ -259,10 +264,12 @@ impl StreamDecoder {
                             let schema = self.schema.as_deref().ok_or_else(|| {
                                 ArrowError::IpcError("Missing schema".to_string())
                             })?;
-                            read_dictionary_impl(
+                            let value_type =
+                                self.dictionary_value_types.get(schema, dictionary.id())?;
+                            read_dictionary_impl_with_value_type(
                                 &body,
                                 dictionary,
-                                schema,
+                                value_type,
                                 &mut self.dictionaries,
                                 &version,
                                 self.require_alignment,
