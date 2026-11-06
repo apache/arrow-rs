@@ -296,7 +296,7 @@ fn compress_lz4(_input: &[u8], _output: &mut Vec<u8>) -> Result<(), ArrowError> 
 #[cfg(feature = "lz4")]
 fn decompress_lz4(input: &[u8], decompressed_size: usize) -> Result<Vec<u8>, ArrowError> {
     use std::io::Read;
-    let mut output = Vec::with_capacity(decompressed_size);
+    let mut output = Vec::with_capacity(decompressed_size.min(crate::reader::MAX_PREALLOC_BYTES));
     let mut decoder = lz4_flex::frame::FrameDecoder::new(input);
     decoder
         .by_ref()
@@ -356,6 +356,25 @@ fn decompress_zstd(
     decompressed_size: usize,
     context: &mut DecompressionContext,
 ) -> Result<Vec<u8>, ArrowError> {
+    if decompressed_size > crate::reader::MAX_PREALLOC_BYTES {
+        // The bulk decompressor writes into a buffer reserved up front, so stream instead.
+        use std::io::Read;
+        let mut output =
+            Vec::with_capacity(decompressed_size.min(crate::reader::MAX_PREALLOC_BYTES));
+        let mut decoder = zstd::stream::read::Decoder::with_buffer(input)?;
+        decoder
+            .by_ref()
+            .take(decompressed_size as u64)
+            .read_to_end(&mut output)?;
+
+        // Probe without growing `output` to reject data exceeding the advertised size.
+        if decoder.read(&mut [0])? != 0 {
+            return Err(ArrowError::IpcError(format!(
+                "ZSTD decompressed buffer exceeds advertised size of {decompressed_size}"
+            )));
+        }
+        return Ok(output);
+    }
     let output = context
         .zstd_decompressor()
         .decompress(input, decompressed_size)?;
@@ -448,6 +467,28 @@ mod tests {
             )
             .unwrap();
         assert_eq!(input_bytes, result.as_slice());
+    }
+
+    /// A buffer larger than `MAX_PREALLOC_BYTES` round-trips, and a size its data does not back fails.
+    #[test]
+    #[cfg(any(feature = "lz4", feature = "zstd"))]
+    fn test_decompression_beyond_prealloc() {
+        let input = vec![7u8; crate::reader::MAX_PREALLOC_BYTES + 2];
+        for codec in [
+            #[cfg(feature = "lz4")]
+            super::CompressionCodec::Lz4Frame,
+            #[cfg(feature = "zstd")]
+            super::CompressionCodec::Zstd(super::DEFAULT_ZSTD_COMPRESSION_LEVEL),
+        ] {
+            let mut compressed = Vec::new();
+            codec
+                .compress(&input, &mut compressed, &mut Default::default())
+                .unwrap();
+            let decompress = |len| codec.decompress(&compressed, len, &mut Default::default());
+            assert_eq!(decompress(input.len()).unwrap(), input, "{codec:?}");
+            assert!(decompress(input.len() - 1).is_err(), "{codec:?}");
+            assert!(decompress(usize::MAX).is_err(), "{codec:?}");
+        }
     }
 
     #[test]

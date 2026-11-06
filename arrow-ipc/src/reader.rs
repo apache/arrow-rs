@@ -1920,7 +1920,7 @@ pub(crate) enum IpcMessage {
 /// start here and the buffer doubles as the data arrives, so a body of `n` bytes costs
 /// `log2(n / MAX_PREALLOC_BYTES)` reallocations and the buffer never runs more than a factor
 /// of two ahead of the bytes actually received.
-const MAX_PREALLOC_BYTES: usize = 64 * 1024 * 1024;
+pub(crate) const MAX_PREALLOC_BYTES: usize = 64 * 1024 * 1024;
 
 /// Reads exactly `len` bytes of message body, without reserving `len` before reading it.
 fn read_body_bounded<R: Read>(reader: &mut R, len: usize) -> Result<MutableBuffer, ArrowError> {
