@@ -2,6 +2,9 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use crate::arrow::arrow_writer::size::{
+    byte_array_bytes_size, byte_array_view_bytes_size, offset_bytes,
+};
 use crate::basic::Encoding;
 use crate::bloom_filter::Sbbf;
 use crate::column::writer::encoder::{
@@ -25,7 +28,7 @@ use arrow_array::{
     Array, ArrayAccessor, BinaryArray, BinaryViewArray, DictionaryArray, FixedSizeBinaryArray,
     GenericByteArray, LargeBinaryArray, LargeStringArray, StringArray, StringViewArray,
 };
-use arrow_buffer::{ArrowNativeType, Buffer};
+use arrow_buffer::Buffer;
 use arrow_schema::DataType;
 
 macro_rules! downcast_dict_impl {
@@ -980,7 +983,7 @@ fn count_within_budget_views(
     // value by `max_value_len`. Skips the walk for the common small-value
     // case (what view arrays are built for, and where there is nothing to
     // bound).
-    let per_value = max_value_len + std::mem::size_of::<u32>();
+    let per_value = byte_array_bytes_size(max_value_len, 1);
     if indices.len().saturating_mul(per_value) <= byte_budget {
         return indices.len();
     }
@@ -988,8 +991,7 @@ fn count_within_budget_views(
     // bits of its u128 view word (no data-buffer dereference).
     let mut cum: usize = 0;
     for (i, idx) in indices.iter().enumerate() {
-        let len = (views[*idx] as u32) as usize;
-        cum = cum.saturating_add(len + std::mem::size_of::<u32>());
+        cum = cum.saturating_add(byte_array_view_bytes_size(&views[*idx..*idx + 1]));
         if cum > byte_budget {
             return i + 1;
         }
@@ -1016,7 +1018,6 @@ fn count_within_budget_offsets<T: ByteArrayType>(
     let last = indices[n - 1];
     let offsets = values.value_offsets();
     // Each plain-encoded value carries a 4-byte length prefix on the page.
-    let prefix_overhead = std::mem::size_of::<u32>();
 
     // Stage 1: O(1) span upper bound. The span `offsets[last+1] -
     // offsets[first]` covers every array position in `[first, last]`, a
@@ -1026,8 +1027,8 @@ fn count_within_budget_offsets<T: ByteArrayType>(
     // common small-value case for both non-null and (sparse) nullable
     // columns.
     if last >= first {
-        let payload = (offsets[last + 1] - offsets[first]).as_usize();
-        if payload + n * prefix_overhead <= byte_budget {
+        let payload = offset_bytes(offsets, first..last + 1);
+        if byte_array_bytes_size(payload, n) <= byte_budget {
             return n;
         }
     }
@@ -1035,7 +1036,7 @@ fn count_within_budget_offsets<T: ByteArrayType>(
     // Stage 2: scan per-index lengths from the offsets buffer.
     let mut cum: usize = 0;
     for (i, idx) in indices.iter().enumerate() {
-        let len = (offsets[idx + 1] - offsets[*idx]).as_usize() + prefix_overhead;
+        let len = byte_array_bytes_size(offset_bytes(offsets, *idx..*idx + 1), 1);
         cum = cum.saturating_add(len);
         if cum > byte_budget {
             return i + 1;
