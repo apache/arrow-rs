@@ -1706,7 +1706,7 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
     /// Validates values in this array can be properly interpreted
     /// with the specified precision.
     pub fn validate_decimal_precision(&self, precision: u8) -> Result<(), ArrowError> {
-        if precision < self.scale() as u8 {
+        if self.scale() > 0 && precision < self.scale() as u8 {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Decimal precision {precision} is less than scale {}",
                 self.scale()
@@ -2614,6 +2614,56 @@ mod tests {
             "Invalid argument error: 10.0 is too large to store in a Decimal128 of precision 2. Max is 9.9",
             error.to_string()
         );
+    }
+
+    #[test]
+    fn test_decimal_validate_precision_with_negative_scale() {
+        fn check<T: DecimalType>()
+        where
+            T::Native: From<i32>,
+        {
+            for scale in [i8::MIN, -2, -1, 0, 2] {
+                let array = PrimitiveArray::<T>::from_iter(
+                    [Some(-99), Some(0), Some(1), Some(99), None]
+                        .into_iter()
+                        .map(|v| v.map(T::Native::from)),
+                )
+                .with_precision_and_scale(2, scale)
+                .unwrap();
+                array.validate_decimal_precision(2).unwrap();
+
+                for value in [-100, 100] {
+                    let array = PrimitiveArray::<T>::from_iter_values([T::Native::from(value)])
+                        .with_precision_and_scale(3, scale)
+                        .unwrap();
+                    assert!(array.validate_decimal_precision(2).is_err());
+                }
+            }
+
+            let array = PrimitiveArray::<T>::from_iter_values([T::Native::from(100)])
+                .with_precision_and_scale(3, -2)
+                .unwrap();
+            assert_eq!(
+                array.validate_decimal_precision(2).unwrap_err().to_string(),
+                format!(
+                    "Invalid argument error: 10000 is too large to store in a {} of precision 2. Max is 9900",
+                    T::PREFIX
+                )
+            );
+
+            let array = PrimitiveArray::<T>::from_iter_values([T::Native::from(0)])
+                .with_precision_and_scale(2, 2)
+                .unwrap();
+            assert_eq!(
+                array.validate_decimal_precision(1).unwrap_err().to_string(),
+                "Invalid argument error: Decimal precision 1 is less than scale 2"
+            );
+        }
+
+        check::<Decimal32Type>();
+        check::<Decimal64Type>();
+        check::<Decimal128Type>();
+        check::<Decimal256Type>();
     }
 
     #[test]
