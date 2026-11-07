@@ -22,8 +22,8 @@ use arrow_array::{
     Array, ArrayRef, GenericListArray, OffsetSizeTrait, builder::BooleanBufferBuilder,
     new_empty_array,
 };
+use arrow_buffer::Buffer;
 use arrow_buffer::ToByteSlice;
-use arrow_buffer::{BooleanBuffer, Buffer};
 use arrow_data::ArrayData;
 use arrow_schema::DataType as ArrowType;
 use std::any::Any;
@@ -78,126 +78,6 @@ impl<OffsetSize: OffsetSizeTrait> ListArrayReader<OffsetSize> {
     }
 }
 
-/// Computes a list's offsets, its validity bitmap when `nullable`, and the
-/// number of child values it references, from the def/rep levels of its
-/// item reader.
-///
-/// Definition levels identify whether each list boundary contributes a
-/// child slot. For a nullable list, the states are:
-///
-/// - `d >= def_level`: list is present with a child item
-/// - `d == def_level - 1`: list is present but empty
-/// - `d <= def_level - 2`: list is null
-///
-/// Required lists do not have the null state, but still use the same
-/// `d >= def_level` test to distinguish child items from empty lists.
-/// Repetition levels identify list boundaries and whether a child item
-/// belongs directly to this list or to a nested child list.
-///
-/// `parent_threshold` is set when this list is itself a child of another
-/// list; entries with `d < threshold` belong to null/empty parent lists and
-/// are skipped.
-fn build_list_offsets_and_validity<O: OffsetSizeTrait>(
-    def_levels: &[i16],
-    rep_levels: &[i16],
-    def_level: i16,
-    rep_level: i16,
-    parent_threshold: Option<i16>,
-    nullable: bool,
-) -> Result<(Vec<O>, Option<BooleanBuffer>, usize)> {
-    let levels_len = def_levels.len().min(rep_levels.len());
-    // At most one list starts per level, plus the trailing offset
-    let mut offsets = vec![O::default(); levels_len + 1];
-    let mut validity = BooleanBufferBuilder::new(if nullable { levels_len } else { 0 });
-
-    // Specialize the scan by nullable/parent-threshold mode so the hot loop
-    // does not check these options once per decoded level.
-    let fill = match (parent_threshold.is_some(), nullable) {
-        (false, false) => fill_list_offsets::<O, false, false>,
-        (false, true) => fill_list_offsets::<O, false, true>,
-        (true, false) => fill_list_offsets::<O, true, false>,
-        (true, true) => fill_list_offsets::<O, true, true>,
-    };
-    let (num_lists, num_children) = fill(
-        def_levels,
-        rep_levels,
-        def_level,
-        rep_level,
-        // Only read by the scans specialized with a threshold
-        parent_threshold.unwrap_or(i16::MIN),
-        &mut offsets,
-        &mut validity,
-    );
-
-    // Offsets never decrease, so the last one fitting means they all do
-    offsets[num_lists] = O::from_usize(num_children)
-        .ok_or_else(|| general_err!("offset of {} would overflow list array", num_children))?;
-    offsets.truncate(num_lists + 1);
-
-    Ok((offsets, nullable.then(|| validity.finish()), num_children))
-}
-
-/// Writes the start offset of each list to `offsets` and, when `NULLABLE`,
-/// its validity bit to `validity`. Returns the number of lists and of child
-/// values. The trailing offset is left to the caller.
-///
-/// The scan does not branch on the level values: every level writes the
-/// current child count to the slot of the next list, and only a list start
-/// advances past that slot, so each list keeps the count from before its own
-/// first level. Validity bits collect in a word that is flushed every 64 lists.
-fn fill_list_offsets<O: OffsetSizeTrait, const HAS_THRESHOLD: bool, const NULLABLE: bool>(
-    def_levels: &[i16],
-    rep_levels: &[i16],
-    def_level: i16,
-    rep_level: i16,
-    threshold: i16,
-    offsets: &mut [O],
-    validity: &mut BooleanBufferBuilder,
-) -> (usize, usize) {
-    // A list is present (empty or not) from this level up
-    let empty_level = def_level - 1;
-
-    let mut num_lists = 0;
-    let mut num_children = 0;
-    let mut word = 0u64;
-    let mut word_bits = 0;
-
-    for (&d, &r) in def_levels.iter().zip(rep_levels) {
-        // Entries of null/empty parent lists do not belong to this list
-        let keep = !HAS_THRESHOLD || d >= threshold;
-        // A level below this list's rep level starts a new list.
-        let start = keep & (r < rep_level);
-        // `d >= def_level` excludes null/empty lists, which carry no child
-        // value: emptiness is handled by this definition-level guard, not by
-        // the repetition level.
-        //
-        // `r <= rep_level` (not `==`) keeps only direct children: the first
-        // element of each list has `r < rep_level` (it coincides with an
-        // outer/row boundary), so `==` would drop it; continuation entries of
-        // a nested child's own list have `r > rep_level` and are excluded.
-        let child = keep & (d >= def_level) & (r <= rep_level);
-
-        offsets[num_lists] = O::usize_as(num_children);
-        if NULLABLE {
-            // Only a list start may set a bit, as non-starts do not advance
-            word |= ((start & (d >= empty_level)) as u64) << word_bits;
-            word_bits += start as usize;
-            if word_bits == 64 {
-                validity.append_word(word, 64);
-                word = 0;
-                word_bits = 0;
-            }
-        }
-        num_lists += start as usize;
-        num_children += child as usize;
-    }
-
-    if NULLABLE {
-        validity.append_word(word, word_bits);
-    }
-    (num_lists, num_children)
-}
-
 /// Implementation of ListArrayReader.
 impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
     fn as_any(&self) -> &dyn Any {
@@ -243,14 +123,95 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
             ));
         }
 
-        let (list_offsets, validity, cur_offset) = build_list_offsets_and_validity::<OffsetSize>(
-            def_levels,
-            rep_levels,
-            self.def_level,
-            self.rep_level,
-            self.parent_threshold,
-            self.nullable,
-        )?;
+        // Definition levels identify whether each list boundary contributes a
+        // child slot. For a nullable list, the states are:
+        //
+        //   d >= self.def_level     : list is present with a child item
+        //   d == self.def_level - 1 : list is present but empty
+        //   d <= self.def_level - 2 : list is null
+        //
+        // Required lists do not have the null state, but still use the same
+        // `d >= self.def_level` test to distinguish child items from empty
+        // lists. Repetition levels identify list boundaries and whether a
+        // child item belongs directly to this list or to a nested child list.
+        let levels_len = def_levels.len();
+        let mut list_offsets: Vec<OffsetSize> = Vec::with_capacity(levels_len + 1);
+        let mut validity = self.nullable.then(|| BooleanBufferBuilder::new(levels_len));
+
+        // Count direct child values of this list.
+        //
+        // `d >= self.def_level` excludes null/empty parent lists: an empty
+        // list is encoded as `d == self.def_level - 1` (a null list lower
+        // still), so it carries no child value and must not advance the
+        // offset. Emptiness is handled by this definition-level guard, not
+        // by the repetition level.
+        //
+        // `r <= self.rep_level` (not `==`) keeps only direct children: the
+        // first element of each list has `r < self.rep_level` (it coincides
+        // with an outer/row boundary), so `==` would drop it; continuation
+        // entries of a nested child's own list have `r > self.rep_level` and
+        // are excluded.
+        //
+        // Split the scan by nullable/parent-threshold mode to avoid checking
+        // these options once per decoded level in the hot loop.
+        let mut cur_offset: usize = 0;
+        let def_level = self.def_level;
+        let rep_level = self.rep_level;
+
+        match (self.parent_threshold, validity.as_mut()) {
+            (None, Some(validity)) => {
+                for (&d, &r) in def_levels.iter().zip(rep_levels) {
+                    if r < rep_level {
+                        list_offsets.push(OffsetSize::from_usize(cur_offset).unwrap());
+                        validity.append(d + 1 >= def_level);
+                    }
+
+                    cur_offset += (d >= def_level && r <= rep_level) as usize;
+                }
+            }
+            (None, None) => {
+                for (&d, &r) in def_levels.iter().zip(rep_levels) {
+                    if r < rep_level {
+                        list_offsets.push(OffsetSize::from_usize(cur_offset).unwrap());
+                    }
+
+                    cur_offset += (d >= def_level && r <= rep_level) as usize;
+                }
+            }
+            (Some(threshold), Some(validity)) => {
+                for (&d, &r) in def_levels.iter().zip(rep_levels) {
+                    // When this list is a child of another list, skip entries
+                    // belonging to null/empty parent lists.
+                    if d < threshold {
+                        continue;
+                    }
+
+                    if r < rep_level {
+                        list_offsets.push(OffsetSize::from_usize(cur_offset).unwrap());
+                        validity.append(d + 1 >= def_level);
+                    }
+
+                    cur_offset += (d >= def_level && r <= rep_level) as usize;
+                }
+            }
+            (Some(threshold), None) => {
+                for (&d, &r) in def_levels.iter().zip(rep_levels) {
+                    // When this list is a child of another list, skip entries
+                    // belonging to null/empty parent lists.
+                    if d < threshold {
+                        continue;
+                    }
+
+                    if r < rep_level {
+                        list_offsets.push(OffsetSize::from_usize(cur_offset).unwrap());
+                    }
+
+                    cur_offset += (d >= def_level && r <= rep_level) as usize;
+                }
+            }
+        }
+
+        list_offsets.push(OffsetSize::from_usize(cur_offset).unwrap());
 
         if cur_offset != child_array.len() {
             return Err(general_err!(
@@ -271,16 +232,16 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
             .add_buffer(value_offsets)
             .add_child_data(child_data);
 
-        if let Some(validity) = validity {
-            if validity.len() != list_offsets.len() - 1 {
+        if let Some(builder) = validity {
+            if builder.len() != list_offsets.len() - 1 {
                 return Err(general_err!(
                     "Failed to decode level data for list array: \
                      expected {} validity bits but got {}",
                     list_offsets.len() - 1,
-                    validity.len()
+                    builder.len()
                 ));
             }
-            data_builder = data_builder.null_bit_buffer(Some(validity.into_inner()));
+            data_builder = data_builder.null_bit_buffer(Some(builder.into()));
         }
 
         let list_data = unsafe { data_builder.build_unchecked() };
@@ -311,7 +272,6 @@ mod tests {
     use crate::arrow::array_reader::list_array::ListArrayReader;
     use crate::arrow::array_reader::test_util::make_int32_page_reader;
     use crate::arrow::arrow_reader::DEFAULT_BATCH_SIZE;
-    use crate::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
     use crate::arrow::schema::parquet_to_arrow_schema_and_fields;
     use crate::arrow::{ArrowWriter, ProjectionMask, parquet_to_arrow_schema};
@@ -319,16 +279,10 @@ mod tests {
     use crate::file::reader::{FileReader, SerializedFileReader};
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::SchemaDescriptor;
-    use arrow::compute::concat_batches;
     use arrow::datatypes::{Field, Int32Type};
-    use arrow_array::builder::{Int32Builder, ListBuilder};
-    use arrow_array::{Array, ListArray, PrimitiveArray, RecordBatch, StructArray};
-    use arrow_buffer::NullBuffer;
+    use arrow_array::{Array, PrimitiveArray};
     use arrow_data::ArrayDataBuilder;
     use arrow_schema::Fields;
-    use bytes::Bytes;
-    use rand::rngs::StdRng;
-    use rand::{RngExt, SeedableRng};
     use std::sync::Arc;
 
     fn list_type<OffsetSize: OffsetSizeTrait>(
@@ -730,295 +684,5 @@ mod tests {
             )]))
         );
         assert_eq!(batch.len(), 0);
-    }
-
-    /// The per-level loop that `build_list_offsets_and_validity` replaced,
-    /// kept as an oracle for the differential test.
-    fn reference_offsets_and_validity<O: OffsetSizeTrait>(
-        def_levels: &[i16],
-        rep_levels: &[i16],
-        def_level: i16,
-        rep_level: i16,
-        parent_threshold: Option<i16>,
-        nullable: bool,
-    ) -> (Vec<O>, Option<BooleanBuffer>, usize) {
-        let levels_len = def_levels.len();
-        let mut list_offsets: Vec<O> = Vec::with_capacity(levels_len + 1);
-        let mut validity = nullable.then(|| BooleanBufferBuilder::new(levels_len));
-        let mut cur_offset: usize = 0;
-
-        match (parent_threshold, validity.as_mut()) {
-            (None, Some(validity)) => {
-                for (&d, &r) in def_levels.iter().zip(rep_levels) {
-                    if r < rep_level {
-                        list_offsets.push(O::from_usize(cur_offset).unwrap());
-                        validity.append(d + 1 >= def_level);
-                    }
-
-                    if d >= def_level && r <= rep_level {
-                        cur_offset += 1;
-                    }
-                }
-            }
-            (None, None) => {
-                for (&d, &r) in def_levels.iter().zip(rep_levels) {
-                    if r < rep_level {
-                        list_offsets.push(O::from_usize(cur_offset).unwrap());
-                    }
-
-                    if d >= def_level && r <= rep_level {
-                        cur_offset += 1;
-                    }
-                }
-            }
-            (Some(threshold), Some(validity)) => {
-                for (&d, &r) in def_levels.iter().zip(rep_levels) {
-                    if d < threshold {
-                        continue;
-                    }
-
-                    if r < rep_level {
-                        list_offsets.push(O::from_usize(cur_offset).unwrap());
-                        validity.append(d + 1 >= def_level);
-                    }
-
-                    if d >= def_level && r <= rep_level {
-                        cur_offset += 1;
-                    }
-                }
-            }
-            (Some(threshold), None) => {
-                for (&d, &r) in def_levels.iter().zip(rep_levels) {
-                    if d < threshold {
-                        continue;
-                    }
-
-                    if r < rep_level {
-                        list_offsets.push(O::from_usize(cur_offset).unwrap());
-                    }
-
-                    if d >= def_level && r <= rep_level {
-                        cur_offset += 1;
-                    }
-                }
-            }
-        }
-
-        list_offsets.push(O::from_usize(cur_offset).unwrap());
-        (list_offsets, validity.map(|mut v| v.finish()), cur_offset)
-    }
-
-    /// One list in a column of nested lists, with the levels `builder.rs`
-    /// would pass to its `ListArrayReader`.
-    #[derive(Debug, Clone, Copy)]
-    struct ListLevels {
-        def_level: i16,
-        rep_level: i16,
-        parent_threshold: Option<i16>,
-        nullable: bool,
-    }
-
-    /// Returns the levels of each list in a column of `nullable.len()` nested
-    /// lists, outermost first, and the column's max definition level. With
-    /// `struct_between`, a nullable struct sits between each pair of lists.
-    fn nested_list_levels(
-        nullable: &[bool],
-        struct_between: bool,
-        leaf_nullable: bool,
-    ) -> (Vec<ListLevels>, i16) {
-        let mut level = 0;
-        let mut parent_threshold = None;
-        let mut lists = Vec::with_capacity(nullable.len());
-        for (i, &list_nullable) in nullable.iter().enumerate() {
-            if struct_between && i > 0 {
-                level += 1;
-            }
-            level += list_nullable as i16 + 1;
-            lists.push(ListLevels {
-                def_level: level,
-                rep_level: i as i16 + 1,
-                parent_threshold,
-                nullable: list_nullable,
-            });
-            parent_threshold = Some(level);
-        }
-        (lists, level + leaf_nullable as i16)
-    }
-
-    /// Random def/rep levels of length `len`. Well-formed sequences start a
-    /// record at index 0 and stay within the column's max levels; the others
-    /// may leave that range and have rep levels of a different length.
-    fn random_levels(
-        rng: &mut StdRng,
-        len: usize,
-        max_def: i16,
-        max_rep: i16,
-        well_formed: bool,
-    ) -> (Vec<i16>, Vec<i16>) {
-        // Skew some sequences towards few or many record starts and full or
-        // empty definition levels, so validity words see long runs.
-        let p_rep_zero = [0.02, 0.3, 0.9][rng.random_range(0..3)];
-        let p_def_max = [0.05, 0.5, 0.95][rng.random_range(0..3)];
-        if well_formed {
-            let rep = (0..len)
-                .map(|i| match i == 0 || rng.random_bool(p_rep_zero) {
-                    true => 0,
-                    false => rng.random_range(0..=max_rep),
-                })
-                .collect();
-            let def = (0..len)
-                .map(|_| match rng.random_bool(p_def_max) {
-                    true => max_def,
-                    false => rng.random_range(0..=max_def),
-                })
-                .collect();
-            (def, rep)
-        } else {
-            let rep_len = (len + rng.random_range(0..3)).saturating_sub(1);
-            let rep = (0..rep_len)
-                .map(|_| rng.random_range(-1..=max_rep + 1))
-                .collect();
-            let def = (0..len)
-                .map(|_| rng.random_range(-1..=max_def + 1))
-                .collect();
-            (def, rep)
-        }
-    }
-
-    fn check_offsets_and_validity<O: OffsetSizeTrait>(def: &[i16], rep: &[i16], list: ListLevels) {
-        let expected = reference_offsets_and_validity::<O>(
-            def,
-            rep,
-            list.def_level,
-            list.rep_level,
-            list.parent_threshold,
-            list.nullable,
-        );
-        let actual = build_list_offsets_and_validity::<O>(
-            def,
-            rep,
-            list.def_level,
-            list.rep_level,
-            list.parent_threshold,
-            list.nullable,
-        )
-        .unwrap();
-        assert_eq!(actual, expected, "{list:?} def={def:?} rep={rep:?}");
-    }
-
-    #[test]
-    fn test_offsets_and_validity_match_reference() {
-        let mut rng = StdRng::seed_from_u64(42);
-        let lengths = [0, 1, 63, 64, 65, 127, 128, 129, 1000, 4099];
-        // [has parent threshold][nullable]
-        let mut modes_seen = [[false; 2]; 2];
-
-        for depth in 1..=3u32 {
-            let max_rep = depth as i16;
-            // The low `depth` bits pick the nullable lists, the next two
-            // whether structs sit between the lists and whether the leaf is
-            // nullable
-            for mask in 0..(1u32 << (depth + 2)) {
-                let bit = |i: u32| (mask >> i) & 1 == 1;
-                let nullable: Vec<bool> = (0..depth).map(bit).collect();
-                let (lists, max_def) = nested_list_levels(&nullable, bit(depth), bit(depth + 1));
-                for len in lengths {
-                    // The last trial is malformed
-                    for trial in 0..4 {
-                        let (def, rep) = random_levels(&mut rng, len, max_def, max_rep, trial != 3);
-                        for &list in &lists {
-                            check_offsets_and_validity::<i32>(&def, &rep, list);
-                            check_offsets_and_validity::<i64>(&def, &rep, list);
-                            modes_seen[list.parent_threshold.is_some() as usize]
-                                [list.nullable as usize] = true;
-                        }
-                    }
-                }
-            }
-        }
-        assert_eq!(modes_seen, [[true; 2]; 2]);
-    }
-
-    /// Writes `array` as a single column, reads it back in batches of 7 rows
-    /// and checks the result matches.
-    fn roundtrip_small_batches(array: ArrayRef) {
-        let batch = RecordBatch::try_from_iter([("c", array)]).unwrap();
-        let mut buf = Vec::new();
-        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), None).unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-
-        let reader = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(buf))
-            .unwrap()
-            .with_batch_size(7)
-            .build()
-            .unwrap();
-        let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
-        assert!(batches.len() > 1);
-        let actual = concat_batches(&batch.schema(), &batches).unwrap();
-        let (expected, actual) = (batch.column(0).to_data(), actual.column(0).to_data());
-        actual.validate_full().unwrap();
-        assert_eq!(expected, actual);
-    }
-
-    /// Appends a random `List<Int32>` value: null, empty, or up to 4 items
-    /// that are themselves sometimes null.
-    fn append_int32_list(rng: &mut StdRng, builder: &mut ListBuilder<Int32Builder>) {
-        match rng.random_range(0..4) {
-            0 => builder.append_null(),
-            1 => builder.append(true),
-            _ => {
-                for _ in 0..rng.random_range(1..5) {
-                    match rng.random_bool(0.3) {
-                        true => builder.values().append_null(),
-                        false => builder.values().append_value(rng.random_range(0..100)),
-                    }
-                }
-                builder.append(true);
-            }
-        }
-    }
-
-    #[test]
-    fn test_roundtrip_list_of_list() {
-        let mut rng = StdRng::seed_from_u64(1);
-        let mut builder = ListBuilder::new(ListBuilder::new(Int32Builder::new()));
-        for _ in 0..60 {
-            match rng.random_range(0..4) {
-                0 => builder.append_null(),
-                1 => builder.append(true),
-                _ => {
-                    for _ in 0..rng.random_range(1..4) {
-                        append_int32_list(&mut rng, builder.values());
-                    }
-                    builder.append(true);
-                }
-            }
-        }
-        roundtrip_small_batches(Arc::new(builder.finish()));
-    }
-
-    #[test]
-    fn test_roundtrip_list_in_struct() {
-        let mut rng = StdRng::seed_from_u64(3);
-        let struct_valid: Vec<bool> = (0..60).map(|_| rng.random_bool(0.8)).collect();
-        let mut builder = ListBuilder::new(Int32Builder::new());
-        for &valid in &struct_valid {
-            match valid {
-                true => append_int32_list(&mut rng, &mut builder),
-                // The writer drops the child of a null struct, so the reader
-                // returns a null list there
-                false => builder.append_null(),
-            }
-        }
-        let list: ListArray = builder.finish();
-        let field = Arc::new(Field::new("l", list.data_type().clone(), true));
-        let array = StructArray::try_new(
-            vec![field].into(),
-            vec![Arc::new(list)],
-            Some(NullBuffer::from(struct_valid)),
-        )
-        .unwrap();
-        roundtrip_small_batches(Arc::new(array));
     }
 }
