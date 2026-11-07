@@ -32,8 +32,9 @@ use futures::{Stream, StreamExt, ready, stream::BoxStream};
 /// 2. When [`DictionaryHandling`] is [`DictionaryHandling::Hydrate`],
 ///    [`DictionaryArray`]s are converted to their underlying types prior to
 ///    transport.
-///    When [`DictionaryHandling`] is [`DictionaryHandling::Resend`], Dictionary [`FlightData`] is sent with every
-///    [`RecordBatch`] that contains a [`DictionaryArray`](arrow_array::array::DictionaryArray).
+///    When [`DictionaryHandling`] is [`DictionaryHandling::Resend`] or [`DictionaryHandling::Delta`],
+///    Dictionary [`FlightData`] is sent before each [`RecordBatch`] whose
+///    [`DictionaryArray`](arrow_array::array::DictionaryArray) values differ from the last ones sent.
 ///    See <https://github.com/apache/arrow-rs/issues/3389>.
 ///
 /// [`DictionaryArray`]: arrow_array::array::DictionaryArray
@@ -293,6 +294,11 @@ impl FlightDataEncoder {
         descriptor: Option<FlightDescriptor>,
         dictionary_handling: DictionaryHandling,
     ) -> Self {
+        let options = if dictionary_handling == DictionaryHandling::Delta {
+            options.with_dictionary_handling(arrow_ipc::writer::DictionaryHandling::Delta)
+        } else {
+            options
+        };
         let mut encoder = Self {
             inner,
             input_schema: schema.clone(),
@@ -300,7 +306,7 @@ impl FlightDataEncoder {
             max_flight_data_size,
             encoder: FlightIpcEncoder::new(
                 options,
-                dictionary_handling != DictionaryHandling::Resend,
+                dictionary_handling == DictionaryHandling::Hydrate,
             ),
             app_metadata: Some(app_metadata),
             queue: VecDeque::new(),
@@ -337,7 +343,7 @@ impl FlightDataEncoder {
     fn encode_schema(&mut self, schema: &SchemaRef) -> SchemaRef {
         // The first message is the schema message, and all
         // batches have the same schema
-        let send_dictionaries = self.dictionary_handling == DictionaryHandling::Resend;
+        let send_dictionaries = self.dictionary_handling != DictionaryHandling::Hydrate;
         let schema = Arc::new(prepare_schema_for_flight(
             schema,
             &mut self.encoder.dictionary_tracker,
@@ -375,7 +381,7 @@ impl FlightDataEncoder {
         };
 
         let batch = match self.dictionary_handling {
-            DictionaryHandling::Resend => batch,
+            DictionaryHandling::Resend | DictionaryHandling::Delta => batch,
             DictionaryHandling::Hydrate => hydrate_dictionaries(&batch, schema)?,
         };
 
@@ -464,8 +470,9 @@ impl Stream for FlightDataEncoder {
 /// Note that since `dict_id` defined in the `Schema` is used as a key to associate dictionary values to their arrays it is required that each
 /// `DictionaryArray` in a `RecordBatch` have a unique `dict_id`.
 ///
-/// The current implementation does not support "delta" dictionaries so a new dictionary batch will be sent each time the encoder sees a
-/// dictionary which is not pointer-equal to the previously observed dictionary for a given `dict_id`.
+/// A new dictionary batch is sent each time the encoder sees a dictionary whose values differ from the previously sent
+/// dictionary for a given `dict_id`. With `DictionaryHandling::Delta`, a dictionary that starts with all the previously sent
+/// values is sent as a delta dictionary batch that contains only the new values.
 ///
 /// For clients which may not support `DictionaryEncoding`, the `DictionaryHandling::Hydrate` method will bypass the process defined above
 /// and "hydrate" any `DictionaryArray` in the batch to their underlying value type (e.g. `TypedDictionaryArray<'_, UInt32Type, Utf8Type>` will
@@ -481,16 +488,22 @@ pub enum DictionaryHandling {
     /// See also:
     /// * <https://github.com/apache/arrow-rs/issues/1206>
     Hydrate,
-    /// Send dictionary FlightData with every RecordBatch that contains a
-    /// [`DictionaryArray`]. See [`Self::Hydrate`] for more tradeoffs. No
-    /// attempt is made to skip sending the same (logical) dictionary values
-    /// twice.
+    /// Send dictionary FlightData before each RecordBatch whose [`DictionaryArray`]
+    /// values differ from the last ones sent. See [`Self::Hydrate`] for more
+    /// tradeoffs.
     ///
     /// [`DictionaryArray`]: arrow_array::DictionaryArray
     ///
     /// This requires identifying the different dictionaries in use and assigning
     //  them unique IDs
     Resend,
+    /// Like [`Self::Resend`], but when a dictionary starts with all the values
+    /// sent last for the same field, only the new values are sent, in a delta
+    /// dictionary batch. Receivers must support delta dictionaries.
+    ///
+    /// This sets [`IpcWriteOptions::with_dictionary_handling`] to
+    /// [`arrow_ipc::writer::DictionaryHandling::Delta`].
+    Delta,
 }
 
 fn prepare_field_for_flight(
@@ -793,7 +806,7 @@ fn hydrate_dictionary(array: &ArrayRef, data_type: &DataType) -> Result<ArrayRef
 
 #[cfg(test)]
 mod tests {
-    use crate::decode::{DecodedPayload, FlightDataDecoder};
+    use crate::decode::{DecodedPayload, FlightDataDecoder, FlightRecordBatchStream};
     use arrow_array::builder::{
         FixedSizeListBuilder, GenericByteDictionaryBuilder, GenericListViewBuilder, Int32Builder,
         LargeListBuilder, ListBuilder, StringDictionaryBuilder, StructBuilder,
@@ -900,6 +913,63 @@ mod tests {
         let batch2 = RecordBatch::try_new(schema, vec![Arc::new(arr2)]).unwrap();
 
         verify_flight_round_trip(vec![batch1, batch2]).await;
+    }
+
+    #[tokio::test]
+    async fn test_dictionary_delta() {
+        let arr1: DictionaryArray<UInt16Type> = vec!["a"].into_iter().collect();
+        let arr2: DictionaryArray<UInt16Type> = vec!["a", "b"].into_iter().collect();
+
+        let schema = Arc::new(Schema::new(vec![Field::new_dictionary(
+            "dict",
+            DataType::UInt16,
+            DataType::Utf8,
+            false,
+        )]));
+        let batch1 = RecordBatch::try_new(schema.clone(), vec![Arc::new(arr1)]).unwrap();
+        let batch2 = RecordBatch::try_new(schema, vec![Arc::new(arr2)]).unwrap();
+
+        let encoded: Vec<FlightData> = FlightDataEncoderBuilder::default()
+            .with_dictionary_handling(DictionaryHandling::Delta)
+            .build(futures::stream::iter([Ok(batch1), Ok(batch2)]))
+            .map(|data| data.unwrap())
+            .collect()
+            .await;
+
+        // schema, dictionary, batch, delta dictionary, batch
+        let message = arrow_ipc::root_as_message(&encoded[3].data_header).unwrap();
+        let dictionary = message.header_as_dictionary_batch().unwrap();
+        assert!(dictionary.isDelta());
+        assert_eq!(dictionary.data().unwrap().length(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_dictionary_delta_then_replacement_round_trip() {
+        let arr1: DictionaryArray<UInt16Type> = vec!["a"].into_iter().collect();
+        let arr2: DictionaryArray<UInt16Type> = vec!["a", "b"].into_iter().collect();
+        // Does not start with ["a", "b"], so it replaces the dictionary.
+        let arr3: DictionaryArray<UInt16Type> = vec!["x"].into_iter().collect();
+
+        let schema = Arc::new(Schema::new(vec![Field::new_dictionary(
+            "dict",
+            DataType::UInt16,
+            DataType::Utf8,
+            false,
+        )]));
+        let batch1 = RecordBatch::try_new(schema.clone(), vec![Arc::new(arr1)]).unwrap();
+        let batch2 = RecordBatch::try_new(schema.clone(), vec![Arc::new(arr2)]).unwrap();
+        let batch3 = RecordBatch::try_new(schema, vec![Arc::new(arr3)]).unwrap();
+        let batches = vec![batch1, batch2, batch3];
+
+        let encoder = FlightDataEncoderBuilder::default()
+            .with_dictionary_handling(DictionaryHandling::Delta)
+            .build(futures::stream::iter(batches.clone().into_iter().map(Ok)));
+        let decoded: Vec<RecordBatch> = FlightRecordBatchStream::new_from_flight_data(encoder)
+            .map(|batch| batch.unwrap())
+            .collect()
+            .await;
+
+        assert_eq!(decoded, batches);
     }
 
     #[tokio::test]
