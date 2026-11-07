@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Arrow Extension Type Support for Parquet
 //!
@@ -51,6 +38,12 @@ pub(crate) fn try_add_extension_type(
         LogicalType::Variant(_) => {
             let mut arrow_field = arrow_field;
             arrow_field.try_with_extension_type(parquet_variant_compute::VariantType)?;
+            arrow_field
+        }
+        #[cfg(feature = "file_experimental")]
+        LogicalType::File => {
+            let mut arrow_field = arrow_field;
+            arrow_field.try_with_extension_type(crate::arrow::file_type::FileType)?;
             arrow_field
         }
         #[cfg(feature = "arrow_canonical_extension_types")]
@@ -110,6 +103,8 @@ pub(crate) fn has_extension_type(parquet_type: &Type) -> bool {
     match parquet_logical_type {
         #[cfg(feature = "variant_experimental")]
         LogicalType::Variant { .. } => true,
+        #[cfg(feature = "file_experimental")]
+        LogicalType::File => true,
         #[cfg(feature = "arrow_canonical_extension_types")]
         LogicalType::Uuid => true,
         #[cfg(feature = "arrow_canonical_extension_types")]
@@ -122,26 +117,28 @@ pub(crate) fn has_extension_type(parquet_type: &Type) -> bool {
     }
 }
 
-/// Return the Parquet logical type to use for the specified Arrow Struct field, if any.
-///
-/// The Parquet specification requires the `VARIANT` logical type annotation to
-/// carry the version number (`VARIANT(1)`); readers such as Apache Spark reject
-/// files whose annotation does not carry version 1. The value written is
-/// [`parquet_variant::VARIANT_SPEC_VERSION`], the same version stamped into
-/// every metadata header.
-#[cfg(feature = "variant_experimental")]
+/// Return the Parquet logical type to use for the specified Arrow Struct field, if any:
+/// `VARIANT` for the Variant extension type and `FILE` for `FileType`.
+#[cfg(any(feature = "variant_experimental", feature = "file_experimental"))]
 pub(crate) fn logical_type_for_struct(field: &Field) -> Option<LogicalType> {
-    use parquet_variant::VARIANT_SPEC_VERSION;
-    use parquet_variant_compute::VariantType;
-    if field.has_valid_extension_type::<VariantType>() {
-        // The 4-bit header version always fits the thrift `i8` field.
-        Some(LogicalType::variant(Some(VARIANT_SPEC_VERSION as i8)))
-    } else {
-        None
+    #[cfg(feature = "variant_experimental")]
+    if field.has_valid_extension_type::<parquet_variant_compute::VariantType>() {
+        // The Parquet specification requires the annotation to carry the version
+        // (`VARIANT(1)`), and readers such as Apache Spark reject files without it.
+        // Write the version stamped into every metadata header; the 4-bit header
+        // version always fits the thrift `i8` field.
+        return Some(LogicalType::variant(Some(
+            parquet_variant::VARIANT_SPEC_VERSION as i8,
+        )));
     }
+    #[cfg(feature = "file_experimental")]
+    if field.has_valid_extension_type::<crate::arrow::file_type::FileType>() {
+        return Some(LogicalType::File);
+    }
+    None
 }
 
-#[cfg(not(feature = "variant_experimental"))]
+#[cfg(not(any(feature = "variant_experimental", feature = "file_experimental")))]
 pub(crate) fn logical_type_for_struct(_field: &Field) -> Option<LogicalType> {
     None
 }

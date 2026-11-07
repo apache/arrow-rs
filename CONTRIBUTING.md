@@ -1,20 +1,7 @@
 <!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+  SPDX-License-Identifier: Apache-2.0
+  SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+  SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 ## Introduction
@@ -232,6 +219,10 @@ Our [release schedule] allows breaking API changes only in major releases.
 This means that if your PR has a breaking API change, it should be marked as
 `api-change` and it will not be merged until development opens for the next
 major release. See [this ticket] for details.
+
+CI uses `cargo-semver-checks` to add `api-change` for detected breakage without
+failing the check. Manual review is still needed, especially for Parquet features
+outside its defaults.
 
 [release schedule]: README.md#release-versioning-and-schedule
 [this ticket]: https://github.com/apache/arrow-rs/issues/5907
