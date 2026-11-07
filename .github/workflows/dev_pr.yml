@@ -13,31 +13,11 @@ on:
   pull_request_target:
     types:
       - opened
-      - edited
-      - synchronize
   workflow_run:
     workflows: [API changes]
     types: [completed]
 
 jobs:
-  process:
-    if: github.event_name == 'pull_request_target'
-    name: Process
-    runs-on: ubuntu-slim
-    permissions:
-      contents: read
-      pull-requests: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-
-      - name: Assign GitHub labels
-        if: github.event.action == 'opened' || github.event.action == 'synchronize'
-        uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13  # v7.0.0
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-          configuration-path: .github/workflows/dev_pr/labeler.yml
-          sync-labels: true
-
   # Copy labels from linked issue if present, to help with changelog generation.
   # For simplicity we just run once on open and for first linked issue; its trivial
   # for maintainers to fix up the label manually for more complex cases.
