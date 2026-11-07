@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["arrow_to_variant","cast_to_variant","from_json","shred_variant","to_json","type_conversion","unshred_variant","variant_array","variant_array_builder","variant_get","variant_to_arrow"],"struct":["VariantType"]};

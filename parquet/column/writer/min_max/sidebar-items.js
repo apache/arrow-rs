@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["LANES_32","LANES_64"],"fn":["fallback_min_max","is_unsigned","min_max_by_key","min_max_f32","min_max_f64","min_max_i32","min_max_i64"],"macro":[["float_min_max",1]]};

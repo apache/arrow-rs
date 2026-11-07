@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["build_field_index","struct_fields"],"struct":["FieldTapePositions","StructArrayDecoder"]};

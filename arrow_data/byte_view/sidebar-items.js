@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["MAX_INLINE_VIEW_LEN"],"fn":["validate_binary_view","validate_string_view","validate_view_impl"],"struct":["ByteView"]};

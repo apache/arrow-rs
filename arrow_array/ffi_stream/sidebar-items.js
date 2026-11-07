@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["get_error_code","get_last_error","get_next","get_schema","get_stream_field","get_stream_schema","producer_error","release_stream"],"struct":["ArrayStreamReader","ExportedArrayStream","FFI_ArrowArrayStream","RecordBatchStreamReader","StreamPrivateData"],"type":["ArrowArrayStreamReader","Result"]};

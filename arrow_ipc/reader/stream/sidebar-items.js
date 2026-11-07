@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["DecoderState"],"fn":["reserve_declared"],"struct":["StreamDecoder"]};
