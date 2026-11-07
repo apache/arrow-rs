@@ -239,7 +239,7 @@ fn cast_keys_only<K: ArrowDictionaryKeyType>(
         DataType::UInt16 => finish_keys_only::<UInt16Type>(cast_keys, values),
         DataType::UInt32 => finish_keys_only::<UInt32Type>(cast_keys, values),
         DataType::UInt64 => finish_keys_only::<UInt64Type>(cast_keys, values),
-        _ => Err(ArrowError::CastError(format!(
+        _ => Err(ArrowError::InvalidArgumentError(format!(
             "Unsupported type {to_index_type} for dictionary index"
         ))),
     }
