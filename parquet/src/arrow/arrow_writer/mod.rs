@@ -5404,6 +5404,89 @@ mod tests {
         );
     }
 
+    /// Writes singleton `ListView<Utf8>` rows that reference the child values
+    /// at `offsets` (`None` for a null row), and returns the largest data
+    /// page body. Child 0 is one byte. Children 1 to 8 are
+    /// [`LIST_VIEW_LARGE`] bytes, against a page limit of the same size.
+    fn max_list_view_page_bytes(offsets: &[Option<i32>], write_batch_size: usize) -> usize {
+        let mut strings = vec!["s".to_owned()];
+        strings.extend((1..=8).map(|i| char::from(b'a' + i).to_string().repeat(LIST_VIEW_LARGE)));
+        let children = Arc::new(StringArray::from(strings));
+        let child_field = Arc::new(Field::new_list_field(ArrowDataType::Utf8, false));
+        let num_rows = offsets.len();
+        let lists = ListViewArray::new(
+            child_field.clone(),
+            offsets.iter().map(|o| o.unwrap_or(0)).collect(),
+            offsets.iter().map(|o| i32::from(o.is_some())).collect(),
+            children,
+            Some(offsets.iter().map(Option::is_some).collect()),
+        );
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            ArrowDataType::ListView(child_field),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(lists)]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(false)
+            .set_encoding(Encoding::PLAIN)
+            .set_compression(crate::basic::Compression::UNCOMPRESSED)
+            .set_data_page_size_limit(LIST_VIEW_LARGE)
+            .set_write_batch_size(write_batch_size)
+            .build();
+        let mut writer = ArrowWriter::try_new(Vec::new(), schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        let data = Bytes::from(writer.into_inner().unwrap());
+
+        let mut metadata = ParquetMetaDataReader::new();
+        metadata.try_parse(&data).unwrap();
+        let metadata = metadata.finish().unwrap();
+        let col_meta = metadata.row_group(0).column(0);
+        let mut reader =
+            SerializedPageReader::new(Arc::new(data.clone()), col_meta, num_rows, None).unwrap();
+        let mut max_page_bytes = 0;
+        while let Some(page) = reader.get_next_page().unwrap() {
+            assert!(page.is_data_page());
+            max_page_bytes = max_page_bytes.max(page.buffer().len());
+        }
+        max_page_bytes
+    }
+
+    const LIST_VIEW_LARGE: usize = 4096;
+
+    /// The byte-budget chunker sizes each mini-batch to the values up to and
+    /// including the first that overflows the budget: the small value and
+    /// one large value. On a nullable column a mini-batch may hold twice
+    /// that (`SubBatchStrategy::Levels::max_values`). So a page holds at
+    /// most four values, plus levels. Without the bound, all eight large
+    /// values land in one page.
+    const LIST_VIEW_MAX_PAGE: usize = 4 * (LIST_VIEW_LARGE + 4) + 64;
+
+    #[test]
+    fn test_arrow_writer_list_view_backward_gather_splits_pages() {
+        // The gather `[0, 1, ..., 8, 0]` jumps back to the small value 0. The
+        // offsets span from the first index to the last covers only value 0,
+        // but the eight large values in between must still split into pages.
+        let offsets: Vec<_> = (0..=8).chain([0]).map(Some).collect();
+        let max = max_list_view_page_bytes(&offsets, 1024);
+        assert!(max <= LIST_VIEW_MAX_PAGE, "page of {max} bytes");
+    }
+
+    #[test]
+    fn test_arrow_writer_list_view_backward_gather_after_chunk_splits_pages() {
+        // The first 16-row chunk references children 0 to 8 in order, then
+        // holds nulls. The next chunk references child 0 again. A gather
+        // that reaches past the first chunk jumps back to value 0.
+        let offsets: Vec<_> = (0..=8)
+            .map(Some)
+            .chain([None; 7])
+            .chain([Some(0); 16])
+            .collect();
+        let max = max_list_view_page_bytes(&offsets, 16);
+        assert!(max <= LIST_VIEW_MAX_PAGE, "page of {max} bytes");
+    }
+
     struct WriteBatchesShape {
         num_batches: usize,
         rows_per_batch: usize,

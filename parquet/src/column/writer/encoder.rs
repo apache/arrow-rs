@@ -86,13 +86,22 @@ pub trait ColumnValueEncoder {
     /// Write the values at the indexes in `indices` to this [`ColumnValueEncoder`]
     fn write_gather(&mut self, values: &Self::Values, indices: &[usize]) -> Result<()>;
 
-    /// Returns the largest `k` such that the first `k` values in
-    /// `values[offset..offset + len]` encode to at most `byte_budget`
-    /// bytes — i.e. how many values fit in a single page byte budget.
+    /// Counts how many leading values in `values[offset..offset + len]`
+    /// belong in one page of `byte_budget` bytes.
     ///
-    /// Returns `len` if every value fits. Returns at least 1 if a single
-    /// value alone exceeds the budget, matching parquet's "at least one
-    /// value per data page" rule.
+    /// Returns `len` if every value fits. Otherwise the result counts the
+    /// values that fit, and may also count the first value that overflows.
+    /// The variable-width implementations count that boundary value, so the
+    /// page-flush check trips on the mini-batch that crosses the budget.
+    /// The result is at least 1 when a single value alone exceeds the
+    /// budget. This matches the parquet rule of at least one value per data
+    /// page.
+    ///
+    /// The result for a prefix must follow from the result for the whole
+    /// range: if the result is `r`, the result for the first `m` values is
+    /// `min(r, m)`. The byte-budget chunker relies on
+    /// this to size a window longer than the chunk and apply the answer to
+    /// the chunk.
     ///
     /// `None` means "no cheap estimate available"; the caller stays on
     /// the batched fast path and lets the post-write

@@ -1001,8 +1001,9 @@ fn count_within_budget_views(
 /// `byte_budget` (boundary value included), for offset-buffer byte arrays
 /// (`Utf8`/`LargeUtf8`/`Binary`/`LargeBinary`).
 ///
-/// `indices` are assumed sorted ascending — they always are here, since
-/// they come from `non_null_indices`, which is built in array order.
+/// `indices` come from `non_null_indices`. They are strictly increasing for
+/// most arrays, but a `ListView` can reference its child values in any
+/// order and more than once.
 fn count_within_budget_offsets<T: ByteArrayType>(
     values: &GenericByteArray<T>,
     indices: &[usize],
@@ -1018,14 +1019,16 @@ fn count_within_budget_offsets<T: ByteArrayType>(
     // Each plain-encoded value carries a 4-byte length prefix on the page.
     let prefix_overhead = std::mem::size_of::<u32>();
 
-    // Stage 1: O(1) span upper bound. The span `offsets[last+1] -
-    // offsets[first]` covers every array position in `[first, last]`, a
-    // superset of `indices` — and the skipped positions in a nullable
-    // column are nulls with zero offset delta, so the span still equals the
-    // exact payload. If it fits the budget, every value fits. Covers the
-    // common small-value case for both non-null and (sparse) nullable
-    // columns.
-    if last >= first {
+    // Stage 1: span upper bound. The span `offsets[last+1] - offsets[first]`
+    // covers every array position in `[first, last]`. If it fits the budget,
+    // every value fits. Covers the common small-value case for both non-null
+    // and (sparse) nullable columns.
+    //
+    // The span bounds the payload only when `indices` are strictly
+    // increasing. A `ListView` gather can repeat an index or jump backwards,
+    // so the span can miss values between the jumps. The order check is one
+    // sequential compare per index. Stage 2 reads two offsets per index.
+    if indices.windows(2).all(|w| w[0] < w[1]) {
         let payload = (offsets[last + 1] - offsets[first]).as_usize();
         if payload + n * prefix_overhead <= byte_budget {
             return n;
