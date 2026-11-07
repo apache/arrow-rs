@@ -202,14 +202,14 @@ impl ArrayReader for FixedLenByteArrayReader {
         let len = self.record_reader.values_written();
 
         let record_data = self.record_reader.consume_record_data();
-        debug_assert_eq!(
-            record_data.buffer.len(),
-            len * self.byte_length,
-            "fixed-len byte array buffer size mismatch: {} bytes for {} elements of size {}",
-            record_data.buffer.len(),
-            len,
-            self.byte_length,
-        );
+        if record_data.buffer.len() != len * self.byte_length {
+            return Err(general_err!(
+                "fixed-len byte array buffer size mismatch: {} bytes for {} elements of size {}",
+                record_data.buffer.len(),
+                len,
+                self.byte_length
+            ));
+        }
         let null_bit_buffer = self.record_reader.consume_compact_bitmap();
 
         let array_data = ArrayDataBuilder::new(ArrowType::FixedSizeBinary(self.byte_length as i32))
@@ -217,6 +217,7 @@ impl ArrayReader for FixedLenByteArrayReader {
             .add_buffer(Buffer::from_vec(record_data.buffer))
             .null_bit_buffer(null_bit_buffer);
 
+        // SAFETY: the buffer is exactly `len * byte_length` bytes and the null bitmap has `len` bits
         let binary = FixedSizeBinaryArray::from(unsafe { array_data.build_unchecked() });
 
         // TODO: An improvement might be to do this conversion on read
