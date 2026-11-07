@@ -540,6 +540,31 @@ fn add_benchmark(c: &mut Criterion) {
         DataType::Decimal128(32, 3)
     );
 
+    benchmark_cast!(
+        "cast float64 to decimal128(38, 15) random",
+        float64_array_cast_to_decimal,
+        DataType::Decimal128(38, 15)
+    );
+    benchmark_cast!(
+        "cast float64 to decimal128(38, 20) random",
+        float64_array_cast_to_decimal,
+        DataType::Decimal128(38, 20)
+    );
+    let integer_float64_array: ArrayRef = Arc::new(
+        float64_array_cast_to_decimal
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap()
+            .iter()
+            .map(|v| v.map(f64::trunc))
+            .collect::<Float64Array>(),
+    );
+    benchmark_cast!(
+        "cast float64 to decimal128(38, 15) integers",
+        integer_float64_array,
+        DataType::Decimal128(38, 15)
+    );
+
     // cast invalid float64 to decimals
     benchmark_cast!(
         "cast invalid float64 to to decimal128(32, 3)",
