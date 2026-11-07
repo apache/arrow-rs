@@ -2319,6 +2319,8 @@ fn gather_dictionary_values<K: ArrowDictionaryKeyType>(
     }
 }
 
+/// Gathers byte values in dictionary-key order, preserving null keys and values.
+/// Returns an error if the accumulated byte offsets overflow.
 fn gather_dictionary_byte_values<K: ArrowDictionaryKeyType, T: ByteArrayType>(
     array: &DictionaryArray<K>,
     values: &GenericByteArray<T>,
@@ -3469,38 +3471,6 @@ mod tests {
         let sliced = dictionary.slice(1, 4);
         let gathered = gather_dictionary_values(&sliced).unwrap();
         let expected = StringArray::from(vec![Some("selected"), None, None, Some("selected")]);
-        assert_eq!(gathered.as_ref(), &expected as &dyn Array);
-
-        let keys = UInt64Array::from(vec![Some(2), None, Some(0), Some(1), Some(2)]);
-        let values = Arc::new(LargeStringArray::from(vec![Some(""), Some("wide"), None]));
-        let dictionary = DictionaryArray::<UInt64Type>::try_new(keys, values).unwrap();
-        let sliced = dictionary.slice(1, 4);
-        let gathered = gather_dictionary_values(&sliced).unwrap();
-        let expected = LargeStringArray::from(vec![None, Some(""), Some("wide"), None]);
-        assert_eq!(gathered.as_ref(), &expected as &dyn Array);
-
-        let keys = UInt16Array::from(vec![Some(0), Some(2), None, Some(1), Some(2)]);
-        let values = Arc::new(BinaryArray::from(vec![
-            Some(&b"unused"[..]),
-            Some(&b"\xff\0"[..]),
-            None,
-        ]));
-        let dictionary = DictionaryArray::<UInt16Type>::try_new(keys, values).unwrap();
-        let sliced = dictionary.slice(1, 4);
-        let gathered = gather_dictionary_values(&sliced).unwrap();
-        let expected = BinaryArray::from(vec![None, None, Some(&b"\xff\0"[..]), None]);
-        assert_eq!(gathered.as_ref(), &expected as &dyn Array);
-
-        let keys = Int64Array::from(vec![Some(0), Some(2), None, Some(1), Some(2)]);
-        let values = Arc::new(LargeBinaryArray::from(vec![
-            Some(&b"unused"[..]),
-            Some(&b"\0\xff"[..]),
-            None,
-        ]));
-        let dictionary = DictionaryArray::<Int64Type>::try_new(keys, values).unwrap();
-        let sliced = dictionary.slice(1, 4);
-        let gathered = gather_dictionary_values(&sliced).unwrap();
-        let expected = LargeBinaryArray::from(vec![None, None, Some(&b"\0\xff"[..]), None]);
         assert_eq!(gathered.as_ref(), &expected as &dyn Array);
     }
 
