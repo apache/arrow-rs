@@ -107,7 +107,8 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
         let mut result = Ok(());
         for key in keys {
             let index = key.as_usize();
-            if index + 1 >= dict_offsets.len() {
+            // Not `index + 1`, which overflows for a negative key
+            if index >= dict_offsets.len().saturating_sub(1) {
                 result = Err(general_err!(
                     "dictionary key beyond bounds of dictionary: 0..{}",
                     dict_offsets.len().saturating_sub(1)
@@ -126,17 +127,28 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
                 break;
             };
 
-            // `copy_value` may write up to `COPY_CHUNK` bytes past the value
-            if self.values.capacity() - len < value_len + COPY_CHUNK {
-                // SAFETY: the first `len` bytes are initialized
-                unsafe { self.values.set_len(len) };
-                self.values.reserve(value_len + COPY_CHUNK);
+            if self.values.capacity() - len < value_len {
+                // SAFETY: the first `len` bytes and `offsets_start + count`
+                // offsets are initialized
+                unsafe {
+                    self.values.set_len(len);
+                    self.offsets.set_len(offsets_start + count);
+                }
+                self.values.reserve(value_len);
                 dst = self.values.as_mut_ptr();
             }
             // SAFETY: `start_offset + value_len <= dict_values.len()` was
-            // checked above, and `self.values` has capacity for
-            // `len + value_len + COPY_CHUNK` bytes
-            unsafe { copy_value(dict_values, start_offset, value_len, dst.add(len)) };
+            // checked above, `self.values` has capacity for `len + value_len`
+            // bytes, and it is a different allocation from `dict_values`
+            unsafe {
+                copy_value(
+                    dict_values,
+                    start_offset,
+                    value_len,
+                    dst.add(len),
+                    self.values.capacity() - len,
+                )
+            };
             len += value_len;
             // SAFETY: capacity for `keys.len()` more offsets was reserved above,
             // and `count < keys.len()`
@@ -186,23 +198,24 @@ const COPY_CHUNK: usize = 16;
 /// Copies `src[start..start + len]` to `dst`
 ///
 /// Values of up to `4 * COPY_CHUNK` bytes are copied in whole `COPY_CHUNK`
-/// byte chunks when `src` has enough bytes past `start`, as this is faster
-/// than `memcpy` for short values. This may write up to `COPY_CHUNK` bytes
-/// past `dst + len`.
+/// byte chunks when both `src` past `start` and `dst` have room for them, as
+/// this is faster than `memcpy` for short values. This may then write up to
+/// `COPY_CHUNK` bytes past `dst + len`, but never past `dst + dst_len`.
 ///
 /// # Safety
 ///
-/// `start + len <= src.len()`, and `dst` must be valid for writes of
-/// `len + COPY_CHUNK` bytes
+/// - `start + len <= src.len()`
+/// - `len <= dst_len`, and `dst` must be valid for writes of `dst_len` bytes
+/// - `dst..dst + dst_len` must not overlap `src`
 #[inline(always)]
-unsafe fn copy_value(src: &[u8], start: usize, len: usize, dst: *mut u8) {
+unsafe fn copy_value(src: &[u8], start: usize, len: usize, dst: *mut u8, dst_len: usize) {
     // SAFETY: `start <= src.len()`
     let src_ptr = unsafe { src.as_ptr().add(start) };
-    // SAFETY: only called below when `i + COPY_CHUNK` is at most `available`
-    // and at most `len + COPY_CHUNK`
+    // SAFETY: only called below when `i + COPY_CHUNK <= available`, so the
+    // chunk is within both `src[start..]` and `dst..dst + dst_len`
     let copy_chunk =
         |i: usize| unsafe { std::ptr::copy_nonoverlapping(src_ptr.add(i), dst.add(i), COPY_CHUNK) };
-    let available = src.len() - start;
+    let available = (src.len() - start).min(dst_len);
     if len <= COPY_CHUNK && available >= COPY_CHUNK {
         copy_chunk(0);
     } else if len > COPY_CHUNK
@@ -368,6 +381,41 @@ mod tests {
     }
 
     #[test]
+    fn test_offset_buffer_extend_from_dictionary_capacity() {
+        let dict_offsets = [0i32, 0, 16, 32];
+        let dict_values = b"aaaaaaaaaaaaaaaabbbbbbbbbbbbbbbb";
+
+        // Empty values don't allocate
+        let mut buffer = OffsetBuffer::<i32>::with_capacity(0);
+        buffer
+            .extend_from_dictionary(&[0; 10], &dict_offsets, dict_values)
+            .unwrap();
+        assert_eq!(buffer.offsets, [0; 11]);
+        assert_eq!(buffer.values.capacity(), 0);
+
+        // Values that exactly fill the capacity don't grow it
+        let keys: Vec<i32> = (0..64).map(|i| 1 + i % 2).collect();
+        buffer.values.reserve_exact(64 * 16);
+        let capacity = buffer.values.capacity();
+        buffer
+            .extend_from_dictionary(&keys, &dict_offsets, dict_values)
+            .unwrap();
+        assert_eq!(buffer.values.len(), 64 * 16);
+        assert_eq!(buffer.values.capacity(), capacity);
+
+        // A short value at the end of the capacity is not copied in a whole
+        // chunk, even if the source has room for one
+        let mut buffer = OffsetBuffer::<i32>::with_capacity(0);
+        buffer.values.reserve_exact(1);
+        let capacity = buffer.values.capacity();
+        buffer
+            .extend_from_dictionary(&[0], &[0i32, 1], dict_values)
+            .unwrap();
+        assert_eq!(buffer.values, b"a");
+        assert_eq!(buffer.values.capacity(), capacity);
+    }
+
+    #[test]
     fn test_offset_buffer_extend_from_dictionary_err() {
         let dict_offsets = [0i32, 2, 5, 9];
         let dict_values = b"abcdefgh";
@@ -375,6 +423,7 @@ mod tests {
         // Values before the invalid key are kept, and the buffer stays valid
         for (keys, err) in [
             (&[1, 0, 3, 1][..], "dictionary key beyond bounds"),
+            (&[1, 0, -1, 1][..], "dictionary key beyond bounds"),
             (&[1, 0, 2, 1][..], "invalid dictionary offsets"),
         ] {
             let mut buffer = OffsetBuffer::<i32>::with_capacity(0);
