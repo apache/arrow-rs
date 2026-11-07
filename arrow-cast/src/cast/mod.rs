@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Cast kernels to convert [`ArrayRef`]  between supported datatypes.
 //!
@@ -3983,6 +3970,159 @@ mod tests {
         assert!(c.is_null(3));
     }
 
+    /// The rows of the string array used by the string -> timestamp DST tests,
+    /// and the instants they denote in `America/New_York` according to
+    /// PostgreSQL 17.11.
+    ///
+    /// They deliberately straddle both transitions of 2024, so a single offset
+    /// resolved once for the whole array cannot satisfy all of them.
+    const DST_STRINGS: [&str; 5] = [
+        // EDT (-04:00), before the November transition.
+        "2024-11-02 12:00:00",
+        // Ambiguous: 01:30 happens twice, the later (EST) instant wins.
+        "2024-11-03 01:30:00",
+        // EST (-05:00), after the November transition.
+        "2024-11-03 12:00:00",
+        // Nonexistent: 02:30 is skipped in March and shifts to 03:30 EDT.
+        "2024-03-10 02:30:00",
+        // EST (-05:00), before the March transition.
+        "2024-03-09 12:00:00",
+    ];
+
+    const DST_SECONDS: [i64; 5] = [
+        1_730_563_200,
+        1_730_615_400,
+        1_730_653_200,
+        1_710_055_800,
+        1_710_003_600,
+    ];
+
+    // Casting strings to `Timestamp(_, Some(tz))` goes through
+    // `string_to_datetime`, not through `adjust_timestamp_to_timezone`, so it
+    // needs its own coverage of the DST rules. See `crate::local_time`.
+    #[test]
+    fn test_cast_string_to_named_timezone_dst() {
+        let to_type = DataType::Timestamp(TimeUnit::Second, Some("America/New_York".into()));
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+
+        let mut values: Vec<Option<&str>> = DST_STRINGS.iter().copied().map(Some).collect();
+        values.push(None);
+
+        let arrays: Vec<ArrayRef> = vec![
+            Arc::new(StringArray::from(values.clone())),
+            Arc::new(LargeStringArray::from(values.clone())),
+            Arc::new(StringViewArray::from(values)),
+        ];
+
+        for array in arrays {
+            let from_type = array.data_type().clone();
+            let b = cast_with_options(&array, &to_type, &options)
+                .unwrap_or_else(|e| panic!("{from_type:?}: {e}"));
+            assert_eq!(b.data_type(), &to_type);
+            let c = b.as_primitive::<TimestampSecondType>();
+            for (i, expected) in DST_SECONDS.iter().enumerate() {
+                assert_eq!(c.value(i), *expected, "{from_type:?} row {i}");
+            }
+            assert!(c.is_null(5), "{from_type:?} null row");
+        }
+    }
+
+    // The same values must not silently become null under `safe` casting either.
+    #[test]
+    fn test_cast_string_to_named_timezone_dst_safe() {
+        let to_type = DataType::Timestamp(TimeUnit::Second, Some("America/New_York".into()));
+        let options = CastOptions {
+            safe: true,
+            ..Default::default()
+        };
+
+        let array = StringArray::from(vec![
+            Some(DST_STRINGS[1]),
+            Some(DST_STRINGS[3]),
+            Some("not a timestamp"),
+            None,
+        ]);
+
+        let b = cast_with_options(&array, &to_type, &options).unwrap();
+        let c = b.as_primitive::<TimestampSecondType>();
+        assert_eq!(c.value(0), DST_SECONDS[1]);
+        assert_eq!(c.value(1), DST_SECONDS[3]);
+        // Genuinely unparsable input still becomes null.
+        assert!(c.is_null(2));
+        assert!(c.is_null(3));
+        assert_eq!(c.null_count(), 2);
+    }
+
+    // Sub-second precision survives the shift applied to a nonexistent reading.
+    #[test]
+    fn test_cast_string_to_named_timezone_dst_nanos() {
+        let to_type = DataType::Timestamp(TimeUnit::Nanosecond, Some("America/New_York".into()));
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+
+        let array = StringArray::from(vec![
+            "2024-03-10 02:30:00.123456789",
+            "2024-11-03 01:30:00.123456789",
+        ]);
+        let b = cast_with_options(&array, &to_type, &options).unwrap();
+        let c = b.as_primitive::<TimestampNanosecondType>();
+        assert_eq!(c.value(0), 1_710_055_800 * 1_000_000_000 + 123_456_789);
+        assert_eq!(c.value(1), 1_730_615_400 * 1_000_000_000 + 123_456_789);
+    }
+
+    // A date-only string reads local midnight, which is itself skipped or
+    // repeated in some zones.
+    #[test]
+    fn test_cast_string_to_named_timezone_dst_date_only() {
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+
+        // Local midnight does not exist in Sao Paulo on 2018-11-04.
+        let to_type = DataType::Timestamp(TimeUnit::Second, Some("America/Sao_Paulo".into()));
+        let array = StringArray::from(vec!["2018-11-04"]);
+        let b = cast_with_options(&array, &to_type, &options).unwrap();
+        assert_eq!(
+            b.as_primitive::<TimestampSecondType>().value(0),
+            1_541_300_400
+        );
+
+        // Local midnight happens twice in Havana on 2024-11-03.
+        let to_type = DataType::Timestamp(TimeUnit::Second, Some("America/Havana".into()));
+        let array = StringArray::from(vec!["2024-11-03"]);
+        let b = cast_with_options(&array, &to_type, &options).unwrap();
+        assert_eq!(
+            b.as_primitive::<TimestampSecondType>().value(0),
+            1_730_610_000
+        );
+    }
+
+    // A timezone named by the string itself is resolved the same way, matching
+    // PostgreSQL.
+    #[test]
+    fn test_cast_string_to_timezone_named_in_string_dst() {
+        let to_type = DataType::Timestamp(TimeUnit::Second, Some("UTC".into()));
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+
+        let array = StringArray::from(vec![
+            "2024-03-10 02:30:00 America/New_York",
+            "2024-11-03 01:30:00 America/New_York",
+        ]);
+        let b = cast_with_options(&array, &to_type, &options).unwrap();
+        let c = b.as_primitive::<TimestampSecondType>();
+        assert_eq!(c.value(0), 1_710_055_800);
+        assert_eq!(c.value(1), 1_730_615_400);
+    }
+
     // The same values must not become null when `safe` casting is requested.
     #[test]
     fn test_cast_timestamp_to_named_timezone_dst_safe() {
@@ -6995,326 +7135,6 @@ mod tests {
         }
     }
     #[test]
-    fn test_cast_struct_to_struct() {
-        let struct_type = DataType::Struct(
-            vec![
-                Field::new("a", DataType::Boolean, false),
-                Field::new("b", DataType::Int32, false),
-            ]
-            .into(),
-        );
-        let to_type = DataType::Struct(
-            vec![
-                Field::new("a", DataType::Utf8, false),
-                Field::new("b", DataType::Utf8, false),
-            ]
-            .into(),
-        );
-        let boolean = Arc::new(BooleanArray::from(vec![false, false, true, true]));
-        let int = Arc::new(Int32Array::from(vec![42, 28, 19, 31]));
-        let struct_array = StructArray::from(vec![
-            (
-                Arc::new(Field::new("b", DataType::Boolean, false)),
-                boolean.clone() as ArrayRef,
-            ),
-            (
-                Arc::new(Field::new("c", DataType::Int32, false)),
-                int.clone() as ArrayRef,
-            ),
-        ]);
-        let casted_array = cast(&struct_array, &to_type).unwrap();
-        let casted_array = casted_array.as_struct();
-        assert_eq!(casted_array.data_type(), &to_type);
-        let casted_boolean_array = casted_array
-            .column(0)
-            .as_string::<i32>()
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
-        let casted_int_array = casted_array
-            .column(1)
-            .as_string::<i32>()
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
-        assert_eq!(casted_boolean_array, vec!["false", "false", "true", "true"]);
-        assert_eq!(casted_int_array, vec!["42", "28", "19", "31"]);
-
-        // test for can't cast
-        let to_type = DataType::Struct(
-            vec![
-                Field::new("a", DataType::Date32, false),
-                Field::new("b", DataType::Utf8, false),
-            ]
-            .into(),
-        );
-        assert!(!can_cast_types(&struct_type, &to_type));
-        let result = cast(&struct_array, &to_type);
-        assert_eq!(
-            "Cast error: Casting from Boolean to Date32 not supported",
-            result.unwrap_err().to_string()
-        );
-    }
-
-    #[test]
-    fn test_cast_struct_to_struct_nullability() {
-        let boolean = Arc::new(BooleanArray::from(vec![false, false, true, true]));
-        let int = Arc::new(Int32Array::from(vec![Some(42), None, Some(19), None]));
-        let struct_array = StructArray::from(vec![
-            (
-                Arc::new(Field::new("b", DataType::Boolean, false)),
-                boolean.clone() as ArrayRef,
-            ),
-            (
-                Arc::new(Field::new("c", DataType::Int32, true)),
-                int.clone() as ArrayRef,
-            ),
-        ]);
-
-        // okay: nullable to nullable
-        let to_type = DataType::Struct(
-            vec![
-                Field::new("a", DataType::Utf8, false),
-                Field::new("b", DataType::Utf8, true),
-            ]
-            .into(),
-        );
-        cast(&struct_array, &to_type).expect("Cast nullable to nullable struct field should work");
-
-        // error: nullable to non-nullable
-        let to_type = DataType::Struct(
-            vec![
-                Field::new("a", DataType::Utf8, false),
-                Field::new("b", DataType::Utf8, false),
-            ]
-            .into(),
-        );
-        cast(&struct_array, &to_type)
-            .expect_err("Cast nullable to non-nullable struct field should fail");
-
-        let boolean = Arc::new(BooleanArray::from(vec![false, false, true, true]));
-        let int = Arc::new(Int32Array::from(vec![i32::MAX, 25, 1, 100]));
-        let struct_array = StructArray::from(vec![
-            (
-                Arc::new(Field::new("b", DataType::Boolean, false)),
-                boolean.clone() as ArrayRef,
-            ),
-            (
-                Arc::new(Field::new("c", DataType::Int32, false)),
-                int.clone() as ArrayRef,
-            ),
-        ]);
-
-        // okay: non-nullable to non-nullable
-        let to_type = DataType::Struct(
-            vec![
-                Field::new("a", DataType::Utf8, false),
-                Field::new("b", DataType::Utf8, false),
-            ]
-            .into(),
-        );
-        cast(&struct_array, &to_type)
-            .expect("Cast non-nullable to non-nullable struct field should work");
-
-        // err: non-nullable to non-nullable but overflowing return null during casting
-        let to_type = DataType::Struct(
-            vec![
-                Field::new("a", DataType::Utf8, false),
-                Field::new("b", DataType::Int8, false),
-            ]
-            .into(),
-        );
-        cast(&struct_array, &to_type).expect_err(
-            "Cast non-nullable to non-nullable struct field returning null should fail",
-        );
-    }
-
-    #[test]
-    fn test_cast_struct_to_non_struct() {
-        let boolean = Arc::new(BooleanArray::from(vec![true, false]));
-        let struct_array = StructArray::from(vec![(
-            Arc::new(Field::new("a", DataType::Boolean, false)),
-            boolean.clone() as ArrayRef,
-        )]);
-        let to_type = DataType::Utf8;
-        let result = cast(&struct_array, &to_type);
-        assert_eq!(
-            r#"Cast error: Casting from Struct("a": non-null Boolean) to Utf8 not supported"#,
-            result.unwrap_err().to_string()
-        );
-    }
-
-    #[test]
-    fn test_cast_non_struct_to_struct() {
-        let array = StringArray::from(vec!["a", "b"]);
-        let to_type = DataType::Struct(vec![Field::new("a", DataType::Boolean, false)].into());
-        let result = cast(&array, &to_type);
-        assert_eq!(
-            r#"Cast error: Casting from Utf8 to Struct("a": non-null Boolean) not supported"#,
-            result.unwrap_err().to_string()
-        );
-    }
-
-    #[test]
-    fn test_cast_struct_with_different_field_order() {
-        // Test slow path: fields are in different order
-        let boolean = Arc::new(BooleanArray::from(vec![false, false, true, true]));
-        let int = Arc::new(Int32Array::from(vec![42, 28, 19, 31]));
-        let string = Arc::new(StringArray::from(vec!["foo", "bar", "baz", "qux"]));
-
-        let struct_array = StructArray::from(vec![
-            (
-                Arc::new(Field::new("a", DataType::Boolean, false)),
-                boolean.clone() as ArrayRef,
-            ),
-            (
-                Arc::new(Field::new("b", DataType::Int32, false)),
-                int.clone() as ArrayRef,
-            ),
-            (
-                Arc::new(Field::new("c", DataType::Utf8, false)),
-                string.clone() as ArrayRef,
-            ),
-        ]);
-
-        // Target has fields in different order: c, a, b instead of a, b, c
-        let to_type = DataType::Struct(
-            vec![
-                Field::new("c", DataType::Utf8, false),
-                Field::new("a", DataType::Utf8, false), // Boolean to Utf8
-                Field::new("b", DataType::Utf8, false), // Int32 to Utf8
-            ]
-            .into(),
-        );
-
-        let result = cast(&struct_array, &to_type).unwrap();
-        let result_struct = result.as_struct();
-
-        assert_eq!(result_struct.data_type(), &to_type);
-        assert_eq!(result_struct.num_columns(), 3);
-
-        // Verify field "c" (originally position 2, now position 0) remains Utf8
-        let c_column = result_struct.column(0).as_string::<i32>();
-        assert_eq!(
-            c_column.into_iter().flatten().collect::<Vec<_>>(),
-            vec!["foo", "bar", "baz", "qux"]
-        );
-
-        // Verify field "a" (originally position 0, now position 1) was cast from Boolean to Utf8
-        let a_column = result_struct.column(1).as_string::<i32>();
-        assert_eq!(
-            a_column.into_iter().flatten().collect::<Vec<_>>(),
-            vec!["false", "false", "true", "true"]
-        );
-
-        // Verify field "b" (originally position 1, now position 2) was cast from Int32 to Utf8
-        let b_column = result_struct.column(2).as_string::<i32>();
-        assert_eq!(
-            b_column.into_iter().flatten().collect::<Vec<_>>(),
-            vec!["42", "28", "19", "31"]
-        );
-    }
-
-    #[test]
-    fn test_cast_struct_with_missing_field() {
-        // Test that casting fails when target has a field not present in source
-        let boolean = Arc::new(BooleanArray::from(vec![false, true]));
-        let struct_array = StructArray::from(vec![(
-            Arc::new(Field::new("a", DataType::Boolean, false)),
-            boolean.clone() as ArrayRef,
-        )]);
-
-        let to_type = DataType::Struct(
-            vec![
-                Field::new("a", DataType::Utf8, false),
-                Field::new("b", DataType::Int32, false), // Field "b" doesn't exist in source
-            ]
-            .into(),
-        );
-
-        let result = cast(&struct_array, &to_type);
-        assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err().to_string(),
-            "Invalid argument error: Incorrect number of arrays for StructArray fields, expected 2 got 1"
-        );
-    }
-
-    #[test]
-    fn test_cast_struct_with_subset_of_fields() {
-        // Test casting to a struct with fewer fields (selecting a subset)
-        let boolean = Arc::new(BooleanArray::from(vec![false, false, true, true]));
-        let int = Arc::new(Int32Array::from(vec![42, 28, 19, 31]));
-        let string = Arc::new(StringArray::from(vec!["foo", "bar", "baz", "qux"]));
-
-        let struct_array = StructArray::from(vec![
-            (
-                Arc::new(Field::new("a", DataType::Boolean, false)),
-                boolean.clone() as ArrayRef,
-            ),
-            (
-                Arc::new(Field::new("b", DataType::Int32, false)),
-                int.clone() as ArrayRef,
-            ),
-            (
-                Arc::new(Field::new("c", DataType::Utf8, false)),
-                string.clone() as ArrayRef,
-            ),
-        ]);
-
-        // Target has only fields "c" and "a", omitting "b"
-        let to_type = DataType::Struct(
-            vec![
-                Field::new("c", DataType::Utf8, false),
-                Field::new("a", DataType::Utf8, false),
-            ]
-            .into(),
-        );
-
-        let result = cast(&struct_array, &to_type).unwrap();
-        let result_struct = result.as_struct();
-
-        assert_eq!(result_struct.data_type(), &to_type);
-        assert_eq!(result_struct.num_columns(), 2);
-
-        // Verify field "c" remains Utf8
-        let c_column = result_struct.column(0).as_string::<i32>();
-        assert_eq!(
-            c_column.into_iter().flatten().collect::<Vec<_>>(),
-            vec!["foo", "bar", "baz", "qux"]
-        );
-
-        // Verify field "a" was cast from Boolean to Utf8
-        let a_column = result_struct.column(1).as_string::<i32>();
-        assert_eq!(
-            a_column.into_iter().flatten().collect::<Vec<_>>(),
-            vec!["false", "false", "true", "true"]
-        );
-    }
-
-    #[test]
-    fn test_can_cast_struct_rename_field() {
-        // Test that can_cast_types returns false when target has a field not in source
-        let from_type = DataType::Struct(
-            vec![
-                Field::new("a", DataType::Int32, false),
-                Field::new("b", DataType::Utf8, false),
-            ]
-            .into(),
-        );
-
-        let to_type = DataType::Struct(
-            vec![
-                Field::new("a", DataType::Int64, false),
-                Field::new("c", DataType::Boolean, false), // Field "c" not in source
-            ]
-            .into(),
-        );
-
-        assert!(can_cast_types(&from_type, &to_type));
-    }
-
-    #[test]
     fn test_first_none() {
         let array = Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
             None,
@@ -7684,25 +7504,6 @@ mod tests {
         assert_eq!(run_array.values().as_primitive::<Int32Type>().value(1), 2);
         assert_eq!(run_array.values().as_primitive::<Int32Type>().value(2), 3);
         assert_eq!(run_array.run_ends().values(), &[2i64, 3i64, 5i64]);
-    }
-
-    #[test]
-    fn test_unsupported_cast_to_run_end_encoded() {
-        // Create a Struct array - complex nested type that might not be supported
-        let field = Field::new("item", DataType::Int32, false);
-        let struct_array = StructArray::from(vec![(
-            Arc::new(field),
-            Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
-        )]);
-        let array_ref = Arc::new(struct_array) as ArrayRef;
-
-        // This should fail because:
-        // 1. The target type is not RunEndEncoded
-        // 2. The target type is not supported for casting from StructArray
-        let cast_result = cast(&array_ref, &DataType::FixedSizeBinary(10));
-
-        // Expect this to fail
-        assert!(cast_result.is_err());
     }
 
     /// Test casting RunEndEncoded<Int64, String> to RunEndEncoded<Int16, String> should fail

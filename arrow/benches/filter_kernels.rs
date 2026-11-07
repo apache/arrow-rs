@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 
@@ -374,7 +361,7 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_built_filter(&data_array, &sparse_filter))
     });
 
-    let mut add_benchmark_for_nested = |name: &str, data_array: &dyn Array| {
+    let mut add_benchmark_for_array = |name: &str, data_array: &dyn Array| {
         c.bench_function(&format!("filter {name} (kept 1/2)"), |b| {
             b.iter(|| bench_filter(data_array, &filter_array))
         });
@@ -400,20 +387,26 @@ fn add_benchmark(c: &mut Criterion) {
         );
     };
 
+    let data_array = create_boolean_array(size, 0.0, 0.5);
+    add_benchmark_for_array("boolean", &data_array);
+
+    let data_array = create_boolean_array(size, 0.1, 0.5);
+    add_benchmark_for_array("boolean w NULLs", &data_array);
+
     let data_array = create_primitive_list_array::<i32, Int32Type>(size, 0.1, 0.1, 16);
-    add_benchmark_for_nested("list<i32> w NULLs", &data_array);
+    add_benchmark_for_array("list<i32> w NULLs", &data_array);
 
     let data_array = create_struct_list_array(size, 0.1, 16);
-    add_benchmark_for_nested("list<struct<i64, utf8>> w NULLs", &data_array);
+    add_benchmark_for_array("list<struct<i64, utf8>> w NULLs", &data_array);
 
     let data_array = create_primitive_fixed_size_list_array::<Int32Type>(size, 0.1, 0.1, 8);
-    add_benchmark_for_nested("fixed_size_list<i32> w NULLs", &data_array);
+    add_benchmark_for_array("fixed_size_list<i32> w NULLs", &data_array);
 
     let data_array = create_struct_fixed_size_list_array(size, 8);
-    add_benchmark_for_nested("fixed_size_list<struct<i64, utf8>>", &data_array);
+    add_benchmark_for_array("fixed_size_list<struct<i64, utf8>>", &data_array);
 
     let data_array = create_string_map_array::<Int64Type>(size, 0.1, 16, 8);
-    add_benchmark_for_nested("map<utf8, i64> w NULLs", &data_array);
+    add_benchmark_for_array("map<utf8, i64> w NULLs", &data_array);
 }
 
 criterion_group!(benches, add_benchmark);

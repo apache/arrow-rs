@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Contains declarations to bind to the [C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html).
 //!
@@ -304,7 +291,9 @@ impl ImportedArrowArray<'_> {
                 DataType::Utf8 | DataType::Binary | DataType::LargeUtf8 | DataType::LargeBinary
             )
         {
-            buffers[0] = MutableBuffer::from_len_zeroed(buffers[0].len()).into();
+            buffers[0] = MutableBuffer::try_from_len_zeroed(buffers[0].len())
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?
+                .into();
         }
 
         let null_bit_buffer = if data_layout.can_contain_null_mask {
@@ -422,7 +411,7 @@ impl ImportedArrowArray<'_> {
                         // if the length is incorrect, we cannot create a correct buffer even if
                         // the pointer is valid.
                         if buf.is_empty() {
-                            Ok(MutableBuffer::new(0).into())
+                            Ok(MutableBuffer::default().into())
                         } else {
                             Ok(buf)
                         }
@@ -430,7 +419,7 @@ impl ImportedArrowArray<'_> {
                     None if len == 0 => {
                         // Null data buffer, which Rust doesn't allow. So create
                         // an empty buffer.
-                        Ok(MutableBuffer::new(0).into())
+                        Ok(MutableBuffer::default().into())
                     }
                     None => Err(ArrowError::CDataInterface(format!(
                         "The external buffer at position {index} is null."

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::ArrowNativeType;
 use crate::buffer::ScalarBuffer;
@@ -109,8 +96,13 @@ where
     ///
     /// # Panics
     ///
+    /// Panics if the [`RunArray` invariants] are not satisfied:
+    ///
     /// - `run_ends` does not contain strictly increasing values greater than zero
-    /// - The last value of `run_ends` is less than `logical_offset + logical_length`
+    /// - `logical_length` is not 0 and the last value of `run_ends` is less than
+    ///   `logical_offset + logical_length` (an empty slice is always accepted)
+    ///
+    /// [`RunArray` invariants]: https://docs.rs/arrow/latest/arrow/array/struct.RunArray.html#offset-and-len
     pub fn new(run_ends: ScalarBuffer<E>, logical_offset: usize, logical_length: usize) -> Self {
         assert!(
             run_ends.windows(2).all(|w| w[0] < w[1]),
@@ -142,8 +134,13 @@ where
     ///
     /// # Safety
     ///
+    /// `run_ends` must satisfy the [`RunArray` invariants]:
+    ///
     /// - `run_ends` must contain strictly increasing values greater than zero
-    /// - The last value of `run_ends` must be greater than or equal to `logical_offset + logical_len`
+    /// - If `logical_length` is not 0, the last value of `run_ends` must be
+    ///   greater than or equal to `logical_offset + logical_length`
+    ///
+    /// [`RunArray` invariants]: https://docs.rs/arrow/latest/arrow/array/struct.RunArray.html#offset-and-len
     pub unsafe fn new_unchecked(
         run_ends: ScalarBuffer<E>,
         logical_offset: usize,
