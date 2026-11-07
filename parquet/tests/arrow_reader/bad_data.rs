@@ -7,13 +7,19 @@
 
 use arrow::compute::concat_batches;
 use arrow::util::test_util::parquet_test_data;
-use arrow_array::RecordBatchReader;
+use arrow_array::{ArrayRef, Float64Array, RecordBatch, RecordBatchReader};
+use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
+use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::ArrowReaderBuilder;
+use parquet::basic::{Compression, Encoding};
 use parquet::errors::ParquetError;
 use parquet::file::metadata::ParquetMetaDataReader;
+use parquet::file::properties::{WriterProperties, WriterVersion};
+use parquet::file::reader::{FileReader, SerializedFileReader};
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 static KNOWN_FILES: &[&str] = &[
     "PARQUET-1481.parquet",
@@ -133,6 +139,56 @@ fn test_arrow_gh_47662() {
     assert_eq!(
         err.to_string(),
         "External: Parquet argument error: Parquet error: Invalid FIXED_LEN_BYTE_ARRAY PLAIN data page payload length: expected 400 bytes (100 values of 4 bytes), got 364"
+    );
+}
+
+#[test]
+fn test_byte_stream_split_truncated_page() {
+    let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Float64, false)]));
+    let values: ArrayRef = Arc::new(Float64Array::from_iter_values(
+        (0..8).map(|i| f64::from(i) + 0.5),
+    ));
+    let expected = RecordBatch::try_new(schema.clone(), vec![values]).unwrap();
+    let properties = WriterProperties::builder()
+        .set_writer_version(WriterVersion::PARQUET_2_0)
+        .set_dictionary_enabled(false)
+        .set_compression(Compression::UNCOMPRESSED)
+        .set_encoding(Encoding::BYTE_STREAM_SPLIT)
+        .build();
+    let mut data = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut data, schema, Some(properties)).unwrap();
+    writer.write(&expected).unwrap();
+    writer.close().unwrap();
+    let original = Bytes::from(data);
+    let batches = ArrowReaderBuilder::try_new(original.clone())
+        .unwrap()
+        .build()
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(batches, vec![expected]);
+
+    let file = SerializedFileReader::new(original.clone()).unwrap();
+    let column = file.metadata().row_group(0).column(0);
+    let (offset, length) = column.byte_range();
+    let offset = offset as usize;
+    let chunk = &original[offset..offset + length as usize];
+    // The first compact-protocol i32 field with value 8 is the page's num_values.
+    let count = chunk
+        .windows(2)
+        .position(|bytes| bytes == [0x15, 16])
+        .unwrap();
+    let mut truncated = original.to_vec();
+    truncated[offset + count + 1] = 126; // Zigzag-encoded 63, preserving the header size.
+    let reader = ArrowReaderBuilder::try_new(Bytes::from(truncated))
+        .unwrap()
+        .build()
+        .unwrap();
+    let err = reader.collect::<Result<Vec<_>, _>>().unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("insufficient values read from column"),
+        "{err}"
     );
 }
 

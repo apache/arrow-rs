@@ -73,9 +73,18 @@ fn join_streams_variable(
 }
 
 impl<T: DataType> Decoder<T> for ByteStreamSplitDecoder<T> {
-    fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
+    fn set_data(&mut self, data: Bytes, _num_values: usize) -> Result<()> {
+        let type_size = T::get_type_size();
+        if !data.len().is_multiple_of(type_size) {
+            return Err(general_err!(
+                "Invalid BYTE_STREAM_SPLIT data length {} for values of size {type_size}",
+                data.len()
+            ));
+        }
+
+        // The page count can include nulls; only the encoded bytes determine the stride.
+        self.total_num_values = data.len() / type_size;
         self.encoded_bytes = data;
-        self.total_num_values = num_values;
         self.values_decoded = 0;
 
         Ok(())
@@ -151,7 +160,7 @@ impl<T: DataType> VariableWidthByteStreamSplitDecoder<T> {
 }
 
 impl<T: DataType> Decoder<T> for VariableWidthByteStreamSplitDecoder<T> {
-    fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
+    fn set_data(&mut self, data: Bytes, _num_values: usize) -> Result<()> {
         // Rough check that all data elements are the same length
         if !data.len().is_multiple_of(self.type_width) {
             return Err(general_err!(
@@ -162,8 +171,8 @@ impl<T: DataType> Decoder<T> for VariableWidthByteStreamSplitDecoder<T> {
 
         match T::get_physical_type() {
             Type::FIXED_LEN_BYTE_ARRAY => {
+                self.total_num_values = data.len() / self.type_width;
                 self.encoded_bytes = data;
-                self.total_num_values = num_values;
                 self.values_decoded = 0;
                 Ok(())
             }

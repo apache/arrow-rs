@@ -671,8 +671,49 @@ impl RepetitionLevelDecoder for RepetitionLevelDecoderImpl {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data_type::DoubleType;
     use crate::encodings::rle::RleEncoder;
+    use crate::schema::types::{ColumnDescriptor, ColumnPath, Type as SchemaType};
     use rand::{prelude::*, rng};
+    use std::sync::Arc;
+
+    #[test]
+    fn test_byte_stream_split_v1_nulls_use_encoded_len() {
+        let ty = SchemaType::primitive_type_builder("t", Type::DOUBLE)
+            .build()
+            .unwrap();
+        let descr = Arc::new(ColumnDescriptor::new(
+            Arc::new(ty),
+            1,
+            0,
+            ColumnPath::new(vec![]),
+        ));
+        let mut decoder = ColumnValueDecoderImpl::<DoubleType>::new(&descr);
+
+        // V1: 3 levels, one of them null, so only 2 encoded f64s (16 bytes).
+        decoder
+            .set_data(
+                Encoding::BYTE_STREAM_SPLIT,
+                Bytes::from(vec![0; 16]),
+                3,
+                None,
+            )
+            .unwrap();
+        let mut out = Vec::new();
+        assert_eq!(decoder.read(&mut out, 2).unwrap(), 2);
+
+        // A corrupt count cannot make the decoder read past the encoded values.
+        decoder
+            .set_data(
+                Encoding::BYTE_STREAM_SPLIT,
+                Bytes::from(vec![0; 16]),
+                3,
+                Some(3),
+            )
+            .unwrap();
+        let mut out = Vec::new();
+        assert_eq!(decoder.read(&mut out, 3).unwrap(), 2);
+    }
 
     #[test]
     fn fixed_len_payload_validation() {
