@@ -461,7 +461,11 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
 
 /// Cast `array` to the provided data type and return a new Array with type `to_type`, if possible.
 ///
-/// See [`cast_with_options`] for more information
+/// See [`cast_with_options`] for more information.
+///
+/// # Errors
+///
+/// See [cast_with_options](cast_with_options#errors) for error conditions.
 pub fn cast(array: &dyn Array, to_type: &DataType) -> Result<ArrayRef, ArrowError> {
     cast_with_options(array, to_type, &CastOptions::default())
 }
@@ -507,6 +511,16 @@ fn cast_reinterpret_arrays<I: ArrowPrimitiveType, O: ArrowPrimitiveType<Native =
 /// * To or from `StructArray`
 /// * `List` to `Primitive`
 /// * `Interval` and `Duration`
+///
+/// # Errors
+///
+/// Returns [`ArrowError::InvalidArgumentError`] when the conversion between the
+/// source and target types is unsupported, regardless of [`CastOptions::safe`].
+/// Use [`can_cast_types`] to check whether a conversion is supported.
+///
+/// [`ArrowError::CastError`] reports failures to convert input values, such as
+/// numeric overflow or invalid strings. See [`CastOptions::safe`] for whether
+/// failed conversions produce nulls or errors.
 ///
 /// # Durations and Intervals
 ///
@@ -623,7 +637,7 @@ pub fn cast_with_options(
             Int16 => run_end_encoded_cast::<Int16Type>(array, to_type, cast_options),
             Int32 => run_end_encoded_cast::<Int32Type>(array, to_type, cast_options),
             Int64 => run_end_encoded_cast::<Int64Type>(array, to_type, cast_options),
-            _ => Err(ArrowError::CastError(format!(
+            _ => Err(ArrowError::InvalidArgumentError(format!(
                 "Casting from run end encoded type {from_type:?} to {to_type:?} not supported",
             ))),
         },
@@ -645,7 +659,7 @@ pub fn cast_with_options(
                     value_type.data_type(),
                     cast_options,
                 ),
-                _ => Err(ArrowError::CastError(format!(
+                _ => Err(ArrowError::InvalidArgumentError(format!(
                     "Casting from type {from_type:?} to run end encoded type {to_type:?} not supported",
                 ))),
             }
@@ -655,7 +669,7 @@ pub fn cast_with_options(
             to_type,
             cast_options,
         ),
-        (_, Union(_, _)) => Err(ArrowError::CastError(format!(
+        (_, Union(_, _)) => Err(ArrowError::InvalidArgumentError(format!(
             "Casting from {from_type} to {to_type} not supported"
         ))),
         (Dictionary(index_type, _), _) => match **index_type {
@@ -667,7 +681,7 @@ pub fn cast_with_options(
             UInt16 => dictionary_cast::<UInt16Type>(array, to_type, cast_options),
             UInt32 => dictionary_cast::<UInt32Type>(array, to_type, cast_options),
             UInt64 => dictionary_cast::<UInt64Type>(array, to_type, cast_options),
-            _ => Err(ArrowError::CastError(format!(
+            _ => Err(ArrowError::InvalidArgumentError(format!(
                 "Casting from dictionary type {from_type} to {to_type} not supported",
             ))),
         },
@@ -680,7 +694,7 @@ pub fn cast_with_options(
             UInt16 => cast_to_dictionary::<UInt16Type>(array, value_type, cast_options),
             UInt32 => cast_to_dictionary::<UInt32Type>(array, value_type, cast_options),
             UInt64 => cast_to_dictionary::<UInt64Type>(array, value_type, cast_options),
-            _ => Err(ArrowError::CastError(format!(
+            _ => Err(ArrowError::InvalidArgumentError(format!(
                 "Casting from type {from_type} to dictionary type {to_type} not supported",
             ))),
         },
@@ -689,7 +703,7 @@ pub fn cast_with_options(
         (LargeList(_), LargeList(to)) => cast_list_values::<i64>(array, to, cast_options),
         (FixedSizeList(_, size_from), FixedSizeList(list_to, size_to)) => {
             if size_from != size_to {
-                return Err(ArrowError::CastError(
+                return Err(ArrowError::InvalidArgumentError(
                     "cannot cast fixed-size-list to fixed-size-list with different size".into(),
                 ));
             }
@@ -781,7 +795,7 @@ pub fn cast_with_options(
             Utf8 => value_to_string::<i32>(array, cast_options),
             LargeUtf8 => value_to_string::<i64>(array, cast_options),
             Utf8View => value_to_string_view(array, cast_options),
-            dt => Err(ArrowError::CastError(format!(
+            dt => Err(ArrowError::InvalidArgumentError(format!(
                 "Cannot cast LIST to non-list data type {dt}"
             ))),
         },
@@ -1048,10 +1062,10 @@ pub fn cast_with_options(
             to_fields.clone(),
             cast_options,
         ),
-        (Struct(_), _) => Err(ArrowError::CastError(format!(
+        (Struct(_), _) => Err(ArrowError::InvalidArgumentError(format!(
             "Casting from {from_type} to {to_type} not supported"
         ))),
-        (_, Struct(_)) => Err(ArrowError::CastError(format!(
+        (_, Struct(_)) => Err(ArrowError::InvalidArgumentError(format!(
             "Casting from {from_type} to {to_type} not supported"
         ))),
         (_, Boolean) => match from_type {
@@ -1069,7 +1083,7 @@ pub fn cast_with_options(
             Utf8View => cast_utf8view_to_boolean(array, cast_options),
             Utf8 => cast_utf8_to_boolean::<i32>(array, cast_options),
             LargeUtf8 => cast_utf8_to_boolean::<i64>(array, cast_options),
-            _ => Err(ArrowError::CastError(format!(
+            _ => Err(ArrowError::InvalidArgumentError(format!(
                 "Casting from {from_type} to {to_type} not supported",
             ))),
         },
@@ -1088,7 +1102,7 @@ pub fn cast_with_options(
             Utf8View => cast_bool_to_string::<StringViewArray>(array),
             Utf8 => cast_bool_to_string::<StringArray>(array),
             LargeUtf8 => cast_bool_to_string::<LargeStringArray>(array),
-            _ => Err(ArrowError::CastError(format!(
+            _ => Err(ArrowError::InvalidArgumentError(format!(
                 "Casting from {from_type} to {to_type} not supported",
             ))),
         },
@@ -1159,7 +1173,7 @@ pub fn cast_with_options(
             Interval(IntervalUnit::MonthDayNano) => {
                 cast_string_to_month_day_nano_interval::<i32>(array, cast_options)
             }
-            _ => Err(ArrowError::CastError(format!(
+            _ => Err(ArrowError::InvalidArgumentError(format!(
                 "Casting from {from_type} to {to_type} not supported",
             ))),
         },
@@ -1217,7 +1231,7 @@ pub fn cast_with_options(
             Interval(IntervalUnit::MonthDayNano) => {
                 cast_view_to_month_day_nano_interval(array, cast_options)
             }
-            _ => Err(ArrowError::CastError(format!(
+            _ => Err(ArrowError::InvalidArgumentError(format!(
                 "Casting from {from_type} to {to_type} not supported",
             ))),
         },
@@ -1292,7 +1306,7 @@ pub fn cast_with_options(
             Interval(IntervalUnit::MonthDayNano) => {
                 cast_string_to_month_day_nano_interval::<i64>(array, cast_options)
             }
-            _ => Err(ArrowError::CastError(format!(
+            _ => Err(ArrowError::InvalidArgumentError(format!(
                 "Casting from {from_type} to {to_type} not supported",
             ))),
         },
@@ -1310,7 +1324,7 @@ pub fn cast_with_options(
             Utf8View => Ok(Arc::new(StringViewArray::from(
                 cast_binary_to_string::<i32>(array, cast_options)?.as_string::<i32>(),
             ))),
-            _ => Err(ArrowError::CastError(format!(
+            _ => Err(ArrowError::InvalidArgumentError(format!(
                 "Casting from {from_type} to {to_type} not supported",
             ))),
         },
@@ -1329,7 +1343,7 @@ pub fn cast_with_options(
                 let array = cast_binary_to_string::<i64>(array, cast_options)?;
                 Ok(Arc::new(StringViewArray::from(array.as_string::<i64>())))
             }
-            _ => Err(ArrowError::CastError(format!(
+            _ => Err(ArrowError::InvalidArgumentError(format!(
                 "Casting from {from_type} to {to_type} not supported",
             ))),
         },
@@ -1337,7 +1351,7 @@ pub fn cast_with_options(
             Binary => cast_fixed_size_binary_to_binary::<i32>(array, *size),
             LargeBinary => cast_fixed_size_binary_to_binary::<i64>(array, *size),
             BinaryView => cast_fixed_size_binary_to_binary_view(array, *size),
-            _ => Err(ArrowError::CastError(format!(
+            _ => Err(ArrowError::InvalidArgumentError(format!(
                 "Casting from {from_type} to {to_type} not supported",
             ))),
         },
@@ -1354,7 +1368,7 @@ pub fn cast_with_options(
             cast_binary_to_string::<i64>(&binary_arr, cast_options)
         }
         (BinaryView, Utf8View) => cast_binary_view_to_string_view(array, cast_options),
-        (BinaryView, _) => Err(ArrowError::CastError(format!(
+        (BinaryView, _) => Err(ArrowError::InvalidArgumentError(format!(
             "Casting from {from_type} to {to_type} not supported",
         ))),
         (from_type, Utf8View) if from_type.is_primitive() => {
@@ -1961,7 +1975,7 @@ pub fn cast_with_options(
         (Int32, Interval(IntervalUnit::YearMonth)) => {
             cast_reinterpret_arrays::<Int32Type, IntervalYearMonthType>(array)
         }
-        (_, _) => Err(ArrowError::CastError(format!(
+        (_, _) => Err(ArrowError::InvalidArgumentError(format!(
             "Casting from {from_type} to {to_type} not supported",
         ))),
     }
@@ -2020,6 +2034,35 @@ mod tests {
     use chrono::{FixedOffset, NaiveDate, NaiveTime};
     use half::f16;
     use std::sync::Arc;
+
+    #[test]
+    fn test_cast_unsupported_types_error() {
+        let array = BooleanArray::from(vec![true, false]);
+        assert!(!can_cast_types(array.data_type(), &Date32));
+        for safe in [true, false] {
+            let options = CastOptions {
+                safe,
+                ..Default::default()
+            };
+            let error = cast_with_options(&array, &Date32, &options).unwrap_err();
+            assert!(matches!(error, ArrowError::InvalidArgumentError(_)));
+        }
+    }
+
+    #[test]
+    fn test_cast_invalid_value_error() {
+        let array = StringArray::from(vec!["x"]);
+        assert!(can_cast_types(array.data_type(), &Int32));
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        let error = cast_with_options(&array, &Int32, &options).unwrap_err();
+        assert!(matches!(error, ArrowError::CastError(_)));
+
+        let result = cast(&array, &Int32).unwrap();
+        assert!(result.is_null(0));
+    }
 
     /// Checks the fast-path classification against `num_cast` for every pair of
     /// numeric types. `num_cast` fails only on values outside the target's range,
@@ -7265,7 +7308,7 @@ mod tests {
         assert!(!can_cast_types(&struct_type, &to_type));
         let result = cast(&struct_array, &to_type);
         assert_eq!(
-            "Cast error: Casting from Boolean to Date32 not supported",
+            "Invalid argument error: Casting from Boolean to Date32 not supported",
             result.unwrap_err().to_string()
         );
     }
@@ -7353,7 +7396,7 @@ mod tests {
         let to_type = DataType::Utf8;
         let result = cast(&struct_array, &to_type);
         assert_eq!(
-            r#"Cast error: Casting from Struct("a": non-null Boolean) to Utf8 not supported"#,
+            r#"Invalid argument error: Casting from Struct("a": non-null Boolean) to Utf8 not supported"#,
             result.unwrap_err().to_string()
         );
     }
@@ -7364,7 +7407,7 @@ mod tests {
         let to_type = DataType::Struct(vec![Field::new("a", DataType::Boolean, false)].into());
         let result = cast(&array, &to_type);
         assert_eq!(
-            r#"Cast error: Casting from Utf8 to Struct("a": non-null Boolean) not supported"#,
+            r#"Invalid argument error: Casting from Utf8 to Struct("a": non-null Boolean) not supported"#,
             result.unwrap_err().to_string()
         );
     }
