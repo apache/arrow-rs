@@ -790,7 +790,8 @@ fn interval_mul_f64(
     let month_remainder_days = month_remainder
         .to_i32()
         .ok_or_else(|| overflow("month remainder"))?;
-    // Same order as DuckDB; regrouping the terms (e.g. via `fract()`) can change the last ns.
+    // Same order of operations as DuckDB; float arithmetic isn't associative and we're aiming
+    // to replicate DuckDB accuracy
     let mut seconds_remainder = timestamp_round(
         (days_product - f64::from(days) + month_remainder - f64::from(month_remainder_days))
             * SECONDS_PER_DAY,
