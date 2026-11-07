@@ -13,7 +13,7 @@ use arrow_array::temporal_conversions::{NANOSECONDS, SECONDS_IN_DAY};
 use arrow_array::timezone::Tz;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, IntervalDayTime, IntervalMonthDayNano};
+use arrow_buffer::{ArrowNativeType, IntervalDayTime, IntervalMonthDayNano, NullBuffer};
 use arrow_schema::{ArrowError, DataType, IntervalUnit, TimeUnit};
 use num_traits::{CheckedMul, ToPrimitive};
 
@@ -311,23 +311,169 @@ macro_rules! try_op_ref {
     }};
 }
 
+/// Wrapping `+`, `-` and `*` that also report whether they overflowed, written
+/// so that LLVM vectorizes a loop over them.
+///
+/// The signed `overflowing_add` and `overflowing_sub` lower to
+/// `llvm.sadd.with.overflow` and `llvm.ssub.with.overflow`, which LLVM doesn't
+/// vectorize, so the signed impls test the sign bits instead.
+trait OverflowingOp: Sized {
+    fn add_overflowing(self, rhs: Self) -> (Self, bool);
+    fn sub_overflowing(self, rhs: Self) -> (Self, bool);
+    fn mul_overflowing(self, rhs: Self) -> (Self, bool);
+}
+
+macro_rules! signed_overflowing_op {
+    ($($t:ty => $wide:ty),*) => {$(
+        impl OverflowingOp for $t {
+            #[inline]
+            fn add_overflowing(self, rhs: Self) -> (Self, bool) {
+                let sum = self.wrapping_add(rhs);
+                // Overflow iff both operands have the same sign and `sum` has the other.
+                (sum, (self ^ sum) & (rhs ^ sum) < 0)
+            }
+
+            #[inline]
+            fn sub_overflowing(self, rhs: Self) -> (Self, bool) {
+                let difference = self.wrapping_sub(rhs);
+                // Overflow iff the operands have different signs and `difference`
+                // doesn't have the sign of `self`.
+                (difference, (self ^ rhs) & (self ^ difference) < 0)
+            }
+
+            #[inline]
+            fn mul_overflowing(self, rhs: Self) -> (Self, bool) {
+                let product = <$wide>::from(self) * <$wide>::from(rhs);
+                // The truncating cast is the wrapping product. It overflowed iff
+                // widening it back doesn't give the full product.
+                (product as $t, <$wide>::from(product as $t) != product)
+            }
+        }
+    )*};
+}
+
+signed_overflowing_op!(i8 => i16, i16 => i32, i32 => i64, i64 => i128);
+
+macro_rules! unsigned_overflowing_op {
+    ($($t:ty),*) => {$(
+        // LLVM vectorizes the unsigned `overflowing_add` and `overflowing_sub`.
+        // It folds a widening unsigned multiply back into `llvm.umul.with.overflow`,
+        // which it doesn't vectorize, so `mul` stays scalar either way.
+        impl OverflowingOp for $t {
+            #[inline]
+            fn add_overflowing(self, rhs: Self) -> (Self, bool) {
+                self.overflowing_add(rhs)
+            }
+
+            #[inline]
+            fn sub_overflowing(self, rhs: Self) -> (Self, bool) {
+                self.overflowing_sub(rhs)
+            }
+
+            #[inline]
+            fn mul_overflowing(self, rhs: Self) -> (Self, bool) {
+                self.overflowing_mul(rhs)
+            }
+        }
+    )*};
+}
+
+unsigned_overflowing_op!(u8, u16, u32, u64);
+
+/// Applies `op` to every slot of `l` and `r`, including null slots, without
+/// branching on overflow.
+///
+/// Returns `None` if any slot overflowed or the array lengths differ, so the
+/// caller can fall back to the checked kernel to report the error. A null slot
+/// can hold any value, so `None` doesn't mean a valid row overflowed.
+fn overflowing_op<T, F>(
+    l: &PrimitiveArray<T>,
+    l_s: bool,
+    r: &PrimitiveArray<T>,
+    r_s: bool,
+    op: F,
+) -> Option<PrimitiveArray<T>>
+where
+    T: ArrowPrimitiveType,
+    F: Fn(T::Native, T::Native) -> (T::Native, bool),
+{
+    match (l_s, r_s) {
+        (true, true) | (false, false) => {
+            if l.len() != r.len() {
+                return None;
+            }
+            let pairs = l.values().iter().zip(r.values());
+            let values = collect_overflowing(pairs.map(|(&l, &r)| op(l, r)))?;
+            Some(PrimitiveArray::new(
+                values.into(),
+                NullBuffer::union(l.nulls(), r.nulls()),
+            ))
+        }
+        (true, false) => match (l.null_count() == 0).then(|| l.value(0)) {
+            None => Some(PrimitiveArray::new_null(r.len())),
+            Some(l) => {
+                let values = collect_overflowing(r.values().iter().map(|&r| op(l, r)))?;
+                Some(PrimitiveArray::new(values.into(), r.nulls().cloned()))
+            }
+        },
+        (false, true) => match (r.null_count() == 0).then(|| r.value(0)) {
+            None => Some(PrimitiveArray::new_null(l.len())),
+            Some(r) => {
+                let values = collect_overflowing(l.values().iter().map(|&l| op(l, r)))?;
+                Some(PrimitiveArray::new(values.into(), l.nulls().cloned()))
+            }
+        },
+    }
+}
+
+/// Collects the values of `iter`, returning `None` if any was flagged as overflowed.
+///
+/// This intentional `inline(never)` keeps `overflow` in a register. Inlined
+/// into `integer_op` under thin LTO, LLVM keeps the flag in memory and loads
+/// and stores it on every row, which serializes the loop and keeps it from
+/// vectorizing.
+#[inline(never)]
+fn collect_overflowing<N>(iter: impl Iterator<Item = (N, bool)>) -> Option<Vec<N>> {
+    let mut overflow = false;
+    let values = iter
+        .map(|(value, overflowed)| {
+            overflow |= overflowed;
+            value
+        })
+        .collect();
+    (!overflow).then_some(values)
+}
+
 /// Perform an arithmetic operation on integers
-fn integer_op<T: ArrowPrimitiveType>(
+fn integer_op<T>(
     op: Op,
     l: &dyn Array,
     l_s: bool,
     r: &dyn Array,
     r_s: bool,
-) -> Result<ArrayRef, ArrowError> {
+) -> Result<ArrayRef, ArrowError>
+where
+    T: ArrowPrimitiveType,
+    T::Native: OverflowingOp,
+{
     let l = l.as_primitive::<T>();
     let r = r.as_primitive::<T>();
     let array: PrimitiveArray<T> = match op {
         Op::AddWrapping => op!(l, l_s, r, r_s, l.add_wrapping(r)),
-        Op::Add => try_op!(l, l_s, r, r_s, l.add_checked(r)),
+        Op::Add => match overflowing_op(l, l_s, r, r_s, T::Native::add_overflowing) {
+            Some(array) => array,
+            None => try_op!(l, l_s, r, r_s, l.add_checked(r)),
+        },
         Op::SubWrapping => op!(l, l_s, r, r_s, l.sub_wrapping(r)),
-        Op::Sub => try_op!(l, l_s, r, r_s, l.sub_checked(r)),
+        Op::Sub => match overflowing_op(l, l_s, r, r_s, T::Native::sub_overflowing) {
+            Some(array) => array,
+            None => try_op!(l, l_s, r, r_s, l.sub_checked(r)),
+        },
         Op::MulWrapping => op!(l, l_s, r, r_s, l.mul_wrapping(r)),
-        Op::Mul => try_op!(l, l_s, r, r_s, l.mul_checked(r)),
+        Op::Mul => match overflowing_op(l, l_s, r, r_s, T::Native::mul_overflowing) {
+            Some(array) => array,
+            None => try_op!(l, l_s, r, r_s, l.mul_checked(r)),
+        },
         Op::Div => try_op!(l, l_s, r, r_s, l.div_checked(r)),
         Op::Rem => try_op!(l, l_s, r, r_s, {
             if r.is_zero() {
@@ -1412,6 +1558,173 @@ mod tests {
         let b = Int16Array::from(vec![0]);
         let err = rem(&a, &b).unwrap_err().to_string();
         assert_eq!(err, "Divide by zero error");
+    }
+
+    type Kernel = fn(&dyn Datum, &dyn Datum) -> Result<ArrayRef, ArrowError>;
+    type Checked<N> = fn(N, N) -> Result<N, ArrowError>;
+
+    fn assert_kernel_result<T: ArrowPrimitiveType>(
+        actual: Result<ArrayRef, ArrowError>,
+        expected: Result<Vec<Option<T::Native>>, ArrowError>,
+    ) {
+        match (actual, expected) {
+            (Ok(actual), Ok(expected)) => {
+                assert_eq!(
+                    actual.as_primitive::<T>(),
+                    &expected.into_iter().collect::<PrimitiveArray<T>>()
+                )
+            }
+            (Err(actual), Err(expected)) => assert_eq!(actual.to_string(), expected.to_string()),
+            (actual, expected) => panic!("got {actual:?}, expected {expected:?}"),
+        }
+    }
+
+    /// Checks `add`, `sub` and `mul` against the scalar checked operations for
+    /// every pair of `edges`, with arrays on both sides and with a scalar on
+    /// either side. Every third row of the left array is null, so null slots
+    /// also hold values that overflow.
+    fn test_checked_integer_ops<T: ArrowPrimitiveType>(edges: &[T::Native]) {
+        test_checked_integer_op::<T>(edges, add, |l, r| l.add_checked(r));
+        test_checked_integer_op::<T>(edges, sub, |l, r| l.sub_checked(r));
+        test_checked_integer_op::<T>(edges, mul, |l, r| l.mul_checked(r));
+    }
+
+    fn test_checked_integer_op<T: ArrowPrimitiveType>(
+        edges: &[T::Native],
+        kernel: Kernel,
+        checked: Checked<T::Native>,
+    ) {
+        let (l, r): (Vec<_>, Vec<_>) = edges
+            .iter()
+            .flat_map(|&x| edges.iter().map(move |&y| (x, y)))
+            .unzip();
+        let nulls = NullBuffer::from_iter((0..l.len()).map(|i| i % 3 != 2));
+        let l_array = PrimitiveArray::<T>::new(l.clone().into(), Some(nulls.clone()));
+        let r_array = PrimitiveArray::<T>::from_iter_values(r.iter().copied());
+
+        // The kernels report the first valid row that overflows.
+        let expected = (0..l.len())
+            .map(|i| nulls.is_valid(i).then(|| checked(l[i], r[i])).transpose())
+            .collect();
+        assert_kernel_result::<T>(kernel(&l_array, &r_array), expected);
+
+        // An overflow in one row sends the whole array to the checked kernel,
+        // which would hide a missed overflow in another row, so also check each
+        // row alone.
+        for i in 0..l.len() {
+            let expected = match nulls.is_valid(i) {
+                true => checked(l[i], r[i]).map(|v| vec![Some(v)]),
+                false => Ok(vec![None]),
+            };
+            let actual = kernel(&l_array.slice(i, 1), &r_array.slice(i, 1));
+            assert_kernel_result::<T>(actual, expected);
+        }
+
+        for &x in edges {
+            let scalar = PrimitiveArray::<T>::new_scalar(x);
+            let expected = r.iter().map(|&y| checked(x, y).map(Some)).collect();
+            assert_kernel_result::<T>(kernel(&scalar, &r_array), expected);
+            let expected = (0..l.len())
+                .map(|i| nulls.is_valid(i).then(|| checked(l[i], x)).transpose())
+                .collect();
+            assert_kernel_result::<T>(kernel(&l_array, &scalar), expected);
+        }
+    }
+
+    #[test]
+    fn test_checked_integer_edges() {
+        macro_rules! signed {
+            ($a:ty, $t:ty) => {
+                test_checked_integer_ops::<$a>(&[
+                    <$t>::MIN,
+                    <$t>::MIN + 1,
+                    <$t>::MIN / 2,
+                    -3,
+                    -1,
+                    0,
+                    1,
+                    3,
+                    <$t>::MAX / 2,
+                    <$t>::MAX / 2 + 1,
+                    <$t>::MAX - 1,
+                    <$t>::MAX,
+                ])
+            };
+        }
+        macro_rules! unsigned {
+            ($a:ty, $t:ty) => {
+                test_checked_integer_ops::<$a>(&[
+                    0,
+                    1,
+                    3,
+                    <$t>::MAX / 2,
+                    <$t>::MAX / 2 + 1,
+                    <$t>::MAX - 1,
+                    <$t>::MAX,
+                ])
+            };
+        }
+        signed!(Int8Type, i8);
+        signed!(Int16Type, i16);
+        signed!(Int32Type, i32);
+        signed!(Int64Type, i64);
+        unsigned!(UInt8Type, u8);
+        unsigned!(UInt16Type, u16);
+        unsigned!(UInt32Type, u32);
+        unsigned!(UInt64Type, u64);
+    }
+
+    #[test]
+    fn test_checked_integer_overflow_position() {
+        let one = Int32Array::new_scalar(1);
+        // Every length up to 130 puts the overflow in each part of the vector loop
+        // for strides up to 64 rows.
+        for len in 1..=130 {
+            let mut values = vec![1; len];
+            values[len - 1] = i32::MAX;
+            let array = Int32Array::from(values.clone());
+            assert_eq!(
+                add(&array, &one).unwrap_err().to_string(),
+                "Arithmetic overflow: Overflow happened on: 2147483647 + 1"
+            );
+
+            // The same value in a null slot is not an error.
+            let nulls = NullBuffer::from_iter((0..len).map(|i| i != len - 1));
+            let array = Int32Array::new(values.into(), Some(nulls));
+            let expected: Int32Array = (0..len).map(|i| (i != len - 1).then_some(2)).collect();
+            assert_eq!(
+                add(&array, &one).unwrap().as_primitive::<Int32Type>(),
+                &expected
+            );
+        }
+    }
+
+    #[test]
+    fn test_checked_integer_slice_null_scalar_and_lengths() {
+        // Overflowing values outside the slice are not an error.
+        let array = Int64Array::from(vec![i64::MAX, 1, 2, i64::MAX]).slice(1, 2);
+        let one = Int64Array::new_scalar(1);
+        let result = add(&array, &one).unwrap();
+        assert_eq!(
+            result.as_primitive::<Int64Type>(),
+            &Int64Array::from(vec![2, 3])
+        );
+
+        // A null scalar gives an all-null result whatever the array holds.
+        let null = Scalar::new(Int64Array::new_null(1));
+        let max = Int64Array::from(vec![i64::MAX; 3]);
+        assert_eq!(add(&max, &null).unwrap().null_count(), 3);
+        assert_eq!(mul(&null, &max).unwrap().null_count(), 3);
+
+        let empty = Int64Array::from(Vec::<i64>::new());
+        assert!(add(&empty, &empty).unwrap().is_empty());
+        assert!(sub(&empty, &one).unwrap().is_empty());
+
+        let err = add(&Int64Array::from(vec![1, 2]), &Int64Array::from(vec![1])).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Compute error: Cannot perform a binary operation on arrays of different length"
+        );
     }
 
     #[test]
