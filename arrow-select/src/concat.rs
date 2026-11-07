@@ -108,7 +108,7 @@ fn concat_dictionaries<K: ArrowDictionaryKeyType>(
         return concat_fallback(arrays, Capacities::Array(output_len));
     }
 
-    let merged = merge_dictionary_values(&dictionaries, None)?;
+    let merged = merge_dictionary_values(&dictionaries, None, None)?;
 
     // Recompute keys
     let mut key_values = Vec::with_capacity(output_len);
@@ -1578,31 +1578,37 @@ mod tests {
     }
 
     #[test]
-    fn test_concat_oversized_dictionary_slices() {
-        let make_dictionary = |prefix| {
-            let values = StringArray::from_iter_values(
-                (0..1_000).map(|idx| format!("{prefix}_value_{idx}")),
+    fn test_concat_sparse_primitive_dictionaries_with_nulls() {
+        let values_len = 3 * crate::dictionary::MAX_DENSE_MAPPING_VALUES_PER_ROW + 1;
+        let last = values_len as i32 - 1;
+        let make_dictionary = |offset, null_value, keys| {
+            let values = Int32Array::from_iter(
+                (0..values_len).map(|idx| (idx != null_value).then_some(offset + idx as i32)),
             );
-            let keys = Int32Array::from_iter_values(0..1_000);
-            DictionaryArray::<Int32Type>::new(keys, Arc::new(values))
+            DictionaryArray::<Int32Type>::new(Int32Array::from(keys), Arc::new(values))
         };
-        let a = make_dictionary("a").slice(997, 3);
-        let b = make_dictionary("b").slice(1, 3);
+        let a = make_dictionary(0, 1, vec![Some(last), None, Some(1)]);
+        let b = make_dictionary(10_000, 2, vec![Some(2), Some(last - 1), None]);
+
+        let merged = merge_dictionary_values(&[&a, &b], None, None).unwrap();
+        assert!(
+            merged
+                .key_mappings
+                .iter()
+                .all(|mapping| matches!(mapping, KeyMapping::Sparse(_)))
+        );
 
         let result = concat(&[&a, &b]).unwrap();
-        let actual = collect_string_dictionary(result.as_dictionary::<Int32Type>());
+        let actual = result
+            .as_dictionary::<Int32Type>()
+            .downcast_dict::<Int32Array>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
 
         assert_eq!(
             actual,
-            [
-                "a_value_997",
-                "a_value_998",
-                "a_value_999",
-                "b_value_1",
-                "b_value_2",
-                "b_value_3",
-            ]
-            .map(Some)
+            [Some(last), None, None, None, Some(10_000 + last - 1), None]
         );
     }
 

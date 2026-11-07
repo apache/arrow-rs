@@ -153,12 +153,18 @@ impl<K: ArrowDictionaryKeyType> InProgressDictionaryArray<K> {
             match &chunk.nulls {
                 Some(nulls) => keys.extend(chunk.keys.iter().enumerate().map(|(offset, key)| {
                     if nulls.is_valid(offset) {
-                        mapping[key.as_usize()]
+                        mapping
+                            .get(key.as_usize())
+                            .expect("referenced dictionary key should be mapped")
                     } else {
                         K::Native::default()
                     }
                 })),
-                None => keys.extend(chunk.keys.iter().map(|key| mapping[key.as_usize()])),
+                None => keys.extend(chunk.keys.iter().map(|key| {
+                    mapping
+                        .get(key.as_usize())
+                        .expect("referenced dictionary key should be mapped")
+                })),
             }
         }
         Ok((keys, merged.values))

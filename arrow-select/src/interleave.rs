@@ -272,7 +272,7 @@ fn interleave_dictionaries<K: ArrowDictionaryKeyType>(
         };
     }
 
-    let masks: Result<Vec<_>, ArrowError> = dictionaries
+    let masks_and_lookups: Result<Vec<_>, ArrowError> = dictionaries
         .iter()
         .enumerate()
         .map(|(a_idx, dictionary)| {
@@ -280,15 +280,17 @@ fn interleave_dictionaries<K: ArrowDictionaryKeyType>(
                 .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
             let mut key_mask = BooleanBufferBuilder::new_from_buffer(buffer, dictionary.len());
 
+            let mut lookups = 0;
             for (_, key_idx) in indices.iter().filter(|(a, _)| *a == a_idx) {
                 key_mask.set_bit(*key_idx, true);
+                lookups += 1;
             }
-            Ok(key_mask.finish())
+            Ok((key_mask.finish(), lookups))
         })
         .collect();
-    let masks = masks?;
+    let (masks, key_lookups): (Vec<_>, Vec<_>) = masks_and_lookups?.into_iter().unzip();
 
-    let merged = merge_dictionary_values(&dictionaries, Some(&masks))?;
+    let merged = merge_dictionary_values(&dictionaries, Some(&masks), Some(&key_lookups))?;
 
     // Recompute keys
     let mut keys = PrimitiveBuilder::<K>::with_capacity(indices.len());
@@ -1135,26 +1137,40 @@ mod tests {
     }
 
     #[test]
-    fn test_interleave_oversized_dictionaries() {
-        let make_dictionary = |prefix| {
-            let values = StringArray::from_iter_values(
-                (0..1_000).map(|idx| format!("{prefix}_value_{idx}")),
+    fn test_interleave_sparse_primitive_dictionaries_with_nulls() {
+        let values_len = 2 * crate::dictionary::MAX_DENSE_MAPPING_VALUES_PER_ROW + 1;
+        let last = values_len as i32 - 1;
+        let make_dictionary = |offset, null_value, keys| {
+            let values = Int32Array::from_iter(
+                (0..values_len).map(|idx| (idx != null_value).then_some(offset + idx as i32)),
             );
-            let keys = Int32Array::from_iter_values([1, 999]);
-            DictionaryArray::<Int32Type>::new(keys, Arc::new(values))
+            DictionaryArray::<Int32Type>::new(Int32Array::from(keys), Arc::new(values))
         };
-        let a = make_dictionary("a");
-        let b = make_dictionary("b");
+        let a = make_dictionary(0, 1, vec![Some(last), None, Some(1)]);
+        let b = make_dictionary(10_000, 2, vec![Some(2), Some(last - 1), None]);
+        let indices = [(0, 2), (1, 0), (0, 0), (1, 2)];
+        let masks = [
+            BooleanBuffer::from_iter([true, false, true]),
+            BooleanBuffer::from_iter([true, false, true]),
+        ];
 
-        let result = interleave(&[&a, &b], &[(0, 1), (1, 0), (0, 0)]).unwrap();
+        let merged = merge_dictionary_values(&[&a, &b], Some(&masks), Some(&[2, 2])).unwrap();
+        assert!(
+            merged
+                .key_mappings
+                .iter()
+                .all(|mapping| matches!(mapping, crate::dictionary::KeyMapping::Sparse(_)))
+        );
+
+        let result = interleave(&[&a, &b], &indices).unwrap();
         let actual = result
             .as_dictionary::<Int32Type>()
-            .downcast_dict::<StringArray>()
+            .downcast_dict::<Int32Array>()
             .unwrap()
             .into_iter()
             .collect::<Vec<_>>();
 
-        assert_eq!(actual, ["a_value_999", "b_value_1", "a_value_1"].map(Some));
+        assert_eq!(actual, [None, None, Some(last), None]);
     }
 
     #[test]
