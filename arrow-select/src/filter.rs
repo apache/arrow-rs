@@ -517,6 +517,17 @@ impl FilterPredicate {
         self.filter.len()
     }
 
+    /// Returns the normalized filter mask, with nulls replaced by `false`.
+    pub(crate) fn filter_mask(&self) -> &BooleanBuffer {
+        self.filter.values()
+    }
+
+    /// Returns whether bit filtering should gather precomputed indices instead of compressing.
+    pub(crate) fn uses_sparse_indices(&self) -> bool {
+        self.count <= self.filter.len() / 64
+            && matches!(self.strategy, IterationStrategy::Indices(_))
+    }
+
     /// Return a [`FilterSelection`] for iterating over the rows selected by
     /// this [`FilterPredicate`].
     pub(crate) fn selection(&self) -> FilterSelection<'_> {
@@ -738,8 +749,7 @@ fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
     let len = predicate.filter.len();
     let count = predicate.count;
     let dense = count >= len - len / 64;
-    let sparse_indices =
-        count <= len / 64 && matches!(predicate.strategy, IterationStrategy::Indices(_));
+    let sparse_indices = predicate.uses_sparse_indices();
     if !dense && !sparse_indices {
         return filter_bits_compress(buffer, predicate);
     }
@@ -790,62 +800,61 @@ fn filter_bits_strategy(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> 
     }
 }
 
+/// Packs bits selected from successive words into complete output words.
+#[derive(Default)]
+pub(crate) struct Packer {
+    /// Bits waiting to be written.
+    current: u64,
+    /// Number of populated low bits in `current`.
+    filled: u32,
+}
+
+impl Packer {
+    #[inline(always)]
+    pub(crate) fn push(&mut self, values: u64, mask: u64) -> Option<u64> {
+        let bits = bit_util::compress(values, mask);
+        self.current |= bits << self.filled;
+        let total = self.filled + mask.count_ones();
+        if total < 64 {
+            self.filled = total;
+            return None;
+        }
+
+        let complete = self.current;
+        // `bits >> (64 - filled)`, written so that `filled == 0`
+        // shifts everything out
+        self.current = (bits >> 1) >> (63 - self.filled);
+        self.filled = total - 64;
+        Some(complete)
+    }
+
+    #[inline]
+    pub(crate) fn finish(self) -> Option<(u64, usize)> {
+        (self.filled != 0).then_some((self.current, self.filled as usize))
+    }
+}
+
 /// Filter the packed bitmask `buffer` with `predicate` by extracting the kept
-/// bits of each 64-bit word with [`bit_util::compress`] (`pext`)
+/// bits of each 64-bit word with [`bit_util::compress`] (`pext`).
 ///
-/// Not inlined: within `filter_array` the packing state spills to the stack
+/// Not inlined: within `filter_array` the packing state spills to the stack.
 #[inline(never)]
 fn filter_bits_compress(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
-    /// Packs the bits extracted from successive words into the low `filled`
-    /// bits of `current`; once complete it is written at `idx` and restarts
-    /// from the bits that did not fit
-    struct Packer {
-        ptr: *mut u64,
-        idx: usize,
-        current: u64,
-        filled: u32,
-    }
-
-    impl Packer {
-        #[inline(always)]
-        fn push(&mut self, values: u64, mask: u64) {
-            let bits = bit_util::compress(values, mask);
-            self.current |= bits << self.filled;
-            let total = self.filled + mask.count_ones();
-            if total < 64 {
-                self.filled = total;
-            } else {
-                // SAFETY: `count` is the number of set bits in the filter, so
-                // at most `count / 64` words are ever completed and the
-                // buffer holds `count / 64 + 1`
-                unsafe { self.ptr.add(self.idx).write(self.current) };
-                self.idx += 1;
-                // `bits >> (64 - filled)`, written so that `filled == 0`
-                // shifts everything out
-                self.current = (bits >> 1) >> (63 - self.filled);
-                self.filled = total - 64;
-            }
-        }
-    }
-
     assert!(buffer.len() >= predicate.filter.len());
     let mask_chunks = predicate.filter.values().bit_chunks();
     let value_chunks = BitChunks::new(buffer.values(), buffer.offset(), predicate.filter.len());
-    // `count` is the filter's set bit count, which the buffer size and the
-    // raw writes below rely on, and both chunk views cover
+    // `predicate.count` is the filter's set bit count, which determines the
+    // output capacity and bounds the raw writes below. Both chunk views cover
     // `predicate.filter.len()` bits, so indexing `value_chunks` by the
-    // position in `mask_chunks` stays in bounds
+    // position in `mask_chunks` stays in bounds.
     debug_assert_eq!(predicate.count, predicate.filter.true_count());
     debug_assert_eq!(mask_chunks.chunk_len(), value_chunks.chunk_len());
 
     // One word beyond the complete ones for the trailing partial word
     let mut out: Vec<u64> = Vec::with_capacity(predicate.count / 64 + 1);
-    let mut packer = Packer {
-        ptr: out.as_mut_ptr(),
-        idx: 0,
-        current: 0,
-        filled: 0,
-    };
+    let ptr = out.as_mut_ptr();
+    let mut idx = 0;
+    let mut packer = Packer::default();
 
     for (index, mask) in mask_chunks.iter().enumerate() {
         // Words with no kept bits are skipped before the corresponding values
@@ -853,18 +862,35 @@ fn filter_bits_compress(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> 
         if mask == 0 {
             continue;
         }
-        packer.push(value_chunks.chunk(index), mask);
+        if let Some(complete) = packer.push(value_chunks.chunk(index), mask) {
+            debug_assert!(idx < out.capacity());
+            // SAFETY: `complete` contains 64 of the `predicate.count` selected
+            // bits. Therefore `idx < predicate.count / 64` before this write,
+            // while `out` has capacity at least `predicate.count / 64 + 1`.
+            unsafe { ptr.add(idx).write(complete) };
+            idx += 1;
+        }
     }
-    packer.push(value_chunks.remainder_bits(), mask_chunks.remainder_bits());
+    if let Some(complete) = packer.push(value_chunks.remainder_bits(), mask_chunks.remainder_bits())
+    {
+        debug_assert!(idx < out.capacity());
+        // SAFETY: this completed word also contains 64 of the
+        // `predicate.count` selected bits, so the same
+        // `idx < predicate.count / 64 < out.capacity()` bound applies.
+        unsafe { ptr.add(idx).write(complete) };
+        idx += 1;
+    }
 
-    // The trailing partial word; its bits above `filled` are zero
-    // SAFETY: `idx <= count / 64`, so this and every word below it is
-    // within the buffer and written
-    debug_assert!(packer.idx < out.capacity());
-    unsafe {
-        packer.ptr.add(packer.idx).write(packer.current);
-        out.set_len(packer.idx + 1);
+    if let Some((pending, _)) = packer.finish() {
+        debug_assert!(idx < out.capacity());
+        // SAFETY: `pending` exists only when the selected bit count is not a
+        // multiple of 64. All prior writes were complete words, so
+        // `idx == predicate.count / 64 < out.capacity()`.
+        unsafe { ptr.add(idx).write(pending) };
+        idx += 1;
     }
+    // SAFETY: every word below `idx` was initialized above
+    unsafe { out.set_len(idx) };
     let mut out = MutableBuffer::from(out);
     out.truncate(bit_util::ceil(predicate.count, 8));
     out.into()
