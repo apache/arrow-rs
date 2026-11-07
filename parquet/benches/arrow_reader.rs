@@ -855,6 +855,44 @@ fn build_int32_list_page_iterator(
     InMemoryPageIterator::new(pages)
 }
 
+/// Builds pages of a nullable list of nullable INT32 where every list has
+/// `list_len` non-null items, the case where branches on the levels predict well.
+fn build_int32_fixed_list_page_iterator(
+    column_desc: ColumnDescPtr,
+    list_len: usize,
+    rows_per_page: usize,
+) -> impl PageIterator + Clone {
+    let max_def_level = column_desc.max_def_level();
+    let max_rep_level = column_desc.max_rep_level();
+    let mut rng = seedable_rng();
+    let mut pages: Vec<Vec<parquet::column::page::Page>> = Vec::new();
+    for _i in 0..NUM_ROW_GROUPS {
+        let mut column_chunk_pages = Vec::new();
+        for _j in 0..PAGES_PER_GROUP {
+            let mut values: Vec<i32> = Vec::with_capacity(rows_per_page * list_len);
+            let mut def_levels = Vec::with_capacity(rows_per_page * list_len);
+            let mut rep_levels = Vec::with_capacity(rows_per_page * list_len);
+            for _k in 0..rows_per_page {
+                rep_levels.push(0);
+                (1..list_len).for_each(|_| rep_levels.push(1));
+                for _l in 0..list_len {
+                    def_levels.push(3);
+                    values.push(rng.random());
+                }
+            }
+            let mut page_builder =
+                DataPageBuilderImpl::new(column_desc.clone(), values.len() as u32, true);
+            page_builder.add_rep_levels(max_rep_level, &rep_levels);
+            page_builder.add_def_levels(max_def_level, &def_levels);
+            page_builder.add_values::<Int32Type>(Encoding::PLAIN, &values);
+            column_chunk_pages.push(page_builder.consume());
+        }
+        pages.push(column_chunk_pages);
+    }
+
+    InMemoryPageIterator::new(pages)
+}
+
 fn create_int32_list_reader(
     page_iterator: impl PageIterator + 'static,
     column_desc: ColumnDescPtr,
@@ -2871,6 +2909,21 @@ fn add_benches(c: &mut Criterion) {
                 count = bench_array_reader(reader);
             });
             assert_eq!(count, EXPECTED_VALUE_COUNT);
+        });
+    }
+    group.finish();
+
+    let mut group = c.benchmark_group("arrow_array_reader/ListArray/Int32LongList");
+    for (list_len, rows_per_page) in [(128, 10_000), (1024, 1_250)] {
+        let list_data =
+            build_int32_fixed_list_page_iterator(int32_list_desc.clone(), list_len, rows_per_page);
+        let rows = NUM_ROW_GROUPS * PAGES_PER_GROUP * rows_per_page;
+        group.bench_function(format!("{list_len} items, no NULLs"), |b| {
+            b.iter(|| {
+                let reader = create_int32_list_reader(list_data.clone(), int32_list_desc.clone());
+                count = bench_array_reader(reader);
+            });
+            assert_eq!(count, rows);
         });
     }
     group.finish();
