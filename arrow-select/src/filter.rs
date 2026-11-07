@@ -162,6 +162,9 @@ pub fn prep_null_mask_filter(filter: &BooleanArray) -> BooleanArray {
 /// Returns a filtered `values` [`Array`] where the corresponding elements of
 /// `predicate` are `true`.
 ///
+/// `predicate` may be shorter than `values`. Rows beyond the end of `predicate`
+/// are not selected.
+///
 /// If multiple arrays (or record batches) need to be filtered using the same predicate array,
 /// consider using [FilterBuilder] to create a single [FilterPredicate] and then
 /// calling [FilterPredicate::filter_record_batch].
@@ -185,10 +188,11 @@ pub fn prep_null_mask_filter(filter: &BooleanArray) -> BooleanArray {
 /// # use arrow_array::{Int32Array, BooleanArray};
 /// # use arrow_select::filter::filter;
 /// let array = Int32Array::from(vec![5, 6, 7, 8, 9]);
-/// let filter_array = BooleanArray::from(vec![true, false, false, true, false]);
+/// // Rows beyond the end of the predicate are not selected.
+/// let filter_array = BooleanArray::from(vec![true, false, true]);
 /// let c = filter(&array, &filter_array).unwrap();
 /// let c = c.as_any().downcast_ref::<Int32Array>().unwrap();
-/// assert_eq!(c, &Int32Array::from(vec![5, 8]));
+/// assert_eq!(c, &Int32Array::from(vec![5, 7]));
 /// ```
 pub fn filter(values: &dyn Array, predicate: &BooleanArray) -> Result<ArrayRef, ArrowError> {
     let mut filter_builder = FilterBuilder::new(predicate);
@@ -208,6 +212,9 @@ pub fn filter(values: &dyn Array, predicate: &BooleanArray) -> Result<ArrayRef, 
 /// `predicate` are true.
 ///
 /// This is the equivalent of calling [filter] on each column of the [RecordBatch].
+///
+/// `predicate` may be shorter than the batch. Rows beyond the end of `predicate`
+/// are not selected.
 ///
 /// If multiple record batches (or arrays) need to be filtered using the same predicate array,
 /// consider using [FilterBuilder] to create a single [FilterPredicate] and then
@@ -478,6 +485,8 @@ pub struct FilterPredicate {
 
 impl FilterPredicate {
     /// Selects rows from `values` based on this [`FilterPredicate`]
+    ///
+    /// This predicate may be shorter than `values`. Rows beyond its length are not selected.
     pub fn filter(&self, values: &dyn Array) -> Result<ArrayRef, ArrowError> {
         filter_array(values, self)
     }
@@ -486,6 +495,8 @@ impl FilterPredicate {
     /// [`FilterPredicate`].
     ///
     /// This is the equivalent of calling [filter] on each column of the [`RecordBatch`].
+    ///
+    /// This predicate may be shorter than the batch. Rows beyond its length are not selected.
     pub fn filter_record_batch(
         &self,
         record_batch: &RecordBatch,
