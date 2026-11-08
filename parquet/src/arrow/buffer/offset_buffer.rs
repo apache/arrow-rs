@@ -94,16 +94,13 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
         dict_values: &[u8],
     ) -> Result<()> {
         self.offsets.reserve(keys.len());
-        let offsets_start = self.offsets.len();
-        let offsets_dst = self.offsets.as_mut_ptr();
 
-        // Values and offsets are written through raw pointers, as this is
-        // much faster than `extend_from_slice` and `push` for short values.
-        // `len` bytes of `self.values` and `offsets_start + count` offsets
-        // are initialized, and the lengths are updated before returning.
+        // Values are written through a raw pointer, as this is much faster
+        // than `extend_from_slice` for short values. The first `len` bytes of
+        // `self.values` are initialized, and its length is updated before
+        // returning.
         let mut len = self.values.len();
         let mut dst = self.values.as_mut_ptr();
-        let mut count = 0;
         let mut result = Ok(());
         for key in keys {
             let index = key.as_usize();
@@ -128,12 +125,8 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
             };
 
             if self.values.capacity() - len < value_len {
-                // SAFETY: the first `len` bytes and `offsets_start + count`
-                // offsets are initialized
-                unsafe {
-                    self.values.set_len(len);
-                    self.offsets.set_len(offsets_start + count);
-                }
+                // SAFETY: the first `len` bytes are initialized
+                unsafe { self.values.set_len(len) };
                 self.values.reserve(value_len);
                 dst = self.values.as_mut_ptr();
             }
@@ -150,17 +143,10 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
                 )
             };
             len += value_len;
-            // SAFETY: capacity for `keys.len()` more offsets was reserved above,
-            // and `count < keys.len()`
-            unsafe { offsets_dst.add(offsets_start + count).write(offset) };
-            count += 1;
+            self.offsets.push(offset);
         }
-        // SAFETY: the first `len` bytes and `offsets_start + count` offsets
-        // were initialized above
-        unsafe {
-            self.values.set_len(len);
-            self.offsets.set_len(offsets_start + count);
-        }
+        // SAFETY: the first `len` bytes were initialized above
+        unsafe { self.values.set_len(len) };
         result
     }
 
