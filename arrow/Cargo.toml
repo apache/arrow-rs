@@ -321,6 +321,7 @@ required-features = ["test_utils"]
 [[bench]]
 name = "named_timezone"
 harness = false
+# Cargo cannot require one of several features. To measure jiff, run with `chrono-tz,jiff`.
 required-features = ["chrono-tz"]
 
 [[test]]
