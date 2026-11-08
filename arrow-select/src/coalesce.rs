@@ -177,6 +177,8 @@ pub struct BatchCoalescer {
     has_non_specialized_filter_columns: bool,
     /// True if the schema contains a variable-width byte-array column.
     has_byte_array_columns: bool,
+    /// True if every column can stream dense filters directly into its builder.
+    has_only_boolean_columns: bool,
     /// Buffered row count. Always less than `batch_size`
     buffered_rows: usize,
     /// Completed batches
@@ -204,6 +206,11 @@ impl BatchCoalescer {
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary
             )
         });
+        let has_only_boolean_columns = !schema.fields().is_empty()
+            && schema
+                .fields()
+                .iter()
+                .all(|field| field.data_type() == &DataType::Boolean);
         let in_progress_arrays = schema
             .fields()
             .iter()
@@ -216,6 +223,7 @@ impl BatchCoalescer {
             in_progress_arrays,
             has_non_specialized_filter_columns,
             has_byte_array_columns,
+            has_only_boolean_columns,
             // We will for sure store at least one completed batch
             completed: VecDeque::with_capacity(1),
             buffered_rows: 0,
@@ -772,12 +780,16 @@ impl BatchCoalescer {
             .biggest_coalesce_batch_size
             .is_some_and(|limit| selected_count > limit);
         let does_not_fit_buffer = selected_count > self.target_batch_size - self.buffered_rows;
+        if self.has_only_boolean_columns && does_not_fit_buffer && !exceeds_coalesce_limit {
+            return self.push_batch_with_streaming_filter(batch, predicate);
+        }
         let should_materialize_filter = exceeds_coalesce_limit
             || self.has_non_specialized_filter_columns
             || does_not_fit_buffer
             || (self.has_byte_array_columns
                 && !should_use_byte_array_direct_copy(filter_len, selected_count))
-            || !should_use_sparse_filter_copy(filter_len, selected_count);
+            || (!self.has_only_boolean_columns
+                && !should_use_sparse_filter_copy(filter_len, selected_count));
 
         if should_materialize_filter {
             // Use materialized filtering when sparse per-column copying is unavailable.
@@ -797,6 +809,43 @@ impl BatchCoalescer {
         }
 
         Ok(())
+    }
+
+    /// Copy a filtered batch directly, splitting at selected-row boundaries to
+    /// keep completed batches exactly `target_batch_size` rows long.
+    fn push_batch_with_streaming_filter(
+        &mut self,
+        batch: RecordBatch,
+        predicate: &FilterPredicate,
+    ) -> Result<(), ArrowError> {
+        let mut source_offset = 0;
+        let mut remaining = None;
+        loop {
+            let predicate = remaining.as_ref().unwrap_or(predicate);
+            let capacity = self.target_batch_size - self.buffered_rows;
+            let split =
+                (predicate.count() > capacity).then(|| predicate.split_at_selected(capacity));
+            let current = split.as_ref().map_or(predicate, |(left, _)| left);
+
+            for (in_progress, array) in self.in_progress_arrays.iter_mut().zip(batch.columns()) {
+                let source = if source_offset == 0 {
+                    Arc::clone(array)
+                } else {
+                    array.slice(source_offset, current.filter_len())
+                };
+                in_progress.copy_rows_by_filter_from(source, current)?;
+            }
+            source_offset += current.filter_len();
+            self.buffered_rows += current.count();
+            if self.buffered_rows == self.target_batch_size {
+                self.finish_buffered_batch()?;
+            }
+
+            match split {
+                Some((_, right)) => remaining = Some(right),
+                None => return Ok(()),
+            }
+        }
     }
 }
 
@@ -938,7 +987,7 @@ mod tests {
         StringViewArray, TimestampNanosecondArray, UInt8Array, UInt32Array, UInt64Array,
         make_array, record_batch,
     };
-    use arrow_buffer::BooleanBufferBuilder;
+    use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder, NullBuffer};
     use arrow_schema::{DataType, Field, Schema};
     use rand::{RngExt, SeedableRng};
     use std::ops::Range;
@@ -1029,6 +1078,103 @@ mod tests {
         assert!(should_use_sparse_filter_copy(8192, 81));
         assert!(!should_use_sparse_filter_copy(8192, 819));
         assert!(!should_use_sparse_filter_copy(8192, 6553));
+    }
+
+    #[test]
+    fn test_boolean_filtered_batch_boundaries() {
+        let values = BooleanArray::new(
+            BooleanBuffer::from_iter((0..260).map(|i| i % 3 == 0)).slice(3, 257),
+            Some(NullBuffer::from_iter((0..264).map(|i| i % 5 != 0)).slice(7, 257)),
+        );
+        let other = BooleanArray::from((0..264).map(|i| i % 7 == 0).collect::<Vec<_>>());
+        let batch = RecordBatch::try_from_iter([
+            ("a", Arc::new(values) as ArrayRef),
+            ("b", Arc::new(other.slice(7, 257)) as ArrayRef),
+        ])
+        .unwrap();
+
+        for batch in [batch.project(&[0]).unwrap(), batch] {
+            for target in [1, 7, 64, 300] {
+                for modulus in [1, 2, 17, 256] {
+                    let filter = BooleanArray::new(
+                        BooleanBuffer::from_iter((0..262).map(|i| i % modulus == 0)),
+                        Some(NullBuffer::from_iter((0..262).map(|i| i % 11 != 0))),
+                    )
+                    .slice(5, 257);
+                    let inputs = [
+                        (batch.clone(), filter.clone()),
+                        // A shorter, differently aligned predicate must not select
+                        // the trailing source rows.
+                        (batch.clone(), filter.slice(3, 249)),
+                        (batch.clone(), BooleanArray::from(vec![false; 257])),
+                        (batch.clone(), BooleanArray::from(vec![true; 257])),
+                    ];
+                    for limit in [None, Some(11)] {
+                        let mut actual = BatchCoalescer::new(batch.schema(), target)
+                            .with_biggest_coalesce_batch_size(limit);
+                        let mut expected = BatchCoalescer::new(batch.schema(), target)
+                            .with_biggest_coalesce_batch_size(limit);
+                        // Fill part of the current output before filtering.
+                        actual.push_batch(batch.slice(0, 3)).unwrap();
+                        expected.push_batch(batch.slice(0, 3)).unwrap();
+                        for (batch, filter) in &inputs {
+                            actual
+                                .push_batch_with_filter(batch.clone(), filter)
+                                .unwrap();
+                            expected
+                                .push_batch(filter_record_batch(batch, filter).unwrap())
+                                .unwrap();
+                        }
+                        actual.finish_buffered_batch().unwrap();
+                        expected.finish_buffered_batch().unwrap();
+                        while let Some(expected_batch) = expected.next_completed_batch() {
+                            let actual_batch = actual.next_completed_batch().unwrap();
+                            assert_eq!(actual_batch, expected_batch);
+                            if limit.is_none() && expected.has_completed_batch() {
+                                assert_eq!(actual_batch.num_rows(), target);
+                            }
+                        }
+                        assert!(actual.next_completed_batch().is_none());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_nullable_boolean_filter_threshold_boundaries() {
+        const LEN: usize = 8192;
+        let values =
+            BooleanArray::from_iter((0..LEN + 7).map(|i| (i % 11 != 0).then_some(i % 3 == 0)))
+                .slice(7, LEN);
+        let batch = RecordBatch::try_from_iter([("b", Arc::new(values) as ArrayRef)]).unwrap();
+        for selected in [511, 512, 513] {
+            let filter: BooleanArray = std::iter::repeat_n(false, 3)
+                .chain((0..LEN).map(|i| i * selected / LEN != (i + 1) * selected / LEN))
+                .collect();
+            let filter = filter.slice(3, LEN);
+            assert_eq!(filter.true_count(), selected);
+            for target in [7, 512, 1024] {
+                let mut actual = BatchCoalescer::new(batch.schema(), target);
+                let mut expected = BatchCoalescer::new(batch.schema(), target);
+                actual.push_batch(batch.slice(0, 5)).unwrap();
+                expected.push_batch(batch.slice(0, 5)).unwrap();
+                for _ in 0..2 {
+                    actual
+                        .push_batch_with_filter(batch.clone(), &filter)
+                        .unwrap();
+                    expected
+                        .push_batch(filter_record_batch(&batch, &filter).unwrap())
+                        .unwrap();
+                }
+                actual.finish_buffered_batch().unwrap();
+                expected.finish_buffered_batch().unwrap();
+                while let Some(expected_batch) = expected.next_completed_batch() {
+                    assert_eq!(actual.next_completed_batch().unwrap(), expected_batch);
+                }
+                assert!(actual.next_completed_batch().is_none());
+            }
+        }
     }
 
     #[test]
