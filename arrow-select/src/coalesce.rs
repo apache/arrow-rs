@@ -935,13 +935,36 @@ mod tests {
     use arrow_array::types::{Int32Type, UInt8Type};
     use arrow_array::{
         BinaryViewArray, DictionaryArray, Int32Array, Int64Array, RecordBatchOptions, StringArray,
-        StringViewArray, TimestampNanosecondArray, UInt8Array, UInt32Array, UInt64Array,
-        make_array, record_batch,
+        StringViewArray, StructArray, TimestampNanosecondArray, UInt8Array, UInt32Array,
+        UInt64Array, make_array, record_batch,
     };
     use arrow_buffer::BooleanBufferBuilder;
     use arrow_schema::{DataType, Field, Schema};
     use rand::{RngExt, SeedableRng};
     use std::ops::Range;
+
+    #[test]
+    fn test_filter_preserves_nested_run_end_type() {
+        for array in crate::test_util::run_arrays() {
+            let selected = UInt32Array::from_iter_values((0..array.len() as u32).step_by(2));
+            let mask = BooleanArray::from_iter((0..array.len()).map(|i| Some(i % 2 == 0)));
+            let child = Arc::new(Field::new("runs", array.data_type().clone(), true));
+            let structure = StructArray::from(vec![(child, array)]);
+            let batch =
+                RecordBatch::try_from_iter([("nested", Arc::new(structure) as ArrayRef)]).unwrap();
+            let expected = take_record_batch(&batch, &selected).unwrap();
+            let mut coalescer = BatchCoalescer::new(batch.schema(), 8);
+            coalescer.push_batch_with_filter(batch, &mask).unwrap();
+            coalescer.finish_buffered_batch().unwrap();
+            if expected.num_rows() != 0 {
+                let actual = coalescer.next_completed_batch().unwrap();
+                assert_eq!(actual, expected);
+                actual.column(0).to_data().validate_full().unwrap();
+            } else {
+                assert!(coalescer.next_completed_batch().is_none());
+            }
+        }
+    }
 
     #[test]
     fn test_coalesce() {
