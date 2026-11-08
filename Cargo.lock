@@ -2662,10 +2662,12 @@ dependencies = [
  "criterion",
  "half",
  "indexmap",
+ "lexical-core",
  "num-traits",
  "parquet-variant",
  "parquet-variant-json",
  "rand",
+ "ryu",
  "serde_json",
  "uuid",
 ]
