@@ -640,11 +640,9 @@ pub(crate) fn cast_string_to_decimal<T: DecimalType, Offset: OffsetSizeTrait>(
             scale,
             cast_options,
         )?,
-        other => {
-            return Err(ArrowError::ComputeError(format!(
-                "Cannot cast {other:?} to decimal",
-            )));
-        }
+        _ => unreachable!(
+            "cast_to_decimal only calls cast_string_to_decimal for Utf8, LargeUtf8, or Utf8View"
+        ),
     };
 
     Ok(Arc::new(result))
@@ -1084,7 +1082,7 @@ where
         Utf8 => value_to_string::<i32>(array, cast_options),
         LargeUtf8 => value_to_string::<i64>(array, cast_options),
         Null => Ok(new_null_array(to_type, array.len())),
-        _ => Err(ArrowError::CastError(format!(
+        _ => Err(ArrowError::InvalidArgumentError(format!(
             "Casting from {from_type} to {to_type} not supported"
         ))),
     }
@@ -1176,7 +1174,7 @@ where
         }
         LargeUtf8 => cast_string_to_decimal::<D, i64>(array, *precision, *scale, cast_options),
         Null => Ok(new_null_array(to_type, array.len())),
-        _ => Err(ArrowError::CastError(format!(
+        _ => Err(ArrowError::InvalidArgumentError(format!(
             "Casting from {from_type} to {to_type} not supported"
         ))),
     }

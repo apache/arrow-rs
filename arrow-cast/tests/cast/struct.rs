@@ -66,7 +66,7 @@ fn test_cast_struct_to_struct() {
     assert!(!can_cast_types(&struct_type, &to_type));
     let result = cast(&struct_array, &to_type);
     assert_eq!(
-        "Cast error: Casting from Boolean to Date32 not supported",
+        "Invalid argument error: Casting from Boolean to Date32 not supported",
         result.unwrap_err().to_string()
     );
 }
@@ -153,7 +153,7 @@ fn test_cast_struct_to_non_struct() {
     let to_type = DataType::Utf8;
     let result = cast(&struct_array, &to_type);
     assert_eq!(
-        r#"Cast error: Casting from Struct("a": non-null Boolean) to Utf8 not supported"#,
+        r#"Invalid argument error: Casting from Struct("a": non-null Boolean) to Utf8 not supported"#,
         result.unwrap_err().to_string()
     );
 }
@@ -179,7 +179,7 @@ fn test_cast_non_struct_to_struct() {
     let to_type = DataType::Struct(vec![Field::new("a", DataType::Boolean, false)].into());
     let result = cast(&array, &to_type);
     assert_eq!(
-        r#"Cast error: Casting from Utf8 to Struct("a": non-null Boolean) not supported"#,
+        r#"Invalid argument error: Casting from Utf8 to Struct("a": non-null Boolean) not supported"#,
         result.unwrap_err().to_string()
     );
 }
