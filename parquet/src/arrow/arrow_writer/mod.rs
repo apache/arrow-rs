@@ -2708,6 +2708,98 @@ mod tests {
         assert_eq!(write_string_dictionaries(&arrays), 5);
     }
 
+    fn dictionary_writer_memory_size(array: ArrayRef, batch_size: usize) -> usize {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            array.data_type().clone(),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![array]).unwrap();
+        let props = WriterProperties::builder()
+            .set_write_batch_size(batch_size)
+            .build();
+        let mut writer = ArrowWriter::try_new(Vec::new(), schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.memory_size()
+    }
+
+    #[test]
+    fn arrow_writer_dictionary_cache_ignores_null_rows() {
+        let values: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("value"),
+            None,
+            Some("unused"),
+            Some("also unused"),
+        ]));
+
+        for non_null in [0, 2] {
+            let valid = |i| (3..3 + non_null).contains(&i);
+            let keys = Int32Array::from_iter((0..10).map(|i| valid(i).then_some(0)));
+            let null_keys: ArrayRef =
+                Arc::new(DictionaryArray::new(keys, values.clone()).slice(1, 8));
+            let keys = Int32Array::from_iter_values((0..10).map(|i| i32::from(!valid(i))));
+            let null_values: ArrayRef =
+                Arc::new(DictionaryArray::new(keys, values.clone()).slice(1, 8));
+            let child: ArrayRef = Arc::new(DictionaryArray::new(
+                Int32Array::from(vec![0; 10]),
+                values.clone(),
+            ));
+            let parent: ArrayRef = Arc::new(
+                StructArray::new(
+                    vec![Arc::new(Field::new(
+                        "item",
+                        child.data_type().clone(),
+                        true,
+                    ))]
+                    .into(),
+                    vec![child],
+                    Some(NullBuffer::from_iter((0..10).map(valid))),
+                )
+                .slice(1, 8),
+            );
+
+            for array in [null_keys, null_values, parent] {
+                let plain_type = match array.data_type() {
+                    DataType::Struct(_) => DataType::Struct(
+                        vec![Arc::new(Field::new("item", DataType::Utf8, true))].into(),
+                    ),
+                    _ => DataType::Utf8,
+                };
+                let plain = cast(&array, &plain_type).unwrap();
+                // Neither input should retain a cache for only zero or two encoded values.
+                assert_eq!(
+                    dictionary_writer_memory_size(array, 2),
+                    dictionary_writer_memory_size(plain, 2)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn arrow_writer_dictionary_cache_counts_rows_across_mini_batches() {
+        let values: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c", "d"]));
+        let array: ArrayRef = Arc::new(DictionaryArray::new(
+            Int32Array::from(vec![
+                Some(0),
+                Some(1),
+                None,
+                Some(2),
+                Some(3),
+                Some(0),
+                Some(1),
+                Some(2),
+                Some(3),
+            ]),
+            values,
+        ));
+        let plain = cast(&array, &DataType::Utf8).unwrap();
+        // Eight rows justify a four-slot cache, even with only two rows per mini-batch.
+        assert_eq!(
+            dictionary_writer_memory_size(array, 2),
+            dictionary_writer_memory_size(plain, 2) + 4 * std::mem::size_of::<u64>()
+        );
+    }
+
     #[test]
     fn roundtrip_bytes() {
         // define schema
