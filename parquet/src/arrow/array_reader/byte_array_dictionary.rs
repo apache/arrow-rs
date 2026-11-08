@@ -95,9 +95,10 @@ pub fn make_byte_array_dictionary_reader(
             .clone(),
     };
 
-    // A schema given to the reader can map this column to a dictionary with a
-    // string value type even though the Parquet annotation does not describe
-    // one, in which case the decoder still has to validate the data as UTF-8.
+    // Validate whenever the dictionary values are strings, not only for columns
+    // annotated as strings: for example, a schema passed to
+    // `ArrowReaderOptions::with_schema` can read an unannotated `BYTE_ARRAY`
+    // column as `Dictionary<_, Utf8>`.
     let validate_utf8 = matches!(
         &data_type,
         ArrowType::Dictionary(_, value_type)
@@ -308,8 +309,8 @@ struct DictionaryDecoder<K, V> {
     /// Dictionary decoder
     decoder: Option<MaybeDictionaryDecoder>,
 
-    /// Whether the values are validated as UTF-8, and so built as strings,
-    /// see [`Self::value_type`].
+    /// Whether the values are validated as UTF-8, which also decides
+    /// [`Self::value_type`]
     validate_utf8: bool,
 
     /// `Some` only for `FIXED_LEN_BYTE_ARRAY` columns, selecting fixed-width
@@ -320,11 +321,8 @@ struct DictionaryDecoder<K, V> {
 }
 
 impl<K, V: OffsetSizeTrait> DictionaryDecoder<K, V> {
-    /// The type of the dictionary values.
-    ///
-    /// Values are built as strings exactly when they are validated as UTF-8:
-    /// when the column is annotated as a string, or is read into a dictionary
-    /// with string values even though its annotation does not say so.
+    /// The type of the dictionary values: strings if they are validated as
+    /// UTF-8, binary otherwise.
     fn value_type(&self) -> ArrowType {
         match (V::IS_LARGE, self.validate_utf8) {
             (true, true) => ArrowType::LargeUtf8,

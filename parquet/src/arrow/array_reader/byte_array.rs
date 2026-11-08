@@ -53,9 +53,9 @@ pub fn make_byte_array_reader(
             .clone(),
     };
 
-    // A schema given to the reader can map this column to a string type even
-    // though the Parquet annotation does not describe one, in which case the
-    // decoder still has to validate the data as UTF-8.
+    // Validate whenever a string array is built, not only for columns annotated
+    // as strings: for example, a schema passed to `ArrowReaderOptions::with_schema`
+    // can read an unannotated `BYTE_ARRAY` column as `Utf8`.
     let validate_utf8 = matches!(data_type, ArrowType::Utf8 | ArrowType::LargeUtf8);
 
     match data_type {

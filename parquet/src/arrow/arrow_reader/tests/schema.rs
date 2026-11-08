@@ -18,6 +18,8 @@
 //! Schema inference, supplied schemas, type conversions, and column projection.
 
 use super::*;
+use crate::arrow::arrow_writer::ArrowWriterOptions;
+use crate::schema::types::SchemaDescriptor;
 
 #[test]
 fn test_arrow_reader_all_columns() {
@@ -706,9 +708,7 @@ fn test_read_binary_as_utf8() {
 }
 
 /// A supplied schema that reads a `Binary` column as a string type must still
-/// validate UTF-8. The readers used to enable validation only when the Parquet
-/// column was annotated as a string, so a schema hint bypassed it entirely and
-/// produced a string array over arbitrary bytes.
+/// validate UTF-8.
 #[test]
 fn test_read_non_utf8_binary_as_utf8() {
     // Invalid UTF-8 after an empty value and a null, so that when the writer
@@ -767,19 +767,20 @@ fn test_read_non_utf8_binary_as_utf8() {
 /// UTF-8 even though its converted type is `JSON` rather than `UTF8`.
 #[test]
 fn test_read_non_utf8_json() {
-    let message_type = "message schema { REQUIRED BYTE_ARRAY json (JSON); }";
-    let schema = Arc::new(parse_message_type(message_type).unwrap());
+    let batch = RecordBatch::try_from_iter([(
+        "json",
+        Arc::new(BinaryArray::from(vec![b"\"\xFF\"".as_ref()])) as ArrayRef,
+    )])
+    .unwrap();
+    let schema = parse_message_type("message schema { REQUIRED BYTE_ARRAY json (JSON); }").unwrap();
+    let options = ArrowWriterOptions::new()
+        .with_parquet_schema(SchemaDescriptor::new(Arc::new(schema)))
+        .with_skip_arrow_metadata(true);
     let file = tempfile().unwrap();
     let mut writer =
-        SerializedFileWriter::new(file.try_clone().unwrap(), schema, Default::default()).unwrap();
-    let mut row_group_writer = writer.next_row_group().unwrap();
-    let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
-    column_writer
-        .typed::<ByteArrayType>()
-        .write_batch(&[ByteArray::from(b"\"\xFF\"".to_vec())], None, None)
-        .unwrap();
-    column_writer.close().unwrap();
-    row_group_writer.close().unwrap();
+        ArrowWriter::try_new_with_options(file.try_clone().unwrap(), batch.schema(), options)
+            .unwrap();
+    writer.write(&batch).unwrap();
     writer.close().unwrap();
 
     let mut arrow_reader = ParquetRecordBatchReader::try_new(file, 1024).unwrap();

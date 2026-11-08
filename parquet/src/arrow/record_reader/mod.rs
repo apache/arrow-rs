@@ -79,8 +79,7 @@ pub struct GenericRecordReader<V, CV> {
     /// copied, and item-level nulls are padded. The companion `compact_bitmap`
     /// has the same compact length and becomes the leaf null bitmap.
     padding_threshold: Option<i16>,
-    /// Whether decoded values must be validated as UTF-8, see
-    /// [`ColumnValueDecoder::set_validate_utf8`].
+    /// Passed to each values decoder, see [`Self::set_validate_utf8`]
     validate_utf8: bool,
     /// Compact bitmap accumulated during selective padding. Each bit
     /// corresponds to an item-level entry (def >= threshold): set when the
@@ -235,9 +234,11 @@ where
         self.padding_threshold = Some(threshold);
     }
 
-    /// Require the values decoder to validate the data as UTF-8, for a column
-    /// read as a string type that the Parquet annotation does not describe as
-    /// one. See [`ColumnValueDecoder::set_validate_utf8`].
+    /// Validate the decoded values as UTF-8, see
+    /// [`ColumnValueDecoder::set_validate_utf8`].
+    ///
+    /// Stored here rather than set on a decoder because [`Self::set_page_reader`]
+    /// creates a new values decoder for every column chunk.
     pub fn set_validate_utf8(&mut self, validate_utf8: bool) {
         self.validate_utf8 = validate_utf8;
     }
