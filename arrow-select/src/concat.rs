@@ -1587,8 +1587,11 @@ mod tests {
             );
             DictionaryArray::<Int32Type>::new(Int32Array::from(keys), Arc::new(values))
         };
-        let a = make_dictionary(0, 1, vec![Some(last), None, Some(1)]);
-        let b = make_dictionary(10_000, 2, vec![Some(2), Some(last - 1), None]);
+        // Slicing moves the keys and their nulls to a non-zero offset; the unsliced
+        // arrays have 4 keys each and would take the dense path.
+        let a = make_dictionary(0, 1, vec![Some(0), Some(last), None, Some(1)]).slice(1, 3);
+        let b =
+            make_dictionary(10_000, 2, vec![Some(0), Some(2), Some(last - 1), None]).slice(1, 3);
 
         let merged = merge_dictionary_values(&[&a, &b], None, None).unwrap();
         assert!(
