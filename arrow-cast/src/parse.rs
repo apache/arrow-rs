@@ -1351,7 +1351,7 @@ impl IntervalParseConfig {
     }
 
     /// Reject fractional calendar units instead of spilling them into smaller units
-    pub fn reject_fractional_calendar_units(mut self) -> Self {
+    pub(crate) fn reject_fractional_calendar_units(mut self) -> Self {
         self.allow_fractional_calendar_units = false;
         self
     }
