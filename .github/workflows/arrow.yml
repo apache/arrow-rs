@@ -50,6 +50,11 @@ jobs:
         run: cargo test -p arrow-csv --all-features
       - name: Test arrow-json
         run: cargo test -p arrow-json --all-features
+      - name: Test arrow-cast, arrow-csv and arrow-json with named timezones resolved by jiff
+        run: |
+          cargo test -p arrow-cast --all-features --features arrow-array/jiff
+          cargo test -p arrow-csv --all-features --features arrow-array/jiff
+          cargo test -p arrow-json --all-features --features arrow-array/jiff
       - name: Test arrow-avro
         run: cargo test -p arrow-avro --all-features
       - name: Test arrow-string
@@ -172,7 +177,7 @@ jobs:
           rustup target add wasm32-unknown-unknown
           rustup target add wasm32-wasip1
       - name: Build wasm32-unknown-unknown
-        run: cargo build -p arrow --no-default-features --features=json,csv,ipc,ffi --target wasm32-unknown-unknown
+        run: cargo build -p arrow --no-default-features --features=json,csv,ipc,ffi,jiff --target wasm32-unknown-unknown
       - name: Build wasm32-wasip1
         run: cargo build -p arrow --no-default-features --features=json,csv,ipc,ffi --target wasm32-wasip1
 

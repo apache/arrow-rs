@@ -84,7 +84,7 @@ mod private {
     use chrono::{Datelike, LocalResult, NaiveDate, NaiveDateTime, NaiveTime, Offset, Timelike};
     use jiff::Timestamp;
     use jiff::civil::DateTime as JiffDateTime;
-    use jiff::tz::{AmbiguousOffset, TimeZone as JiffTimeZone, TimeZoneDatabase};
+    use jiff::tz::{AmbiguousOffset, TimeZone as JiffTimeZone};
     use std::collections::HashMap;
     use std::fmt::Display;
     use std::str::FromStr;
@@ -109,20 +109,31 @@ mod private {
         }
     }
 
-    /// The IANA database compiled into jiff.
-    ///
-    /// Names are not resolved through `jiff::tz::db()`: if any crate in the build enables jiff's
-    /// `tzdb-zoneinfo` feature, that reads the host's zoneinfo files, or `$TZDIR`, instead.
-    fn bundled_db() -> &'static TimeZoneDatabase {
-        static DB: OnceLock<TimeZoneDatabase> = OnceLock::new();
-        DB.get_or_init(TimeZoneDatabase::bundled)
-    }
-
     /// A named timezone resolved by jiff, together with its name.
-    #[derive(Debug)]
     struct NamedTz {
         name: &'static str,
         tz: JiffTimeZone,
+    }
+
+    /// Prints only the name, so that `Debug` output matches the `chrono-tz` feature.
+    impl std::fmt::Debug for NamedTz {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.name)
+        }
+    }
+
+    /// Builds a timezone from the database in jiff-tzdb.
+    ///
+    /// Names are not resolved through `jiff::tz::db()`: if any crate in the build enables jiff's
+    /// `tzdb-zoneinfo` feature, that reads the host's zoneinfo files, or `$TZDIR`, instead. Reading
+    /// jiff-tzdb directly also means [`tzdb_version`] always describes the data in use.
+    fn bundled_tz(name: &str) -> Option<JiffTimeZone> {
+        // As jiff's own bundled database does, so that UTC is not backed by TZif data
+        if name == "UTC" {
+            return Some(JiffTimeZone::UTC);
+        }
+        let (canonical_name, tzif) = jiff_tzdb::get(name)?;
+        JiffTimeZone::tzif(canonical_name, tzif).ok()
     }
 
     /// Resolves a name in the bundled database. Unlike jiff, and like chrono-tz, the name must
@@ -133,21 +144,20 @@ mod private {
     /// use. The table's keys are fixed when it is built, so its memory is bounded by the database
     /// and lookups take no lock.
     fn named_tz(name: &str) -> Result<&'static NamedTz, ArrowError> {
-        type Slots = HashMap<Box<str>, OnceLock<Option<NamedTz>>, ahash::RandomState>;
+        type Slots = HashMap<&'static str, OnceLock<Option<NamedTz>>, ahash::RandomState>;
         static SLOTS: OnceLock<Slots> = OnceLock::new();
         let slots = SLOTS.get_or_init(|| {
-            bundled_db()
-                .available()
+            jiff_tzdb::available()
                 // A placeholder for an unknown local timezone, which chrono-tz does not accept
-                .filter(|name| name.as_str() != "Factory")
-                .map(|name| (name.as_str().into(), OnceLock::new()))
+                .filter(|name| *name != "Factory")
+                .map(|name| (name, OnceLock::new()))
                 .collect()
         });
         slots
             .get_key_value(name)
             .and_then(|(name, slot)| {
                 slot.get_or_init(|| {
-                    let tz = bundled_db().get(name).ok()?;
+                    let tz = bundled_tz(name)?;
                     Some(NamedTz { name, tz })
                 })
                 .as_ref()
@@ -169,6 +179,13 @@ mod private {
         Timezone(&'static NamedTz),
         Offset(FixedOffset),
     }
+
+    // These are copied per value by chrono, so catch any accidental growth
+    #[cfg(target_pointer_width = "64")]
+    const _: () = {
+        assert!(std::mem::size_of::<Tz>() == 16);
+        assert!(std::mem::size_of::<TzOffset>() == 24);
+    };
 
     impl FromStr for Tz {
         type Err = ArrowError;
@@ -264,6 +281,8 @@ mod private {
                     .offset_from_local_datetime(local)
                     .map(|x| self.offset(x.fix())),
                 TzInner::Timezone(tz) => match jiff_civil(local) {
+                    // Outside jiff's range, treat the local datetime as if it were UTC. Either
+                    // way it takes the offset in force at the nearest covered instant.
                     None => LocalResult::Single(self.offset_from_utc_datetime(local)),
                     Some(dt) => match tz.tz.to_ambiguous_timestamp(dt).offset() {
                         AmbiguousOffset::Unambiguous { offset } => {
@@ -478,8 +497,7 @@ mod private {
 
         #[test]
         fn test_bundled_names() {
-            for name in bundled_db().available() {
-                let name = name.as_str();
+            for name in jiff_tzdb::available() {
                 if name != "Factory" {
                     let tz: Tz = name.parse().unwrap();
                     assert_eq!(tz.to_string(), name);
@@ -502,6 +520,155 @@ mod private {
                 let err = name.parse::<Tz>().unwrap_err().to_string();
                 let expected = format!("Invalid timezone \"{name}\"");
                 assert!(err.contains(&expected), "{err}");
+            }
+        }
+
+        #[test]
+        fn test_debug_matches_chrono_tz() {
+            let tz: Tz = "America/Los_Angeles".parse().unwrap();
+            assert_eq!(format!("{tz:?}"), "Tz(Timezone(America/Los_Angeles))");
+            let offset = tz.offset_from_utc_datetime(
+                &NaiveDate::from_ymd_opt(2024, 1, 1)
+                    .unwrap()
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap(),
+            );
+            assert_eq!(
+                format!("{offset:?}"),
+                "TzOffset { tz: Tz(Timezone(America/Los_Angeles)), offset: -08:00 }"
+            );
+        }
+
+        /// With `--features chrono-tz,jiff` both engines are compiled, so these compare them
+        /// directly. They are expected to fail when either crate moves to a new release of the
+        /// IANA database, which is how such a change gets noticed.
+        #[cfg(feature = "chrono-tz")]
+        mod compare_with_chrono_tz {
+            use super::*;
+            use std::collections::BTreeSet;
+
+            /// Zones whose offsets differ only because the two engines bundle different releases.
+            /// When this test fails after a dependency update, review the differences and update
+            /// this list.
+            const KNOWN_DIFFERENCES: &[&str] = &[
+                "Africa/Casablanca",
+                "Africa/El_Aaiun",
+                "America/Edmonton",
+                "America/Ensenada",
+                "America/Santa_Isabel",
+                "America/Tijuana",
+                "America/Vancouver",
+                "America/Yellowknife",
+                "Canada/Mountain",
+                "Canada/Pacific",
+                "Europe/Chisinau",
+                "Europe/Tiraspol",
+                "Mexico/BajaNorte",
+            ];
+
+            fn releases() -> String {
+                format!(
+                    "chrono-tz has tzdb {}, jiff-tzdb has tzdb {}",
+                    chrono_tz::IANA_TZDB_VERSION,
+                    jiff_tzdb::VERSION.unwrap_or("unknown")
+                )
+            }
+
+            fn at(seconds: i64) -> NaiveDateTime {
+                DateTime::from_timestamp(seconds, 0).unwrap().naive_utc()
+            }
+
+            /// The parts of a gap that both engines report: where it begins and ends
+            type Gap = (Option<(NaiveDateTime, FixedOffset)>, Option<NaiveDateTime>);
+
+            fn chrono_tz_gap(tz: &chrono_tz::Tz, local: &NaiveDateTime) -> Option<Gap> {
+                chrono_tz::GapInfo::new(local, tz).map(|gap| {
+                    (
+                        gap.begin.map(|(begin, offset)| (begin, offset.fix())),
+                        gap.end.map(|end| end.naive_utc()),
+                    )
+                })
+            }
+
+            fn jiff_gap(tz: &Tz, local: &NaiveDateTime) -> Option<Gap> {
+                GapInfo::new(local, tz).map(|gap| {
+                    (
+                        gap.begin.map(|(begin, offset)| (begin, offset.fix())),
+                        gap.end.map(|end| end.naive_utc()),
+                    )
+                })
+            }
+
+            /// Whether the engines agree when `datetime` is read as UTC and as local time
+            fn agree(chrono_tz: chrono_tz::Tz, jiff: Tz, datetime: &NaiveDateTime) -> bool {
+                chrono_tz_gap(&chrono_tz, datetime) == jiff_gap(&jiff, datetime)
+                    && chrono_tz.offset_from_utc_datetime(datetime).fix()
+                        == jiff.offset_from_utc_datetime(datetime).fix()
+                    && chrono_tz
+                        .offset_from_local_datetime(datetime)
+                        .map(|o| o.fix())
+                        == jiff.offset_from_local_datetime(datetime).map(|o| o.fix())
+            }
+
+            #[test]
+            fn test_same_names() {
+                let chrono: BTreeSet<_> =
+                    chrono_tz::TZ_VARIANTS.iter().map(|tz| tz.name()).collect();
+                let jiff: BTreeSet<_> = jiff_tzdb::available()
+                    .filter(|name| *name != "Factory")
+                    .collect();
+                assert_eq!(chrono, jiff, "{}", releases());
+            }
+
+            #[test]
+            fn test_same_offsets() {
+                // 1900-01-01 to 2099-01-01, before chrono-tz stops applying daylight saving
+                const START: i64 = -2_208_988_800;
+                const END: i64 = 4_070_908_800;
+                const WEEK: usize = 7 * 24 * 60 * 60;
+
+                let mut different = BTreeSet::new();
+                for variant in chrono_tz::TZ_VARIANTS {
+                    let name = variant.name();
+                    let jiff: Tz = name.parse().unwrap();
+                    let TzInner::Timezone(named) = jiff.0 else {
+                        unreachable!("{name} is not an offset");
+                    };
+
+                    // Weekly samples find transitions that only one engine knows about
+                    let mut same = (START..END)
+                        .step_by(WEEK)
+                        .all(|s| agree(variant, jiff, &at(s)));
+
+                    // Probing each side of every transition covers gaps and folds
+                    let start = Timestamp::from_second(START).unwrap();
+                    let transitions = named.tz.following(start);
+                    for t in transitions.take_while(|t| t.timestamp().as_second() < END) {
+                        let instant = t.timestamp().as_second();
+                        let after = i64::from(t.offset().seconds());
+                        let before = i64::from(
+                            named
+                                .tz
+                                .to_offset(Timestamp::from_second(instant - 1).unwrap())
+                                .seconds(),
+                        );
+                        same &= [
+                            instant - 1,
+                            instant,
+                            instant + before - 1,
+                            instant + before,
+                            instant + after - 1,
+                            instant + after,
+                        ]
+                        .into_iter()
+                        .all(|s| agree(variant, jiff, &at(s)));
+                    }
+                    if !same {
+                        different.insert(name);
+                    }
+                }
+                let known = KNOWN_DIFFERENCES.iter().copied().collect();
+                assert_eq!(different, known, "{}", releases());
             }
         }
     }
