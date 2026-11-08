@@ -649,6 +649,25 @@ fn take_bits<I: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
     indices: &PrimitiveArray<I>,
 ) -> BooleanBuffer {
     let len = indices.len();
+
+    // For a low-cardinality source, a single mask avoids loading and extracting
+    // a source bit for every index.
+    if !VALIDATE_INDICES
+        && indices.null_count() == 0
+        && values.len() <= 64
+        && values.len().saturating_mul(8) <= len
+    {
+        let lookup = values
+            .iter()
+            .enumerate()
+            .fold(0_u64, |acc, (idx, value)| acc | ((value as u64) << idx));
+        return BooleanBuffer::collect_bool(len, |idx| {
+            // SAFETY: the caller guarantees every index is in bounds.
+            let key = unsafe { indices.value_unchecked(idx) }.as_usize();
+            lookup & (1 << key) != 0
+        });
+    }
+
     let src_offset = values.offset();
     let src_ptr = values.values().as_ptr();
     let out_bytes = len.div_ceil(8);
@@ -2322,6 +2341,15 @@ mod tests {
             true, true, false, true, true, false, true, false, false, true,
         ]);
         assert_eq!(result, &expected);
+    }
+
+    #[test]
+    fn test_take_bool_unchecked_low_cardinality() {
+        let values = BooleanBuffer::from(vec![true, false, true]);
+        let indices = UInt8Array::from_iter_values((0..24).map(|idx| idx % 3));
+        let actual = take_bits::<_, false>(&values, &indices);
+        let expected = BooleanBuffer::from_iter((0..24).map(|idx| idx % 3 != 1));
+        assert_eq!(actual, expected);
     }
 
     #[test]

@@ -13,7 +13,8 @@ use crate::predicate::Predicate;
 use arrow_array::cast::AsArray;
 use arrow_array::*;
 use arrow_schema::*;
-use arrow_select::take::take;
+use arrow_select::take::{take, take_arrays_unchecked};
+use std::sync::Arc;
 
 use crate::binary_like::binary_apply;
 pub use arrow_array::StringArrayType;
@@ -349,9 +350,24 @@ fn op_scalar<'a, T: StringArrayType<'a>>(
     };
 
     Ok(match l_v {
-        Some(v) => take(&r, v.keys(), None)?.as_boolean().clone(),
+        Some(v) => take_dictionary_boolean(r, v)?,
         None => r,
     })
+}
+
+fn take_dictionary_boolean(
+    values: BooleanArray,
+    dictionary: &dyn AnyDictionaryArray,
+) -> Result<BooleanArray, ArrowError> {
+    if dictionary.null_count() == 0 {
+        let values: ArrayRef = Arc::new(values);
+        // SAFETY: a dictionary without null keys validates every key against its values array.
+        let mut output =
+            unsafe { take_arrays_unchecked(std::slice::from_ref(&values), dictionary.keys())? };
+        return Ok(output.pop().unwrap().as_boolean().clone());
+    }
+
+    Ok(take(&values, dictionary.keys(), None)?.as_boolean().clone())
 }
 
 fn vectored_iter<'a, T: StringArrayType<'a> + 'a>(
@@ -1421,6 +1437,20 @@ mod tests {
             Some(false)
         ]
     );
+
+    #[test]
+    fn dictionary_scalar_like_with_null_keys_and_values() {
+        let keys = Int8Array::from(vec![Some(0), Some(1), None, Some(2)]);
+        let values = StringArray::from(vec![Some("google"), None, Some("arrow"), Some("unused")]);
+        let dictionary = DictionaryArray::try_new(keys, Arc::new(values)).unwrap();
+        let pattern = StringArray::new_scalar("%google%");
+
+        let expected = BooleanArray::from(vec![Some(true), None, None, Some(false)]);
+        assert_eq!(like(&dictionary, &pattern).unwrap(), expected);
+
+        let expected = BooleanArray::from(vec![Some(false), None, None, Some(true)]);
+        assert_eq!(nlike(&dictionary, &pattern).unwrap(), expected);
+    }
 
     #[test]
     #[cfg_attr(miri, ignore)] // Takes too long

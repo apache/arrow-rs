@@ -13,15 +13,17 @@
 use arrow_array::cast::AsArray;
 use arrow_array::types::{ByteArrayType, ByteViewType};
 use arrow_array::{
-    AnyDictionaryArray, Array, ArrowNativeTypeOp, BooleanArray, Datum, FixedSizeBinaryArray,
-    GenericByteArray, GenericByteViewArray, downcast_primitive_array, downcast_run_array,
+    AnyDictionaryArray, Array, ArrayRef, ArrowNativeTypeOp, BooleanArray, Datum,
+    FixedSizeBinaryArray, GenericByteArray, GenericByteViewArray, downcast_primitive_array,
+    downcast_run_array,
 };
 use arrow_buffer::bit_util::ceil;
 use arrow_buffer::{ArrowNativeType, BooleanBuffer, BooleanBufferBuilder, NullBuffer};
 use arrow_schema::{ArrowError, DataType};
-use arrow_select::take::take;
+use arrow_select::take::{take, take_arrays_unchecked};
 use std::cmp::Ordering;
 use std::ops::Not;
+use std::sync::Arc;
 
 #[derive(Debug, Copy, Clone)]
 enum Op {
@@ -565,7 +567,16 @@ fn expand_from_runs(info: &ReeInfo, buffer: BooleanBuffer) -> BooleanBuffer {
 }
 
 fn take_bits(v: &dyn AnyDictionaryArray, buffer: BooleanBuffer) -> BooleanBuffer {
-    let array = take(&BooleanArray::new(buffer, None), v.keys(), None).unwrap();
+    let values = BooleanArray::new(buffer, None);
+    if v.null_count() == 0 {
+        let values: ArrayRef = Arc::new(values);
+        // SAFETY: a dictionary without null keys validates every key against its values array.
+        let mut arrays =
+            unsafe { take_arrays_unchecked(std::slice::from_ref(&values), v.keys()).unwrap() };
+        return arrays.pop().unwrap().as_boolean().values().clone();
+    }
+
+    let array = take(&values, v.keys(), None).unwrap();
     array.as_boolean().values().clone()
 }
 
@@ -1182,6 +1193,10 @@ mod tests {
         let col = DictionaryArray::try_new(keys, Arc::new(values)).unwrap();
 
         neq(&col.slice(0, col.len() - 1), &col.slice(1, col.len() - 1)).unwrap();
+
+        let scalar = StringArray::new_scalar("us-west");
+        let expected = BooleanArray::from(vec![None, Some(false), Some(true)]);
+        assert_eq!(eq(&col, &scalar).unwrap(), expected);
     }
 
     #[test]
