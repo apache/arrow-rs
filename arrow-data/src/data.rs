@@ -30,7 +30,7 @@ pub(crate) fn contains_nulls(
                 None => len != 0, // No non-null values
             }
         }
-        None => false, // No null buffer
+        None => false, // No null
     }
 }
 

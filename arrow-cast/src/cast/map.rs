@@ -4,7 +4,7 @@
 
 use crate::cast::*;
 
-/// Helper function that takes a map container and casts the inner datatype.
+/// function that takes a map container and casts the inner datatype.
 pub(crate) fn cast_map_values(
     from: &MapArray,
     to_data_type: &DataType,
