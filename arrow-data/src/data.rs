@@ -1575,11 +1575,19 @@ impl ArrayData {
                 let child = &self.child_data[0];
                 if !field.is_nullable() {
                     let element_len = *len as usize;
-                    let child_nulls = child.nulls().map(|nulls| {
-                        nulls.slice(self.offset * element_len, self.len * element_len)
-                    });
-                    let expanded = self.nulls.as_ref().map(|nulls| nulls.expand(element_len));
-                    self.validate_non_nullable(expanded.as_ref(), child, child_nulls.as_ref())?;
+                    let child_nulls = child
+                        .nulls()
+                        .map(|nulls| nulls.slice(self.offset * element_len, self.len * element_len))
+                        .filter(|nulls| nulls.null_count() != 0);
+                    if let Some(child_nulls) = child_nulls {
+                        let expanded = self
+                            .nulls
+                            .as_ref()
+                            .map(|nulls| nulls.try_expand(element_len))
+                            .transpose()
+                            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+                        self.validate_non_nullable(expanded.as_ref(), child, Some(&child_nulls))?;
+                    }
                 }
             }
             DataType::Struct(fields) => {
