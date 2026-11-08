@@ -5,6 +5,7 @@
 mod binary;
 mod decimal;
 mod dictionary;
+mod dispatch;
 mod list;
 mod map;
 mod run_array;
