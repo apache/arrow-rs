@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`SerializedFileWriter`]: Low level Parquet writer API
 
@@ -2831,5 +2818,45 @@ mod tests {
         assert_eq!(new_max, exp_max);
         assert_eq!(new_col_min, exp_col_min);
         assert_eq!(new_col_max, exp_col_max);
+    }
+
+    #[test]
+    fn test_empty_row_group_data_page_offset() {
+        // Write a parquet file with one row group and one column but no data written.
+        // With no rows written no pages are flushed, so sizes should be zero.
+        let schema = Arc::new(
+            types::Type::group_type_builder("schema")
+                .with_fields(vec![Arc::new(
+                    types::Type::primitive_type_builder("col1", Type::INT32)
+                        .build()
+                        .unwrap(),
+                )])
+                .build()
+                .unwrap(),
+        );
+        let props = Default::default();
+        let mut buf = Vec::new();
+        let mut writer =
+            SerializedFileWriter::new(std::io::Cursor::new(&mut buf), schema, props).unwrap();
+
+        let mut row_group = writer.next_row_group().unwrap();
+        let col = row_group.next_column().unwrap().unwrap();
+        col.close().unwrap();
+        row_group.close().unwrap();
+        let metadata = writer.close().unwrap();
+
+        assert_eq!(metadata.num_row_groups(), 1);
+        let col_meta = metadata.row_group(0).column(0);
+        // No pages written: sizes are zero.
+        assert_eq!(col_meta.compressed_size(), 0);
+        assert_eq!(col_meta.uncompressed_size(), 0);
+        assert_eq!(metadata.row_group(0).compressed_size(), 0);
+        // No dictionary page written.
+        assert_eq!(col_meta.dictionary_page_offset(), None);
+        // data_page_offset is 0. The field is required,
+        // but 0 would be invalid since it points to the PAR1 magic.
+        assert_eq!(col_meta.data_page_offset(), 0);
+        // No pages written: no encodings recorded.
+        assert_eq!(col_meta.encodings().collect::<Vec<_>>(), vec![]);
     }
 }

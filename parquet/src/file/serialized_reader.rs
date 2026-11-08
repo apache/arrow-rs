@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Contains implementations of the reader traits FileReader, RowGroupReader and PageReader
 //! Also contains implementations of the ChunkReader for files (with buffering) and byte arrays (RAM)
@@ -246,27 +233,29 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
     /// Creates file reader from a Parquet file with read options.
     /// Returns an error if the Parquet file does not exist or is corrupt.
     pub fn new_with_options(chunk_reader: R, options: ReadOptions) -> Result<Self> {
-        let mut metadata_builder = ParquetMetaDataReader::new()
+        let mut metadata = ParquetMetaDataReader::new()
             .with_metadata_options(Some(options.metadata_options.clone()))
-            .parse_and_finish(&chunk_reader)?
-            .into_builder();
+            .parse_and_finish(&chunk_reader)?;
         let mut predicates = options.predicates;
 
-        // Filter row groups based on the predicates
-        for (i, rg_meta) in metadata_builder.take_row_groups().into_iter().enumerate() {
-            let mut keep = true;
-            for predicate in &mut predicates {
-                if !predicate(&rg_meta, i) {
-                    keep = false;
-                    break;
+        if !predicates.is_empty() {
+            let row_groups = metadata.row_groups();
+            let mut filtered = None;
+
+            // Only clone retained row groups if a predicate rejects a row group.
+            for (i, rg_meta) in row_groups.iter().enumerate() {
+                let keep = predicates.iter_mut().all(|predicate| predicate(rg_meta, i));
+                if !keep {
+                    filtered.get_or_insert_with(|| row_groups[..i].to_vec());
+                } else if let Some(kept) = &mut filtered {
+                    kept.push(rg_meta.clone());
                 }
             }
-            if keep {
-                metadata_builder = metadata_builder.add_row_group(rg_meta);
+
+            if let Some(row_groups) = filtered {
+                metadata = metadata.into_builder().set_row_groups(row_groups).build();
             }
         }
-
-        let mut metadata = metadata_builder.build();
 
         // If page indexes are desired, build them with the filtered set of row groups
         if options.enable_page_index {
@@ -531,6 +520,39 @@ pub(crate) fn decode_page(
     Ok(result)
 }
 
+/// Location of a dictionary page skipped without decoding.
+///
+/// ```text
+///            skip, and the reader can defer         first data page that
+///            (record location, zero decompress)     needs the dictionary
+///   NotSeen ─────────────────────────────▶ Deferred ─────────────────────▶ Decoded
+///      │                                                                      ▲
+///      ├── read hits the dictionary page (eager path, unchanged) ─────────────┤
+///      │                                                                      │
+///      └── skip, but the reader cannot defer ─────────────────────────────────┘
+///          (`supports_deferred_dictionary()` is false: read it eagerly,
+///           because a skipped page this reader cannot hand back is lost)
+/// ```
+///
+/// A chunk skipped end to end stays `Deferred`: its dictionary is never
+/// decompressed, which is the point. Skipping *values* needs only the RLE
+/// index cursor, and skipping whole pages needs nothing at all, so the only
+/// consumer of dictionary *contents* is value decoding. Random re-read is
+/// what makes the deferral safe: [`ChunkReader`] hands out readers at any
+/// offset, and the async path's in-memory column chunk already holds the
+/// page's bytes.
+enum DeferredDictionaryPage {
+    /// `Values` state: the header was already parsed on the skip path, only
+    /// the page body was left untouched.
+    Header {
+        data_start: u64,
+        header: Box<PageHeader>,
+    },
+    /// `Pages` state: the offset index records the page location; header and
+    /// body are both still unread.
+    Location(PageLocation),
+}
+
 enum SerializedPageReaderState {
     Values {
         /// The current byte offset in the reader
@@ -575,6 +597,10 @@ pub(crate) struct SerializedPageReaderContext {
 pub struct SerializedPageReader<R: ChunkReader> {
     /// The chunk reader
     reader: Arc<R>,
+
+    /// A dictionary page skipped past without decoding. See
+    /// [`DeferredDictionaryPage`] for the state diagram.
+    deferred_dictionary: Option<DeferredDictionaryPage>,
 
     /// The compression codec for this column chunk. Only set for non-PLAIN codec.
     decompressor: Option<Box<dyn Codec>>,
@@ -683,6 +709,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
         }
         Ok(Self {
             reader,
+            deferred_dictionary: None,
             decompressor,
             state,
             physical_type: meta.column_type(),
@@ -1114,7 +1141,9 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
     }
 
     fn skip_next_page(&mut self) -> Result<()> {
-        match &mut self.state {
+        // Retain skipped dictionary pages so they can be decoded on demand.
+        // See [`DeferredDictionaryPage`] for the state diagram.
+        let deferred = match &mut self.state {
             SerializedPageReaderState::Values {
                 offset,
                 remaining_bytes,
@@ -1122,15 +1151,24 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                 page_index,
                 require_dictionary,
             } => {
+                let mut deferred = None;
                 if let Some(buffered_header) = next_page_header.take() {
                     verify_page_size(
                         buffered_header.compressed_page_size,
                         buffered_header.uncompressed_page_size,
                         *remaining_bytes,
                     )?;
-                    // The next page header has already been peeked, so just advance the offset
-                    *offset += buffered_header.compressed_page_size as u64;
-                    *remaining_bytes -= buffered_header.compressed_page_size as u64;
+                    // The next page header has already been peeked, so the
+                    // offset already points at the page body.
+                    let body_len = buffered_header.compressed_page_size as u64;
+                    if buffered_header.r#type == PageType::DICTIONARY_PAGE {
+                        deferred = Some(DeferredDictionaryPage::Header {
+                            data_start: *offset,
+                            header: buffered_header,
+                        });
+                    }
+                    *offset += body_len;
+                    *remaining_bytes -= body_len;
                 } else {
                     let mut read = self.reader.get_read(*offset)?;
                     let (header_len, header) = Self::read_page_header_len(
@@ -1146,14 +1184,22 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         *remaining_bytes,
                     )?;
                     let data_page_size = header.compressed_page_size as u64;
+                    let is_dict = header.r#type == PageType::DICTIONARY_PAGE;
+                    if is_dict {
+                        deferred = Some(DeferredDictionaryPage::Header {
+                            data_start: *offset + header_len as u64,
+                            header: Box::new(header),
+                        });
+                    }
                     *offset += header_len as u64 + data_page_size;
                     *remaining_bytes -= header_len as u64 + data_page_size;
                 }
-                if *require_dictionary {
+                if deferred.is_some() {
                     *require_dictionary = false;
                 } else {
                     *page_index += 1;
                 }
+                deferred
             }
             SerializedPageReaderState::Pages {
                 page_locations,
@@ -1162,17 +1208,68 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                 ..
             } => {
                 if dictionary_page.is_some() {
-                    // If a dictionary page exists, consume it by taking it (sets to None)
-                    dictionary_page.take();
+                    // Consume the dictionary page, keeping its location.
+                    dictionary_page.take().map(DeferredDictionaryPage::Location)
                 } else {
                     // If no dictionary page exists, simply pop the data page from page_locations
                     if page_locations.pop_front().is_some() {
                         *page_index += 1;
                     }
+                    None
                 }
             }
+        };
+        if deferred.is_some() {
+            self.deferred_dictionary = deferred;
         }
         Ok(())
+    }
+
+    fn supports_deferred_dictionary(&self) -> bool {
+        match &self.state {
+            // Walking headers identifies dictionaries independently of metadata.
+            SerializedPageReaderState::Values { .. } => true,
+            // With an offset index, a dictionary is recoverable only when its
+            // location can be inferred before the first data-page location, in
+            // which case `dictionary_page` will be `Some`.
+            SerializedPageReaderState::Pages {
+                dictionary_page, ..
+            } => dictionary_page.is_some(),
+        }
+    }
+
+    fn take_deferred_dictionary(&mut self) -> Result<Option<Page>> {
+        let Some(deferred) = self.deferred_dictionary.take() else {
+            return Ok(None);
+        };
+        let page = match deferred {
+            DeferredDictionaryPage::Header { data_start, header } => {
+                let data_len = header.compressed_page_size as usize;
+                let buffer = self.reader.get_bytes(data_start, data_len)?;
+                let buffer = self.context.decrypt_page_data(buffer, 0, true)?;
+                decode_page(
+                    *header,
+                    buffer,
+                    self.physical_type,
+                    self.decompressor.as_mut(),
+                )?
+            }
+            DeferredDictionaryPage::Location(front) => {
+                let page_len = usize::try_from(front.compressed_page_size)?;
+                let buffer = self.reader.get_bytes(front.offset as u64, page_len)?;
+                let (offset, header) =
+                    read_page_header_len_from_bytes(&self.context, buffer.as_ref(), 0, true)?;
+                let bytes = buffer.slice(offset..);
+                let bytes = self.context.decrypt_page_data(bytes, 0, true)?;
+                decode_page(
+                    header,
+                    bytes,
+                    self.physical_type,
+                    self.decompressor.as_mut(),
+                )?
+            }
+        };
+        Ok(Some(page))
     }
 
     fn at_record_boundary(&mut self) -> Result<bool> {
@@ -1190,7 +1287,9 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
     use std::collections::HashSet;
+    use std::rc::Rc;
 
     use bytes::Buf;
 
@@ -1199,12 +1298,13 @@ mod tests {
     };
     use crate::file::properties::{EnabledStatistics, WriterProperties};
 
-    use crate::basic::{self, BoundaryOrder, ColumnOrder, Encoding, SortOrder};
+    use crate::basic::{self, BoundaryOrder, ColumnOrder, Compression, Encoding, SortOrder};
     use crate::column::reader::ColumnReader;
     use crate::data_type::private::ParquetValueType;
     use crate::data_type::{AsBytes, FixedLenByteArrayType, Int32Type};
     use crate::file::metadata::thrift::DataPageHeaderV2;
     use crate::file::writer::SerializedFileWriter;
+    use crate::parquet_thrift::{ReadThrift, ThriftSliceInputProtocol};
     use crate::record::RowAccessor;
     use crate::schema::parser::parse_message_type;
     use crate::util::test_common::file_util::{get_test_file, get_test_path};
@@ -2782,6 +2882,56 @@ mod tests {
         assert_eq!(file_metadata.file_metadata().num_rows(), 25);
         assert_eq!(file_metadata.num_row_groups(), 5);
 
+        // Stateful predicates must run once per group in order, with short-circuiting
+        // and original indexes, whether or not any groups are rejected.
+        for filter in [false, true] {
+            let calls = Rc::new(RefCell::new(Vec::new()));
+            let first_calls = Rc::clone(&calls);
+            let second_calls = Rc::clone(&calls);
+            let mut next_index = 0;
+            let read_options = ReadOptionsBuilder::new()
+                .with_page_index()
+                .with_predicate(Box::new(move |rg_meta, i| {
+                    assert_eq!(i, next_index);
+                    assert_eq!(rg_meta.ordinal(), Some(i as i32));
+                    next_index += 1;
+                    first_calls.borrow_mut().push((i, 0));
+                    !filter || i != 1
+                }))
+                .with_predicate(Box::new(move |_, i| {
+                    second_calls.borrow_mut().push((i, 1));
+                    !filter || i != 3
+                }))
+                .build();
+            let reader =
+                SerializedFileReader::new_with_options(file.try_clone().unwrap(), read_options)
+                    .unwrap();
+            let metadata = reader.metadata();
+            let expected_ordinals = if filter {
+                vec![0, 2, 4]
+            } else {
+                vec![0, 1, 2, 3, 4]
+            };
+            let ordinals: Vec<_> = metadata
+                .row_groups()
+                .iter()
+                .map(|rg| rg.ordinal().unwrap())
+                .collect();
+            assert_eq!(ordinals, expected_ordinals);
+            assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
+
+            let expected_calls: Vec<_> = (0..5)
+                .flat_map(|i| {
+                    if filter && i == 1 {
+                        vec![(i, 0)]
+                    } else {
+                        vec![(i, 0), (i, 1)]
+                    }
+                })
+                .collect();
+            assert_eq!(*calls.borrow(), expected_calls);
+        }
+
         // read only the 3rd row group
         let read_options = ReadOptionsBuilder::new()
             .with_page_index()
@@ -2910,5 +3060,371 @@ mod tests {
             num_rows += 1;
         }
         assert_eq!(num_rows, reader.metadata().file_metadata().num_rows());
+    }
+
+    /// Builds an in-memory single-row-group file with one snappy-compressed,
+    /// dictionary-encoded INT32 column holding `1..=5`, and returns its bytes
+    /// together with the byte range of the dictionary page *body* (the
+    /// compressed payload after the page header), so tests can corrupt
+    /// exactly the part lazy skipping promises never to touch.
+    fn dict_column_file() -> (Bytes, std::ops::Range<usize>) {
+        let message_type = "
+            message test_schema {
+                REQUIRED INT32 a;
+            }
+        ";
+        let schema = Arc::new(parse_message_type(message_type).unwrap());
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_compression(Compression::SNAPPY)
+                .build(),
+        );
+        let mut out = Vec::new();
+        let mut writer = SerializedFileWriter::new(&mut out, schema, props).unwrap();
+        let mut rg = writer.next_row_group().unwrap();
+        let mut col = rg.next_column().unwrap().unwrap();
+        col.typed::<Int32Type>()
+            .write_batch(&[1, 2, 3, 4, 5], None, None)
+            .unwrap();
+        col.close().unwrap();
+        rg.close().unwrap();
+        writer.close().unwrap();
+        let bytes = Bytes::from(out);
+
+        let reader = SerializedFileReader::new(bytes.clone()).unwrap();
+        let col_meta = reader.metadata().row_group(0).column(0).clone();
+        let dict_offset = col_meta.dictionary_page_offset().unwrap() as usize;
+        let data_offset = col_meta.data_page_offset() as usize;
+        // Parse the dictionary page header to find where its body starts.
+        let mut prot = ThriftSliceInputProtocol::new(&bytes[dict_offset..data_offset]);
+        let _header = PageHeader::read_thrift(&mut prot).unwrap();
+        let header_len = (data_offset - dict_offset) - prot.as_slice().len();
+        (bytes, dict_offset + header_len..data_offset)
+    }
+
+    /// Zeroes the dictionary page body: an all-zero snappy stream declares an
+    /// uncompressed length of zero, so decoding it fails deterministically on
+    /// the decompressed-size check. Any code path that decompresses the
+    /// dictionary therefore errors; a path that genuinely never touches it
+    /// succeeds.
+    fn corrupt_dictionary_body(bytes: &Bytes, body: &std::ops::Range<usize>) -> Bytes {
+        let mut v = bytes.to_vec();
+        v[body.clone()].fill(0);
+        Bytes::from(v)
+    }
+
+    fn int32_reader(bytes: Bytes) -> crate::column::reader::ColumnReaderImpl<Int32Type> {
+        let reader = SerializedFileReader::new(bytes.clone()).unwrap();
+        let meta = reader.metadata();
+        let descr = meta.file_metadata().schema_descr().column(0);
+        let col_meta = meta.row_group(0).column(0).clone();
+        let total_rows = meta.row_group(0).num_rows() as usize;
+        let pages =
+            SerializedPageReader::new(Arc::new(bytes), &col_meta, total_rows, None).unwrap();
+        crate::column::reader::ColumnReaderImpl::<Int32Type>::new(descr, Box::new(pages))
+    }
+
+    /// Skipping the whole chunk never decompresses the dictionary: with the
+    /// dictionary body corrupted so that any decompression errors, the skip
+    /// still succeeds. Reverting the lazy branch in
+    /// `GenericColumnReader::skip_records` turns this test red.
+    #[test]
+    fn skipping_a_whole_chunk_never_decodes_the_dictionary() {
+        let (bytes, body) = dict_column_file();
+        let corrupted = corrupt_dictionary_body(&bytes, &body);
+        let mut reader = int32_reader(corrupted);
+        let skipped = reader.skip_records(5).unwrap();
+        assert_eq!(skipped, 5);
+    }
+
+    /// The deferred dictionary is genuinely decoded the moment a data page
+    /// needs it: the same corruption that whole-chunk skipping never notices
+    /// fails a skip that has to open the data page.
+    #[test]
+    fn a_partial_skip_pays_the_deferred_dictionary() {
+        let (bytes, body) = dict_column_file();
+        let corrupted = corrupt_dictionary_body(&bytes, &body);
+        let mut reader = int32_reader(corrupted);
+        let err = reader.skip_records(2).unwrap_err().to_string();
+        assert!(
+            err.contains("corrupt") || err.contains("size"),
+            "expected the deferred dictionary decode to fail on \
+             decompression, got: {err}"
+        );
+    }
+
+    /// Skip-then-read returns the right values: the dictionary deferred by
+    /// the skip is installed before the first value decodes.
+    #[test]
+    fn skip_then_read_decodes_correct_values() {
+        let (bytes, _) = dict_column_file();
+        let mut reader = int32_reader(bytes);
+        assert_eq!(reader.skip_records(2).unwrap(), 2);
+        let mut values = Vec::new();
+        let (records, _, read) = reader.read_records(3, None, None, &mut values).unwrap();
+        assert_eq!(records, 3);
+        assert_eq!(read, 3);
+        assert_eq!(values, vec![3, 4, 5]);
+    }
+
+    /// The eager path is untouched: reading from the start still installs the
+    /// dictionary through `get_next_page` and decodes every value.
+    #[test]
+    fn plain_read_is_unchanged() {
+        let (bytes, _) = dict_column_file();
+        let mut reader = int32_reader(bytes);
+        let mut values = Vec::new();
+        let (records, _, read) = reader.read_records(5, None, None, &mut values).unwrap();
+        assert_eq!((records, read), (5, 5));
+        assert_eq!(values, vec![1, 2, 3, 4, 5]);
+    }
+
+    /// A [`PageReader`] that implements only what existed before deferral: it
+    /// forwards the required trait methods and takes the defaults for
+    /// `supports_deferred_dictionary` (`false`) and `take_deferred_dictionary`
+    /// (`Ok(None)`). This stands in for every third-party implementation, none
+    /// of which can retain a dictionary that `skip_next_page` skips past.
+    struct NonDeferringPageReader(SerializedPageReader<Bytes>);
+
+    impl Iterator for NonDeferringPageReader {
+        type Item = Result<Page>;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            self.get_next_page().transpose()
+        }
+    }
+
+    impl PageReader for NonDeferringPageReader {
+        fn get_next_page(&mut self) -> Result<Option<Page>> {
+            self.0.get_next_page()
+        }
+
+        fn peek_next_page(&mut self) -> Result<Option<PageMetadata>> {
+            self.0.peek_next_page()
+        }
+
+        fn skip_next_page(&mut self) -> Result<()> {
+            self.0.skip_next_page()
+        }
+    }
+
+    fn non_deferring_int32_reader(
+        bytes: Bytes,
+    ) -> crate::column::reader::ColumnReaderImpl<Int32Type> {
+        let reader = SerializedFileReader::new(bytes.clone()).unwrap();
+        let meta = reader.metadata();
+        let descr = meta.file_metadata().schema_descr().column(0);
+        let col_meta = meta.row_group(0).column(0).clone();
+        let total_rows = meta.row_group(0).num_rows() as usize;
+        let pages =
+            SerializedPageReader::new(Arc::new(bytes), &col_meta, total_rows, None).unwrap();
+        crate::column::reader::ColumnReaderImpl::<Int32Type>::new(
+            descr,
+            Box::new(NonDeferringPageReader(pages)),
+        )
+    }
+
+    /// A page reader that cannot give a skipped dictionary back must still get
+    /// the eager path. Skipping past its dictionary would drop it, and the
+    /// first dictionary-encoded data page decoded afterwards would have no
+    /// dictionary to decode against — a panic in `set_data`, not an error.
+    ///
+    /// Removing the `supports_deferred_dictionary` gate in
+    /// `GenericColumnReader::skip_records` turns this test red.
+    #[test]
+    fn a_reader_that_cannot_defer_still_gets_its_dictionary() {
+        let (bytes, _) = dict_column_file();
+        let mut reader = non_deferring_int32_reader(bytes);
+
+        assert_eq!(reader.skip_records(2).unwrap(), 2);
+
+        let mut values = Vec::new();
+        let (records, _, read) = reader.read_records(3, None, None, &mut values).unwrap();
+        assert_eq!(records, 3);
+        assert_eq!(read, 3);
+        assert_eq!(values, vec![3, 4, 5]);
+    }
+
+    /// The same reader must also survive a whole-chunk skip. Nothing is
+    /// decoded, so nothing needs the dictionary, but the eager read still has
+    /// to leave the page cursor in a consistent place.
+    #[test]
+    fn a_reader_that_cannot_defer_survives_a_whole_chunk_skip() {
+        let (bytes, _) = dict_column_file();
+        let mut reader = non_deferring_int32_reader(bytes);
+
+        assert_eq!(reader.skip_records(5).unwrap(), 5);
+
+        let mut values = Vec::new();
+        let (records, _, _) = reader.read_records(1, None, None, &mut values).unwrap();
+        assert_eq!(records, 0, "chunk is exhausted");
+        assert!(values.is_empty());
+    }
+
+    /// The probe has to describe what the reader can actually do. Without page
+    /// locations the reader walks page headers, so it recognises a dictionary
+    /// by its header type and can always defer.
+    #[test]
+    fn values_state_supports_deferral() {
+        let (bytes, _) = dict_column_file();
+        let reader = SerializedFileReader::new(bytes.clone()).unwrap();
+        let meta = reader.metadata();
+        let col_meta = meta.row_group(0).column(0).clone();
+        let total_rows = meta.row_group(0).num_rows() as usize;
+        let pages =
+            SerializedPageReader::new(Arc::new(bytes), &col_meta, total_rows, None).unwrap();
+
+        assert!(pages.supports_deferred_dictionary());
+    }
+
+    /// With page locations, a dictionary is only representable when the
+    /// metadata recorded an offset for it. `dict_column_file` writes one, so
+    /// the synthesised `dictionary_page` is present and deferral is safe.
+    #[test]
+    fn offset_index_state_with_a_dictionary_offset_supports_deferral() {
+        let (bytes, _) = dict_column_file();
+        let reader = SerializedFileReader::new(bytes.clone()).unwrap();
+        let meta = reader.metadata();
+        let col_meta = meta.row_group(0).column(0).clone();
+        let total_rows = meta.row_group(0).num_rows() as usize;
+        let (dict_offset, data_offset) = (
+            col_meta.dictionary_page_offset().unwrap(),
+            col_meta.data_page_offset(),
+        );
+        assert_ne!(
+            dict_offset, data_offset,
+            "fixture must record a dictionary offset"
+        );
+
+        let locations = vec![PageLocation {
+            offset: data_offset,
+            compressed_page_size: 0,
+            first_row_index: 0,
+        }];
+        let pages =
+            SerializedPageReader::new(Arc::new(bytes), &col_meta, total_rows, Some(locations))
+                .unwrap();
+
+        assert!(pages.supports_deferred_dictionary());
+    }
+
+    /// When the metadata records no dictionary offset, `byte_range()` starts
+    /// at the first data page, so the synthesised `dictionary_page` is `None`
+    /// and a dictionary inlined ahead of that page is indistinguishable from a
+    /// data page location. Skipping it would drop it, so the probe must say
+    /// so and let the column reader read it eagerly instead.
+    #[test]
+    fn offset_index_state_without_a_dictionary_offset_declines_deferral() {
+        let (bytes, _) = dict_column_file();
+        let reader = SerializedFileReader::new(bytes.clone()).unwrap();
+        let meta = reader.metadata();
+        let total_rows = meta.row_group(0).num_rows() as usize;
+
+        // Drop the dictionary offset, reproducing the older parquet-mr writers
+        // that inline a dictionary without recording where it is.
+        let col_meta = meta.row_group(0).column(0).clone();
+        let stripped = col_meta
+            .clone()
+            .into_builder()
+            .set_dictionary_page_offset(None)
+            .build()
+            .unwrap();
+
+        let locations = vec![PageLocation {
+            offset: stripped.data_page_offset(),
+            compressed_page_size: 0,
+            first_row_index: 0,
+        }];
+        let pages =
+            SerializedPageReader::new(Arc::new(bytes), &stripped, total_rows, Some(locations))
+                .unwrap();
+
+        assert!(
+            !pages.supports_deferred_dictionary(),
+            "an offset-less dictionary cannot be recovered from the offset-index state"
+        );
+        // Note this combination is unlikely to occur in practice: a writer old
+        // enough to omit `dictionary_page_offset` predates the offset index,
+        // so it would not emit page locations either. The probe answers
+        // defensively rather than relying on that.
+    }
+
+    /// Alternating skip and read is the shape a `RowSelection` produces, and
+    /// it exercises the deferral more than once per chunk: the first skip
+    /// defers, the first read installs, and every later skip has to cope with
+    /// a dictionary that is already installed.
+    #[test]
+    fn alternating_skip_and_read_decodes_correct_values() {
+        let (bytes, _) = dict_column_file();
+        let mut reader = int32_reader(bytes);
+
+        assert_eq!(reader.skip_records(1).unwrap(), 1);
+        let mut first = Vec::new();
+        let (records, _, _) = reader.read_records(2, None, None, &mut first).unwrap();
+        assert_eq!(records, 2);
+        assert_eq!(first, vec![2, 3]);
+
+        assert_eq!(reader.skip_records(1).unwrap(), 1);
+        let mut second = Vec::new();
+        let (records, _, _) = reader.read_records(1, None, None, &mut second).unwrap();
+        assert_eq!(records, 1);
+        assert_eq!(second, vec![5]);
+    }
+
+    /// A wrapper that forwards `take_deferred_dictionary` but not
+    /// `supports_deferred_dictionary`, which is the easy mistake to make when
+    /// adding the new methods to an existing wrapper.
+    struct HalfForwardingPageReader(SerializedPageReader<Bytes>);
+
+    impl Iterator for HalfForwardingPageReader {
+        type Item = Result<Page>;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            self.get_next_page().transpose()
+        }
+    }
+
+    impl PageReader for HalfForwardingPageReader {
+        fn get_next_page(&mut self) -> Result<Option<Page>> {
+            self.0.get_next_page()
+        }
+
+        fn peek_next_page(&mut self) -> Result<Option<PageMetadata>> {
+            self.0.peek_next_page()
+        }
+
+        fn skip_next_page(&mut self) -> Result<()> {
+            self.0.skip_next_page()
+        }
+
+        fn take_deferred_dictionary(&mut self) -> Result<Option<Page>> {
+            self.0.take_deferred_dictionary()
+        }
+    }
+
+    /// Forwarding only half the pair must stay correct: the probe still
+    /// reports `false`, so the skip path reads the dictionary eagerly and the
+    /// forwarded `take_deferred_dictionary` simply never has anything to
+    /// return. Slower than forwarding both, never wrong.
+    #[test]
+    fn forwarding_only_take_deferred_dictionary_is_still_correct() {
+        let (bytes, _) = dict_column_file();
+        let reader = SerializedFileReader::new(bytes.clone()).unwrap();
+        let meta = reader.metadata();
+        let descr = meta.file_metadata().schema_descr().column(0);
+        let col_meta = meta.row_group(0).column(0).clone();
+        let total_rows = meta.row_group(0).num_rows() as usize;
+        let pages =
+            SerializedPageReader::new(Arc::new(bytes), &col_meta, total_rows, None).unwrap();
+        let mut reader = crate::column::reader::ColumnReaderImpl::<Int32Type>::new(
+            descr,
+            Box::new(HalfForwardingPageReader(pages)),
+        );
+
+        assert_eq!(reader.skip_records(2).unwrap(), 2);
+        let mut values = Vec::new();
+        let (records, _, _) = reader.read_records(3, None, None, &mut values).unwrap();
+        assert_eq!(records, 3);
+        assert_eq!(values, vec![3, 4, 5]);
     }
 }

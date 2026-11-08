@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Module for converting Variant data to JSON format
 use arrow_schema::ArrowError;
@@ -175,8 +162,8 @@ impl VariantToJson for Variant<'_, '_> {
             Variant::Int16(i) => write!(buffer, "{i}")?,
             Variant::Int32(i) => write!(buffer, "{i}")?,
             Variant::Int64(i) => write!(buffer, "{i}")?,
-            Variant::Float(f) => write!(buffer, "{f}")?,
-            Variant::Double(f) => write!(buffer, "{f}")?,
+            Variant::Float(f) => write!(buffer, "{}", ryu::Buffer::new().format(*f))?,
+            Variant::Double(f) => write!(buffer, "{}", ryu::Buffer::new().format(*f))?,
             Variant::Decimal4(decimal) => write!(buffer, "{decimal}")?,
             Variant::Decimal8(decimal) => write!(buffer, "{decimal}")?,
             Variant::Decimal16(decimal) => write!(buffer, "{decimal}")?,
@@ -192,26 +179,20 @@ impl VariantToJson for Variant<'_, '_> {
             }
             Variant::Time(time) => write!(buffer, "\"{}\"", format_time_ntz_str(time))?,
             Variant::Binary(bytes) => {
-                // Encode binary as base64 string
+                // Encode binary as base64 string and serialize it directly into the writer
                 let base64_str = format_binary_base64(bytes);
-                let json_str = serde_json::to_string(&base64_str).map_err(|e| {
-                    ArrowError::InvalidArgumentError(format!("JSON encoding error: {e}"))
-                })?;
-                write!(buffer, "{json_str}")?
+                serde_json::to_writer(&mut *buffer, &base64_str)
+                    .map_err(|e| json_encoding_error("JSON encoding error", e))?
             }
             Variant::String(s) => {
-                // Use serde_json to properly escape the string
-                let json_str = serde_json::to_string(s).map_err(|e| {
-                    ArrowError::InvalidArgumentError(format!("JSON encoding error: {e}"))
-                })?;
-                write!(buffer, "{json_str}")?
+                // Serialize directly into the writer, escaping as needed
+                serde_json::to_writer(&mut *buffer, s)
+                    .map_err(|e| json_encoding_error("JSON encoding error", e))?
             }
             Variant::ShortString(s) => {
-                // Use serde_json to properly escape the string
-                let json_str = serde_json::to_string(s.as_str()).map_err(|e| {
-                    ArrowError::InvalidArgumentError(format!("JSON encoding error: {e}"))
-                })?;
-                write!(buffer, "{json_str}")?
+                // Serialize directly into the writer, escaping as needed
+                serde_json::to_writer(&mut *buffer, s.as_str())
+                    .map_err(|e| json_encoding_error("JSON encoding error", e))?
             }
             Variant::Uuid(uuid) => {
                 write!(buffer, "\"{uuid}\"")?;
@@ -365,6 +346,16 @@ fn format_time_ntz_str(time: &chrono::NaiveTime) -> String {
     }
 }
 
+/// Maps a [`serde_json`] serialization failure, keeping writer failures as
+/// [`ArrowError::IoError`] just like [`write!`] does
+fn json_encoding_error(context: &str, error: serde_json::Error) -> ArrowError {
+    if error.is_io() {
+        ArrowError::IoError(error.to_string(), error.into())
+    } else {
+        ArrowError::InvalidArgumentError(format!("{context}: {error}"))
+    }
+}
+
 /// Convert object fields to JSON
 fn convert_object_to_json(buffer: &mut impl Write, obj: &VariantObject) -> Result<(), ArrowError> {
     write!(buffer, "{{")?;
@@ -378,11 +369,10 @@ fn convert_object_to_json(buffer: &mut impl Write, obj: &VariantObject) -> Resul
         }
         first = false;
 
-        // Write the key (properly escaped)
-        let json_key = serde_json::to_string(key).map_err(|e| {
-            ArrowError::InvalidArgumentError(format!("JSON key encoding error: {e}"))
-        })?;
-        write!(buffer, "{json_key}:")?;
+        // Write the key (properly escaped), directly into the writer
+        serde_json::to_writer(&mut *buffer, key)
+            .map_err(|e| json_encoding_error("JSON key encoding error", e))?;
+        write!(buffer, ":")?;
 
         // Recursively convert the value
         value.to_json(buffer)?;
@@ -813,8 +803,10 @@ mod tests {
 
         JsonTest {
             variant: Variant::Float(0.0),
-            expected_json: "0",
-            expected_value: Value::Number(0.into()), // Use integer 0 to match JSON parsing
+            expected_json: "0.0",
+            expected_value: serde_json::Number::from_f64(0.0)
+                .map(Value::Number)
+                .unwrap(),
         }
         .run();
 
@@ -831,6 +823,15 @@ mod tests {
             variant: Variant::Double(std::f64::consts::E),
             expected_json: "2.718281828459045",
             expected_value: serde_json::Number::from_f64(std::f64::consts::E)
+                .map(Value::Number)
+                .unwrap(),
+        }
+        .run();
+
+        JsonTest {
+            variant: Variant::Double(2.0),
+            expected_json: "2.0",
+            expected_value: serde_json::Number::from_f64(2.0)
                 .map(Value::Number)
                 .unwrap(),
         }
@@ -1209,7 +1210,7 @@ mod tests {
             obj.insert("string_field", "test_string");
             obj.insert("int_field", 123i32);
             obj.insert("bool_field", true);
-            obj.insert("float_field", 2.71f64);
+            obj.insert("float_field", 2.0f64);
             obj.insert("null_field", ());
             obj.insert("long_field", 999i64);
             obj.finish();
@@ -1218,6 +1219,7 @@ mod tests {
         let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
         let json = variant.to_json_string()?;
+        assert!(json.contains(r#""float_field":2.0"#));
 
         let parsed: Value = serde_json::from_str(&json).unwrap();
         let obj = parsed.as_object().expect("expected JSON object");

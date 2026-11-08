@@ -16,513 +16,549 @@
  * limitations under the License.
  */
 
- syntax = "proto3";
- import "google/protobuf/timestamp.proto";
+syntax = "proto3";
+import "google/protobuf/timestamp.proto";
 
- option java_package = "org.apache.arrow.flight.impl";
- option go_package = "github.com/apache/arrow/go/arrow/flight/gen/flight";
- option csharp_namespace = "Apache.Arrow.Flight.Protocol";
- 
- package arrow.flight.protocol;
- 
- /*
-  * A flight service is an endpoint for retrieving or storing Arrow data. A
-  * flight service can expose one or more predefined endpoints that can be
-  * accessed using the Arrow Flight Protocol. Additionally, a flight service
-  * can expose a set of actions that are available.
-  */
- service FlightService {
- 
-   /*
-    * Handshake between client and server. Depending on the server, the
-    * handshake may be required to determine the token that should be used for
-    * future operations. Both request and response are streams to allow multiple
-    * round-trips depending on auth mechanism.
-    */
-   rpc Handshake(stream HandshakeRequest) returns (stream HandshakeResponse) {}
- 
-   /*
-    * Get a list of available streams given a particular criteria. Most flight
-    * services will expose one or more streams that are readily available for
-    * retrieval. This api allows listing the streams available for
-    * consumption. A user can also provide a criteria. The criteria can limit
-    * the subset of streams that can be listed via this interface. Each flight
-    * service allows its own definition of how to consume criteria.
-    */
-   rpc ListFlights(Criteria) returns (stream FlightInfo) {}
- 
-   /*
-    * For a given FlightDescriptor, get information about how the flight can be
-    * consumed. This is a useful interface if the consumer of the interface
-    * already can identify the specific flight to consume. This interface can
-    * also allow a consumer to generate a flight stream through a specified
-    * descriptor. For example, a flight descriptor might be something that
-    * includes a SQL statement or a Pickled Python operation that will be
-    * executed. In those cases, the descriptor will not be previously available
-    * within the list of available streams provided by ListFlights but will be
-    * available for consumption for the duration defined by the specific flight
-    * service.
-    */
-   rpc GetFlightInfo(FlightDescriptor) returns (FlightInfo) {}
- 
-   /*
-    * For a given FlightDescriptor, start a query and get information
-    * to poll its execution status. This is a useful interface if the
-    * query may be a long-running query. The first PollFlightInfo call
-    * should return as quickly as possible. (GetFlightInfo doesn't
-    * return until the query is complete.)
-    *
-    * A client can consume any available results before
-    * the query is completed. See PollInfo.info for details.
-    *
-    * A client can poll the updated query status by calling
-    * PollFlightInfo() with PollInfo.flight_descriptor. A server
-    * should not respond until the result would be different from last
-    * time. That way, the client can "long poll" for updates
-    * without constantly making requests. Clients can set a short timeout
-    * to avoid blocking calls if desired.
-    *
-    * A client can't use PollInfo.flight_descriptor after
-    * PollInfo.expiration_time passes. A server might not accept the
-    * retry descriptor anymore and the query may be cancelled.
-    *
-    * A client may use the CancelFlightInfo action with
-    * PollInfo.info to cancel the running query.
-    */
-   rpc PollFlightInfo(FlightDescriptor) returns (PollInfo) {}
- 
-   /*
-    * For a given FlightDescriptor, get the Schema as described in Schema.fbs::Schema
-    * This is used when a consumer needs the Schema of flight stream. Similar to
-    * GetFlightInfo this interface may generate a new flight that was not previously
-    * available in ListFlights.
-    */
-    rpc GetSchema(FlightDescriptor) returns (SchemaResult) {}
- 
-   /*
-    * Retrieve a single stream associated with a particular descriptor
-    * associated with the referenced ticket. A Flight can be composed of one or
-    * more streams where each stream can be retrieved using a separate opaque
-    * ticket that the flight service uses for managing a collection of streams.
-    */
-   rpc DoGet(Ticket) returns (stream FlightData) {}
- 
-   /*
-    * Push a stream to the flight service associated with a particular
-    * flight stream. This allows a client of a flight service to upload a stream
-    * of data. Depending on the particular flight service, a client consumer
-    * could be allowed to upload a single stream per descriptor or an unlimited
-    * number. In the latter, the service might implement a 'seal' action that
-    * can be applied to a descriptor once all streams are uploaded.
-    */
-   rpc DoPut(stream FlightData) returns (stream PutResult) {}
- 
-   /*
-    * Open a bidirectional data channel for a given descriptor. This
-    * allows clients to send and receive arbitrary Arrow data and
-    * application-specific metadata in a single logical stream. In
-    * contrast to DoGet/DoPut, this is more suited for clients
-    * offloading computation (rather than storage) to a Flight service.
-    */
-   rpc DoExchange(stream FlightData) returns (stream FlightData) {}
- 
-   /*
-    * Flight services can support an arbitrary number of simple actions in
-    * addition to the possible ListFlights, GetFlightInfo, DoGet, DoPut
-    * operations that are potentially available. DoAction allows a flight client
-    * to do a specific action against a flight service. An action includes
-    * opaque request and response objects that are specific to the type action
-    * being undertaken.
-    */
-   rpc DoAction(Action) returns (stream Result) {}
- 
-   /*
-    * A flight service exposes all of the available action types that it has
-    * along with descriptions. This allows different flight consumers to
-    * understand the capabilities of the flight service.
-    */
-   rpc ListActions(Empty) returns (stream ActionType) {}
- 
- }
- 
- /*
-  * The request that a client provides to a server on handshake.
-  */
- message HandshakeRequest {
- 
-   /*
-    * A defined protocol version
-    */
-   uint64 protocol_version = 1;
- 
-   /*
-    * Arbitrary auth/handshake info.
-    */
-   bytes payload = 2;
- }
- 
- message HandshakeResponse {
- 
-   /*
-    * A defined protocol version
-    */
-   uint64 protocol_version = 1;
- 
-   /*
-    * Arbitrary auth/handshake info.
-    */
-   bytes payload = 2;
- }
- 
- /*
-  * A message for doing simple auth.
-  */
- message BasicAuth {
-   string username = 2;
-   string password = 3;
- }
- 
- message Empty {}
- 
- /*
-  * Describes an available action, including both the name used for execution
-  * along with a short description of the purpose of the action.
-  */
- message ActionType {
-   string type = 1;
-   string description = 2;
- }
- 
- /*
-  * A service specific expression that can be used to return a limited set
-  * of available Arrow Flight streams.
-  */
- message Criteria {
-   bytes expression = 1;
- }
- 
- /*
-  * An opaque action specific for the service.
-  */
- message Action {
-   string type = 1;
-   bytes body = 2;
- }
- 
- /*
-  * The request of the CancelFlightInfo action.
-  *
-  * The request should be stored in Action.body.
-  */
- message CancelFlightInfoRequest {
-   FlightInfo info = 1;
- }
- 
- /*
-  * The request of the RenewFlightEndpoint action.
-  *
-  * The request should be stored in Action.body.
-  */
- message RenewFlightEndpointRequest {
-   FlightEndpoint endpoint = 1;
- }
- 
- /*
-  * An opaque result returned after executing an action.
-  */
- message Result {
-   bytes body = 1;
- }
- 
- /*
-  * The result of a cancel operation.
-  *
-  * This is used by CancelFlightInfoResult.status.
-  */
- enum CancelStatus {
-   // The cancellation status is unknown. Servers should avoid using
-   // this value (send a NOT_FOUND error if the requested query is
-   // not known). Clients can retry the request.
-   CANCEL_STATUS_UNSPECIFIED = 0;
-   // The cancellation request is complete. Subsequent requests with
-   // the same payload may return CANCELLED or a NOT_FOUND error.
-   CANCEL_STATUS_CANCELLED = 1;
-   // The cancellation request is in progress. The client may retry
-   // the cancellation request.
-   CANCEL_STATUS_CANCELLING = 2;
-   // The query is not cancellable. The client should not retry the
-   // cancellation request.
-   CANCEL_STATUS_NOT_CANCELLABLE = 3;
- }
- 
- /*
-  * The result of the CancelFlightInfo action.
-  *
-  * The result should be stored in Result.body.
-  */
- message CancelFlightInfoResult {
-   CancelStatus status = 1;
- }
- 
- /*
-  * Wrap the result of a getSchema call
-  */
- message SchemaResult {
-   // The schema of the dataset in its IPC form:
-   //   4 bytes - an optional IPC_CONTINUATION_TOKEN prefix
-   //   4 bytes - the byte length of the payload
-   //   a flatbuffer Message whose header is the Schema
-   bytes schema = 1;
- }
- 
- /*
-  * The name or tag for a Flight. May be used as a way to retrieve or generate
-  * a flight or be used to expose a set of previously defined flights.
-  */
- message FlightDescriptor {
- 
-   /*
-    * Describes what type of descriptor is defined.
-    */
-   enum DescriptorType {
- 
-     // Protobuf pattern, not used.
-     UNKNOWN = 0;
- 
-     /*
-      * A named path that identifies a dataset. A path is composed of a string
-      * or list of strings describing a particular dataset. This is conceptually
-      *  similar to a path inside a filesystem.
-      */
-     PATH = 1;
- 
-     /*
-      * An opaque command to generate a dataset.
-      */
-     CMD = 2;
-   }
- 
-   DescriptorType type = 1;
- 
-   /*
-    * Opaque value used to express a command. Should only be defined when
-    * type = CMD.
-    */
-   bytes cmd = 2;
- 
-   /*
-    * List of strings identifying a particular dataset. Should only be defined
-    * when type = PATH.
-    */
-   repeated string path = 3;
- }
- 
- /*
-  * The access coordinates for retrieval of a dataset. With a FlightInfo, a
-  * consumer is able to determine how to retrieve a dataset.
-  */
- message FlightInfo {
-   // The schema of the dataset in its IPC form:
-   //   4 bytes - an optional IPC_CONTINUATION_TOKEN prefix
-   //   4 bytes - the byte length of the payload
-   //   a flatbuffer Message whose header is the Schema
-   bytes schema = 1;
- 
-   /*
-    * The descriptor associated with this info.
-    */
-   FlightDescriptor flight_descriptor = 2;
- 
-   /*
-    * A list of endpoints associated with the flight. To consume the
-    * whole flight, all endpoints (and hence all Tickets) must be
-    * consumed. Endpoints can be consumed in any order.
-    *
-    * In other words, an application can use multiple endpoints to
-    * represent partitioned data.
-    *
-    * If the returned data has an ordering, an application can use
-    * "FlightInfo.ordered = true" or should return the all data in a
-    * single endpoint. Otherwise, there is no ordering defined on
-    * endpoints or the data within.
-    *
-    * A client can read ordered data by reading data from returned
-    * endpoints, in order, from front to back.
-    *
-    * Note that a client may ignore "FlightInfo.ordered = true". If an
-    * ordering is important for an application, an application must
-    * choose one of them:
-    *
-    * * An application requires that all clients must read data in
-    *   returned endpoints order.
-    * * An application must return the all data in a single endpoint.
-    */
-   repeated FlightEndpoint endpoint = 3;
- 
-   // Set these to -1 if unknown.
-   int64 total_records = 4;
-   int64 total_bytes = 5;
- 
-   /*
-    * FlightEndpoints are in the same order as the data.
-    */
-   bool ordered = 6;
- 
-   /*
-    * Application-defined metadata.
-    * 
-    * There is no inherent or required relationship between this
-    * and the app_metadata fields in the FlightEndpoints or resulting
-    * FlightData messages. Since this metadata is application-defined,
-    * a given application could define there to be a relationship,
-    * but there is none required by the spec.
-    */
-   bytes app_metadata = 7;
- }
- 
- /*
-  * The information to process a long-running query.
-  */
- message PollInfo {
-   /*
-    * The currently available results.
-    *
-    * If "flight_descriptor" is not specified, the query is complete
-    * and "info" specifies all results. Otherwise, "info" contains
-    * partial query results.
-    *
-    * Note that each PollInfo response contains a complete
-    * FlightInfo (not just the delta between the previous and current
-    * FlightInfo).
-    *
-    * Subsequent PollInfo responses may only append new endpoints to
-    * info.
-    *
-    * Clients can begin fetching results via DoGet(Ticket) with the
-    * ticket in the info before the query is
-    * completed. FlightInfo.ordered is also valid.
-    */
-   FlightInfo info = 1;
+option java_package = "org.apache.arrow.flight.impl";
+option go_package = "github.com/apache/arrow-go/arrow/flight/gen/flight";
+option csharp_namespace = "Apache.Arrow.Flight.Protocol";
 
-   /*
-    * The descriptor the client should use on the next try.
-    * If unset, the query is complete.
-    */
-   FlightDescriptor flight_descriptor = 2;
+package arrow.flight.protocol;
 
-   /*
-    * Query progress. If known, must be in [0.0, 1.0] but need not be
-    * monotonic or nondecreasing. If unknown, do not set.
-    */
-   optional double progress = 3;
+/*
+ * A flight service is an endpoint for retrieving or storing Arrow data. A
+ * flight service can expose one or more predefined endpoints that can be
+ * accessed using the Arrow Flight Protocol. Additionally, a flight service
+ * can expose a set of actions that are available.
+ */
+service FlightService {
 
-   /*
-    * Expiration time for this request. After this passes, the server
-    * might not accept the retry descriptor anymore (and the query may
-    * be cancelled). This may be updated on a call to PollFlightInfo.
-    */
-   google.protobuf.Timestamp expiration_time = 4;
- }
- 
- /*
-  * A particular stream or split associated with a flight.
-  */
- message FlightEndpoint {
- 
-   /*
-    * Token used to retrieve this stream.
-    */
-   Ticket ticket = 1;
- 
-   /*
-    * A list of URIs where this ticket can be redeemed via DoGet().
-    *
-    * If the list is empty, the expectation is that the ticket can only
-    * be redeemed on the current service where the ticket was
-    * generated.
-    *
-    * If the list is not empty, the expectation is that the ticket can
-    * be redeemed at any of the locations, and that the data returned
-    * will be equivalent. In this case, the ticket may only be redeemed
-    * at one of the given locations, and not (necessarily) on the
-    * current service.
-    *
-    * In other words, an application can use multiple locations to
-    * represent redundant and/or load balanced services.
-    */
-   repeated Location location = 2;
- 
-   /*
-    * Expiration time of this stream. If present, clients may assume
-    * they can retry DoGet requests. Otherwise, it is
-    * application-defined whether DoGet requests may be retried.
-    */
-   google.protobuf.Timestamp expiration_time = 3;
+  /*
+   * Handshake between client and server. Depending on the server, the
+   * handshake may be required to determine the token that should be used for
+   * future operations. Both request and response are streams to allow multiple
+   * round-trips depending on auth mechanism.
+   */
+  rpc Handshake(stream HandshakeRequest) returns (stream HandshakeResponse) {}
 
-   /*
-    * Application-defined metadata.
-    * 
-    * There is no inherent or required relationship between this
-    * and the app_metadata fields in the FlightInfo or resulting
-    * FlightData messages. Since this metadata is application-defined,
-    * a given application could define there to be a relationship,
-    * but there is none required by the spec.
-    */
-   bytes app_metadata = 4;
- }
- 
- /*
-  * A location where a Flight service will accept retrieval of a particular
-  * stream given a ticket.
-  */
- message Location {
-   string uri = 1;
- }
- 
- /*
-  * An opaque identifier that the service can use to retrieve a particular
-  * portion of a stream.
-  *
-  * Tickets are meant to be single use. It is an error/application-defined
-  * behavior to reuse a ticket.
-  */
- message Ticket {
-   bytes ticket = 1;
- }
- 
- /*
-  * A batch of Arrow data as part of a stream of batches.
-  */
- message FlightData {
- 
-   /*
-    * The descriptor of the data. This is only relevant when a client is
-    * starting a new DoPut stream.
-    */
-   FlightDescriptor flight_descriptor = 1;
- 
-   /*
-    * Header for message data as described in Message.fbs::Message.
-    */
-   bytes data_header = 2;
- 
-   /*
-    * Application-defined metadata.
-    */
-   bytes app_metadata = 3;
- 
-   /*
-    * The actual batch of Arrow data. Preferably handled with minimal-copies
-    * coming last in the definition to help with sidecar patterns (it is
-    * expected that some implementations will fetch this field off the wire
-    * with specialized code to avoid extra memory copies).
-    */
-   bytes data_body = 1000;
- }
- 
- /**
-  * The response message associated with the submission of a DoPut.
-  */
- message PutResult {
-   bytes app_metadata = 1;
- }
+  /*
+   * Get a list of available streams given a particular criteria. Most flight
+   * services will expose one or more streams that are readily available for
+   * retrieval. This api allows listing the streams available for
+   * consumption. A user can also provide a criteria. The criteria can limit
+   * the subset of streams that can be listed via this interface. Each flight
+   * service allows its own definition of how to consume criteria.
+   */
+  rpc ListFlights(Criteria) returns (stream FlightInfo) {}
+
+  /*
+   * For a given FlightDescriptor, get information about how the flight can be
+   * consumed. This is a useful interface if the consumer of the interface
+   * already can identify the specific flight to consume. This interface can
+   * also allow a consumer to generate a flight stream through a specified
+   * descriptor. For example, a flight descriptor might be something that
+   * includes a SQL statement or a Pickled Python operation that will be
+   * executed. In those cases, the descriptor will not be previously available
+   * within the list of available streams provided by ListFlights but will be
+   * available for consumption for the duration defined by the specific flight
+   * service.
+   */
+  rpc GetFlightInfo(FlightDescriptor) returns (FlightInfo) {}
+
+  /*
+   * For a given FlightDescriptor, start a query and get information
+   * to poll its execution status. This is a useful interface if the
+   * query may be a long-running query. The first PollFlightInfo call
+   * should return as quickly as possible. (GetFlightInfo doesn't
+   * return until the query is complete.)
+   *
+   * A client can consume any available results before
+   * the query is completed. See PollInfo.info for details.
+   *
+   * A client can poll the updated query status by calling
+   * PollFlightInfo() with PollInfo.flight_descriptor. A server
+   * should not respond until the result would be different from last
+   * time. That way, the client can "long poll" for updates
+   * without constantly making requests. Clients can set a short timeout
+   * to avoid blocking calls if desired.
+   *
+   * A client can't use PollInfo.flight_descriptor after
+   * PollInfo.expiration_time passes. A server might not accept the
+   * retry descriptor anymore and the query may be cancelled.
+   *
+   * A client may use the CancelFlightInfo action with
+   * PollInfo.info to cancel the running query.
+   */
+  rpc PollFlightInfo(FlightDescriptor) returns (PollInfo) {}
+
+  /*
+   * For a given FlightDescriptor, get the Schema as described in Schema.fbs::Schema
+   * This is used when a consumer needs the Schema of flight stream. Similar to
+   * GetFlightInfo this interface may generate a new flight that was not previously
+   * available in ListFlights.
+   */
+   rpc GetSchema(FlightDescriptor) returns (SchemaResult) {}
+
+  /*
+   * Retrieve a single stream associated with a particular descriptor
+   * associated with the referenced ticket. A Flight can be composed of one or
+   * more streams where each stream can be retrieved using a separate opaque
+   * ticket that the flight service uses for managing a collection of streams.
+   */
+  rpc DoGet(Ticket) returns (stream FlightData) {}
+
+  /*
+   * Push a stream to the flight service associated with a particular
+   * flight stream. This allows a client of a flight service to upload a stream
+   * of data. Depending on the particular flight service, a client consumer
+   * could be allowed to upload a single stream per descriptor or an unlimited
+   * number. In the latter, the service might implement a 'seal' action that
+   * can be applied to a descriptor once all streams are uploaded.
+   */
+  rpc DoPut(stream FlightData) returns (stream PutResult) {}
+
+  /*
+   * Open a bidirectional data channel for a given descriptor. This
+   * allows clients to send and receive arbitrary Arrow data and
+   * application-specific metadata in a single logical stream. In
+   * contrast to DoGet/DoPut, this is more suited for clients
+   * offloading computation (rather than storage) to a Flight service.
+   */
+  rpc DoExchange(stream FlightData) returns (stream FlightData) {}
+
+  /*
+   * Flight services can support an arbitrary number of simple actions in
+   * addition to the possible ListFlights, GetFlightInfo, DoGet, DoPut
+   * operations that are potentially available. DoAction allows a flight client
+   * to do a specific action against a flight service. An action includes
+   * opaque request and response objects that are specific to the type action
+   * being undertaken.
+   */
+  rpc DoAction(Action) returns (stream Result) {}
+
+  /*
+   * A flight service exposes all of the available action types that it has
+   * along with descriptions. This allows different flight consumers to
+   * understand the capabilities of the flight service.
+   */
+  rpc ListActions(Empty) returns (stream ActionType) {}
+}
+
+/*
+ * The request that a client provides to a server on handshake.
+ */
+message HandshakeRequest {
+
+  /*
+   * A defined protocol version
+   */
+  uint64 protocol_version = 1;
+
+  /*
+   * Arbitrary auth/handshake info.
+   */
+  bytes payload = 2;
+}
+
+message HandshakeResponse {
+
+  /*
+   * A defined protocol version
+   */
+  uint64 protocol_version = 1;
+
+  /*
+   * Arbitrary auth/handshake info.
+   */
+  bytes payload = 2;
+}
+
+/*
+ * A message for doing simple auth.
+ */
+message BasicAuth {
+  string username = 2;
+  string password = 3;
+}
+
+message Empty {}
+
+/*
+ * Describes an available action, including both the name used for execution
+ * along with a short description of the purpose of the action.
+ */
+message ActionType {
+  string type = 1;
+  string description = 2;
+}
+
+/*
+ * A service specific expression that can be used to return a limited set
+ * of available Arrow Flight streams.
+ */
+message Criteria {
+  bytes expression = 1;
+}
+
+/*
+ * An opaque action specific for the service.
+ */
+message Action {
+  string type = 1;
+  bytes body = 2;
+}
+
+/*
+ * An opaque result returned after executing an action.
+ */
+message Result {
+  bytes body = 1;
+}
+
+/*
+ * Wrap the result of a getSchema call
+ */
+message SchemaResult {
+  // The schema of the dataset in its IPC form:
+  //   4 bytes - an optional IPC_CONTINUATION_TOKEN prefix
+  //   4 bytes - the byte length of the payload
+  //   a flatbuffer Message whose header is the Schema
+  bytes schema = 1;
+}
+
+/*
+ * The name or tag for a Flight. May be used as a way to retrieve or generate
+ * a flight or be used to expose a set of previously defined flights.
+ */
+message FlightDescriptor {
+
+  /*
+   * Describes what type of descriptor is defined.
+   */
+  enum DescriptorType {
+
+    // Protobuf pattern, not used.
+    UNKNOWN = 0;
+
+    /*
+     * A named path that identifies a dataset. A path is composed of a string
+     * or list of strings describing a particular dataset. This is conceptually
+     *  similar to a path inside a filesystem.
+     */
+    PATH = 1;
+
+    /*
+     * An opaque command to generate a dataset.
+     */
+    CMD = 2;
+  }
+
+  DescriptorType type = 1;
+
+  /*
+   * Opaque value used to express a command. Should only be defined when
+   * type = CMD.
+   */
+  bytes cmd = 2;
+
+  /*
+   * List of strings identifying a particular dataset. Should only be defined
+   * when type = PATH.
+   */
+  repeated string path = 3;
+}
+
+/*
+ * The access coordinates for retrieval of a dataset. With a FlightInfo, a
+ * consumer is able to determine how to retrieve a dataset.
+ */
+message FlightInfo {
+  // The schema of the dataset in its IPC form:
+  //   4 bytes - an optional IPC_CONTINUATION_TOKEN prefix
+  //   4 bytes - the byte length of the payload
+  //   a flatbuffer Message whose header is the Schema
+  bytes schema = 1;
+
+  /*
+   * The descriptor associated with this info.
+   */
+  FlightDescriptor flight_descriptor = 2;
+
+  /*
+   * A list of endpoints associated with the flight. To consume the
+   * whole flight, all endpoints (and hence all Tickets) must be
+   * consumed. Endpoints can be consumed in any order.
+   *
+   * In other words, an application can use multiple endpoints to
+   * represent partitioned data.
+   *
+   * If the returned data has an ordering, an application can use
+   * "FlightInfo.ordered = true" or should return all data in a
+   * single endpoint. Otherwise, there is no ordering defined on
+   * endpoints or the data within.
+   *
+   * A client can read ordered data by reading data from returned
+   * endpoints, in order, from front to back.
+   *
+   * Note that a client may ignore "FlightInfo.ordered = true". If an
+   * ordering is important for an application, an application must
+   * choose one of them:
+   *
+   * * An application requires that all clients must read data in
+   *   returned endpoints order.
+   * * An application must return all data in a single endpoint.
+   */
+  repeated FlightEndpoint endpoint = 3;
+
+  // Set these to -1 if unknown.
+  int64 total_records = 4;
+  int64 total_bytes = 5;
+
+  /*
+   * FlightEndpoints are in the same order as the data.
+   */
+  bool ordered = 6;
+
+  /*
+   * Application-defined metadata.
+   *
+   * There is no inherent or required relationship between this
+   * and the app_metadata fields in the FlightEndpoints or resulting
+   * FlightData messages. Since this metadata is application-defined,
+   * a given application could define there to be a relationship,
+   * but there is none required by the spec.
+   */
+  bytes app_metadata = 7;
+}
+
+/*
+ * The information to process a long-running query.
+ */
+message PollInfo {
+  /*
+   * The currently available results.
+   *
+   * If "flight_descriptor" is not specified, the query is complete
+   * and "info" specifies all results. Otherwise, "info" contains
+   * partial query results.
+   *
+   * Note that each PollInfo response contains a complete
+   * FlightInfo (not just the delta between the previous and current
+   * FlightInfo).
+   *
+   * Subsequent PollInfo responses may only append new endpoints to
+   * info.
+   *
+   * Clients can begin fetching results via DoGet(Ticket) with the
+   * ticket in the info before the query is
+   * completed. FlightInfo.ordered is also valid.
+   */
+  FlightInfo info = 1;
+
+  /*
+   * The descriptor the client should use on the next try.
+   * If unset, the query is complete.
+   */
+  FlightDescriptor flight_descriptor = 2;
+
+  /*
+   * Query progress. If known, must be in [0.0, 1.0] but need not be
+   * monotonic or nondecreasing. If unknown, do not set.
+   */
+  optional double progress = 3;
+
+  /*
+   * Expiration time for this request. After this passes, the server
+   * might not accept the retry descriptor anymore (and the query may
+   * be cancelled). This may be updated on a call to PollFlightInfo.
+   */
+  google.protobuf.Timestamp expiration_time = 4;
+}
+
+/*
+ * The request of the CancelFlightInfo action.
+ *
+ * The request should be stored in Action.body.
+ */
+message CancelFlightInfoRequest {
+  FlightInfo info = 1;
+}
+
+/*
+ * The result of a cancel operation.
+ *
+ * This is used by CancelFlightInfoResult.status.
+ */
+enum CancelStatus {
+  // The cancellation status is unknown. Servers should avoid using
+  // this value (send a NOT_FOUND error if the requested query is
+  // not known). Clients can retry the request.
+  CANCEL_STATUS_UNSPECIFIED = 0;
+  // The cancellation request is complete. Subsequent requests with
+  // the same payload may return CANCELLED or a NOT_FOUND error.
+  CANCEL_STATUS_CANCELLED = 1;
+  // The cancellation request is in progress. The client may retry
+  // the cancellation request.
+  CANCEL_STATUS_CANCELLING = 2;
+  // The query is not cancellable. The client should not retry the
+  // cancellation request.
+  CANCEL_STATUS_NOT_CANCELLABLE = 3;
+}
+
+/*
+ * The result of the CancelFlightInfo action.
+ *
+ * The result should be stored in Result.body.
+ */
+message CancelFlightInfoResult {
+  CancelStatus status = 1;
+}
+
+/*
+ * An opaque identifier that the service can use to retrieve a particular
+ * portion of a stream.
+ *
+ * Tickets are meant to be single use. It is an error/application-defined
+ * behavior to reuse a ticket.
+ */
+message Ticket {
+  bytes ticket = 1;
+}
+
+/*
+ * A location to retrieve a particular stream from. This URI should be one of
+ * the following:
+ *  - An empty string or the string 'arrow-flight-reuse-connection://?':
+ *    indicating that the ticket can be redeemed on the service where the
+ *    ticket was generated via a DoGet request.
+ *  - A valid grpc URI (grpc://, grpc+tls://, grpc+unix://, etc.):
+ *    indicating that the ticket can be redeemed on the service at the given
+ *    URI via a DoGet request.
+ *  - A valid HTTP URI (http://, https://, etc.):
+ *    indicating that the client should perform a GET request against the
+ *    given URI to retrieve the stream. The ticket should be empty
+ *    in this case and should be ignored by the client. Cloud object storage
+ *    can be utilized by presigned URLs or mediating the auth separately and
+ *    returning the full URL (e.g. https://amzn-s3-demo-bucket.s3.us-west-2.amazonaws.com/...).
+ *
+ * We allow non-Flight URIs for the purpose of allowing Flight services to indicate that
+ * results can be downloaded in formats other than Arrow (such as Parquet) or to allow
+ * direct fetching of results from a URI to reduce excess copying and data movement.
+ * In these cases, the following conventions should be followed by servers and clients:
+ *
+ *  - Unless otherwise specified by the 'Content-Type' header of the response,
+ *    a client should assume the response is using the Arrow IPC Streaming format.
+ *    Usage of an IANA media type like 'application/octet-stream' should be assumed to
+ *    be using the Arrow IPC Streaming format.
+ *  - The server may allow the client to choose a specific response format by
+ *    specifying an 'Accept' header in the request, such as 'application/vnd.apache.parquet'
+ *    or 'application/vnd.apache.arrow.stream'. If multiple types are requested and
+ *    supported by the server, the choice of which to use is server-specific. If
+ *    none of the requested content-types are supported, the server may respond with
+ *    either 406 (Not Acceptable) or 415 (Unsupported Media Type), or successfully
+ *    respond with a different format that it does support along with the correct
+ *    'Content-Type' header.
+ *
+ * Note: new schemes may be proposed in the future to allow for more flexibility based
+ * on community requests.
+ */
+message Location {
+  string uri = 1;
+}
+
+/*
+ * A particular stream or split associated with a flight.
+ */
+message FlightEndpoint {
+
+  /*
+   * Token used to retrieve this stream.
+   */
+  Ticket ticket = 1;
+
+  /*
+   * A list of URIs where this ticket can be redeemed via DoGet().
+   *
+   * If the list is empty, the expectation is that the ticket can only
+   * be redeemed on the current service where the ticket was
+   * generated.
+   *
+   * If the list is not empty, the expectation is that the ticket can be
+   * redeemed at any of the locations, and that the data returned will be
+   * equivalent. In this case, the ticket may only be redeemed at one of the
+   * given locations, and not (necessarily) on the current service. If one
+   * of the given locations is "arrow-flight-reuse-connection://?", the
+   * client may redeem the ticket on the service where the ticket was
+   * generated (i.e., the same as above), in addition to the other
+   * locations. (This URI was chosen to maximize compatibility, as 'scheme:'
+   * or 'scheme://' are not accepted by Java's java.net.URI.)
+   *
+   * In other words, an application can use multiple locations to
+   * represent redundant and/or load balanced services.
+   */
+  repeated Location location = 2;
+
+  /*
+   * Expiration time of this stream. If present, clients may assume
+   * they can retry DoGet requests. Otherwise, it is
+   * application-defined whether DoGet requests may be retried.
+   */
+  google.protobuf.Timestamp expiration_time = 3;
+
+  /*
+   * Application-defined metadata.
+   *
+   * There is no inherent or required relationship between this
+   * and the app_metadata fields in the FlightInfo or resulting
+   * FlightData messages. Since this metadata is application-defined,
+   * a given application could define there to be a relationship,
+   * but there is none required by the spec.
+   */
+  bytes app_metadata = 4;
+}
+
+/*
+ * The request of the RenewFlightEndpoint action.
+ *
+ * The request should be stored in Action.body.
+ */
+message RenewFlightEndpointRequest {
+  FlightEndpoint endpoint = 1;
+}
+
+/*
+ * A batch of Arrow data as part of a stream of batches.
+ */
+message FlightData {
+
+  /*
+   * The descriptor of the data. This is only relevant when a client is
+   * starting a new DoPut stream.
+   */
+  FlightDescriptor flight_descriptor = 1;
+
+  /*
+   * Header for message data as described in Message.fbs::Message.
+   */
+  bytes data_header = 2;
+
+  /*
+   * Application-defined metadata.
+   */
+  bytes app_metadata = 3;
+
+  /*
+   * The actual batch of Arrow data. Preferably handled with minimal-copies
+   * coming last in the definition to help with sidecar patterns (it is
+   * expected that some implementations will fetch this field off the wire
+   * with specialized code to avoid extra memory copies).
+   */
+  bytes data_body = 1000;
+}
+
+/**
+ * The response message associated with the submission of a DoPut.
+ */
+message PutResult {
+  bytes app_metadata = 1;
+}

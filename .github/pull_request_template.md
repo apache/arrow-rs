@@ -1,3 +1,9 @@
+> [!IMPORTANT]
+>
+> Before opening this PR, [enable CI in your fork](https://github.com/apache/arrow-rs/blob/main/CONTRIBUTING.md#pull-requests-from-forks).
+>
+> **Delete this notice after enabling CI.**
+
 # Which issue does this PR close?
 
 <!--

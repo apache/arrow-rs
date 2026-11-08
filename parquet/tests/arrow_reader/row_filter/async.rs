@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::io::TestReader;
 use std::sync::{Arc, Mutex};
@@ -1033,5 +1020,88 @@ async fn test_mask_from_boolean_buffer_slice_with_sparse_pages() {
             &[0, 11],
             "policy={policy:?}"
         );
+    }
+}
+
+#[tokio::test]
+async fn test_mask_word_scan_across_unaligned_loaded_pages() {
+    use arrow_buffer::BooleanBuffer;
+
+    // Each page boundary moves relative to the bitmap's 64-bit words. The
+    // selected pages also end with unset bits, which must be skipped rather
+    // than decoded when the next page has not been fetched.
+    for page_rows in [63, 65, 127] {
+        let rows = page_rows * 9;
+        let values = (0..rows as i64).collect::<Vec<_>>();
+        let data = make_two_column_i64_file(&values, page_rows);
+        let expected: Vec<_> = (0..rows)
+            .filter(|row| {
+                (row / page_rows) % 3 != 1 && row % page_rows < page_rows - 3 && row % 5 != 1
+            })
+            .map(|row| row as i64)
+            .collect();
+        for offset in [1, 3, 7, 63] {
+            let mask = BooleanBuffer::from_iter((0..offset + rows + 64).map(|row| {
+                if !(offset..offset + rows).contains(&row) {
+                    return true;
+                }
+                let row = row - offset;
+                (row / page_rows) % 3 != 1 && row % page_rows < page_rows - 3 && row % 5 != 1
+            }))
+            .slice(offset, rows);
+            for batch_size in [63, 64, 65, 129, 1024] {
+                let builder = ParquetRecordBatchStreamBuilder::new_with_options(
+                    TestReader::new(data.clone()),
+                    ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
+                )
+                .await
+                .unwrap();
+                let pages = builder
+                    .metadata()
+                    .page_index()
+                    .unwrap()
+                    .page_locations(0, 0)
+                    .unwrap();
+                assert_eq!(
+                    pages
+                        .iter()
+                        .map(|page| page.first_row_index)
+                        .collect::<Vec<_>>(),
+                    (0..rows)
+                        .step_by(page_rows)
+                        .map(|row| row as i64)
+                        .collect::<Vec<_>>()
+                );
+                let stream = builder
+                    .with_row_selection(RowSelection::from_boolean_buffer(mask.clone()))
+                    .with_row_selection_policy(RowSelectionPolicy::Mask)
+                    .with_batch_size(batch_size)
+                    .build()
+                    .unwrap();
+                let schema = stream.schema().clone();
+                let batches: Vec<RecordBatch> = stream.try_collect().await.unwrap();
+                let sizes: Vec<_> = batches.iter().map(RecordBatch::num_rows).collect();
+                assert_eq!(
+                    sizes,
+                    expected
+                        .chunks(batch_size)
+                        .map(<[i64]>::len)
+                        .collect::<Vec<_>>(),
+                    "page_rows={page_rows}, offset={offset}, batch_size={batch_size}"
+                );
+                let batch = concat_batches(&schema, &batches).unwrap();
+                for column in batch.columns() {
+                    assert_eq!(
+                        column
+                            .as_any()
+                            .downcast_ref::<Int64Array>()
+                            .unwrap()
+                            .values(),
+                        expected.as_slice(),
+                        "page_rows={page_rows}, offset={offset}, batch_size={batch_size}"
+                    );
+                }
+            }
+        }
     }
 }

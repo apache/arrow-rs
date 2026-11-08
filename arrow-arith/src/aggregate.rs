@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Defines aggregations over Arrow arrays.
 
@@ -457,7 +444,8 @@ fn min_max_helper<T, A: ArrayAccessor<Item = T>, F>(array: A, cmp: F) -> Option<
 where
     F: Fn(&T, &T) -> bool,
 {
-    let null_count = array.null_count();
+    let nulls = array.logical_nulls();
+    let null_count = nulls.as_ref().map_or(0, NullBuffer::null_count);
     if null_count == array.len() {
         None
     } else if null_count == 0 {
@@ -468,7 +456,7 @@ where
             .map(|i| unsafe { array.value_unchecked(i) })
             .reduce(|acc, item| if cmp(&acc, &item) { item } else { acc })
     } else {
-        let nulls = array.nulls().unwrap();
+        let nulls = nulls.unwrap();
         unsafe {
             let idx = nulls.valid_indices().reduce(|acc_idx, idx| {
                 let acc = array.value_unchecked(acc_idx);
@@ -572,9 +560,9 @@ pub fn sum_array<T: ArrowNumericType, A: ArrayAccessor<Item = T::Native>>(
 ) -> Option<T::Native> {
     match array.data_type() {
         DataType::Dictionary(_, _) => {
-            let null_count = array.null_count();
+            let logical_null_count = array.logical_null_count();
 
-            if null_count == array.len() {
+            if logical_null_count == array.len() {
                 return None;
             }
 
@@ -612,9 +600,9 @@ pub fn sum_array_checked<T: ArrowNumericType, A: ArrayAccessor<Item = T::Native>
 ) -> Result<Option<T::Native>, ArrowError> {
     match array.data_type() {
         DataType::Dictionary(_, _) => {
-            let null_count = array.null_count();
+            let logical_null_count = array.logical_null_count();
 
-            if null_count == array.len() {
+            if logical_null_count == array.len() {
                 return Ok(None);
             }
 
@@ -989,7 +977,10 @@ pub fn product_checked<T: ArrowNumericType>(
 }
 
 /// Returns the minimum value in the array, according to the natural order.
-/// For floating point arrays any NaN values are considered to be greater than any other non-null value
+///
+/// Floating point values are compared using IEEE 754 totalOrder (see [`f64::total_cmp`]):
+/// a positive NaN is greater than every non-NaN value, including positive infinity, and a
+/// negative NaN is less than every non-NaN value, including negative infinity.
 ///
 /// # Example
 /// ```rust
@@ -1004,7 +995,10 @@ pub fn min<T: ArrowNumericType>(array: &PrimitiveArray<T>) -> Option<T::Native> 
 }
 
 /// Returns the maximum value in the array, according to the natural order.
-/// For floating point arrays any NaN values are considered to be greater than any other non-null value
+///
+/// Floating point values are compared using IEEE 754 totalOrder (see [`f64::total_cmp`]):
+/// a positive NaN is greater than every non-NaN value, including positive infinity, and a
+/// negative NaN is less than every non-NaN value, including negative infinity.
 ///
 /// # Example
 /// ```rust
@@ -1812,6 +1806,38 @@ mod tests {
 
         assert_eq!(Some(false), min_boolean(&with_nulls));
         assert_eq!(Some(false), max_boolean(&with_nulls));
+    }
+
+    #[test]
+    fn test_dictionary_aggregates_with_null_values() {
+        let values = Arc::new(Int32Array::new(
+            vec![5, -100, 100].into(),
+            Some(vec![true, false, false].into()),
+        ));
+        for (keys, expected) in [
+            (
+                vec![Some(0_i8), Some(1), Some(0)],
+                vec![Some(5), None, Some(5)],
+            ),
+            (vec![Some(1), Some(2)], vec![None, None]),
+            (vec![None, Some(1), Some(0)], vec![None, None, Some(5)]),
+            (vec![Some(0), Some(0)], vec![Some(5), Some(5)]),
+            (vec![None, None], vec![None, None]),
+            (vec![], vec![]),
+        ] {
+            let dictionary =
+                DictionaryArray::<Int8Type>::try_new(Int8Array::from(keys), values.clone())
+                    .unwrap();
+            let array = dictionary.downcast_dict::<Int32Array>().unwrap();
+            let expected = Int32Array::from(expected);
+            assert_eq!(min_array::<Int32Type, _>(array), min(&expected));
+            assert_eq!(max_array::<Int32Type, _>(array), max(&expected));
+            assert_eq!(sum_array::<Int32Type, _>(array), sum(&expected));
+            assert_eq!(
+                sum_array_checked::<Int32Type, _>(array).unwrap(),
+                sum_checked(&expected).unwrap()
+            );
+        }
     }
 
     #[test]

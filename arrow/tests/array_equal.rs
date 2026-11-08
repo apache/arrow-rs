@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::array::{
     Array, ArrayRef, BooleanArray, Decimal128Array, FixedSizeBinaryArray, FixedSizeBinaryBuilder,
@@ -27,9 +14,10 @@ use arrow_array::builder::{
 };
 use arrow_array::cast::AsArray;
 use arrow_array::{
-    DictionaryArray, FixedSizeListArray, GenericListViewArray, PrimitiveArray, StringViewArray,
+    BinaryViewArray, DictionaryArray, FixedSizeListArray, Float32Array, GenericListViewArray,
+    PrimitiveArray, RunArray, StringViewArray,
 };
-use arrow_buffer::{Buffer, ScalarBuffer, ToByteSlice};
+use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer, ToByteSlice};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{DataType, Field, Fields, UnionFields};
 use arrow_select::take::take;
@@ -355,6 +343,49 @@ fn test_string_view_equal() {
     let a1_s = a1.slice(1, 2);
     let a2_s = a2.slice(2, 2);
     test_equal(&a1_s, &a2_s, true);
+}
+
+/// Builds `[[child[0]], [child[1]]]` with the given child validity and slices it to its second
+/// row, so the equality check compares a child range that starts at 1 instead of 0.
+fn sliced_list_of_view(child: ArrayData, validity: [bool; 2]) -> ListArray {
+    let child = child
+        .into_builder()
+        .nulls(Some(NullBuffer::from(validity.to_vec())))
+        .build()
+        .unwrap();
+    let field = Arc::new(Field::new("item", child.data_type().clone(), true));
+    let list = ListArray::new(
+        field,
+        OffsetBuffer::from_lengths([1, 1]),
+        make_array(child),
+        None,
+    );
+    list.slice(1, 1)
+}
+
+// https://github.com/apache/arrow-rs/issues/11583
+#[test]
+fn test_list_of_view_child_nulls_past_start() {
+    let long_a = "a long string that is not inlined in the view";
+    let long_b = "another long string that is not inlined either";
+
+    let children: [fn(&str) -> ArrayData; 2] = [
+        |second| StringViewArray::from(vec!["x", second]).into_data(),
+        |second| BinaryViewArray::from(vec![b"x".as_slice(), second.as_bytes()]).into_data(),
+    ];
+
+    for child in children {
+        // Both are [[null]] and differ only in the data under the null slot
+        let a = sliced_list_of_view(child(long_a), [true, false]);
+        let b = sliced_list_of_view(child(long_b), [true, false]);
+        test_equal(&a, &b, true);
+
+        // Both rows are valid and hold different values; the null at child index 0 is
+        // outside the compared range and must not hide the difference
+        let a = sliced_list_of_view(child(long_a), [false, true]);
+        let b = sliced_list_of_view(child(long_b), [false, true]);
+        test_equal(&a, &b, false);
+    }
 }
 
 #[test]
@@ -1539,5 +1570,50 @@ fn test_list_excess_children_equal() {
 
     assert_eq!(a.value_offsets(), &[0, 1, 3]);
     assert_eq!(b.value_offsets(), &[0, 0, 2]);
+    assert_eq!(a, b);
+}
+
+#[test]
+fn test_from_run_array_array_data_offset() {
+    let a = RunArray::try_new(
+        &Int32Array::from(vec![1, 3]),
+        &Float32Array::from(vec![1.5, 2.5]),
+    )
+    .unwrap()
+    .to_data();
+
+    // ensure if run_ends child has a physical offset, it is respected
+    // we construct & compare with ArrayData as other APIs will usually normalize
+    // this physical offset to 0
+    let b = {
+        let dt = DataType::RunEndEncoded(
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Float32,
+                true,
+            )),
+        );
+
+        let runs = ArrayData::builder(DataType::Int32)
+            .len(3)
+            .offset(1)
+            .add_buffer(vec![-20_i32, 1_i32, 2, 4, 0].into())
+            .build()
+            .unwrap();
+        let values = Float32Array::from(vec![1.5, 2.5, 2.5]);
+
+        ArrayDataBuilder::new(dt)
+            .len(3)
+            .offset(0)
+            .child_data(vec![runs, values.to_data()])
+            .build()
+            .unwrap()
+    };
+
     assert_eq!(a, b);
 }

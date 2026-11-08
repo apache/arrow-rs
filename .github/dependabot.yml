@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
 version: 2
 updates:
   - package-ecosystem: cargo
@@ -8,7 +12,7 @@ updates:
       interval: daily
     open-pull-requests-limit: 10
     target-branch: main
-    labels: [auto-dependencies, arrow]
+    labels: [auto-dependencies]
     groups:
       prost:
         applies-to: version-updates

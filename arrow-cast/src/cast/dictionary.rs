@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::cast::*;
 
@@ -132,6 +119,13 @@ fn dictionary_to_dictionary_cast<K: ArrowDictionaryKeyType>(
 ) -> Result<ArrayRef, ArrowError> {
     use DataType::*;
 
+    // Value type unchanged (and not nested dict): cast keys only, reuse values Arc.
+    if array.values().data_type() == to_value_type
+        && !matches!(array.values().data_type(), Dictionary(_, _))
+    {
+        return cast_keys_only(array, to_index_type, cast_options);
+    }
+
     // Fast path for a nested dictionary source (`Dictionary<K, Dictionary<K2, V>>`).
     // Both layers index into the same inner values, so the two index layers can
     // be composed into one rather than materializing the values: `take` gathers
@@ -190,13 +184,65 @@ fn dictionary_to_dictionary_cast<K: ArrowDictionaryKeyType>(
         UInt32 => Arc::new(DictionaryArray::<UInt32Type>::from(data)),
         UInt64 => Arc::new(DictionaryArray::<UInt64Type>::from(data)),
         _ => {
-            return Err(ArrowError::CastError(format!(
+            return Err(ArrowError::InvalidArgumentError(format!(
                 "Unsupported type {to_index_type} for dictionary index"
             )));
         }
     };
 
     Ok(new_array)
+}
+
+fn finish_keys_only<K2: ArrowDictionaryKeyType>(
+    cast_keys: ArrayRef,
+    values: ArrayRef,
+) -> Result<ArrayRef, ArrowError> {
+    let new_keys = cast_keys
+        .as_any()
+        .downcast_ref::<PrimitiveArray<K2>>()
+        .ok_or_else(|| {
+            ArrowError::ComputeError(
+                "Internal Error: cast keys did not downcast to target key type".to_string(),
+            )
+        })?
+        .clone();
+    // SAFETY: caller rejects overflowing keys, so every non-null key stays in bounds of `values`.
+    Ok(Arc::new(unsafe {
+        DictionaryArray::<K2>::new_unchecked(new_keys, values)
+    }))
+}
+
+fn cast_keys_only<K: ArrowDictionaryKeyType>(
+    array: &DictionaryArray<K>,
+    to_index_type: &DataType,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let source_keys = array.keys();
+    let cast_keys = cast_with_options(&source_keys, to_index_type, cast_options)?;
+
+    if cast_keys.null_count() > source_keys.null_count() {
+        return Err(ArrowError::ComputeError(format!(
+            "Could not convert {} dictionary indexes from {:?} to {:?}",
+            cast_keys.null_count() - source_keys.null_count(),
+            source_keys.data_type(),
+            to_index_type
+        )));
+    }
+
+    let values = array.values().clone();
+    match to_index_type {
+        DataType::Int8 => finish_keys_only::<Int8Type>(cast_keys, values),
+        DataType::Int16 => finish_keys_only::<Int16Type>(cast_keys, values),
+        DataType::Int32 => finish_keys_only::<Int32Type>(cast_keys, values),
+        DataType::Int64 => finish_keys_only::<Int64Type>(cast_keys, values),
+        DataType::UInt8 => finish_keys_only::<UInt8Type>(cast_keys, values),
+        DataType::UInt16 => finish_keys_only::<UInt16Type>(cast_keys, values),
+        DataType::UInt32 => finish_keys_only::<UInt32Type>(cast_keys, values),
+        DataType::UInt64 => finish_keys_only::<UInt64Type>(cast_keys, values),
+        _ => Err(ArrowError::InvalidArgumentError(format!(
+            "Unsupported type {to_index_type} for dictionary index"
+        ))),
+    }
 }
 
 /// Cast `Dict<K, Binary>` or `Dict<K, LargeBinary>` to `Utf8View`, validating UTF-8 for each
@@ -481,7 +527,7 @@ pub(crate) fn cast_to_dictionary<K: ArrowDictionaryKeyType>(
             pack_byte_to_fixed_size_dictionary::<K>(array, cast_options, byte_size)
         }
         Struct(_) => pack_struct_to_dictionary::<K>(array, dict_value_type, cast_options),
-        _ => Err(ArrowError::CastError(format!(
+        _ => Err(ArrowError::InvalidArgumentError(format!(
             "Unsupported output type for dictionary packing: {dict_value_type}"
         ))),
     }
@@ -566,14 +612,9 @@ where
 {
     let dict = pack_numeric_to_dictionary::<K, D>(array, dict_value_type, cast_options)?;
     let dict = dict.as_dictionary::<K>();
-    let typed = dict.downcast_dict::<PrimitiveArray<D>>().ok_or_else(|| {
-        ArrowError::ComputeError(format!(
-            "Internal Error: Cannot cast dict to {}Array",
-            D::PREFIX
-        ))
-    })?;
-    let value = typed
+    let value = dict
         .values()
+        .as_primitive::<D>()
         .clone()
         .with_precision_and_scale(precision, scale)?;
     Ok(Arc::new(dict.with_values(Arc::new(value))))
@@ -590,12 +631,7 @@ where
         1024,
         1024,
     );
-    let string_view = array
-        .as_any()
-        .downcast_ref::<StringViewArray>()
-        .ok_or_else(|| {
-            ArrowError::ComputeError("Internal Error: Cannot cast to StringViewArray".to_string())
-        })?;
+    let string_view = array.as_string_view();
     for v in string_view {
         match v {
             Some(v) => {
@@ -621,12 +657,7 @@ where
         1024,
         1024,
     );
-    let binary_view = array
-        .as_any()
-        .downcast_ref::<BinaryViewArray>()
-        .ok_or_else(|| {
-            ArrowError::ComputeError("Internal Error: Cannot cast to BinaryViewArray".to_string())
-        })?;
+    let binary_view = array.as_binary_view();
     for v in binary_view {
         match v {
             Some(v) => {
@@ -652,12 +683,7 @@ where
     T: ByteArrayType,
 {
     let cast_values = cast_with_options(array, &T::DATA_TYPE, cast_options)?;
-    let values = cast_values
-        .as_any()
-        .downcast_ref::<GenericByteArray<T>>()
-        .ok_or_else(|| {
-            ArrowError::ComputeError("Internal Error: Cannot cast to GenericByteArray".to_string())
-        })?;
+    let values = cast_values.as_bytes::<T>();
     let mut b = GenericByteDictionaryBuilder::<K, T>::with_capacity(values.len(), 1024, 1024);
     b.append_array(values)?;
     Ok(Arc::new(b.finish()))
@@ -675,12 +701,7 @@ where
 {
     let cast_values =
         cast_with_options(array, &DataType::FixedSizeBinary(byte_width), cast_options)?;
-    let values = cast_values
-        .as_any()
-        .downcast_ref::<FixedSizeBinaryArray>()
-        .ok_or_else(|| {
-            ArrowError::ComputeError("Internal Error: Cannot cast to GenericByteArray".to_string())
-        })?;
+    let values = cast_values.as_fixed_size_binary();
     let mut b = FixedSizeBinaryDictionaryBuilder::<K>::with_capacity(1024, 1024, byte_width);
 
     // copy each element one at a time

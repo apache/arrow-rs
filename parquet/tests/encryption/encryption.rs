@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! This module contains tests for reading encrypted Parquet files with the Arrow API
 
@@ -45,6 +32,68 @@ use parquet::file::writer::SerializedFileWriter;
 use parquet::schema::parser::parse_message_type;
 use std::fs::File;
 use std::sync::Arc;
+
+#[test]
+fn test_encryption_properties_key_debug_redaction() {
+    let footer_key = b"SYNTHETIC-FOOTER".to_vec();
+    let column_key = b"SYNTHETIC-COLUMN".to_vec();
+    let footer_key_metadata = b"footer-key-id".to_vec();
+    let column_key_metadata = b"column-key-id".to_vec();
+    let properties = FileEncryptionProperties::builder(footer_key.clone())
+        .with_footer_key_metadata(footer_key_metadata.clone())
+        .with_column_key_and_metadata(
+            "private_column",
+            column_key.clone(),
+            column_key_metadata.clone(),
+        )
+        .build()
+        .unwrap();
+
+    for output in [format!("{properties:?}"), format!("{properties:#?}")] {
+        let compact: String = output.split_whitespace().collect();
+        for key in [&footer_key, &column_key] {
+            let key_debug: String = format!("{key:?}").split_whitespace().collect();
+            assert!(!compact.contains(&key_debug));
+        }
+        assert!(output.contains("FileEncryptionProperties"));
+        assert!(output.contains("private_column"));
+    }
+
+    assert_eq!(properties.footer_key(), &footer_key);
+    assert_eq!(properties.footer_key_metadata(), Some(&footer_key_metadata));
+    assert_eq!(
+        properties.column_keys(),
+        (
+            vec!["private_column".to_string()],
+            vec![column_key],
+            vec![column_key_metadata],
+        )
+    );
+}
+
+#[test]
+fn test_writer_properties_key_debug_redaction() {
+    let footer_key = b"SYNTHETIC-FOOTER".to_vec();
+    let column_key = b"SYNTHETIC-COLUMN".to_vec();
+    let encryption = FileEncryptionProperties::builder(footer_key.clone())
+        .with_column_key("private_column", column_key.clone())
+        .build()
+        .unwrap();
+    let builder = WriterProperties::builder().with_file_encryption_properties(encryption);
+    let builder_debug = [format!("{builder:?}"), format!("{builder:#?}")];
+    let properties = builder.build();
+    for output in builder_debug
+        .into_iter()
+        .chain([format!("{properties:?}"), format!("{properties:#?}")])
+    {
+        let compact: String = output.split_whitespace().collect();
+        for key in [&footer_key, &column_key] {
+            let key_debug: String = format!("{key:?}").split_whitespace().collect();
+            assert!(!compact.contains(&key_debug));
+        }
+        assert!(output.contains("private_column"));
+    }
+}
 
 #[test]
 fn test_non_uniform_encryption_plaintext_footer() {

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Timezone for timestamp arrays
 //!
@@ -38,7 +25,7 @@
 //! [jiff]: https://docs.rs/jiff
 
 use arrow_schema::ArrowError;
-use chrono::FixedOffset;
+use chrono::{DateTime, FixedOffset, NaiveDateTime};
 pub use private::{Tz, TzOffset};
 
 /// Returns the release of the [IANA time zone database] that resolves named timezones, such as
@@ -304,6 +291,29 @@ mod private {
                 }
             }
         }
+    }
+
+    pub(super) fn new_gap_info(local: &NaiveDateTime, tz: &Tz) -> Option<GapInfo> {
+        let TzInner::Timezone(named) = tz.0 else {
+            return None;
+        };
+        // A local datetime outside jiff's range resolves to a single offset, so it is not in a gap
+        let civil = jiff_civil(local)?;
+        let AmbiguousOffset::Gap { before, after } =
+            named.tz.to_ambiguous_timestamp(civil).offset()
+        else {
+            return None;
+        };
+        // Reading a local datetime in the gap with the later offset gives an instant before the
+        // transition, so the next transition is the one that opened the gap
+        let from = after.to_timestamp(civil).ok()?;
+        let transition = named.tz.following(from).next()?;
+        let end = DateTime::from_timestamp(transition.timestamp().as_second(), 0)?;
+        let begin = end.naive_utc() + chrono::TimeDelta::seconds(before.seconds().into());
+        Some(GapInfo {
+            begin: Some((begin, tz.offset(fixed_offset(before)))),
+            end: Some(end.with_timezone(tz)),
+        })
     }
 
     #[cfg(test)]
@@ -609,6 +619,25 @@ mod private {
         }
     }
 
+    #[inline]
+    pub(super) fn new_gap_info(local: &NaiveDateTime, tz: &Tz) -> Option<GapInfo> {
+        let TzInner::Timezone(ctz) = &tz.0 else {
+            return None;
+        };
+        chrono_tz::GapInfo::new(local, ctz).map(|gi| GapInfo {
+            begin: gi.begin.map(|(ndt, ctz)| {
+                (
+                    ndt,
+                    TzOffset {
+                        tz: *tz,
+                        offset: ctz.fix(),
+                    },
+                )
+            }),
+            end: gi.end.map(|dt| dt.with_timezone(tz)),
+        })
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -762,6 +791,87 @@ mod private {
             TzOffset(self.0.offset_from_utc_datetime(utc).fix())
         }
     }
+
+    #[inline]
+    pub(super) fn new_gap_info(_local: &NaiveDateTime, _tz: &Tz) -> Option<GapInfo> {
+        // Fixed offsets never contain gaps
+        None
+    }
+}
+
+/// Represents the information of a gap.
+///
+/// This returns useful information that can be used when converting a local [`NaiveDateTime`]
+/// to a timezone-aware [`DateTime`] with [`chrono::TimeZone::from_local_datetime`] and a gap
+/// ([`chrono::LocalResult::None`]) is found.
+///
+/// # Examples
+///
+/// In the `America/New_York` timezone the clocks went forward one hour at `2026-03-08T02:00:00`.
+/// The local time `2026-03-08T01:30:00` exists, but `2026-03-08T02:30:00` falls in the gap and
+/// does not.
+///
+/// ```
+/// # #[cfg(any(feature = "chrono-tz", feature = "jiff"))]
+/// # {
+/// use arrow_array::timezone::{GapInfo, Tz};
+/// use chrono::{DateTime, FixedOffset, LocalResult, NaiveDateTime, Offset, TimeZone};
+///
+/// let tz: Tz = "America/New_York".parse().unwrap();
+/// let expect_offset: FixedOffset = "-0500".parse().unwrap();
+///
+/// // A local time before the gap has a single offset, and is not in a gap.
+/// let exists: NaiveDateTime = "2026-03-08T01:30:00".parse().unwrap();
+/// let offset = tz.offset_from_local_datetime(&exists).single().unwrap();
+/// assert_eq!(offset.fix(), expect_offset);
+/// assert!(GapInfo::new(&exists, &tz).is_none());
+///
+/// // A local time inside the gap has no offset...
+/// let not_exist: NaiveDateTime = "2026-03-08T02:30:00".parse().unwrap();
+/// let offset = tz.offset_from_local_datetime(&not_exist);
+/// assert!(matches!(offset, LocalResult::None));
+///
+/// // ...but `GapInfo` describes the gap it falls in.
+/// let GapInfo { begin, end } = GapInfo::new(&not_exist, &tz).unwrap();
+///
+/// // The gap begins at 02:00 local time. The offset is the one in effect before the gap.
+/// let (begin_datetime, begin_offset) = begin.unwrap();
+/// let expect_begin: NaiveDateTime = "2026-03-08T02:00:00".parse().unwrap();
+/// assert_eq!(begin_datetime, expect_begin);
+/// assert_eq!(begin_offset.fix(), expect_offset);
+///
+/// // The gap ends at 03:00 local time, with the offset in effect after the gap.
+/// let expect_end: DateTime<FixedOffset> = "2026-03-08T03:00:00-0400".parse().unwrap();
+/// assert_eq!(end.unwrap(), expect_end.with_timezone(&tz));
+/// # }
+/// ```
+#[derive(Debug, Clone, Copy)]
+pub struct GapInfo {
+    /// When available it contains information about the beginning of the gap.
+    ///
+    /// The time represents the first instant in which the gap starts.
+    /// This means that it is the first instant that when used with
+    /// [`chrono::TimeZone::from_local_datetime`] it will return
+    /// [`chrono::LocalResult::None`].
+    ///
+    /// The offset represents the offset of the first instant before the gap.
+    pub begin: Option<(NaiveDateTime, TzOffset)>,
+
+    /// When available it contains the first instant after the gap.
+    pub end: Option<DateTime<Tz>>,
+}
+
+impl GapInfo {
+    /// Return information about a gap.
+    ///
+    /// It returns `None` if `local` is not in a gap for the current timezone. Timezones
+    /// that represent fixed offsets contain no gaps and therefore always return `None`.
+    ///
+    /// If `local` is at the limits of the known timestamps the fields `begin` or `end` in
+    /// [`GapInfo`] will be `None`.
+    pub fn new(local: &NaiveDateTime, tz: &Tz) -> Option<Self> {
+        private::new_gap_info(local, tz)
+    }
 }
 
 #[cfg(test)]
@@ -819,6 +929,127 @@ mod tests {
             assert!(version.as_bytes()[4].is_ascii_lowercase(), "{version}");
         } else {
             assert_eq!(version, None);
+        }
+    }
+
+    #[test]
+    fn test_gap_info_fixed_offset() {
+        let times = [
+            NaiveDate::from_ymd_opt(2000, 1, 1)
+                .unwrap()
+                .and_hms_opt(0, 0, 0)
+                .unwrap(),
+            // Times that are in a DST gap for some named timezones
+            NaiveDate::from_ymd_opt(2021, 3, 14)
+                .unwrap()
+                .and_hms_opt(2, 30, 0)
+                .unwrap(),
+            NaiveDate::from_ymd_opt(2021, 3, 28)
+                .unwrap()
+                .and_hms_opt(1, 30, 0)
+                .unwrap(),
+        ];
+
+        for tz in ["+00:00", "-05:00", "+01:00", "+09:30"] {
+            let tz: Tz = tz.parse().unwrap();
+            for t in &times {
+                assert!(GapInfo::new(t, &tz).is_none(), "{tz:?} {t}");
+            }
+        }
+    }
+
+    #[cfg(any(feature = "chrono-tz", feature = "jiff"))]
+    mod gap_info {
+        use super::*;
+        use chrono::Utc;
+
+        fn naive(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> NaiveDateTime {
+            NaiveDate::from_ymd_opt(y, mo, d)
+                .unwrap()
+                .and_hms_opt(h, mi, 0)
+                .unwrap()
+        }
+
+        fn utc(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> chrono::DateTime<Utc> {
+            Utc.with_ymd_and_hms(y, mo, d, h, mi, 0).unwrap()
+        }
+
+        #[test]
+        fn test_gap_info_not_in_gap() {
+            let tz: Tz = "America/New_York".parse().unwrap();
+            // Just before and at the end of the 2021 spring forward gap
+            assert!(GapInfo::new(&naive(2021, 3, 14, 1, 59), &tz).is_none());
+            assert!(GapInfo::new(&naive(2021, 3, 14, 3, 0), &tz).is_none());
+            // Ambiguous time during the 2021 fall back overlap is not a gap
+            assert!(GapInfo::new(&naive(2021, 11, 7, 1, 30), &tz).is_none());
+        }
+
+        #[test]
+        fn test_gap_info_america_new_york() {
+            // Clocks went forward from 2021-03-14T02:00:00-05:00 to 2021-03-14T03:00:00-04:00
+            let tz: Tz = "America/New_York".parse().unwrap();
+            for local in [
+                naive(2021, 3, 14, 2, 0),
+                naive(2021, 3, 14, 2, 30),
+                naive(2021, 3, 14, 2, 59),
+            ] {
+                assert!(tz.from_local_datetime(&local).single().is_none());
+
+                let gap = GapInfo::new(&local, &tz).unwrap();
+                let (begin, begin_offset) = gap.begin.unwrap();
+                assert_eq!(begin, naive(2021, 3, 14, 2, 0));
+                assert_eq!(
+                    begin_offset.fix(),
+                    FixedOffset::west_opt(5 * 60 * 60).unwrap()
+                );
+
+                let end = gap.end.unwrap();
+                assert_eq!(end.naive_local(), naive(2021, 3, 14, 3, 0));
+                assert_eq!(
+                    end.offset().fix(),
+                    FixedOffset::west_opt(4 * 60 * 60).unwrap()
+                );
+                assert_eq!(end, utc(2021, 3, 14, 7, 0));
+                assert_eq!(end.timezone().to_string(), "America/New_York");
+            }
+        }
+
+        #[test]
+        fn test_gap_info_europe_london() {
+            // Clocks went forward from 2021-03-28T01:00:00+00:00 to 2021-03-28T02:00:00+01:00
+            let tz: Tz = "Europe/London".parse().unwrap();
+            let gap = GapInfo::new(&naive(2021, 3, 28, 1, 30), &tz).unwrap();
+
+            let (begin, begin_offset) = gap.begin.unwrap();
+            assert_eq!(begin, naive(2021, 3, 28, 1, 0));
+            assert_eq!(begin_offset.fix(), FixedOffset::east_opt(0).unwrap());
+
+            let end = gap.end.unwrap();
+            assert_eq!(end.naive_local(), naive(2021, 3, 28, 2, 0));
+            assert_eq!(end.offset().fix(), FixedOffset::east_opt(60 * 60).unwrap());
+            assert_eq!(end, utc(2021, 3, 28, 1, 0));
+        }
+
+        #[test]
+        fn test_gap_info_australia_sydney() {
+            // Clocks went forward from 2021-10-03T02:00:00+10:00 to 2021-10-03T03:00:00+11:00
+            let tz: Tz = "Australia/Sydney".parse().unwrap();
+            let gap = GapInfo::new(&naive(2021, 10, 3, 2, 30), &tz).unwrap();
+
+            let (begin, begin_offset) = gap.begin.unwrap();
+            assert_eq!(begin, naive(2021, 10, 3, 2, 0));
+            assert_eq!(
+                begin_offset.fix(),
+                FixedOffset::east_opt(10 * 60 * 60).unwrap()
+            );
+
+            let end = gap.end.unwrap();
+            assert_eq!(end.naive_local(), naive(2021, 10, 3, 3, 0));
+            assert_eq!(
+                end.offset().fix(),
+                FixedOffset::east_opt(11 * 60 * 60).unwrap()
+            );
+            assert_eq!(end, utc(2021, 10, 2, 16, 0));
         }
     }
 }

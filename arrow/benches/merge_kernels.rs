@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use criterion::measurement::WallTime;
 use criterion::{BenchmarkGroup, BenchmarkId, Criterion, criterion_group, criterion_main};
@@ -225,6 +212,36 @@ fn bench_merge_input_on_all_masks(
     }
 }
 
+/// An Int8-keyed dictionary of `len` random keys into `distinct` string values.
+/// Each call builds its own values array, so two calls share values but not
+/// the dictionary itself
+fn generate_int8_dictionary(seed: u64, len: usize, distinct: usize) -> ArrayRef {
+    let mut rng = StdRng::seed_from_u64(seed);
+    let values = StringArray::from_iter_values((0..distinct).map(|i| format!("value_{i}")));
+    let keys = Int8Array::from_iter_values((0..len).map(|_| rng.random_range(0..distinct) as i8));
+    Arc::new(DictionaryArray::<Int8Type>::try_new(keys, Arc::new(values)).unwrap())
+}
+
+fn bench_merge_dictionaries(c: &mut Criterion) {
+    const ARRAY_LEN: usize = 8192;
+
+    let mut group = c.benchmark_group(format!("merge_{ARRAY_LEN}_from_int8_dictionaries"));
+    let masks = mask_cases(ARRAY_LEN);
+
+    // 2 x 50 values fit in Int8 keys when the dictionaries are concatenated,
+    // 2 x 100 values do not, so merging them has to merge the dictionaries
+    for (description, distinct) in [
+        ("array_vs_array_concatenated_values_fit", 50),
+        ("array_vs_array_concatenated_values_overflow", 100),
+    ] {
+        let truthy = generate_int8_dictionary(42, ARRAY_LEN, distinct);
+        let falsy = generate_int8_dictionary(18, ARRAY_LEN, distinct);
+        bench_merge_input_on_all_masks(description, &mut group, &masks, &truthy, &falsy);
+    }
+
+    group.finish();
+}
+
 fn add_benchmark(c: &mut Criterion) {
     // Primitive
     bench_merge_on_input_generator(
@@ -274,6 +291,9 @@ fn add_benchmark(c: &mut Criterion) {
             _marker: std::marker::PhantomData,
         },
     );
+
+    // Dictionaries
+    bench_merge_dictionaries(c);
 }
 
 criterion_group!(benches, add_benchmark);

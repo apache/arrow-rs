@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::builder::{ArrayBuilder, PrimitiveBuilder};
 use crate::types::ArrowDictionaryKeyType;
@@ -25,6 +12,7 @@ use arrow_schema::{ArrowError, DataType};
 use num_traits::NumCast;
 use std::any::Any;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
 /// Wraps a type implementing `ToByteSlice` implementing `Hash` and `Eq` for it
@@ -35,7 +23,7 @@ struct Value<T>(T);
 
 impl<T: ToByteSlice> std::hash::Hash for Value<T> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0.to_byte_slice().hash(state)
+        state.write(self.0.to_byte_slice())
     }
 }
 
@@ -87,7 +75,7 @@ where
 {
     keys_builder: PrimitiveBuilder<K>,
     values_builder: PrimitiveBuilder<V>,
-    map: HashMap<Value<V::Native>, usize>,
+    map: HashMap<Value<V::Native>, usize, ahash::RandomState>,
 }
 
 impl<K, V> Default for PrimitiveDictionaryBuilder<K, V>
@@ -110,7 +98,7 @@ where
         Self {
             keys_builder: PrimitiveBuilder::new(),
             values_builder: PrimitiveBuilder::new(),
-            map: HashMap::new(),
+            map: HashMap::default(),
         }
     }
 
@@ -131,7 +119,7 @@ where
         Self {
             keys_builder,
             values_builder,
-            map: HashMap::with_capacity(values_capacity),
+            map: HashMap::with_capacity_and_hasher(values_capacity, Default::default()),
         }
     }
 
@@ -146,7 +134,7 @@ where
     ) -> Self {
         let keys = keys_builder.values_slice();
         let values = values_builder.values_slice();
-        let mut map = HashMap::with_capacity(values.len());
+        let mut map = HashMap::with_capacity_and_hasher(values.len(), Default::default());
 
         keys.iter().zip(values.iter()).for_each(|(key, value)| {
             map.insert(Value(*value), K::Native::to_usize(*key).unwrap());
@@ -167,7 +155,7 @@ where
         Self {
             keys_builder: PrimitiveBuilder::with_capacity(keys_capacity),
             values_builder: PrimitiveBuilder::with_capacity(values_capacity),
-            map: HashMap::with_capacity(values_capacity),
+            map: HashMap::with_capacity_and_hasher(values_capacity, Default::default()),
         }
     }
 
@@ -286,17 +274,15 @@ where
 {
     #[inline]
     fn get_or_insert_key(&mut self, value: V::Native) -> Result<K::Native, ArrowError> {
-        match self.map.get(&Value(value)) {
-            Some(&key) => {
-                Ok(K::Native::from_usize(key).ok_or(ArrowError::DictionaryKeyOverflowError)?)
-            }
-            None => {
+        let key = match self.map.entry(Value(value)) {
+            Entry::Occupied(entry) => *entry.get(),
+            Entry::Vacant(entry) => {
                 let key = self.values_builder.len();
                 self.values_builder.append_value(value);
-                self.map.insert(Value(value), key);
-                Ok(K::Native::from_usize(key).ok_or(ArrowError::DictionaryKeyOverflowError)?)
+                *entry.insert(key)
             }
-        }
+        };
+        K::Native::from_usize(key).ok_or(ArrowError::DictionaryKeyOverflowError)
     }
 
     /// Append a primitive value to the array. Return an existing index

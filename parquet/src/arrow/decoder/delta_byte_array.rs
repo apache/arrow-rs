@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use bytes::Bytes;
 
@@ -56,6 +43,13 @@ impl DeltaByteArrayDecoder {
 
         assert_eq!(prefix_lengths.len(), suffix_lengths.len());
 
+        if let Some(len) = prefix_lengths.iter().find(|l| **l < 0) {
+            return Err(general_err!("Invalid DELTA_BYTE_ARRAY prefix length {len}"));
+        }
+        if let Some(len) = suffix_lengths.iter().find(|l| **l < 0) {
+            return Err(general_err!("Invalid DELTA_BYTE_ARRAY suffix length {len}"));
+        }
+
         Ok(Self {
             prefix_lengths,
             suffix_lengths,
@@ -92,16 +86,18 @@ impl DeltaByteArrayDecoder {
             let prefix_length = *prefix_length as usize;
             let suffix_length = *suffix_length as usize;
 
-            if self.data_offset + suffix_length > self.data.len() {
-                return Err(ParquetError::EOF("eof decoding byte array".into()));
-            }
+            let end = self
+                .data_offset
+                .checked_add(suffix_length)
+                .filter(|&e| e <= data.len())
+                .ok_or_else(|| ParquetError::EOF("eof decoding byte array".into()))?;
 
             self.last_value.truncate(prefix_length);
             self.last_value
-                .extend_from_slice(&data[self.data_offset..self.data_offset + suffix_length]);
+                .extend_from_slice(&data[self.data_offset..end]);
             f(&self.last_value)?;
 
-            self.data_offset += suffix_length;
+            self.data_offset = end;
         }
 
         self.length_offset += to_read;
@@ -123,16 +119,57 @@ impl DeltaByteArrayDecoder {
             let prefix_length = *prefix_length as usize;
             let suffix_length = *suffix_length as usize;
 
-            if self.data_offset + suffix_length > self.data.len() {
-                return Err(ParquetError::EOF("eof decoding byte array".into()));
-            }
+            let end = self
+                .data_offset
+                .checked_add(suffix_length)
+                .filter(|&e| e <= data.len())
+                .ok_or_else(|| ParquetError::EOF("eof decoding byte array".into()))?;
 
             self.last_value.truncate(prefix_length);
             self.last_value
-                .extend_from_slice(&data[self.data_offset..self.data_offset + suffix_length]);
-            self.data_offset += suffix_length;
+                .extend_from_slice(&data[self.data_offset..end]);
+            self.data_offset = end;
         }
         self.length_offset += to_skip;
         Ok(to_skip)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::encodings::encoding::{DeltaBitPackEncoder, Encoder};
+
+    fn page(prefixes: &[i32], suffixes: &[i32], payload: &[u8]) -> Bytes {
+        let mut page = vec![];
+        for lengths in [prefixes, suffixes] {
+            let mut encoder = DeltaBitPackEncoder::<Int32Type>::new();
+            encoder.put(lengths).unwrap();
+            page.extend_from_slice(&encoder.flush_buffer().unwrap());
+        }
+        page.extend_from_slice(payload);
+        page.into()
+    }
+
+    #[test]
+    fn test_negative_suffix_length() {
+        let Err(err) = DeltaByteArrayDecoder::new(page(&[0, 0], &[1, -1], b"ab")) else {
+            panic!("expected error");
+        };
+        assert!(
+            err.to_string()
+                .contains("Invalid DELTA_BYTE_ARRAY suffix length -1")
+        );
+    }
+
+    #[test]
+    fn test_negative_prefix_length() {
+        let Err(err) = DeltaByteArrayDecoder::new(page(&[0, -1], &[1, 1], b"ab")) else {
+            panic!("expected error");
+        };
+        assert!(
+            err.to_string()
+                .contains("Invalid DELTA_BYTE_ARRAY prefix length -1")
+        );
     }
 }

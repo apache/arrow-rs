@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::cast::*;
 use arrow_ord::partition::partition;
@@ -27,10 +14,7 @@ pub(crate) fn run_end_encoded_cast<K: RunEndIndexType>(
 ) -> Result<ArrayRef, ArrowError> {
     match array.data_type() {
         DataType::RunEndEncoded(_, _) => {
-            let run_array = array
-                .as_any()
-                .downcast_ref::<RunArray<K>>()
-                .ok_or_else(|| ArrowError::CastError("Expected RunArray".to_string()))?;
+            let run_array = array.as_run::<K>();
 
             match to_type {
                 // Stay as RunEndEncoded, cast only the values
@@ -63,7 +47,7 @@ pub(crate) fn run_end_encoded_cast<K: RunEndIndexType>(
                             Arc::new(RunArray::<Int64Type>::try_new(re, cast_values.as_ref())?)
                         }
                         _ => {
-                            return Err(ArrowError::CastError(
+                            return Err(ArrowError::InvalidArgumentError(
                                 "Run-end type must be i16, i32, or i64".to_string(),
                             ));
                         }
@@ -100,10 +84,9 @@ pub(crate) fn run_end_encoded_cast<K: RunEndIndexType>(
             }
         }
 
-        _ => Err(ArrowError::CastError(format!(
-            "Cannot cast array of type {:?} to RunEndEncodedArray",
-            array.data_type()
-        ))),
+        _ => unreachable!(
+            "cast_with_options only calls run_end_encoded_cast for RunEndEncoded source arrays"
+        ),
     }
 }
 
@@ -135,9 +118,9 @@ pub(crate) fn cast_to_run_end_encoded<K: RunEndIndexType>(
 
     // REE arrays are handled by run_end_encoded_cast
     if let DataType::RunEndEncoded(_, _) = array.data_type() {
-        return Err(ArrowError::CastError(
-            "Source array is already a RunEndEncoded array, should have been handled by run_end_encoded_cast".to_string()
-        ));
+        unreachable!(
+            "cast_with_options handles RunEndEncoded source arrays with run_end_encoded_cast first"
+        );
     }
 
     // Partition the array to identify runs of consecutive equal values

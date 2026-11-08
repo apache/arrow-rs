@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! ALP (Adaptive Lossless floating-Point) Encoding
 //!
@@ -245,9 +232,7 @@ impl<Exact: AlpExact> ForInfo<Exact> {
 /// unsigned wrapping arithmetic: this avoids signed overflow when a vector's
 /// range exceeds the signed maximum, and unpacking needs no sign extension.
 /// Signed interpretation is applied later during decimal reconstruction.
-pub(crate) trait AlpExact:
-    Copy + std::fmt::Debug + PartialEq + BitPacking + Default
-{
+pub trait AlpExact: Copy + std::fmt::Debug + PartialEq + BitPacking + Default {
     const WIDTH: usize;
     type Signed: BitPacking + Copy + Ord + std::fmt::Debug + Send;
     fn from_le_slice(slice: &[u8]) -> Self;
@@ -406,9 +391,7 @@ pub(crate) const ALP_NEG_POW10_F64: [f64; 19] = [
 /// float side of the codec, the decimal scaling and rounding that turn floats
 /// into exact integers and back, while [`AlpExact`] owns the integer side, the
 /// FOR and bit-packing arithmetic on those encoded values.
-pub(crate) trait AlpFloat:
-    Copy + Default + PartialEq + std::ops::Mul<Output = Self>
-{
+pub trait AlpFloat: Copy + Default + PartialEq + std::ops::Mul<Output = Self> {
     type Exact: AlpExact + FromBytes;
     type Scale: Copy + Send;
 

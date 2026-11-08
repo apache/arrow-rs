@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::arith::derive_arith;
 use crate::bigint::div::div_rem;
@@ -496,9 +483,16 @@ impl i256 {
         let a = self.wrapping_abs();
         let b = other.wrapping_abs();
 
-        let (div, rem) = div_rem(&a.as_digits(), &b.as_digits());
-        let div = Self::from_digits(div);
-        let rem = Self::from_digits(rem);
+        let (div, rem) = if a.high == 0 && b.high == 0 {
+            // Magnitudes below 2^128 don't need the long division
+            (
+                Self::from_parts(a.low / b.low, 0),
+                Self::from_parts(a.low % b.low, 0),
+            )
+        } else {
+            let (div, rem) = div_rem(&a.as_digits(), &b.as_digits());
+            (Self::from_digits(div), Self::from_digits(rem))
+        };
 
         Ok((
             if self.is_negative() == other.is_negative() {
@@ -1203,6 +1197,7 @@ impl CheckedDiv for i256 {
 }
 
 impl CheckedMul for i256 {
+    #[inline]
     fn checked_mul(&self, v: &i256) -> Option<Self> {
         (*self).checked_mul(*v)
     }

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::arrow::array_reader::{ArrayReader, read_records, skip_records};
 use crate::arrow::buffer::bit_util::sign_extend_be;
@@ -459,7 +446,7 @@ impl ByteArrayDecoderDeltaLength {
         let mut lengths = vec![0; values];
         len_decoder.get(&mut lengths)?;
 
-        let mut total_bytes = 0;
+        let mut total_bytes = len_decoder.get_offset();
 
         for l in &lengths {
             if *l < 0 {
@@ -467,10 +454,12 @@ impl ByteArrayDecoderDeltaLength {
                     "negative delta length byte array length".to_string(),
                 ));
             }
-            total_bytes += *l as usize;
+            total_bytes = total_bytes
+                .checked_add(*l as usize)
+                .ok_or_else(|| general_err!("delta length byte array length overflow"))?;
         }
 
-        if total_bytes + len_decoder.get_offset() > data.len() {
+        if total_bytes > data.len() {
             return Err(ParquetError::General(
                 "Insufficient delta length byte array bytes".to_string(),
             ));
@@ -496,6 +485,8 @@ impl ByteArrayDecoderDeltaLength {
         let src_lengths = &self.lengths[self.length_offset..self.length_offset + to_read];
         let total_bytes: usize = src_lengths.iter().map(|x| *x as usize).sum();
 
+        Self::checked_offset::<I>(initial_values_length, total_bytes)?;
+
         // Reserve capacity for both offsets and values upfront
         output.offsets.reserve(to_read);
         output.values.reserve(total_bytes);
@@ -511,7 +502,8 @@ impl ByteArrayDecoderDeltaLength {
         let mut running = base_offset;
         output.offsets.extend(src_lengths.iter().map(|length| {
             running += *length as usize;
-            I::from_usize(running).expect("index overflow decoding byte array")
+            // Nonnegative lengths and the checked final offset make every offset valid.
+            I::usize_as(running)
         }));
 
         self.data_offset = data_end;
@@ -521,6 +513,13 @@ impl ByteArrayDecoderDeltaLength {
             output.check_valid_utf8(initial_values_length)?;
         }
         Ok(to_read)
+    }
+
+    fn checked_offset<I: OffsetSizeTrait>(offset: usize, additional: usize) -> Result<I> {
+        offset
+            .checked_add(additional)
+            .and_then(I::from_usize)
+            .ok_or_else(|| general_err!("index overflow decoding byte array"))
     }
 
     fn skip(&mut self, to_skip: usize) -> Result<usize> {
@@ -766,5 +765,87 @@ mod tests {
         assert_eq!(output.values.as_slice(), b"foo");
         assert_eq!(output.offsets.as_slice(), &[0, 3]);
         assert_eq!(decoder.max_remaining_values, 1);
+    }
+
+    #[test]
+    fn test_delta_length_checked_offset() {
+        let max = i32::MAX as usize;
+        assert_eq!(
+            ByteArrayDecoderDeltaLength::checked_offset::<i32>(max - 1, 1).unwrap(),
+            i32::MAX
+        );
+        assert_eq!(
+            ByteArrayDecoderDeltaLength::checked_offset::<i32>(max, 0).unwrap(),
+            i32::MAX
+        );
+        for (offset, additional) in [(max, 1), (0, max + 1), (usize::MAX, 1)] {
+            let error =
+                ByteArrayDecoderDeltaLength::checked_offset::<i32>(offset, additional).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "Parquet error: index overflow decoding byte array"
+            );
+        }
+        assert_eq!(
+            ByteArrayDecoderDeltaLength::checked_offset::<i64>(max, 1).unwrap(),
+            i32::MAX as i64 + 1
+        );
+        assert!(ByteArrayDecoderDeltaLength::checked_offset::<i64>(usize::MAX, 1).is_err());
+    }
+
+    #[test]
+    fn test_delta_length_read_append_and_skip() {
+        let (pages, _) = byte_array_all_encodings(vec!["ab", "", "cde", "f"]);
+        let (_, page) = pages
+            .into_iter()
+            .find(|(encoding, _)| *encoding == Encoding::DELTA_LENGTH_BYTE_ARRAY)
+            .unwrap();
+        let mut decoder = ByteArrayDecoderDeltaLength::new(page, true).unwrap();
+        let mut output = OffsetBuffer::<i32>::with_capacity(0);
+        output.try_push(b"prefix", true).unwrap();
+
+        assert_eq!(decoder.read(&mut output, 2).unwrap(), 2);
+        assert_eq!(output.values.as_slice(), b"prefixab");
+        assert_eq!(output.offsets.as_slice(), &[0, 6, 8, 8]);
+        assert_eq!(decoder.skip(1).unwrap(), 1);
+        assert_eq!(decoder.read(&mut output, 1).unwrap(), 1);
+        assert_eq!(output.values.as_slice(), b"prefixabf");
+        assert_eq!(output.offsets.as_slice(), &[0, 6, 8, 8, 9]);
+        assert_eq!(decoder.read(&mut output, 1).unwrap(), 0);
+    }
+
+    // The checked_offset unit tests cover arithmetic; this also verifies that
+    // read rejects a real overflow before changing output or decoder state.
+    // Keep this regression available for manual runs without requiring an
+    // allocation of about 2 GiB in routine CI.
+    #[test]
+    #[ignore = "allocates about 2 GiB; run --ignored --test-threads=1"]
+    fn test_delta_length_offset_overflow_preserves_state() {
+        let (pages, _) = byte_array_all_encodings(vec!["", "a"]);
+        let (_, page) = pages
+            .into_iter()
+            .find(|(encoding, _)| *encoding == Encoding::DELTA_LENGTH_BYTE_ARRAY)
+            .unwrap();
+        let mut decoder = ByteArrayDecoderDeltaLength::new(page, false).unwrap();
+        let data_offset = decoder.data_offset;
+        let mut output = OffsetBuffer::<i32> {
+            offsets: vec![0, i32::MAX],
+            values: vec![0; i32::MAX as usize],
+        };
+
+        let error = decoder.read(&mut output, 2).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Parquet error: index overflow decoding byte array"
+        );
+        assert_eq!(output.values.len(), i32::MAX as usize);
+        assert_eq!(output.offsets, vec![0, i32::MAX]);
+        assert_eq!(decoder.data_offset, data_offset);
+        assert_eq!(decoder.length_offset, 0);
+
+        assert_eq!(decoder.read(&mut output, 1).unwrap(), 1);
+        assert_eq!(output.offsets, vec![0, i32::MAX, i32::MAX]);
+        assert_eq!(decoder.skip(1).unwrap(), 1);
+        assert_eq!(decoder.read(&mut output, 1).unwrap(), 0);
     }
 }
