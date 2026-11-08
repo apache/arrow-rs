@@ -2618,6 +2618,7 @@ dependencies = [
  "serde_json",
  "simdutf8",
  "snap",
+ "snipsnap",
  "sysinfo",
  "tempfile",
  "tokio",
@@ -3552,6 +3553,11 @@ name = "snap"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "199905e6153d6405f9728fe44daace35f8f837bbf830bb6e85fbd5828709a886"
+
+[[package]]
+name = "snipsnap"
+version = "0.0.2"
+source = "git+https://github.com/Dandandan/snipsnap?rev=2f32cbd03a1322dfb923af1b26103f0e2966dc15#2f32cbd03a1322dfb923af1b26103f0e2966dc15"
 
 [[package]]
 name = "socket2"
