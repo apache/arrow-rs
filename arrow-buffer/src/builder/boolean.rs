@@ -263,10 +263,63 @@ impl BooleanBufferBuilder {
         self.advance(additional);
 
         let offset = self.len() - additional;
-        for (i, v) in slice.iter().enumerate() {
-            if *v {
-                unsafe { bit_util::set_bit_raw(self.buffer.as_mut_ptr(), offset + i) }
+
+        // Up to 8 values touch at most two bytes, so pack them directly. This
+        // includes 8 values at an unaligned offset, which leave no whole byte
+        // for `pack_slice` to pack.
+        if additional <= 8 {
+            if additional == 0 {
+                return;
             }
+            // At most 8 bits starting at bit 7 end at bit 14, so they span at most two bytes
+            let bits = (Self::pack_bits(slice) as u16) << (offset % 8);
+            let buffer = self.buffer.as_slice_mut();
+            buffer[offset / 8] |= bits as u8;
+            if let Some(next) = buffer.get_mut(offset / 8 + 1) {
+                *next |= (bits >> 8) as u8;
+            }
+        } else {
+            self.pack_slice(offset, slice)
+        }
+    }
+
+    /// Packs up to 8 bools into a byte, `slice[i]` at bit `i`,
+    /// without a branch per value
+    #[inline]
+    fn pack_bits(slice: &[bool]) -> u8 {
+        slice
+            .iter()
+            .enumerate()
+            .fold(0, |acc, (i, v)| acc | ((*v as u8) << i))
+    }
+
+    /// Writes `slice` into the already allocated bits starting at `offset`
+    ///
+    /// Kept out of line so that the short slice path of [`Self::append_slice`]
+    /// stays small when inlined
+    #[inline(never)]
+    fn pack_slice(&mut self, offset: usize, slice: &[bool]) {
+        let additional = slice.len();
+        let buffer = self.buffer.as_slice_mut();
+
+        // Fill the first byte up to the next byte boundary
+        let head = ((8 - offset % 8) % 8).min(additional);
+        let (head_slice, rest) = slice.split_at(head);
+        buffer[offset / 8] |= Self::pack_bits(head_slice) << (offset % 8);
+
+        // Pack 8 bools into each byte without branching: a `bool` is a byte
+        // holding 0 or 1, and the multiply moves byte `i` to bit `56 + i`
+        let byte_offset = (offset + head) / 8;
+        let (chunks, remainder) = rest.as_chunks::<8>();
+        for (dst, chunk) in buffer[byte_offset..].iter_mut().zip(chunks) {
+            let bytes: [u8; 8] = std::array::from_fn(|i| chunk[i] as u8);
+            let packed = u64::from_le_bytes(bytes).wrapping_mul(0x0102_0408_1020_4080) >> 56;
+            *dst = packed as u8;
+        }
+
+        // The remainder starts on a byte boundary
+        if !remainder.is_empty() {
+            buffer[(self.len - remainder.len()) / 8] |= Self::pack_bits(remainder);
         }
     }
 
@@ -774,6 +827,50 @@ mod tests {
             let finished = builder.finish();
             for (i, &v) in bools.iter().enumerate() {
                 assert_eq!(finished.value(i), v, "at index {i} for len {len}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_append_slice_all_byte_patterns() {
+        for byte in 0..=u8::MAX {
+            // 8 values take the short path, 16 values are packed with the multiply
+            let values: Vec<bool> = (0..16).map(|i| byte & (1 << (i % 8)) != 0).collect();
+            let mut b = BooleanBufferBuilder::new(8);
+            b.append_slice(&values[..8]);
+            assert_eq!(b.as_slice(), &[byte]);
+
+            let mut b = BooleanBufferBuilder::new(16);
+            b.append_slice(&values);
+            assert_eq!(b.as_slice(), &[byte, byte]);
+        }
+    }
+
+    #[test]
+    fn test_append_slice_offsets() {
+        // Exercise every combination of starting bit offset and slice length
+        // around the byte boundaries, including after a truncate.
+        let pattern: Vec<bool> = (0..100).map(|i| (i * 7 + i / 3) % 5 < 2).collect();
+        for start in 0..17 {
+            for len in 0..pattern.len() {
+                let mut b = BooleanBufferBuilder::new(0);
+                b.append_n(start + 3, true);
+                b.truncate(start);
+                b.append_slice(&pattern[..len]);
+                b.append(true);
+                let finished = b.finish();
+                assert_eq!(finished.len(), start + len + 1);
+                for i in 0..start {
+                    assert!(finished.value(i), "start {start} len {len} index {i}");
+                }
+                for (i, v) in pattern[..len].iter().enumerate() {
+                    assert_eq!(
+                        finished.value(start + i),
+                        *v,
+                        "start {start} len {len} index {i}"
+                    );
+                }
+                assert!(finished.value(start + len));
             }
         }
     }
