@@ -358,7 +358,7 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
         let decoder = if encoding == Encoding::RLE_DICTIONARY {
             self.decoders[encoding as usize]
                 .as_mut()
-                .expect("Decoder for dict should have been set")
+                .ok_or_else(|| general_err!("missing dictionary page for column"))?
         } else {
             let slot = encoding as usize;
             if self.decoders[slot].is_none() {
@@ -919,5 +919,39 @@ mod tests {
                 assert_ne!(remaining_records, 0);
             }
         }
+    }
+
+    #[test]
+    fn rle_dictionary_without_dict_page_returns_error() {
+        use crate::basic::Type;
+        use crate::data_type::Int32Type;
+        use crate::schema::types::{ColumnDescriptor, ColumnPath, Type as SchemaType};
+        use std::sync::Arc;
+
+        let schema = Arc::new(
+            SchemaType::primitive_type_builder("col", Type::INT32)
+                .build()
+                .unwrap(),
+        );
+        let descr = Arc::new(ColumnDescriptor::new(
+            schema,
+            0,
+            0,
+            ColumnPath::from("col"),
+        ));
+        let mut decoder = ColumnValueDecoderImpl::<Int32Type>::new(&descr);
+        // Call set_data with RLE_DICTIONARY without a preceding set_dict.
+        let result = decoder.set_data(
+            Encoding::RLE_DICTIONARY,
+            Bytes::from_static(b"\x00"),
+            1,
+            None,
+        );
+        assert!(result.is_err(), "expected error for missing dictionary page");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("missing dictionary page"),
+            "unexpected error: {msg}"
+        );
     }
 }
