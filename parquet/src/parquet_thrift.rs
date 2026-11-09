@@ -659,7 +659,12 @@ impl<'a, R: Read> ThriftCompactInputProtocol<'a> for ThriftReadInputProtocol<R> 
 
     fn read_bytes_owned(&mut self) -> ThriftProtocolResult<Vec<u8>> {
         let len = self.read_vlq()? as usize;
-        let mut v = Vec::with_capacity(len);
+        // Cap the initial allocation to avoid OOM on malformed lengths.
+        // The actual read (io::copy + take) is bounded by the stream, so
+        // an overlong declared length returns UnexpectedEof rather than
+        // allocating gigabytes.
+        let capacity = len.min(8 * 1024 * 1024);
+        let mut v = Vec::with_capacity(capacity);
         std::io::copy(&mut self.reader.by_ref().take(len as u64), &mut v)?;
         Ok(v)
     }
