@@ -162,7 +162,10 @@ impl BooleanBufferBuilder {
     }
 
     /// Clears the bits of the last byte at and past `len`
-    #[inline]
+    ///
+    /// Cold so that the per-value [`Self::append`] loop falls through when
+    /// the padding is clean
+    #[cold]
     fn clear_padding(&mut self) {
         self.padding_dirty = false;
         let remainder = self.len % 8;
