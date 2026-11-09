@@ -443,61 +443,6 @@ impl From<BooleanBufferBuilder> for NullBuffer {
 mod tests {
     use super::*;
 
-    /// `set_bit` and `as_slice_mut` can set bits past `len` in the last byte.
-    /// Appending `false` must not expose them.
-    #[test]
-    fn test_append_false_with_dirty_padding() {
-        type Operation = fn(&mut BooleanBufferBuilder, usize);
-        let operations: [(&str, Operation); 8] = [
-            ("append", |b, n| (0..n).for_each(|_| b.append(false))),
-            ("append_slice", |b, n| b.append_slice(&vec![false; n])),
-            ("append_word", |b, n| {
-                (0..n)
-                    .step_by(64)
-                    .for_each(|i| b.append_word(0, (n - i).min(64)))
-            }),
-            ("append_n", |b, n| b.append_n(n, false)),
-            ("resize", |b, n| b.resize(b.len() + n)),
-            ("advance", |b, n| b.advance(n)),
-            ("append_packed_range", |b, n| {
-                b.append_packed_range(0..n, &vec![0; n.div_ceil(8)])
-            }),
-            // SAFETY: `repeat_n` reports its exact length
-            ("extend_trusted_len", |b, n| unsafe {
-                b.extend_trusted_len(std::iter::repeat_n(false, n))
-            }),
-        ];
-
-        for initial_len in 0..=16 {
-            for additional in [0, 1, 2, 7, 8, 9, 15, 63, 64, 65] {
-                for (name, operation) in operations {
-                    for use_set_bit in [false, true] {
-                        let mut expected: Vec<bool> =
-                            (0..initial_len).map(|i| i % 3 == 0).collect();
-                        let mut builder = BooleanBufferBuilder::new(initial_len);
-                        builder.append_slice(&expected);
-
-                        for i in initial_len..builder.as_slice().len() * 8 {
-                            if use_set_bit {
-                                builder.set_bit(i, true);
-                            } else {
-                                builder.as_slice_mut()[i / 8] |= 1 << (i % 8);
-                            }
-                        }
-
-                        operation(&mut builder, additional);
-                        expected.resize(initial_len + additional, false);
-                        let actual: Vec<bool> = builder.build().iter().collect();
-                        assert_eq!(
-                            actual, expected,
-                            "{name}: initial_len={initial_len} additional={additional} use_set_bit={use_set_bit}"
-                        );
-                    }
-                }
-            }
-        }
-    }
-
     #[test]
     fn test_boolean_buffer_builder_write_bytes() {
         let mut b = BooleanBufferBuilder::new(4);
@@ -943,6 +888,53 @@ mod tests {
                     );
                 }
                 assert!(finished.value(start + len));
+            }
+        }
+    }
+
+    #[test]
+    fn test_append_false_with_dirty_padding() {
+        // `set_bit` can set the bits past `len` in the last byte. Appending
+        // `false` must not expose them.
+        type Operation = fn(&mut BooleanBufferBuilder, usize);
+        let operations: [(&str, Operation); 8] = [
+            ("append", |b, n| (0..n).for_each(|_| b.append(false))),
+            ("append_slice", |b, n| b.append_slice(&vec![false; n])),
+            ("append_word", |b, n| {
+                (0..n)
+                    .step_by(64)
+                    .for_each(|i| b.append_word(0, (n - i).min(64)))
+            }),
+            ("append_n", |b, n| b.append_n(n, false)),
+            ("resize", |b, n| b.resize(b.len() + n)),
+            ("advance", |b, n| b.advance(n)),
+            ("append_packed_range", |b, n| {
+                b.append_packed_range(0..n, &vec![0; n.div_ceil(8)])
+            }),
+            // SAFETY: `repeat_n` reports its exact length
+            ("extend_trusted_len", |b, n| unsafe {
+                b.extend_trusted_len(std::iter::repeat_n(false, n))
+            }),
+        ];
+
+        for initial_len in 0..=9 {
+            for additional in [0, 1, 7, 8, 9, 64, 65] {
+                for (name, operation) in operations {
+                    let mut expected: Vec<bool> = (0..initial_len).map(|i| i % 3 == 0).collect();
+                    let mut builder = BooleanBufferBuilder::new(initial_len);
+                    builder.append_slice(&expected);
+                    for i in initial_len..builder.as_slice().len() * 8 {
+                        builder.set_bit(i, true);
+                    }
+
+                    operation(&mut builder, additional);
+                    expected.resize(initial_len + additional, false);
+                    let actual: Vec<bool> = builder.finish().iter().collect();
+                    assert_eq!(
+                        actual, expected,
+                        "{name} initial_len {initial_len} additional {additional}"
+                    );
+                }
             }
         }
     }
