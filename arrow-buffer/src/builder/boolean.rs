@@ -34,6 +34,9 @@ use std::ops::Range;
 pub struct BooleanBufferBuilder {
     buffer: MutableBuffer,
     len: usize,
+    /// Whether the bits of the last byte past `len` may be set, which
+    /// [`Self::set_bit`] and [`Self::as_slice_mut`] allow
+    padding_dirty: bool,
 }
 
 impl BooleanBufferBuilder {
@@ -46,7 +49,11 @@ impl BooleanBufferBuilder {
     pub fn new(capacity: usize) -> Self {
         let byte_capacity = bit_util::ceil(capacity, 8);
         let buffer = MutableBuffer::new(byte_capacity);
-        Self { buffer, len: 0 }
+        Self {
+            buffer,
+            len: 0,
+            padding_dirty: false,
+        }
     }
 
     /// Creates a new `BooleanBufferBuilder` from [`MutableBuffer`] of `len`
@@ -59,6 +66,7 @@ impl BooleanBufferBuilder {
         let mut s = Self {
             len: buffer.len() * 8,
             buffer,
+            padding_dirty: false,
         };
         s.truncate(len);
         s
@@ -82,6 +90,7 @@ impl BooleanBufferBuilder {
         } else {
             bit_util::unset_bit(self.buffer.as_mut(), index);
         }
+        self.padding_dirty |= index >= self.len;
     }
 
     /// Gets a bit in the buffer at `index`
@@ -126,14 +135,9 @@ impl BooleanBufferBuilder {
     /// Advances the buffer by `additional` bits, which are set to `false`
     #[inline]
     pub fn advance(&mut self, additional: usize) {
-        self.clear_padding();
-        self.grow(additional);
-    }
-
-    /// Advances the buffer by `additional` bits, keeping the padding bits of
-    /// the last byte as they are
-    #[inline]
-    fn grow(&mut self, additional: usize) {
+        if self.padding_dirty {
+            self.clear_padding();
+        }
         let new_len = self.len + additional;
         let new_len_bytes = bit_util::ceil(new_len, 8);
         if new_len_bytes > self.buffer.len() {
@@ -157,10 +161,10 @@ impl BooleanBufferBuilder {
         self.clear_padding();
     }
 
-    /// Clears the bits of the last byte at and past `len`, which
-    /// [`Self::set_bit`] and [`Self::as_slice_mut`] can set
+    /// Clears the bits of the last byte at and past `len`
     #[inline]
     fn clear_padding(&mut self) {
+        self.padding_dirty = false;
         let remainder = self.len % 8;
         if remainder != 0
             && let Some(last) = self.buffer.as_mut().last_mut()
@@ -195,15 +199,10 @@ impl BooleanBufferBuilder {
     /// Appends a boolean `v` into the buffer
     #[inline]
     pub fn append(&mut self, v: bool) {
-        let index = self.len;
-        self.grow(1);
-        debug_assert!(index / 8 < self.buffer.len());
-        // One write sets the bit and clears the padding past it, without a
-        // branch on `v`
-        let bit = index % 8;
-        // SAFETY: `grow(1)` resized the buffer to hold bit `index`
-        let byte = unsafe { &mut *self.buffer.as_mut_ptr().add(index / 8) };
-        *byte = (*byte & ((1 << bit) - 1)) | (u8::from(v) << bit);
+        self.advance(1);
+        if v {
+            unsafe { bit_util::set_bit_raw(self.buffer.as_mut_ptr(), self.len - 1) };
+        }
     }
 
     /// Appends the low `count` bits from `word` into the buffer.
@@ -272,9 +271,7 @@ impl BooleanBufferBuilder {
     #[inline]
     pub fn append_slice(&mut self, slice: &[bool]) {
         let additional = slice.len();
-        // Only the byte at `offset / 8` can hold padding bits, and the first
-        // write below clears them
-        self.grow(additional);
+        self.advance(additional);
 
         let offset = self.len() - additional;
 
@@ -288,8 +285,7 @@ impl BooleanBufferBuilder {
             // At most 8 bits starting at bit 7 end at bit 14, so they span at most two bytes
             let bits = (Self::pack_bits(slice) as u16) << (offset % 8);
             let buffer = self.buffer.as_slice_mut();
-            let first = &mut buffer[offset / 8];
-            *first = (*first & ((1 << (offset % 8)) - 1)) | bits as u8;
+            buffer[offset / 8] |= bits as u8;
             if let Some(next) = buffer.get_mut(offset / 8 + 1) {
                 *next |= (bits >> 8) as u8;
             }
@@ -320,9 +316,7 @@ impl BooleanBufferBuilder {
         // Fill the first byte up to the next byte boundary
         let head = ((8 - offset % 8) % 8).min(additional);
         let (head_slice, rest) = slice.split_at(head);
-        let first = &mut buffer[offset / 8];
-        *first =
-            (*first & ((1 << (offset % 8)) - 1)) | (Self::pack_bits(head_slice) << (offset % 8));
+        buffer[offset / 8] |= Self::pack_bits(head_slice) << (offset % 8);
 
         // Pack 8 bools into each byte without branching: a `bool` is a byte
         // holding 0 or 1, and the multiply moves byte `i` to bit `56 + i`
@@ -376,6 +370,7 @@ impl BooleanBufferBuilder {
 
     /// Returns the packed bits
     pub fn as_slice_mut(&mut self) -> &mut [u8] {
+        self.padding_dirty = true;
         self.buffer.as_slice_mut()
     }
 
@@ -894,8 +889,19 @@ mod tests {
 
     #[test]
     fn test_append_false_with_dirty_padding() {
-        // `set_bit` can set the bits past `len` in the last byte. Appending
-        // `false` must not expose them.
+        // `set_bit` and `as_slice_mut` can set the bits past `len` in the last
+        // byte. Appending `false` must not expose them.
+        type Dirty = fn(&mut BooleanBufferBuilder);
+        let dirties: [(&str, Dirty); 2] = [
+            ("set_bit", |b| {
+                (b.len()..b.as_slice().len() * 8).for_each(|i| b.set_bit(i, true))
+            }),
+            ("as_slice_mut", |b| {
+                let len = b.len();
+                let bits = b.as_slice_mut();
+                (len..bits.len() * 8).for_each(|i| bit_util::set_bit(bits, i))
+            }),
+        ];
         type Operation = fn(&mut BooleanBufferBuilder, usize);
         let operations: [(&str, Operation); 8] = [
             ("append", |b, n| (0..n).for_each(|_| b.append(false))),
@@ -919,20 +925,20 @@ mod tests {
 
         for initial_len in 0..=9 {
             for additional in [0, 1, 7, 8, 9, 64, 65] {
-                for (name, operation) in operations {
+                for ((dirty_name, dirty), (name, operation)) in
+                    dirties.into_iter().flat_map(|d| operations.map(|o| (d, o)))
+                {
                     let mut expected: Vec<bool> = (0..initial_len).map(|i| i % 3 == 0).collect();
                     let mut builder = BooleanBufferBuilder::new(initial_len);
                     builder.append_slice(&expected);
-                    for i in initial_len..builder.as_slice().len() * 8 {
-                        builder.set_bit(i, true);
-                    }
+                    dirty(&mut builder);
 
                     operation(&mut builder, additional);
                     expected.resize(initial_len + additional, false);
                     let actual: Vec<bool> = builder.finish().iter().collect();
                     assert_eq!(
                         actual, expected,
-                        "{name} initial_len {initial_len} additional {additional}"
+                        "{dirty_name} then {name}, initial_len {initial_len} additional {additional}"
                     );
                 }
             }
