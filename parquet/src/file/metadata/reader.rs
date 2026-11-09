@@ -15,8 +15,7 @@ use crate::file::metadata::page_index::{PageIndex, PageIndexProvider};
 use crate::file::metadata::parser::decode_metadata;
 use crate::file::metadata::thrift::parquet_schema_from_bytes;
 use crate::file::metadata::{
-    ColumnChunkMetaData, FooterTail, ParquetMetaData, ParquetMetaDataOptions,
-    ParquetMetaDataPushDecoder,
+    FooterTail, ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataPushDecoder,
 };
 use crate::file::reader::ChunkReader;
 use crate::schema::types::SchemaDescriptor;
@@ -810,13 +809,12 @@ impl ParquetMetaDataReader {
     /// The metadata and reader must refer to the same file. `column_idx` is a
     /// physical Parquet leaf index, not a top-level Arrow field index.
     ///
-    /// Returns `Ok(None)` without I/O when the column chunk has no Bloom filter.
-    /// Invalid coordinates, invalid Bloom metadata, malformed filters, and read
-    /// failures return an error. The filter is returned separately; the supplied
-    /// metadata is neither modified nor reloaded.
+    /// Returns `Ok(None)` without I/O if the column chunk has no Bloom filter.
+    /// The filter is returned separately without modifying or reloading metadata.
     ///
-    /// Prefer reading filters after other pruning has narrowed the row groups and
-    /// columns of interest. Footer and page index reads never load Bloom filters.
+    /// Bloom filters are stored outside the footer and require additional I/O when
+    /// present. Prefer reading them after other pruning has narrowed the row groups
+    /// and columns of interest. Footer and page-index reads do not load them.
     ///
     /// # Example
     ///
@@ -853,18 +851,11 @@ impl ParquetMetaDataReader {
         row_group_idx: usize,
         column_idx: usize,
     ) -> Result<Option<Sbbf>> {
-        let column = bloom_filter_column(metadata, row_group_idx, column_idx)?;
+        let column = metadata.column_chunk(row_group_idx, column_idx)?;
         Sbbf::read_from_column_chunk(column, reader)
     }
 
     /// Asynchronous version of [`Self::read_column_bloom_filter`].
-    ///
-    /// Accepts a [`MetadataFetch`] byte source without requiring an Arrow reader
-    /// builder or an [`crate::arrow::async_reader::AsyncFileReader`] implementation.
-    /// Existing async file readers can be passed by mutable reference and reused
-    /// for subsequent reads. For a boxed trait-object reader, pass `&mut reader`
-    /// rather than `reader.as_mut()`. Only the requested column chunk's filter is read;
-    /// absence and errors have the same behavior as the synchronous method.
     #[cfg(all(feature = "async", feature = "arrow"))]
     pub async fn read_column_bloom_filter_async<F: MetadataFetch>(
         fetch: F,
@@ -872,7 +863,7 @@ impl ParquetMetaDataReader {
         row_group_idx: usize,
         column_idx: usize,
     ) -> Result<Option<Sbbf>> {
-        let column = bloom_filter_column(metadata, row_group_idx, column_idx)?;
+        let column = metadata.column_chunk(row_group_idx, column_idx)?;
         Sbbf::read_from_column_chunk_with_fetch(column, fetch).await
     }
 
@@ -1306,25 +1297,6 @@ fn parse_page_index_data(
         DecodeResult::Data(page_index) => Ok(page_index),
         DecodeResult::Finished => Err(general_err!("Internal error: decoder was finished")),
     }
-}
-
-fn bloom_filter_column(
-    metadata: &ParquetMetaData,
-    row_group_idx: usize,
-    column_idx: usize,
-) -> Result<&ColumnChunkMetaData> {
-    let row_group = metadata.row_groups().get(row_group_idx).ok_or_else(|| {
-        general_err!(
-            "Row group index {row_group_idx} out of bounds for file with {} row groups",
-            metadata.num_row_groups()
-        )
-    })?;
-    row_group.columns().get(column_idx).ok_or_else(|| {
-        general_err!(
-            "Column index {column_idx} out of bounds for row group {row_group_idx} with {} columns",
-            row_group.num_columns()
-        )
-    })
 }
 
 /// Returns the `[start, end)` byte range of a column chunk's dictionary
