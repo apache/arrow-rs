@@ -72,8 +72,26 @@ fn join_streams_variable(
     }
 }
 
+/// Returns the number of values physically present in a BYTE_STREAM_SPLIT page.
+///
+/// `num_values` is an upper bound rather than an exact count: for a V1 data page it is
+/// the number of levels, which includes nulls (and repetition levels), while only
+/// non-null values are encoded. The byte streams therefore must not hold more values
+/// than `num_values`, but they may legitimately hold fewer. The stride between the
+/// streams, and so the number of values that can be decoded, comes from the encoded
+/// length. If the page declares more values than are present, the column reader reports
+/// that it could not read enough values instead of indexing past the end of the buffer.
+fn check_encoded_value_count(encoded_values: usize, num_values: usize) -> Result<usize> {
+    if encoded_values > num_values {
+        return Err(general_err!(
+            "Invalid BYTE_STREAM_SPLIT data: {encoded_values} encoded values exceeds the {num_values} values expected"
+        ));
+    }
+    Ok(encoded_values)
+}
+
 impl<T: DataType> Decoder<T> for ByteStreamSplitDecoder<T> {
-    fn set_data(&mut self, data: Bytes, _num_values: usize) -> Result<()> {
+    fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
         let type_size = T::get_type_size();
         if !data.len().is_multiple_of(type_size) {
             return Err(general_err!(
@@ -82,8 +100,7 @@ impl<T: DataType> Decoder<T> for ByteStreamSplitDecoder<T> {
             ));
         }
 
-        // The page count can include nulls; only the encoded bytes determine the stride.
-        self.total_num_values = data.len() / type_size;
+        self.total_num_values = check_encoded_value_count(data.len() / type_size, num_values)?;
         self.encoded_bytes = data;
         self.values_decoded = 0;
 
@@ -160,7 +177,7 @@ impl<T: DataType> VariableWidthByteStreamSplitDecoder<T> {
 }
 
 impl<T: DataType> Decoder<T> for VariableWidthByteStreamSplitDecoder<T> {
-    fn set_data(&mut self, data: Bytes, _num_values: usize) -> Result<()> {
+    fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
         // Rough check that all data elements are the same length
         if !data.len().is_multiple_of(self.type_width) {
             return Err(general_err!(
@@ -171,7 +188,8 @@ impl<T: DataType> Decoder<T> for VariableWidthByteStreamSplitDecoder<T> {
 
         match T::get_physical_type() {
             Type::FIXED_LEN_BYTE_ARRAY => {
-                self.total_num_values = data.len() / self.type_width;
+                self.total_num_values =
+                    check_encoded_value_count(data.len() / self.type_width, num_values)?;
                 self.encoded_bytes = data;
                 self.values_decoded = 0;
                 Ok(())
