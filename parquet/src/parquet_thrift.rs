@@ -38,6 +38,7 @@ pub(crate) enum ThriftProtocolError {
     Utf8Error,
     SkipDepth(FieldType),
     SkipUnsupportedType(FieldType),
+    InvalidVlq,
 }
 
 impl From<ThriftProtocolError> for ParquetError {
@@ -69,6 +70,9 @@ impl From<ThriftProtocolError> for ParquetError {
             }
             ThriftProtocolError::SkipUnsupportedType(field_type) => {
                 general_err!("cannot skip field type {:?}", field_type)
+            }
+            ThriftProtocolError::InvalidVlq => {
+                general_err!("varint exceeds 10 bytes")
             }
         }
     }
@@ -301,7 +305,13 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
         }
         let mut in_progress = (byte & 0x7f) as u64;
         let mut shift = 7;
+        // A u64 varint uses at most 10 bytes (ceil(64 / 7)).
+        // Without this limit, a malformed stream with only continuation
+        // bytes causes wrapping_shl to silently corrupt the result.
         loop {
+            if shift > 63 {
+                return Err(ThriftProtocolError::InvalidVlq);
+            }
             let byte = self.read_byte()?;
             in_progress |= ((byte & 0x7F) as u64).wrapping_shl(shift);
             if byte & 0x80 == 0 {
