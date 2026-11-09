@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Defines take kernel for [Array]
 
@@ -1046,7 +1033,9 @@ where
         let values_buf = &child_data.buffers()[0];
         let child_buf_offset = child_data.offset() * bytes_per_value;
 
-        let mut dst_buf = MutableBuffer::new(estimated_child_len.saturating_mul(bytes_per_value));
+        let capacity = estimated_child_len.saturating_mul(bytes_per_value);
+        let mut dst_buf = MutableBuffer::try_with_capacity(capacity)
+            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
         let mut child_len = OffsetType::Native::zero();
 
@@ -1056,7 +1045,9 @@ where
                     let row = idx.as_usize();
                     let start = child_buf_offset + src_offsets[row].as_usize() * bytes_per_value;
                     let end = child_buf_offset + src_offsets[row + 1].as_usize() * bytes_per_value;
-                    dst_buf.extend_from_slice(&values_buf[start..end]);
+                    dst_buf
+                        .try_extend_from_slice(&values_buf[start..end])
+                        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
                     child_len = child_len
                         .checked_add(&(src_offsets[row + 1] - src_offsets[row]))
                         .ok_or_else(|| ArrowError::OffsetOverflowError(child_len.as_usize()))?;
@@ -1089,7 +1080,9 @@ where
                             )
                         }
                     };
-                    dst_buf.extend_from_slice(&values_buf[start..end]);
+                    dst_buf
+                        .try_extend_from_slice(&values_buf[start..end])
+                        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
                     child_len = child_len
                         .checked_add(&(src_offsets[row + 1] - src_offsets[row]))
                         .ok_or_else(|| ArrowError::OffsetOverflowError(child_len.as_usize()))?;
@@ -1119,11 +1112,11 @@ where
         return GenericListArray::<OffsetType::Native>::try_new(field, offsets, child, nulls);
     }
 
-    let mut mutable = MutableArrayData::new(
+    let mut mutable = MutableArrayData::try_new(
         vec![&child_data],
         child_data.null_count() > 0,
         estimated_child_len,
-    );
+    )?;
 
     match nulls.as_ref().filter(|n| n.null_count() > 0) {
         None => {
@@ -1238,7 +1231,7 @@ fn take_fixed_size_list<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: b
             length as usize,
             element_size,
             nulls.as_ref(),
-        )
+        )?
     } else {
         let list_indices = take_value_indices_from_fixed_size_list(values, indices, length)?;
         take_impl::<UInt32Type, VALIDATE_INDICES>(child.as_ref(), &list_indices)?
@@ -1260,19 +1253,25 @@ fn take_fixed_size_list_primitive<IndexType: ArrowPrimitiveType>(
     list_size: usize,
     element_size: usize,
     taken_row_nulls: Option<&NullBuffer>,
-) -> ArrayRef {
-    let row_bytes = list_size * element_size;
+) -> Result<ArrayRef, ArrowError> {
+    let row_bytes = list_size
+        .checked_mul(element_size)
+        .ok_or_else(|| ArrowError::MemoryError("take output size overflow".into()))?;
     let child_data = child.to_data();
     let src = child_data.buffers()[0].as_slice();
     let child_byte_offset = child_data.offset() * element_size;
 
-    debug_assert!(
-        indices.len().checked_mul(row_bytes).is_some(),
-        "take_fixed_size_list_primitive: output buffer size overflows usize"
-    );
-    let out_len = indices.len() * list_size;
+    let out_len = indices
+        .len()
+        .checked_mul(list_size)
+        .ok_or_else(|| ArrowError::MemoryError("take output size overflow".into()))?;
+    let out_byte_len = indices
+        .len()
+        .checked_mul(row_bytes)
+        .ok_or_else(|| ArrowError::MemoryError("take output size overflow".into()))?;
 
-    let mut out = MutableBuffer::from_len_zeroed(indices.len() * row_bytes);
+    let mut out = MutableBuffer::try_from_len_zeroed(out_byte_len)
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
     let out_slice = out.as_slice_mut();
 
     if indices.null_count() == 0 {
@@ -1291,12 +1290,19 @@ fn take_fixed_size_list_primitive<IndexType: ArrowPrimitiveType>(
         }
     }
     // Expand the per-row null bitmap to per-element: each null row produces `list_size` null elements.
-    let child_null_buf = taken_row_nulls.map(|n| n.expand(list_size).buffer().clone());
+    let child_null_buf = taken_row_nulls
+        .map(|n| {
+            n.try_expand(list_size)
+                .map(|n| n.buffer().clone())
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))
+        })
+        .transpose()?;
 
     // SAFETY:
     // - The data buffer has `indices.len() * row_bytes` bytes = `out_len` elements of a
     //   primitive type, matching `.len(out_len)`.
-    // - The null buffer (when present) is `ceil(out_len, 8)` bytes via `expand(list_size).buffer()`.
+    // - The null buffer (when present) is `ceil(out_len, 8)` bytes via
+    //   `try_expand(list_size).buffer()`.
     // - Primitive types have exactly one value buffer.
     let array_data = unsafe {
         ArrayData::builder(child.data_type().clone())
@@ -1305,7 +1311,7 @@ fn take_fixed_size_list_primitive<IndexType: ArrowPrimitiveType>(
             .null_bit_buffer(child_null_buf)
             .build_unchecked()
     };
-    make_array(array_data)
+    Ok(make_array(array_data))
 }
 
 /// The take kernel implementation for `FixedSizeBinaryArray`.

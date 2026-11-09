@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 
@@ -152,11 +139,17 @@ impl ArrayReader for FixedSizeListArrayReader {
             .iter()
             .filter(|&&d| d >= self.def_level)
             .count();
+        let expected_items = items_count
+            .checked_mul(self.fixed_size)
+            .ok_or_else(|| general_err!("Fixed-size list child length overflow"))?;
+        let output_items = list_len
+            .checked_mul(self.fixed_size)
+            .ok_or_else(|| general_err!("Fixed-size list child length overflow"))?;
 
-        if child_array.len() != items_count * self.fixed_size {
+        if child_array.len() != expected_items {
             return Err(general_err!(
                 "Fixed-size list child mismatch: expected {} entries but got {}",
-                items_count * self.fixed_size,
+                expected_items,
                 child_array.len()
             ));
         }
@@ -167,7 +160,8 @@ impl ArrayReader for FixedSizeListArrayReader {
             child_array.to_data()
         } else {
             let data = child_array.to_data();
-            let mut builder = MutableArrayData::new(vec![&data], true, list_len * self.fixed_size);
+            let mut builder = MutableArrayData::try_new(vec![&data], true, output_items)
+                .map_err(|e| general_err!("{}", e))?;
             let mut src_idx = 0;
             for &d in &boundary_defs {
                 if d >= self.def_level {
@@ -184,7 +178,7 @@ impl ArrayReader for FixedSizeListArrayReader {
             builder.freeze()
         };
 
-        debug_assert_eq!(child_data.len(), list_len * self.fixed_size);
+        debug_assert_eq!(child_data.len(), output_items);
 
         let mut list_builder = ArrayData::builder(self.get_data_type().clone())
             .len(list_len)
