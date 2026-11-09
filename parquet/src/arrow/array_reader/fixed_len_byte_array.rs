@@ -202,7 +202,14 @@ impl ArrayReader for FixedLenByteArrayReader {
         let len = self.record_reader.values_written();
 
         let record_data = self.record_reader.consume_record_data();
-        if record_data.buffer.len() != len * self.byte_length {
+        let expected_len = len.checked_mul(self.byte_length).ok_or_else(|| {
+            general_err!(
+                "fixed-len byte array buffer size overflow: {} elements of size {}",
+                len,
+                self.byte_length
+            )
+        })?;
+        if record_data.buffer.len() != expected_len {
             return Err(general_err!(
                 "fixed-len byte array buffer size mismatch: {} bytes for {} elements of size {}",
                 record_data.buffer.len(),
