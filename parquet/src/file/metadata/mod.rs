@@ -172,7 +172,7 @@ impl ParquetMetaData {
 
     /// Returns column chunk metadata for a row-group position and physical leaf column index.
     ///
-    /// Returns an error if either index is out of bounds, checking the row group first.
+    /// Returns an error if either index is out of bounds.
     pub fn column_chunk(
         &self,
         row_group_idx: usize,
