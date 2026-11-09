@@ -123,9 +123,17 @@ impl BooleanBufferBuilder {
         self.buffer.capacity() * 8
     }
 
-    /// Advances the buffer by `additional` bits
+    /// Advances the buffer by `additional` bits, which are set to `false`
     #[inline]
     pub fn advance(&mut self, additional: usize) {
+        self.clear_padding();
+        self.grow(additional);
+    }
+
+    /// Advances the buffer by `additional` bits, keeping the padding bits of
+    /// the last byte as they are
+    #[inline]
+    fn grow(&mut self, additional: usize) {
         let new_len = self.len + additional;
         let new_len_bytes = bit_util::ceil(new_len, 8);
         if new_len_bytes > self.buffer.len() {
@@ -146,7 +154,13 @@ impl BooleanBufferBuilder {
         let new_len_bytes = bit_util::ceil(len, 8);
         self.buffer.truncate(new_len_bytes);
         self.len = len;
+        self.clear_padding();
+    }
 
+    /// Clears the bits of the last byte at and past `len`, which
+    /// [`Self::set_bit`] and [`Self::as_slice_mut`] can set
+    #[inline]
+    fn clear_padding(&mut self) {
         let remainder = self.len % 8;
         if remainder != 0
             && let Some(last) = self.buffer.as_mut().last_mut()
@@ -181,10 +195,15 @@ impl BooleanBufferBuilder {
     /// Appends a boolean `v` into the buffer
     #[inline]
     pub fn append(&mut self, v: bool) {
-        self.advance(1);
-        if v {
-            unsafe { bit_util::set_bit_raw(self.buffer.as_mut_ptr(), self.len - 1) };
-        }
+        let index = self.len;
+        self.grow(1);
+        debug_assert!(index / 8 < self.buffer.len());
+        // One write sets the bit and clears the padding past it, without a
+        // branch on `v`
+        let bit = index % 8;
+        // SAFETY: `grow(1)` resized the buffer to hold bit `index`
+        let byte = unsafe { &mut *self.buffer.as_mut_ptr().add(index / 8) };
+        *byte = (*byte & ((1 << bit) - 1)) | (u8::from(v) << bit);
     }
 
     /// Appends the low `count` bits from `word` into the buffer.
@@ -200,14 +219,9 @@ impl BooleanBufferBuilder {
         let mask = (u64::MAX >> ((64 - count) & 63)) * ((count != 0) as u64);
         let word = word & mask;
 
-        let new_len = self.len + count;
-        let new_len_bytes = bit_util::ceil(new_len, 8);
-        if new_len_bytes > self.buffer.len() {
-            self.buffer.resize(new_len_bytes, 0);
-        }
-
         let bit_offset = self.len & 7;
         let byte_start = self.len / 8;
+        self.advance(count);
         let buf = self.buffer.as_slice_mut();
 
         // Shift the word to align with the bit offset within the
@@ -223,8 +237,6 @@ impl BooleanBufferBuilder {
         if bit_offset > 0 && count + bit_offset > 64 {
             buf[byte_start + 8] |= (word >> (64 - bit_offset)) as u8;
         }
-
-        self.len = new_len;
     }
 
     /// Appends n `additional` bits of value `v` into the buffer
@@ -260,7 +272,9 @@ impl BooleanBufferBuilder {
     #[inline]
     pub fn append_slice(&mut self, slice: &[bool]) {
         let additional = slice.len();
-        self.advance(additional);
+        // Only the byte at `offset / 8` can hold padding bits, and the first
+        // write below clears them
+        self.grow(additional);
 
         let offset = self.len() - additional;
 
@@ -274,7 +288,8 @@ impl BooleanBufferBuilder {
             // At most 8 bits starting at bit 7 end at bit 14, so they span at most two bytes
             let bits = (Self::pack_bits(slice) as u16) << (offset % 8);
             let buffer = self.buffer.as_slice_mut();
-            buffer[offset / 8] |= bits as u8;
+            let first = &mut buffer[offset / 8];
+            *first = (*first & ((1 << (offset % 8)) - 1)) | bits as u8;
             if let Some(next) = buffer.get_mut(offset / 8 + 1) {
                 *next |= (bits >> 8) as u8;
             }
@@ -305,7 +320,9 @@ impl BooleanBufferBuilder {
         // Fill the first byte up to the next byte boundary
         let head = ((8 - offset % 8) % 8).min(additional);
         let (head_slice, rest) = slice.split_at(head);
-        buffer[offset / 8] |= Self::pack_bits(head_slice) << (offset % 8);
+        let first = &mut buffer[offset / 8];
+        *first =
+            (*first & ((1 << (offset % 8)) - 1)) | (Self::pack_bits(head_slice) << (offset % 8));
 
         // Pack 8 bools into each byte without branching: a `bool` is a byte
         // holding 0 or 1, and the multiply moves byte `i` to bit `56 + i`
@@ -425,6 +442,61 @@ impl From<BooleanBufferBuilder> for NullBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `set_bit` and `as_slice_mut` can set bits past `len` in the last byte.
+    /// Appending `false` must not expose them.
+    #[test]
+    fn test_append_false_with_dirty_padding() {
+        type Operation = fn(&mut BooleanBufferBuilder, usize);
+        let operations: [(&str, Operation); 8] = [
+            ("append", |b, n| (0..n).for_each(|_| b.append(false))),
+            ("append_slice", |b, n| b.append_slice(&vec![false; n])),
+            ("append_word", |b, n| {
+                (0..n)
+                    .step_by(64)
+                    .for_each(|i| b.append_word(0, (n - i).min(64)))
+            }),
+            ("append_n", |b, n| b.append_n(n, false)),
+            ("resize", |b, n| b.resize(b.len() + n)),
+            ("advance", |b, n| b.advance(n)),
+            ("append_packed_range", |b, n| {
+                b.append_packed_range(0..n, &vec![0; n.div_ceil(8)])
+            }),
+            // SAFETY: `repeat_n` reports its exact length
+            ("extend_trusted_len", |b, n| unsafe {
+                b.extend_trusted_len(std::iter::repeat_n(false, n))
+            }),
+        ];
+
+        for initial_len in 0..=16 {
+            for additional in [0, 1, 2, 7, 8, 9, 15, 63, 64, 65] {
+                for (name, operation) in operations {
+                    for use_set_bit in [false, true] {
+                        let mut expected: Vec<bool> =
+                            (0..initial_len).map(|i| i % 3 == 0).collect();
+                        let mut builder = BooleanBufferBuilder::new(initial_len);
+                        builder.append_slice(&expected);
+
+                        for i in initial_len..builder.as_slice().len() * 8 {
+                            if use_set_bit {
+                                builder.set_bit(i, true);
+                            } else {
+                                builder.as_slice_mut()[i / 8] |= 1 << (i % 8);
+                            }
+                        }
+
+                        operation(&mut builder, additional);
+                        expected.resize(initial_len + additional, false);
+                        let actual: Vec<bool> = builder.build().iter().collect();
+                        assert_eq!(
+                            actual, expected,
+                            "{name}: initial_len={initial_len} additional={additional} use_set_bit={use_set_bit}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_boolean_buffer_builder_write_bytes() {
