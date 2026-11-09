@@ -8,6 +8,7 @@ mod dictionary;
 mod dispatch;
 mod list;
 mod map;
+mod numeric;
 mod run_array;
 mod string;
 mod r#struct;
