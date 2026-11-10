@@ -247,9 +247,8 @@ where
         let buffer = self.record_reader.consume_record_data();
         let null_buffer = self.record_reader.consume_compact_bitmap();
 
-        let array = match &self.buffer_type {
-            None => buffer.into_array(null_buffer, &self.data_type, &mut self.hash_scratch)?,
-            Some(buffer_type) => {
+        let array = match (&self.buffer_type, buffer) {
+            (Some(buffer_type), buffer @ DictionaryBuffer::Dict { .. }) => {
                 let buffer_array =
                     buffer.into_array(null_buffer, buffer_type, &mut self.hash_scratch)?;
                 let array = buffer_array.as_any_dictionary();
@@ -269,6 +268,9 @@ where
                     }
                 };
                 array.with_values(converted)
+            }
+            (_, buffer) => {
+                buffer.into_array(null_buffer, &self.data_type, &mut self.hash_scratch)?
             }
         };
 
