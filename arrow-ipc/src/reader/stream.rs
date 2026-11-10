@@ -11,8 +11,9 @@ use arrow_buffer::{Buffer, MutableBuffer};
 use arrow_data::UnsafeFlag;
 use arrow_schema::{ArrowError, SchemaRef};
 
+use crate::IpcSchema;
 use crate::convert::MessageBuffer;
-use crate::reader::{MAX_PREALLOC_BYTES, RecordBatchDecoder, read_dictionary_impl};
+use crate::reader::{MAX_PREALLOC_BYTES, RecordBatchDecoder, read_dictionary_with_ipc_schema_impl};
 use crate::{CONTINUATION_MARKER, MessageHeader};
 
 /// A low-level interface for reading [`RecordBatch`] data from a stream of bytes
@@ -21,7 +22,7 @@ use crate::{CONTINUATION_MARKER, MessageHeader};
 #[derive(Debug, Default)]
 pub struct StreamDecoder {
     /// The schema of this decoder, if read
-    schema: Option<SchemaRef>,
+    schema: Option<IpcSchema>,
     /// Lookup table for dictionaries by ID
     dictionaries: HashMap<i64, ArrayRef>,
     /// The decoder state
@@ -97,7 +98,9 @@ impl StreamDecoder {
 
     /// Return the schema if decoded, else None.
     pub fn schema(&self) -> Option<SchemaRef> {
-        self.schema.as_ref().map(|schema| schema.clone())
+        self.schema
+            .as_ref()
+            .map(|schema| Arc::clone(schema.schema()))
     }
 
     /// Specifies if validation should be skipped when reading data (defaults to `false`)
@@ -232,22 +235,23 @@ impl StreamDecoder {
                                     "Unable to read IPC message as schema".to_string(),
                                 )
                             })?;
-                            let schema = crate::convert::try_fb_to_schema(ipc_schema)?;
+                            let schema = IpcSchema::try_from_fb(ipc_schema)?;
                             self.state = DecoderState::default();
-                            self.schema = Some(Arc::new(schema));
+                            self.schema = Some(schema);
                         }
                         MessageHeader::RecordBatch => {
                             let batch = message.header_as_record_batch().unwrap();
-                            let schema = self.schema.clone().ok_or_else(|| {
+                            let schema = self.schema.as_ref().ok_or_else(|| {
                                 ArrowError::IpcError("Missing schema".to_string())
                             })?;
                             let batch = RecordBatchDecoder::try_new(
                                 &body,
                                 batch,
-                                schema,
+                                Arc::clone(schema.schema()),
                                 &self.dictionaries,
                                 &version,
                             )?
+                            .with_dict_ids(Arc::clone(schema.dict_ids()))
                             .with_require_alignment(self.require_alignment)
                             .with_skip_validation(self.skip_validation.clone())
                             .read_record_batch()?;
@@ -256,10 +260,10 @@ impl StreamDecoder {
                         }
                         MessageHeader::DictionaryBatch => {
                             let dictionary = message.header_as_dictionary_batch().unwrap();
-                            let schema = self.schema.as_deref().ok_or_else(|| {
+                            let schema = self.schema.as_ref().ok_or_else(|| {
                                 ArrowError::IpcError("Missing schema".to_string())
                             })?;
-                            read_dictionary_impl(
+                            read_dictionary_with_ipc_schema_impl(
                                 &body,
                                 dictionary,
                                 schema,
