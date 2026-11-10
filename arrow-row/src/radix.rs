@@ -5,36 +5,29 @@
 //! MSD radix sort on row-encoded keys.
 //!
 //! The Arrow row format produces big-endian, memcmp-comparable byte sequences,
-//! so they can be radix sorted directly with no extra encoding. MSD (Most
-//! Significant Digit) radix sort runs in O(n * key_width) instead of the
-//! O(n log n * comparison_cost) of a comparison sort.
+//! so they can be radix sorted directly. The sort skips the bytes that every
+//! row shares, radix sorts an 8-byte key taken from each row after them, and
+//! compares the rest of a row only to order rows whose keys are equal.
 //!
 //! # When to use this
 //!
-//! Radix sort wins when sorting by two or more columns, and the margin grows
-//! with N. Comparison sort walks every column again on each comparison. Radix
-//! sort pays a fixed cost per byte position no matter how many columns there
-//! are or what types they are (primitives, strings, dicts, lists).
+//! Radix sort is usually faster than [`lexsort_to_indices`] when sorting by
+//! two or more columns, unless one of them is expensive to encode (see below).
+//! [`lexsort_to_indices`] compares rows through a dynamically dispatched
+//! comparator per column, calling them in turn on every comparison until one
+//! column differs. Radix sort reads each row's 8-byte key once per pass. It
+//! also does well when every row shares long leading bytes, such as small
+//! `Decimal128` values, because it skips them. On a single non-null primitive
+//! column the two are about even. Its cost includes encoding the columns into
+//! [`Rows`], so a caller that already has [`Rows`] saves more.
 //!
-//! # When NOT to use this
+//! # When to prefer `lexsort_to_indices`
 //!
-//! Prefer [`lexsort_to_indices`] when:
-//! - **Sorting by a single column.** The row encoding overhead (allocation,
-//!   encoding, indirection through `Rows`) outweighs the radix advantage.
-//!   Comparison sort on the columnar array skips encoding entirely.
-//! - **All sort columns are low-cardinality dictionaries** with no
-//!   high-cardinality column to break ties. Dictionary values encode to long
-//!   shared prefixes, so the early radix passes discriminate few rows before
-//!   falling back to comparison sort.
-//! - **Columns with low-entropy leading bytes**, such as `Decimal128` and
-//!   `Decimal256`. These encode as 16- or 32-byte big-endian integers, but
-//!   real values cover only a fraction of that range, so the leading bytes
-//!   barely differ across rows. Radix uses up its max depth without
-//!   discriminating rows and then falls back to comparison sort.
-//! - **A leading column discriminates most rows and a trailing column is
-//!   expensive to encode**, such as a list. [`lexsort_to_indices`] skips
-//!   encoding the trailing column for rows already resolved by the leading
-//!   column.
+//! - **A single nullable or string column.** [`lexsort_to_indices`] sorts one
+//!   column without encoding it, and sets nulls aside before sorting.
+//! - **A key with an expensive column to encode, such as a list.** The row
+//!   format encodes every column of every row, while [`lexsort_to_indices`]
+//!   reads a later column only for rows that the earlier columns leave tied.
 //!
 //! [`lexsort_to_indices`]: https://docs.rs/arrow-ord/latest/arrow_ord/sort/fn.lexsort_to_indices.html
 
@@ -52,6 +45,10 @@ const FALLBACK_THRESHOLD: usize = 32;
 /// the row indices in sorted order. The caller is responsible for encoding
 /// columns into row format and for using the returned indices to reorder the
 /// original arrays (e.g., via [`take`]).
+///
+/// Rows that compare equal can appear in any order in the result.
+///
+/// Besides the result, the sort allocates two buffers of 16 bytes per row.
 ///
 /// See the [module-level documentation](self) for guidance on when radix sort
 /// is faster than [`lexsort_to_indices`].
