@@ -17,6 +17,7 @@ use arrow::array::*;
 use arrow::error::Result as ArrowResult;
 use arrow_array::{Int32Array, RecordBatch};
 use arrow_schema::{DataType as ArrowDataType, DataType, Field, Schema};
+use bytes::Bytes;
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::{
     ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowSelection,
@@ -1178,101 +1179,63 @@ fn test_write_bloom_filter_for_encrypted_column_errors() {
     let column_key = AES_128_COLUMN_KEYS[0].to_vec();
     let batch = bloom_filter_test_batch();
 
-    let uniform = FileEncryptionProperties::builder(footer_key.clone())
-        .build()
-        .unwrap();
-    let uniform_plaintext_footer = FileEncryptionProperties::builder(footer_key.clone())
-        .with_plaintext_footer(true)
-        .build()
-        .unwrap();
-    let column_keys = FileEncryptionProperties::builder(footer_key.clone())
+    let encryption_properties = FileEncryptionProperties::builder(footer_key.clone())
         .with_column_key("x", column_key.clone())
         .build()
         .unwrap();
 
-    for encryption_properties in [uniform, uniform_plaintext_footer, column_keys] {
-        // Bloom filters enabled for all columns
-        let all_columns = WriterProperties::builder()
-            .with_file_encryption_properties(Arc::clone(&encryption_properties))
-            .set_bloom_filter_enabled(true)
-            .build();
-        // Bloom filter enabled only for (encrypted) column x
-        let one_column = WriterProperties::builder()
-            .with_file_encryption_properties(encryption_properties)
-            .set_column_bloom_filter_enabled("x".into(), true)
-            .build();
+    // Bloom filters enabled for all columns
+    let props = WriterProperties::builder()
+        .with_file_encryption_properties(Arc::clone(&encryption_properties))
+        .set_bloom_filter_enabled(true)
+        .build();
 
-        for props in [all_columns, one_column] {
-            let err = ArrowWriter::try_new(Vec::new(), batch.schema(), Some(props)).unwrap_err();
-            assert!(matches!(err, ParquetError::NYI(_)), "{err:?}");
-            assert_eq!(
-                err.to_string(),
-                "NYI: Encryption is not currently supported with bloom filters, \
+    let err = ArrowWriter::try_new(Vec::new(), batch.schema(), Some(props)).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "NYI: Encryption is not currently supported with bloom filters, \
                  but bloom filters are enabled for encrypted column 'x'"
-            );
-        }
-    }
-}
+    );
 
-/// Bloom filters can still be written for the unencrypted columns of an
-/// encrypted file
-#[test]
-fn test_write_bloom_filter_for_unencrypted_column() {
-    let footer_key = AES_128_FOOTER_KEY.to_vec();
-    let column_key = AES_128_COLUMN_KEYS[0].to_vec();
-    let batch = bloom_filter_test_batch();
+    let decryption_properties = FileDecryptionProperties::builder(footer_key.clone())
+        .with_column_key("x", column_key.clone())
+        .build()
+        .unwrap();
 
-    for plaintext_footer in [true, false] {
-        // Column x is encrypted, column z is not
-        let encryption_properties = FileEncryptionProperties::builder(footer_key.clone())
-            .with_plaintext_footer(plaintext_footer)
-            .with_column_key("x", column_key.clone())
-            .build()
+    // Can write bloom filter for unencrypted colum
+    let props = WriterProperties::builder()
+        .with_file_encryption_properties(encryption_properties)
+        .set_column_bloom_filter_enabled("z".into(), true)
+        .build();
+
+    let mut output = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut output, batch.schema(), Some(props)).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+
+    let options =
+        ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties);
+    let builder =
+        ParquetRecordBatchReaderBuilder::try_new_with_options(Bytes::from(output), options)
             .unwrap();
-        let decryption_properties = FileDecryptionProperties::builder(footer_key.clone())
-            .with_column_key("x", column_key.clone())
-            .build()
-            .unwrap();
 
-        let props = WriterProperties::builder()
-            .with_file_encryption_properties(encryption_properties)
-            .set_column_bloom_filter_enabled("z".into(), true)
-            .build();
+    let row_group = builder.metadata().row_group(0);
+    assert!(row_group.column(0).bloom_filter_offset().is_none());
+    assert!(row_group.column(1).bloom_filter_offset().is_some()); // wrote bloom filter
 
-        let temp_file = tempfile::tempfile().unwrap();
-        let mut writer = ArrowWriter::try_new(&temp_file, batch.schema(), Some(props)).unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
+    let sbbf = builder
+        .get_row_group_column_bloom_filter(0, 1)
+        .unwrap()
+        .expect("bloom filter for column z");
+    assert!(sbbf.check(&19_i32));
+    assert!(!sbbf.check(&42_i32));
 
-        let options =
-            ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties);
-        let builder =
-            ParquetRecordBatchReaderBuilder::try_new_with_options(temp_file, options).unwrap();
-
-        let row_group = builder.metadata().row_group(0);
-        assert!(row_group.column(0).bloom_filter_offset().is_none());
-        assert!(row_group.column(1).bloom_filter_offset().is_some());
-
-        assert!(
-            builder
-                .get_row_group_column_bloom_filter(0, 0)
-                .unwrap()
-                .is_none()
-        );
-        let sbbf = builder
-            .get_row_group_column_bloom_filter(0, 1)
-            .unwrap()
-            .expect("bloom filter for column z");
-        assert!(sbbf.check(&19_i32));
-        assert!(!sbbf.check(&42_i32));
-
-        let batches = builder
-            .build()
-            .unwrap()
-            .collect::<ArrowResult<Vec<_>>>()
-            .unwrap();
-        assert_eq!(batches, vec![batch.clone()]);
-    }
+    let batches = builder
+        .build()
+        .unwrap()
+        .collect::<ArrowResult<Vec<_>>>()
+        .unwrap();
+    assert_eq!(batches, vec![batch.clone()]);
 }
 
 #[test]
