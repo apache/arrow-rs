@@ -47,10 +47,12 @@ struct PendingBatch {
 }
 
 impl CapacitySplitter {
+    /// `max_bytes` must be at most `i32::MAX`.
     pub(crate) fn new(schema: SchemaRef, max_bytes: usize) -> Self {
+        debug_assert!(i32::try_from(max_bytes).is_ok());
         Self {
             schema,
-            max_bytes: max_bytes.min(i32::MAX as usize) as i64,
+            max_bytes: max_bytes as i64,
             pending: None,
         }
     }
@@ -195,6 +197,21 @@ fn staged_offsets<'a>(array: &'a dyn Array, target: &DataType) -> Option<&'a [i6
     }
 }
 
+/// Shared split slices retain less than 4x their payload in reported capacity;
+/// external owners may retain unaccounted storage.
+fn should_copy_payload(slice_bytes: usize, window_bytes: usize, capacity: usize) -> bool {
+    // Treat zero reported capacity as an unknown retained allocation size.
+    if capacity == 0 {
+        return true;
+    }
+    // Avoid retaining the whole allocation for at most half the window's payload.
+    if slice_bytes <= window_bytes / 2 {
+        return true;
+    }
+    // Copy over-reserved buffers, allowing up to 2x the window for decoder Vec growth.
+    capacity > window_bytes.saturating_mul(2)
+}
+
 /// Rebase and narrow only the visible slice's offsets, preserving its validity.
 fn narrow<F, T>(array: &ArrayRef, split_window: Option<&ArrayRef>) -> Result<ArrayRef>
 where
@@ -215,16 +232,10 @@ where
         .map(|o| (*o - first) as i32)
         .collect::<Vec<_>>();
     let (first, span) = (first as usize, span as usize);
-    // Use the original column window's visible span to identify a dominant
-    // slice, allowing up to 2x capacity for decoder Vec growth. Small slices
-    // and windows backed by an oversized allocation still get compact copies.
-    // For split windows, sharing retains less than 4x the slice's payload in
-    // reported capacity; external owners may retain unaccounted storage.
     let copy_values = split_window.is_some_and(|window| {
         let offsets = window.as_bytes::<F>().value_offsets();
         let window_span = (offsets[offsets.len() - 1] - offsets[0]) as usize;
-        let capacity = source.values().capacity();
-        capacity == 0 || span <= window_span / 2 || capacity > window_span.saturating_mul(2)
+        should_copy_payload(span, window_span, source.values().capacity())
     });
     let values = if copy_values {
         Buffer::from(&source.values()[first..first + span])

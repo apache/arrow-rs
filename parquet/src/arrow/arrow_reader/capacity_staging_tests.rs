@@ -23,6 +23,7 @@ use super::{
 use crate::arrow::schema::ArrowSchemaConverter;
 use crate::arrow::{ArrowWriter, ProjectionMask};
 use crate::basic::{Encoding, Type as PhysicalType};
+use crate::file::metadata::ParquetStatisticsPolicy;
 use crate::file::properties::WriterProperties;
 use crate::file::reader::{FileReader, SerializedFileReader};
 use arrow_array::builder::{ListBuilder, StringBuilder};
@@ -149,6 +150,72 @@ fn assert_capacity(batches: &[RecordBatch], capacity: usize) {
             assert!((offsets[offsets.len() - 1] - offsets[0]) as usize <= capacity);
         }
     }
+}
+
+fn options_without_size_stats() -> super::ArrowReaderOptions {
+    super::ArrowReaderOptions::new().with_size_stats_policy(ParquetStatisticsPolicy::SkipAll)
+}
+
+fn assert_staging_enabled(reader: &super::ParquetRecordBatchReader, enabled: bool) {
+    assert!(matches!(
+        (&reader.staging, enabled),
+        (super::CapacityStaging::Active(_), true) | (super::CapacityStaging::Disabled, false)
+    ));
+}
+
+fn schema_filter(schema: Arc<Schema>) -> RowFilter {
+    RowFilter::new(vec![Box::new(ArrowPredicateFn::new(
+        ProjectionMask::all(),
+        move |batch: RecordBatch| {
+            assert_eq!(batch.schema(), schema);
+            Ok(BooleanArray::from(vec![true; batch.num_rows()]))
+        },
+    ))])
+}
+
+#[test]
+fn test_capacity_staging_public_option() {
+    let batch = mixed_batch();
+    let data = write(&batch, Encoding::PLAIN);
+    for enabled in [None, Some(false), Some(true)] {
+        let mut builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
+            data.clone(),
+            options_without_size_stats(),
+        )
+        .unwrap()
+        .with_batch_size(8);
+        assert!(
+            builder
+                .metadata()
+                .row_group(0)
+                .column(0)
+                .unencoded_byte_array_data_bytes()
+                .is_none()
+        );
+        if let Some(enabled) = enabled {
+            builder = builder
+                .with_byte_array_capacity(Some(5))
+                .with_byte_array_capacity_staging(false);
+            if enabled {
+                builder = builder.with_byte_array_capacity_staging(true);
+            }
+        }
+        let enabled = enabled.unwrap_or(true);
+        assert_eq!(
+            builder.byte_array_capacity,
+            enabled.then_some(i32::MAX as usize)
+        );
+        let reader = builder.build().unwrap();
+        assert_staging_enabled(&reader, enabled);
+        assert_eq!(reader.schema, batch.schema());
+        let output = reader.map(Result::unwrap).collect::<Vec<_>>();
+        assert_eq!(flatten(&output), batch);
+    }
+
+    let builder = ParquetRecordBatchReaderBuilder::try_new(data)
+        .unwrap()
+        .with_byte_array_capacity(Some(usize::MAX));
+    assert_eq!(builder.byte_array_capacity, Some(i32::MAX as usize));
 }
 
 #[test]
@@ -455,42 +522,94 @@ fn test_capacity_staging_stateful_sync_predicates() {
 
 #[test]
 fn test_capacity_staging_push_decoder_rebuild() {
+    use super::metrics::ArrowReaderMetrics;
     use crate::DecodeResult;
     use crate::arrow::push_decoder::ParquetPushDecoderBuilder;
 
     let batch = mixed_batch();
     let data = write(&batch, Encoding::DELTA_LENGTH_BYTE_ARRAY);
-    let file = SerializedFileReader::new(data.clone()).unwrap();
-    assert_eq!(file.metadata().num_row_groups(), 2);
-    let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(Arc::new(file.metadata().clone()))
+    let metadata = super::ArrowReaderMetadata::load(&data, options_without_size_stats()).unwrap();
+    assert_eq!(metadata.metadata.num_row_groups(), 2);
+    for enabled in [true, false] {
+        let metrics = ArrowReaderMetrics::enabled();
+        let mut builder = ParquetPushDecoderBuilder::new_with_metadata(metadata.clone())
+            .with_batch_size(8)
+            .with_byte_array_capacity(Some(28))
+            .with_row_filter(schema_filter(batch.schema()))
+            .with_max_predicate_cache_size(usize::MAX)
+            .with_metrics(metrics.clone());
+        if !enabled {
+            builder = builder.with_byte_array_capacity_staging(false);
+        }
+        let mut decoder = builder.build().unwrap();
+        decoder
+            .push_range(0..data.len() as u64, data.clone())
+            .unwrap();
+        let DecodeResult::Data(reader) = decoder.try_next_reader().unwrap() else {
+            panic!("prefetched first row group must be ready");
+        };
+        assert_staging_enabled(&reader, enabled);
+        let first: Vec<_> = reader.map(Result::unwrap).collect();
+        if enabled {
+            assert_capacity(&first, 28);
+            assert!(first.len() > 2);
+        }
+        assert_eq!(flatten(&first), batch.slice(0, 16));
+
+        let builder = decoder.into_builder().unwrap();
+        assert_eq!(builder.byte_array_capacity, enabled.then_some(28));
+        let mut decoder = builder.build().unwrap();
+        let DecodeResult::Data(reader) = decoder.try_next_reader().unwrap() else {
+            panic!("rebuilt decoder must retain prefetched second row group");
+        };
+        assert_staging_enabled(&reader, enabled);
+        let second: Vec<_> = reader.map(Result::unwrap).collect();
+        if enabled {
+            assert_capacity(&second, 28);
+            assert!(second.len() > 1);
+        }
+        assert_eq!(flatten(&second), batch.slice(16, 8));
+        assert!(metrics.records_read_from_cache().unwrap() > 0);
+        assert!(matches!(
+            decoder.try_next_reader().unwrap(),
+            DecodeResult::Finished
+        ));
+    }
+}
+
+#[cfg(feature = "async")]
+#[tokio::test]
+async fn test_capacity_staging_async_public_option() {
+    use super::metrics::ArrowReaderMetrics;
+    use crate::arrow::ParquetRecordBatchStreamBuilder;
+    use std::io::Cursor;
+
+    let batch = mixed_batch();
+    let data = write(&batch, Encoding::PLAIN);
+    for enabled in [true, false] {
+        let metrics = ArrowReaderMetrics::enabled();
+        let mut stream = ParquetRecordBatchStreamBuilder::new_with_options(
+            Cursor::new(data.clone()),
+            options_without_size_stats(),
+        )
+        .await
         .unwrap()
         .with_batch_size(8)
-        .with_byte_array_capacity(Some(28))
+        .with_byte_array_capacity_staging(enabled)
+        .with_row_filter(schema_filter(batch.schema()))
+        .with_max_predicate_cache_size(usize::MAX)
+        .with_metrics(metrics.clone())
         .build()
         .unwrap();
-    decoder.push_range(0..data.len() as u64, data).unwrap();
-    let DecodeResult::Data(reader) = decoder.try_next_reader().unwrap() else {
-        panic!("prefetched first row group must be ready");
-    };
-    let first: Vec<_> = reader.map(Result::unwrap).collect();
-    assert_capacity(&first, 28);
-    assert!(first.len() > 2);
-    assert_eq!(flatten(&first), batch.slice(0, 16));
-
-    let builder = decoder.into_builder().unwrap();
-    assert_eq!(builder.byte_array_capacity, Some(28));
-    let mut decoder = builder.build().unwrap();
-    let DecodeResult::Data(reader) = decoder.try_next_reader().unwrap() else {
-        panic!("rebuilt decoder must retain prefetched second row group");
-    };
-    let second: Vec<_> = reader.map(Result::unwrap).collect();
-    assert_capacity(&second, 28);
-    assert!(second.len() > 1);
-    assert_eq!(flatten(&second), batch.slice(16, 8));
-    assert!(matches!(
-        decoder.try_next_reader().unwrap(),
-        DecodeResult::Finished
-    ));
+        assert_eq!(stream.schema(), &batch.schema());
+        let mut output = vec![];
+        while let Some(reader) = stream.next_row_group().await.unwrap() {
+            assert_staging_enabled(&reader, enabled);
+            output.extend(reader.map(Result::unwrap));
+        }
+        assert_eq!(flatten(&output), batch);
+        assert!(metrics.records_read_from_cache().unwrap() > 0);
+    }
 }
 
 #[cfg(feature = "async")]

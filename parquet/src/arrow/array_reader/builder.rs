@@ -135,6 +135,11 @@ impl<'a> ReaderArgs<'a> {
         }
     }
 
+    /// Whether this field is a direct child of the reader's root struct.
+    fn is_top_level(&self) -> bool {
+        self.depth == 1
+    }
+
     /// Returns a copy of these arguments with a different `padding_threshold`.
     ///
     /// Used by list/map readers to set the threshold their children should
@@ -178,8 +183,10 @@ impl<'a> ArrayReaderBuilder<'a> {
     /// Nested fields and other requested types keep their native representation.
     /// `None` disables staging. Callers must restore staged arrays before
     /// exposing them to predicates or users.
+    /// A supplied capacity must be at most `i32::MAX`.
     pub(crate) fn with_byte_array_capacity(mut self, capacity: Option<usize>) -> Self {
-        self.byte_array_capacity = capacity.map(|limit| limit.min(i32::MAX as usize));
+        debug_assert!(capacity.is_none_or(|limit| i32::try_from(limit).is_ok()));
+        self.byte_array_capacity = capacity;
         self
     }
 
@@ -250,13 +257,16 @@ impl<'a> ArrayReaderBuilder<'a> {
 
     /// A bound for the complete scan, including repeated row groups. Page
     /// pruning and predicate-cache roles must not change a column's type.
+    /// Size statistics are optional (e.g. for older writers). Missing or invalid
+    /// counts cannot prove the payload fits, so staging remains enabled.
+    /// Empty collections keep that default too, although they decode no rows.
     fn byte_array_fits(&self, column: usize, capacity: usize) -> bool {
-        let mut has_metadata = false;
+        let mut has_row_groups = false;
         let total = self
             .row_groups
             .row_groups()
             .try_fold(0_i64, |total, group| {
-                has_metadata = true;
+                has_row_groups = true;
                 let bytes = group
                     .columns()
                     .get(column)?
@@ -268,7 +278,7 @@ impl<'a> ArrayReaderBuilder<'a> {
                     .checked_add(bytes)
                     .filter(|&total| total <= capacity as i64)
             });
-        has_metadata && total.is_some()
+        has_row_groups && total.is_some()
     }
 
     /// Return the total number of rows
@@ -550,23 +560,15 @@ impl<'a> ArrayReaderBuilder<'a> {
         ));
 
         let page_iterator = self.row_groups.column_chunks(col_idx)?;
-        let arrow_type = Some(match (&field.arrow_type, physical_type) {
-            (DataType::Utf8, PhysicalType::BYTE_ARRAY)
-                if args.depth == 1
-                    && self
-                        .byte_array_capacity
-                        .is_some_and(|capacity| !self.byte_array_fits(col_idx, capacity)) =>
-            {
-                DataType::LargeUtf8
-            }
-            (DataType::Binary, PhysicalType::BYTE_ARRAY)
-                if args.depth == 1
-                    && self
-                        .byte_array_capacity
-                        .is_some_and(|capacity| !self.byte_array_fits(col_idx, capacity)) =>
-            {
-                DataType::LargeBinary
-            }
+        let stage_byte_array = args.is_top_level()
+            && physical_type == PhysicalType::BYTE_ARRAY
+            && matches!(&field.arrow_type, DataType::Utf8 | DataType::Binary)
+            && self
+                .byte_array_capacity
+                .is_some_and(|capacity| !self.byte_array_fits(col_idx, capacity));
+        let arrow_type = Some(match (&field.arrow_type, stage_byte_array) {
+            (DataType::Utf8, true) => DataType::LargeUtf8,
+            (DataType::Binary, true) => DataType::LargeBinary,
             (other, _) => other.clone(),
         });
 
