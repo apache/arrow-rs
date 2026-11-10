@@ -104,7 +104,8 @@ pub fn radix_sort_to_indices(rows: &Rows) -> Result<UInt32Array, ArrowError> {
     let mut indices: Vec<u32> = (0..len).collect();
     let mut temp = vec![0u32; n];
     let mut bytes = vec![0u8; n];
-    msd_radix_sort(&mut indices, &mut temp, &mut bytes, rows, 0, true);
+    // SAFETY: indices is 0..n and n == rows.num_rows()
+    unsafe { msd_radix_sort(&mut indices, &mut temp, &mut bytes, rows, 0, true) };
     Ok(UInt32Array::from(indices))
 }
 
@@ -118,7 +119,14 @@ pub fn radix_sort_to_indices(rows: &Rows) -> Result<UInt32Array, ArrowError> {
 /// true means `src`, false means `dst`. It flips at each scatter so
 /// the final result lands in the right buffer. The top-level call
 /// passes `true` so the answer ends up in `indices`.
-fn msd_radix_sort(
+///
+/// Rows are read with [`Rows::row_unchecked`] to skip the per-access index
+/// check of [`Rows::row`] in the histogram and comparison loops.
+///
+/// # Safety
+///
+/// Every index in `src` must be less than `rows.num_rows()`.
+unsafe fn msd_radix_sort(
     src: &mut [u32],
     dst: &mut [u32],
     bytes: &mut [u8],
@@ -127,6 +135,7 @@ fn msd_radix_sort(
     result_in_src: bool,
 ) {
     let n = src.len();
+    debug_assert!(src.iter().all(|&idx| (idx as usize) < rows.num_rows()));
 
     if n <= FALLBACK_THRESHOLD || byte_pos >= MAX_DEPTH {
         // Compare from byte_pos onward. Earlier bytes are identical within this
@@ -142,8 +151,10 @@ fn msd_radix_sort(
             dst
         };
         out.sort_unstable_by(|&a, &b| {
-            let a = rows.row(a as usize).data();
-            let b = rows.row(b as usize).data();
+            // SAFETY: out holds the indices of src, which the caller guarantees
+            // are in bounds
+            let a = unsafe { rows.row_unchecked(a as usize) }.data();
+            let b = unsafe { rows.row_unchecked(b as usize) }.data();
             a.get(byte_pos..)
                 .unwrap_or_default()
                 .cmp(b.get(byte_pos..).unwrap_or_default())
@@ -156,8 +167,8 @@ fn msd_radix_sort(
     let bytes = &mut bytes[..n];
     let mut counts = [0u32; 256];
     for (i, &idx) in src.iter().enumerate() {
-        let b = rows
-            .row(idx as usize)
+        // SAFETY: the caller guarantees every index in src is in bounds
+        let b = unsafe { rows.row_unchecked(idx as usize) }
             .data()
             .get(byte_pos)
             .copied()
@@ -175,7 +186,8 @@ fn msd_radix_sort(
 
     // No scatter happened, so the data is still in src and roles are unchanged.
     if num_buckets == 1 {
-        msd_radix_sort(src, dst, bytes, rows, byte_pos + 1, result_in_src);
+        // SAFETY: src is unchanged, so its indices are still in bounds
+        unsafe { msd_radix_sort(src, dst, bytes, rows, byte_pos + 1, result_in_src) };
         return;
     }
 
@@ -195,14 +207,18 @@ fn msd_radix_sort(
         let end = offsets[bucket + 1] as usize;
         let len = end - start;
         if len > 1 {
-            msd_radix_sort(
-                &mut dst[start..end],
-                &mut src[start..end],
-                &mut bytes[start..end],
-                rows,
-                byte_pos + 1,
-                !result_in_src,
-            );
+            // SAFETY: the scatter wrote every index of src into dst exactly
+            // once, so dst holds only in-bounds indices
+            unsafe {
+                msd_radix_sort(
+                    &mut dst[start..end],
+                    &mut src[start..end],
+                    &mut bytes[start..end],
+                    rows,
+                    byte_pos + 1,
+                    !result_in_src,
+                )
+            };
         } else if len == 1 && result_in_src {
             // Singleton bucket does not recurse. The scattered element is in
             // dst, so copy it back when the caller expects the result in src.
@@ -646,9 +662,11 @@ mod tests {
         assert_eq!(sorted, expected);
     }
 
-    /// Out-of-range indices must panic rather than read out of bounds.
+    /// The debug assertion catches out-of-range indices before any unchecked
+    /// read. Release builds skip it, so the test runs only with assertions.
     #[test]
-    #[should_panic(expected = "row index out of bounds")]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "rows.num_rows()")]
     fn test_out_of_range_index_panics() {
         let array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
         let converter = RowConverter::new(vec![SortField::new(DataType::Int32)]).unwrap();
@@ -656,6 +674,8 @@ mod tests {
         let mut src = vec![0u32, 5];
         let mut dst = vec![0u32; 2];
         let mut bytes = vec![0u8; 2];
-        msd_radix_sort(&mut src, &mut dst, &mut bytes, &rows, 0, true);
+        // SAFETY: violates the precondition on purpose. The debug assertion
+        // panics before any unchecked read.
+        unsafe { msd_radix_sort(&mut src, &mut dst, &mut bytes, &rows, 0, true) };
     }
 }
