@@ -6,6 +6,7 @@ mod binary;
 mod decimal;
 mod dictionary;
 mod dispatch;
+mod interval;
 mod list;
 mod map;
 mod numeric;
