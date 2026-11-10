@@ -1095,6 +1095,13 @@ impl WriterPropertiesBuilder {
     }
 
     /// Sets FileEncryptionProperties (defaults to `None`)
+    ///
+    /// # Notes
+    ///
+    /// Writing encrypted bloom filters is not yet supported. Creating a writer
+    /// returns an error if bloom filters are enabled for any encrypted column.
+    /// Bloom filters can still be written for columns that are not encrypted,
+    /// by enabling them with [`Self::set_column_bloom_filter_enabled`].
     #[cfg(feature = "encryption")]
     pub fn with_file_encryption_properties(
         mut self,

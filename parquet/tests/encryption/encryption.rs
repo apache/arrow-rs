@@ -1096,7 +1096,6 @@ fn write_and_read_stats(
 
     let props = WriterProperties::builder()
         .with_file_encryption_properties(encryption_properties)
-        .set_bloom_filter_enabled(true)
         .build();
 
     let temp_file = tempfile::tempfile().unwrap();
@@ -1122,13 +1121,9 @@ fn write_and_read_stats(
                 assert_eq!(column_stats.min_bytes_opt(), Some(expected_min.as_slice()));
                 assert_eq!(column_stats.max_bytes_opt(), Some(expected_max.as_slice()));
             }
-            assert!(column.bloom_filter_offset().is_some());
-            assert!(column.bloom_filter_length().is_some());
         } else {
             assert!(column.statistics().is_none());
             assert!(column.page_encoding_stats().is_none());
-            assert!(column.bloom_filter_offset().is_none());
-            assert!(column.bloom_filter_length().is_none());
             // Size statistics should also be stripped
             if is_byte_array {
                 assert!(column.unencoded_byte_array_data_bytes().is_none());
@@ -1153,6 +1148,121 @@ fn write_and_read_stats(
 
     for (column, stats_expected) in row_group.columns().iter().zip(expect_stats) {
         check_column_stats(column, *stats_expected);
+    }
+}
+
+/// Returns a batch with two Int32 columns, "x" and "z"
+fn bloom_filter_test_batch() -> RecordBatch {
+    let values = Arc::new(Int32Array::from(vec![8, 3, 4, 19, 5]));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("x", DataType::Int32, true),
+        Field::new("z", DataType::Int32, true),
+    ]));
+    RecordBatch::try_new(schema, vec![values.clone(), values]).unwrap()
+}
+
+/// Writing a bloom filter for an encrypted column is not supported, and must
+/// error rather than silently writing the bloom filter in plaintext
+#[test]
+fn test_write_bloom_filter_for_encrypted_column_errors() {
+    let footer_key = AES_128_FOOTER_KEY.to_vec();
+    let column_key = AES_128_COLUMN_KEYS[0].to_vec();
+    let batch = bloom_filter_test_batch();
+
+    let uniform = FileEncryptionProperties::builder(footer_key.clone())
+        .build()
+        .unwrap();
+    let uniform_plaintext_footer = FileEncryptionProperties::builder(footer_key.clone())
+        .with_plaintext_footer(true)
+        .build()
+        .unwrap();
+    let column_keys = FileEncryptionProperties::builder(footer_key.clone())
+        .with_column_key("x", column_key.clone())
+        .build()
+        .unwrap();
+
+    for encryption_properties in [uniform, uniform_plaintext_footer, column_keys] {
+        // Bloom filters enabled for all columns
+        let all_columns = WriterProperties::builder()
+            .with_file_encryption_properties(Arc::clone(&encryption_properties))
+            .set_bloom_filter_enabled(true)
+            .build();
+        // Bloom filter enabled only for (encrypted) column x
+        let one_column = WriterProperties::builder()
+            .with_file_encryption_properties(encryption_properties)
+            .set_column_bloom_filter_enabled("x".into(), true)
+            .build();
+
+        for props in [all_columns, one_column] {
+            let err = ArrowWriter::try_new(Vec::new(), batch.schema(), Some(props)).unwrap_err();
+            assert!(matches!(err, ParquetError::NYI(_)), "{err:?}");
+            assert_eq!(
+                err.to_string(),
+                "NYI: Encryption is not currently supported with bloom filters, \
+                 but bloom filters are enabled for encrypted column 'x'"
+            );
+        }
+    }
+}
+
+/// Bloom filters can still be written for the unencrypted columns of an
+/// encrypted file
+#[test]
+fn test_write_bloom_filter_for_unencrypted_column() {
+    let footer_key = AES_128_FOOTER_KEY.to_vec();
+    let column_key = AES_128_COLUMN_KEYS[0].to_vec();
+    let batch = bloom_filter_test_batch();
+
+    for plaintext_footer in [true, false] {
+        // Column x is encrypted, column z is not
+        let encryption_properties = FileEncryptionProperties::builder(footer_key.clone())
+            .with_plaintext_footer(plaintext_footer)
+            .with_column_key("x", column_key.clone())
+            .build()
+            .unwrap();
+        let decryption_properties = FileDecryptionProperties::builder(footer_key.clone())
+            .with_column_key("x", column_key.clone())
+            .build()
+            .unwrap();
+
+        let props = WriterProperties::builder()
+            .with_file_encryption_properties(encryption_properties)
+            .set_column_bloom_filter_enabled("z".into(), true)
+            .build();
+
+        let temp_file = tempfile::tempfile().unwrap();
+        let mut writer = ArrowWriter::try_new(&temp_file, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let options =
+            ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties);
+        let builder =
+            ParquetRecordBatchReaderBuilder::try_new_with_options(temp_file, options).unwrap();
+
+        let row_group = builder.metadata().row_group(0);
+        assert!(row_group.column(0).bloom_filter_offset().is_none());
+        assert!(row_group.column(1).bloom_filter_offset().is_some());
+
+        assert!(
+            builder
+                .get_row_group_column_bloom_filter(0, 0)
+                .unwrap()
+                .is_none()
+        );
+        let sbbf = builder
+            .get_row_group_column_bloom_filter(0, 1)
+            .unwrap()
+            .expect("bloom filter for column z");
+        assert!(sbbf.check(&19_i32));
+        assert!(!sbbf.check(&42_i32));
+
+        let batches = builder
+            .build()
+            .unwrap()
+            .collect::<ArrowResult<Vec<_>>>()
+            .unwrap();
+        assert_eq!(batches, vec![batch.clone()]);
     }
 }
 
