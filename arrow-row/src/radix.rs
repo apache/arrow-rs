@@ -28,6 +28,9 @@
 //! - **A key with an expensive column to encode, such as a list.** The row
 //!   format encodes every column of every row, while [`lexsort_to_indices`]
 //!   reads a later column only for rows that the earlier columns leave tied.
+//! - **A sort with a limit.** [`lexsort_to_indices`] takes a `limit` and orders
+//!   only the first `limit` rows, while [`radix_sort_to_indices`] sorts every
+//!   row.
 //!
 //! [`lexsort_to_indices`]: https://docs.rs/arrow-ord/latest/arrow_ord/sort/fn.lexsort_to_indices.html
 
