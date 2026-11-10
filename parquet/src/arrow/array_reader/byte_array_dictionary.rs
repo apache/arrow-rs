@@ -178,7 +178,10 @@ struct ByteArrayDictionaryReader<K: ArrowNativeType, V: OffsetSizeTrait> {
     record_reader: GenericRecordReader<DictionaryBuffer<K, V>, DictionaryDecoder<K, V>>,
     /// Reusable scratch space for hashing byte slices when building dictionaries from plain-encoded values.
     hash_scratch: MutableBuffer,
-    /// Cached conversion of the current dictionary page's values.
+    /// Cached `(source_values, converted_values)` for the current dictionary page.
+    ///
+    /// `source_values` is retained for pointer-identity checks, while
+    /// `converted_values` is reused across batches backed by the same dictionary page.
     converted_values: Option<(ArrayRef, ArrayRef)>,
 }
 
