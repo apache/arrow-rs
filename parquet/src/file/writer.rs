@@ -208,10 +208,8 @@ impl<W: Write + Send> SerializedFileWriter<W> {
 
             let file_encryptor = FileEncryptor::new(Arc::clone(file_encryption_properties))?;
 
-            // Writing encrypted bloom filters is not yet supported. Rather than
-            // silently writing the bloom filter of an encrypted column in
-            // plaintext (leaking information about the column's values),
-            // return an error.
+            // Writing encrypted bloom filters not supported. See
+            // https://github.com/apache/arrow-rs/issues/12166
             for column in schema_descriptor.columns() {
                 let path = column.path().string();
                 if file_encryptor.is_column_encrypted(&path)

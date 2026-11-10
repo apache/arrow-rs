@@ -1096,6 +1096,9 @@ fn write_and_read_stats(
 
     let props = WriterProperties::builder()
         .with_file_encryption_properties(encryption_properties)
+        // TODO: enable bloom filters when supported
+        // https://github.com/apache/arrow-rs/issues/12166
+        //.set_bloom_filter_enabled(true)
         .build();
 
     let temp_file = tempfile::tempfile().unwrap();
@@ -1121,9 +1124,15 @@ fn write_and_read_stats(
                 assert_eq!(column_stats.min_bytes_opt(), Some(expected_min.as_slice()));
                 assert_eq!(column_stats.max_bytes_opt(), Some(expected_max.as_slice()));
             }
+            // Enable when bloom filters supported
+            // https://github.com/apache/arrow-rs/issues/12166
+            // assert!(column.bloom_filter_offset().is_some());
+            // assert!(column.bloom_filter_length().is_some());
         } else {
             assert!(column.statistics().is_none());
             assert!(column.page_encoding_stats().is_none());
+            assert!(column.bloom_filter_offset().is_none());
+            assert!(column.bloom_filter_length().is_none());
             // Size statistics should also be stripped
             if is_byte_array {
                 assert!(column.unencoded_byte_array_data_bytes().is_none());
