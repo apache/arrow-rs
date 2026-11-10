@@ -1196,6 +1196,18 @@ fn test_write_bloom_filter_for_encrypted_column_errors() {
                  but bloom filters are enabled for encrypted column 'x'"
     );
 
+    // Uniform encryption (all columns encrypted) also results in an error
+    let props = WriterProperties::builder()
+        .with_file_encryption_properties(
+            FileEncryptionProperties::builder(footer_key.clone())
+                .build()
+                .unwrap(),
+        )
+        .set_bloom_filter_enabled(true)
+        .build();
+    let err = ArrowWriter::try_new(Vec::new(), batch.schema(), Some(props)).unwrap_err();
+    assert!(matches!(err, ParquetError::NYI(_)), "{err}");
+
     let decryption_properties = FileDecryptionProperties::builder(footer_key.clone())
         .with_column_key("x", column_key.clone())
         .build()
