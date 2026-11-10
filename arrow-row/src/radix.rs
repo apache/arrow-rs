@@ -95,12 +95,7 @@ pub fn radix_sort_to_indices(rows: &Rows) -> Result<UInt32Array, ArrowError> {
             .skip(1)
             .fold((first.len(), first.len()), |(prefix, max_len), row| {
                 let row = row.data();
-                let prefix = first[..prefix]
-                    .iter()
-                    .zip(row)
-                    .take_while(|(a, b)| a == b)
-                    .count();
-                (prefix, max_len.max(row.len()))
+                (common_prefix(&first[..prefix], row), max_len.max(row.len()))
             });
 
     // Each entry holds the next 8 bytes of its row as a big-endian key in its
@@ -143,6 +138,16 @@ pub fn radix_sort_to_indices(rows: &Rows) -> Result<UInt32Array, ArrowError> {
     // prefix + 8, so the rest of each row decides their order. When no row is
     // longer than that, equal keys mean equal rows and there is nothing left
     // to compare.
+    //
+    // TODO: when long runs of equal keys dominate, as with dictionary or string
+    // keys that share more than 8 bytes, re-key instead of comparing: gather
+    // the next 8 bytes of each row in a run larger than FALLBACK_THRESHOLD into
+    // its entries, radix sort that slice with the matching slice of temp as
+    // scratch, and repeat for the runs that remain, using a worklist of
+    // (range, offset) rather than recursion. Each row is then read once per 8
+    // bytes instead of once per comparison. Smaller runs keep this comparison
+    // sort. In profiles, this comparator takes about 20% of sorting
+    // [dict(100,str_opt(50)), dict(100,str_opt(50))] with 32768 rows.
     let suffix = prefix + 8;
     if max_len > suffix {
         for run in entries.chunk_by_mut(|&a, &b| key(a) == key(b)) {
@@ -196,7 +201,7 @@ fn msd_radix_sort(src: &mut [u128], dst: &mut [u128], mut byte: u32, result_in_s
 
     // u32 counts halve the array zeroed at each level. They can't overflow,
     // because radix_sort_to_indices checks that src.len() <= u32::MAX.
-    let mut counts;
+    let mut counts: [u32; 256];
     let shift = loop {
         if byte == 8 {
             // Every key is equal, and the caller orders equal keys.
@@ -221,23 +226,25 @@ fn msd_radix_sort(src: &mut [u128], dst: &mut [u128], mut byte: u32, result_in_s
         let diff = src.iter().fold(0, |acc, &e| acc | (key(e) ^ first));
         byte = diff.leading_zeros() / 8;
     };
-    let mut offsets = [0u32; 257];
-    for i in 0..256 {
-        offsets[i + 1] = offsets[i] + counts[i];
+    // Turn counts into each bucket's start in place. The scatter then advances
+    // them to each bucket's end. One array saves zeroing and copying separate
+    // offset and write position arrays at every level.
+    let mut sum = 0;
+    for c in &mut counts {
+        (*c, sum) = (sum, sum + *c);
     }
-
-    let mut write_pos = offsets;
     for &e in src.iter() {
         let b = digit(e, shift);
-        dst[write_pos[b] as usize] = e;
-        write_pos[b] += 1;
+        dst[counts[b] as usize] = e;
+        counts[b] += 1;
     }
 
     // Recurse with roles swapped. After the scatter the data lives in dst, so
     // dst becomes the next level's src. Flipping result_in_src keeps each
     // level's output in the buffer its caller expects.
-    for bucket in 0..256 {
-        let (start, end) = (offsets[bucket] as usize, offsets[bucket + 1] as usize);
+    let mut start = 0;
+    for &end in &counts {
+        let end = end as usize;
         if end - start > 1 {
             msd_radix_sort(
                 &mut dst[start..end],
@@ -250,7 +257,33 @@ fn msd_radix_sort(src: &mut [u128], dst: &mut [u128], mut byte: u32, result_in_s
             // it back when the caller expects the result in src.
             src[start] = dst[start];
         }
+        start = end;
     }
+}
+
+/// The length of the longest prefix that `a` and `b` share
+fn common_prefix(a: &[u8], b: &[u8]) -> usize {
+    // Most keys share less than 8 bytes, and a plain byte loop costs the least
+    // for them
+    if a.len() < 8 {
+        return a.iter().zip(b).take_while(|(x, y)| x == y).count();
+    }
+    // Compares 8 bytes at a time, because rows can share long prefixes, such
+    // as the high bytes of small decimals, and every row compares them.
+    let (a_chunks, _) = a.as_chunks::<8>();
+    let (b_chunks, _) = b.as_chunks::<8>();
+    for (i, (x, y)) in a_chunks.iter().zip(b_chunks).enumerate() {
+        let diff = u64::from_be_bytes(*x) ^ u64::from_be_bytes(*y);
+        if diff != 0 {
+            return i * 8 + diff.leading_zeros() as usize / 8;
+        }
+    }
+    let done = a_chunks.len().min(b_chunks.len()) * 8;
+    done + a[done..]
+        .iter()
+        .zip(&b[done..])
+        .take_while(|(x, y)| x == y)
+        .count()
 }
 
 /// The key of an entry built by [`radix_sort_to_indices`]
@@ -695,6 +728,28 @@ mod tests {
         let mut expected: Vec<&str> = values.iter().map(String::as_str).collect();
         expected.sort_unstable();
         assert_eq!(sorted, expected);
+    }
+
+    #[test]
+    fn test_common_prefix() {
+        let a: Vec<u8> = (0..20).collect();
+        let cases: &[(&[u8], &[u8], usize)] = &[
+            (&[], &[], 0),
+            (&[], &a, 0),
+            (&a, &a, 20),
+            (&a[..5], &a, 5),
+            (&a, &a[..12], 12),
+            (&[1, 2, 3], &[1, 2, 4], 2),
+        ];
+        for &(x, y, expected) in cases {
+            assert_eq!(common_prefix(x, y), expected, "{x:?} {y:?}");
+        }
+        for i in [0, 7, 8, 9, 15, 16, 19] {
+            let mut b = a.clone();
+            b[i] ^= 0x80;
+            assert_eq!(common_prefix(&a, &b), i, "differ at {i}");
+            assert_eq!(common_prefix(&b, &a), i, "differ at {i}");
+        }
     }
 
     /// Small decimals share their first 13 encoded bytes, so the key must start
