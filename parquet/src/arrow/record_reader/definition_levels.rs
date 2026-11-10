@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_buffer::Buffer;
@@ -218,7 +205,7 @@ pub struct DefinitionLevelBufferDecoder {
 impl DefinitionLevelBufferDecoder {
     pub fn new(max_level: i16, packed: bool) -> Self {
         let decoder = match packed {
-            true => MaybePacked::Packed(PackedDecoder::new()),
+            true => MaybePacked::Packed(PackedDecoder::new(max_level)),
             false => MaybePacked::Fallback(DefinitionLevelDecoderImpl::new(max_level)),
         };
 
@@ -386,7 +373,12 @@ impl PackedDecoder {
 }
 
 impl PackedDecoder {
-    fn new() -> Self {
+    fn new(max_level: i16) -> Self {
+        assert_eq!(
+            max_level, 1,
+            "packed definition-level decoding requires max level 1"
+        );
+
         Self {
             data: Bytes::from(vec![]),
             data_offset: 0,
@@ -533,6 +525,33 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "packed definition-level decoding requires max level 1")]
+    fn test_packed_decoder_zero_max_level() {
+        PackedDecoder::new(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "packed definition-level decoding requires max level 1")]
+    fn test_packed_decoder_multiple_max_levels() {
+        PackedDecoder::new(2);
+    }
+
+    #[test]
+    #[should_panic(expected = "packed definition-level decoding requires max level 1")]
+    fn test_definition_level_buffer_decoder_invalid_packed_max_level() {
+        DefinitionLevelBufferDecoder::new(2, true);
+    }
+
+    #[test]
+    fn test_definition_level_buffer_decoder_modes() {
+        let packed = DefinitionLevelBufferDecoder::new(1, true);
+        assert!(matches!(packed.decoder, MaybePacked::Packed(_)));
+
+        let fallback = DefinitionLevelBufferDecoder::new(2, false);
+        assert!(matches!(fallback.decoder, MaybePacked::Fallback(_)));
+    }
+
+    #[test]
     fn test_packed_decoder() {
         let mut rng = rng();
         let len: usize = rng.random_range(512..1024);
@@ -547,7 +566,7 @@ mod tests {
         assert_eq!(expected.len(), len);
 
         let encoded = encoder.consume();
-        let mut decoder = PackedDecoder::new();
+        let mut decoder = PackedDecoder::new(1);
         decoder.set_data(Encoding::RLE, encoded.into());
 
         // Decode data in random length intervals
@@ -586,7 +605,7 @@ mod tests {
         assert_eq!(expected.len(), len);
 
         let encoded = encoder.consume();
-        let mut decoder = PackedDecoder::new();
+        let mut decoder = PackedDecoder::new(1);
         decoder.set_data(Encoding::RLE, encoded.into());
 
         let mut skip_value = 0;
@@ -628,7 +647,7 @@ mod tests {
     #[test]
     fn test_packed_decoder_truncated_run_returns_error() {
         // The header declares 504 levels (63 bytes), but only three packed bytes follow.
-        let mut decoder = PackedDecoder::new();
+        let mut decoder = PackedDecoder::new(1);
         decoder.set_data(Encoding::RLE, Bytes::from_static(&[0x7F, 0x55, 0x55, 0x55]));
 
         let mut decoded = BooleanBufferBuilder::new(504);
@@ -640,7 +659,7 @@ mod tests {
     #[test]
     fn test_packed_decoder_skip_truncated_run_returns_error() {
         // The skip path must validate the same source range as the read path.
-        let mut decoder = PackedDecoder::new();
+        let mut decoder = PackedDecoder::new(1);
         decoder.set_data(Encoding::RLE, Bytes::from_static(&[0x7F, 0x55, 0x55, 0x55]));
 
         let result = decoder.skip(504);
@@ -657,7 +676,7 @@ mod tests {
             encoder.put(1); // all valid
         }
         let encoded = encoder.consume();
-        let mut decoder = PackedDecoder::new();
+        let mut decoder = PackedDecoder::new(1);
         decoder.set_data(Encoding::RLE, encoded.into());
 
         // try_consume_all_valid now parses the RLE block itself, no need to read first
@@ -670,7 +689,7 @@ mod tests {
             encoder.put(0); // all null
         }
         let encoded = encoder.consume();
-        let mut decoder = PackedDecoder::new();
+        let mut decoder = PackedDecoder::new(1);
         decoder.set_data(Encoding::RLE, encoded.into());
 
         // Should return None because rle_value is false (all nulls)
@@ -686,7 +705,7 @@ mod tests {
             encoder.put(0); // followed by nulls
         }
         let encoded = encoder.consume();
-        let mut decoder = PackedDecoder::new();
+        let mut decoder = PackedDecoder::new(1);
         decoder.set_data(Encoding::RLE, encoded.into());
 
         // Request more than the valid run - should return None
@@ -722,7 +741,7 @@ mod tests {
     fn test_packed_decoder_invalid_run_len() {
         let mut writer = BitWriter::new(16);
         writer.put_vlq_int(u64::MAX);
-        let mut decoder = PackedDecoder::new();
+        let mut decoder = PackedDecoder::new(1);
         decoder.set_data(Encoding::RLE, writer.consume().into());
 
         let mut decoded = BooleanBufferBuilder::new(8);

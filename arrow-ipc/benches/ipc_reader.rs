@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow_array::builder::{
     Date32Builder, Decimal128Builder, Int32Builder, ListBuilder, StringDictionaryBuilder,
@@ -22,7 +9,7 @@ use arrow_array::types::Int32Type;
 use arrow_array::{ArrayRef, FixedSizeBinaryArray, RecordBatch, builder::StringBuilder};
 use arrow_buffer::Buffer;
 use arrow_ipc::convert::try_fb_to_schema;
-use arrow_ipc::reader::{FileDecoder, FileReader, StreamReader, read_footer_length};
+use arrow_ipc::reader::{FileDecoder, FileReader, StreamDecoder, StreamReader, read_footer_length};
 use arrow_ipc::writer::{FileWriter, IpcWriteOptions, StreamWriter};
 use arrow_ipc::{Block, CompressionType, root_as_footer};
 use arrow_schema::{DataType, Field, Schema};
@@ -59,6 +46,33 @@ fn criterion_benchmark(c: &mut Criterion) {
                 reader.next().unwrap().unwrap();
             }
             assert!(reader.next().is_none());
+        })
+    });
+
+    group.bench_function("StreamDecoder/read_10", |b| {
+        let buffer = Buffer::from_vec(ipc_stream(IpcWriteOptions::default()));
+        b.iter(move || {
+            let mut decoder = StreamDecoder::new();
+            let mut buffer = buffer.clone();
+            for _ in 0..10 {
+                decoder.decode(&mut buffer).unwrap().unwrap();
+            }
+            assert!(decoder.decode(&mut buffer).unwrap().is_none());
+            decoder.finish().unwrap();
+        })
+    });
+
+    group.bench_function("StreamDecoder/no_validation/read_10", |b| {
+        let buffer = Buffer::from_vec(ipc_stream(IpcWriteOptions::default()));
+        b.iter(move || {
+            // safety: we created a valid IPC stream
+            let mut decoder = unsafe { StreamDecoder::new().with_skip_validation(true) };
+            let mut buffer = buffer.clone();
+            for _ in 0..10 {
+                decoder.decode(&mut buffer).unwrap().unwrap();
+            }
+            assert!(decoder.decode(&mut buffer).unwrap().is_none());
+            decoder.finish().unwrap();
         })
     });
 

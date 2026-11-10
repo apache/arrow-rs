@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Defines numeric arithmetic kernels on [`PrimitiveArray`], such as [`add`]
 
@@ -790,8 +777,12 @@ fn interval_mul_f64(
     let month_remainder_days = month_remainder
         .to_i32()
         .ok_or_else(|| overflow("month remainder"))?;
-    let mut seconds_remainder =
-        timestamp_round((days_product.fract() + month_remainder.fract()) * SECONDS_PER_DAY);
+    // Same order of operations as DuckDB; float arithmetic isn't associative and we're aiming
+    // to replicate DuckDB accuracy
+    let mut seconds_remainder = timestamp_round(
+        (days_product - f64::from(days) + month_remainder - f64::from(month_remainder_days))
+            * SECONDS_PER_DAY,
+    );
 
     if seconds_remainder.abs() >= SECONDS_PER_DAY {
         let remainder_days = (seconds_remainder / SECONDS_PER_DAY)
@@ -2249,6 +2240,37 @@ mod tests {
             mul(&interval, &null_factor).unwrap().as_ref(),
             &IntervalMonthDayNanoArray::new_null(interval.len())
         );
+    }
+
+    #[test]
+    fn test_interval_mul_div_f64_matches_duckdb_rounding() {
+        // Regression test for https://github.com/apache/arrow-rs/issues/12004: each of these
+        // results is off by 1 ns unless the sub-day remainder is summed in DuckDB's order.
+        let interval = IntervalMonthDayNanoArray::from(vec![
+            IntervalMonthDayNanoType::make_value(1, 1, 0),
+            IntervalMonthDayNanoType::make_value(1, 1, 0),
+            IntervalMonthDayNanoType::make_value(1, 2, 0),
+            IntervalMonthDayNanoType::make_value(1, 1, 0),
+        ]);
+        let factor = Float64Array::from(vec![32. / 7., 10. / 13., 5. / 7., -32. / 7.]);
+        let expected = IntervalMonthDayNanoArray::from(vec![
+            IntervalMonthDayNanoType::make_value(4, 21, 61_714_285_726_628),
+            IntervalMonthDayNanoType::make_value(0, 23, 73_107_692_314_339),
+            IntervalMonthDayNanoType::make_value(0, 22, 74_057_142_894_171),
+            IntervalMonthDayNanoType::make_value(-4, -21, -61_714_285_726_628),
+        ]);
+        assert_eq!(mul(&interval, &factor).unwrap().as_ref(), &expected);
+
+        // Division multiplies by the reciprocal, so it follows the same order.
+        let interval =
+            IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNanoType::make_value(1, 1, 0)]);
+        let factor = Float64Array::new_scalar(7. / 32.);
+        let expected = IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNanoType::make_value(
+            4,
+            21,
+            61_714_285_726_628,
+        )]);
+        assert_eq!(div(&interval, &factor).unwrap().as_ref(), &expected);
     }
 
     #[test]
