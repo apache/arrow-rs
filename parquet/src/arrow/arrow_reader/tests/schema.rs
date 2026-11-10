@@ -627,7 +627,41 @@ fn dictionary_type(value_type: ArrowDataType) -> ArrowDataType {
 }
 
 #[test]
-fn test_dictionary_honors_requested_value_type() {
+fn test_binary_column_as_utf8_dictionary() {
+    let file = write_parquet_from_iter(vec![(
+        "binary",
+        Arc::new(BinaryArray::from(vec![
+            b"one".as_ref(),
+            b"two".as_ref(),
+            b"one".as_ref(),
+        ])) as ArrayRef,
+    )]);
+    let data_type = dictionary_type(ArrowDataType::Utf8);
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "binary",
+        data_type.clone(),
+        false,
+    )]));
+    let options = ArrowReaderOptions::new().with_schema(schema);
+    let mut reader = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let batch = reader.next().unwrap().unwrap();
+    assert_eq!(batch.column(0).data_type(), &data_type);
+    let dictionary = batch
+        .column(0)
+        .as_dictionary::<arrow::datatypes::Int32Type>();
+    assert_eq!(dictionary.keys().values().as_ref(), &[0, 1, 0]);
+    assert_eq!(
+        dictionary.values().as_string::<i32>(),
+        &StringArray::from(vec!["one", "two"])
+    );
+}
+
+#[test]
+fn test_dictionary_requested_value_type_variants() {
     let binary_values = vec![
         Some(b"one".as_ref()),
         None,
@@ -636,10 +670,6 @@ fn test_dictionary_honors_requested_value_type() {
     ];
     let string_values = vec![Some("one"), None, Some("two"), Some("one")];
     let file = write_parquet_from_iter(vec![
-        (
-            "utf8",
-            Arc::new(BinaryArray::from(binary_values.clone())) as ArrayRef,
-        ),
         (
             "large_utf8",
             Arc::new(LargeBinaryArray::from(binary_values.clone())) as ArrayRef,
@@ -658,7 +688,6 @@ fn test_dictionary_honors_requested_value_type() {
         ),
     ]);
     let schema = Arc::new(Schema::new(vec![
-        Field::new("utf8", dictionary_type(ArrowDataType::Utf8), true),
         Field::new(
             "large_utf8",
             dictionary_type(ArrowDataType::LargeUtf8),
