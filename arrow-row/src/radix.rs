@@ -100,16 +100,30 @@ pub fn radix_sort_to_indices(rows: &Rows) -> Result<UInt32Array, ArrowError> {
     // key and move as one value. Keeping the key in one 64-bit half makes
     // extracting a key byte a single shift.
     //
-    // The key is loaded straight from the buffer through the offsets, because
-    // `Row::data` ends at the row and the load reads 8 bytes regardless.
+    // A row shorter than the key takes its last key bytes from the next row,
+    // because a fixed-size load is one instruction and a variable-length copy
+    // calls memcpy. Those bytes can only reorder equal rows: no row is a proper
+    // prefix of another, because every field encoding is self-delimiting, so
+    // two different rows differ within the shorter one. That load reads the
+    // buffer through the offsets, because `Row::data` ends at the row.
     let buffer = rows.buffer.as_slice();
     let mut entries: Vec<u128> = rows
         .offsets
         .windows(2)
         .enumerate()
         .map(|(i, w)| {
-            let key = load_key(buffer, w[0] + prefix, w[1]);
-            (u128::from(key) << 64) | i as u128
+            let start = w[0] + prefix;
+            let bytes = match buffer.get(start..).and_then(<[u8]>::first_chunk::<8>) {
+                Some(bytes) => *bytes,
+                // The last rows of the buffer are padded with zeros instead
+                None => {
+                    let tail = &buffer[start..];
+                    let mut bytes = [0u8; 8];
+                    bytes[..tail.len()].copy_from_slice(tail);
+                    bytes
+                }
+            };
+            (u128::from(u64::from_be_bytes(bytes)) << 64) | i as u128
         })
         .collect();
     let mut temp = vec![0u128; n];
@@ -267,25 +281,6 @@ fn common_prefix(a: &[u8], b: &[u8]) -> usize {
         .zip(&b[done..])
         .take_while(|(x, y)| x == y)
         .count()
-}
-
-/// The 8 bytes of `buffer` from `start` as a big-endian key, with the bytes at
-/// and after `end` zeroed
-fn load_key(buffer: &[u8], start: usize, end: usize) -> u64 {
-    let len = end - start;
-    match buffer.get(start..).and_then(<[u8]>::first_chunk::<8>) {
-        // A fixed-size load is one instruction, where a copy of `len` bytes
-        // calls memcpy. The mask clears the bytes of the next row, so that
-        // equal rows shorter than the key get equal keys and share a bucket.
-        Some(bytes) if len < 8 => u64::from_be_bytes(*bytes) & !(u64::MAX >> (8 * len)),
-        Some(bytes) => u64::from_be_bytes(*bytes),
-        // The last rows of the buffer have fewer than 8 bytes left to load
-        None => {
-            let mut bytes = [0u8; 8];
-            bytes[..len].copy_from_slice(&buffer[start..end]);
-            u64::from_be_bytes(bytes)
-        }
-    }
 }
 
 /// The key of an entry built by [`radix_sort_to_indices`]
@@ -730,24 +725,6 @@ mod tests {
         let mut expected: Vec<&str> = values.iter().map(String::as_str).collect();
         expected.sort_unstable();
         assert_eq!(sorted, expected);
-    }
-
-    #[test]
-    fn test_load_key() {
-        let buffer: Vec<u8> = (1..=12).collect();
-        let cases = [
-            // A row shorter than the key ignores the bytes of the next row
-            (0, 3, 0x0102_0300_0000_0000),
-            (5, 5, 0),
-            (0, 8, 0x0102_0304_0506_0708),
-            (2, 12, 0x0304_0506_0708_090a),
-            // Rows at the end of the buffer have fewer than 8 bytes to load
-            (10, 12, 0x0b0c_0000_0000_0000),
-            (12, 12, 0),
-        ];
-        for (start, end, expected) in cases {
-            assert_eq!(load_key(&buffer, start, end), expected, "{start}..{end}");
-        }
     }
 
     #[test]
