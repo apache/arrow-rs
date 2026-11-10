@@ -96,7 +96,7 @@ jobs:
         uses: ./.github/actions/setup-rustup
       - name: Install cargo-shear
         id: install-shear
-        uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941  # v2.89.1
+        uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2  # v2.90.2
         with:
           tool: cargo-shear
       - name: Check workspace dependencies
@@ -120,7 +120,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv
-        uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941  # v2.89.1
+        uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2  # v2.90.2
         with:
           tool: cargo-msrv
       - name: Check all packages
