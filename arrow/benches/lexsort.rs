@@ -6,7 +6,8 @@ use arrow::compute::{SortColumn, lexsort_to_indices};
 use arrow::row::radix::radix_sort_to_indices;
 use arrow::row::{RowConverter, SortField};
 use arrow::util::bench_util::{
-    create_dict_from_values, create_primitive_array, create_string_array_with_len,
+    create_decimal128_array, create_dict_from_values, create_primitive_array,
+    create_primitive_array_range, create_string_array_with_len,
 };
 use arrow::util::data_gen::create_random_array;
 use arrow_array::types::{Float64Type, Int32Type, Int64Type};
@@ -23,6 +24,8 @@ enum Column {
     OptionalI64,
     RequiredF64,
     OptionalF64,
+    SmallRangeI64,
+    Decimal128,
     Required16CharString,
     Optional16CharString,
     Optional50CharString,
@@ -42,6 +45,8 @@ impl std::fmt::Debug for Column {
             Column::OptionalI64 => "i64_opt",
             Column::RequiredF64 => "f64",
             Column::OptionalF64 => "f64_opt",
+            Column::SmallRangeI64 => "i64(0..1000)",
+            Column::Decimal128 => "decimal128(18,2)",
             Column::Required16CharString => "str(16)",
             Column::Optional16CharString => "str_opt(16)",
             Column::Optional50CharString => "str_opt(50)",
@@ -64,6 +69,12 @@ impl Column {
             Column::OptionalI64 => Arc::new(create_primitive_array::<Int64Type>(size, 0.2)),
             Column::RequiredF64 => Arc::new(create_primitive_array::<Float64Type>(size, 0.)),
             Column::OptionalF64 => Arc::new(create_primitive_array::<Float64Type>(size, 0.2)),
+            // Values share their leading encoded bytes, unlike the full-range
+            // columns above, so the first radix passes split few rows.
+            Column::SmallRangeI64 => {
+                Arc::new(create_primitive_array_range::<Int64Type>(size, 0., 0..1000))
+            }
+            Column::Decimal128 => Arc::new(create_decimal128_array(size, 18, 2)),
             Column::Required16CharString => {
                 Arc::new(create_string_array_with_len::<i32>(size, 0., 16))
             }
@@ -156,8 +167,7 @@ fn do_bench(c: &mut Criterion, columns: &[Column], len: usize) {
                     .collect();
                 let converter = RowConverter::new(fields).unwrap();
                 let rows = converter.convert_columns(&arrays).unwrap();
-                let indices = radix_sort_to_indices(&rows);
-                UInt32Array::from_iter_values(indices)
+                radix_sort_to_indices(&rows).unwrap()
             })
         })
     });
@@ -177,6 +187,8 @@ fn add_benchmark(c: &mut Criterion) {
         &[Column::Optional16CharString],
         // Multi-column
         &[Column::RequiredI32, Column::OptionalI32],
+        &[Column::SmallRangeI64, Column::RequiredI32],
+        &[Column::Decimal128, Column::RequiredI32],
         &[Column::RequiredI32, Column::Optional16CharString],
         &[Column::RequiredI32, Column::Required16CharString],
         &[Column::Optional16CharString, Column::Required16CharString],

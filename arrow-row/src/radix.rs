@@ -52,6 +52,8 @@
 //! [`lexsort_to_indices`]: https://docs.rs/arrow-ord/latest/arrow_ord/sort/fn.lexsort_to_indices.html
 
 use crate::Rows;
+use arrow_array::UInt32Array;
+use arrow_schema::ArrowError;
 
 /// Buckets this size or smaller fall back to comparison sort. On small inputs
 /// a comparison sort beats the per-level indirection of another radix pass.
@@ -66,12 +68,16 @@ const MAX_DEPTH: usize = 8;
 /// Sort row indices using MSD radix sort on row-encoded keys.
 ///
 /// Takes [`Rows`] produced by [`RowConverter::convert_columns`] and returns
-/// a `Vec<u32>` of row indices in sorted order. The caller is responsible for
-/// encoding columns into row format and for using the returned indices to
-/// reorder the original arrays (e.g., via [`take`]).
+/// the row indices in sorted order. The caller is responsible for encoding
+/// columns into row format and for using the returned indices to reorder the
+/// original arrays (e.g., via [`take`]).
 ///
 /// See the [module-level documentation](self) for guidance on when radix sort
 /// is faster than [`lexsort_to_indices`].
+///
+/// # Errors
+///
+/// Returns an error if `rows` has more rows than a `u32` index can address.
 ///
 /// # Example
 ///
@@ -84,54 +90,22 @@ const MAX_DEPTH: usize = 8;
 /// let array: ArrayRef = Arc::new(Int32Array::from(vec![5, 3, 1, 4, 2]));
 /// let converter = RowConverter::new(vec![SortField::new(DataType::Int32)]).unwrap();
 /// let rows = converter.convert_columns(&[array]).unwrap();
-/// let indices = radix_sort_to_indices(&rows);
-/// assert_eq!(indices, vec![2, 4, 1, 3, 0]); // points to [1, 2, 3, 4, 5]
+/// let indices = radix_sort_to_indices(&rows).unwrap();
+/// assert_eq!(indices.values(), &[2, 4, 1, 3, 0]); // points to [1, 2, 3, 4, 5]
 /// ```
 ///
 /// [`RowConverter::convert_columns`]: crate::RowConverter::convert_columns
 /// [`take`]: https://docs.rs/arrow/latest/arrow/compute/fn.take.html
 /// [`lexsort_to_indices`]: https://docs.rs/arrow-ord/latest/arrow_ord/sort/fn.lexsort_to_indices.html
-pub fn radix_sort_to_indices(rows: &Rows) -> Vec<u32> {
-    radix_sort_to_indices_with(rows, MAX_DEPTH, FALLBACK_THRESHOLD)
-}
-
-/// Like [`radix_sort_to_indices`] but with tunable parameters for
-/// benchmarking. `max_depth` controls how many radix passes to run
-/// before falling back to comparison sort. `fallback_threshold` is
-/// the bucket size below which we switch to comparison sort.
-pub fn radix_sort_to_indices_with(
-    rows: &Rows,
-    max_depth: usize,
-    fallback_threshold: usize,
-) -> Vec<u32> {
+pub fn radix_sort_to_indices(rows: &Rows) -> Result<UInt32Array, ArrowError> {
     let n = rows.num_rows();
-    let mut indices: Vec<u32> = (0..n as u32).collect();
+    let len = u32::try_from(n)
+        .map_err(|_| ArrowError::ComputeError(format!("cannot sort {n} rows with u32 indices")))?;
+    let mut indices: Vec<u32> = (0..len).collect();
     let mut temp = vec![0u32; n];
     let mut bytes = vec![0u8; n];
-    let config = RadixSortConfig {
-        max_depth,
-        fallback_threshold,
-    };
-    msd_radix_sort(&mut indices, &mut temp, &mut bytes, rows, 0, true, &config);
-    indices
-}
-
-/// Tunable parameters for MSD radix sort.
-struct RadixSortConfig {
-    /// Maximum number of radix passes before falling back to comparison sort.
-    max_depth: usize,
-    /// Buckets smaller than this fall back to comparison sort.
-    fallback_threshold: usize,
-}
-
-/// The byte at `byte_pos` of row `idx`, or 0 past the row's end.
-///
-/// # Safety
-/// `idx` must be a valid row index in `rows`.
-#[inline(always)]
-unsafe fn row_byte(rows: &Rows, idx: u32, byte_pos: usize) -> u8 {
-    // SAFETY: caller guarantees idx is a valid row index
-    unsafe { rows.row_unchecked(idx as usize) }.byte_from(byte_pos)
+    msd_radix_sort(&mut indices, &mut temp, &mut bytes, rows, 0, true);
+    Ok(UInt32Array::from(indices))
 }
 
 /// MSD radix sort using ping-pong buffers.
@@ -151,35 +125,29 @@ fn msd_radix_sort(
     rows: &Rows,
     byte_pos: usize,
     result_in_src: bool,
-    config: &RadixSortConfig,
 ) {
     let n = src.len();
 
-    if n <= config.fallback_threshold || byte_pos >= config.max_depth {
+    if n <= FALLBACK_THRESHOLD || byte_pos >= MAX_DEPTH {
         // Compare from byte_pos onward. Earlier bytes are identical within this
-        // bucket, having been discriminated by the radix passes above. Rows of
-        // different lengths can share a bucket when a shorter row's past-end
-        // default (0) matches a longer row's real byte, and data_from returns
-        // an empty slice past the end so those rows still order correctly.
-        //
-        // When the result is expected in dst, copy there first and sort in
-        // place.
-        if result_in_src {
-            src.sort_unstable_by(|&a, &b| {
-                // SAFETY: indices contains a permutation of 0..rows.num_rows()
-                let ra = unsafe { rows.row_unchecked(a as usize) };
-                let rb = unsafe { rows.row_unchecked(b as usize) };
-                ra.data_from(byte_pos).cmp(rb.data_from(byte_pos))
-            });
+        // bucket, having been discriminated by the radix passes above. Past-end
+        // bytes read as 0, but no row is a proper prefix of another because
+        // every field encoding is self-delimiting. So rows in one bucket are
+        // either equal or all longer than byte_pos, and skipping the prefix
+        // drops no byte that decides the order.
+        let out = if result_in_src {
+            src
         } else {
             dst.copy_from_slice(src);
-            dst.sort_unstable_by(|&a, &b| {
-                // SAFETY: indices contains a permutation of 0..rows.num_rows()
-                let ra = unsafe { rows.row_unchecked(a as usize) };
-                let rb = unsafe { rows.row_unchecked(b as usize) };
-                ra.data_from(byte_pos).cmp(rb.data_from(byte_pos))
-            });
-        }
+            dst
+        };
+        out.sort_unstable_by(|&a, &b| {
+            let a = rows.row(a as usize).data();
+            let b = rows.row(b as usize).data();
+            a.get(byte_pos..)
+                .unwrap_or_default()
+                .cmp(b.get(byte_pos..).unwrap_or_default())
+        });
         return;
     }
 
@@ -188,8 +156,12 @@ fn msd_radix_sort(
     let bytes = &mut bytes[..n];
     let mut counts = [0u32; 256];
     for (i, &idx) in src.iter().enumerate() {
-        // SAFETY: src contains valid row indices
-        let b = unsafe { row_byte(rows, idx, byte_pos) };
+        let b = rows
+            .row(idx as usize)
+            .data()
+            .get(byte_pos)
+            .copied()
+            .unwrap_or(0);
         bytes[i] = b;
         counts[b as usize] += 1;
     }
@@ -203,7 +175,7 @@ fn msd_radix_sort(
 
     // No scatter happened, so the data is still in src and roles are unchanged.
     if num_buckets == 1 {
-        msd_radix_sort(src, dst, bytes, rows, byte_pos + 1, result_in_src, config);
+        msd_radix_sort(src, dst, bytes, rows, byte_pos + 1, result_in_src);
         return;
     }
 
@@ -230,7 +202,6 @@ fn msd_radix_sort(
                 rows,
                 byte_pos + 1,
                 !result_in_src,
-                config,
             );
         } else if len == 1 && result_in_src {
             // Singleton bucket does not recurse. The scattered element is in
@@ -243,12 +214,17 @@ fn msd_radix_sort(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::generate_column;
     use crate::{RowConverter, SortField};
     use arrow_array::{ArrayRef, BooleanArray, Float64Array, Int32Array, StringArray};
     use arrow_schema::{DataType, SortOptions};
     use rand::rngs::StdRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
     use std::sync::Arc;
+
+    fn sort(rows: &Rows) -> Vec<u32> {
+        radix_sort_to_indices(rows).unwrap().values().to_vec()
+    }
 
     fn assert_sorted(rows: &Rows, indices: &[u32]) {
         for i in 1..indices.len() {
@@ -269,7 +245,7 @@ mod tests {
         let converter = RowConverter::new(vec![SortField::new(DataType::Int32)]).unwrap();
         let rows = converter.convert_columns(&[array]).unwrap();
 
-        let indices = radix_sort_to_indices(&rows);
+        let indices = sort(&rows);
         assert_sorted(&rows, &indices);
         assert_eq!(indices, vec![2, 4, 1, 3, 0]);
     }
@@ -281,7 +257,7 @@ mod tests {
         let converter = RowConverter::new(vec![SortField::new(DataType::Utf8)]).unwrap();
         let rows = converter.convert_columns(&[array]).unwrap();
 
-        let indices = radix_sort_to_indices(&rows);
+        let indices = sort(&rows);
         assert_sorted(&rows, &indices);
         assert_eq!(indices, vec![1, 0, 2, 3]);
     }
@@ -298,7 +274,7 @@ mod tests {
         let converter = RowConverter::new(vec![SortField::new(DataType::Int32)]).unwrap();
         let rows = converter.convert_columns(&[array]).unwrap();
 
-        let indices = radix_sort_to_indices(&rows);
+        let indices = sort(&rows);
         assert_sorted(&rows, &indices);
     }
 
@@ -313,7 +289,7 @@ mod tests {
         .unwrap();
         let rows = converter.convert_columns(&[a1, a2]).unwrap();
 
-        let indices = radix_sort_to_indices(&rows);
+        let indices = sort(&rows);
         assert_sorted(&rows, &indices);
         assert_eq!(indices, vec![1, 0, 3, 2]);
     }
@@ -324,7 +300,7 @@ mod tests {
         let converter = RowConverter::new(vec![SortField::new(DataType::Int32)]).unwrap();
         let rows = converter.convert_columns(&[array]).unwrap();
 
-        let indices = radix_sort_to_indices(&rows);
+        let indices = sort(&rows);
         assert!(indices.is_empty());
     }
 
@@ -334,7 +310,7 @@ mod tests {
         let converter = RowConverter::new(vec![SortField::new(DataType::Int32)]).unwrap();
         let rows = converter.convert_columns(&[array]).unwrap();
 
-        let indices = radix_sort_to_indices(&rows);
+        let indices = sort(&rows);
         assert_eq!(indices, vec![0]);
     }
 
@@ -344,7 +320,7 @@ mod tests {
         let converter = RowConverter::new(vec![SortField::new(DataType::Int32)]).unwrap();
         let rows = converter.convert_columns(&[array]).unwrap();
 
-        let indices = radix_sort_to_indices(&rows);
+        let indices = sort(&rows);
         assert_sorted(&rows, &indices);
     }
 
@@ -356,7 +332,7 @@ mod tests {
             RowConverter::new(vec![SortField::new_with_options(DataType::Int32, options)]).unwrap();
         let rows = converter.convert_columns(&[array]).unwrap();
 
-        let indices = radix_sort_to_indices(&rows);
+        let indices = sort(&rows);
         assert_sorted(&rows, &indices);
     }
 
@@ -374,7 +350,7 @@ mod tests {
             RowConverter::new(vec![SortField::new_with_options(DataType::Int32, options)]).unwrap();
         let rows = converter.convert_columns(&[array]).unwrap();
 
-        let indices = radix_sort_to_indices(&rows);
+        let indices = sort(&rows);
         assert_sorted(&rows, &indices);
     }
 
@@ -392,7 +368,7 @@ mod tests {
             RowConverter::new(vec![SortField::new_with_options(DataType::Int32, options)]).unwrap();
         let rows = converter.convert_columns(&[array]).unwrap();
 
-        let indices = radix_sort_to_indices(&rows);
+        let indices = sort(&rows);
         assert_sorted(&rows, &indices);
     }
 
@@ -421,7 +397,7 @@ mod tests {
                     .convert_columns(std::slice::from_ref(&array))
                     .unwrap();
 
-                let indices = radix_sort_to_indices(&rows);
+                let indices = sort(&rows);
                 assert_sorted(&rows, &indices);
             }
         }
@@ -441,7 +417,7 @@ mod tests {
         let converter = RowConverter::new(vec![SortField::new(DataType::Float64)]).unwrap();
         let rows = converter.convert_columns(&[array]).unwrap();
 
-        let indices = radix_sort_to_indices(&rows);
+        let indices = sort(&rows);
         assert_sorted(&rows, &indices);
     }
 
@@ -458,7 +434,7 @@ mod tests {
         let converter = RowConverter::new(vec![SortField::new(DataType::Boolean)]).unwrap();
         let rows = converter.convert_columns(&[array]).unwrap();
 
-        let indices = radix_sort_to_indices(&rows);
+        let indices = sort(&rows);
         assert_sorted(&rows, &indices);
     }
 
@@ -467,7 +443,7 @@ mod tests {
     #[test]
     fn test_radix_sort_threshold_boundary() {
         let mut rng = StdRng::seed_from_u64(0xCAFE);
-        for n in [1, 2, 32, 63, 64, 65, 100, 128, 256, 500, 1000] {
+        for n in [1, 2, 31, 32, 33, 64, 100, 128, 256, 500, 1000] {
             let values: Vec<Option<i32>> = (0..n)
                 .map(|_| {
                     if rng.random_bool(0.1) {
@@ -481,21 +457,25 @@ mod tests {
             let converter = RowConverter::new(vec![SortField::new(DataType::Int32)]).unwrap();
             let rows = converter.convert_columns(&[array]).unwrap();
 
-            let indices = radix_sort_to_indices(&rows);
+            let indices = sort(&rows);
             assert_sorted(&rows, &indices);
             assert_eq!(indices.len(), n, "wrong number of indices for n={n}");
         }
     }
 
     /// Generate random arrays and verify radix sort produces correctly sorted output
-    /// across random column types, sort options, and sizes.
+    /// across random column types, sort options, and sizes. Lengths reach past
+    /// FALLBACK_THRESHOLD so most iterations take the radix path, and the
+    /// variable-length types (strings, lists, dictionaries, maps) exercise
+    /// rows of different lengths sharing a bucket.
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_radix_sort_fuzz() {
         let mut rng = StdRng::seed_from_u64(0xF00D);
 
-        for iteration in 0..100 {
+        for iteration in 0..200 {
             let num_columns = rng.random_range(1..=4);
-            let len = rng.random_range(5..500);
+            let len = rng.random_range(2..2000);
 
             let mut arrays: Vec<ArrayRef> = Vec::new();
             let mut fields: Vec<SortField> = Vec::new();
@@ -505,135 +485,27 @@ mod tests {
                     descending: rng.random_bool(0.5),
                     nulls_first: rng.random_bool(0.5),
                 };
-                let null_rate = if rng.random_bool(0.3) { 0.0 } else { 0.2 };
 
-                // Pick a random column type
-                let (array, dt) = match rng.random_range(0..7) {
-                    0 => {
-                        let vals: Vec<Option<i32>> = (0..len)
-                            .map(|_| {
-                                if rng.random_bool(null_rate) {
-                                    None
-                                } else {
-                                    Some(rng.random_range(-10000..10000))
-                                }
-                            })
-                            .collect();
-                        (
-                            Arc::new(Int32Array::from(vals)) as ArrayRef,
-                            DataType::Int32,
-                        )
-                    }
-                    1 => {
-                        let vals: Vec<Option<i64>> = (0..len)
-                            .map(|_| {
-                                if rng.random_bool(null_rate) {
-                                    None
-                                } else {
-                                    Some(rng.random())
-                                }
-                            })
-                            .collect();
-                        (
-                            Arc::new(arrow_array::Int64Array::from(vals)) as ArrayRef,
-                            DataType::Int64,
-                        )
-                    }
-                    2 => {
-                        let vals: Vec<Option<f64>> = (0..len)
-                            .map(|_| {
-                                if rng.random_bool(null_rate) {
-                                    None
-                                } else {
-                                    Some(rng.random::<f64>() * 1000.0 - 500.0)
-                                }
-                            })
-                            .collect();
-                        (
-                            Arc::new(Float64Array::from(vals)) as ArrayRef,
-                            DataType::Float64,
-                        )
-                    }
-                    3 => {
-                        let vals: Vec<Option<&str>> = (0..len)
-                            .map(|_| {
-                                if rng.random_bool(null_rate) {
-                                    None
-                                } else {
-                                    // Fixed set of strings to get some collisions
-                                    Some(
-                                        [
-                                            "alpha",
-                                            "beta",
-                                            "gamma",
-                                            "delta",
-                                            "epsilon",
-                                            "zeta",
-                                            "eta",
-                                            "theta",
-                                            "iota",
-                                            "kappa",
-                                            "a longer string for testing",
-                                            "",
-                                        ][rng.random_range(0..12)],
-                                    )
-                                }
-                            })
-                            .collect();
-                        (
-                            Arc::new(StringArray::from(vals)) as ArrayRef,
-                            DataType::Utf8,
-                        )
-                    }
-                    4 => {
-                        let vals: Vec<Option<bool>> = (0..len)
-                            .map(|_| {
-                                if rng.random_bool(null_rate) {
-                                    None
-                                } else {
-                                    Some(rng.random_bool(0.5))
-                                }
-                            })
-                            .collect();
-                        (
-                            Arc::new(BooleanArray::from(vals)) as ArrayRef,
-                            DataType::Boolean,
-                        )
-                    }
-                    5 => {
-                        // Low-cardinality i32 to create many ties
-                        let vals: Vec<Option<i32>> = (0..len)
-                            .map(|_| {
-                                if rng.random_bool(null_rate) {
-                                    None
-                                } else {
-                                    Some(rng.random_range(0..5))
-                                }
-                            })
-                            .collect();
-                        (
-                            Arc::new(Int32Array::from(vals)) as ArrayRef,
-                            DataType::Int32,
-                        )
-                    }
-                    _ => {
-                        // All-null column
-                        let vals: Vec<Option<i32>> = vec![None; len];
-                        (
-                            Arc::new(Int32Array::from(vals)) as ArrayRef,
-                            DataType::Int32,
-                        )
-                    }
+                let array: ArrayRef = match rng.random_range(0..6) {
+                    // Low-cardinality i32 to create many ties
+                    0 => Arc::new(Int32Array::from_iter(
+                        (0..len).map(|_| rng.random_bool(0.8).then(|| rng.random_range(0..5))),
+                    )),
+                    1 => Arc::new(Int32Array::new_null(len)),
+                    _ => generate_column(&mut rng, len),
                 };
 
+                fields.push(SortField::new_with_options(
+                    array.data_type().clone(),
+                    options,
+                ));
                 arrays.push(array);
-                fields.push(SortField::new_with_options(dt, options));
             }
 
             let converter = RowConverter::new(fields).unwrap();
             let rows = converter.convert_columns(&arrays).unwrap();
 
-            let indices = radix_sort_to_indices(&rows);
+            let indices = sort(&rows);
             assert_sorted(&rows, &indices);
             assert_eq!(
                 indices.len(),
@@ -682,7 +554,7 @@ mod tests {
                     .unwrap();
             let rows = converter.convert_columns(&[array]).unwrap();
 
-            let radix = radix_sort_to_indices(&rows);
+            let radix = sort(&rows);
 
             let mut comparison: Vec<u32> = (0..len as u32).collect();
             comparison.sort_unstable_by(|&a, &b| rows.row(a as usize).cmp(&rows.row(b as usize)));
@@ -734,7 +606,56 @@ mod tests {
         .unwrap();
         let rows = converter.convert_columns(&[a1, a2]).unwrap();
 
-        let indices = radix_sort_to_indices(&rows);
+        let indices = sort(&rows);
         assert_sorted(&rows, &indices);
+    }
+
+    /// Equal rows above FALLBACK_THRESHOLD take the single-bucket path at
+    /// every byte position until MAX_DEPTH, then fall back.
+    #[test]
+    fn test_radix_sort_all_equal_past_threshold() {
+        let array: ArrayRef = Arc::new(StringArray::from(vec!["same value"; 100]));
+        let converter = RowConverter::new(vec![SortField::new(DataType::Utf8)]).unwrap();
+        let rows = converter.convert_columns(&[array]).unwrap();
+
+        let mut indices = sort(&rows);
+        assert_sorted(&rows, &indices);
+        indices.sort_unstable();
+        assert_eq!(indices, (0..100).collect::<Vec<u32>>());
+    }
+
+    /// Rows that share more than MAX_DEPTH leading bytes are ordered only by
+    /// the fallback, which compares from byte_pos onward.
+    #[test]
+    fn test_radix_sort_shared_prefix_past_max_depth() {
+        let values: Vec<String> = (0..100)
+            .map(|i| format!("shared-prefix-longer-than-max-depth-{}", (i * 37) % 100))
+            .collect();
+        let array: ArrayRef = Arc::new(StringArray::from(values.clone()));
+        let converter = RowConverter::new(vec![SortField::new(DataType::Utf8)]).unwrap();
+        let rows = converter.convert_columns(&[array]).unwrap();
+
+        let indices = sort(&rows);
+        assert_sorted(&rows, &indices);
+        let sorted: Vec<&str> = indices
+            .iter()
+            .map(|&i| values[i as usize].as_str())
+            .collect();
+        let mut expected: Vec<&str> = values.iter().map(String::as_str).collect();
+        expected.sort_unstable();
+        assert_eq!(sorted, expected);
+    }
+
+    /// Out-of-range indices must panic rather than read out of bounds.
+    #[test]
+    #[should_panic(expected = "row index out of bounds")]
+    fn test_out_of_range_index_panics() {
+        let array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
+        let converter = RowConverter::new(vec![SortField::new(DataType::Int32)]).unwrap();
+        let rows = converter.convert_columns(&[array]).unwrap();
+        let mut src = vec![0u32, 5];
+        let mut dst = vec![0u32; 2];
+        let mut bytes = vec![0u8; 2];
+        msd_radix_sort(&mut src, &mut dst, &mut bytes, &rows, 0, true);
     }
 }
