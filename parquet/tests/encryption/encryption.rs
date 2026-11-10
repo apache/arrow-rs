@@ -1197,12 +1197,11 @@ fn test_write_bloom_filter_for_encrypted_column_errors() {
     );
 
     // Uniform encryption (all columns encrypted) also results in an error
+    let uniform_properties = FileEncryptionProperties::builder(footer_key.clone())
+        .build()
+        .unwrap();
     let props = WriterProperties::builder()
-        .with_file_encryption_properties(
-            FileEncryptionProperties::builder(footer_key.clone())
-                .build()
-                .unwrap(),
-        )
+        .with_file_encryption_properties(uniform_properties)
         .set_bloom_filter_enabled(true)
         .build();
     let err = ArrowWriter::try_new(Vec::new(), batch.schema(), Some(props)).unwrap_err();
