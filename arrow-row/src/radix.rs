@@ -42,15 +42,9 @@ use crate::Rows;
 use arrow_array::UInt32Array;
 use arrow_schema::ArrowError;
 
-/// Buckets this size or smaller fall back to comparison sort. On small inputs
-/// a comparison sort beats the per-level indirection of another radix pass.
+/// Buckets this size or smaller are sorted by comparing keys. On small inputs
+/// a comparison sort beats the per-bucket cost of another radix pass.
 const FALLBACK_THRESHOLD: usize = 32;
-
-/// Maximum number of radix passes before falling back to comparison sort.
-/// Each pass chases pointers through the Rows indirection, so returns diminish
-/// as buckets shrink. 8 bytes covers the discriminating prefix of most key
-/// layouts. Comparison sort resolves any remaining ties on the suffix.
-const MAX_DEPTH: usize = 8;
 
 /// Sort row indices using MSD radix sort on row-encoded keys.
 ///
@@ -86,17 +80,84 @@ const MAX_DEPTH: usize = 8;
 /// [`lexsort_to_indices`]: https://docs.rs/arrow-ord/latest/arrow_ord/sort/fn.lexsort_to_indices.html
 pub fn radix_sort_to_indices(rows: &Rows) -> Result<UInt32Array, ArrowError> {
     let n = rows.num_rows();
-    let len = u32::try_from(n)
+    u32::try_from(n)
         .map_err(|_| ArrowError::ComputeError(format!("cannot sort {n} rows with u32 indices")))?;
-    let mut indices: Vec<u32> = (0..len).collect();
-    let mut temp = vec![0u32; n];
-    let mut bytes = vec![0u8; n];
-    // SAFETY: indices is 0..n and n == rows.num_rows()
-    unsafe { msd_radix_sort(&mut indices, &mut temp, &mut bytes, rows, 0, true) };
-    Ok(UInt32Array::from(indices))
+    let Some(first) = rows.iter().next() else {
+        return Ok(UInt32Array::from(Vec::<u32>::new()));
+    };
+
+    // Bytes that every row shares can't order rows, so the key starts after them.
+    let first = first.data();
+    let (prefix, max_len) =
+        rows.iter()
+            .skip(1)
+            .fold((first.len(), first.len()), |(prefix, max_len), row| {
+                let row = row.data();
+                let prefix = first[..prefix]
+                    .iter()
+                    .zip(row)
+                    .take_while(|(a, b)| a == b)
+                    .count();
+                (prefix, max_len.max(row.len()))
+            });
+
+    // Each entry holds the next 8 bytes of its row as a big-endian key above
+    // the row's index, so entries compare by key and move as one value.
+    //
+    // A row shorter than the key takes its last key bytes from the next row,
+    // because a fixed-size load is one instruction and a variable-length copy
+    // calls memcpy. Those bytes can only reorder equal rows: no row is a proper
+    // prefix of another, because every field encoding is self-delimiting, so
+    // two different rows differ within the shorter one.
+    let buffer = rows.buffer.as_slice();
+    let mut entries: Vec<u128> = rows
+        .offsets
+        .windows(2)
+        .enumerate()
+        .map(|(i, w)| {
+            let start = w[0] + prefix;
+            let key = match buffer.get(start..).and_then(<[u8]>::first_chunk::<8>) {
+                Some(key) => *key,
+                // The last rows of the buffer are padded with zeros instead
+                None => {
+                    let tail = &buffer[start..];
+                    let mut key = [0u8; 8];
+                    key[..tail.len()].copy_from_slice(tail);
+                    key
+                }
+            };
+            (u128::from(u64::from_be_bytes(key)) << 32) | i as u128
+        })
+        .collect();
+    let mut temp = vec![0u128; n];
+    // The first key byte differs between rows unless every row is equal,
+    // because the key starts after the prefix that every row shares.
+    msd_radix_sort(&mut entries, &mut temp, 0, true);
+
+    // Entries with equal keys come from rows that agree on every byte before
+    // prefix + 8, so the rest of each row decides their order. When no row is
+    // longer than that, equal keys mean equal rows and there is nothing left
+    // to compare.
+    let suffix = prefix + 8;
+    if max_len > suffix {
+        for run in entries.chunk_by_mut(|a, b| a >> 32 == b >> 32) {
+            if run.len() > 1 {
+                run.sort_unstable_by(|&a, &b| {
+                    let a = rows.row(a as u32 as usize).data();
+                    let b = rows.row(b as u32 as usize).data();
+                    a.get(suffix..)
+                        .unwrap_or_default()
+                        .cmp(b.get(suffix..).unwrap_or_default())
+                });
+            }
+        }
+    }
+    Ok(UInt32Array::from_iter_values(
+        entries.iter().map(|&e| e as u32),
+    ))
 }
 
-/// MSD radix sort using ping-pong buffers.
+/// MSD radix sort of entries by their key, using ping-pong buffers.
 ///
 /// Each level scatters from `src` into `dst`, then recurses with the
 /// roles swapped (dst becomes the next level's src). This avoids an
@@ -104,85 +165,56 @@ pub fn radix_sort_to_indices(rows: &Rows) -> Result<UInt32Array, ArrowError> {
 ///
 /// `result_in_src` tracks where the caller expects the sorted output:
 /// true means `src`, false means `dst`. It flips at each scatter so
-/// the final result lands in the right buffer. The top-level call
-/// passes `true` so the answer ends up in `indices`.
+/// the final result lands in the right buffer.
 ///
-/// Rows are read with [`Rows::row_unchecked`] to skip the per-access index
-/// check of [`Rows::row`] in the histogram and comparison loops.
-///
-/// # Safety
-///
-/// Every index in `src` must be less than `rows.num_rows()`.
-unsafe fn msd_radix_sort(
-    src: &mut [u32],
-    dst: &mut [u32],
-    bytes: &mut [u8],
-    rows: &Rows,
-    byte_pos: usize,
-    result_in_src: bool,
-) {
-    let n = src.len();
-    debug_assert!(src.iter().all(|&idx| (idx as usize) < rows.num_rows()));
-
-    if n <= FALLBACK_THRESHOLD || byte_pos >= MAX_DEPTH {
-        // Compare from byte_pos onward. Earlier bytes are identical within this
-        // bucket, having been discriminated by the radix passes above. Past-end
-        // bytes read as 0, but no row is a proper prefix of another because
-        // every field encoding is self-delimiting. So rows in one bucket are
-        // either equal or all longer than byte_pos, and skipping the prefix
-        // drops no byte that decides the order.
+/// `byte` is the key byte to split on, counted from the most significant.
+/// Every entry in `src` agrees on the bytes before it. When every entry also
+/// shares `byte`, the sort skips ahead to the first byte that differs, so the
+/// recursion ends after at most 8 levels.
+fn msd_radix_sort(src: &mut [u128], dst: &mut [u128], mut byte: u32, result_in_src: bool) {
+    if src.len() <= FALLBACK_THRESHOLD {
         let out = if result_in_src {
             src
         } else {
             dst.copy_from_slice(src);
             dst
         };
-        out.sort_unstable_by(|&a, &b| {
-            // SAFETY: out holds the indices of src, which the caller guarantees
-            // are in bounds
-            let a = unsafe { rows.row_unchecked(a as usize) }.data();
-            let b = unsafe { rows.row_unchecked(b as usize) }.data();
-            a.get(byte_pos..)
-                .unwrap_or_default()
-                .cmp(b.get(byte_pos..).unwrap_or_default())
-        });
+        out.sort_unstable();
         return;
     }
 
-    // Extract bytes and build the histogram in one pass. The scatter below
-    // reads from this flat buffer instead of indirecting through Rows again.
-    let bytes = &mut bytes[..n];
-    let mut counts = [0u32; 256];
-    for (i, &idx) in src.iter().enumerate() {
-        // SAFETY: the caller guarantees every index in src is in bounds
-        let b = unsafe { rows.row_unchecked(idx as usize) }
-            .data()
-            .get(byte_pos)
-            .copied()
-            .unwrap_or(0);
-        bytes[i] = b;
-        counts[b as usize] += 1;
-    }
-
+    // src.len() <= u32::MAX, checked by radix_sort_to_indices
+    let mut counts;
+    let shift = loop {
+        if byte == 8 {
+            // Every key is equal, and the caller orders equal keys.
+            if !result_in_src {
+                dst.copy_from_slice(src);
+            }
+            return;
+        }
+        // Moves key byte `byte` to the low byte of an entry
+        let shift = 32 + 56 - 8 * byte;
+        counts = [0; 256];
+        for &e in src.iter() {
+            counts[(e >> shift) as u8 as usize] += 1;
+        }
+        if counts[(src[0] >> shift) as u8 as usize] as usize != src.len() {
+            break shift;
+        }
+        let first = src[0] >> 32;
+        let diff = src.iter().fold(0, |acc, &e| acc | ((e >> 32) ^ first)) as u64;
+        byte = diff.leading_zeros() / 8;
+    };
     let mut offsets = [0u32; 257];
-    let mut num_buckets = 0u32;
     for i in 0..256 {
-        num_buckets += (counts[i] > 0) as u32;
         offsets[i + 1] = offsets[i] + counts[i];
     }
 
-    // No scatter happened, so the data is still in src and roles are unchanged.
-    if num_buckets == 1 {
-        // SAFETY: src is unchanged, so its indices are still in bounds
-        unsafe { msd_radix_sort(src, dst, bytes, rows, byte_pos + 1, result_in_src) };
-        return;
-    }
-
-    // Scatter from src into dst using the pre-extracted bytes.
     let mut write_pos = offsets;
-    for (i, &idx) in src.iter().enumerate() {
-        let b = bytes[i] as usize;
-        dst[write_pos[b] as usize] = idx;
+    for &e in src.iter() {
+        let b = (e >> shift) as u8 as usize;
+        dst[write_pos[b] as usize] = e;
         write_pos[b] += 1;
     }
 
@@ -190,25 +222,17 @@ unsafe fn msd_radix_sort(
     // dst becomes the next level's src. Flipping result_in_src keeps each
     // level's output in the buffer its caller expects.
     for bucket in 0..256 {
-        let start = offsets[bucket] as usize;
-        let end = offsets[bucket + 1] as usize;
-        let len = end - start;
-        if len > 1 {
-            // SAFETY: the scatter wrote every index of src into dst exactly
-            // once, so dst holds only in-bounds indices
-            unsafe {
-                msd_radix_sort(
-                    &mut dst[start..end],
-                    &mut src[start..end],
-                    &mut bytes[start..end],
-                    rows,
-                    byte_pos + 1,
-                    !result_in_src,
-                )
-            };
-        } else if len == 1 && result_in_src {
-            // Singleton bucket does not recurse. The scattered element is in
-            // dst, so copy it back when the caller expects the result in src.
+        let (start, end) = (offsets[bucket] as usize, offsets[bucket + 1] as usize);
+        if end - start > 1 {
+            msd_radix_sort(
+                &mut dst[start..end],
+                &mut src[start..end],
+                byte + 1,
+                !result_in_src,
+            );
+        } else if end - start == 1 && result_in_src {
+            // A singleton bucket doesn't recurse. Its entry is in dst, so copy
+            // it back when the caller expects the result in src.
             src[start] = dst[start];
         }
     }
@@ -613,8 +637,8 @@ mod tests {
         assert_sorted(&rows, &indices);
     }
 
-    /// Equal rows above FALLBACK_THRESHOLD take the single-bucket path at
-    /// every byte position until MAX_DEPTH, then fall back.
+    /// Equal rows above FALLBACK_THRESHOLD have equal keys and are ordered by
+    /// comparing the rest of each row.
     #[test]
     fn test_radix_sort_all_equal_past_threshold() {
         let array: ArrayRef = Arc::new(StringArray::from(vec!["same value"; 100]));
@@ -627,8 +651,7 @@ mod tests {
         assert_eq!(indices, (0..100).collect::<Vec<u32>>());
     }
 
-    /// Rows that share more than MAX_DEPTH leading bytes are ordered only by
-    /// the fallback, which compares from byte_pos onward.
+    /// Rows that share a prefix are keyed by the bytes after it.
     #[test]
     fn test_radix_sort_shared_prefix_past_max_depth() {
         let values: Vec<String> = (0..100)
@@ -649,20 +672,68 @@ mod tests {
         assert_eq!(sorted, expected);
     }
 
-    /// The debug assertion catches out-of-range indices before any unchecked
-    /// read. Release builds skip it, so the test runs only with assertions.
+    /// Small decimals share their first 13 encoded bytes, so the key must start
+    /// after that prefix, and the trailing column orders rows with equal keys.
     #[test]
-    #[cfg(debug_assertions)]
-    #[should_panic(expected = "rows.num_rows()")]
-    fn test_out_of_range_index_panics() {
-        let array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
-        let converter = RowConverter::new(vec![SortField::new(DataType::Int32)]).unwrap();
+    fn test_radix_sort_shared_prefix_longer_than_key() {
+        let mut rng = StdRng::seed_from_u64(0xDEC);
+        let decimals: Vec<Option<i128>> = (0..500)
+            .map(|_| rng.random_bool(0.9).then(|| rng.random_range(0..20)))
+            .collect();
+        let ints: Vec<i32> = (0..500).map(|_| rng.random_range(-5..5)).collect();
+        let a1: ArrayRef = Arc::new(
+            arrow_array::Decimal128Array::from(decimals)
+                .with_precision_and_scale(18, 2)
+                .unwrap(),
+        );
+        let a2: ArrayRef = Arc::new(Int32Array::from(ints));
+        let converter = RowConverter::new(vec![
+            SortField::new(DataType::Decimal128(18, 2)),
+            SortField::new(DataType::Int32),
+        ])
+        .unwrap();
+        let rows = converter.convert_columns(&[a1, a2]).unwrap();
+
+        let indices = sort(&rows);
+        assert_sorted(&rows, &indices);
+    }
+
+    /// Two-byte rows end inside the 8-byte key, so keys are zero-padded.
+    #[test]
+    fn test_radix_sort_rows_shorter_than_key() {
+        let mut rng = StdRng::seed_from_u64(0x8);
+        let values: Vec<Option<i8>> = (0..1000)
+            .map(|_| rng.random_bool(0.8).then(|| rng.random()))
+            .collect();
+        let array: ArrayRef = Arc::new(arrow_array::Int8Array::from(values));
+        let converter = RowConverter::new(vec![SortField::new(DataType::Int8)]).unwrap();
         let rows = converter.convert_columns(&[array]).unwrap();
-        let mut src = vec![0u32, 5];
-        let mut dst = vec![0u32; 2];
-        let mut bytes = vec![0u8; 2];
-        // SAFETY: violates the precondition on purpose. The debug assertion
-        // panics before any unchecked read.
-        unsafe { msd_radix_sort(&mut src, &mut dst, &mut bytes, &rows, 0, true) };
+
+        let indices = sort(&rows);
+        assert_sorted(&rows, &indices);
+    }
+
+    /// Null rows of a leading column share their first five bytes, and the
+    /// string column after them decides their order.
+    #[test]
+    fn test_radix_sort_null_bucket_then_strings() {
+        let mut rng = StdRng::seed_from_u64(0x0);
+        let ints: Vec<Option<i32>> = (0..1000)
+            .map(|_| rng.random_bool(0.5).then(|| rng.random_range(0..4)))
+            .collect();
+        let strings: Vec<String> = (0..1000)
+            .map(|_| format!("{:x}", rng.random::<u64>()))
+            .collect();
+        let a1: ArrayRef = Arc::new(Int32Array::from(ints));
+        let a2: ArrayRef = Arc::new(StringArray::from(strings));
+        let converter = RowConverter::new(vec![
+            SortField::new(DataType::Int32),
+            SortField::new(DataType::Utf8),
+        ])
+        .unwrap();
+        let rows = converter.convert_columns(&[a1, a2]).unwrap();
+
+        let indices = sort(&rows);
+        assert_sorted(&rows, &indices);
     }
 }
