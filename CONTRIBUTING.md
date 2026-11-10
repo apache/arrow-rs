@@ -332,7 +332,7 @@ git checkout feature
 cargo bench --bench parse_time -- --baseline main
 ```
 
-If your PR proposes a performance improvement, include a summary of the benchmark results (for example, from `cargo-criterion` or `critcmp`) in the PR description.
+If your PR proposes a performance improvement, include a summary of the benchmark results (for example, from `cargo-criterion` or `critcmp`) in the PR description. Name the benchmark(s) the change targets, so reviewers know which to run.
 
 A benchmark that improves is not enough on its own. State which part of the change produces the gain, for example by removing it and rerunning. Cover both well-predicted input (constant lengths, all valid) and poorly predicted input (random), because branchless code wins on the second and can lose on the first. Name the inputs that get slower and say whether real workloads are likely to hit them.
 

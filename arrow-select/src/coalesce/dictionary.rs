@@ -3,7 +3,7 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use super::{InProgressArray, generic::GenericInProgressArray};
-use crate::dictionary::{child_values_ptr_eq, merge_dictionary_values_with_masks};
+use crate::dictionary::{KeyMapping, child_values_ptr_eq, merge_dictionary_values_with_masks};
 use ahash::RandomState;
 use arrow_array::cast::AsArray;
 use arrow_array::types::ArrowDictionaryKeyType;
@@ -149,7 +149,9 @@ impl<K: ArrowDictionaryKeyType> InProgressDictionaryArray<K> {
 
         let mut keys = Vec::with_capacity(len);
         for chunk in chunks {
-            let mapping = &merged.key_mappings[chunk.source];
+            let KeyMapping::Dense(mapping) = &merged.key_mappings[chunk.source] else {
+                unreachable!("merge_dictionary_values_with_masks returns dense mappings");
+            };
             match &chunk.nulls {
                 Some(nulls) => keys.extend(chunk.keys.iter().enumerate().map(|(offset, key)| {
                     if nulls.is_valid(offset) {
