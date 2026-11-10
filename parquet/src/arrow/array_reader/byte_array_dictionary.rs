@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::{
-    Array, ArrayRef, BinaryArray, BinaryViewArray, LargeBinaryArray, LargeStringArray,
-    OffsetSizeTrait, StringArray, StringViewArray, new_empty_array,
+    Array, ArrayRef, BinaryViewArray, LargeStringArray, OffsetSizeTrait, StringArray,
+    StringViewArray, new_empty_array,
 };
 use arrow_buffer::{ArrowNativeType, MutableBuffer};
 use arrow_schema::DataType as ArrowType;
@@ -135,12 +135,6 @@ fn convert_dictionary_values(values: &ArrayRef, to_type: &ArrowType) -> Result<A
         (ArrowType::LargeBinary, ArrowType::LargeUtf8) => Arc::new(
             LargeStringArray::try_from_binary(values.as_binary::<i64>().clone())?,
         ),
-        (ArrowType::Utf8, ArrowType::Binary) => {
-            Arc::new(BinaryArray::from(values.as_string::<i32>().clone()))
-        }
-        (ArrowType::LargeUtf8, ArrowType::LargeBinary) => {
-            Arc::new(LargeBinaryArray::from(values.as_string::<i64>().clone()))
-        }
         (ArrowType::Utf8, ArrowType::Utf8View) => {
             Arc::new(StringViewArray::from(values.as_string::<i32>()))
         }
@@ -150,10 +144,6 @@ fn convert_dictionary_values(values: &ArrayRef, to_type: &ArrowType) -> Result<A
         }
         (ArrowType::Binary, ArrowType::BinaryView) => {
             Arc::new(BinaryViewArray::from(values.as_binary::<i32>()))
-        }
-        (ArrowType::Utf8, ArrowType::BinaryView) => {
-            let values = BinaryArray::from(values.as_string::<i32>().clone());
-            Arc::new(BinaryViewArray::from(&values))
         }
         (from, to) => {
             return Err(general_err!(

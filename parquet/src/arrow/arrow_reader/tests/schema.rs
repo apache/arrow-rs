@@ -627,23 +627,35 @@ fn dictionary_type(value_type: ArrowDataType) -> ArrowDataType {
 }
 
 #[test]
-fn test_binary_dictionary_as_string_values() {
-    let values = vec![
+fn test_dictionary_honors_requested_value_type() {
+    let binary_values = vec![
         Some(b"one".as_ref()),
         None,
         Some(b"two".as_ref()),
         Some(b"one".as_ref()),
     ];
+    let string_values = vec![Some("one"), None, Some("two"), Some("one")];
     let file = write_parquet_from_iter(vec![
         (
             "utf8",
-            Arc::new(BinaryArray::from(values.clone())) as ArrayRef,
+            Arc::new(BinaryArray::from(binary_values.clone())) as ArrayRef,
         ),
         (
             "large_utf8",
-            Arc::new(LargeBinaryArray::from(values.clone())) as ArrayRef,
+            Arc::new(LargeBinaryArray::from(binary_values.clone())) as ArrayRef,
         ),
-        ("utf8_view", Arc::new(BinaryArray::from(values)) as ArrayRef),
+        (
+            "utf8_view",
+            Arc::new(BinaryArray::from(binary_values.clone())) as ArrayRef,
+        ),
+        (
+            "binary_view",
+            Arc::new(BinaryArray::from(binary_values)) as ArrayRef,
+        ),
+        (
+            "annotated_utf8_view",
+            Arc::new(StringArray::from(string_values)) as ArrayRef,
+        ),
     ]);
     let schema = Arc::new(Schema::new(vec![
         Field::new("utf8", dictionary_type(ArrowDataType::Utf8), true),
@@ -653,6 +665,16 @@ fn test_binary_dictionary_as_string_values() {
             true,
         ),
         Field::new("utf8_view", dictionary_type(ArrowDataType::Utf8View), true),
+        Field::new(
+            "binary_view",
+            dictionary_type(ArrowDataType::BinaryView),
+            true,
+        ),
+        Field::new(
+            "annotated_utf8_view",
+            dictionary_type(ArrowDataType::Utf8View),
+            true,
+        ),
     ]));
 
     let options = ArrowReaderOptions::new().with_schema(Arc::clone(&schema));
@@ -687,6 +709,72 @@ fn test_binary_dictionary_as_string_values() {
         vec![Some(1), Some(0)]
     );
     assert!(Arc::ptr_eq(first.values(), second.values()));
+}
+
+#[test]
+fn test_dictionary_value_cache_across_row_groups() {
+    let values = Arc::new(BinaryArray::from(vec![
+        b"one".as_ref(),
+        b"two".as_ref(),
+        b"one".as_ref(),
+        b"two".as_ref(),
+        b"three".as_ref(),
+        b"four".as_ref(),
+        b"three".as_ref(),
+        b"four".as_ref(),
+    ])) as ArrayRef;
+    let batch = RecordBatch::try_from_iter(vec![("binary", values)]).unwrap();
+    let props = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(4))
+        .build();
+    let mut parquet_data = vec![];
+    let mut writer = ArrowWriter::try_new(&mut parquet_data, batch.schema(), Some(props)).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "binary",
+        dictionary_type(ArrowDataType::Utf8),
+        false,
+    )]));
+    let options = ArrowReaderOptions::new().with_schema(Arc::clone(&schema));
+    let reader =
+        ParquetRecordBatchReaderBuilder::try_new_with_options(Bytes::from(parquet_data), options)
+            .unwrap()
+            .with_batch_size(2)
+            .build()
+            .unwrap();
+
+    let batches = reader.collect::<std::result::Result<Vec<_>, _>>().unwrap();
+    assert_eq!(batches.len(), 4);
+    let expected = [
+        vec![Some("one"), Some("two")],
+        vec![Some("one"), Some("two")],
+        vec![Some("three"), Some("four")],
+        vec![Some("three"), Some("four")],
+    ];
+    for (batch, expected) in batches.iter().zip(expected) {
+        let actual = arrow::compute::cast(batch.column(0), &ArrowDataType::Utf8).unwrap();
+        assert_eq!(
+            actual.as_string::<i32>().iter().collect::<Vec<_>>(),
+            expected
+        );
+    }
+
+    let dictionary_values = batches
+        .iter()
+        .map(|batch| {
+            Arc::clone(
+                batch
+                    .column(0)
+                    .as_dictionary::<arrow::datatypes::Int32Type>()
+                    .values(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(Arc::ptr_eq(&dictionary_values[0], &dictionary_values[1]));
+    assert!(!Arc::ptr_eq(&dictionary_values[1], &dictionary_values[2]));
+    assert!(Arc::ptr_eq(&dictionary_values[2], &dictionary_values[3]));
 }
 
 #[test]
