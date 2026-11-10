@@ -80,13 +80,15 @@ const FALLBACK_THRESHOLD: usize = 32;
 /// [`lexsort_to_indices`]: https://docs.rs/arrow-ord/latest/arrow_ord/sort/fn.lexsort_to_indices.html
 pub fn radix_sort_to_indices(rows: &Rows) -> Result<UInt32Array, ArrowError> {
     let n = rows.num_rows();
+    // Entries store, and the result returns, each row's index as a u32
     u32::try_from(n)
         .map_err(|_| ArrowError::ComputeError(format!("cannot sort {n} rows with u32 indices")))?;
     let Some(first) = rows.iter().next() else {
         return Ok(UInt32Array::from(Vec::<u32>::new()));
     };
 
-    // Bytes that every row shares can't order rows, so the key starts after them.
+    // Bytes that every row shares can't order rows, so the key starts after
+    // them. The longest row decides below whether equal keys need comparing.
     let first = first.data();
     let (prefix, max_len) =
         rows.iter()
@@ -101,14 +103,17 @@ pub fn radix_sort_to_indices(rows: &Rows) -> Result<UInt32Array, ArrowError> {
                 (prefix, max_len.max(row.len()))
             });
 
-    // Each entry holds the next 8 bytes of its row as a big-endian key above
-    // the row's index, so entries compare by key and move as one value.
+    // Each entry holds the next 8 bytes of its row as a big-endian key in its
+    // high 64 bits and the row's index in its low bits, so entries compare by
+    // key and move as one value. Keeping the key in one 64-bit half makes
+    // extracting a key byte a single shift.
     //
     // A row shorter than the key takes its last key bytes from the next row,
     // because a fixed-size load is one instruction and a variable-length copy
     // calls memcpy. Those bytes can only reorder equal rows: no row is a proper
     // prefix of another, because every field encoding is self-delimiting, so
-    // two different rows differ within the shorter one.
+    // two different rows differ within the shorter one. That load reads the
+    // buffer through the offsets, because `Row::data` ends at the row.
     let buffer = rows.buffer.as_slice();
     let mut entries: Vec<u128> = rows
         .offsets
@@ -116,17 +121,17 @@ pub fn radix_sort_to_indices(rows: &Rows) -> Result<UInt32Array, ArrowError> {
         .enumerate()
         .map(|(i, w)| {
             let start = w[0] + prefix;
-            let key = match buffer.get(start..).and_then(<[u8]>::first_chunk::<8>) {
-                Some(key) => *key,
+            let bytes = match buffer.get(start..).and_then(<[u8]>::first_chunk::<8>) {
+                Some(bytes) => *bytes,
                 // The last rows of the buffer are padded with zeros instead
                 None => {
                     let tail = &buffer[start..];
-                    let mut key = [0u8; 8];
-                    key[..tail.len()].copy_from_slice(tail);
-                    key
+                    let mut bytes = [0u8; 8];
+                    bytes[..tail.len()].copy_from_slice(tail);
+                    bytes
                 }
             };
-            (u128::from(u64::from_be_bytes(key)) << 32) | i as u128
+            (u128::from(u64::from_be_bytes(bytes)) << 64) | i as u128
         })
         .collect();
     let mut temp = vec![0u128; n];
@@ -140,8 +145,11 @@ pub fn radix_sort_to_indices(rows: &Rows) -> Result<UInt32Array, ArrowError> {
     // to compare.
     let suffix = prefix + 8;
     if max_len > suffix {
-        for run in entries.chunk_by_mut(|a, b| a >> 32 == b >> 32) {
+        for run in entries.chunk_by_mut(|&a, &b| key(a) == key(b)) {
             if run.len() > 1 {
+                // The low 32 bits of an entry hold the index. A row that ends
+                // before suffix compares as empty, which is correct because it
+                // shares its key only with rows equal to it.
                 run.sort_unstable_by(|&a, &b| {
                     let a = rows.row(a as u32 as usize).data();
                     let b = rows.row(b as u32 as usize).data();
@@ -152,6 +160,7 @@ pub fn radix_sort_to_indices(rows: &Rows) -> Result<UInt32Array, ArrowError> {
             }
         }
     }
+    // The low 32 bits of each entry are its row's index
     Ok(UInt32Array::from_iter_values(
         entries.iter().map(|&e| e as u32),
     ))
@@ -179,11 +188,14 @@ fn msd_radix_sort(src: &mut [u128], dst: &mut [u128], mut byte: u32, result_in_s
             dst.copy_from_slice(src);
             dst
         };
+        // Entries compare by key, then by index. Comparing integers costs
+        // less than another radix pass on a bucket this small.
         out.sort_unstable();
         return;
     }
 
-    // src.len() <= u32::MAX, checked by radix_sort_to_indices
+    // u32 counts halve the array zeroed at each level. They can't overflow,
+    // because radix_sort_to_indices checks that src.len() <= u32::MAX.
     let mut counts;
     let shift = loop {
         if byte == 8 {
@@ -193,17 +205,20 @@ fn msd_radix_sort(src: &mut [u128], dst: &mut [u128], mut byte: u32, result_in_s
             }
             return;
         }
-        // Moves key byte `byte` to the low byte of an entry
-        let shift = 32 + 56 - 8 * byte;
+        // Moves key byte `byte` to the low byte of a key
+        let shift = 56 - 8 * byte;
         counts = [0; 256];
         for &e in src.iter() {
-            counts[(e >> shift) as u8 as usize] += 1;
+            counts[digit(e, shift)] += 1;
         }
-        if counts[(src[0] >> shift) as u8 as usize] as usize != src.len() {
+        if counts[digit(src[0], shift)] as usize != src.len() {
             break shift;
         }
-        let first = src[0] >> 32;
-        let diff = src.iter().fold(0, |acc, &e| acc | ((e >> 32) ^ first)) as u64;
+        // Every entry shares this byte. Rather than one pass per shared byte,
+        // find the first byte where any key differs. diff is 0 when every key
+        // is equal, which sets byte to 8 and ends the loop above.
+        let first = key(src[0]);
+        let diff = src.iter().fold(0, |acc, &e| acc | (key(e) ^ first));
         byte = diff.leading_zeros() / 8;
     };
     let mut offsets = [0u32; 257];
@@ -213,7 +228,7 @@ fn msd_radix_sort(src: &mut [u128], dst: &mut [u128], mut byte: u32, result_in_s
 
     let mut write_pos = offsets;
     for &e in src.iter() {
-        let b = (e >> shift) as u8 as usize;
+        let b = digit(e, shift);
         dst[write_pos[b] as usize] = e;
         write_pos[b] += 1;
     }
@@ -236,6 +251,16 @@ fn msd_radix_sort(src: &mut [u128], dst: &mut [u128], mut byte: u32, result_in_s
             src[start] = dst[start];
         }
     }
+}
+
+/// The key of an entry built by [`radix_sort_to_indices`]
+fn key(entry: u128) -> u64 {
+    (entry >> 64) as u64
+}
+
+/// The key byte of an entry that `shift` moves to the low byte of the key
+fn digit(entry: u128, shift: u32) -> usize {
+    (key(entry) >> shift) as u8 as usize
 }
 
 #[cfg(test)]
