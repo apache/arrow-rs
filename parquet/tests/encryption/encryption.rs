@@ -1184,12 +1184,11 @@ fn test_write_bloom_filter_for_encrypted_column_errors() {
         .build()
         .unwrap();
 
-    // Bloom filters enabled for all columns
+    // Bloom filters enabled for all columns results in an error
     let props = WriterProperties::builder()
         .with_file_encryption_properties(Arc::clone(&encryption_properties))
         .set_bloom_filter_enabled(true)
         .build();
-
     let err = ArrowWriter::try_new(Vec::new(), batch.schema(), Some(props)).unwrap_err();
     assert_eq!(
         err.to_string(),
@@ -1202,7 +1201,8 @@ fn test_write_bloom_filter_for_encrypted_column_errors() {
         .build()
         .unwrap();
 
-    // Can write bloom filter for unencrypted colum
+    // However, we can write bloom filters for unencrypted columns even when
+    // some are still encrypted.
     let props = WriterProperties::builder()
         .with_file_encryption_properties(encryption_properties)
         .set_column_bloom_filter_enabled("z".into(), true)
