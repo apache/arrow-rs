@@ -27,7 +27,7 @@ use arrow_data::{ArrayData, ArrayDataBuilder, BufferSpec, layout};
 use arrow_schema::*;
 
 use crate::CONTINUATION_MARKER;
-use crate::compression::{CompressionCodec, DEFAULT_LZ4_BLOCK_SIZE, SUPPORTED_LZ4_BLOCK_SIZES};
+use crate::compression::{CompressionCodec, Lz4BlockSize};
 #[expect(deprecated)]
 pub use crate::compression::{CompressionContext, IpcWriteContext};
 use crate::convert::IpcSchemaEncoder;
@@ -54,9 +54,9 @@ pub struct IpcWriteOptions {
     batch_compression_type: Option<crate::CompressionType>,
     // Compression level
     batch_compression_level: Option<i32>,
-    /// The lz4 frame block size in bytes; `None` selects [`DEFAULT_LZ4_BLOCK_SIZE`]. Set through
+    /// The lz4 frame block size; `None` selects 256 KiB. Set through
     /// [`IpcWriteOptions::try_with_lz4_block_size`], which validates the value.
-    batch_lz4_block_size: Option<usize>,
+    batch_lz4_block_size: Option<Lz4BlockSize>,
     /// How to handle updating dictionaries in IPC messages
     dictionary_handling: DictionaryHandling,
 }
@@ -393,6 +393,14 @@ impl IpcWriteOptions {
         mut self,
         batch_compression_type: Option<crate::CompressionType>,
     ) -> Result<Self, ArrowError> {
+        if matches!(batch_compression_type, Some(crate::CompressionType::ZSTD))
+            && self.batch_lz4_block_size.is_some()
+        {
+            return Err(ArrowError::InvalidArgumentError(
+                "lz4 frame block size does not apply to ZSTD compression".to_string(),
+            ));
+        }
+
         self.batch_compression_type = batch_compression_type;
 
         if self.batch_compression_type.is_some()
@@ -452,13 +460,15 @@ impl IpcWriteOptions {
         mut self,
         block_size: Option<usize>,
     ) -> Result<Self, ArrowError> {
-        if let Some(block_size) = block_size {
-            if !SUPPORTED_LZ4_BLOCK_SIZES.contains(&block_size) {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Unsupported lz4 block size {block_size}, must be one of {SUPPORTED_LZ4_BLOCK_SIZES:?} bytes"
-                )));
-            }
+        let block_size = block_size.map(|bytes| {
+            Lz4BlockSize::from_bytes(bytes).ok_or_else(|| {
+                ArrowError::InvalidArgumentError(format!(
+                    "Unsupported lz4 block size {bytes}, must be one of 65536, 262144, 1048576, or 4194304 bytes"
+                ))
+            })
+        }).transpose()?;
 
+        if block_size.is_some() {
             if self.metadata_version < crate::MetadataVersion::V5 {
                 return Err(ArrowError::InvalidArgumentError(
                     "Compression only supported in metadata v5 and above".to_string(),
@@ -480,8 +490,8 @@ impl IpcWriteOptions {
     }
 
     /// The lz4 frame block size to compress with, in bytes.
-    pub(crate) fn lz4_block_size(&self) -> usize {
-        self.batch_lz4_block_size.unwrap_or(DEFAULT_LZ4_BLOCK_SIZE)
+    pub(crate) fn lz4_block_size(&self) -> Lz4BlockSize {
+        self.batch_lz4_block_size.unwrap_or(Lz4BlockSize::DEFAULT)
     }
 
     #[cfg(not(feature = "zstd"))]
@@ -3221,28 +3231,25 @@ mod tests {
     }
 
     #[test]
-    fn test_lz4_block_size_option_validation() {
+    fn test_lz4_block_size_options() {
         let options = || IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap();
 
-        // Unset falls back to the default of 256 KiB, and clearing restores it.
-        assert_eq!(options().lz4_block_size(), 256 * 1024);
+        assert_eq!(options().lz4_block_size(), Lz4BlockSize::DEFAULT);
         assert_eq!(
             options()
                 .try_with_lz4_block_size(None)
                 .unwrap()
                 .lz4_block_size(),
-            256 * 1024
+            Lz4BlockSize::DEFAULT
         );
         assert_eq!(
             options()
                 .try_with_lz4_block_size(Some(1024 * 1024))
                 .unwrap()
                 .lz4_block_size(),
-            1024 * 1024
+            Lz4BlockSize::Max1MiB
         );
 
-        // Sizes the lz4 frame header cannot describe are rejected, not silently rounded:
-        // 8 MiB in particular would set the header's reserved bit.
         for block_size in [0, 32 * 1024, 128 * 1024, 2 * 1024 * 1024, 8 * 1024 * 1024] {
             let err = options()
                 .try_with_lz4_block_size(Some(block_size))
@@ -3252,10 +3259,7 @@ mod tests {
                 "unexpected error: {err}"
             );
         }
-    }
 
-    #[test]
-    fn test_lz4_block_size_requires_v5_metadata() {
         let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V4).unwrap();
         let err = options
             .try_with_lz4_block_size(Some(64 * 1024))
@@ -3264,10 +3268,7 @@ mod tests {
             err.to_string().contains("metadata v5"),
             "unexpected error: {err}"
         );
-    }
 
-    #[test]
-    fn test_lz4_block_size_rejects_zstd_compression() {
         let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)
             .unwrap()
             .try_with_compression(Some(crate::CompressionType::ZSTD))
@@ -3275,6 +3276,14 @@ mod tests {
         let err = options
             .try_with_lz4_block_size(Some(64 * 1024))
             .expect_err("lz4 block size must be rejected for ZSTD");
+        assert!(err.to_string().contains("ZSTD"), "unexpected error: {err}");
+
+        let err = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)
+            .unwrap()
+            .try_with_lz4_block_size(Some(64 * 1024))
+            .unwrap()
+            .try_with_compression(Some(crate::CompressionType::ZSTD))
+            .expect_err("ZSTD must be rejected after setting an lz4 block size");
         assert!(err.to_string().contains("ZSTD"), "unexpected error: {err}");
     }
 
