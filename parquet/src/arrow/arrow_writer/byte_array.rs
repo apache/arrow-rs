@@ -743,10 +743,11 @@ impl ColumnValueEncoder for ByteArrayEncoder {
         // is the relevant method.
         //
         // Two-stage walk for the simple offset-buffer byte array types:
-        //   1. If indices are contiguous, compute the total payload in
-        //      O(1) via a single subtraction on the offsets buffer.
-        //      When the total fits the budget — the overwhelmingly
-        //      common "small values" case — return immediately.
+        //   1. If indices are strictly increasing, bound the total
+        //      payload by a single subtraction on the offsets buffer.
+        //      The order check is one sequential pass over `indices`.
+        //      When the bound fits the budget (the common small-value
+        //      case), return immediately.
         //   2. Otherwise, walk per-value byte sizes from the offsets
         //      buffer (still cheap, no slice/UTF-8 construction) and
         //      exit at the first value that pushes the cumulative sum
