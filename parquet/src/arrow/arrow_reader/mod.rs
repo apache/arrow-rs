@@ -1629,9 +1629,10 @@ impl<T: ChunkReader + 'static> PageIterator for ReaderPageIterator<T> {}
 ///
 /// Typically, either reads from a file or an in memory buffer [`Bytes`]
 ///
-/// When byte-array capacity staging is needed, this reader ends after returning
-/// an error, releasing its pending window instead of continuing past rows that
-/// could not be returned. This matches the push decoder's terminal error behavior.
+/// When this reader uses 64-bit offsets for
+/// [byte-array batch splitting](ArrowReaderBuilder::with_byte_array_batch_splitting),
+/// it returns the first error, releases any pending window, and ends iteration.
+/// This matches the push decoder's terminal error behavior.
 ///
 /// Created by [`ParquetRecordBatchReaderBuilder`]
 ///
