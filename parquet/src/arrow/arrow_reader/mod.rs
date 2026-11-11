@@ -282,7 +282,7 @@ impl<T: Debug> Debug for ArrowReaderBuilder<T> {
             .field("offset", &self.offset)
             .field("metrics", &self.metrics)
             .field(
-                "byte_array_capacity_staging",
+                "byte_array_batch_splitting",
                 &self.byte_array_capacity.is_some(),
             )
             .finish()
@@ -334,8 +334,9 @@ impl<T> ArrowReaderBuilder<T> {
     ///
     /// If `batch_size` is more than the file row count, use the file row count.
     ///
-    /// When capacity staging is enabled, a batch can have fewer rows when a
-    /// top-level `Utf8`/`Binary` column would contain more than `i32::MAX` data bytes.
+    /// With [byte-array batch splitting](Self::with_byte_array_batch_splitting)
+    /// enabled, a batch can have fewer rows when a top-level `Utf8` or `Binary`
+    /// column would contain more than `i32::MAX` data bytes.
     /// The remaining rows are returned in later batches, each containing
     /// complete top-level rows. Requesting `LargeUtf8`/`LargeBinary` or
     /// `Utf8View`/`BinaryView` for the affected column avoids this byte limit.
@@ -346,17 +347,23 @@ impl<T> ArrowReaderBuilder<T> {
         Self { batch_size, ..self }
     }
 
-    /// Enable or disable capacity staging for top-level `Utf8`/`Binary` columns.
+    /// Set whether to split oversized batches for top-level `Utf8` and `Binary` columns.
     ///
-    /// Enabled by default, staging decodes eligible columns with 64-bit offsets
-    /// and splits output batches when needed to fit 32-bit offsets. It is
-    /// skipped when size statistics prove the scanned data fits. Disabling it
-    /// can avoid staging overhead, but a decoded batch that exceeds `i32::MAX`
-    /// bytes for a column can return an offset overflow error, including when
-    /// unselected rows are decoded before filtering. The setting also applies
-    /// to predicate evaluation, the predicate cache, and the async and push
-    /// readers. It does not impose a peak-memory limit.
-    pub fn with_byte_array_capacity_staging(mut self, enabled: bool) -> Self {
+    /// Enabled by default. The reader can decode eligible columns with 64-bit
+    /// offsets, then split the output at row boundaries and restore the requested
+    /// types. Size statistics allow the reader to use 32-bit offsets throughout
+    /// when the scanned data fits. The reader can decode an entire window before
+    /// splitting its output.
+    ///
+    /// With splitting disabled, a decoded window exceeding `i32::MAX` bytes for
+    /// a column can return an offset overflow error. This includes unselected
+    /// rows that are decoded before filtering.
+    ///
+    /// This option applies to sync, async, and push readers built through this
+    /// builder, including predicate evaluation and caching. The low-level
+    /// [`ParquetRecordBatchReader::try_new_with_row_groups`] constructor always
+    /// enables splitting.
+    pub fn with_byte_array_batch_splitting(mut self, enabled: bool) -> Self {
         self.byte_array_capacity = enabled.then_some(i32::MAX as usize);
         self
     }
@@ -1923,10 +1930,12 @@ impl ParquetRecordBatchReader {
             .build()
     }
 
-    /// Create a new [`ParquetRecordBatchReader`] from the provided [`RowGroups`]
+    /// Create a new [`ParquetRecordBatchReader`] from the provided [`RowGroups`].
     ///
-    /// Note: this is a low-level interface see [`ParquetRecordBatchReader::try_new`] for a
-    /// higher-level interface for reading parquet data from a file
+    /// This low-level constructor always enables splitting oversized top-level
+    /// `Utf8` and `Binary` batches. To configure
+    /// [byte-array batch splitting](ArrowReaderBuilder::with_byte_array_batch_splitting)
+    /// when reading from a file, use [`ParquetRecordBatchReaderBuilder`].
     pub fn try_new_with_row_groups(
         levels: &FieldLevels,
         row_groups: &dyn RowGroups,
@@ -1935,16 +1944,15 @@ impl ParquetRecordBatchReader {
     ) -> Result<Self> {
         // note metrics are not supported in this API
         let metrics = ArrowReaderMetrics::disabled();
+        let byte_array_capacity = Some(i32::MAX as usize);
         let (array_reader, schema) = ArrayReaderBuilder::new(row_groups, &metrics)
             .with_batch_size(batch_size)
             .with_parquet_metadata(row_groups.metadata())
-            .with_byte_array_capacity(Some(i32::MAX as usize))
+            .with_byte_array_capacity(byte_array_capacity)
             .build_array_reader_with_logical_schema(
                 levels.levels.as_ref(),
                 &ProjectionMask::all(),
             )?;
-        debug_assert_eq!(schema.fields(), &levels.fields);
-
         let read_plan = ReadPlanBuilder::new(batch_size)
             .with_selection(selection)
             .build();
@@ -1952,8 +1960,8 @@ impl ParquetRecordBatchReader {
         Ok(Self::new_with_capacity_staging(
             array_reader,
             read_plan,
-            Arc::new(Schema::new(levels.fields.clone())),
-            Some(i32::MAX as usize),
+            schema,
+            byte_array_capacity,
         ))
     }
 

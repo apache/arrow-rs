@@ -182,9 +182,9 @@ fn test_capacity_staging_public_option() {
         if let Some(enabled) = enabled {
             builder = builder
                 .with_byte_array_capacity(Some(5))
-                .with_byte_array_capacity_staging(false);
+                .with_byte_array_batch_splitting(false);
             if enabled {
-                builder = builder.with_byte_array_capacity_staging(true);
+                builder = builder.with_byte_array_batch_splitting(true);
             }
         }
         let enabled = enabled.unwrap_or(true);
@@ -203,6 +203,36 @@ fn test_capacity_staging_public_option() {
         .unwrap()
         .with_byte_array_capacity(Some(usize::MAX));
     assert_eq!(builder.byte_array_capacity, Some(i32::MAX as usize));
+}
+
+#[test]
+fn test_capacity_staging_row_group_reader_uses_collected_schema() {
+    let batch = mixed_batch();
+    let data = write(&batch, Encoding::PLAIN);
+    let metadata = super::ArrowReaderMetadata::load(&data, options_without_size_stats()).unwrap();
+    let row_groups = super::ReaderRowGroups {
+        reader: Arc::new(data),
+        row_groups: (0..metadata.metadata().num_row_groups()).collect(),
+        metadata: Arc::clone(metadata.metadata()),
+    };
+    let mut levels = crate::arrow::schema::parquet_to_arrow_field_levels(
+        row_groups.metadata.file_metadata().schema_descr(),
+        ProjectionMask::all(),
+        Some(batch.schema().fields()),
+    )
+    .unwrap();
+    // Exercise a field list that differs from the field levels used to build the readers.
+    let mut fields = levels.fields.to_vec();
+    fields[0] = Arc::new(fields[0].as_ref().clone().with_name("mismatched_text"));
+    levels.fields = fields.into();
+
+    let reader =
+        super::ParquetRecordBatchReader::try_new_with_row_groups(&levels, &row_groups, 8, None)
+            .unwrap();
+    assert_staging_enabled(&reader, true);
+    assert_eq!(reader.schema, batch.schema());
+    let output = reader.collect::<Result<Vec<_>, _>>().unwrap();
+    assert_eq!(flatten(&output), batch);
 }
 
 #[test]
@@ -526,7 +556,7 @@ fn test_capacity_staging_push_decoder_rebuild() {
             .with_max_predicate_cache_size(usize::MAX)
             .with_metrics(metrics.clone());
         if !enabled {
-            builder = builder.with_byte_array_capacity_staging(false);
+            builder = builder.with_byte_array_batch_splitting(false);
         }
         let mut decoder = builder.build().unwrap();
         decoder
@@ -582,7 +612,7 @@ async fn test_capacity_staging_async_public_option() {
         .await
         .unwrap()
         .with_batch_size(8)
-        .with_byte_array_capacity_staging(enabled)
+        .with_byte_array_batch_splitting(enabled)
         .with_row_filter(schema_filter(batch.schema()))
         .with_max_predicate_cache_size(usize::MAX)
         .with_metrics(metrics.clone())
