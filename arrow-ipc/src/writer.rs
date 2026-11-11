@@ -2381,6 +2381,52 @@ fn get_list_view_array_buffers<O: OffsetSizeTrait>(
     (offsets_slice, sizes_slice, child_data)
 }
 
+/// Returns the offsets buffer and the child data for a dense Union array.
+///
+/// Each child is narrowed to the range of rows that the slice references, and
+/// the offsets are rebased to the start of that range. A child that the slice
+/// does not reference is written empty. Rows inside a range that no slot
+/// references are still written.
+fn get_dense_union_buffers(data: &ArrayData, fields: &UnionFields) -> (Buffer, Vec<ArrayData>) {
+    let range = data.offset()..data.offset() + data.len();
+    let type_ids = &data.buffers()[0].as_slice()[range.clone()];
+    let offsets = &data.buffers()[1].typed_data::<i32>()[range];
+
+    // Maps a type id to its child index. Type ids are in 0..128.
+    let mut child_index = [0usize; 128];
+    for (index, (type_id, _)) in fields.iter().enumerate() {
+        child_index[type_id as usize] = index;
+    }
+
+    let mut ranges: Vec<Option<(i32, i32)>> = vec![None; fields.len()];
+    for (type_id, offset) in type_ids.iter().zip(offsets) {
+        let range = &mut ranges[child_index[*type_id as usize]];
+        *range = Some(match *range {
+            Some((start, end)) => (start.min(*offset), end.max(*offset + 1)),
+            None => (*offset, *offset + 1),
+        });
+    }
+
+    let offsets = type_ids
+        .iter()
+        .zip(offsets)
+        .map(|(type_id, offset)| {
+            let (start, _) = ranges[child_index[*type_id as usize]].unwrap();
+            offset - start
+        })
+        .collect();
+    let children = data
+        .child_data()
+        .iter()
+        .zip(ranges)
+        .map(|(child, range)| match range {
+            Some((start, end)) => child.slice(start as usize, (end - start) as usize),
+            None => child.slice(0, 0),
+        })
+        .collect();
+    (offsets, children)
+}
+
 /// Returns the sliced views [`Buffer`] for a BinaryView/Utf8View array.
 ///
 /// The views buffer is sliced to only include views in the valid range based on
@@ -2629,6 +2675,32 @@ fn write_array_data(
             ipc_write_context,
             write_options,
         )?;
+        return Ok(offset);
+    } else if let DataType::Union(fields, UnionMode::Dense) = data_type {
+        let type_ids = array_data.buffers()[0].slice_with_length(array_data.offset(), num_rows);
+        let (offsets, children) = get_dense_union_buffers(array_data, fields);
+        for buffer in [type_ids, offsets] {
+            offset = encode_sink_buffer(
+                buffer,
+                meta,
+                sink,
+                offset,
+                compression_codec,
+                ipc_write_context,
+                write_options.alignment,
+            )?;
+        }
+        for child_data in &children {
+            offset = write_array_data(
+                child_data,
+                meta,
+                sink,
+                offset,
+                compression_codec,
+                ipc_write_context,
+                write_options,
+            )?;
+        }
         return Ok(offset);
     } else if matches!(data_type, DataType::Union(_, _)) {
         for (buffer, byte_width) in array_data
@@ -5296,5 +5368,132 @@ mod tests {
         let mut reader = StreamReader::try_new(Cursor::new(buffer), None).unwrap();
         let read_batch = reader.next().unwrap().unwrap();
         assert_eq!(read_batch, batch2);
+    }
+
+    /// Writes `array` whole and as `array.slice(offset, len)`, checks that both
+    /// read back equal, and returns the stream sizes in bytes as `(whole, sliced)`.
+    fn roundtrip_sliced_stream_sizes(array: ArrayRef, offset: usize, len: usize) -> (usize, usize) {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            array.data_type().clone(),
+            true,
+        )]));
+        let whole = RecordBatch::try_new(schema, vec![array]).unwrap();
+        let sliced = whole.slice(offset, len);
+        let whole_bytes = serialize_stream(&whole);
+        let sliced_bytes = serialize_stream(&sliced);
+        let sizes = (whole_bytes.len(), sliced_bytes.len());
+        assert_eq!(deserialize_stream(whole_bytes), whole);
+        assert_eq!(deserialize_stream(sliced_bytes), sliced);
+        sizes
+    }
+
+    /// Builds a dense union of 100,000 rows that alternate between a nullable
+    /// Int32 child (type id 3) and a nullable Utf8 child (type id 7).
+    fn generate_dense_union_data() -> UnionArray {
+        let n = 100_000;
+        let fields = UnionFields::try_new(
+            vec![3, 7],
+            vec![
+                Field::new("int", DataType::Int32, true),
+                Field::new("str", DataType::Utf8, true),
+            ],
+        )
+        .unwrap();
+        let ints = Int32Array::from_iter((0..n / 2).map(|i| (i % 5 != 0).then_some(i)));
+        let strs =
+            StringArray::from_iter((0..n / 2).map(|i| (i % 3 != 0).then(|| format!("s{i}"))));
+        let type_ids = (0..n).map(|i| if i % 2 == 0 { 3 } else { 7 }).collect();
+        let offsets = (0..n).map(|i| i / 2).collect();
+        UnionArray::try_new(
+            fields,
+            type_ids,
+            Some(offsets),
+            vec![Arc::new(ints), Arc::new(strs)],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
+    fn sliced_dense_union_writes_only_referenced_children() {
+        let (whole, sliced) =
+            roundtrip_sliced_stream_sizes(Arc::new(generate_dense_union_data()), 50_001, 10);
+        assert!(sliced * 1000 < whole, "whole: {whole}, sliced: {sliced}");
+    }
+
+    #[test]
+    fn sliced_dense_union_rebases_offsets() {
+        let fields = UnionFields::try_new(
+            vec![0, 1, 2],
+            vec![
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Int64, true),
+                Field::new("c", DataType::Utf8, true),
+            ],
+        )
+        .unwrap();
+        let a = Int32Array::from_iter_values(0..1000);
+        let b = Int64Array::from_iter((0..1000).map(|i| (i % 2 == 0).then_some(i)));
+        let c = StringArray::from_iter_values((0..1000).map(|i| format!("c{i}")));
+        // Rows 1..5 reference a[500..502], b[700..704] and no rows of c.
+        let type_ids = vec![2, 0, 1, 1, 0, 1, 2].into();
+        let offsets = vec![0, 500, 700, 701, 501, 703, 999].into();
+        let union = UnionArray::try_new(
+            fields,
+            type_ids,
+            Some(offsets),
+            vec![Arc::new(a), Arc::new(b), Arc::new(c)],
+        )
+        .unwrap();
+
+        let (whole, sliced) = roundtrip_sliced_stream_sizes(Arc::new(union.clone()), 1, 5);
+        assert!(sliced * 10 < whole, "whole: {whole}, sliced: {sliced}");
+
+        let data = union.slice(1, 5).to_data();
+        let DataType::Union(fields, _) = data.data_type() else {
+            unreachable!()
+        };
+        let (offsets, children) = get_dense_union_buffers(&data, fields);
+        assert_eq!(offsets.typed_data::<i32>(), &[0, 0, 1, 1, 3]);
+        let child_ranges: Vec<_> = children.iter().map(|c| (c.offset(), c.len())).collect();
+        assert_eq!(child_ranges, vec![(500, 2), (700, 4), (0, 0)]);
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
+    fn sliced_dense_union_of_list() {
+        let n = 10_000;
+        let mut lists = ListBuilder::new(StringBuilder::new());
+        for i in 0..n {
+            if i % 4 == 0 {
+                lists.append_null();
+                continue;
+            }
+            lists.values().append_value(format!("v{i}"));
+            lists.values().append_null();
+            lists.append(true);
+        }
+        let lists = lists.finish();
+        let ints = Int32Array::from_iter_values(0..n);
+        let fields = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("int", DataType::Int32, false),
+                Field::new("list", lists.data_type().clone(), true),
+            ],
+        )
+        .unwrap();
+        let type_ids = (0..2 * n).map(|i| (i % 2) as i8).collect();
+        let offsets = (0..2 * n).map(|i| i / 2).collect();
+        let union = UnionArray::try_new(
+            fields,
+            type_ids,
+            Some(offsets),
+            vec![Arc::new(ints), Arc::new(lists)],
+        )
+        .unwrap();
+        let (whole, sliced) = roundtrip_sliced_stream_sizes(Arc::new(union), 9_000, 10);
+        assert!(sliced * 100 < whole, "whole: {whole}, sliced: {sliced}");
     }
 }
