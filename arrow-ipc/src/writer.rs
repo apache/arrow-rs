@@ -2353,32 +2353,46 @@ fn get_list_array_buffers<O: OffsetSizeTrait>(data: &ArrayData) -> (Buffer, Arra
 
 /// Returns the offsets, sizes, and child data buffers for a ListView array.
 ///
-/// Unlike List arrays, ListView arrays store both offsets and sizes explicitly,
-/// and offsets can be non-monotonic. When slicing, we simply pass through the
-/// offsets and sizes without re-encoding, and do not slice the child data.
+/// The child data is narrowed to the range that the non-empty views of the
+/// slice reference, and the offsets are rebased to the start of that range.
+/// Views can overlap or be out of order, so the range runs from the smallest
+/// offset to the largest `offset + size`. Values inside the range that no view
+/// references are still written. Empty views get offset `0`, because their
+/// original offsets can lie outside the range.
 fn get_list_view_array_buffers<O: OffsetSizeTrait>(
     data: &ArrayData,
 ) -> (Buffer, Buffer, ArrayData) {
-    if data.is_empty() {
-        return (
-            MutableBuffer::new(0).into(),
-            MutableBuffer::new(0).into(),
-            data.child_data()[0].slice(0, 0),
-        );
-    }
+    let element_size = size_of::<O>();
+    let sizes = data.buffers()[1]
+        .slice_with_length(data.offset() * element_size, data.len() * element_size);
+    let offsets = &data.buffers()[0].typed_data::<O>()[data.offset()..data.offset() + data.len()];
+    let sizes_slice = sizes.typed_data::<O>();
 
-    let offsets = &data.buffers()[0];
-    let sizes = &data.buffers()[1];
+    let range = offsets
+        .iter()
+        .zip(sizes_slice)
+        .filter(|(_, size)| size.as_usize() > 0)
+        .map(|(offset, size)| (offset.as_usize(), offset.as_usize() + size.as_usize()))
+        .reduce(|(start, end), (s, e)| (start.min(s), end.max(e)));
+    let Some((start, end)) = range else {
+        let zeros = MutableBuffer::from_len_zeroed(data.len() * element_size).into();
+        return (zeros, sizes, data.child_data()[0].slice(0, 0));
+    };
 
-    let element_size = std::mem::size_of::<O>();
-    let offsets_slice =
-        offsets.slice_with_length(data.offset() * element_size, data.len() * element_size);
-    let sizes_slice =
-        sizes.slice_with_length(data.offset() * element_size, data.len() * element_size);
-
-    let child_data = data.child_data()[0].clone();
-
-    (offsets_slice, sizes_slice, child_data)
+    let start_offset = O::usize_as(start);
+    let offsets = offsets
+        .iter()
+        .zip(sizes_slice)
+        .map(|(offset, size)| {
+            if size.as_usize() > 0 {
+                *offset - start_offset
+            } else {
+                O::usize_as(0)
+            }
+        })
+        .collect();
+    let child_data = data.child_data()[0].slice(start, end - start);
+    (offsets, sizes, child_data)
 }
 
 /// Returns the sliced views [`Buffer`] for a BinaryView/Utf8View array.
@@ -2839,7 +2853,7 @@ mod tests {
     };
     use arrow_array::builder::{PrimitiveRunBuilder, UInt32Builder};
     use arrow_array::types::*;
-    use arrow_buffer::ScalarBuffer;
+    use arrow_buffer::{NullBuffer, ScalarBuffer};
 
     use crate::MetadataVersion;
     use crate::convert::try_fb_to_schema;
@@ -5296,5 +5310,104 @@ mod tests {
         let mut reader = StreamReader::try_new(Cursor::new(buffer), None).unwrap();
         let read_batch = reader.next().unwrap().unwrap();
         assert_eq!(read_batch, batch2);
+    }
+
+    /// Writes `array` whole and as `array.slice(offset, len)`, checks that both
+    /// read back equal, and returns the stream sizes in bytes as `(whole, sliced)`.
+    fn roundtrip_sliced_stream_sizes(array: ArrayRef, offset: usize, len: usize) -> (usize, usize) {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            array.data_type().clone(),
+            true,
+        )]));
+        let whole = RecordBatch::try_new(schema, vec![array]).unwrap();
+        let sliced = whole.slice(offset, len);
+        let whole_bytes = serialize_stream(&whole);
+        let sliced_bytes = serialize_stream(&sliced);
+        let sizes = (whole_bytes.len(), sliced_bytes.len());
+        assert_eq!(deserialize_stream(whole_bytes), whole);
+        assert_eq!(deserialize_stream(sliced_bytes), sliced);
+        sizes
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
+    fn sliced_list_view_writes_only_referenced_values() {
+        let (whole, sliced) =
+            roundtrip_sliced_stream_sizes(Arc::new(generate_list_view_data::<i32>()), 999, 10);
+        assert!(sliced * 1000 < whole, "whole: {whole}, sliced: {sliced}");
+        let (whole, sliced) =
+            roundtrip_sliced_stream_sizes(Arc::new(generate_list_view_data::<i64>()), 999, 10);
+        assert!(sliced * 1000 < whole, "whole: {whole}, sliced: {sliced}");
+    }
+
+    #[test]
+    fn sliced_list_view_with_overlapping_out_of_order_views() {
+        let values = Arc::new(Int32Array::from_iter_values(0..10_000));
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        // Rows 1..6 reference values 5000..5006 only. The views overlap, run
+        // backwards, and include an empty view and a null view whose offsets
+        // lie outside that range.
+        let offsets = ScalarBuffer::from(vec![0, 5003, 5000, 9000, 5002, 7000, 9990]);
+        let sizes = ScalarBuffer::from(vec![10, 3, 4, 0, 2, 0, 10]);
+        let nulls = NullBuffer::from(vec![true, true, true, true, true, false, true]);
+        let list = ListViewArray::new(field, offsets, sizes, values, Some(nulls));
+
+        let (whole, sliced) = roundtrip_sliced_stream_sizes(Arc::new(list.clone()), 1, 5);
+        assert!(sliced * 20 < whole, "whole: {whole}, sliced: {sliced}");
+
+        let data = list.slice(1, 5).to_data();
+        let (offsets, sizes, child) = get_list_view_array_buffers::<i32>(&data);
+        assert_eq!(offsets.typed_data::<i32>(), &[3, 0, 0, 2, 0]);
+        assert_eq!(sizes.typed_data::<i32>(), &[3, 4, 0, 2, 0]);
+        assert_eq!(child.offset(), 5000);
+        assert_eq!(child.len(), 6);
+    }
+
+    #[test]
+    fn sliced_list_view_with_only_empty_views() {
+        let values = Arc::new(Int32Array::from_iter_values(0..1000));
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let offsets = ScalarBuffer::from(vec![0i64, 500, 700, 0]);
+        let sizes = ScalarBuffer::from(vec![10i64, 0, 0, 1000]);
+        let nulls = NullBuffer::from(vec![true, false, true, true]);
+        let list = LargeListViewArray::new(field, offsets, sizes, values, Some(nulls));
+
+        let (whole, sliced) = roundtrip_sliced_stream_sizes(Arc::new(list.clone()), 1, 2);
+        assert!(sliced * 5 < whole, "whole: {whole}, sliced: {sliced}");
+
+        let data = list.slice(1, 2).to_data();
+        let (offsets, sizes, child) = get_list_view_array_buffers::<i64>(&data);
+        assert_eq!(offsets.typed_data::<i64>(), &[0, 0]);
+        assert_eq!(sizes.typed_data::<i64>(), &[0, 0]);
+        assert_eq!(child.len(), 0);
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
+    fn sliced_list_view_of_strings() {
+        let mut builder = GenericListViewBuilder::<i32, _>::new(StringBuilder::new());
+        for i in 0..10_000 {
+            if i % 7 == 0 {
+                builder.append_null();
+                continue;
+            }
+            builder.values().append_value(format!("value-{i}"));
+            builder.values().append_null();
+            builder.append(true);
+        }
+        let (whole, sliced) = roundtrip_sliced_stream_sizes(Arc::new(builder.finish()), 5000, 10);
+        assert!(sliced * 100 < whole, "whole: {whole}, sliced: {sliced}");
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
+    fn sliced_nested_list_view() {
+        let (whole, sliced) = roundtrip_sliced_stream_sizes(
+            Arc::new(generate_nested_list_view_data::<i32>()),
+            500,
+            10,
+        );
+        assert!(sliced * 100 < whole, "whole: {whole}, sliced: {sliced}");
     }
 }
