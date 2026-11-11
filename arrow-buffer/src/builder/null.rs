@@ -370,6 +370,23 @@ mod tests {
     }
 
     #[test]
+    fn test_append_full_word_after_non_nulls() {
+        let word = 0xDEAD_BEEF_CAFE_BABE;
+        for offset in 0..8 {
+            let mut builder = NullBufferBuilder::new(128);
+            builder.append_n_non_nulls(offset);
+            builder.append_word(word, 64);
+            builder.append_n_non_nulls(7);
+            let expected = NullBuffer::from_iter(
+                std::iter::repeat_n(true, offset)
+                    .chain((0..64).map(|bit| (word >> bit) & 1 != 0))
+                    .chain(std::iter::repeat_n(true, 7)),
+            );
+            assert_eq!(builder.finish(), Some(expected));
+        }
+    }
+
+    #[test]
     #[should_panic(expected = "count must be less than or equal to 64")]
     fn test_append_word_count_too_large() {
         let mut builder = NullBufferBuilder::new(0);
