@@ -11,7 +11,7 @@ use arrow::datatypes::*;
 use arrow::util::bench_util::*;
 use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_schema::{Field, UnionFields};
-use arrow_select::minify::minify;
+use arrow_select::minify::{compacted_size, minify, row_sizes};
 use std::hint;
 use std::sync::Arc;
 
@@ -20,8 +20,22 @@ const PARENT: usize = 100_000;
 /// Rows in each slice.
 const SLICE: usize = 8192;
 
+/// Benchmarks `minify`, `compacted_size` and `row_sizes` on `array`.
 fn bench(c: &mut Criterion, name: &str, array: &dyn Array) {
-    c.bench_function(name, |b| b.iter(|| hint::black_box(minify(array).unwrap())));
+    c.bench_function(&format!("minify {name}"), |b| {
+        b.iter(|| hint::black_box(minify(array).unwrap()))
+    });
+    c.bench_function(&format!("compacted_size {name}"), |b| {
+        b.iter(|| hint::black_box(compacted_size(array).unwrap()))
+    });
+    let mut sizes = vec![0; array.len()];
+    c.bench_function(&format!("row_sizes {name}"), |b| {
+        b.iter(|| {
+            sizes.fill(0);
+            row_sizes(array, &mut sizes).unwrap();
+            hint::black_box(&sizes);
+        })
+    });
 }
 
 /// Slices `SLICE` rows out of the middle of `array`.
@@ -38,25 +52,36 @@ fn strings_with_null_ranges(len: usize) -> StringArray {
 
 fn add_benchmark(c: &mut Criterion) {
     let ints = create_primitive_array::<Int32Type>(PARENT, 0.1);
-    bench(c, "minify i32 slice", mid(&ints).as_ref());
+    bench(c, "i32 slice", mid(&ints).as_ref());
+
+    let bools = create_boolean_array(PARENT, 0.1, 0.5);
+    bench(c, "boolean slice", mid(&bools).as_ref());
+
+    let fixed = create_fsb_array(PARENT, 0.1, 16);
+    bench(c, "fixed size binary slice", mid(&fixed).as_ref());
+
+    let fsl = FixedSizeListArray::new(
+        Arc::new(Field::new_list_field(DataType::Int32, true)),
+        4,
+        Arc::new(create_primitive_array::<Int32Type>(4 * PARENT, 0.1)),
+        None,
+    );
+    bench(c, "fixed size list<i32> slice", mid(&fsl).as_ref());
 
     let strings = create_string_array::<i32>(PARENT, 0.0);
-    bench(c, "minify utf8 slice no nulls", mid(&strings).as_ref());
+    bench(c, "utf8 slice no nulls", mid(&strings).as_ref());
     let null_ranges = strings_with_null_ranges(PARENT);
-    bench(
-        c,
-        "minify utf8 slice null ranges",
-        mid(&null_ranges).as_ref(),
-    );
+    bench(c, "utf8 slice null ranges", mid(&null_ranges).as_ref());
 
     let views = create_string_view_array_with_max_len(PARENT, 0.1, 64);
+    bench(c, "utf8view slice", mid(&views).as_ref());
     let sparse = arrow_select::take::take(
         &views,
         &UInt32Array::from_iter_values((0..SLICE as u32).map(|i| i * 12)),
         None,
     )
     .unwrap();
-    bench(c, "minify utf8view sparse", sparse.as_ref());
+    bench(c, "utf8view sparse", sparse.as_ref());
 
     let field = Arc::new(Field::new_list_field(DataType::Utf8, true));
     let lists = ListArray::new(
@@ -65,7 +90,7 @@ fn add_benchmark(c: &mut Criterion) {
         Arc::new(create_string_array::<i32>(PARENT, 0.1)),
         Some(NullBuffer::from_iter((0..PARENT / 4).map(|i| i % 7 != 0))),
     );
-    bench(c, "minify list<utf8> slice", mid(&lists).as_ref());
+    bench(c, "list<utf8> slice", mid(&lists).as_ref());
 
     let offsets: ScalarBuffer<i32> = (0..PARENT as i32)
         .rev()
@@ -79,7 +104,7 @@ fn add_benchmark(c: &mut Criterion) {
         Arc::new(create_primitive_array::<Int32Type>(PARENT, 0.0)),
         None,
     );
-    bench(c, "minify listview slice", mid(&list_views).as_ref());
+    bench(c, "listview slice", mid(&list_views).as_ref());
 
     let union_fields = UnionFields::try_new(
         [0, 1],
@@ -101,31 +126,39 @@ fn add_benchmark(c: &mut Criterion) {
         ],
     )
     .unwrap();
-    bench(c, "minify dense union slice", mid(&union).as_ref());
+    bench(c, "dense union slice", mid(&union).as_ref());
 
     let dict_values = create_string_array::<i32>(PARENT, 0.0);
     let keys = Int32Array::from_iter_values((0..PARENT as i32).map(|i| i % 1000));
     let dict = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(dict_values)).unwrap();
-    bench(
-        c,
-        "minify dictionary<utf8> few referenced",
-        mid(&dict).as_ref(),
-    );
+    bench(c, "dictionary<utf8> few referenced", mid(&dict).as_ref());
+
+    let struct_array = StructArray::from(vec![
+        (
+            Arc::new(Field::new("i", DataType::Int64, true)),
+            Arc::new(create_primitive_array::<Int64Type>(PARENT, 0.1)) as ArrayRef,
+        ),
+        (
+            Arc::new(Field::new("s", DataType::Utf8, true)),
+            Arc::new(create_string_array::<i32>(PARENT, 0.1)) as ArrayRef,
+        ),
+    ]);
+    bench(c, "struct<i64, utf8> slice", mid(&struct_array).as_ref());
 
     let run_ends = Int32Array::from_iter_values((1..=PARENT as i32 / 4).map(|i| i * 4));
     let run_values = create_primitive_array::<Int64Type>(PARENT / 4, 0.1);
     let runs = RunArray::<Int32Type>::try_new(&run_ends, &run_values).unwrap();
-    bench(c, "minify run end encoded slice", mid(&runs).as_ref());
+    bench(c, "run end encoded slice", mid(&runs).as_ref());
 
     let minimal = minify(mid(&lists).as_ref()).unwrap();
-    bench(c, "minify list<utf8> already minimal", minimal.as_ref());
+    bench(c, "list<utf8> already minimal", minimal.as_ref());
     let minimal = minify(mid(&null_ranges).as_ref()).unwrap();
-    bench(c, "minify utf8 already minimal", minimal.as_ref());
+    bench(c, "utf8 already minimal", minimal.as_ref());
 
     let large = strings_with_null_ranges(4 * 1024 * 1024);
     bench(
         c,
-        "minify utf8 4M rows null ranges",
+        "utf8 4M rows null ranges",
         &large.slice(1, large.len() - 2),
     );
 }
