@@ -6,7 +6,7 @@
 //!
 //! The Arrow row format produces big-endian, memcmp-comparable byte sequences,
 //! so they can be radix sorted directly. The sort skips the bytes that every
-//! row shares, radix sorts an 8-byte key taken from each row after them, and
+//! row shares, radix sorts a 12-byte key taken from each row after them, and
 //! compares the rest of a row only to order rows whose keys are equal.
 //!
 //! # When to use this
@@ -15,7 +15,7 @@
 //! two or more columns, unless one of them is expensive to encode (see below).
 //! [`lexsort_to_indices`] compares rows through a dynamically dispatched
 //! comparator per column, calling them in turn on every comparison until one
-//! column differs. Radix sort reads each row's 8-byte key once per pass. It
+//! column differs. Radix sort reads each row's 12-byte key once per pass. It
 //! also does well when every row shares long leading bytes, such as small
 //! `Decimal128` values, because it skips them. On a single non-null primitive
 //! column the two are about even. Its cost includes encoding the columns into
@@ -31,11 +31,10 @@
 //!   reads a later column only for rows that the earlier columns leave tied.
 //! - **Input that is already sorted.** [`lexsort_to_indices`] detects it in one
 //!   pass, while radix sort does the same work as on unsorted input.
-//! - **Large groups of rows that are equal in their first 8 bytes after the
+//! - **Large groups of rows that are equal in their first 12 bytes after the
 //!   shared prefix.** Radix sort orders each such group by comparing the rest
-//!   of each row. Examples are strings with a few common prefixes, several
-//!   low-cardinality columns, and a wide column of small values after the
-//!   first column, such as `(Int32, Int64)` with small `Int64` values.
+//!   of each row. Examples are strings with a few common prefixes and three or
+//!   more low-cardinality columns.
 //! - **A sort with a limit.** [`lexsort_to_indices`] takes a `limit` and orders
 //!   only the first `limit` rows, while [`radix_sort_to_indices`] sorts every
 //!   row.
@@ -49,6 +48,10 @@ use arrow_schema::ArrowError;
 /// Buckets this size or smaller are sorted by comparing keys. On small inputs
 /// a comparison sort beats the per-bucket cost of another radix pass.
 const FALLBACK_THRESHOLD: usize = 32;
+
+/// The bytes of each row that an entry holds as its key, in the 96 bits above
+/// the row's u32 index
+const KEY_BYTES: u32 = 12;
 
 /// Sort row indices using MSD radix sort on row-encoded keys.
 ///
@@ -106,10 +109,10 @@ pub fn radix_sort_to_indices(rows: &Rows) -> Result<UInt32Array, ArrowError> {
                 (common_prefix(&first[..prefix], row), max_len.max(row.len()))
             });
 
-    // Each entry holds the next 8 bytes of its row as a big-endian key in its
-    // high 64 bits and the row's index in its low bits, so entries compare by
-    // key and move as one value. Keeping the key in one 64-bit half makes
-    // extracting a key byte a single shift.
+    // Each entry holds the next 12 bytes of its row as a big-endian key in its
+    // high 96 bits and the row's index in its low 32 bits, so entries compare
+    // by key and move as one value. 12 bytes cover an Int32 and an Int64 after
+    // their shared null and high bytes, the shape of a BIGINT join key.
     //
     // A row shorter than the key takes its last key bytes from the next row,
     // because a fixed-size load is one instruction and a variable-length copy
@@ -124,37 +127,38 @@ pub fn radix_sort_to_indices(rows: &Rows) -> Result<UInt32Array, ArrowError> {
         .enumerate()
         .map(|(i, w)| {
             let start = w[0] + prefix;
-            let bytes = match buffer.get(start..).and_then(<[u8]>::first_chunk::<8>) {
+            let bytes = match buffer.get(start..).and_then(<[u8]>::first_chunk::<16>) {
                 Some(bytes) => *bytes,
                 // The last rows of the buffer are padded with zeros instead
                 None => {
                     let tail = &buffer[start..];
-                    let mut bytes = [0u8; 8];
+                    let mut bytes = [0u8; 16];
                     bytes[..tail.len()].copy_from_slice(tail);
                     bytes
                 }
             };
-            (u128::from(u64::from_be_bytes(bytes)) << 64) | i as u128
+            // The last 4 bytes loaded lie past the key, and the index replaces
+            // them
+            (u128::from_be_bytes(bytes) & !u128::from(u32::MAX)) | i as u128
         })
         .collect();
     let mut temp = vec![0u128; n];
     // The first key byte differs between rows unless every row is equal,
     // because the key starts after the prefix that every row shares.
-    msd_radix_sort(&mut entries, &mut temp, 0, true);
+    msd_radix_sort::<true>(&mut entries, &mut temp, 0, true);
 
     // Entries with equal keys come from rows that agree on every byte before
-    // prefix + 8, so the rest of each row decides their order. When no row is
+    // prefix + KEY_BYTES, so the rest of each row decides their order. When no row is
     // longer than that, equal keys mean equal rows and there is nothing left
     // to compare.
     //
     // TODO: re-key large runs of equal keys instead of comparing them: load
-    // the next 8 bytes of each row in the run into its entries and radix sort
+    // the next 12 bytes of each row in the run into its entries and radix sort
     // the run again, with the matching slice of temp as scratch. Each row is
-    // then read once per 8 bytes instead of once per comparison. This
-    // comparison sort dominates for dictionary keys, strings with a few common
-    // prefixes, several low-cardinality columns, and a wide column of small
-    // values after the first, such as (Int32, Int64) with small Int64 values.
-    let suffix = prefix + 8;
+    // then read once per key instead of once per comparison. This comparison
+    // sort dominates for dictionary keys, strings with a few common prefixes,
+    // and three or more low-cardinality columns.
+    let suffix = prefix + KEY_BYTES as usize;
     if max_len > suffix {
         for run in entries.chunk_by_mut(|&a, &b| key(a) == key(b)) {
             if run.len() > 1 {
@@ -190,8 +194,17 @@ pub fn radix_sort_to_indices(rows: &Rows) -> Result<UInt32Array, ArrowError> {
 /// `byte` is the key byte to split on, counted from the most significant.
 /// Every entry in `src` agrees on the bytes before it. When every entry also
 /// shares `byte`, the sort skips ahead to the first byte that differs, so the
-/// recursion ends after at most 8 levels.
-fn msd_radix_sort(src: &mut [u128], dst: &mut [u128], mut byte: u32, result_in_src: bool) {
+/// recursion ends after at most KEY_BYTES levels.
+///
+/// `HIGH` is whether `byte` is in the high 64 bits of an entry (key bytes 0
+/// to 7) rather than the low 64 bits (key bytes 8 to 11). Fixing the half for
+/// a whole pass keeps extracting a key byte to one 64-bit shift.
+fn msd_radix_sort<const HIGH: bool>(
+    src: &mut [u128],
+    dst: &mut [u128],
+    mut byte: u32,
+    result_in_src: bool,
+) {
     if src.len() <= FALLBACK_THRESHOLD {
         let out = if result_in_src {
             src
@@ -209,28 +222,32 @@ fn msd_radix_sort(src: &mut [u128], dst: &mut [u128], mut byte: u32, result_in_s
     // because radix_sort_to_indices checks that src.len() <= u32::MAX.
     let mut counts: [u32; 256];
     let shift = loop {
-        if byte == 8 {
+        if byte == KEY_BYTES {
             // Every key is equal, and the caller orders equal keys.
             if !result_in_src {
                 dst.copy_from_slice(src);
             }
             return;
         }
-        // Moves key byte `byte` to the low byte of a key
-        let shift = 56 - 8 * byte;
+        if HIGH && byte >= 8 {
+            return msd_radix_sort::<false>(src, dst, byte, result_in_src);
+        }
+        // Moves key byte `byte` to the low byte of its half of an entry
+        let shift = (120 - 8 * byte) % 64;
         counts = [0; 256];
         for &e in src.iter() {
-            counts[digit(e, shift)] += 1;
+            counts[digit::<HIGH>(e, shift)] += 1;
         }
-        if counts[digit(src[0], shift)] as usize != src.len() {
+        if counts[digit::<HIGH>(src[0], shift)] as usize != src.len() {
             break shift;
         }
         // Every entry shares this byte. Rather than one pass per shared byte,
-        // find the first byte where any key differs. diff is 0 when every key
-        // is equal, which sets byte to 8 and ends the loop above.
+        // find the first byte where any key differs. A key's top 32 bits are
+        // zero, so they are not key bytes. diff is 0 when every key is equal,
+        // which sets byte to KEY_BYTES and ends the loop above.
         let first = key(src[0]);
         let diff = src.iter().fold(0, |acc, &e| acc | (key(e) ^ first));
-        byte = diff.leading_zeros() / 8;
+        byte = (diff.leading_zeros() - 32) / 8;
     };
     // Turn counts into each bucket's start in place. The scatter then advances
     // them to each bucket's end. One array saves zeroing and copying separate
@@ -240,7 +257,7 @@ fn msd_radix_sort(src: &mut [u128], dst: &mut [u128], mut byte: u32, result_in_s
         (*c, sum) = (sum, sum + *c);
     }
     for &e in src.iter() {
-        let b = digit(e, shift);
+        let b = digit::<HIGH>(e, shift);
         dst[counts[b] as usize] = e;
         counts[b] += 1;
     }
@@ -252,7 +269,7 @@ fn msd_radix_sort(src: &mut [u128], dst: &mut [u128], mut byte: u32, result_in_s
     for &end in &counts {
         let end = end as usize;
         if end - start > 1 {
-            msd_radix_sort(
+            msd_radix_sort::<HIGH>(
                 &mut dst[start..end],
                 &mut src[start..end],
                 byte + 1,
@@ -292,14 +309,20 @@ fn common_prefix(a: &[u8], b: &[u8]) -> usize {
         .count()
 }
 
-/// The key of an entry built by [`radix_sort_to_indices`]
-fn key(entry: u128) -> u64 {
-    (entry >> 64) as u64
+/// The 96-bit key of an entry built by [`radix_sort_to_indices`]
+fn key(entry: u128) -> u128 {
+    entry >> 32
 }
 
-/// The key byte of an entry that `shift` moves to the low byte of the key
-fn digit(entry: u128, shift: u32) -> usize {
-    (key(entry) >> shift) as u8 as usize
+/// The key byte of an entry that `shift` moves to the low byte of the high
+/// (`HIGH`) or low 64 bits of the entry
+fn digit<const HIGH: bool>(entry: u128, shift: u32) -> usize {
+    let half = if HIGH {
+        (entry >> 64) as u64
+    } else {
+        entry as u64
+    };
+    (half >> shift) as u8 as usize
 }
 
 #[cfg(test)]
@@ -307,7 +330,10 @@ mod tests {
     use super::*;
     use crate::tests::generate_column;
     use crate::{RowConverter, SortField};
-    use arrow_array::{ArrayRef, BooleanArray, Float64Array, Int32Array, StringArray};
+    use arrow_array::{
+        ArrayRef, BooleanArray, FixedSizeBinaryArray, Float64Array, Int32Array, Int64Array,
+        StringArray,
+    };
     use arrow_schema::{DataType, SortOptions};
     use rand::rngs::StdRng;
     use rand::{RngExt, SeedableRng};
@@ -315,6 +341,12 @@ mod tests {
 
     fn sort(rows: &Rows) -> Vec<u32> {
         radix_sort_to_indices(rows).unwrap().values().to_vec()
+    }
+
+    fn assert_permutation(indices: &[u32], len: usize) {
+        let mut sorted = indices.to_vec();
+        sorted.sort_unstable();
+        assert!(sorted.into_iter().eq(0..len as u32), "not a permutation");
     }
 
     fn assert_sorted(rows: &Rows, indices: &[u32]) {
@@ -784,7 +816,7 @@ mod tests {
         assert_sorted(&rows, &indices);
     }
 
-    /// Two-byte rows end inside the 8-byte key, so keys are zero-padded.
+    /// Two-byte rows end inside the key, so keys are zero-padded.
     #[test]
     fn test_radix_sort_rows_shorter_than_key() {
         let mut rng = StdRng::seed_from_u64(0x8);
@@ -821,5 +853,50 @@ mod tests {
 
         let indices = sort(&rows);
         assert_sorted(&rows, &indices);
+    }
+
+    /// Rows whose bytes after the shared prefix are each 0 or 1, at widths
+    /// around the key size, so rows tie on their keys and the bytes after the
+    /// key decide their order
+    #[test]
+    fn test_radix_sort_widths_around_key() {
+        let mut rng = StdRng::seed_from_u64(0x12);
+        for width in [7, 8, 9, 11, 12, 13, 16, 20] {
+            let values: Vec<Vec<u8>> = (0..500)
+                .map(|_| (0..width).map(|_| rng.random_range(0..2)).collect())
+                .collect();
+            let array: ArrayRef =
+                Arc::new(FixedSizeBinaryArray::try_from_iter(values.iter()).unwrap());
+            let converter =
+                RowConverter::new(vec![SortField::new(DataType::FixedSizeBinary(width))]).unwrap();
+            let rows = converter.convert_columns(&[array]).unwrap();
+
+            let indices = sort(&rows);
+            assert_sorted(&rows, &indices);
+            assert_permutation(&indices, 500);
+        }
+    }
+
+    /// Small Int64 values after an Int32 have zero high bytes, the shape of a
+    /// BIGINT join key such as (l_partkey, l_suppkey)
+    #[test]
+    fn test_radix_sort_int32_then_small_int64() {
+        let mut rng = StdRng::seed_from_u64(0x14);
+        let items: ArrayRef = Arc::new(Int32Array::from_iter_values(
+            (0..2000).map(|_| rng.random_range(1..50)),
+        ));
+        let tickets: ArrayRef = Arc::new(Int64Array::from_iter_values(
+            (0..2000).map(|_| rng.random_range(0..200)),
+        ));
+        let converter = RowConverter::new(vec![
+            SortField::new(DataType::Int32),
+            SortField::new(DataType::Int64),
+        ])
+        .unwrap();
+        let rows = converter.convert_columns(&[items, tickets]).unwrap();
+
+        let indices = sort(&rows);
+        assert_sorted(&rows, &indices);
+        assert_permutation(&indices, 2000);
     }
 }
