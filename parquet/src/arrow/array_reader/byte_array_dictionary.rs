@@ -247,31 +247,38 @@ where
         let buffer = self.record_reader.consume_record_data();
         let null_buffer = self.record_reader.consume_compact_bitmap();
 
-        let array = match (&self.buffer_type, buffer) {
-            (Some(buffer_type), buffer @ DictionaryBuffer::Dict { .. }) => {
+        let ArrowType::Dictionary(_, output_value_type) = &self.data_type else {
+            unreachable!()
+        };
+        let cache_converted_values = matches!(&buffer, DictionaryBuffer::Dict { .. });
+        let convert_values = cache_converted_values
+            || matches!(
+                output_value_type.as_ref(),
+                ArrowType::Utf8View | ArrowType::BinaryView
+            );
+
+        let array = match (&self.buffer_type, convert_values) {
+            (Some(buffer_type), true) => {
                 let buffer_array =
                     buffer.into_array(null_buffer, buffer_type, &mut self.hash_scratch)?;
                 let array = buffer_array.as_any_dictionary();
                 let values = array.values();
-                let ArrowType::Dictionary(_, output_value_type) = &self.data_type else {
-                    unreachable!()
-                };
-                let converted = match &self.converted_values {
-                    Some((source, converted)) if Arc::ptr_eq(source, values) => {
+                let converted = match (cache_converted_values, &self.converted_values) {
+                    (true, Some((source, converted))) if Arc::ptr_eq(source, values) => {
                         Arc::clone(converted)
                     }
-                    _ => {
-                        let converted =
-                            convert_dictionary_values(values, output_value_type.as_ref())?;
-                        self.converted_values = Some((Arc::clone(values), Arc::clone(&converted)));
+                    (cache, _) => {
+                        let converted = convert_dictionary_values(values, output_value_type)?;
+                        if cache {
+                            self.converted_values =
+                                Some((Arc::clone(values), Arc::clone(&converted)));
+                        }
                         converted
                     }
                 };
                 array.with_values(converted)
             }
-            (_, buffer) => {
-                buffer.into_array(null_buffer, &self.data_type, &mut self.hash_scratch)?
-            }
+            _ => buffer.into_array(null_buffer, &self.data_type, &mut self.hash_scratch)?,
         };
 
         self.record_reader.reset();
