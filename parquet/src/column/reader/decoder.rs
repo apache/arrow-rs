@@ -355,10 +355,14 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
             encoding = Encoding::RLE_DICTIONARY;
         }
 
+        // Invalidate the previous page before configuring the new one, so a
+        // failed set_data cannot be retried with stale decoder state.
+        self.current_encoding = None;
+
         let decoder = if encoding == Encoding::RLE_DICTIONARY {
             self.decoders[encoding as usize]
                 .as_mut()
-                .expect("Decoder for dict should have been set")
+                .ok_or_else(|| general_err!("missing dictionary page for column"))?
         } else {
             let slot = encoding as usize;
             if self.decoders[slot].is_none() {
@@ -377,9 +381,10 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
     }
 
     fn read(&mut self, out: &mut Self::Buffer, num_values: usize) -> Result<usize> {
+        // Unset by a failed data page; retries must error, not panic.
         let encoding = self
             .current_encoding
-            .expect("current_encoding should be set");
+            .ok_or_else(|| general_err!("the current data page failed to decode"))?;
 
         let current_decoder = self.decoders[encoding as usize]
             .as_mut()
@@ -394,9 +399,10 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
     }
 
     fn skip_values(&mut self, num_values: usize) -> Result<usize> {
+        // Unset by a failed data page; retries must error, not panic.
         let encoding = self
             .current_encoding
-            .expect("current_encoding should be set");
+            .ok_or_else(|| general_err!("the current data page failed to decode"))?;
 
         let current_decoder = self.decoders[encoding as usize]
             .as_mut()
