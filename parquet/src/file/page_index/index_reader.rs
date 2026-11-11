@@ -87,17 +87,19 @@ pub fn decode_offset_index(data: &[u8]) -> Result<OffsetIndexMetaData, ParquetEr
     }
 }
 
+use crate::file::metadata::thrift_fields::column_index as fields;
+
 // private struct only used for decoding then discarded
 thrift_struct!(
 pub(super) struct ThriftColumnIndex<'a> {
-  1: required list<bool> null_pages
-  2: required list<'a><binary> min_values
-  3: required list<'a><binary> max_values
-  4: required BoundaryOrder boundary_order
-  5: optional list<i64> null_counts
-  6: optional list<i64> repetition_level_histograms;
-  7: optional list<i64> definition_level_histograms;
-  8: optional list<i64> nan_counts
+  fields::NULL_PAGES: required list<bool> null_pages
+  fields::MIN_VALUES: required list<'a><binary> min_values
+  fields::MAX_VALUES: required list<'a><binary> max_values
+  fields::BOUNDARY_ORDER: required BoundaryOrder boundary_order
+  fields::NULL_COUNTS: optional list<i64> null_counts
+  fields::REPETITION_LEVEL_HISTOGRAMS: optional list<i64> repetition_level_histograms;
+  fields::DEFINITION_LEVEL_HISTOGRAMS: optional list<i64> definition_level_histograms;
+  fields::NAN_COUNTS: optional list<i64> nan_counts
 }
 );
 
