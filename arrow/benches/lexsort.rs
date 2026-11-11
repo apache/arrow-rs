@@ -11,9 +11,11 @@ use arrow::util::bench_util::{
 };
 use arrow::util::data_gen::create_random_array;
 use arrow_array::types::{Float64Type, Int32Type, Int64Type};
-use arrow_array::{Array, ArrayRef, UInt32Array};
+use arrow_array::{Array, ArrayRef, Int32Array, Int64Array, UInt32Array};
 use arrow_schema::{DataType, Field};
 use criterion::{Criterion, criterion_group, criterion_main};
+use rand::rngs::StdRng;
+use rand::{RngExt, SeedableRng};
 use std::{hint, sync::Arc};
 
 #[derive(Copy, Clone)]
@@ -34,6 +36,12 @@ enum Column {
     OptionalI32List,
     Required4CharStringList,
     Optional4CharStringList,
+    // Values in 0..10, from the given seed so that columns are independent
+    TenValueI32(u64),
+    // The shape of a BIGINT join key such as (ss_item_sk, ss_ticket_number)
+    // with a BIGINT ticket: item numbers, then tickets in 0..len / 10
+    JoinItemI32,
+    JoinTicketI64,
 }
 
 impl std::fmt::Debug for Column {
@@ -55,6 +63,9 @@ impl std::fmt::Debug for Column {
             Column::OptionalI32List => "i32_list_opt",
             Column::Required4CharStringList => "str_list(4)",
             Column::Optional4CharStringList => "str_list_opt(4)",
+            Column::TenValueI32(_) => "i32(0..10)",
+            Column::JoinItemI32 => "i32(1..204K)",
+            Column::JoinTicketI64 => "i64(0..n/10)",
         };
         f.write_str(s)
     }
@@ -122,6 +133,25 @@ impl Column {
                     true,
                 );
                 create_random_array(&field, size, 0.2, 1.).unwrap()
+            }
+            Column::TenValueI32(seed) => {
+                let mut rng = StdRng::seed_from_u64(seed);
+                Arc::new(Int32Array::from_iter_values(
+                    (0..size).map(|_| rng.random_range(0..10)),
+                ))
+            }
+            Column::JoinItemI32 => {
+                let mut rng = StdRng::seed_from_u64(1);
+                Arc::new(Int32Array::from_iter_values(
+                    (0..size).map(|_| rng.random_range(1..204_001)),
+                ))
+            }
+            Column::JoinTicketI64 => {
+                let mut rng = StdRng::seed_from_u64(2);
+                let tickets = (size as i64 / 10).max(1);
+                Arc::new(Int64Array::from_iter_values(
+                    (0..size).map(|_| rng.random_range(0..tickets)),
+                ))
             }
         }
     }
@@ -260,6 +290,23 @@ fn add_benchmark(c: &mut Criterion) {
     for case in cases {
         do_bench(c, case, 4096);
         do_bench(c, case, 4096 * 8);
+    }
+
+    // Keys whose rows tie past the first 8 bytes after the bytes every row
+    // shares. Groups of tied rows grow with the row count, so these also run
+    // at 1M rows.
+    let ties: &[&[Column]] = &[
+        &[Column::JoinItemI32, Column::JoinTicketI64],
+        &[
+            Column::TenValueI32(1),
+            Column::TenValueI32(2),
+            Column::TenValueI32(3),
+        ],
+    ];
+    for case in ties {
+        for len in [4096, 4096 * 8, 1 << 20] {
+            do_bench(c, case, len);
+        }
     }
 }
 
