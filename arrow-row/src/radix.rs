@@ -23,11 +23,19 @@
 //!
 //! # When to prefer `lexsort_to_indices`
 //!
-//! - **A single nullable or string column.** [`lexsort_to_indices`] sorts one
-//!   column without encoding it, and sets nulls aside before sorting.
+//! - **A single nullable or string column, or one with few distinct values.**
+//!   [`lexsort_to_indices`] sorts one column without encoding it, sets nulls
+//!   aside before sorting, and sorts duplicates cheaply.
 //! - **A key with an expensive column to encode, such as a list.** The row
 //!   format encodes every column of every row, while [`lexsort_to_indices`]
 //!   reads a later column only for rows that the earlier columns leave tied.
+//! - **Input that is already sorted.** [`lexsort_to_indices`] detects it in one
+//!   pass, while radix sort does the same work as on unsorted input.
+//! - **Large groups of rows that are equal in their first 8 bytes after the
+//!   shared prefix.** Radix sort orders each such group by comparing the rest
+//!   of each row. Examples are strings with a few common prefixes, several
+//!   low-cardinality columns, and a wide column of small values after the
+//!   first column, such as `(Int32, Int64)` with small `Int64` values.
 //! - **A sort with a limit.** [`lexsort_to_indices`] takes a `limit` and orders
 //!   only the first `limit` rows, while [`radix_sort_to_indices`] sorts every
 //!   row.
@@ -139,15 +147,13 @@ pub fn radix_sort_to_indices(rows: &Rows) -> Result<UInt32Array, ArrowError> {
     // longer than that, equal keys mean equal rows and there is nothing left
     // to compare.
     //
-    // TODO: when long runs of equal keys dominate, as with dictionary or string
-    // keys that share more than 8 bytes, re-key instead of comparing: gather
-    // the next 8 bytes of each row in a run larger than FALLBACK_THRESHOLD into
-    // its entries, radix sort that slice with the matching slice of temp as
-    // scratch, and repeat for the runs that remain, using a worklist of
-    // (range, offset) rather than recursion. Each row is then read once per 8
-    // bytes instead of once per comparison. Smaller runs keep this comparison
-    // sort. In profiles, this comparator takes about 20% of sorting
-    // [dict(100,str_opt(50)), dict(100,str_opt(50))] with 32768 rows.
+    // TODO: re-key large runs of equal keys instead of comparing them: load
+    // the next 8 bytes of each row in the run into its entries and radix sort
+    // the run again, with the matching slice of temp as scratch. Each row is
+    // then read once per 8 bytes instead of once per comparison. This
+    // comparison sort dominates for dictionary keys, strings with a few common
+    // prefixes, several low-cardinality columns, and a wide column of small
+    // values after the first, such as (Int32, Int64) with small Int64 values.
     let suffix = prefix + 8;
     if max_len > suffix {
         for run in entries.chunk_by_mut(|&a, &b| key(a) == key(b)) {

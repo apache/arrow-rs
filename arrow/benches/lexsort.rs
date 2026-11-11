@@ -171,6 +171,20 @@ fn do_bench(c: &mut Criterion, columns: &[Column], len: usize) {
             })
         })
     });
+
+    // The encoding part of lexsort_radix, so the difference is the sort
+    c.bench_function(&format!("encode({columns:?}): {len}"), |b| {
+        b.iter(|| {
+            hint::black_box({
+                let fields = arrays
+                    .iter()
+                    .map(|a| SortField::new(a.data_type().clone()))
+                    .collect();
+                let converter = RowConverter::new(fields).unwrap();
+                converter.convert_columns(&arrays).unwrap()
+            })
+        })
+    });
 }
 
 fn add_benchmark(c: &mut Criterion) {
