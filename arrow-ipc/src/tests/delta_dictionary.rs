@@ -11,7 +11,7 @@ use crate::{
     writer::FileWriter,
 };
 use arrow_array::{
-    Array, ArrayRef, DictionaryArray, ListArray, RecordBatch, StringArray, StructArray,
+    Array, ArrayRef, DictionaryArray, Int32Array, ListArray, RecordBatch, StringArray, StructArray,
     builder::{ArrayBuilder, ListBuilder, StringDictionaryBuilder, StructBuilder},
     types::Int32Type,
 };
@@ -211,6 +211,48 @@ fn test_multi_same_value_sequence() {
             MessageType::RecordBatch,
         ],
     );
+}
+
+#[test]
+fn test_stream_writes_referenced_dictionary_prefix() {
+    let values = Arc::new(StringArray::from(vec!["A", "B", "C", "unused"]));
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "dict",
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        true,
+    )]));
+    let batches = [vec![Some(0)], vec![Some(2)], vec![Some(0)], vec![None]]
+        .into_iter()
+        .map(|keys| {
+            let dictionary =
+                DictionaryArray::<Int32Type>::new(Int32Array::from(keys), values.clone());
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(dictionary)]).unwrap()
+        })
+        .collect::<Vec<_>>();
+
+    run_delta_sequence_test(
+        &batches,
+        &[
+            MessageType::Dict(str_vec(&["A"])),
+            MessageType::RecordBatch,
+            MessageType::DeltaDict(str_vec(&["B", "C"])),
+            MessageType::RecordBatch,
+            MessageType::RecordBatch,
+            MessageType::RecordBatch,
+        ],
+    );
+    run_resend_sequence_test(
+        &batches,
+        &[
+            MessageType::Dict(str_vec(&["A"])),
+            MessageType::RecordBatch,
+            MessageType::Dict(str_vec(&["A", "B", "C"])),
+            MessageType::RecordBatch,
+            MessageType::RecordBatch,
+            MessageType::RecordBatch,
+        ],
+    );
+    run_parity_test(&batches);
 }
 
 #[derive(Debug, PartialEq)]
