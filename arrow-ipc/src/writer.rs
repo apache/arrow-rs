@@ -574,6 +574,16 @@ struct DictionaryToEncode {
     is_delta: bool,
 }
 
+fn dictionary_values_prefix_len(column: &ArrayRef) -> usize {
+    downcast_dictionary_array!(
+        column => match column.keys_iter().flatten().max() {
+            Some(key) => key.saturating_add(1),
+            None => 0,
+        },
+        _ => unreachable!("expected dictionary array"),
+    )
+}
+
 /// The result of encoding a record batch's body and flatbuffer `RecordBatch` table
 /// via [`IpcDataGenerator::encode_record_batch_data`].
 ///
@@ -791,9 +801,28 @@ impl IpcDataGenerator {
                 }
 
                 let dict_data = column.to_data();
-                let dict_values = &dict_data.child_data()[0];
+                let mut dict_values = dict_data.child_data()[0].clone();
+                let tracked_column;
 
-                let values = make_array(dict_data.child_data()[0].clone());
+                // Stream dictionaries can grow as later batches reference higher keys. Only
+                // send the prefix needed by this batch, while preserving key identity so that
+                // subsequent prefixes can still be sent as deltas.
+                let prefix_len = dictionary_values_prefix_len(column);
+                let column =
+                    if dictionary_tracker.error_on_replacement || prefix_len > dict_values.len() {
+                        column
+                    } else {
+                        dict_values = dict_values.slice(0, prefix_len);
+                        tracked_column = make_array(
+                            dict_data
+                                .into_builder()
+                                .child_data(vec![dict_values.clone()])
+                                .build()?,
+                        );
+                        &tracked_column
+                    };
+
+                let values = make_array(dict_values.clone());
 
                 self._collect_dict_updates(
                     &values,
@@ -824,7 +853,7 @@ impl IpcDataGenerator {
                     DictionaryUpdate::New | DictionaryUpdate::Replaced => {
                         dictionaries_to_encode.push(DictionaryToEncode {
                             id: dict_id,
-                            data: dict_values.clone(),
+                            data: dict_values,
                             is_delta: false,
                         });
                     }
@@ -1523,7 +1552,10 @@ impl DictionaryTracker {
 
         // Slow path - Compare the dictionaries value by value
         let comparison = compare_dictionaries(old_values, new_values);
-        if matches!(comparison, DictionaryComparison::Equal) {
+        if matches!(
+            comparison,
+            DictionaryComparison::Equal | DictionaryComparison::Contained
+        ) {
             return Ok(DictionaryUpdate::None);
         }
 
@@ -1560,7 +1592,9 @@ impl DictionaryTracker {
                     Ok(DictionaryUpdate::Delta(delta))
                 }
             },
-            DictionaryComparison::Equal => unreachable!("Already checked equal case"),
+            DictionaryComparison::Equal | DictionaryComparison::Contained => {
+                unreachable!("Already checked no-update cases")
+            }
         }
     }
 
@@ -1585,6 +1619,8 @@ enum DictionaryComparison {
     /// The two arrays are dictionary deltas of each other, meaning the first
     /// is a prefix of the second.
     Delta,
+    /// The new dictionary is a prefix of the dictionary already sent.
+    Contained,
 }
 
 // Compares two dictionaries and returns a [`DictionaryComparison`].
@@ -1600,9 +1636,13 @@ fn compare_dictionaries(old: &ArrayData, new: &ArrayData) -> DictionaryCompariso
         };
     }
 
-    // Can't be a delta if the new is shorter than the existing
+    // A shorter prefix is already available to the reader
     if new_len < existing_len {
-        return DictionaryComparison::NotEqual;
+        return if old.slice(0, new_len) == *new {
+            DictionaryComparison::Contained
+        } else {
+            DictionaryComparison::NotEqual
+        };
     }
 
     // Check for delta
