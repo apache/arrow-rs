@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Functions for printing array values as human-readable strings.
 //!
@@ -36,7 +23,7 @@ use arrow_buffer::ArrowNativeType;
 use arrow_data::decimal::write_decimal;
 use arrow_schema::*;
 use chrono::format::{Item, StrftimeItems};
-use chrono::{NaiveDate, NaiveDateTime, SecondsFormat, TimeZone, Utc};
+use chrono::{NaiveDate, NaiveDateTime, Offset, SecondsFormat, TimeZone, Utc};
 use lexical_core::FormattedSize;
 
 type TimeFormat<'a> = Option<&'a str>;
@@ -761,10 +748,15 @@ fn write_timestamp(
 ) -> FormatResult {
     match timezone {
         Some(tz) => {
-            let date = Utc.from_utc_datetime(&naive).with_timezone(&tz);
+            let utc = Utc.from_utc_datetime(&naive);
+            let date = utc.with_timezone(&tz);
             match format {
                 CompiledTimeFormat::Custom(items) => {
                     write!(f, "{}", date.format_with_items(items.0.iter()))?
+                }
+                // RFC 3339 offsets have no seconds and the arrow parser rejects them, so only Z round-trips
+                CompiledTimeFormat::Default if date.offset().fix().local_minus_utc() % 60 != 0 => {
+                    write!(f, "{}", utc.to_rfc3339_opts(SecondsFormat::AutoSi, true))?
                 }
                 CompiledTimeFormat::Default => {
                     write!(f, "{}", date.to_rfc3339_opts(SecondsFormat::AutoSi, true))?
@@ -1477,6 +1469,30 @@ mod tests {
     fn format_array(array: &dyn Array, fmt: &FormatOptions) -> Vec<String> {
         let fmt = ArrayFormatter::try_new(array, fmt).unwrap();
         (0..array.len()).map(|x| fmt.value(x).to_string()).collect()
+    }
+
+    #[test]
+    fn test_timestamp_tz_offset_with_seconds() {
+        let options = FormatOptions::new();
+        let cases = [
+            ("Africa/Monrovia", "1960-06-01T12:00:00.250Z"),
+            ("Europe/Paris", "1900-06-01T12:00:00.250Z"),
+        ];
+        for (tz, ts) in cases {
+            let expected = crate::parse::string_to_datetime(&Utc, ts).unwrap();
+            let array = TimestampMillisecondArray::from(vec![expected.timestamp_millis()])
+                .with_timezone(tz);
+            let formatted = format_array(&array, &options);
+            assert_eq!(formatted, [ts]);
+            let parsed = crate::parse::string_to_datetime(&Utc, &formatted[0]).unwrap();
+            assert_eq!(parsed, expected);
+        }
+
+        let array = TimestampSecondArray::from(vec![0]).with_timezone("Asia/Kolkata");
+        assert_eq!(
+            format_array(&array, &options),
+            ["1970-01-01T05:30:00+05:30"]
+        );
     }
 
     #[test]

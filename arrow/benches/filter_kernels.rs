@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 
@@ -117,6 +104,19 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("filter context u8 low selectivity (kept 1/1024)", |b| {
         b.iter(|| bench_built_filter(&data_array, &sparse_filter))
     });
+
+    let data_array = create_boolean_array(size, 0.0, 0.5);
+    c.bench_function("filter context boolean (kept 1/2)", |b| {
+        b.iter(|| bench_built_filter(&data_array, &filter))
+    });
+    c.bench_function(
+        "filter context boolean high selectivity (kept 1023/1024)",
+        |b| b.iter(|| bench_built_filter(&data_array, &dense_filter)),
+    );
+    c.bench_function(
+        "filter context boolean low selectivity (kept 1/1024)",
+        |b| b.iter(|| bench_built_filter(&data_array, &sparse_filter)),
+    );
 
     let data_array = create_primitive_array::<Int32Type>(size, 0.0);
     c.bench_function("filter i32 (kept 1/2)", |b| {

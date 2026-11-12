@@ -1,20 +1,7 @@
 <!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+  SPDX-License-Identifier: Apache-2.0
+  SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+  SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 ## Introduction
@@ -345,8 +332,17 @@ git checkout feature
 cargo bench --bench parse_time -- --baseline main
 ```
 
-If your PR proposes a performance improvement, include a summary of the benchmark results (for example, from `cargo-criterion` or `critcmp`) in the PR description.
-If you need to add new benchmarks to cover your change, make a separate PR first (for example, [#9729]) so we can run the benchmarks on an automated runner.
+If your PR proposes a performance improvement, include a summary of the benchmark results (for example, from `cargo-criterion` or `critcmp`) in the PR description. Name the benchmark(s) the change targets, so reviewers know which to run.
+
+A benchmark that improves is not enough on its own. State which part of the change produces the gain, for example by removing it and rerunning. Cover both well-predicted input (constant lengths, all valid) and poorly predicted input (random), because branchless code wins on the second and can lose on the first. Name the inputs that get slower and say whether real workloads are likely to hit them.
+
+If you need to add new benchmarks to cover your change, add them in a separate PR first (for example, [#9729]) or as the first commit of your PR. Either way, the automated benchmark runner can compare the change against a revision that already has the benchmarks. For a first commit, pass its SHA as the baseline:
+
+```yaml
+run benchmark <bench>
+baseline:
+  ref: <benchmark commit SHA>
+```
 
 [#9729]: https://github.com/apache/arrow-rs/pull/9729
 

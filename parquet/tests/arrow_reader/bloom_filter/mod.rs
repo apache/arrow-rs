@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 #[cfg(feature = "async")]
 mod r#async;
@@ -27,11 +14,14 @@ use futures::future::{BoxFuture, ready};
 use parquet::arrow::{arrow_reader::ArrowReaderOptions, async_reader::AsyncFileReader};
 use parquet::basic::Type as PhysicalType;
 use parquet::errors::{ParquetError, Result};
-use parquet::file::metadata::ColumnChunkMetaData;
-#[cfg(feature = "async")]
-use parquet::file::metadata::ParquetMetaData;
+use parquet::file::metadata::{
+    ColumnChunkMetaData, FileMetaData, ParquetMetaData, RowGroupMetaData,
+};
 use parquet::file::reader::{ChunkReader, Length};
-use parquet::schema::types::{ColumnDescriptor, ColumnPath, Type};
+use parquet::schema::{
+    parser::parse_message_type,
+    types::{ColumnDescriptor, ColumnPath, SchemaDescriptor, Type},
+};
 use std::collections::VecDeque;
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
@@ -119,6 +109,20 @@ fn column(offset: Option<i64>, length: Option<i32>) -> ColumnChunkMetaData {
         .set_bloom_filter_length(length)
         .build()
         .unwrap()
+}
+
+fn metadata(offset: Option<i64>, length: Option<i32>) -> ParquetMetaData {
+    let schema = Arc::new(SchemaDescriptor::new(Arc::new(
+        parse_message_type("message schema { REQUIRED BYTE_ARRAY value; }").unwrap(),
+    )));
+    let row_group = RowGroupMetaData::builder(schema.clone())
+        .set_column_metadata(vec![column(offset, length)])
+        .build()
+        .unwrap();
+    ParquetMetaData::new(
+        FileMetaData::new(1, 0, None, None, schema, None),
+        vec![row_group],
+    )
 }
 
 fn encode(num_bytes: i32, bitset_length: usize) -> Bytes {

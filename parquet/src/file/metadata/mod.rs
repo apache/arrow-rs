@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Parquet metadata API
 //!
@@ -182,6 +169,28 @@ impl ParquetMetaData {
     /// Returns slice of row groups in this file.
     pub fn row_groups(&self) -> &[RowGroupMetaData] {
         &self.row_groups
+    }
+
+    /// Returns [`ColumnChunkMetaData`] for a row-group position and physical leaf column index.
+    ///
+    /// Returns an error if either index is out of bounds.
+    pub fn column_chunk(
+        &self,
+        row_group_idx: usize,
+        column_idx: usize,
+    ) -> Result<&ColumnChunkMetaData> {
+        let row_group = self.row_groups().get(row_group_idx).ok_or_else(|| {
+            general_err!(
+                "Row group index {row_group_idx} out of bounds for file with {} row groups",
+                self.num_row_groups()
+            )
+        })?;
+        row_group.columns().get(column_idx).ok_or_else(|| {
+            general_err!(
+                "Column index {column_idx} out of bounds for row group {row_group_idx} with {} columns",
+                row_group.num_columns()
+            )
+        })
     }
 
     /// Returns the number of rows in `row_group_idx`.
@@ -1834,6 +1843,62 @@ mod tests {
         let mut histogram = LevelHistogram::try_new(2).unwrap();
         histogram.update_from_levels(&[0, 2, 1, 2, 2]);
         assert_eq!(histogram.values(), &[1, 1, 3]);
+    }
+
+    #[test]
+    fn test_column_chunk() {
+        let schema = get_test_schema_descr();
+        let row_groups = (0..2)
+            .map(|row| {
+                let columns = schema
+                    .columns()
+                    .iter()
+                    .enumerate()
+                    .map(|(column, descriptor)| {
+                        ColumnChunkMetaData::builder(descriptor.clone())
+                            .set_data_page_offset((row * 2 + column) as i64)
+                            .build()
+                            .unwrap()
+                    })
+                    .collect();
+                RowGroupMetaData::builder(schema.clone())
+                    .set_column_metadata(columns)
+                    .build()
+                    .unwrap()
+            })
+            .collect();
+        let metadata = ParquetMetaData::new(
+            FileMetaData::new(1, 0, None, None, schema, None),
+            row_groups,
+        );
+        for row in 0..2 {
+            for column in 0..2 {
+                assert_eq!(
+                    metadata
+                        .column_chunk(row, column)
+                        .unwrap()
+                        .data_page_offset(),
+                    (row * 2 + column) as i64
+                );
+            }
+        }
+        for index in [2, usize::MAX] {
+            assert_eq!(
+                metadata
+                    .column_chunk(index, usize::MAX)
+                    .unwrap_err()
+                    .to_string(),
+                format!(
+                    "Parquet error: Row group index {index} out of bounds for file with 2 row groups"
+                )
+            );
+            assert_eq!(
+                metadata.column_chunk(1, index).unwrap_err().to_string(),
+                format!(
+                    "Parquet error: Column index {index} out of bounds for row group 1 with 2 columns"
+                )
+            );
+        }
     }
 
     #[test]

@@ -1,21 +1,9 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::bit_iterator::{BitIndexIterator, BitIterator, BitSliceIterator};
+use crate::bit_util;
 use crate::buffer::BooleanBuffer;
 use crate::{Buffer, MutableBuffer, OverflowError};
 
@@ -121,7 +109,8 @@ impl NullBuffer {
     ///
     /// # Panics
     ///
-    /// Panics if `self.len() * count` overflows `usize`.
+    /// Panics if `self.len() * count` overflows `usize` or if the required
+    /// buffer cannot be allocated.
     /// Use [`Self::try_expand`] for a fallible version.
     pub fn expand(&self, count: usize) -> Self {
         self.try_expand(count).unwrap_or_else(|err| panic!("{err}"))
@@ -133,14 +122,16 @@ impl NullBuffer {
     ///
     /// # Errors
     ///
-    /// Errors if `self.len() * count` overflows `usize`
+    /// Errors if `self.len() * count` overflows `usize` or if the required
+    /// buffer cannot be allocated.
     pub fn try_expand(&self, count: usize) -> Result<Self, OverflowError> {
         let capacity = self
             .buffer
             .len()
             .checked_mul(count)
             .ok_or_else(|| OverflowError::new::<usize>("buffer length"))?;
-        let mut buffer = MutableBuffer::new_null(capacity);
+        let mut buffer = MutableBuffer::try_from_len_zeroed(bit_util::ceil(capacity, 8))
+            .map_err(|_| OverflowError::new::<usize>("buffer length"))?;
 
         if count.is_multiple_of(8) {
             // When count is a multiple of 8 every expanded run starts on a byte
