@@ -105,7 +105,7 @@ jobs:
     permissions:
       security-events: write # for zizmor
       contents: read
-    uses: $/.github/workflows/dev.yml
+    uses: ./.github/workflows/dev.yml
 
   rust:
     needs: changes
