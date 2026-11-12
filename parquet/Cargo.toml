@@ -308,6 +308,11 @@ required-features = ["experimental", "default"]
 harness = false
 
 [[bench]]
+name = "level_encoding"
+required-features = ["experimental", "default"]
+harness = false
+
+[[bench]]
 name = "metadata"
 harness = false
 
