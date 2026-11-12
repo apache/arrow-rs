@@ -85,9 +85,12 @@ pub trait ColumnValueEncoder {
 
     /// Write the values at the indexes in `indices` to this [`ColumnValueEncoder`]
     ///
-    /// `num_values_in_batch` is the total number of selected non-null values in the
-    /// enclosing batch, including any other mini-batches. Arrow callers provide an
-    /// exact selection with no unused trailing indices.
+    /// `num_values_in_batch` is the number of non-null values in the whole write. The
+    /// column writer may split one write into several calls of this method (for
+    /// example by `write_batch_size` or the page size limit), so it can be larger than
+    /// `indices.len()`. It is the length of the write's full index list, which has one
+    /// entry per non-null value. The byte array encoder uses it to decide whether a
+    /// dictionary cache pays off.
     fn write_gather(
         &mut self,
         values: &Self::Values,
