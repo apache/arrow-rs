@@ -162,9 +162,9 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     group.bench_function(
-        "StreamWriter/write_1/dict/referenced_values=16/values=65536/value_bytes=256",
+        "StreamWriter/write_1/dict/referenced_values=8192/values=65536/value_bytes=256",
         |b| {
-            let batch = create_dict_batch_with_unreferenced_values(8192, 16, 65_536, 256);
+            let batch = create_dict_batch_with_unreferenced_values(8192, 8192, 65_536, 256);
             let schema = batch.schema();
             let mut buffer = Vec::with_capacity(17 * 1024 * 1024);
             b.iter(move || {
