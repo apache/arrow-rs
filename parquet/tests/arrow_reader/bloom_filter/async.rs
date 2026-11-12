@@ -2,20 +2,34 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use super::{RecordingReader, column, encode};
+use super::{RecordingReader, column, encode, metadata};
 use crate::io::TestReader;
 use arrow_array::{ArrayRef, Int32Array, RecordBatch, StringArray, StructArray};
 use arrow_schema::{DataType, Field};
 use bytes::Bytes;
-use futures::TryStreamExt;
+use futures::{TryStreamExt, future::BoxFuture};
 use parquet::{
-    arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, async_reader::AsyncFileReader},
+    arrow::{
+        ArrowWriter, ParquetRecordBatchStreamBuilder,
+        async_reader::{AsyncFileReader, MetadataFetch},
+    },
     bloom_filter::Sbbf,
     file::{
-        properties::WriterProperties, reader::FileReader, serialized_reader::SerializedFileReader,
+        metadata::{FooterTail, ParquetMetaDataReader},
+        properties::WriterProperties,
+        reader::FileReader,
+        serialized_reader::SerializedFileReader,
     },
 };
-use std::sync::Arc;
+use std::{ops::Range, sync::Arc};
+
+struct FetchOnly<'a, R>(&'a mut R);
+
+impl<R: AsyncFileReader> MetadataFetch for FetchOnly<'_, R> {
+    fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
+        self.0.get_bytes(range)
+    }
+}
 
 #[tokio::test]
 async fn test_standalone_bloom_filter_after_nested_columns() {
@@ -56,7 +70,30 @@ async fn test_standalone_bloom_filter_after_nested_columns() {
         .unwrap();
     assert!(filter.check("present"));
     assert!(filter.check("other"));
-    assert_eq!(reader.requests().lock().unwrap().len(), 1);
+    let requested = ParquetMetaDataReader::read_column_bloom_filter_async(
+        &mut reader,
+        metadata_reader.metadata(),
+        0,
+        2,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(requested.check("present"));
+    assert!(requested.check("other"));
+    // Logical field 1 is a nested leaf without a Bloom filter, not the value column.
+    assert!(
+        ParquetMetaDataReader::read_column_bloom_filter_async(
+            &mut reader,
+            metadata_reader.metadata(),
+            0,
+            1,
+        )
+        .await
+        .unwrap()
+        .is_none()
+    );
+    assert_eq!(reader.requests().lock().unwrap().len(), 2);
 }
 
 #[tokio::test]
@@ -120,6 +157,60 @@ async fn test_get_row_group_column_bloom_filter(data: Bytes, with_length: bool) 
     assert_eq!(standalone.num_blocks(), sync.num_blocks());
     assert!(standalone.check(&"Hello"));
     assert!(!standalone.check(&"Hello_Not_Exists"));
+    let mut metadata_reader = TestReader::new(data.clone());
+    let footer_start = data.len() - 8;
+    let tail = FooterTail::try_from(&data[footer_start..]).unwrap();
+    let metadata_start = footer_start - tail.metadata_length();
+    let footer = ParquetMetaDataReader::new()
+        .load_and_finish(FetchOnly(&mut metadata_reader), data.len() as u64)
+        .await
+        .unwrap();
+    assert_eq!(
+        *metadata_reader.requests().lock().unwrap(),
+        vec![footer_start..data.len(), metadata_start..footer_start]
+    );
+    assert!(footer.page_index().is_none());
+    assert!(
+        footer
+            .row_group(0)
+            .column(0)
+            .bloom_filter_offset()
+            .is_some()
+    );
+    metadata_reader.requests().lock().unwrap().clear();
+    let requested = ParquetMetaDataReader::read_column_bloom_filter_async(
+        FetchOnly(&mut metadata_reader),
+        &footer,
+        0,
+        0,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(requested.check("Hello"));
+    assert!(!requested.check("Hello_Not_Exists"));
+    assert_eq!(requested.num_blocks(), standalone.num_blocks());
+    assert_eq!(
+        *metadata_reader.requests().lock().unwrap(),
+        *reader.requests().lock().unwrap()
+    );
+    // Reuse the borrowed source, then exercise the boxed AsyncFileReader API.
+    assert!(
+        ParquetMetaDataReader::read_column_bloom_filter_async(&mut metadata_reader, &footer, 0, 0)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    let mut expected = reader.requests().lock().unwrap().clone();
+    expected.extend_from_within(..);
+    assert_eq!(*metadata_reader.requests().lock().unwrap(), expected);
+    let mut boxed: Box<dyn AsyncFileReader> = Box::new(TestReader::new(data));
+    assert!(
+        ParquetMetaDataReader::read_column_bloom_filter_async(&mut boxed, &footer, 0, 0)
+            .await
+            .unwrap()
+            .is_some()
+    );
 
     let sbbf = builder
         .get_row_group_column_bloom_filter(0, 0)
@@ -215,4 +306,49 @@ async fn exact_responses_and_transport_errors_are_required() {
         );
         assert_eq!(reader.requests().len(), failure_at + 1);
     }
+}
+
+#[tokio::test]
+async fn async_metadata_bloom_absence_and_invalid_requests_do_not_read() {
+    let mut reader = RecordingReader::default();
+    let absent = metadata(None, Some(-1));
+    assert!(
+        ParquetMetaDataReader::read_column_bloom_filter_async(
+            FetchOnly(&mut reader),
+            &absent,
+            0,
+            0
+        )
+        .await
+        .unwrap()
+        .is_none()
+    );
+    assert!(
+        ParquetMetaDataReader::read_column_bloom_filter_async(
+            FetchOnly(&mut reader),
+            &absent,
+            0,
+            1
+        )
+        .await
+        .is_err()
+    );
+    assert!(reader.requests().is_empty());
+}
+
+#[tokio::test]
+async fn metadata_fetch_transport_error_propagates() {
+    let mut reader = RecordingReader::default();
+    reader.fail_at(0);
+    let length = encode(32, 32).len();
+    let error = ParquetMetaDataReader::read_column_bloom_filter_async(
+        FetchOnly(&mut reader),
+        &metadata(Some(0), Some(length as i32)),
+        0,
+        0,
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("injected read failure"));
+    assert_eq!(reader.requests(), vec![0..length as u64]);
 }
