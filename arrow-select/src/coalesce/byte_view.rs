@@ -393,6 +393,8 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
     ///
     /// Every value in `indices` must be less than `src_views.len()`, and every
     /// selected non-inline view must reference a valid range in `src_buffers`.
+    /// `selected_bytes` must equal the total length of the selected non-inline
+    /// values, and every selected value must fit within `i32::MAX` bytes.
     #[inline(never)]
     unsafe fn append_indexed_views_and_copy_strings(
         &mut self,
@@ -418,6 +420,8 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
     ///
     /// Every value in `indices` must be less than `src_views.len()`, and every
     /// selected non-inline view must reference a valid range in `src_buffers`.
+    /// `selected_bytes` must equal the total length of the selected non-inline
+    /// values, and every selected value must fit within `max_buffer_size`.
     unsafe fn append_indexed_views_and_copy_strings_with_max_buffer_size(
         &mut self,
         src_views: &[u128],
@@ -462,6 +466,77 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
                 .next_buffer(selected_bytes.min(max_buffer_size)),
         };
 
+        if selected_bytes > max_buffer_size {
+            // SAFETY: the caller guarantees the index, view, byte-count, and
+            // per-value size invariants required by the delegated operation.
+            unsafe {
+                self.append_indexed_views_and_copy_strings_split(
+                    src_views,
+                    indices,
+                    src_buffers,
+                    selected_bytes,
+                    max_buffer_size,
+                    dst_buffer,
+                )
+            };
+            return;
+        }
+
+        let current_len = self.views.len();
+        self.views.reserve(indices.len());
+        let output = self.views.spare_capacity_mut().as_mut_ptr().cast::<u128>();
+
+        let buffer_index = self.completed.len().try_into().expect("too many buffers");
+        for (i, &idx) in indices.iter().enumerate() {
+            // SAFETY: caller validated idx < src_views.len().
+            let raw = unsafe { *src_views.get_unchecked(idx as usize) };
+            let mut view = ByteView::from(raw);
+            if view.length > MAX_INLINE_VIEW_LEN {
+                let source_buffer_index = view.buffer_index as usize;
+                let source_buffer_offset = view.offset as usize;
+                let length = view.length as usize;
+
+                // SAFETY: source views carry valid buffer_index/offset/length.
+                let src = unsafe {
+                    src_buffers
+                        .get_unchecked(source_buffer_index)
+                        .get_unchecked(source_buffer_offset..source_buffer_offset + length)
+                };
+                view.offset = dst_buffer
+                    .len()
+                    .try_into()
+                    .expect("byte view offset exceeds u32::MAX");
+                view.buffer_index = buffer_index;
+                debug_assert!(dst_buffer.capacity() - dst_buffer.len() >= length);
+                dst_buffer.extend_from_slice(src);
+            }
+            // SAFETY: `reserve` above allocated room for every selected view.
+            unsafe { output.add(i).write(view.as_u128()) };
+        }
+        // SAFETY: the loop above initialized exactly `indices.len()` views.
+        unsafe { self.views.set_len(current_len + indices.len()) };
+        self.current = Some(dst_buffer);
+    }
+
+    /// Copies indexed views into bounded output buffers.
+    ///
+    /// # Safety
+    ///
+    /// Every value in `indices` must be less than `src_views.len()`, every
+    /// selected non-inline view must reference a valid range in `src_buffers`,
+    /// every selected value must fit within `max_buffer_size`, and
+    /// `selected_bytes` must equal their total length.
+    #[cold]
+    #[inline(never)]
+    unsafe fn append_indexed_views_and_copy_strings_split(
+        &mut self,
+        src_views: &[u128],
+        indices: &[u32],
+        src_buffers: &[Buffer],
+        selected_bytes: usize,
+        max_buffer_size: usize,
+        mut dst_buffer: Vec<u8>,
+    ) {
         let current_len = self.views.len();
         self.views.reserve(indices.len());
         let output = self.views.spare_capacity_mut().as_mut_ptr().cast::<u128>();
@@ -1192,6 +1267,39 @@ mod tests {
         for raw in &actual.views()[indices_a.len()..] {
             assert_eq!(ByteView::from(*raw).buffer_index, 1);
         }
+    }
+
+    #[test]
+    fn test_copy_rows_by_indices_compacts_into_single_buffer() {
+        let (array, _) = non_inline_array(8);
+        let source: ArrayRef = Arc::new(array);
+        let indices = [0u32, 3, 7];
+        let typed = source.as_binary_view();
+        // SAFETY: every index is less than `typed.views().len()`.
+        let selected_bytes =
+            unsafe { selected_non_inline_bytes(typed.views(), &indices, usize::MAX) }.unwrap();
+
+        let mut in_progress = InProgressByteViewArray::<BinaryViewType>::new(16);
+        in_progress.nulls.append_n_non_nulls(indices.len());
+        // SAFETY: every index selects a valid view from `typed`, whose views and
+        // buffers come from the same validated ByteView array.
+        unsafe {
+            in_progress.append_indexed_views_and_copy_strings_with_max_buffer_size(
+                typed.views(),
+                &indices,
+                typed.data_buffers(),
+                selected_bytes,
+                selected_bytes,
+            );
+        }
+        let actual = in_progress.finish().unwrap();
+
+        let expected = take(source.as_ref(), &UInt32Array::from(indices.to_vec()), None).unwrap();
+        assert_eq!(actual.as_ref(), expected.as_ref());
+        let actual = actual.as_binary_view();
+        assert_eq!(actual.data_buffers().len(), 1);
+        assert_eq!(actual.data_buffers()[0].len(), selected_bytes);
+        actual.to_data().validate_full().unwrap();
     }
 
     #[test]
