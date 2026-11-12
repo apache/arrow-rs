@@ -22,7 +22,9 @@
 //! [`take`]: crate::take::take
 use crate::filter::{FilterBuilder, FilterPredicate, FilterSelection};
 use crate::interleave::interleave_record_batch;
-use crate::take::{TakeOptions, take, take_arrays_unchecked, take_bits, take_record_batch};
+use crate::take::{
+    TakeOptions, check_bounds, take, take_arrays_unchecked, take_bits, take_record_batch,
+};
 use arrow_array::types::{
     BinaryViewType, GenericBinaryType, GenericStringType, StringViewType, UInt32Type,
 };
@@ -74,28 +76,6 @@ pub(crate) unsafe fn append_gathered_nulls(
     }
     let gathered = take_bits::<UInt32Type, false>(source_nulls.inner(), indices);
     nulls.append_buffer(&NullBuffer::new(gathered));
-}
-
-pub(crate) fn validate_indices_bounds(
-    indices: &[u32],
-    source_len: usize,
-) -> Result<(), ArrowError> {
-    let has_out_of_bounds = indices
-        .iter()
-        .copied()
-        .max()
-        .is_some_and(|idx| (idx as usize) >= source_len);
-    if has_out_of_bounds {
-        let bad = indices
-            .iter()
-            .copied()
-            .find(|&idx| (idx as usize) >= source_len)
-            .expect("maximum index was out of bounds");
-        return Err(ArrowError::InvalidArgumentError(format!(
-            "take index {bad} out of bounds for array of {source_len} rows"
-        )));
-    }
-    Ok(())
 }
 
 fn has_sparse_filter_copy(data_type: &DataType) -> bool {
@@ -455,7 +435,7 @@ impl BatchCoalescer {
             .downcast_ref::<UInt32Array>()
             .filter(|array| array.null_count() == 0);
         if let Some(u32_arr) = u32_indices {
-            validate_indices_bounds(u32_arr.values(), batch.num_rows())?;
+            check_bounds(batch.num_rows(), u32_arr)?;
         }
 
         // Direct indexed copying is a fast path for non-null UInt32 selections
@@ -3555,8 +3535,9 @@ mod tests {
                 .push_batch_with_indices(batch, indices)
                 .unwrap_err()
                 .to_string();
-            let expected_err =
-                format!("take index 99 out of bounds for array of {source_len} rows");
+            let expected_err = format!(
+                "Array index out of bounds, cannot get item at index 99 from {source_len} entries"
+            );
             assert!(err.contains(&expected_err), "unexpected error: {err}");
             assert_eq!(coalescer.get_buffered_rows(), 0);
             assert!(!coalescer.has_completed_batch());

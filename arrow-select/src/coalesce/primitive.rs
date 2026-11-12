@@ -229,6 +229,10 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
         }
     }
 
+    /// # Safety
+    ///
+    /// `indices` must not contain nulls, and every value must be less than
+    /// `source.len()`.
     unsafe fn copy_rows_by_indices(
         &mut self,
         source: &ArrayRef,
@@ -258,7 +262,7 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
                 .all(|&idx| (idx as usize) < values.len()),
             "copy_rows_by_indices requires caller-validated in-bounds indices",
         );
-        // SAFETY: indices were bounds-checked by the coalescer, and reserve
+        // SAFETY: the caller guarantees every index is in bounds, and reserve
         // allocated one output slot per index.
         unsafe {
             let base = self

@@ -58,9 +58,9 @@ pub(crate) struct InProgressByteViewArray<B: ByteViewType> {
     completed_buffers_size: usize,
     /// The size in bytes from [`Self::source`] that it is being used in [`Self::completed`]
     size_of_completed_buffers_from_current_source: usize,
-    /// Weak identity of the last indexed source. Its data buffers are already
-    /// retained in `completed`, so keeping the array alive would retain its
-    /// views and null bitmap unnecessarily.
+    /// Weak identity of the last indexed source. Repeated indexed copies from
+    /// this source reuse the data-buffer references already in `completed`.
+    /// Keeping only a weak reference avoids retaining its views and null bitmap.
     last_indexed_source: Option<Weak<dyn Array>>,
     /// Position in `completed` where `last_indexed_source`'s buffers begin.
     last_indexed_starting_buffer: u32,
@@ -722,6 +722,10 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
         Ok(())
     }
 
+    /// # Safety
+    ///
+    /// `indices` must not contain nulls, and every value must be less than
+    /// `source.len()`.
     unsafe fn copy_rows_by_indices(
         &mut self,
         source: &ArrayRef,

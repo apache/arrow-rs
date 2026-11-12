@@ -191,7 +191,7 @@ pub unsafe fn take_arrays_unchecked(
 }
 
 /// Verifies that the non-null values of `indices` are all `< len`
-fn check_bounds<T: ArrowPrimitiveType>(
+pub(crate) fn check_bounds<T: ArrowPrimitiveType>(
     len: usize,
     indices: &PrimitiveArray<T>,
 ) -> Result<(), ArrowError>
