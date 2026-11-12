@@ -184,6 +184,7 @@ dependencies = [
  "arrow-cast",
  "arrow-csv",
  "arrow-data",
+ "arrow-hash",
  "arrow-ipc",
  "arrow-json",
  "arrow-ord",
@@ -211,7 +212,6 @@ dependencies = [
  "arrow-schema",
  "chrono",
  "criterion",
- "half",
  "num-traits",
  "rand",
 ]
@@ -388,6 +388,16 @@ dependencies = [
  "tracing-log",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "arrow-hash"
+version = "60.1.0"
+dependencies = [
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-schema",
+ "half",
 ]
 
 [[package]]

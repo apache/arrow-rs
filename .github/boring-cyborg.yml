@@ -19,6 +19,7 @@ labelPRBasedOnFilePath:
 
   arrow-kernels:
     - "arrow-arith/**/*"
+    - "arrow-hash/**/*"
     - "arrow-cast/**/*"
     - "arrow-select/**/*"
     - "arrow-string/**/*"

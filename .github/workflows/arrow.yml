@@ -56,6 +56,8 @@ jobs:
         run: cargo test -p arrow-ord --all-features
       - name: Test arrow-arith
         run: cargo test -p arrow-arith --all-features
+      - name: Test arrow-hash
+        run: cargo test -p arrow-hash --all-features
       - name: Test arrow-row
         run: cargo test -p arrow-row --all-features
       - name: Test arrow-integration-test
@@ -117,6 +119,8 @@ jobs:
         run: cargo test --lib --tests --release -p arrow-ord
       - name: Test arrow-arith
         run: cargo test --lib --tests --release -p arrow-arith
+      - name: Test arrow-hash
+        run: cargo test --lib --tests --release -p arrow-hash
       - name: Test arrow-row
         run: cargo test --lib --tests --release -p arrow-row
 
@@ -209,6 +213,8 @@ jobs:
         run: cargo clippy -p arrow-ord --all-targets --all-features -- -D warnings
       - name: Clippy arrow-arith
         run: cargo clippy -p arrow-arith --all-targets --all-features -- -D warnings
+      - name: Clippy arrow-hash
+        run: cargo clippy -p arrow-hash --all-targets --all-features -- -D warnings
       - name: Clippy arrow-row
         run: cargo clippy -p arrow-row --all-targets --all-features -- -D warnings
       - name: Clippy arrow

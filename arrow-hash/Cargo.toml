@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+[package]
+name = "arrow-hash"
+version = { workspace = true }
+description = "Hashing kernels for Apache Arrow arrays"
+repository = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+keywords = { workspace = true }
+include = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+
+[lib]
+name = "arrow_hash"
+bench = false
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+arrow-array = { workspace = true }
+arrow-buffer = { workspace = true }
+arrow-schema = { workspace = true }
+half = { version = "2.1", default-features = false }
+
+[lints]
+workspace = true

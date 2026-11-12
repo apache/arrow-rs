@@ -31,6 +31,7 @@ arrow-buffer = { workspace = true }
 arrow-cast = { workspace = true }
 arrow-csv = { workspace = true, optional = true }
 arrow-data = { workspace = true }
+arrow-hash = { workspace = true }
 arrow-ipc = { workspace = true, optional = true }
 arrow-json = { workspace = true, optional = true }
 arrow-ord = { workspace = true }

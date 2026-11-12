@@ -315,6 +315,7 @@
 //! * [`arrow-cast`][arrow_cast] - cast kernels for arrow arrays
 //! * [`arrow-csv`][arrow_csv] - read/write CSV to arrow format
 //! * [`arrow-data`][arrow_data] - the underlying data of arrow arrays
+//! * [`arrow-hash`][arrow_hash] - hashing kernels for arrow arrays
 //! * [`arrow-ipc`][arrow_ipc] - read/write IPC to arrow format
 //! * [`arrow-json`][arrow_json] - read/write JSON to arrow format
 //! * [`arrow-ord`][arrow_ord] - ordering kernels for arrow arrays

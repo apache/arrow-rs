@@ -43,7 +43,7 @@ pub fn combine_hashes(new_hash: u64, previous_hash: u64) -> u64 {
 /// ```
 /// use std::collections::hash_map::RandomState;
 /// use arrow_array::{Array, Int32Array, StringArray};
-/// use arrow_arith::hash::create_hashes;
+/// use arrow_hash::create_hashes;
 ///
 /// let ids = Int32Array::from(vec![1, 2, 3]);
 /// let labels = StringArray::from(vec!["a", "b", "c"]);
