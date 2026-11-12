@@ -85,7 +85,8 @@ pub fn take(
             if options.check_bounds {
                 check_bounds(values.len(), &indices)?;
             }
-            take_impl::<_, true>(values, &indices)
+            // SAFETY: `VALIDATE_INDICES` is `true`, so there is no precondition.
+            unsafe { take_impl::<_, true>(values, &indices) }
         },
         d => Err(ArrowError::InvalidArgumentError(format!("Take only supported for integers, got {d:?}")))
     )
@@ -168,9 +169,10 @@ pub unsafe fn take_arrays_unchecked(
     downcast_integer_array!(
         indices => {
             let indices = indices.to_indices();
+            // SAFETY: the caller guarantees every index is in bounds for each array.
             arrays
                 .iter()
-                .map(|array| take_impl::<_, false>(array.as_ref(), &indices))
+                .map(|array| unsafe { take_impl::<_, false>(array.as_ref(), &indices) })
                 .collect()
         },
         d => Err(ArrowError::InvalidArgumentError(format!("Take only supported for integers, got {d:?}")))
@@ -222,8 +224,12 @@ where
     }
 }
 
+/// # Safety
+///
+/// When `VALIDATE_INDICES` is `false`, every non-null value in `indices` must be
+/// less than `values.len()`.
 #[inline(never)]
-fn take_impl<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
+unsafe fn take_impl<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
     values: &dyn Array,
     indices: &PrimitiveArray<IndexType>,
 ) -> Result<ArrayRef, ArrowError> {
@@ -237,47 +243,47 @@ fn take_impl<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
         }
         return Ok(new_empty_array(values.data_type()));
     }
+    // SAFETY: unless noted otherwise, each helper below receives `indices` together
+    // with `values` itself, a buffer of `values`, or a child of `values` that has the
+    // same length, so this function's contract covers every call.
     downcast_primitive_array! {
-        values => Ok(Arc::new(take_primitive::<_, _, VALIDATE_INDICES>(values, indices)?)),
+        values => Ok(Arc::new(unsafe { take_primitive::<_, _, VALIDATE_INDICES>(values, indices) }?)),
         DataType::Boolean => {
             let values = values.as_any().downcast_ref::<BooleanArray>().unwrap();
-            Ok(Arc::new(take_boolean::<_, VALIDATE_INDICES>(values, indices)))
+            Ok(Arc::new(unsafe { take_boolean::<_, VALIDATE_INDICES>(values, indices) }))
         }
         DataType::Utf8 => {
-            Ok(Arc::new(take_bytes::<_, _, VALIDATE_INDICES>(values.as_string::<i32>(), indices)?))
+            Ok(Arc::new(unsafe { take_bytes::<_, _, VALIDATE_INDICES>(values.as_string::<i32>(), indices) }?))
         }
         DataType::LargeUtf8 => {
-            Ok(Arc::new(take_bytes::<_, _, VALIDATE_INDICES>(values.as_string::<i64>(), indices)?))
+            Ok(Arc::new(unsafe { take_bytes::<_, _, VALIDATE_INDICES>(values.as_string::<i64>(), indices) }?))
         }
         DataType::Utf8View => {
-            Ok(Arc::new(take_byte_view::<_, _, VALIDATE_INDICES>(values.as_string_view(), indices)?))
+            Ok(Arc::new(unsafe { take_byte_view::<_, _, VALIDATE_INDICES>(values.as_string_view(), indices) }?))
         }
         DataType::List(_) => {
-            Ok(Arc::new(take_list::<_, Int32Type, VALIDATE_INDICES>(values.as_list(), indices)?))
+            Ok(Arc::new(unsafe { take_list::<_, Int32Type, VALIDATE_INDICES>(values.as_list(), indices) }?))
         }
         DataType::LargeList(_) => {
-            Ok(Arc::new(take_list::<_, Int64Type, VALIDATE_INDICES>(values.as_list(), indices)?))
+            Ok(Arc::new(unsafe { take_list::<_, Int64Type, VALIDATE_INDICES>(values.as_list(), indices) }?))
         }
         DataType::ListView(_) => {
-            Ok(Arc::new(take_list_view::<_, Int32Type, VALIDATE_INDICES>(values.as_list_view(), indices)?))
+            Ok(Arc::new(unsafe { take_list_view::<_, Int32Type, VALIDATE_INDICES>(values.as_list_view(), indices) }?))
         }
         DataType::LargeListView(_) => {
-            Ok(Arc::new(take_list_view::<_, Int64Type, VALIDATE_INDICES>(values.as_list_view(), indices)?))
+            Ok(Arc::new(unsafe { take_list_view::<_, Int64Type, VALIDATE_INDICES>(values.as_list_view(), indices) }?))
         }
         DataType::FixedSizeList(_, length) => {
             let values = values
                 .as_any()
                 .downcast_ref::<FixedSizeListArray>()
                 .unwrap();
-            Ok(Arc::new(take_fixed_size_list::<_, VALIDATE_INDICES>(
-                values,
-                indices,
-                *length as u32,
-            )?))
+            let taken = unsafe { take_fixed_size_list::<_, VALIDATE_INDICES>(values, indices, *length as u32) }?;
+            Ok(Arc::new(taken))
         }
         DataType::Map(field, ordered) => {
             let list_arr = ListArray::from(values.as_map().clone());
-            let list_data = take_list::<_, Int32Type, VALIDATE_INDICES>(&list_arr, indices)?;
+            let list_data = unsafe { take_list::<_, Int32Type, VALIDATE_INDICES>(&list_arr, indices) }?;
             let (_, offsets, entries, nulls) = list_data.into_parts();
             let entries = entries.as_struct().clone();
             Ok(Arc::new(MapArray::try_new(
@@ -293,7 +299,7 @@ fn take_impl<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
             let arrays  = array
                 .columns()
                 .iter()
-                .map(|a| take_impl::<_, VALIDATE_INDICES>(a.as_ref(), indices))
+                .map(|a| unsafe { take_impl::<_, VALIDATE_INDICES>(a.as_ref(), indices) })
                 .collect::<Result<Vec<ArrayRef>, _>>()?;
             let fields: Vec<(FieldRef, ArrayRef)> =
                 fields.iter().cloned().zip(arrays).collect();
@@ -318,7 +324,7 @@ fn take_impl<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
             }
         }
         DataType::Dictionary(_, _) => downcast_dictionary_array! {
-            values => Ok(Arc::new(take_dict::<_, _, VALIDATE_INDICES>(values, indices)?)),
+            values => Ok(Arc::new(unsafe { take_dict::<_, _, VALIDATE_INDICES>(values, indices) }?)),
             t => unimplemented!("Take not supported for dictionary type {:?}", t)
         }
         DataType::RunEndEncoded(_, _) => downcast_run_array! {
@@ -326,20 +332,20 @@ fn take_impl<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
             t => unimplemented!("Take not supported for run type {:?}", t)
         }
         DataType::Binary => {
-            Ok(Arc::new(take_bytes::<_, _, VALIDATE_INDICES>(values.as_binary::<i32>(), indices)?))
+            Ok(Arc::new(unsafe { take_bytes::<_, _, VALIDATE_INDICES>(values.as_binary::<i32>(), indices) }?))
         }
         DataType::LargeBinary => {
-            Ok(Arc::new(take_bytes::<_, _, VALIDATE_INDICES>(values.as_binary::<i64>(), indices)?))
+            Ok(Arc::new(unsafe { take_bytes::<_, _, VALIDATE_INDICES>(values.as_binary::<i64>(), indices) }?))
         }
         DataType::BinaryView => {
-            Ok(Arc::new(take_byte_view::<_, _, VALIDATE_INDICES>(values.as_binary_view(), indices)?))
+            Ok(Arc::new(unsafe { take_byte_view::<_, _, VALIDATE_INDICES>(values.as_binary_view(), indices) }?))
         }
         DataType::FixedSizeBinary(size) => {
             let values = values
                 .as_any()
                 .downcast_ref::<FixedSizeBinaryArray>()
                 .unwrap();
-            Ok(Arc::new(take_fixed_size_binary::<_, VALIDATE_INDICES>(values, indices, *size)?))
+            Ok(Arc::new(unsafe { take_fixed_size_binary::<_, VALIDATE_INDICES>(values, indices, *size) }?))
         }
         DataType::Null => {
             // Take applied to a null array produces a null array.
@@ -359,11 +365,14 @@ fn take_impl<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
             let children = fields
                 .iter()
                 .map(|(type_id, _)| {
-                    take_sparse_union_child::<_, VALIDATE_INDICES>(
-                        values.child(type_id),
-                        null_type_id == Some(type_id),
-                        indices,
-                    )
+                    // SAFETY: a sparse union's children have the same length as the union.
+                    unsafe {
+                        take_sparse_union_child::<_, VALIDATE_INDICES>(
+                            values.child(type_id),
+                            null_type_id == Some(type_id),
+                            indices,
+                        )
+                    }
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             let array = UnionArray::try_new(fields.clone(), type_ids, None, children)?;
@@ -377,7 +386,7 @@ fn take_impl<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
             // Keep index nulls so `take` of each child writes a null instead of
             // reading child offset 0 (the default `take_native` fills in).
             let offsets = <PrimitiveArray<Int32Type>>::try_new(
-                take_native::<_, _, VALIDATE_INDICES>(values.offsets().unwrap(), indices),
+                unsafe { take_native::<_, _, VALIDATE_INDICES>(values.offsets().unwrap(), indices) },
                 indices.nulls().cloned(),
             )?;
 
@@ -389,7 +398,8 @@ fn take_impl<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
 
                     let values = values.child(field_type_id);
 
-                    take_impl::<_, VALIDATE_INDICES>(values, indices.as_primitive::<Int32Type>())
+                    // SAFETY: the taken offsets of a valid dense union are in bounds for its child.
+                    unsafe { take_impl::<_, VALIDATE_INDICES>(values, indices.as_primitive::<Int32Type>()) }
                 })
                 .collect::<Result<_, _>>()?;
 
@@ -432,11 +442,16 @@ fn take_union_type_ids<IndexType: ArrowPrimitiveType>(
     indices: &PrimitiveArray<IndexType>,
 ) -> Result<(ScalarBuffer<i8>, Option<i8>), ArrowError> {
     if indices.null_count() == 0 {
-        return Ok((take_native::<_, _, true>(type_ids, indices), None));
+        // SAFETY: `VALIDATE_INDICES` is `true`, so there is no precondition.
+        return Ok((
+            unsafe { take_native::<_, _, true>(type_ids, indices) },
+            None,
+        ));
     }
 
     let null_type_id = union_null_type_id(fields)?;
-    let taken_type_ids = take_native::<_, _, true>(type_ids, indices);
+    // SAFETY: `VALIDATE_INDICES` is `true`, so there is no precondition.
+    let taken_type_ids = unsafe { take_native::<_, _, true>(type_ids, indices) };
     let type_ids = indices
         .iter()
         .zip(&taken_type_ids)
@@ -488,13 +503,19 @@ fn field_can_represent_take_null(field: &FieldRef) -> bool {
 /// ([`take_union_type_ids`]). Values in the other children at those positions
 /// are unspecified, so they are taken with dummy indices instead of introducing
 /// nulls that would contradict field metadata.
-fn take_sparse_union_child<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
+///
+/// # Safety
+///
+/// When `VALIDATE_INDICES` is `false`, every non-null value in `indices` must be
+/// less than `values.len()`.
+unsafe fn take_sparse_union_child<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
     values: &dyn Array,
     represent_nulls: bool,
     indices: &PrimitiveArray<IndexType>,
 ) -> Result<ArrayRef, ArrowError> {
     if represent_nulls || indices.null_count() == 0 {
-        return take_impl::<_, VALIDATE_INDICES>(values, indices);
+        // SAFETY: same `values` and `indices` as this function's contract.
+        return unsafe { take_impl::<_, VALIDATE_INDICES>(values, indices) };
     }
 
     if values.is_empty() {
@@ -510,7 +531,9 @@ fn take_sparse_union_child<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES
         ));
     }
 
-    take_impl::<_, VALIDATE_INDICES>(values, &indices_without_nulls(indices))
+    // SAFETY: the non-null indices are covered by this function's contract, and the
+    // dummy index `0` is in bounds because `values` is not empty (checked above).
+    unsafe { take_impl::<_, VALIDATE_INDICES>(values, &indices_without_nulls(indices)) }
 }
 
 /// Replaces null take indices with `0` and drops the null bitmap.
@@ -540,7 +563,12 @@ pub struct TakeOptions {
 ///     values:  [1, 2, 3, null, 5]
 ///     indices: [0, null, 4, 3]
 /// The result is: [1 (slot 0), null (null slot), 5 (slot 4), null (slot 3)]
-fn take_primitive<T, I, const VALIDATE_INDICES: bool>(
+///
+/// # Safety
+///
+/// When `VALIDATE_INDICES` is `false`, every non-null value in `indices` must be
+/// less than `values.len()`.
+unsafe fn take_primitive<T, I, const VALIDATE_INDICES: bool>(
     values: &PrimitiveArray<T>,
     indices: &PrimitiveArray<I>,
 ) -> Result<PrimitiveArray<T>, ArrowError>
@@ -548,21 +576,25 @@ where
     T: ArrowPrimitiveType,
     I: ArrowPrimitiveType,
 {
-    let values_buf = take_native::<_, _, VALIDATE_INDICES>(values.values(), indices);
-    let nulls = take_nulls::<_, VALIDATE_INDICES>(values.nulls(), indices);
+    // SAFETY: the values buffer and null buffer both have length `values.len()`.
+    let values_buf = unsafe { take_native::<_, _, VALIDATE_INDICES>(values.values(), indices) };
+    let nulls = unsafe { take_nulls::<_, VALIDATE_INDICES>(values.nulls(), indices) };
     Ok(PrimitiveArray::try_new(values_buf, nulls)?.with_data_type(values.data_type().clone()))
 }
 
+/// # Safety
+///
+/// When `VALIDATE_INDICES` is `false`, every non-null value in `indices` must be
+/// less than the length of `values` when it is `Some`.
 #[inline(never)]
-fn take_nulls<I: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
+unsafe fn take_nulls<I: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
     values: Option<&NullBuffer>,
     indices: &PrimitiveArray<I>,
 ) -> Option<NullBuffer> {
     match values.filter(|n| n.null_count() > 0) {
         Some(n) => NullBuffer::from_unsliced_buffer(
-            // SAFETY: when `VALIDATE_INDICES` is false, `take_impl::<_, false>` is only
-            // reached after `check_bounds` verified every index against the array
-            // length, which equals `n.len()`. Otherwise `take_bits` checks each index.
+            // SAFETY: `n` is `values`, whose length bounds `indices` by this
+            // function's contract.
             unsafe { take_bits::<_, VALIDATE_INDICES>(n.inner(), indices) }.into_inner(),
             indices.len(),
         ),
@@ -570,8 +602,12 @@ fn take_nulls<I: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
     }
 }
 
+/// # Safety
+///
+/// When `VALIDATE_INDICES` is `false`, every non-null value in `indices` must be
+/// less than `values.len()`.
 #[inline(never)]
-fn take_native<T: ArrowNativeType, I: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
+unsafe fn take_native<T: ArrowNativeType, I: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
     values: &[T],
     indices: &PrimitiveArray<I>,
 ) -> ScalarBuffer<T> {
@@ -651,9 +687,7 @@ unsafe fn pack_bit(src: *const u8, bit_idx: usize, out_pos: usize) -> u8 {
 /// # Safety
 ///
 /// When `VALIDATE_INDICES` is `false`, every non-null value in `indices` must be
-/// less than `values.len()`; the source bits are read through raw pointers with
-/// no bounds check. When `VALIDATE_INDICES` is `true`, there are no additional
-/// requirements and out-of-bounds indices panic.
+/// less than `values.len()`.
 #[inline(never)]
 unsafe fn take_bits<I: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
     values: &BooleanBuffer,
@@ -734,9 +768,7 @@ unsafe fn take_bits<I: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
 /// # Safety
 ///
 /// When `VALIDATE_INDICES` is `false`, every non-null value in `indices` must be
-/// less than both `values.len()` and `validity.len()`; the source bits are read
-/// through raw pointers with no bounds check. When `VALIDATE_INDICES` is `true`,
-/// there are no additional requirements and out-of-bounds indices panic.
+/// less than both `values.len()` and `validity.len()`.
 #[inline(never)]
 unsafe fn take_bits_with_validity<I: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
     values: &BooleanBuffer,
@@ -854,34 +886,45 @@ unsafe fn take_bits_with_validity<I: ArrowPrimitiveType, const VALIDATE_INDICES:
 }
 
 /// `take` implementation for boolean arrays
-fn take_boolean<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
+///
+/// # Safety
+///
+/// When `VALIDATE_INDICES` is `false`, every non-null value in `indices` must be
+/// less than `array.len()`.
+unsafe fn take_boolean<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
     array: &BooleanArray,
     indices: &PrimitiveArray<IndexType>,
 ) -> BooleanArray {
     let bits = array.values();
     match array.nulls().filter(|n| n.null_count() > 0) {
         Some(array_nulls) => {
-            // SAFETY: when `VALIDATE_INDICES` is false, `take_impl::<_, false>` is only
-            // reached after `check_bounds` verified every index against `array.len()`,
-            // which equals the length of both `bits` and `array_nulls`. Otherwise
-            // `take_bits_with_validity` checks each index.
+            // SAFETY: `bits` and `array_nulls` both have length `array.len()`.
             let (val_buf, null_buf) = unsafe {
                 take_bits_with_validity::<_, VALIDATE_INDICES>(bits, array_nulls.inner(), indices)
             };
             BooleanArray::new(val_buf, null_buf)
         }
         None => {
-            // SAFETY: as above, `bits.len()` equals `array.len()`, which was
-            // bounds-checked before `take_impl::<_, false>` was entered.
+            // SAFETY: `bits` has length `array.len()`, and `take_nulls` with `None`
+            // reads no values.
             let val_buf = unsafe { take_bits::<_, VALIDATE_INDICES>(bits, indices) };
-            let null_buf = take_nulls::<_, VALIDATE_INDICES>(None, indices);
+            let null_buf = unsafe { take_nulls::<_, VALIDATE_INDICES>(None, indices) };
             BooleanArray::new(val_buf, null_buf)
         }
     }
 }
 
 /// `take` implementation for string arrays
-fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
+///
+/// # Safety
+///
+/// When `VALIDATE_INDICES` is `false`, every non-null value in `indices` must be
+/// less than `array.len()`.
+unsafe fn take_bytes<
+    T: ByteArrayType,
+    IndexType: ArrowPrimitiveType,
+    const VALIDATE_INDICES: bool,
+>(
     array: &GenericByteArray<T>,
     indices: &PrimitiveArray<IndexType>,
 ) -> Result<GenericByteArray<T>, ArrowError> {
@@ -891,7 +934,8 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType, const VALIDATE_IN
 
     let input_offsets = array.value_offsets();
     let mut capacity = 0;
-    let nulls = take_nulls::<_, VALIDATE_INDICES>(array.nulls(), indices);
+    // SAFETY: the null buffer has length `array.len()`.
+    let nulls = unsafe { take_nulls::<_, VALIDATE_INDICES>(array.nulls(), indices) };
 
     // Branch on output nulls — `None` means every output slot is valid.
     match nulls.as_ref().filter(|n| n.null_count() > 0) {
@@ -1012,12 +1056,22 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType, const VALIDATE_IN
 }
 
 /// `take` implementation for byte view arrays
-fn take_byte_view<T: ByteViewType, IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
+///
+/// # Safety
+///
+/// When `VALIDATE_INDICES` is `false`, every non-null value in `indices` must be
+/// less than `array.len()`.
+unsafe fn take_byte_view<
+    T: ByteViewType,
+    IndexType: ArrowPrimitiveType,
+    const VALIDATE_INDICES: bool,
+>(
     array: &GenericByteViewArray<T>,
     indices: &PrimitiveArray<IndexType>,
 ) -> Result<GenericByteViewArray<T>, ArrowError> {
-    let new_views = take_native::<_, _, VALIDATE_INDICES>(array.views(), indices);
-    let new_nulls = take_nulls::<_, VALIDATE_INDICES>(array.nulls(), indices);
+    // SAFETY: the views buffer and null buffer both have length `array.len()`.
+    let new_views = unsafe { take_native::<_, _, VALIDATE_INDICES>(array.views(), indices) };
+    let new_nulls = unsafe { take_nulls::<_, VALIDATE_INDICES>(array.nulls(), indices) };
     let buffers = Arc::clone(array.data_buffers());
     // Safety:  array.views was valid, and take_native copies only valid values, and verifies bounds
     Ok(unsafe { GenericByteViewArray::new_unchecked(new_views, buffers, new_nulls) })
@@ -1027,7 +1081,12 @@ fn take_byte_view<T: ByteViewType, IndexType: ArrowPrimitiveType, const VALIDATE
 ///
 /// Copies the selected list entries' child slices into a new child array
 /// via `MutableArrayData`, then reconstructs a list array with new offsets
-fn take_list<IndexType, OffsetType, const VALIDATE_INDICES: bool>(
+///
+/// # Safety
+///
+/// When `VALIDATE_INDICES` is `false`, every non-null value in `indices` must be
+/// less than `values.len()`.
+unsafe fn take_list<IndexType, OffsetType, const VALIDATE_INDICES: bool>(
     values: &GenericListArray<OffsetType::Native>,
     indices: &PrimitiveArray<IndexType>,
 ) -> Result<GenericListArray<OffsetType::Native>, ArrowError>
@@ -1045,7 +1104,8 @@ where
     let estimated_child_len = visible_child_len
         .checked_div(values.len())
         .map_or(0, |avg| avg.saturating_mul(indices.len()));
-    let nulls = take_nulls::<_, VALIDATE_INDICES>(values.nulls(), indices);
+    // SAFETY: the null buffer has length `values.len()`.
+    let nulls = unsafe { take_nulls::<_, VALIDATE_INDICES>(values.nulls(), indices) };
 
     let mut dst_offsets = Vec::with_capacity(indices.len() + 1);
     dst_offsets.push(OffsetType::Native::zero());
@@ -1201,7 +1261,11 @@ where
     GenericListArray::<OffsetType::Native>::try_new(field, offsets, child, nulls)
 }
 
-fn take_list_view<IndexType, OffsetType, const VALIDATE_INDICES: bool>(
+/// # Safety
+///
+/// When `VALIDATE_INDICES` is `false`, every non-null value in `indices` must be
+/// less than `values.len()`.
+unsafe fn take_list_view<IndexType, OffsetType, const VALIDATE_INDICES: bool>(
     values: &GenericListViewArray<OffsetType::Native>,
     indices: &PrimitiveArray<IndexType>,
 ) -> Result<GenericListViewArray<OffsetType::Native>, ArrowError>
@@ -1210,9 +1274,10 @@ where
     OffsetType: ArrowPrimitiveType,
     OffsetType::Native: OffsetSizeTrait,
 {
-    let taken_offsets = take_native::<_, _, VALIDATE_INDICES>(values.offsets(), indices);
-    let taken_sizes = take_native::<_, _, VALIDATE_INDICES>(values.sizes(), indices);
-    let nulls = take_nulls::<_, VALIDATE_INDICES>(values.nulls(), indices);
+    // SAFETY: the offsets, sizes, and null buffers all have length `values.len()`.
+    let taken_offsets = unsafe { take_native::<_, _, VALIDATE_INDICES>(values.offsets(), indices) };
+    let taken_sizes = unsafe { take_native::<_, _, VALIDATE_INDICES>(values.sizes(), indices) };
+    let nulls = unsafe { take_nulls::<_, VALIDATE_INDICES>(values.nulls(), indices) };
 
     let field = match values.data_type() {
         DataType::ListView(field) | DataType::LargeListView(field) => field.clone(),
@@ -1237,14 +1302,20 @@ where
 /// Calculates the index and indexed offset for the inner array,
 /// applying `take` on the inner array, then reconstructing a list array
 /// with the indexed offsets
-fn take_fixed_size_list<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
+///
+/// # Safety
+///
+/// When `VALIDATE_INDICES` is `false`, every non-null value in `indices` must be
+/// less than `values.len()`.
+unsafe fn take_fixed_size_list<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
     values: &FixedSizeListArray,
     indices: &PrimitiveArray<IndexType>,
     length: <UInt32Type as ArrowPrimitiveType>::Native,
 ) -> Result<FixedSizeListArray, ArrowError> {
     let field = values.value_field();
     let child = values.values();
-    let nulls = take_nulls::<_, VALIDATE_INDICES>(values.nulls(), indices);
+    // SAFETY: the null buffer has length `values.len()`.
+    let nulls = unsafe { take_nulls::<_, VALIDATE_INDICES>(values.nulls(), indices) };
 
     // Fast path: primitive child with no nulls  copy row-sized byte blocks directly,
     let taken_child = if child.null_count() == 0
@@ -1259,7 +1330,9 @@ fn take_fixed_size_list<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: b
         )?
     } else {
         let list_indices = take_value_indices_from_fixed_size_list(values, indices, length)?;
-        take_impl::<UInt32Type, VALIDATE_INDICES>(child.as_ref(), &list_indices)?
+        // SAFETY: `list_indices` are the child positions of in-bounds rows of `values`,
+        // so they are in bounds for `child`.
+        unsafe { take_impl::<UInt32Type, VALIDATE_INDICES>(child.as_ref(), &list_indices) }?
     };
 
     FixedSizeListArray::try_new_with_length(
@@ -1344,7 +1417,12 @@ fn take_fixed_size_list_primitive<IndexType: ArrowPrimitiveType>(
 /// The computation is done in two steps:
 /// - Compute the values buffer
 /// - Compute the null buffer
-fn take_fixed_size_binary<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
+///
+/// # Safety
+///
+/// When `VALIDATE_INDICES` is `false`, every non-null value in `indices` must be
+/// less than `values.len()`.
+unsafe fn take_fixed_size_binary<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
     values: &FixedSizeBinaryArray,
     indices: &PrimitiveArray<IndexType>,
     size: i32,
@@ -1362,7 +1440,8 @@ fn take_fixed_size_binary<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES:
         _ => take_fixed_size_binary_buffer_dynamic_length(values, indices, size_usize),
     };
 
-    let value_nulls = take_nulls::<_, VALIDATE_INDICES>(values.nulls(), indices);
+    // SAFETY: the null buffer has length `values.len()`.
+    let value_nulls = unsafe { take_nulls::<_, VALIDATE_INDICES>(values.nulls(), indices) };
     let final_nulls = NullBuffer::union(value_nulls.as_ref(), indices.nulls());
 
     return FixedSizeBinaryArray::try_new_with_len(size, result_buffer, final_nulls, indices.len());
@@ -1474,11 +1553,21 @@ fn take_fixed_size<IndexType: ArrowPrimitiveType, const N: usize>(
 ///
 /// applies `take` to the keys of the dictionary array and returns a new dictionary array
 /// with the same dictionary values and reordered keys
-fn take_dict<T: ArrowDictionaryKeyType, I: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
+///
+/// # Safety
+///
+/// When `VALIDATE_INDICES` is `false`, every non-null value in `indices` must be
+/// less than `values.len()`.
+unsafe fn take_dict<
+    T: ArrowDictionaryKeyType,
+    I: ArrowPrimitiveType,
+    const VALIDATE_INDICES: bool,
+>(
     values: &DictionaryArray<T>,
     indices: &PrimitiveArray<I>,
 ) -> Result<DictionaryArray<T>, ArrowError> {
-    let new_keys = take_primitive::<_, _, VALIDATE_INDICES>(values.keys(), indices)?;
+    // SAFETY: the keys array has length `values.len()`.
+    let new_keys = unsafe { take_primitive::<_, _, VALIDATE_INDICES>(values.keys(), indices) }?;
     Ok(unsafe { DictionaryArray::new_unchecked(new_keys, values.values().clone()) })
 }
 
@@ -1752,10 +1841,12 @@ pub fn take_record_batch(
             // Check once against the row count, which every column shares. A checked take of
             // one column would not do: some types (e.g. `Null`) read no index.
             check_bounds(record_batch.num_rows(), &indices)?;
+            // SAFETY: `check_bounds` above verified `indices` against the row count,
+            // which is the length of every column.
             let columns = record_batch
                 .columns()
                 .iter()
-                .map(|c| take_impl::<_, false>(c.as_ref(), &indices))
+                .map(|c| unsafe { take_impl::<_, false>(c.as_ref(), &indices) })
                 .collect::<Result<Vec<_>, _>>()?;
             // Null indices can put nulls in non-nullable columns, which this rejects. The
             // row count is needed for a batch with no columns.
@@ -2754,8 +2845,10 @@ mod tests {
 
         let input_array = FixedSizeListArray::from_iter_primitive::<T, _, _>(input_data, length);
 
+        // SAFETY: `VALIDATE_INDICES` is `true`, so there is no precondition.
         let output =
-            take_fixed_size_list::<_, true>(&input_array, &indices, length as u32).unwrap();
+            unsafe { take_fixed_size_list::<_, true>(&input_array, &indices, length as u32) }
+                .unwrap();
 
         let expected = FixedSizeListArray::from_iter_primitive::<T, _, _>(expected_data, length);
 
@@ -2954,7 +3047,8 @@ mod tests {
         // The two middle indices are null -> Should be null in the output.
         let indices = UInt32Array::from(vec![Some(0), None, None, Some(3)]);
 
-        let result = take_fixed_size_binary::<_, true>(&fsb, &indices, 4).unwrap();
+        // SAFETY: `VALIDATE_INDICES` is `true`, so there is no precondition.
+        let result = unsafe { take_fixed_size_binary::<_, true>(&fsb, &indices, 4) }.unwrap();
         assert_eq!(result.len(), 4);
         assert_eq!(result.null_count(), 2);
         assert_eq!(
@@ -2983,7 +3077,8 @@ mod tests {
         // The two middle indices are null -> Should be null in the output.
         let indices = UInt32Array::from(vec![Some(0), None, None, Some(3)]);
 
-        let result = take_fixed_size_binary::<_, true>(&fsb, &indices, 5).unwrap();
+        // SAFETY: `VALIDATE_INDICES` is `true`, so there is no precondition.
+        let result = unsafe { take_fixed_size_binary::<_, true>(&fsb, &indices, 5) }.unwrap();
         assert_eq!(result.len(), 4);
         assert_eq!(result.null_count(), 2);
         assert_eq!(
@@ -4066,7 +4161,8 @@ mod tests {
 
         let logical_indices: PrimitiveArray<Int32Type> = PrimitiveArray::from(Vec::<i32>::new());
 
-        let result = take_impl::<_, true>(&run_array, &logical_indices)
+        // SAFETY: `VALIDATE_INDICES` is `true`, so there is no precondition.
+        let result = unsafe { take_impl::<_, true>(&run_array, &logical_indices) }
             .expect("take_run with empty indices");
 
         // Verify the result is a valid empty RunArray
