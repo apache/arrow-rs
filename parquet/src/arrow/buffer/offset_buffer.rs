@@ -48,6 +48,9 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
     /// Note: This does not verify that the entirety of `data` is valid
     /// UTF-8. This should be done by calling [`Self::check_valid_utf8`] after
     /// all data has been written
+    // Always inlined, as it is called for every value by the PLAIN and
+    // DELTA_BYTE_ARRAY decoders, and is otherwise not inlined into their loops
+    #[inline(always)]
     pub fn try_push(&mut self, data: &[u8], validate_utf8: bool) -> Result<()> {
         if validate_utf8 && let Some(&b) = data.first() {
             // A valid code-point iff it does not start with 0b10xxxxxx

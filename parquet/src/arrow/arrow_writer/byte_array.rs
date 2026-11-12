@@ -805,14 +805,17 @@ impl ColumnValueEncoder for ByteArrayEncoder {
         unreachable!("should call write_gather instead")
     }
 
-    fn write_gather(&mut self, values: &Self::Values, indices: &[usize]) -> Result<()> {
+    fn write_gather(
+        &mut self,
+        values: &Self::Values,
+        indices: &[usize],
+        num_values_in_batch: usize,
+    ) -> Result<()> {
         if let DataType::Dictionary(key, value) = values.data_type() {
             let dictionary = values.as_any_dictionary().values();
-            if self
-                .dict_encoder
-                .as_ref()
-                .is_some_and(|encoder| encoder.use_dictionary_cache(dictionary, values.len()))
-            {
+            if self.dict_encoder.as_ref().is_some_and(|encoder| {
+                encoder.use_dictionary_cache(dictionary, num_values_in_batch)
+            }) {
                 return downcast_dict_values_op!(
                     key,
                     value,
