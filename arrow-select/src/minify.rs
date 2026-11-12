@@ -43,6 +43,12 @@
 //! referenced range in one piece. Otherwise it copies the ranges of each run of
 //! valid rows.
 //!
+//! # Sizes
+//!
+//! [`compacted_size`] returns the bytes that `minify` would return, without a
+//! copy. [`row_sizes`] attributes these bytes to rows, so a caller can cut a
+//! batch at byte boundaries with prefix sums or [`split_by_size`].
+//!
 //! # Limitations
 //!
 //! * `minify` does not deduplicate dictionary values or merge equal runs.
@@ -824,17 +830,20 @@ struct ViewData {
     null_views: bool,
 }
 
-/// Merges the out-of-line ranges of the valid views of `array`.
+/// Merges the out-of-line ranges of the valid views among `rows` of `array`.
 ///
 /// Null rows reference nothing. `minify` gives them an empty view, as it
 /// gives null rows of a byte array an empty range.
 fn view_data<T: ByteViewType + ?Sized>(
     array: &GenericByteViewArray<T>,
     nulls: Option<&NullBuffer>,
+    rows: impl Iterator<Item = usize>,
 ) -> ViewData {
     let mut ranges = vec![];
     let mut null_views = false;
-    for (i, v) in array.views().iter().enumerate() {
+    let views = array.views();
+    for i in rows {
+        let v = &views[i];
         let len = *v as u32;
         if len <= MAX_INLINE_VIEW_LEN {
             continue;
@@ -892,7 +901,7 @@ fn minify_byte_view<T: ByteViewType + ?Sized>(
         merged,
         referenced,
         null_views,
-    } = view_data(array, nulls.as_ref());
+    } = view_data(array, nulls.as_ref(), 0..array.len());
     let old_buffers = array.data_buffers();
     let kept: Vec<bool> = old_buffers
         .iter()
@@ -1320,6 +1329,638 @@ fn minify_run<R: RunEndIndexType>(array: &RunArray<R>) -> Result<ArrayRef, Arrow
         &run_ends,
         values.as_ref(),
     )?))
+}
+
+/// Returns the bytes of the buffers that [`minify`] returns for `array`,
+/// without a copy.
+///
+/// The count is the sum of the buffer lengths of the result, including child
+/// arrays, dictionary values and null buffers. It is not the allocated
+/// capacity: `minify` can reuse a buffer whose allocation is up to 63 bytes
+/// larger than its length.
+///
+/// `compacted_size` makes the same decisions as `minify` about which rows,
+/// child rows and buffers to keep, so the result is exact.
+///
+/// # Example
+///
+/// ```
+/// # use arrow_array::{Array, Int32Array};
+/// # use arrow_select::minify::{compacted_size, minify};
+/// let array = Int32Array::from_iter_values(0..1024);
+/// let sliced = array.slice(10, 4);
+/// assert_eq!(compacted_size(&sliced).unwrap(), 16);
+/// assert_eq!(minify(&sliced).unwrap().to_data().buffers()[0].len(), 16);
+/// ```
+///
+/// # Errors
+///
+/// `compacted_size` returns `InvalidArgumentError` for a time type with an
+/// invalid unit, a dictionary with an invalid key type and a run-end encoded
+/// array with an invalid run end type.
+pub fn compacted_size(array: &dyn Array) -> Result<usize, ArrowError> {
+    let all = 0..array.len();
+    gathered_size(array, std::slice::from_ref(&all))
+}
+
+/// Returns the bytes of the null buffer that `minify` keeps for `ranges` of
+/// rows, gathered back to back into `len` rows.
+fn gathered_null_size(nulls: Option<&NullBuffer>, ranges: &[Range<usize>], len: usize) -> usize {
+    let Some(nulls) = nulls.filter(|n| n.null_count() > 0) else {
+        return 0;
+    };
+    let has_nulls = match ranges {
+        [r] if r.len() == nulls.len() => true,
+        _ => ranges
+            .iter()
+            .any(|r| nulls.inner().slice(r.start, r.len()).count_set_bits() < r.len()),
+    };
+    if has_nulls { bit_util::ceil(len, 8) } else { 0 }
+}
+
+/// Calls `f` with the child ranges of the valid rows among `ranges` of rows.
+fn valid_child_ranges<O: OffsetSizeTrait>(
+    offsets: &OffsetBuffer<O>,
+    nulls: Option<&NullBuffer>,
+    ranges: &[Range<usize>],
+    mut f: impl FnMut(Range<usize>),
+) {
+    let nulls = nulls.filter(|n| n.null_count() > 0);
+    for r in ranges {
+        match nulls {
+            None => f(offsets[r.start].as_usize()..offsets[r.end].as_usize()),
+            Some(nulls) => {
+                for (s, e) in nulls.inner().slice(r.start, r.len()).set_slices() {
+                    f(offsets[r.start + s].as_usize()..offsets[r.start + e].as_usize())
+                }
+            }
+        }
+    }
+}
+
+/// Returns the bytes of `minify` of `ranges` of rows of `array`, gathered
+/// back to back. This models both `minify` of the whole array (one range)
+/// and `minify` of the arrays that [`gather_ranges`] returns.
+fn gathered_size(array: &dyn Array, ranges: &[Range<usize>]) -> Result<usize, ArrowError> {
+    let len: usize = ranges.iter().map(|r| r.len()).sum();
+    let nulls = gathered_null_size(array.nulls(), ranges, len);
+    let size = match array.data_type() {
+        DataType::Null => 0,
+        DataType::Boolean => bit_util::ceil(len, 8) + nulls,
+        DataType::FixedSizeBinary(size) => len * *size as usize + nulls,
+        DataType::Utf8 => bytes_size(array.as_bytes::<Utf8Type>(), ranges) + nulls,
+        DataType::LargeUtf8 => bytes_size(array.as_bytes::<LargeUtf8Type>(), ranges) + nulls,
+        DataType::Binary => bytes_size(array.as_bytes::<BinaryType>(), ranges) + nulls,
+        DataType::LargeBinary => bytes_size(array.as_bytes::<LargeBinaryType>(), ranges) + nulls,
+        DataType::Utf8View => view_size(array.as_byte_view::<StringViewType>(), ranges) + nulls,
+        DataType::BinaryView => view_size(array.as_byte_view::<BinaryViewType>(), ranges) + nulls,
+        DataType::List(_) => {
+            let a = array.as_list::<i32>();
+            list_size(a.offsets(), a.values().as_ref(), a.nulls(), ranges)? + nulls
+        }
+        DataType::LargeList(_) => {
+            let a = array.as_list::<i64>();
+            list_size(a.offsets(), a.values().as_ref(), a.nulls(), ranges)? + nulls
+        }
+        DataType::Map(_, _) => {
+            let a = array.as_map();
+            list_size(a.offsets(), a.entries(), a.nulls(), ranges)? + nulls
+        }
+        DataType::ListView(_) => list_view_size(array.as_list_view::<i32>(), ranges)? + nulls,
+        DataType::LargeListView(_) => list_view_size(array.as_list_view::<i64>(), ranges)? + nulls,
+        DataType::FixedSizeList(_, size) => {
+            let size = *size as usize;
+            let mut child_ranges = vec![];
+            for r in ranges {
+                push_range(&mut child_ranges, r.start * size..r.end * size);
+            }
+            let values = array.as_fixed_size_list().values();
+            gathered_size(values.as_ref(), &child_ranges)? + nulls
+        }
+        DataType::Struct(_) => {
+            let mut size = nulls;
+            for c in array.as_struct().columns() {
+                size += gathered_size(c.as_ref(), ranges)?;
+            }
+            size
+        }
+        DataType::Union(fields, UnionMode::Sparse) => {
+            let array = array.as_union();
+            let mut size = len;
+            for (type_id, _) in fields.iter() {
+                size += gathered_size(array.child(type_id).as_ref(), ranges)?;
+            }
+            size
+        }
+        DataType::Union(fields, UnionMode::Dense) => {
+            let array = array.as_union();
+            let rows = dense_union_rows(array, fields, ranges.iter().flat_map(|r| r.clone()));
+            let mut size = len * (1 + 4);
+            for (type_id, _) in fields.iter() {
+                let mut child_ranges = vec![];
+                for i in &rows.indices[type_id as usize] {
+                    push_range(&mut child_ranges, *i as usize..*i as usize + 1);
+                }
+                size += gathered_size(array.child(type_id).as_ref(), &child_ranges)?;
+            }
+            size
+        }
+        DataType::Dictionary(key, _) => match key.as_ref() {
+            DataType::Int8 => dictionary_size(array.as_dictionary::<Int8Type>(), ranges)? + nulls,
+            DataType::Int16 => dictionary_size(array.as_dictionary::<Int16Type>(), ranges)? + nulls,
+            DataType::Int32 => dictionary_size(array.as_dictionary::<Int32Type>(), ranges)? + nulls,
+            DataType::Int64 => dictionary_size(array.as_dictionary::<Int64Type>(), ranges)? + nulls,
+            DataType::UInt8 => dictionary_size(array.as_dictionary::<UInt8Type>(), ranges)? + nulls,
+            DataType::UInt16 => {
+                dictionary_size(array.as_dictionary::<UInt16Type>(), ranges)? + nulls
+            }
+            DataType::UInt32 => {
+                dictionary_size(array.as_dictionary::<UInt32Type>(), ranges)? + nulls
+            }
+            DataType::UInt64 => {
+                dictionary_size(array.as_dictionary::<UInt64Type>(), ranges)? + nulls
+            }
+            t => {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "invalid dictionary key type {t}"
+                )));
+            }
+        },
+        DataType::RunEndEncoded(run_ends, _) => match run_ends.data_type() {
+            DataType::Int16 => run_size(array.as_run::<Int16Type>(), ranges)?,
+            DataType::Int32 => run_size(array.as_run::<Int32Type>(), ranges)?,
+            DataType::Int64 => run_size(array.as_run::<Int64Type>(), ranges)?,
+            t => {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "invalid run end type {t}"
+                )));
+            }
+        },
+        t @ (DataType::Time32(TimeUnit::Microsecond | TimeUnit::Nanosecond)
+        | DataType::Time64(TimeUnit::Second | TimeUnit::Millisecond)) => {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "invalid time unit in {t}"
+            )));
+        }
+        DataType::Int8 | DataType::UInt8 => len + nulls,
+        DataType::Int16 | DataType::UInt16 | DataType::Float16 => len * 2 + nulls,
+        DataType::Int32
+        | DataType::UInt32
+        | DataType::Float32
+        | DataType::Decimal32(_, _)
+        | DataType::Date32
+        | DataType::Time32(TimeUnit::Second | TimeUnit::Millisecond)
+        | DataType::Interval(IntervalUnit::YearMonth) => len * 4 + nulls,
+        DataType::Int64
+        | DataType::UInt64
+        | DataType::Float64
+        | DataType::Decimal64(_, _)
+        | DataType::Date64
+        | DataType::Time64(TimeUnit::Microsecond | TimeUnit::Nanosecond)
+        | DataType::Timestamp(_, _)
+        | DataType::Duration(_)
+        | DataType::Interval(IntervalUnit::DayTime) => len * 8 + nulls,
+        DataType::Decimal128(_, _) | DataType::Interval(IntervalUnit::MonthDayNano) => {
+            len * 16 + nulls
+        }
+        DataType::Decimal256(_, _) => len * 32 + nulls,
+    };
+    Ok(size)
+}
+
+fn bytes_size<T: ByteArrayType>(array: &GenericByteArray<T>, ranges: &[Range<usize>]) -> usize {
+    let len: usize = ranges.iter().map(|r| r.len()).sum();
+    let mut values = 0;
+    valid_child_ranges(array.offsets(), array.nulls(), ranges, |r| {
+        values += r.len()
+    });
+    (len + 1) * std::mem::size_of::<T::Offset>() + values
+}
+
+/// `minify` keeps a data buffer only if the valid views reference all of its
+/// bytes, and copies the distinct referenced bytes of the other buffers. Both
+/// cases hold exactly the distinct referenced bytes.
+fn view_size<T: ByteViewType + ?Sized>(
+    array: &GenericByteViewArray<T>,
+    ranges: &[Range<usize>],
+) -> usize {
+    let len: usize = ranges.iter().map(|r| r.len()).sum();
+    let rows = ranges.iter().flat_map(|r| r.clone());
+    let data: usize = view_data(array, array.nulls(), rows)
+        .referenced
+        .iter()
+        .sum();
+    len * 16 + data
+}
+
+/// Returns the bytes of the offsets and the child of a list or map array.
+fn list_size<O: OffsetSizeTrait>(
+    offsets: &OffsetBuffer<O>,
+    values: &dyn Array,
+    nulls: Option<&NullBuffer>,
+    ranges: &[Range<usize>],
+) -> Result<usize, ArrowError> {
+    let len: usize = ranges.iter().map(|r| r.len()).sum();
+    let mut child_ranges = vec![];
+    valid_child_ranges(offsets, nulls, ranges, |r| push_range(&mut child_ranges, r));
+    Ok((len + 1) * O::get_byte_width() + gathered_size(values, &child_ranges)?)
+}
+
+fn list_view_size<O: OffsetSizeTrait>(
+    array: &GenericListViewArray<O>,
+    ranges: &[Range<usize>],
+) -> Result<usize, ArrowError> {
+    let len: usize = ranges.iter().map(|r| r.len()).sum();
+    let (offsets, sizes) = (array.offsets(), array.sizes());
+    let views = ranges.iter().flat_map(|r| r.clone()).map(|i| {
+        (
+            array.is_valid(i),
+            offsets[i].as_usize(),
+            sizes[i].as_usize(),
+        )
+    });
+    let child = list_view_child(views);
+    Ok(2 * len * O::get_byte_width() + gathered_size(array.values().as_ref(), &child.merged)?)
+}
+
+fn dictionary_size<K: ArrowDictionaryKeyType>(
+    array: &DictionaryArray<K>,
+    ranges: &[Range<usize>],
+) -> Result<usize, ArrowError> {
+    let len: usize = ranges.iter().map(|r| r.len()).sum();
+    let keys = array.keys();
+    let mut used = BooleanBufferBuilder::new(array.values().len());
+    used.append_n(array.values().len(), false);
+    for r in ranges {
+        for i in r.clone() {
+            if keys.is_valid(i) {
+                used.set_bit(keys.values()[i].as_usize(), true);
+            }
+        }
+    }
+    let value_ranges: Vec<_> = used.finish().set_slices().map(|(s, e)| s..e).collect();
+    let values = gathered_size(array.values().as_ref(), &value_ranges)?;
+    Ok(len * K::Native::get_byte_width() + values)
+}
+
+fn run_size<R: RunEndIndexType>(
+    array: &RunArray<R>,
+    ranges: &[Range<usize>],
+) -> Result<usize, ArrowError> {
+    let mut runs = 0;
+    let mut value_ranges = vec![];
+    for r in ranges.iter().filter(|r| !r.is_empty()) {
+        let slice = array.run_ends().slice(r.start, r.len());
+        let (start, end) = (
+            slice.get_start_physical_index(),
+            slice.get_end_physical_index(),
+        );
+        // Mirrors `gather_run`: a range that continues the last run adds no run
+        let first = start + continues_run(&value_ranges, start) as usize;
+        runs += end + 1 - first;
+        push_range(&mut value_ranges, first..end + 1);
+    }
+    let values = gathered_size(array.values().as_ref(), &value_ranges)?;
+    Ok(runs * R::Native::get_byte_width() + values)
+}
+
+/// Adds the compacted bytes of each row of `array` to `sizes`.
+///
+/// `sizes` must have one entry per row. `row_sizes` adds to the entries, so a
+/// caller can sum the row sizes of all columns of a batch into one slice.
+///
+/// # Attribution
+///
+/// `row_sizes` charges each row the bytes that it references:
+///
+/// | Part | Charge |
+/// |------|--------|
+/// | Fixed width value, offset, view, type id, union offset, dictionary key | Each row |
+/// | Bytes of a byte array or a non-inline view | The row that references them |
+/// | Null buffer and boolean values | 1 byte to each row whose index is a multiple of 8 |
+/// | Child rows of a list, map or list view | The parent row, if it is valid |
+/// | Child rows of a fixed size list | The parent row |
+/// | Child row of a union | The union row |
+/// | Dictionary value | Each row whose key references it |
+/// | Run end and run value of a run-end encoded array | Each row of the run |
+///
+/// A null row of a byte, list or map array pays only its offset, because
+/// `minify` empties its range.
+///
+/// # Error bound
+///
+/// Let `s` be the sum of `sizes[a..b]` and `c` be
+/// `compacted_size(&array.slice(a, b - a))`. For an array that shares no data
+/// between rows, `s` and `c` differ only by these terms:
+///
+/// * `c` holds one more offset than its rows for each offset buffer.
+/// * Each bitmap of `c` differs from its charge by at most one byte for each
+///   contiguous run of rows it holds.
+/// * `s` charges a bitmap that `minify` drops if the slice has no nulls.
+///
+/// Rows can share data: dictionary values, the runs of a run-end encoded
+/// array, dense union child rows, the child rows of overlapping list views,
+/// and the bytes of views that point to the same bytes. `row_sizes` charges shared data to every row that references
+/// it, and `compacted_size` counts it once. Then `s` can exceed `c` by the
+/// size of the shared data times the number of extra references.
+///
+/// # Errors
+///
+/// `row_sizes` returns `InvalidArgumentError` if `sizes` does not have one
+/// entry per row, for a time type with an invalid unit, for a dictionary with
+/// an invalid key type and for a run-end encoded array with an invalid run end
+/// type.
+pub fn row_sizes(array: &dyn Array, sizes: &mut [u64]) -> Result<(), ArrowError> {
+    if sizes.len() != array.len() {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "row_sizes needs {} entries, got {}",
+            array.len(),
+            sizes.len()
+        )));
+    }
+    add_row_sizes(array, sizes)
+}
+
+/// Adds 1 byte to each row whose index is a multiple of 8.
+fn add_bitmap(sizes: &mut [u64]) {
+    sizes.iter_mut().step_by(8).for_each(|s| *s += 1);
+}
+
+fn add_each(sizes: &mut [u64], size: usize) {
+    sizes.iter_mut().for_each(|s| *s += size as u64);
+}
+
+/// Returns the row sizes of `array`.
+fn child_row_sizes(array: &dyn Array) -> Result<Vec<u64>, ArrowError> {
+    let mut sizes = vec![0; array.len()];
+    add_row_sizes(array, &mut sizes)?;
+    Ok(sizes)
+}
+
+/// Returns the prefix sums of the row sizes of `array`, with a leading zero.
+fn child_prefix_sizes(array: &dyn Array) -> Result<Vec<u64>, ArrowError> {
+    let mut sizes = vec![0; array.len() + 1];
+    add_row_sizes(array, &mut sizes[1..])?;
+    for i in 1..sizes.len() {
+        sizes[i] += sizes[i - 1];
+    }
+    Ok(sizes)
+}
+
+fn add_row_sizes(array: &dyn Array, sizes: &mut [u64]) -> Result<(), ArrowError> {
+    if array.nulls().is_some_and(|n| n.null_count() > 0) {
+        add_bitmap(sizes);
+    }
+    match array.data_type() {
+        DataType::Null => {}
+        DataType::Boolean => add_bitmap(sizes),
+        DataType::FixedSizeBinary(size) => add_each(sizes, *size as usize),
+        DataType::Utf8 => add_bytes(array.as_bytes::<Utf8Type>(), sizes),
+        DataType::LargeUtf8 => add_bytes(array.as_bytes::<LargeUtf8Type>(), sizes),
+        DataType::Binary => add_bytes(array.as_bytes::<BinaryType>(), sizes),
+        DataType::LargeBinary => add_bytes(array.as_bytes::<LargeBinaryType>(), sizes),
+        DataType::Utf8View | DataType::BinaryView => {
+            let data = array.to_data();
+            for (s, v) in sizes.iter_mut().zip(data.buffer::<u128>(0)) {
+                let len = *v as u32;
+                *s += 16
+                    + if len > MAX_INLINE_VIEW_LEN {
+                        len as u64
+                    } else {
+                        0
+                    };
+            }
+        }
+        DataType::List(_) => {
+            let a = array.as_list::<i32>();
+            add_list(a.offsets(), a.values().as_ref(), a.nulls(), sizes)?
+        }
+        DataType::LargeList(_) => {
+            let a = array.as_list::<i64>();
+            add_list(a.offsets(), a.values().as_ref(), a.nulls(), sizes)?
+        }
+        DataType::Map(_, _) => {
+            let a = array.as_map();
+            add_list(a.offsets(), a.entries(), a.nulls(), sizes)?
+        }
+        DataType::ListView(_) => add_list_view(array.as_list_view::<i32>(), sizes)?,
+        DataType::LargeListView(_) => add_list_view(array.as_list_view::<i64>(), sizes)?,
+        DataType::FixedSizeList(_, size) => {
+            let a = array.as_fixed_size_list();
+            let size = *size as usize;
+            if size > 0 {
+                let child = child_row_sizes(a.values().as_ref())?;
+                // `minify` keeps the child rows of null rows
+                for (s, c) in sizes.iter_mut().zip(child.chunks(size)) {
+                    *s += c.iter().sum::<u64>();
+                }
+            }
+        }
+        DataType::Struct(_) => {
+            for c in array.as_struct().columns() {
+                add_row_sizes(c.as_ref(), sizes)?;
+            }
+        }
+        DataType::Union(fields, UnionMode::Sparse) => {
+            add_each(sizes, 1);
+            let array = array.as_union();
+            for (type_id, _) in fields.iter() {
+                add_row_sizes(array.child(type_id).as_ref(), sizes)?;
+            }
+        }
+        DataType::Union(fields, UnionMode::Dense) => {
+            let array = array.as_union();
+            let mut children = vec![vec![]; 128];
+            for (type_id, _) in fields.iter() {
+                children[type_id as usize] = child_row_sizes(array.child(type_id).as_ref())?;
+            }
+            let offsets = array.offsets().expect("dense union has offsets");
+            for ((s, type_id), offset) in sizes.iter_mut().zip(array.type_ids()).zip(offsets) {
+                *s += 1 + 4 + children[*type_id as usize][*offset as usize];
+            }
+        }
+        DataType::Dictionary(key, _) => match key.as_ref() {
+            DataType::Int8 => add_dictionary(array.as_dictionary::<Int8Type>(), sizes)?,
+            DataType::Int16 => add_dictionary(array.as_dictionary::<Int16Type>(), sizes)?,
+            DataType::Int32 => add_dictionary(array.as_dictionary::<Int32Type>(), sizes)?,
+            DataType::Int64 => add_dictionary(array.as_dictionary::<Int64Type>(), sizes)?,
+            DataType::UInt8 => add_dictionary(array.as_dictionary::<UInt8Type>(), sizes)?,
+            DataType::UInt16 => add_dictionary(array.as_dictionary::<UInt16Type>(), sizes)?,
+            DataType::UInt32 => add_dictionary(array.as_dictionary::<UInt32Type>(), sizes)?,
+            DataType::UInt64 => add_dictionary(array.as_dictionary::<UInt64Type>(), sizes)?,
+            t => {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "invalid dictionary key type {t}"
+                )));
+            }
+        },
+        DataType::RunEndEncoded(run_ends, _) => match run_ends.data_type() {
+            DataType::Int16 => add_run(array.as_run::<Int16Type>(), sizes)?,
+            DataType::Int32 => add_run(array.as_run::<Int32Type>(), sizes)?,
+            DataType::Int64 => add_run(array.as_run::<Int64Type>(), sizes)?,
+            t => {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "invalid run end type {t}"
+                )));
+            }
+        },
+        t @ (DataType::Time32(TimeUnit::Microsecond | TimeUnit::Nanosecond)
+        | DataType::Time64(TimeUnit::Second | TimeUnit::Millisecond)) => {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "invalid time unit in {t}"
+            )));
+        }
+        DataType::Int8 | DataType::UInt8 => add_each(sizes, 1),
+        DataType::Int16 | DataType::UInt16 | DataType::Float16 => add_each(sizes, 2),
+        DataType::Int32
+        | DataType::UInt32
+        | DataType::Float32
+        | DataType::Decimal32(_, _)
+        | DataType::Date32
+        | DataType::Time32(TimeUnit::Second | TimeUnit::Millisecond)
+        | DataType::Interval(IntervalUnit::YearMonth) => add_each(sizes, 4),
+        DataType::Int64
+        | DataType::UInt64
+        | DataType::Float64
+        | DataType::Decimal64(_, _)
+        | DataType::Date64
+        | DataType::Time64(TimeUnit::Microsecond | TimeUnit::Nanosecond)
+        | DataType::Timestamp(_, _)
+        | DataType::Duration(_)
+        | DataType::Interval(IntervalUnit::DayTime) => add_each(sizes, 8),
+        DataType::Decimal128(_, _) | DataType::Interval(IntervalUnit::MonthDayNano) => {
+            add_each(sizes, 16)
+        }
+        DataType::Decimal256(_, _) => add_each(sizes, 32),
+    }
+    Ok(())
+}
+
+fn add_bytes<T: ByteArrayType>(array: &GenericByteArray<T>, sizes: &mut [u64]) {
+    let width = std::mem::size_of::<T::Offset>() as u64;
+    let offsets = array.offsets().windows(2);
+    match array.nulls().filter(|n| n.null_count() > 0) {
+        None => {
+            for (s, o) in sizes.iter_mut().zip(offsets) {
+                *s += width + (o[1] - o[0]).as_usize() as u64;
+            }
+        }
+        Some(nulls) => {
+            for ((s, o), valid) in sizes.iter_mut().zip(offsets).zip(nulls.iter()) {
+                *s += width
+                    + if valid {
+                        (o[1] - o[0]).as_usize() as u64
+                    } else {
+                        0
+                    };
+            }
+        }
+    }
+}
+
+fn add_list<O: OffsetSizeTrait>(
+    offsets: &OffsetBuffer<O>,
+    values: &dyn Array,
+    nulls: Option<&NullBuffer>,
+    sizes: &mut [u64],
+) -> Result<(), ArrowError> {
+    let start = offsets[0].as_usize();
+    let end = offsets[offsets.len() - 1].as_usize();
+    let child = child_prefix_sizes(&values.slice(start, end - start))?;
+    let width = O::get_byte_width() as u64;
+    for (i, (s, o)) in sizes.iter_mut().zip(offsets.windows(2)).enumerate() {
+        *s += width;
+        if nulls.is_none_or(|n| n.is_valid(i)) {
+            *s += child[o[1].as_usize() - start] - child[o[0].as_usize() - start];
+        }
+    }
+    Ok(())
+}
+
+fn add_list_view<O: OffsetSizeTrait>(
+    array: &GenericListViewArray<O>,
+    sizes: &mut [u64],
+) -> Result<(), ArrowError> {
+    let views = || {
+        (0..array.len())
+            .filter(|i| array.is_valid(*i) && !array.sizes()[*i].is_zero())
+            .map(|i| {
+                let offset = array.offsets()[i].as_usize();
+                (i, offset, offset + array.sizes()[i].as_usize())
+            })
+    };
+    let start = views().map(|(_, s, _)| s).min().unwrap_or(0);
+    let end = views().map(|(_, _, e)| e).max().unwrap_or(0);
+    let child = child_prefix_sizes(&array.values().slice(start, end - start))?;
+    add_each(sizes, 2 * O::get_byte_width());
+    for (i, s, e) in views() {
+        sizes[i] += child[e - start] - child[s - start];
+    }
+    Ok(())
+}
+
+fn add_dictionary<K: ArrowDictionaryKeyType>(
+    array: &DictionaryArray<K>,
+    sizes: &mut [u64],
+) -> Result<(), ArrowError> {
+    let values = child_row_sizes(array.values().as_ref())?;
+    let width = K::Native::get_byte_width() as u64;
+    let keys = array.keys();
+    for (i, (s, k)) in sizes.iter_mut().zip(keys.values()).enumerate() {
+        *s += width;
+        if keys.is_valid(i) {
+            *s += values[k.as_usize()];
+        }
+    }
+    Ok(())
+}
+
+fn add_run<R: RunEndIndexType>(array: &RunArray<R>, sizes: &mut [u64]) -> Result<(), ArrowError> {
+    let run_ends = array.run_ends();
+    if run_ends.is_empty() {
+        return Ok(());
+    }
+    let start = run_ends.get_start_physical_index();
+    let end = run_ends.get_end_physical_index();
+    let values = child_row_sizes(&array.values().slice(start, end - start + 1))?;
+    let width = R::Native::get_byte_width() as u64;
+    let mut run_start = 0;
+    for (run_end, value) in run_ends.sliced_values().zip(values) {
+        let run_end = run_end.as_usize();
+        sizes[run_start..run_end]
+            .iter_mut()
+            .for_each(|s| *s += width + value);
+        run_start = run_end;
+    }
+    Ok(())
+}
+
+/// Splits rows with `sizes` into consecutive ranges whose sizes sum to at
+/// most `max_size`.
+///
+/// A row larger than `max_size` gets a range of its own. Pass the result of
+/// [`row_sizes`], summed over the columns of a batch, to split the batch.
+///
+/// ```
+/// # use arrow_select::minify::split_by_size;
+/// assert_eq!(split_by_size(&[4, 4, 4, 9, 1], 8), vec![0..2, 2..3, 3..4, 4..5]);
+/// ```
+pub fn split_by_size(sizes: &[u64], max_size: u64) -> Vec<Range<usize>> {
+    let mut ranges = vec![];
+    let mut start = 0;
+    let mut sum = 0;
+    for (i, size) in sizes.iter().enumerate() {
+        if i > start && sum + size > max_size {
+            ranges.push(start..i);
+            start = i;
+            sum = 0;
+        }
+        sum += size;
+    }
+    if start < sizes.len() {
+        ranges.push(start..sizes.len());
+    }
+    ranges
 }
 
 #[cfg(test)]
@@ -2495,7 +3136,7 @@ mod tests {
         let buffers: Arc<[Buffer]> = Arc::from([Buffer::from_vec(vec![b'x'; 20])]);
         // SAFETY: the test reads only the views, never the bytes they point to
         let array = unsafe { BinaryViewArray::new_unchecked(vec![view].into(), buffers, None) };
-        let data = view_data(&array, None);
+        let data = view_data(&array, None, 0..1);
         assert_eq!(
             data.merged,
             [(0, u32::MAX as usize - 10, u32::MAX as usize + 10)]
@@ -2604,5 +3245,533 @@ mod tests {
         let values = gathered.as_string::<i32>().values();
         assert_eq!(values.len(), 128);
         assert_eq!(values.capacity(), 128);
+    }
+
+    fn sizes_of(array: &dyn Array) -> Vec<u64> {
+        let mut sizes = vec![0; array.len()];
+        row_sizes(array, &mut sizes).unwrap();
+        sizes
+    }
+
+    #[test]
+    fn test_row_sizes_values() {
+        let strings = StringArray::new(
+            OffsetBuffer::from_lengths([2, 2, 3]),
+            b"abcdefg".to_vec().into(),
+            Some(NullBuffer::from(vec![true, false, true])),
+        );
+        // Offset, bytes of valid rows, and 1 bitmap byte at row 0
+        assert_eq!(sizes_of(&strings), [7, 4, 7]);
+        assert_eq!(compacted_size(&strings).unwrap(), 4 * 4 + 5 + 1);
+
+        let values = StringArray::from(vec!["x", "yy"]);
+        let keys = Int8Array::from(vec![0, 0, 1]);
+        let dict = DictionaryArray::<Int8Type>::try_new(keys, Arc::new(values)).unwrap();
+        // Every row pays its key and its value
+        assert_eq!(sizes_of(&dict), [6, 6, 7]);
+        assert_eq!(compacted_size(&dict).unwrap(), 3 + 3 * 4 + 3);
+
+        let runs = RunArray::<Int32Type>::try_new(
+            &Int32Array::from(vec![2, 3]),
+            &Int64Array::from(vec![5, 6]),
+        )
+        .unwrap();
+        // Every row of a run pays its run end and its value
+        assert_eq!(sizes_of(&runs), [12, 12, 12]);
+        assert_eq!(compacted_size(&runs).unwrap(), 2 * 4 + 2 * 8);
+
+        let list = ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            OffsetBuffer::from_lengths([2, 1, 0]),
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Some(NullBuffer::from(vec![true, false, true])),
+        );
+        // The null row 1 pays its offset but not its child row
+        assert_eq!(sizes_of(&list), [4 + 8 + 1, 4, 4]);
+        assert_eq!(compacted_size(&list).unwrap(), 4 * 4 + 8 + 1);
+    }
+
+    #[test]
+    fn test_row_sizes_shared_and_edge_values() {
+        // A null buffer without nulls costs nothing, as `minify` drops it
+        let ints = Int32Array::new(vec![1, 2].into(), Some(NullBuffer::new_valid(2)));
+        assert_eq!(sizes_of(&ints), [4, 4]);
+
+        // Views of 12 bytes are inline, views of 13 bytes are not
+        let views = StringViewArray::from_iter_values(["a".repeat(12), "b".repeat(13)]);
+        assert_eq!(sizes_of(&views), [16, 16 + 13]);
+
+        // Both rows pay for the shared child row
+        let union = dense_union_of(Arc::new(Int64Array::from(vec![7, 8])), &[1, 1]);
+        assert_eq!(sizes_of(&union), [1 + 4 + 8, 1 + 4 + 8]);
+        assert_eq!(compacted_size(&union).unwrap(), 2 + 2 * 4 + 8);
+
+        // Overlapping views pay for their child rows each. The null view
+        // pays only its offset, its size and its bitmap byte.
+        let list_views = ListViewArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            vec![0, 1, 2].into(),
+            vec![2, 2, 1].into(),
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Some(NullBuffer::from(vec![true, true, false])),
+        );
+        assert_eq!(sizes_of(&list_views), [8 + 8 + 1, 8 + 8, 8]);
+        let minified = minify(&list_views).unwrap();
+        let minified = minified.as_list_view::<i32>();
+        // `minify` gives the null view an offset and a size of zero
+        assert_eq!(minified.offsets().as_ref(), [0, 1, 0]);
+        assert_eq!(minified.sizes().as_ref(), [2, 2, 0]);
+
+        // A fixed size list of size zero has no child rows
+        let empty = FixedSizeListArray::new_null(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            0,
+            3,
+        );
+        assert_eq!(sizes_of(&empty), [1, 0, 0]);
+        assert_eq!(compacted_size(&empty).unwrap(), 1);
+    }
+
+    #[test]
+    fn test_row_sizes_adds_and_checks_len() {
+        let array = Int32Array::from(vec![1, 2]);
+        let mut sizes = vec![1, 2];
+        row_sizes(&array, &mut sizes).unwrap();
+        assert_eq!(sizes, [5, 6]);
+        let err = row_sizes(&array, &mut [0; 3]).unwrap_err();
+        assert!(err.to_string().contains("needs 2 entries, got 3"), "{err}");
+    }
+
+    #[test]
+    fn test_split_by_size() {
+        assert_eq!(split_by_size(&[], 8), Vec::<Range<usize>>::new());
+        assert_eq!(split_by_size(&[9], 8), vec![0..1]);
+        assert_eq!(split_by_size(&[0, 8, 0, 1], 8), vec![0..3, 3..4]);
+    }
+
+    /// Sums the buffer lengths of all buffers, including children.
+    fn buffer_bytes(data: &ArrayData) -> usize {
+        data.buffers().iter().map(|b| b.len()).sum::<usize>()
+            + data.nulls().map_or(0, |n| n.buffer().len())
+            + data.child_data().iter().map(buffer_bytes).sum::<usize>()
+    }
+
+    /// Generates random arrays of every type that `minify` supports. Arrays
+    /// have random nulls, null rows with non-empty ranges, and random slices.
+    struct Gen(rand::rngs::StdRng);
+
+    impl Gen {
+        fn new(seed: u64) -> Self {
+            use rand::SeedableRng;
+            Self(rand::rngs::StdRng::seed_from_u64(seed))
+        }
+
+        fn int(&mut self, max: usize) -> usize {
+            use rand::RngExt;
+            self.0.random_range(0..=max)
+        }
+
+        fn nulls(&mut self, len: usize) -> Option<NullBuffer> {
+            use rand::RngExt;
+            let p = [1.0, 0.9, 0.5, 0.0][self.int(3)];
+            match self.int(2) {
+                0 => None,
+                _ => Some(NullBuffer::from_iter(
+                    (0..len).map(|_| self.0.random_bool(p)),
+                )),
+            }
+        }
+
+        fn lengths(&mut self, len: usize, max: usize) -> OffsetBuffer<i32> {
+            OffsetBuffer::from_lengths((0..len).map(|_| self.int(max)))
+        }
+
+        fn bytes(&mut self, len: usize) -> Vec<u8> {
+            (0..len).map(|_| b'a' + self.int(25) as u8).collect()
+        }
+
+        /// Returns a random array of `len` rows.
+        fn array(&mut self, depth: usize, len: usize) -> ArrayRef {
+            let extra = [0, 1, 7, 30][self.int(3)];
+            let before = self.int(extra);
+            let array = self.unsliced(depth, len + extra);
+            array.slice(before, len)
+        }
+
+        fn unsliced(&mut self, depth: usize, len: usize) -> ArrayRef {
+            let kinds = if depth == 0 { 12 } else { 24 };
+            let kind = match self.int(kinds - 1) {
+                // Leaf kinds 21 to 23 follow the nested kinds
+                k if depth == 0 && k >= 9 => k + 12,
+                k => k,
+            };
+            match kind {
+                0 => Arc::new(Int32Array::new((0..len as i32).collect(), self.nulls(len))),
+                1 => Arc::new(BooleanArray::new(
+                    BooleanBuffer::from_iter((0..len).map(|i| i % 3 == 0)),
+                    self.nulls(len),
+                )),
+                2 => Arc::new(NullArray::new(len)),
+                3 => {
+                    let offsets = self.lengths(len, 6);
+                    let values = self.bytes(offsets[len] as usize);
+                    Arc::new(StringArray::new(offsets, values.into(), self.nulls(len)))
+                }
+                4 => {
+                    let offsets: Vec<i64> =
+                        self.lengths(len, 6).iter().map(|o| *o as i64).collect();
+                    let values = self.bytes(offsets[len] as usize);
+                    Arc::new(LargeBinaryArray::new(
+                        OffsetBuffer::new(offsets.into()),
+                        values.into(),
+                        self.nulls(len),
+                    ))
+                }
+                5 => Arc::new(
+                    FixedSizeBinaryArray::try_new(3, self.bytes(3 * len).into(), self.nulls(len))
+                        .unwrap(),
+                ),
+                6 | 7 => {
+                    let strings: Vec<String> = (0..len)
+                        .map(|_| {
+                            let n = self.int(30);
+                            String::from_utf8(self.bytes(n)).unwrap()
+                        })
+                        .collect();
+                    let array = StringViewArray::from_iter_values(strings);
+                    let (views, buffers, _) = array.into_parts();
+                    let array = StringViewArray::new(views, buffers, self.nulls(len));
+                    if self.int(1) == 0 {
+                        Arc::new(array)
+                    } else {
+                        // Views out of order that share bytes
+                        let indices = (0..len as u32).map(|_| self.int(len.max(1) - 1) as u32);
+                        let indices = UInt32Array::from_iter_values(indices);
+                        if len == 0 {
+                            Arc::new(array)
+                        } else {
+                            take(&array, &indices, None).unwrap()
+                        }
+                    }
+                }
+                8 => Arc::new(Int64Array::new((0..len as i64).collect(), self.nulls(len))),
+                9 | 10 => {
+                    let offsets = self.lengths(len, 4);
+                    let values = self.array(depth - 1, offsets[len] as usize);
+                    let field = Arc::new(Field::new_list_field(values.data_type().clone(), true));
+                    let nulls = self.nulls(len);
+                    if self.int(1) == 0 {
+                        Arc::new(ListArray::new(field, offsets, values, nulls))
+                    } else {
+                        let offsets: Vec<i64> = offsets.iter().map(|o| *o as i64).collect();
+                        let offsets = OffsetBuffer::new(offsets.into());
+                        Arc::new(LargeListArray::new(field, offsets, values, nulls))
+                    }
+                }
+                11 => {
+                    let offsets = self.lengths(len, 3);
+                    let n = offsets[len] as usize;
+                    let values = self.array(depth - 1, n);
+                    let fields = Fields::from(vec![
+                        Field::new("keys", DataType::Int32, false),
+                        Field::new("values", values.data_type().clone(), true),
+                    ]);
+                    let keys = Arc::new(Int32Array::from_iter_values(0..n as i32));
+                    let entries = StructArray::new(fields.clone(), vec![keys, values], None);
+                    let field = Arc::new(Field::new_struct("entries", fields, false));
+                    Arc::new(
+                        MapArray::try_new(field, offsets, entries, self.nulls(len), false).unwrap(),
+                    )
+                }
+                12 | 13 => {
+                    let n = self.int(2 * len);
+                    let values = self.array(depth - 1, n);
+                    let mut offsets = vec![];
+                    let mut sizes = vec![];
+                    for _ in 0..len {
+                        let o = self.int(n);
+                        offsets.push(o);
+                        sizes.push(self.int((n - o).min(4)));
+                    }
+                    let field = Arc::new(Field::new_list_field(values.data_type().clone(), true));
+                    let nulls = self.nulls(len);
+                    if self.int(1) == 0 {
+                        let o = offsets.iter().map(|o| *o as i32).collect();
+                        let s = sizes.iter().map(|s| *s as i32).collect();
+                        Arc::new(ListViewArray::new(field, o, s, values, nulls))
+                    } else {
+                        let o = offsets.iter().map(|o| *o as i64).collect();
+                        let s = sizes.iter().map(|s| *s as i64).collect();
+                        Arc::new(LargeListViewArray::new(field, o, s, values, nulls))
+                    }
+                }
+                14 => {
+                    let values = self.array(depth - 1, 2 * len);
+                    let field = Arc::new(Field::new_list_field(values.data_type().clone(), true));
+                    Arc::new(FixedSizeListArray::new(field, 2, values, self.nulls(len)))
+                }
+                15 => {
+                    let a = self.array(depth - 1, len);
+                    let b = self.array(depth - 1, len);
+                    let fields = Fields::from(vec![
+                        Field::new("a", a.data_type().clone(), true),
+                        Field::new("b", b.data_type().clone(), true),
+                    ]);
+                    Arc::new(
+                        StructArray::try_new_with_length(fields, vec![a, b], self.nulls(len), len)
+                            .unwrap(),
+                    )
+                }
+                16 | 17 => {
+                    let dense = self.int(1) == 0;
+                    let type_ids: Vec<i8> = (0..len).map(|_| self.int(1) as i8).collect();
+                    let (children, offsets) = if dense {
+                        let lens = [self.int(len).max(1), self.int(len).max(1)];
+                        let offsets: Vec<i32> = type_ids
+                            .iter()
+                            .map(|t| self.int(lens[*t as usize] - 1) as i32)
+                            .collect();
+                        let children = vec![
+                            self.array(depth - 1, lens[0]),
+                            self.array(depth - 1, lens[1]),
+                        ];
+                        (children, Some(offsets.into()))
+                    } else {
+                        (
+                            vec![self.array(depth - 1, len), self.array(depth - 1, len)],
+                            None,
+                        )
+                    };
+                    let fields = UnionFields::try_new(
+                        [0, 1],
+                        [
+                            Field::new("a", children[0].data_type().clone(), true),
+                            Field::new("b", children[1].data_type().clone(), true),
+                        ],
+                    )
+                    .unwrap();
+                    Arc::new(
+                        UnionArray::try_new(fields, type_ids.into(), offsets, children).unwrap(),
+                    )
+                }
+                18 => {
+                    let mut ends = vec![];
+                    let mut end = 0;
+                    while end < len {
+                        end = (end + 1 + self.int(3)).min(len);
+                        ends.push(end as i32);
+                    }
+                    let values = self.array(depth - 1, ends.len());
+                    Arc::new(
+                        RunArray::<Int32Type>::try_new(&Int32Array::from(ends), values.as_ref())
+                            .unwrap(),
+                    )
+                }
+                21 => {
+                    let offsets: Vec<i64> =
+                        self.lengths(len, 6).iter().map(|o| *o as i64).collect();
+                    let values = self.bytes(offsets[len] as usize);
+                    let offsets = OffsetBuffer::new(offsets.into());
+                    Arc::new(LargeStringArray::new(
+                        offsets,
+                        values.into(),
+                        self.nulls(len),
+                    ))
+                }
+                22 => {
+                    let offsets = self.lengths(len, 6);
+                    let values = self.bytes(offsets[len] as usize);
+                    Arc::new(BinaryArray::new(offsets, values.into(), self.nulls(len)))
+                }
+                23 => {
+                    let values: Vec<Vec<u8>> = (0..len)
+                        .map(|_| {
+                            let n = self.int(20);
+                            self.bytes(n)
+                        })
+                        .collect();
+                    let array = BinaryViewArray::from_iter_values(values);
+                    let (views, buffers, _) = array.into_parts();
+                    Arc::new(BinaryViewArray::new(views, buffers, self.nulls(len)))
+                }
+                _ => {
+                    let n = self.int(len).max(1);
+                    let values = loop {
+                        let values = self.array(depth - 1, n);
+                        if !matches!(
+                            values.data_type(),
+                            DataType::Dictionary(_, _) | DataType::RunEndEncoded(_, _)
+                        ) {
+                            break values;
+                        }
+                    };
+                    let keys = Int16Array::new(
+                        (0..len).map(|_| self.int(n - 1) as i16).collect(),
+                        self.nulls(len),
+                    );
+                    Arc::new(DictionaryArray::<Int16Type>::try_new(keys, values).unwrap())
+                }
+            }
+        }
+    }
+
+    /// Returns `true` if rows of `data_type` can share data, which
+    /// `row_sizes` charges to every row that references it.
+    fn shares_data(data_type: &DataType) -> bool {
+        match data_type {
+            DataType::Dictionary(_, _)
+            | DataType::RunEndEncoded(_, _)
+            | DataType::Union(_, UnionMode::Dense)
+            | DataType::ListView(_)
+            | DataType::LargeListView(_)
+            | DataType::Utf8View
+            | DataType::BinaryView => true,
+            DataType::List(f)
+            | DataType::LargeList(f)
+            | DataType::FixedSizeList(f, _)
+            | DataType::Map(f, _) => shares_data(f.data_type()),
+            DataType::Struct(fields) => fields.iter().any(|f| shares_data(f.data_type())),
+            DataType::Union(fields, _) => fields.iter().any(|(_, f)| shares_data(f.data_type())),
+            _ => false,
+        }
+    }
+
+    /// The error bound of `row_sizes` for an array that shares no data: one
+    /// offset, one run and 2 bytes per bitmap per node, plus the bitmaps
+    /// `minify` can drop and the bitmap bytes of non-contiguous child rows.
+    fn row_size_slack(data: &ArrayData) -> usize {
+        8 + 8
+            + 2 * (2 + bit_util::ceil(data.len(), 8))
+            + data.len()
+            + data.child_data().iter().map(row_size_slack).sum::<usize>()
+    }
+
+    /// Checks `compacted_size` and `row_sizes` against `minify` on `array`
+    /// and random slices of it.
+    fn check_sizes(g: &mut Gen, array: &dyn Array) {
+        let minified = minify(array).unwrap();
+        let expected = buffer_bytes(&minified.to_data());
+        assert_eq!(
+            compacted_size(array).unwrap(),
+            expected,
+            "{:?}",
+            array.data_type()
+        );
+        // `minify` of a minified array keeps the same buffers
+        assert_eq!(compacted_size(minified.as_ref()).unwrap(), expected);
+
+        let mut sizes = vec![0; array.len()];
+        row_sizes(array, &mut sizes).unwrap();
+
+        for _ in 0..4 {
+            let a = g.int(array.len());
+            let b = a + g.int(array.len() - a);
+            let slice = array.slice(a, b - a);
+            let c = compacted_size(&slice).unwrap();
+            assert_eq!(c, buffer_bytes(&minify(&slice).unwrap().to_data()));
+            let s = sizes[a..b].iter().sum::<u64>() as i64;
+            let slack = row_size_slack(&slice.to_data()) as i64;
+            let diff = s - c as i64;
+            if shares_data(array.data_type()) {
+                assert!(
+                    diff >= -slack,
+                    "{:?} {a}..{b}: {s} vs {c}",
+                    array.data_type()
+                );
+            } else {
+                assert!(
+                    diff.abs() <= slack,
+                    "{:?} {a}..{b}: {s} vs {c}",
+                    array.data_type()
+                );
+            }
+        }
+    }
+
+    /// The number of random arrays that `test_sizes_random` checks. Set
+    /// `MINIFY_SIZES_ITERATIONS` for a longer run.
+    fn iterations() -> u64 {
+        std::env::var("MINIFY_SIZES_ITERATIONS").map_or(300, |v| v.parse().unwrap())
+    }
+
+    #[test]
+    fn test_sizes_random() {
+        let seed = std::env::var("MINIFY_SIZES_SEED").map_or(0, |v| v.parse().unwrap());
+        for i in seed..seed + iterations() {
+            let mut g = Gen::new(i);
+            let depth = g.int(3);
+            let len = g.int(40);
+            let array = g.array(depth, len);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                check_sizes(&mut g, array.as_ref())
+            }));
+            if result.is_err() {
+                panic!("seed {i} failed: {:?}", array.data_type());
+            }
+        }
+    }
+
+    /// Wraps an `Int32Array` or `Int64Array` but reports a time type with an
+    /// invalid unit. Safe constructors reject such a type, so only a custom
+    /// `Array` can reach the error paths.
+    #[derive(Debug)]
+    struct InvalidTime(ArrayRef, DataType);
+
+    unsafe impl Array for InvalidTime {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn to_data(&self) -> ArrayData {
+            self.0.to_data()
+        }
+        fn into_data(self) -> ArrayData {
+            self.0.to_data()
+        }
+        fn data_type(&self) -> &DataType {
+            &self.1
+        }
+        fn slice(&self, offset: usize, length: usize) -> ArrayRef {
+            Arc::new(Self(self.0.slice(offset, length), self.1.clone()))
+        }
+        fn len(&self) -> usize {
+            self.0.len()
+        }
+        fn is_empty(&self) -> bool {
+            self.0.is_empty()
+        }
+        fn offset(&self) -> usize {
+            self.0.offset()
+        }
+        fn nulls(&self) -> Option<&NullBuffer> {
+            self.0.nulls()
+        }
+        fn get_buffer_memory_size(&self) -> usize {
+            self.0.get_buffer_memory_size()
+        }
+        fn get_array_memory_size(&self) -> usize {
+            self.0.get_array_memory_size()
+        }
+    }
+
+    #[test]
+    fn sizes_reject_invalid_time_unit() {
+        let int32: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let int64: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3]));
+        for (values, data_type) in [
+            (&int32, DataType::Time32(TimeUnit::Microsecond)),
+            (&int32, DataType::Time32(TimeUnit::Nanosecond)),
+            (&int64, DataType::Time64(TimeUnit::Second)),
+            (&int64, DataType::Time64(TimeUnit::Millisecond)),
+        ] {
+            let expected = format!("Invalid argument error: invalid time unit in {data_type}");
+            let array = InvalidTime(Arc::clone(values), data_type);
+            assert_eq!(minify(&array).unwrap_err().to_string(), expected);
+            assert_eq!(compacted_size(&array).unwrap_err().to_string(), expected);
+            let mut sizes = [0; 3];
+            assert_eq!(
+                row_sizes(&array, &mut sizes).unwrap_err().to_string(),
+                expected
+            );
+        }
     }
 }
