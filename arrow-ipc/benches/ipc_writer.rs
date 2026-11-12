@@ -6,7 +6,7 @@ use arrow_array::builder::{
     Date32Builder, Decimal128Builder, Int32Builder, StringBuilder, StringDictionaryBuilder,
 };
 use arrow_array::types::UInt32Type;
-use arrow_array::{FixedSizeBinaryArray, RecordBatch};
+use arrow_array::{DictionaryArray, FixedSizeBinaryArray, RecordBatch, StringArray, UInt32Array};
 use arrow_ipc::CompressionType;
 use arrow_ipc::writer::{
     DictionaryHandling, FileWriter, IpcWriteOptions, StreamEncoder, StreamWriter,
@@ -161,6 +161,22 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
+    group.bench_function(
+        "StreamWriter/write_1/dict/referenced_values=16/values=65536/value_bytes=256",
+        |b| {
+            let batch = create_dict_batch_with_unreferenced_values(8192, 16, 65_536, 256);
+            let schema = batch.schema();
+            let mut buffer = Vec::with_capacity(17 * 1024 * 1024);
+            b.iter(move || {
+                buffer.clear();
+                let mut writer = StreamWriter::try_new(&mut buffer, schema.as_ref()).unwrap();
+                writer.write(&batch).unwrap();
+                writer.finish().unwrap();
+                black_box(buffer.len());
+            })
+        },
+    );
+
     group.bench_function("StreamWriter/write_10/dict/delta", |b| {
         let batches = create_delta_dict_batches(10, 8192);
         let schema = batches[0].schema();
@@ -275,6 +291,25 @@ fn create_unique_dict_batches(n: usize, num_rows: usize) -> Vec<RecordBatch> {
     }
 
     batches
+}
+
+fn create_dict_batch_with_unreferenced_values(
+    num_rows: usize,
+    referenced_values: usize,
+    num_values: usize,
+    value_bytes: usize,
+) -> RecordBatch {
+    let keys = UInt32Array::from_iter_values((0..num_rows).map(|i| (i % referenced_values) as u32));
+    let suffix = "x".repeat(value_bytes - 8);
+    let values = StringArray::from_iter_values((0..num_values).map(|i| format!("{i:08}{suffix}")));
+    let dictionary = DictionaryArray::<UInt32Type>::try_new(keys, Arc::new(values)).unwrap();
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "d0",
+        DataType::Dictionary(Box::new(DataType::UInt32), Box::new(DataType::Utf8)),
+        false,
+    )]));
+
+    RecordBatch::try_new(schema, vec![Arc::new(dictionary)]).unwrap()
 }
 
 fn create_batch(num_rows: usize, allow_nulls: bool) -> RecordBatch {
