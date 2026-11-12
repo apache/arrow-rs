@@ -170,6 +170,11 @@ harness = false
 required-features = ["test_utils"]
 
 [[bench]]
+name = "minify_kernels"
+harness = false
+required-features = ["test_utils"]
+
+[[bench]]
 name = "interleave_kernels"
 harness = false
 required-features = ["test_utils"]
