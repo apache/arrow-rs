@@ -4,7 +4,9 @@
 
 //! Tests of selective page index population
 
-use parquet::file::metadata::{ColumnChunkMask, PageIndexPolicy, ParquetMetaDataReader};
+use parquet::file::metadata::{
+    ColumnChunkMask, PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader,
+};
 
 use crate::custom_page_index_provider::create_test_file;
 
@@ -74,13 +76,39 @@ fn test_parse_with_page_index_mask() {
     );
 }
 
+fn index_layout(
+    metadata: &ParquetMetaData,
+    has_index: impl Fn(usize, usize) -> bool,
+) -> Vec<String> {
+    let num_cols = metadata.file_metadata().schema_descr().num_columns();
+    (0..metadata.num_row_groups())
+        .map(|rg| {
+            (0..num_cols)
+                .map(|col| if has_index(rg, col) { 'X' } else { '.' })
+                .collect()
+        })
+        .collect()
+}
+
 #[test]
 fn test_sparse_page_index_missing_ranges_preserve_coordinates() {
+    // Omitting missing ranges from compact storage must not shift subsequent
+    // indexes onto earlier row-group/column coordinates.
+    // Each string is a row group; each character is a column. X means an index
+    // range is present, and . means it is missing from the footer metadata.
+    let column_index_ranges = [".XXX", "XXXX", "XXX."];
+    let offset_index_ranges = ["X.XX", "XX.X", "XXXX"];
+
     let file = create_test_file();
+    // Keep the fully loaded indexes as a reference for the values that survive
+    // selection, not just whether an index exists at each coordinate.
     let original = ParquetMetaDataReader::new()
         .with_page_index_policy(PageIndexPolicy::Required)
         .parse_and_finish(&file)
         .unwrap();
+    // Load only the footer, then remove selected range descriptors to simulate
+    // missing indexes without rewriting the file. The remaining descriptors
+    // still point to the original bytes; no previously decoded indexes are reused.
     let metadata = ParquetMetaDataReader::new()
         .with_page_index_policy(PageIndexPolicy::Skip)
         .parse_and_finish(&file)
@@ -97,12 +125,12 @@ fn test_sparse_page_index_missing_ranges_preserve_coordinates() {
                 .enumerate()
                 .map(|(col_idx, column)| {
                     let mut column = column.clone().into_builder();
-                    if matches!((rg_idx, col_idx), (0, 0) | (2, 3)) {
+                    if column_index_ranges[rg_idx].as_bytes()[col_idx] == b'.' {
                         column = column
                             .set_column_index_offset(None)
                             .set_column_index_length(None);
                     }
-                    if matches!((rg_idx, col_idx), (0, 1) | (1, 2)) {
+                    if offset_index_ranges[rg_idx].as_bytes()[col_idx] == b'.' {
                         column = column
                             .set_offset_index_offset(None)
                             .set_offset_index_length(None);
@@ -118,8 +146,8 @@ fn test_sparse_page_index_missing_ranges_preserve_coordinates() {
         .collect();
     let metadata = builder.set_row_groups(row_groups).build();
 
-    // Masks canonicalize unordered, duplicate, and out-of-bounds coordinates.
-    // Missing ranges must leave holes in coordinate space, not vector positions.
+    // Select column indexes in row groups 0 and 2, columns 0, 1, and 3; offset
+    // indexes remain unmasked. Mask axes canonicalize duplicates and ignore 99.
     let mut reader = ParquetMetaDataReader::new_with_metadata(metadata.clone())
         .with_page_index_policy(PageIndexPolicy::Optional)
         .with_column_index_mask(ColumnChunkMask::row_groups_and_columns(
@@ -128,14 +156,19 @@ fn test_sparse_page_index_missing_ranges_preserve_coordinates() {
         ));
     reader.read_page_indexes(&file).unwrap();
     let read = reader.finish().unwrap();
-    assert_page_index_cells(
-        &read,
-        |rg, col| {
-            matches!(rg, 0 | 2) && matches!(col, 0 | 1 | 3) && !matches!((rg, col), (0, 0) | (2, 3))
-        },
-        |rg, col| !matches!((rg, col), (0, 1) | (1, 2)),
-    );
     let index = read.page_index().unwrap();
+    // Selected, available indexes must retain their coordinates despite holes
+    // from both the mask and missing ranges.
+    assert_eq!(
+        index_layout(&read, |rg, col| index.column_index(rg, col).is_some()),
+        [".X.X", "....", "XX.."]
+    );
+    assert_eq!(
+        index_layout(&read, |rg, col| index.offset_index(rg, col).is_some()),
+        ["X.XX", "XX.X", "XXXX"]
+    );
+    // Correct presence alone could hide values assigned to the wrong chunk.
+    // Compare each surviving index with the same coordinate in the original.
     let expected = original.page_index().unwrap();
     for rg in 0..3 {
         for col in 0..4 {

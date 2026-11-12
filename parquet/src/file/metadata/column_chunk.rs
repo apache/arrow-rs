@@ -3,6 +3,10 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Sparse storage keyed by row-group and column coordinates.
+//!
+//! Builders use [`ColumnChunkMap`] for arbitrary insertion and replacement. Finished indexes
+//! use [`ColumnChunkEntries`], a sorted boxed slice containing only populated entries. This reduces
+//! retained memory at the cost of binary-search vs hash lookups.
 
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::memory::HeapSize;
@@ -52,6 +56,7 @@ fn validate_dimensions(num_row_groups: usize, num_columns: usize) -> Result<()> 
     Ok(())
 }
 
+// Chunk storage backed by a HashMap to allow builders to insert to arbitrary positions.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ColumnChunkMap<T> {
     num_row_groups: usize,
@@ -136,6 +141,7 @@ impl<T: HeapSize> HeapSize for ColumnChunkMap<T> {
     }
 }
 
+// Chunk storage backed by a boxed slice. Finished (immutable) indexes use this to save memory.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ColumnChunkEntries<T> {
     num_row_groups: usize,
