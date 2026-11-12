@@ -3192,7 +3192,8 @@ mod tests {
             .row_group(0)
             .column(0)
             .dictionary_page_offset()
-            .unwrap() as usize;
+            .expect("writer must emit a dictionary page for dictionary-encoded data")
+            as usize;
         // In the compact protocol the PageHeader starts with field 1 (type,
         // i32): 0x15, then zigzag(DICTIONARY_PAGE = 2) = 0x04.
         assert_eq!(

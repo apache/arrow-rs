@@ -163,7 +163,8 @@ fn test_arrow_rs_gh_12129_missing_dictionary_page() {
         .row_group(0)
         .column(0)
         .dictionary_page_offset()
-        .unwrap() as usize;
+        .expect("writer must emit a dictionary page for dictionary-encoded data")
+        as usize;
     // In the compact protocol the PageHeader starts with field 1 (type, i32):
     // 0x15, then zigzag(DICTIONARY_PAGE = 2) = 0x04.
     assert_eq!(
@@ -173,23 +174,25 @@ fn test_arrow_rs_gh_12129_missing_dictionary_page() {
     );
     bytes[dict_offset + 1] = 0x02; // zigzag(INDEX_PAGE = 1)
 
-    let reader = ArrowReaderBuilder::try_new(Bytes::from(bytes))
+    let mut reader = ArrowReaderBuilder::try_new(Bytes::from(bytes))
         .unwrap()
         .build()
         .unwrap();
-    let mut reader = reader.take(2);
     let err = reader.next().unwrap().unwrap_err().to_string();
     assert!(
         err.contains("missing dictionary page for column"),
         "unexpected error: {err}"
     );
-    // A retry must also error instead of panicking.
-    let err = reader.next().unwrap().unwrap_err().to_string();
-    assert!(
-        err.contains("the current data page failed to decode"),
-        "unexpected error: {err}"
-    );
-    assert!(reader.next().is_none(), "take(2) should end iteration");
+    // A retry must also error instead of panicking. The iterator errors on
+    // every attempt and never ends on its own, so pin further attempts
+    // rather than asserting natural termination.
+    for _ in 0..2 {
+        let err = reader.next().unwrap().unwrap_err().to_string();
+        assert!(
+            err.contains("the current data page failed to decode"),
+            "unexpected error: {err}"
+        );
+    }
 }
 
 /// Reads the file and tries to return the total row count
