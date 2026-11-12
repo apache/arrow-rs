@@ -546,10 +546,13 @@ mod zstd_codec {
         output_buf: &mut Vec<u8>,
     ) -> std::result::Result<(), zstd_safe::ErrorCode> {
         cctx.reset(zstd_safe::ResetDirective::SessionOnly)?;
+        
         // causes frame header to include size
         cctx.set_pledged_src_size(Some(input_buf.len() as u64))?;
-        // zstd can avoid allocating and copying into an input window
-        cctx.set_parameter(zstd_safe::CParameter::StableInBuffer(true))?;
+
+        // zstd can avoid allocating and copying into an input window,
+        // but zstd-rs 0.14 banned this parameter due to safety concerns.
+        // cctx.set_parameter(zstd_safe::CParameter::StableInBuffer(true))?;
 
         let mut input = zstd_safe::InBuffer::around(input_buf);
         loop {
