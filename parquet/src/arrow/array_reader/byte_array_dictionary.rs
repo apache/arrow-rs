@@ -172,7 +172,7 @@ struct ByteArrayDictionaryReader<K: ArrowNativeType, V: OffsetSizeTrait> {
     ///
     /// `source_values` is retained for pointer-identity checks, while
     /// `converted_values` is reused across batches backed by the same dictionary page.
-    converted_values: Option<(ArrayRef, ArrayRef)>,
+    converted_values_cache: Option<(ArrayRef, ArrayRef)>,
 }
 
 impl<K, V> ByteArrayDictionaryReader<K, V>
@@ -210,7 +210,7 @@ where
             rep_levels_buffer: None,
             record_reader,
             hash_scratch: MutableBuffer::new(0),
-            converted_values: None,
+            converted_values_cache: None,
         })
     }
 }
@@ -251,34 +251,33 @@ where
             unreachable!()
         };
         let cache_converted_values = matches!(&buffer, DictionaryBuffer::Dict { .. });
-        let convert_values = cache_converted_values
-            || matches!(
-                output_value_type.as_ref(),
-                ArrowType::Utf8View | ArrowType::BinaryView
-            );
 
-        let array = match (&self.buffer_type, convert_values) {
-            (Some(buffer_type), true) => {
+        // Plain-encoded pages also decode into `buffer_type` and convert, so that
+        // `convert_dictionary_values` validates UTF-8 for unannotated BINARY columns.
+        let array = match &self.buffer_type {
+            Some(buffer_type) => {
                 let buffer_array =
                     buffer.into_array(null_buffer, buffer_type, &mut self.hash_scratch)?;
                 let array = buffer_array.as_any_dictionary();
                 let values = array.values();
-                let converted = match (cache_converted_values, &self.converted_values) {
+                let converted = match (cache_converted_values, &self.converted_values_cache) {
+                    // Reuse the conversion for another batch from the same dictionary page.
                     (true, Some((source, converted))) if Arc::ptr_eq(source, values) => {
                         Arc::clone(converted)
                     }
-                    (cache, _) => {
+                    // Convert and cache values from the first batch of a dictionary page.
+                    (true, _) => {
                         let converted = convert_dictionary_values(values, output_value_type)?;
-                        if cache {
-                            self.converted_values =
-                                Some((Arc::clone(values), Arc::clone(&converted)));
-                        }
+                        self.converted_values_cache =
+                            Some((Arc::clone(values), Arc::clone(&converted)));
                         converted
                     }
+                    // Convert batch-local plain-page values without caching them.
+                    (false, _) => convert_dictionary_values(values, output_value_type)?,
                 };
                 array.with_values(converted)
             }
-            _ => buffer.into_array(null_buffer, &self.data_type, &mut self.hash_scratch)?,
+            None => buffer.into_array(null_buffer, &self.data_type, &mut self.hash_scratch)?,
         };
 
         self.record_reader.reset();
