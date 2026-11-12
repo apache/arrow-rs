@@ -161,7 +161,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    let dictionary_cases = [(400, 8192), (8192, 8192), (16, 65_536), (8192, 65_536)];
+    let dictionary_cases = [(400, 8192), (8192, 8192), (400, 65_536), (8192, 65_536)];
     for (referenced_values, num_values) in dictionary_cases {
         group.bench_function(
             format!(
