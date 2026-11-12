@@ -264,6 +264,7 @@ class RoutingTests(unittest.TestCase):
             (["parquet-variant/src/lib.rs"], {"parquet"}),
             (["parquet-variant-compute/src/lib.rs"], {"parquet"}),
             (["arrow-arith/src/lib.rs"], {"arrow", "parquet", "integration"}),
+            (["arrow-hash/src/lib.rs"], {"arrow", "parquet", "integration"}),
             (["arrow-ord/src/lib.rs"], {"arrow", "parquet", "integration"}),
             (["arrow-string/src/lib.rs"], {"arrow", "parquet", "integration"}),
             # A move or deletion must still select the affected suites.

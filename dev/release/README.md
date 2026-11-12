@@ -215,6 +215,7 @@ Rust Arrow Crates:
 (cd arrow-schema && cargo publish)
 (cd arrow-data && cargo publish)
 (cd arrow-array && cargo publish)
+(cd arrow-hash && cargo publish)
 (cd arrow-cmp && cargo publish)
 (cd arrow-select && cargo publish)
 (cd arrow-ord && cargo publish)

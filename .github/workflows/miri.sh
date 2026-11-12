@@ -20,6 +20,7 @@ CRATES="
     -p arrow-cast
     -p arrow-csv
     -p arrow-data
+    -p arrow-hash
     -p arrow-ipc
     -p arrow-json
     -p arrow-cmp
