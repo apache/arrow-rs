@@ -364,11 +364,13 @@ impl ByteViewArrayDecoderPlain {
                     .unwrap(),
             );
 
-            end_offset = start_offset + len as usize;
-
-            if end_offset > buf_len {
-                return Err(ParquetError::EOF("eof decoding byte array".into()));
-            }
+            // `checked_add` because the length comes from the page: on a 32-bit
+            // target a corrupt one could wrap `end_offset` below `start_offset`
+            // and pass the bounds check below.
+            end_offset = start_offset
+                .checked_add(len as usize)
+                .filter(|&end| end <= buf_len)
+                .ok_or_else(|| ParquetError::EOF("eof decoding byte array".into()))?;
 
             if VALIDATE_UTF8 {
                 // It seems you are trying to understand what's going on here, take a breath and be patient.
@@ -833,6 +835,22 @@ mod tests {
 
         decoder.read(&mut view_buffer, 1).unwrap();
         assert_eq!(view_buffer.buffers.len(), 1);
+    }
+
+    #[test]
+    fn test_byte_view_array_plain_decoder_read_length_overflow_returns_error() {
+        // A length of 0xFFFF_FFFC after a 4 byte prefix ends at offset 2^32,
+        // which is 0 in a 32-bit usize.
+        let buffer = Bytes::from_static(&[0xFC, 0xFF, 0xFF, 0xFF, b'a', b'b', b'c', b'd']);
+        for validate_utf8 in [false, true] {
+            let mut decoder =
+                ByteViewArrayDecoderPlain::new(buffer.clone(), 1, Some(1), validate_utf8);
+            let mut output = ViewBuffer::with_capacity(0);
+
+            let error = decoder.read(&mut output, 1).unwrap_err();
+            assert!(matches!(error, ParquetError::EOF(_)), "{error}");
+            assert!(output.views.is_empty());
+        }
     }
 
     #[test]
