@@ -560,7 +560,10 @@ fn take_nulls<I: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
 ) -> Option<NullBuffer> {
     match values.filter(|n| n.null_count() > 0) {
         Some(n) => NullBuffer::from_unsliced_buffer(
-            take_bits::<_, VALIDATE_INDICES>(n.inner(), indices).into_inner(),
+            // SAFETY: when `VALIDATE_INDICES` is false, `take_impl::<_, false>` is only
+            // reached after `check_bounds` verified every index against the array
+            // length, which equals `n.len()`. Otherwise `take_bits` checks each index.
+            unsafe { take_bits::<_, VALIDATE_INDICES>(n.inner(), indices) }.into_inner(),
             indices.len(),
         ),
         None => indices.nulls().cloned(),
@@ -643,8 +646,16 @@ unsafe fn pack_bit(src: *const u8, bit_idx: usize, out_pos: usize) -> u8 {
     ((byte >> (bit_idx & 7)) & 1) << out_pos // extract the bit, shift to output position
 }
 
+/// Gather the bits of `values` selected by `indices` into a new [`BooleanBuffer`].
+///
+/// # Safety
+///
+/// When `VALIDATE_INDICES` is `false`, every non-null value in `indices` must be
+/// less than `values.len()`; the source bits are read through raw pointers with
+/// no bounds check. When `VALIDATE_INDICES` is `true`, there are no additional
+/// requirements and out-of-bounds indices panic.
 #[inline(never)]
-fn take_bits<I: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
+unsafe fn take_bits<I: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
     values: &BooleanBuffer,
     indices: &PrimitiveArray<I>,
 ) -> BooleanBuffer {
@@ -719,8 +730,15 @@ fn take_bits<I: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
 
 /// Gather value bits and validity bits from two boolean buffers in a single pass.
 /// Used when the values array itself has nulls, avoiding two separate `take_bits` calls.
+///
+/// # Safety
+///
+/// When `VALIDATE_INDICES` is `false`, every non-null value in `indices` must be
+/// less than both `values.len()` and `validity.len()`; the source bits are read
+/// through raw pointers with no bounds check. When `VALIDATE_INDICES` is `true`,
+/// there are no additional requirements and out-of-bounds indices panic.
 #[inline(never)]
-fn take_bits_with_validity<I: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
+unsafe fn take_bits_with_validity<I: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
     values: &BooleanBuffer,
     validity: &BooleanBuffer,
     indices: &PrimitiveArray<I>,
@@ -843,12 +861,19 @@ fn take_boolean<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
     let bits = array.values();
     match array.nulls().filter(|n| n.null_count() > 0) {
         Some(array_nulls) => {
-            let (val_buf, null_buf) =
-                take_bits_with_validity::<_, VALIDATE_INDICES>(bits, array_nulls.inner(), indices);
+            // SAFETY: when `VALIDATE_INDICES` is false, `take_impl::<_, false>` is only
+            // reached after `check_bounds` verified every index against `array.len()`,
+            // which equals the length of both `bits` and `array_nulls`. Otherwise
+            // `take_bits_with_validity` checks each index.
+            let (val_buf, null_buf) = unsafe {
+                take_bits_with_validity::<_, VALIDATE_INDICES>(bits, array_nulls.inner(), indices)
+            };
             BooleanArray::new(val_buf, null_buf)
         }
         None => {
-            let val_buf = take_bits::<_, VALIDATE_INDICES>(bits, indices);
+            // SAFETY: as above, `bits.len()` equals `array.len()`, which was
+            // bounds-checked before `take_impl::<_, false>` was entered.
+            let val_buf = unsafe { take_bits::<_, VALIDATE_INDICES>(bits, indices) };
             let null_buf = take_nulls::<_, VALIDATE_INDICES>(None, indices);
             BooleanArray::new(val_buf, null_buf)
         }
