@@ -375,6 +375,8 @@ impl ParquetMetaDataReader {
     ///
     /// The mask applies only when the column index policy is not [`PageIndexPolicy::Skip`].
     /// [`PageIndexPolicy::Required`] validates only selected column chunks.
+    ///
+    /// See [`PageIndexProvider`] for more details on customizing page index loading.
     pub fn with_column_index_mask(mut self, mask: ColumnChunkMask) -> Self {
         self.column_index_mask = mask;
         self
@@ -384,6 +386,8 @@ impl ParquetMetaDataReader {
     ///
     /// The mask applies only when the offset index policy is not [`PageIndexPolicy::Skip`].
     /// [`PageIndexPolicy::Required`] validates only selected column chunks.
+    ///
+    /// See [`PageIndexProvider`] for more details on customizing page index loading.
     pub fn with_offset_index_mask(mut self, mask: ColumnChunkMask) -> Self {
         self.offset_index_mask = mask;
         self
