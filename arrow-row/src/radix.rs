@@ -7,7 +7,7 @@
 //! The Arrow row format produces big-endian, memcmp-comparable byte sequences,
 //! so they can be radix sorted directly. The sort skips the bytes that every
 //! row shares, radix sorts a 12-byte key taken from each row after them, and
-//! compares the rest of a row only to order rows whose keys are equal.
+//! sorts rows whose keys are equal again by the bytes after the key.
 //!
 //! # When to use this
 //!
@@ -32,9 +32,10 @@
 //! - **Input that is already sorted.** [`lexsort_to_indices`] detects it in one
 //!   pass, while radix sort does the same work as on unsorted input.
 //! - **Large groups of rows that are equal in their first 12 bytes after the
-//!   shared prefix.** Radix sort orders each such group by comparing the rest
-//!   of each row. Examples are strings with a few common prefixes and three or
-//!   more low-cardinality columns.
+//!   shared prefix.** Radix sort orders each such group by keying its rows
+//!   again on the bytes after the key, which reads the rows in random order.
+//!   Examples are strings with a few common prefixes and three or more
+//!   low-cardinality columns.
 //! - **A sort with a limit.** [`lexsort_to_indices`] takes a `limit` and orders
 //!   only the first `limit` rows, while [`radix_sort_to_indices`] sorts every
 //!   row.
@@ -62,7 +63,9 @@ const KEY_BYTES: u32 = 12;
 ///
 /// Rows that compare equal can appear in any order in the result.
 ///
-/// Besides the result, the sort allocates two buffers of 16 bytes per row.
+/// Besides the result, the sort allocates two buffers of 16 bytes per row, and
+/// for rows longer than 12 bytes past their shared prefix, a stack of at most
+/// one 24-byte frame per 12 bytes of the longest row.
 ///
 /// See the [module-level documentation](self) for guidance on when radix sort
 /// is faster than [`lexsort_to_indices`].
@@ -99,7 +102,7 @@ pub fn radix_sort_to_indices(rows: &Rows) -> Result<UInt32Array, ArrowError> {
     };
 
     // Bytes that every row shares can't order rows, so the key starts after
-    // them. The longest row decides below whether equal keys need comparing.
+    // them. The longest row decides below whether equal keys need more sorting.
     let first = first.data();
     let (prefix, max_len) =
         rows.iter()
@@ -113,34 +116,12 @@ pub fn radix_sort_to_indices(rows: &Rows) -> Result<UInt32Array, ArrowError> {
     // high 96 bits and the row's index in its low 32 bits, so entries compare
     // by key and move as one value. 12 bytes cover an Int32 and an Int64 after
     // their shared null and high bytes, the shape of a BIGINT join key.
-    //
-    // A row shorter than the key takes its last key bytes from the next row,
-    // because a fixed-size load is one instruction and a variable-length copy
-    // calls memcpy. Those bytes can only reorder equal rows: no row is a proper
-    // prefix of another, because every field encoding is self-delimiting, so
-    // two different rows differ within the shorter one. That load reads the
-    // buffer through the offsets, because `Row::data` ends at the row.
     let buffer = rows.buffer.as_slice();
     let mut entries: Vec<u128> = rows
         .offsets
         .windows(2)
         .enumerate()
-        .map(|(i, w)| {
-            let start = w[0] + prefix;
-            let bytes = match buffer.get(start..).and_then(<[u8]>::first_chunk::<16>) {
-                Some(bytes) => *bytes,
-                // The last rows of the buffer are padded with zeros instead
-                None => {
-                    let tail = &buffer[start..];
-                    let mut bytes = [0u8; 16];
-                    bytes[..tail.len()].copy_from_slice(tail);
-                    bytes
-                }
-            };
-            // The last 4 bytes loaded lie past the key, and the index replaces
-            // them
-            (u128::from_be_bytes(bytes) & !u128::from(u32::MAX)) | i as u128
-        })
+        .map(|(i, w)| entry(buffer, w[0] + prefix, i))
         .collect();
     let mut temp = vec![0u128; n];
     // The first key byte differs between rows unless every row is equal,
@@ -148,30 +129,15 @@ pub fn radix_sort_to_indices(rows: &Rows) -> Result<UInt32Array, ArrowError> {
     msd_radix_sort::<true>(&mut entries, &mut temp, 0, true);
 
     // Entries with equal keys come from rows that agree on every byte before
-    // prefix + KEY_BYTES, so the rest of each row decides their order. When no row is
-    // longer than that, equal keys mean equal rows and there is nothing left
-    // to compare.
-    //
-    // TODO: re-key large runs of equal keys instead of comparing them: load
-    // the next 12 bytes of each row in the run into its entries and radix sort
-    // the run again, with the matching slice of temp as scratch. Each row is
-    // then read once per key instead of once per comparison. This comparison
-    // sort dominates for dictionary keys, strings with a few common prefixes,
-    // and three or more low-cardinality columns.
+    // prefix + KEY_BYTES, so the rest of each row decides their order. When no
+    // row is longer than that, equal keys mean equal rows and there is nothing
+    // left to sort.
     let suffix = prefix + KEY_BYTES as usize;
     if max_len > suffix {
+        let mut stack = Vec::new();
         for run in entries.chunk_by_mut(|&a, &b| key(a) == key(b)) {
             if run.len() > 1 {
-                // The low 32 bits of an entry hold the index. A row that ends
-                // before suffix compares as empty, which is correct because it
-                // shares its key only with rows equal to it.
-                run.sort_unstable_by(|&a, &b| {
-                    let a = rows.row(a as u32 as usize).data();
-                    let b = rows.row(b as u32 as usize).data();
-                    a.get(suffix..)
-                        .unwrap_or_default()
-                        .cmp(b.get(suffix..).unwrap_or_default())
-                });
+                sort_ties(rows, run, suffix, &mut stack);
             }
         }
     }
@@ -284,7 +250,108 @@ fn msd_radix_sort<const HIGH: bool>(
     }
 }
 
+/// The entry for row `index`, keyed by the 12 bytes of the rows buffer that
+/// start at `start`.
+///
+/// A row that ends within the key takes its last key bytes from the next row,
+/// because a fixed-size load is one instruction and a variable-length copy
+/// calls memcpy. Those bytes can only reorder equal rows: the rows sorted
+/// against each other agree on every byte before the key, and no row is a
+/// proper prefix of another, because every field encoding is self-delimiting,
+/// so two different rows differ within the shorter one. The load reads the buffer
+/// directly, because `Row::data` ends at the row.
+fn entry(buffer: &[u8], start: usize, index: usize) -> u128 {
+    let bytes = match buffer.get(start..).and_then(<[u8]>::first_chunk::<16>) {
+        Some(bytes) => *bytes,
+        // The last rows of the buffer are padded with zeros instead
+        None => {
+            let tail = buffer.get(start..).unwrap_or_default();
+            let mut bytes = [0u8; 16];
+            bytes[..tail.len()].copy_from_slice(tail);
+            bytes
+        }
+    };
+    // The last 4 bytes loaded lie past the key, and the index replaces them
+    (u128::from_be_bytes(bytes) & !u128::from(u32::MAX)) | index as u128
+}
+
+/// Orders `run`, whose rows agree on every byte before `offset`, by the rest
+/// of each row.
+///
+/// Each round keys a run's entries by the next 12 bytes of their rows and
+/// sorts them, then does the same for each sub-run whose keys still tie. A row
+/// is read once per round instead of once per comparison. `stack` holds one
+/// frame per round in progress instead of recursion, because rows can be
+/// arbitrarily long, so its length is bounded by the longest row divided by
+/// 12, not by the number of rows. It is empty on entry and on return.
+fn sort_ties(rows: &Rows, run: &mut [u128], offset: usize, stack: &mut Vec<(usize, usize, usize)>) {
+    // A frame is a run sorted by one round: its end, the offset of its next
+    // round, and the start of the next sub-run to look at.
+    if let Some(next) = sort_round(rows, run, offset) {
+        stack.push((run.len(), next, 0));
+    }
+    while let Some(frame) = stack.last_mut() {
+        let (end, next, start) = *frame;
+        if start == end {
+            stack.pop();
+            continue;
+        }
+        let first = key(run[start]);
+        let len = run[start..end]
+            .iter()
+            .take_while(|&&e| key(e) == first)
+            .count();
+        frame.2 = start + len;
+        if len > 1
+            && let Some(after) = sort_round(rows, &mut run[start..start + len], next)
+        {
+            stack.push((start + len, after, start));
+        }
+    }
+}
+
+/// Keys the entries of `run` by the 12 bytes of their rows at `offset` and
+/// sorts them.
+///
+/// Returns the offset of the next round, or `None` if the key reaches the end
+/// of every row in `run`, because entries that still tie then come from equal
+/// rows. Stopping at the run's own longest row matters: equal short rows next
+/// to each other borrow equal bytes from the rows after them, and would keep
+/// tying until the key passed the longest row of the whole input.
+///
+/// When every entry still ties, the next round starts at the first byte where
+/// any row of the run differs, found in one pass. Otherwise runs that share
+/// long stretches, such as rows with the same long string, would take a round
+/// of reloading every row for each 12 bytes of the stretch.
+fn sort_round(rows: &Rows, run: &mut [u128], offset: usize) -> Option<usize> {
+    let buffer = rows.buffer.as_slice();
+    let row = |index: usize| &buffer[rows.offsets[index]..rows.offsets[index + 1]];
+    let mut longest = 0;
+    for e in run.iter_mut() {
+        // The low 32 bits of an entry hold its row's index
+        let index = *e as u32 as usize;
+        let (start, end) = (rows.offsets[index], rows.offsets[index + 1]);
+        longest = longest.max(end - start);
+        *e = entry(buffer, start + offset, index);
+    }
+    run.sort_unstable();
+    let mut next = offset + KEY_BYTES as usize;
+    // The run is sorted, so its first and last keys are equal only if all are
+    if next < longest && key(run[0]) == key(run[run.len() - 1]) {
+        let rest = |e: u128| row(e as u32 as usize).get(next..).unwrap_or_default();
+        let first = rest(run[0]);
+        next += run[1..].iter().fold(first.len(), |shared, &e| {
+            common_prefix(&first[..shared], rest(e))
+        });
+    }
+    (next < longest).then_some(next)
+}
+
 /// The length of the longest prefix that `a` and `b` share
+// `radix_sort_to_indices` calls this once per row to find the shared prefix.
+// With `sort_round` as a second caller, release builds stop inlining it there,
+// which adds a call per row to every sort.
+#[inline(always)]
 fn common_prefix(a: &[u8], b: &[u8]) -> usize {
     // Most keys share less than 8 bytes, and a plain byte loop costs the least
     // for them
@@ -874,6 +941,151 @@ mod tests {
             let indices = sort(&rows);
             assert_sorted(&rows, &indices);
             assert_permutation(&indices, 500);
+        }
+    }
+
+    /// `sort_ties` orders entries whose keys say nothing, given only their
+    /// indices, by the whole row.
+    #[test]
+    fn test_sort_ties_orders_rows_from_offset() {
+        let mut rng = StdRng::seed_from_u64(0x7135);
+        for _ in 0..50 {
+            let len = rng.random_range(1..300);
+            let strings: ArrayRef = Arc::new(StringArray::from_iter((0..len).map(|_| {
+                rng.random_bool(0.9).then(|| {
+                    let n = rng.random_range(0..40);
+                    "ab".repeat(n / 2) + &rng.random_range(0..3).to_string()
+                })
+            })));
+            let ints: ArrayRef = Arc::new(Int32Array::from_iter_values(
+                (0..len).map(|_| rng.random_range(0..4)),
+            ));
+            let converter = RowConverter::new(vec![
+                SortField::new(DataType::Utf8),
+                SortField::new(DataType::Int32),
+            ])
+            .unwrap();
+            let rows = converter.convert_columns(&[strings, ints]).unwrap();
+
+            let mut entries: Vec<u128> = (0..len as u128).collect();
+            sort_ties(&rows, &mut entries, 0, &mut vec![]);
+            let indices: Vec<u32> = entries.iter().map(|&e| e as u32).collect();
+            assert_sorted(&rows, &indices);
+            assert_permutation(&indices, len);
+        }
+    }
+
+    /// When a round leaves every entry tied, `sort_round` skips to the first
+    /// byte where the run's rows differ, and to the end when they are equal.
+    #[test]
+    fn test_sort_round_skips_bytes_the_run_shares() {
+        let shared = "a value every row shares, longer than one key";
+        let cases: [Vec<String>; 3] = [
+            (0..40).map(|i| format!("{shared}{}", i % 7)).collect(),
+            (0..40)
+                .map(|i| format!("{shared}{}{shared}", i % 3))
+                .collect(),
+            vec![shared.to_string(); 40],
+        ];
+        for values in cases {
+            let array: ArrayRef = Arc::new(StringArray::from(values));
+            let converter = RowConverter::new(vec![SortField::new(DataType::Utf8)]).unwrap();
+            let rows = converter.convert_columns(&[array]).unwrap();
+            let first = rows.row(0);
+            let differ = rows
+                .iter()
+                .map(|row| common_prefix(first.data(), row.data()))
+                .min()
+                .unwrap();
+            let longest = rows.iter().map(|row| row.data().len()).max().unwrap();
+
+            let mut entries: Vec<u128> = (0..rows.num_rows() as u128).collect();
+            let expected = (differ < longest).then_some(differ);
+            assert_eq!(sort_round(&rows, &mut entries, 0), expected);
+        }
+    }
+
+    /// A run that splits into many tied sub-runs, and a run of equal short rows
+    /// next to one long row, leave only a few frames on the stack.
+    #[test]
+    fn test_sort_ties_stack_stays_small() {
+        // 1000 rows share their first 16 bytes, then split into 500 pairs that
+        // share the next 16 bytes and differ in the last one.
+        let pairs: Vec<String> = (0..1000)
+            .map(|i| format!("{:>16}{:>16}{}", "same", i / 2, i % 2))
+            .collect();
+        // Equal one-byte rows borrow equal key bytes from the rows after them
+        let mut short = vec!["a".to_string(); 1000];
+        short.push("b".repeat(4000));
+
+        for values in [pairs, short] {
+            let len = values.len();
+            let array: ArrayRef = Arc::new(StringArray::from(values));
+            let converter = RowConverter::new(vec![SortField::new(DataType::Utf8)]).unwrap();
+            let rows = converter.convert_columns(&[array]).unwrap();
+
+            let mut entries: Vec<u128> = (0..len as u128).collect();
+            let mut stack = Vec::new();
+            sort_ties(&rows, &mut entries, 0, &mut stack);
+            assert!(stack.capacity() <= 8, "capacity {}", stack.capacity());
+            let indices: Vec<u32> = entries.iter().map(|&e| e as u32).collect();
+            assert_sorted(&rows, &indices);
+            assert_permutation(&indices, len);
+        }
+    }
+
+    /// Rows that tie on their key through hundreds of 12-byte rounds, and
+    /// duplicates longer than the key, are ordered.
+    #[test]
+    fn test_radix_sort_ties_through_long_rows() {
+        let shared = "x".repeat(5000);
+        let values: Vec<String> = (0..300)
+            .map(|i| format!("{shared}{}", (i * 7) % 20))
+            .collect();
+        let array: ArrayRef = Arc::new(StringArray::from(values));
+        let converter = RowConverter::new(vec![SortField::new(DataType::Utf8)]).unwrap();
+        let rows = converter.convert_columns(&[array]).unwrap();
+
+        let indices = sort(&rows);
+        assert_sorted(&rows, &indices);
+        assert_permutation(&indices, 300);
+    }
+
+    /// A low-cardinality Int32, a small Int64, and a larger Int64, the shape of
+    /// sorting lineitem by (l_linenumber, l_suppkey, l_orderkey). The 12-byte
+    /// key ends before the bytes of the last column that vary, so most rows tie
+    /// on their key.
+    #[test]
+    fn test_radix_sort_ties_past_key_on_integer_columns() {
+        let mut rng = StdRng::seed_from_u64(0x0505);
+        let len = 5000;
+        for descending in [false, true] {
+            for nulls_first in [false, true] {
+                let options = SortOptions {
+                    descending,
+                    nulls_first,
+                };
+                let line: ArrayRef = Arc::new(Int32Array::from_iter(
+                    (0..len).map(|_| rng.random_bool(0.95).then(|| rng.random_range(1..8))),
+                ));
+                let supplier: ArrayRef = Arc::new(Int64Array::from_iter_values(
+                    (0..len).map(|_| rng.random_range(0..500)),
+                ));
+                let order: ArrayRef = Arc::new(Int64Array::from_iter_values(
+                    (0..len).map(|_| rng.random_range(0..1 << 31)),
+                ));
+                let converter = RowConverter::new(vec![
+                    SortField::new_with_options(DataType::Int32, options),
+                    SortField::new_with_options(DataType::Int64, options),
+                    SortField::new_with_options(DataType::Int64, options),
+                ])
+                .unwrap();
+                let rows = converter.convert_columns(&[line, supplier, order]).unwrap();
+
+                let indices = sort(&rows);
+                assert_sorted(&rows, &indices);
+                assert_permutation(&indices, len);
+            }
         }
     }
 
