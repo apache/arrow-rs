@@ -103,7 +103,7 @@ jobs:
     needs: changes
     if: contains(fromJSON(needs.changes.outputs.suites), 'dev')
     permissions:
-      security-event: write # for zizmor
+      security-events: write # for zizmor
     uses: $/.github/workflows/dev.yml
 
   rust:
