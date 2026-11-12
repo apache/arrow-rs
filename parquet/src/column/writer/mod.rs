@@ -611,19 +611,13 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
         let mut values_offset = 0;
         let mut levels_offset = 0;
-        let both_levels_compact = !matches!(def_levels, LevelDataRef::Materialized(_))
-            && !matches!(rep_levels, LevelDataRef::Materialized(_));
-        let has_levels = !matches!(def_levels, LevelDataRef::Absent)
-            || !matches!(rep_levels, LevelDataRef::Absent);
 
-        // When both level vectors are compact (Uniform or Absent), there is no
-        // materialized slice to split and the per-mini-batch work is O(1), so we
-        // can safely use a much larger batch size.
-        let base_batch_size = if both_levels_compact && has_levels {
-            self.column_props.data_page_row_count_limit
-        } else {
-            self.props.write_batch_size()
-        };
+        // Limits are checked between mini-batches, so `write_batch_size` is the
+        // enforcement granularity documented for `set_write_batch_size`.
+        // Batching by `data_page_row_count_limit` instead made that granularity
+        // depend on whether the level data happened to be compact; see
+        // https://github.com/apache/arrow-rs/issues/10931.
+        let base_batch_size = self.props.write_batch_size();
         debug_assert!(base_batch_size > 0);
 
         let chunker = ByteBudgetChunker::new(&self.descr, &self.column_props, base_batch_size);

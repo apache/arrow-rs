@@ -4,7 +4,8 @@
 
 //! Tests that the ArrowWriter correctly lays out values into multiple pages
 
-use arrow::array::{Int32Array, StringArray};
+use arrow::array::{ArrayRef, Int32Array, Int64Array, StringArray};
+use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow_array::builder::{BinaryBuilder, Int32Builder, ListBuilder};
 use arrow_array::types::Int32Type;
@@ -973,4 +974,92 @@ fn test_dictionary_spill_large_values() {
             }],
         },
     });
+}
+
+#[test]
+fn test_write_batch_size_bounds_compact_level_batches() {
+    // https://github.com/apache/arrow-rs/issues/10931
+    //
+    // A flat nullable column whose batch contains no nulls produces compact
+    // (Uniform) definition levels. That path used to batch at
+    // `data_page_row_count_limit` and never consult `write_batch_size`, so
+    // the same writer properties produced different page boundaries depending
+    // on whether the batch happened to contain a null. `write_batch_size` is
+    // documented as the granularity at which the other page limits are
+    // checked, so all three level shapes must lay out identically and the
+    // boundaries must move with `write_batch_size`.
+    const ROWS: usize = 12_000;
+
+    fn rows_per_page(write_batch_size: usize, nullable: bool, with_null: bool) -> Vec<usize> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            DataType::Int64,
+            nullable,
+        )]));
+        let col: Int64Array = (0..ROWS as i64)
+            .map(|i| if with_null && i == 0 { None } else { Some(i) })
+            .collect();
+        let batch =
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(col) as ArrayRef]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_write_batch_size(write_batch_size)
+            .set_data_page_row_count_limit(3_000)
+            .set_dictionary_enabled(false)
+            .build();
+
+        let mut buf = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buf, schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let read_options =
+            ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::from(true));
+        let reader =
+            ParquetRecordBatchReaderBuilder::try_new_with_options(Bytes::from(buf), read_options)
+                .unwrap();
+        let meta = reader.metadata();
+        let page_index = meta.page_index_for_row_group(0);
+        let page_locations = page_index
+            .page_locations(0)
+            .expect("page locations missing");
+        let mut rows: Vec<usize> = page_locations
+            .windows(2)
+            .map(|w| (w[1].first_row_index - w[0].first_row_index) as usize)
+            .collect();
+        let last = page_locations.last().expect("no data pages");
+        rows.push((meta.row_group(0).num_rows() - last.first_row_index) as usize);
+        rows
+    }
+
+    // The row count limit is only checked between mini-batches, so pages end
+    // at the first multiple of `write_batch_size` at or past 3_000, and a
+    // `write_batch_size` larger than the limit defeats it entirely. These are
+    // the values the issue records for the absent and materialized level
+    // paths, which already followed that rule.
+    let expected = [
+        (8, vec![3000, 3000, 3000, 3000]),
+        (64, vec![3008, 3008, 3008, 2976]),
+        (1024, vec![3072, 3072, 3072, 2784]),
+        (100_000, vec![12000]),
+    ];
+
+    for (write_batch_size, want) in expected {
+        let absent = rows_per_page(write_batch_size, false, false);
+        let uniform = rows_per_page(write_batch_size, true, false);
+        let materialized = rows_per_page(write_batch_size, true, true);
+
+        assert_eq!(
+            uniform, want,
+            "write_batch_size={write_batch_size}, compact (Uniform) levels"
+        );
+        assert_eq!(
+            absent, want,
+            "write_batch_size={write_batch_size}, absent levels"
+        );
+        assert_eq!(
+            materialized, want,
+            "write_batch_size={write_batch_size}, materialized levels"
+        );
+    }
 }
