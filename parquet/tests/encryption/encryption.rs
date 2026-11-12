@@ -951,6 +951,9 @@ fn bloom_filter_test_batch() -> RecordBatch {
 /// error rather than silently writing the bloom filter in plaintext
 #[test]
 fn test_write_bloom_filter_for_encrypted_column_errors() {
+    const AES_128_FOOTER_KEY: &[u8; 16] = b"0123456789012345"; // 128bit/16
+    const AES_128_COLUMN_KEYS: [&[u8; 16]; 2] = [b"1234567890123450", b"1234567890123451"];
+
     let footer_key = AES_128_FOOTER_KEY.to_vec();
     let column_key = AES_128_COLUMN_KEYS[0].to_vec();
     let batch = bloom_filter_test_batch();
