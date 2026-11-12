@@ -165,7 +165,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     for (referenced_values, num_values) in dictionary_cases {
         group.bench_function(
             format!(
-                "StreamWriter/write_1/dict/referenced_values={referenced_values}/values={num_values}/value_bytes=256"
+                "StreamWriter/dict/referenced_values={referenced_values}/values={num_values}/value_bytes=256"
             ),
             move |b| {
                 let batch = create_dict_batch_with_unreferenced_values(
