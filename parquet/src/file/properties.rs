@@ -706,6 +706,11 @@ impl WriterPropertiesBuilder {
     }
 
     /// Sets FileEncryptionProperties (defaults to `None`)
+    ///
+    /// # Notes
+    ///
+    /// Writing encrypted bloom filters is not yet supported. See
+    /// <https://github.com/apache/arrow-rs/issues/12166>
     #[cfg(feature = "encryption")]
     pub fn with_file_encryption_properties(
         mut self,
