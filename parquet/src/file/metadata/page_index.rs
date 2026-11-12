@@ -16,6 +16,7 @@ use crate::file::page_index::{
     offset_index::{OffsetIndexMetaData, PageLocation},
 };
 use std::sync::Arc;
+use crate::file::metadata::ColumnChunkMask;
 
 /// Trait for accessing Parquet [Page Index] data for efficient page-level skipping
 ///
@@ -125,10 +126,17 @@ use std::sync::Arc;
 /// }
 /// ```
 ///
+/// # Caching the Page Index
+///
+/// The Page Index can be much larger than the rest of the metadata, so some
+/// systems may want to incrementally fetch or assemble the relevant data. See
+/// [`page_index_cache.rs`] for an example of an incremental page index cache.
+///
 /// [Page Index]: https://parquet.apache.org/docs/file-format/pageindex/
 /// [`ColumnIndex`]: crate::file::page_index::column_index::ColumnIndexMetaData
 /// [`OffsetIndex`]: crate::file::page_index::offset_index::OffsetIndexMetaData
 /// [`ColumnChunkMetaData`]: crate::file::metadata::ColumnChunkMetaData
+/// [`page_index_cache.rs`]: https://github.com/apache/arrow-rs/blob/main/parquet/examples/page_index_cache.rs
 pub trait PageIndexProvider: Send + Sync + std::fmt::Debug {
     /// Returns `true` if offset index structures are available via this provider
     ///
@@ -484,6 +492,11 @@ impl PageIndex {
     /// Each entry contains its `(row_group_index, column_index)` coordinate and owned index
     /// metadata. This can be used to move parsed indexes into a cache without cloning their
     /// metadata. Entries are returned in row-major order.
+    ///
+    /// For an example of using this to populate an incremental page index
+    /// cache, see [`page_index_cache.rs`]
+    ///
+    /// [`page_index_cache.rs`]: https://github.com/apache/arrow-rs/blob/main/parquet/examples/page_index_cache.rs
     #[expect(clippy::type_complexity)]
     pub fn into_index_entries(
         self,

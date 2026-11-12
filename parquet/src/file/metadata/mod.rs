@@ -107,8 +107,10 @@ pub(crate) use writer::ThriftMetadataWriter;
 /// The individual fields of this structure are stored in a way that make cloning
 /// this structure low-cost.
 ///
-/// See the [`ParquetMetaDataBuilder`] to create and modify this structure.
+/// See [`PageIndexProvider`] for details on customizing page index handling.  
 ///
+/// See the [`ParquetMetaDataBuilder`] to create and modify this structure.
+/// 
 /// [`parquet.thrift`]: https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift
 #[derive(Debug, Clone)]
 pub struct ParquetMetaData {
