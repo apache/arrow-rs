@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 """Check CI configuration and routing policy, following Comet's structure.
 
@@ -70,6 +57,8 @@ def validate_fork_ci(workflows, ci):
     for name, job in rust["jobs"].items():
         if name in {"lint", "unused-dependencies"}:
             assert "if" not in job, f"rust/{name}: lightweight check must run upstream"
+        elif name in {"macos", "windows"}:
+            assert job.get("if") == "${{ !inputs.lint-only && github.repository == 'apache/arrow-rs' }}", f"rust/{name}: must only run upstream outside lint-only mode"
         else:
             assert job.get("if") == "${{ !inputs.lint-only }}", f"rust/{name}: runs during lint-only mode"
     docs = load_yaml(workflows / "docs.yml")
@@ -134,7 +123,7 @@ def validate_config(root=ROOT):
     assert set(events) == {"pull_request", "push", "merge_group", "workflow_dispatch"}, "Unexpected CI triggers"
     assert events["pull_request"] is None, "Required CI must run on every PR"
     assert events["merge_group"] == {"types": ["checks_requested"]}, "Missing queue trigger"
-    assert events["push"] == {"branches-ignore": ["asf-site", "gh-readonly-queue/**"]}, "Fork branches must trigger CI without queue-branch push runs"
+    assert events["push"] == {"branches-ignore": ["asf-site", "gh-readonly-queue/**", "dependabot/**"]}, "Fork branches must trigger CI without queue-branch or Dependabot push runs"
     validate_fork_ci(workflows, ci)
 
     gate = jobs["required-checks"]
@@ -307,6 +296,10 @@ class ConfigurationTests(unittest.TestCase):
             (".asf.yaml", "enforcement: active", "enforcement: disabled"),
             (".asf.yaml", "type: merge_queue", "type: deletion"),
             (".github/workflows/rust.yml", "    if: ${{ !inputs.lint-only }}\n", ""),
+            (".github/workflows/rust.yml", "    if: ${{ !inputs.lint-only && github.repository == 'apache/arrow-rs' }}\n", ""),
+            (".github/workflows/rust.yml", " && github.repository == 'apache/arrow-rs'", ""),
+            (".github/workflows/rust.yml", "!inputs.lint-only && ", ""),
+            (".github/workflows/rust.yml", "    if: ${{ !inputs.lint-only && github.repository == 'apache/arrow-rs' }}\n    name: Test on Windows\n", "    if: ${{ !inputs.lint-only }}\n    name: Test on Windows\n"),
             (".github/workflows/ci.yml", "      lint-only: ${{ needs.changes.outputs.fork-pr == 'true' }}\n", ""),
             (".github/workflows/docs.yml", "github.repository == 'apache/arrow-rs' && ", ""),
             (".asf.yaml", '"Required Checks"', '"Missing Check"'),

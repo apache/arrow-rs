@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Converting Parquet schema <--> Arrow schema: [`ArrowSchemaConverter`] and [parquet_to_arrow_schema]
 
@@ -2798,6 +2785,39 @@ mod tests {
         assert_eq!(
             arrow_schema.field(0).try_extension_type::<Json>()?,
             Json::default()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(feature = "variant_experimental")]
+    fn arrow_variant_to_parquet_variant() -> Result<()> {
+        use parquet_variant_compute::VariantType;
+        let variant_fields = Fields::from(vec![
+            Field::new("metadata", DataType::BinaryView, false),
+            Field::new("value", DataType::BinaryView, true),
+        ]);
+        let arrow_schema = Schema::new(vec![
+            Field::new("v", DataType::Struct(variant_fields), true)
+                .with_extension_type(VariantType),
+        ]);
+
+        let parquet_schema = ArrowSchemaConverter::new().convert(&arrow_schema)?;
+
+        // The Parquet spec requires the VARIANT annotation to carry the
+        // specification version (`VARIANT(1)`); Spark rejects files without it
+        let root = parquet_schema.root_schema();
+        assert_eq!(
+            root.get_fields()[0].get_basic_info().logical_type_ref(),
+            Some(&LogicalType::variant(Some(1)))
+        );
+
+        let arrow_schema = parquet_to_arrow_schema(&parquet_schema, None)?;
+        assert!(
+            arrow_schema
+                .field(0)
+                .has_valid_extension_type::<VariantType>()
         );
 
         Ok(())
