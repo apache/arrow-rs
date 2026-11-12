@@ -23,5 +23,6 @@ pub mod arithmetic;
 pub mod arity;
 pub mod bitwise;
 pub mod boolean;
+pub mod hash;
 pub mod numeric;
 pub mod temporal;

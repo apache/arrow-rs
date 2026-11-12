@@ -15,6 +15,7 @@ pub use self::kernels::coalesce::*;
 pub use self::kernels::comparison::*;
 pub use self::kernels::concat::*;
 pub use self::kernels::filter::*;
+pub use self::kernels::hash::*;
 pub use self::kernels::interleave::*;
 pub use self::kernels::nullif::*;
 pub use self::kernels::partition::*;

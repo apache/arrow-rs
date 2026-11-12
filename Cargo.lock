@@ -211,6 +211,7 @@ dependencies = [
  "arrow-schema",
  "chrono",
  "criterion",
+ "half",
  "num-traits",
  "rand",
 ]
