@@ -607,6 +607,12 @@ fn add_all_gather_benchmarks(c: &mut Criterion, operation: GatherOperation) {
                     schema: &single_schema,
                 },
                 GatherBenchmarkScenario {
+                    name: "single_utf8view (max_string_len=8)",
+                    num_output_batches: 50,
+                    max_string_len: 8,
+                    schema: &single_schema,
+                },
+                GatherBenchmarkScenario {
                     name: "single_binaryview",
                     num_output_batches: 50,
                     max_string_len: 30,
