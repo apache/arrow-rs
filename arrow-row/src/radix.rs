@@ -128,8 +128,6 @@ pub fn radix_sort_to_indices(rows: &Rows) -> Result<UInt32Array, ArrowError> {
         .map(|(i, w)| entry(buffer, w[0] + prefix, i))
         .collect();
     let mut temp = vec![0u128; n];
-    // The first key byte differs between rows unless every row is equal,
-    // because the key starts after the prefix that every row shares.
     msd_radix_sort::<true>(&mut entries, &mut temp, 0, true);
 
     // Entries with equal keys come from rows that agree on every byte before
@@ -151,15 +149,11 @@ pub fn radix_sort_to_indices(rows: &Rows) -> Result<UInt32Array, ArrowError> {
     ))
 }
 
-/// MSD radix sort of entries by their key, using ping-pong buffers.
+/// MSD radix sort of entries by their key.
 ///
-/// Each level scatters from `src` into `dst`, then recurses with the
-/// roles swapped (dst becomes the next level's src). This avoids an
-/// O(n) `copy_from_slice` at every recursion level.
-///
-/// `result_in_src` tracks where the caller expects the sorted output:
-/// true means `src`, false means `dst`. It flips at each scatter so
-/// the final result lands in the right buffer.
+/// Each level scatters from `src` into `dst` and recurses with the two
+/// swapped, so no level copies its entries back. `result_in_src` says whether
+/// the caller expects the sorted entries in `src` or in `dst`.
 ///
 /// `byte` is the key byte to split on, counted from the most significant.
 /// Every entry in `src` agrees on the bytes before it. When every entry also
@@ -232,9 +226,6 @@ fn msd_radix_sort<const HIGH: bool>(
         counts[b] += 1;
     }
 
-    // Recurse with roles swapped. After the scatter the data lives in dst, so
-    // dst becomes the next level's src. Flipping result_in_src keeps each
-    // level's output in the buffer its caller expects.
     let mut start = 0;
     for &end in &counts {
         let end = end as usize;
@@ -262,8 +253,8 @@ fn msd_radix_sort<const HIGH: bool>(
 /// calls memcpy. Those bytes can only reorder equal rows: the rows sorted
 /// against each other agree on every byte before the key, and no row is a
 /// proper prefix of another, because every field encoding is self-delimiting,
-/// so two different rows differ within the shorter one. The load reads the buffer
-/// directly, because `Row::data` ends at the row.
+/// so two different rows differ within the shorter one. The load reads the
+/// buffer directly, because `Row::data` ends at the row.
 fn entry(buffer: &[u8], start: usize, index: usize) -> u128 {
     let bytes = match buffer.get(start..).and_then(<[u8]>::first_chunk::<16>) {
         Some(bytes) => *bytes,
@@ -288,14 +279,16 @@ fn entry(buffer: &[u8], start: usize, index: usize) -> u128 {
 /// frame per round in progress instead of recursion, because rows can be
 /// arbitrarily long, so its length is bounded by the longest row divided by
 /// 12, not by the number of rows. It is empty on entry and on return.
-fn sort_ties(rows: &Rows, run: &mut [u128], offset: usize, stack: &mut Vec<(usize, usize, usize)>) {
-    // A frame is a run sorted by one round: its end, the offset of its next
-    // round, and the start of the next sub-run to look at.
+fn sort_ties(rows: &Rows, run: &mut [u128], offset: usize, stack: &mut Vec<Frame>) {
     if let Some(next) = sort_round(rows, run, offset) {
-        stack.push((run.len(), next, 0));
+        stack.push(Frame {
+            start: 0,
+            end: run.len(),
+            next,
+        });
     }
     while let Some(frame) = stack.last_mut() {
-        let (end, next, start) = *frame;
+        let Frame { start, end, next } = *frame;
         if start == end {
             stack.pop();
             continue;
@@ -305,13 +298,28 @@ fn sort_ties(rows: &Rows, run: &mut [u128], offset: usize, stack: &mut Vec<(usiz
             .iter()
             .take_while(|&&e| key(e) == first)
             .count();
-        frame.2 = start + len;
+        frame.start = start + len;
         if len > 1
             && let Some(after) = sort_round(rows, &mut run[start..start + len], next)
         {
-            stack.push((start + len, after, start));
+            stack.push(Frame {
+                start,
+                end: start + len,
+                next: after,
+            });
         }
     }
+}
+
+/// A run of entries in `sort_ties` that one round has sorted
+#[derive(Clone, Copy)]
+struct Frame {
+    /// The start of the next sub-run to look at
+    start: usize,
+    /// The end of the run
+    end: usize,
+    /// The row offset where the run's next round starts
+    next: usize,
 }
 
 /// Keys the entries of `run` by the 12 bytes of their rows at `offset` and
@@ -402,8 +410,8 @@ mod tests {
     use crate::tests::generate_column;
     use crate::{RowConverter, SortField};
     use arrow_array::{
-        ArrayRef, BooleanArray, FixedSizeBinaryArray, Float64Array, Int32Array, Int64Array,
-        StringArray,
+        ArrayRef, BooleanArray, Decimal128Array, FixedSizeBinaryArray, Float64Array, Int8Array,
+        Int32Array, Int64Array, StringArray,
     };
     use arrow_schema::{DataType, SortOptions};
     use rand::rngs::StdRng;
@@ -653,7 +661,7 @@ mod tests {
 
             let indices = sort(&rows);
             assert_sorted(&rows, &indices);
-            assert_eq!(indices.len(), n, "wrong number of indices for n={n}");
+            assert_permutation(&indices, n);
         }
     }
 
@@ -667,7 +675,7 @@ mod tests {
     fn test_radix_sort_fuzz() {
         let mut rng = StdRng::seed_from_u64(0xF00D);
 
-        for iteration in 0..200 {
+        for _ in 0..200 {
             let num_columns = rng.random_range(1..=4);
             let len = rng.random_range(2..2000);
 
@@ -701,21 +709,7 @@ mod tests {
 
             let indices = sort(&rows);
             assert_sorted(&rows, &indices);
-            assert_eq!(
-                indices.len(),
-                len,
-                "iteration {iteration}: wrong index count"
-            );
-
-            // Verify every original index appears exactly once
-            let mut seen = vec![false; len];
-            for &idx in &indices {
-                assert!(
-                    !seen[idx as usize],
-                    "iteration {iteration}: duplicate index {idx}"
-                );
-                seen[idx as usize] = true;
-            }
+            assert_permutation(&indices, len);
         }
     }
 
@@ -753,9 +747,8 @@ mod tests {
             let mut comparison: Vec<u32> = (0..len as u32).collect();
             comparison.sort_unstable_by(|&a, &b| rows.row(a as usize).cmp(&rows.row(b as usize)));
 
-            // Both sorts operate on the same rows, so equal-keyed elements
-            // should appear in the same relative order only if both are stable
-            // (they aren't), but the *row values* at each position must match.
+            // Neither sort is stable, so equal rows can come back in a
+            // different order, but the rows at each position must be equal.
             for i in 0..len {
                 let radix_row = rows.row(radix[i] as usize);
                 let cmp_row = rows.row(comparison[i] as usize);
@@ -804,25 +797,28 @@ mod tests {
         assert_sorted(&rows, &indices);
     }
 
-    /// Equal rows above FALLBACK_THRESHOLD have equal keys and are ordered by
-    /// comparing the rest of each row.
+    /// Equal rows longer than the key, more than FALLBACK_THRESHOLD of them,
+    /// tie on their keys and go to `sort_ties`. The smaller last row keeps the
+    /// input from returning early as sorted.
     #[test]
-    fn test_radix_sort_all_equal_past_threshold() {
-        let array: ArrayRef = Arc::new(StringArray::from(vec!["same value"; 100]));
+    fn test_radix_sort_equal_rows_past_threshold() {
+        let mut values = vec!["the same long value"; 100];
+        values.push("a");
+        let array: ArrayRef = Arc::new(StringArray::from(values));
         let converter = RowConverter::new(vec![SortField::new(DataType::Utf8)]).unwrap();
         let rows = converter.convert_columns(&[array]).unwrap();
 
-        let mut indices = sort(&rows);
+        let indices = sort(&rows);
         assert_sorted(&rows, &indices);
-        indices.sort_unstable();
-        assert_eq!(indices, (0..100).collect::<Vec<u32>>());
+        assert_permutation(&indices, 101);
+        assert_eq!(indices[0], 100);
     }
 
     /// Rows that share a prefix are keyed by the bytes after it.
     #[test]
-    fn test_radix_sort_shared_prefix_past_max_depth() {
+    fn test_radix_sort_shared_string_prefix() {
         let values: Vec<String> = (0..100)
-            .map(|i| format!("shared-prefix-longer-than-max-depth-{}", (i * 37) % 100))
+            .map(|i| format!("shared-prefix-longer-than-the-key-{}", (i * 37) % 100))
             .collect();
         let array: ArrayRef = Arc::new(StringArray::from(values.clone()));
         let converter = RowConverter::new(vec![SortField::new(DataType::Utf8)]).unwrap();
@@ -871,7 +867,7 @@ mod tests {
             .collect();
         let ints: Vec<i32> = (0..500).map(|_| rng.random_range(-5..5)).collect();
         let a1: ArrayRef = Arc::new(
-            arrow_array::Decimal128Array::from(decimals)
+            Decimal128Array::from(decimals)
                 .with_precision_and_scale(18, 2)
                 .unwrap(),
         );
@@ -894,7 +890,7 @@ mod tests {
         let values: Vec<Option<i8>> = (0..1000)
             .map(|_| rng.random_bool(0.8).then(|| rng.random()))
             .collect();
-        let array: ArrayRef = Arc::new(arrow_array::Int8Array::from(values));
+        let array: ArrayRef = Arc::new(Int8Array::from(values));
         let converter = RowConverter::new(vec![SortField::new(DataType::Int8)]).unwrap();
         let rows = converter.convert_columns(&[array]).unwrap();
 

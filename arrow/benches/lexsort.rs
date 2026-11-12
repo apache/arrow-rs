@@ -292,9 +292,9 @@ fn add_benchmark(c: &mut Criterion) {
         do_bench(c, case, 4096 * 8);
     }
 
-    // Keys whose rows tie past the first 8 bytes after the bytes every row
-    // shares. Groups of tied rows grow with the row count, so these also run
-    // at 1M rows.
+    // Integer keys longer than 8 bytes after the bytes every row shares, which
+    // fit in the 12-byte radix key. Groups of rows that agree on their first
+    // 8 such bytes grow with the row count, so these also run at 1M rows.
     let ties: &[&[Column]] = &[
         &[Column::JoinItemI32, Column::JoinTicketI64],
         &[
