@@ -20,9 +20,9 @@
 //! This example keeps footer metadata and decoded page indexes in separate caches. For each
 //! query it:
 //!
-//! 1. Finds the requested column chunks that are absent from the page-index cache
-//! 2. Uses [`ParquetMetaDataReader::read_page_index_and_finish`] to request and decode those misses
-//! 3. Moves the decoded entries into the cache and wraps them in [`Arc`]
+//! 1. Finds the requested column chunks that don't yet have entries in the page-index cache
+//! 2. Uses [`ParquetMetaDataReader::read_page_index_and_finish`] to fetch the missing entries
+//! 3. Moves the decoded entries into the cache
 //! 4. Builds a query-specific [`PageIndexProvider`] from shared cache entries
 //!
 //! A production cache shared by multiple files would also include a stable file identity and
@@ -47,9 +47,11 @@ use parquet::file::page_index::column_index::ColumnIndexMetaData;
 use parquet::file::page_index::offset_index::OffsetIndexMetaData;
 use parquet::file::properties::{EnabledStatistics, WriterProperties};
 
+/// Identifier for a column chunk in a Parquet file: (row group index, column index)
 type ColumnChunk = (usize, usize);
 
-/// A query-specific provider backed by handles to cached entries.
+/// A query-specific [`PageIndexProvider`] backed by handles to shared entries
+/// in a [`PageIndexCache`].
 #[derive(Debug, Default)]
 struct CachedPageIndexProvider {
     column_indexes: HashMap<ColumnChunk, Arc<ColumnIndexMetaData>>,
@@ -98,8 +100,8 @@ struct PageIndexCache {
 }
 
 impl PageIndexCache {
-    /// Returns the footer metadata and a provider containing exactly the entries requested for
-    /// one query, loading any cache misses through `ParquetMetaDataReader` first.
+    /// Returns the footer metadata and a provider for the entries requested for
+    /// one query, loading any missing entries using [`ParquetMetaDataReader`].
     fn page_index_for_query(
         &mut self,
         mut metadata: ParquetMetaData,
@@ -190,7 +192,7 @@ fn covering_mask(chunks: &[ColumnChunk]) -> ColumnChunkMask {
     )
 }
 
-/// Reads and caches footer metadata without decoding page indexes.
+/// Reads footer metadata into [`ParquetMetaData`] without decoding page indexes.
 fn decode_footer(file_bytes: &Bytes) -> Result<ParquetMetaData> {
     ParquetMetaDataReader::new()
         .with_page_index_policy(PageIndexPolicy::Skip)
