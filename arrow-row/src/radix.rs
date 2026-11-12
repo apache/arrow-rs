@@ -29,8 +29,6 @@
 //! - **A key with an expensive column to encode, such as a list.** The row
 //!   format encodes every column of every row, while [`lexsort_to_indices`]
 //!   reads a later column only for rows that the earlier columns leave tied.
-//! - **Input that is already sorted.** [`lexsort_to_indices`] detects it in one
-//!   pass, while radix sort does the same work as on unsorted input.
 //! - **Large groups of rows that are equal in their first 12 bytes after the
 //!   shared prefix.** Radix sort orders each such group by keying its rows
 //!   again on the bytes after the key, which reads the rows in random order.
@@ -95,11 +93,17 @@ const KEY_BYTES: u32 = 12;
 pub fn radix_sort_to_indices(rows: &Rows) -> Result<UInt32Array, ArrowError> {
     let n = rows.num_rows();
     // Entries store, and the result returns, each row's index as a u32
-    u32::try_from(n)
+    let len = u32::try_from(n)
         .map_err(|_| ArrowError::ComputeError(format!("cannot sort {n} rows with u32 indices")))?;
     let Some(first) = rows.iter().next() else {
         return Ok(UInt32Array::from(Vec::<u32>::new()));
     };
+    // Input stored in key order often reaches a sort the planner can't remove.
+    // The check stops at the first pair of rows out of order, so unsorted input
+    // pays for little more than its first few rows.
+    if rows.iter().is_sorted() {
+        return Ok(UInt32Array::from_iter_values(0..len));
+    }
 
     // Bytes that every row shares can't order rows, so the key starts after
     // them. The longest row decides below whether equal keys need more sorting.
@@ -973,6 +977,39 @@ mod tests {
             assert_sorted(&rows, &indices);
             assert_permutation(&indices, len);
         }
+    }
+
+    /// Sorted input, with equal rows, comes back as `0..n`, and input sorted
+    /// except for its last row still comes back sorted.
+    #[test]
+    fn test_radix_sort_sorted_input() {
+        let len = 1000;
+        let keys: Vec<i64> = (0..len).map(|i| i / 3).collect();
+        let names: Vec<String> = (0..len).map(|i| format!("{:>8}", i / 5)).collect();
+        let converter = RowConverter::new(vec![
+            SortField::new(DataType::Int64),
+            SortField::new(DataType::Utf8),
+        ])
+        .unwrap();
+
+        let sorted: Vec<ArrayRef> = vec![
+            Arc::new(Int64Array::from(keys.clone())),
+            Arc::new(StringArray::from(names.clone())),
+        ];
+        let rows = converter.convert_columns(&sorted).unwrap();
+        assert_eq!(sort(&rows), (0..len as u32).collect::<Vec<_>>());
+
+        let mut last_out_of_order = keys;
+        last_out_of_order[len as usize - 1] = -1;
+        let unsorted: Vec<ArrayRef> = vec![
+            Arc::new(Int64Array::from(last_out_of_order)),
+            Arc::new(StringArray::from(names)),
+        ];
+        let rows = converter.convert_columns(&unsorted).unwrap();
+        let indices = sort(&rows);
+        assert_sorted(&rows, &indices);
+        assert_permutation(&indices, len as usize);
+        assert_eq!(indices[0], len as u32 - 1);
     }
 
     /// When a round leaves every entry tied, `sort_round` skips to the first
