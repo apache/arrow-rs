@@ -110,7 +110,7 @@ pub(crate) use writer::ThriftMetadataWriter;
 /// See [`PageIndexProvider`] for details on customizing page index handling.  
 ///
 /// See the [`ParquetMetaDataBuilder`] to create and modify this structure.
-/// 
+///
 /// [`parquet.thrift`]: https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift
 #[derive(Debug, Clone)]
 pub struct ParquetMetaData {

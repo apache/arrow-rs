@@ -16,7 +16,6 @@ use crate::file::page_index::{
     offset_index::{OffsetIndexMetaData, PageLocation},
 };
 use std::sync::Arc;
-use crate::file::metadata::ColumnChunkMask;
 
 /// Trait for accessing Parquet [Page Index] data for efficient page-level skipping
 ///
