@@ -1383,7 +1383,7 @@ mod tests {
 
     #[test]
     fn test_div_rem_by_scalar_integer() {
-        // 16, 13 and 7 reach each variant of the precomputed divisor. 0, and -1 for `/`, fall back
+        // 16, 13, 7, -16 and -7 reach each variant of the precomputed divisor. 0, and -1 for `/`, fall back
         // to `integer_op`, which returns an error for a valid value and `Ok` otherwise
         let values = [
             Some(i32::MIN),
@@ -1394,7 +1394,7 @@ mod tests {
             Some(13),
             Some(i32::MAX),
         ];
-        test_div_rem_by_scalar::<Int32Type>(&values, &[16, 13, 7, 0, -1]);
+        test_div_rem_by_scalar::<Int32Type>(&values, &[16, 13, 7, -16, -7, 0, -1]);
         let values = [
             Some(i64::MIN),
             Some(i64::MIN + 1),
@@ -1404,7 +1404,7 @@ mod tests {
             Some(13),
             Some(i64::MAX),
         ];
-        test_div_rem_by_scalar::<Int64Type>(&values, &[16, 13, 7, 0, -1]);
+        test_div_rem_by_scalar::<Int64Type>(&values, &[16, 13, 7, -16, -7, 0, -1]);
         let values = [
             Some(0),
             Some(1),
