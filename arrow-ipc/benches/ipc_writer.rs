@@ -161,21 +161,31 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    group.bench_function(
-        "StreamWriter/write_1/dict/referenced_values=8192/values=65536/value_bytes=256",
-        |b| {
-            let batch = create_dict_batch_with_unreferenced_values(8192, 8192, 65_536, 256);
-            let schema = batch.schema();
-            let mut buffer = Vec::with_capacity(17 * 1024 * 1024);
-            b.iter(move || {
-                buffer.clear();
-                let mut writer = StreamWriter::try_new(&mut buffer, schema.as_ref()).unwrap();
-                writer.write(&batch).unwrap();
-                writer.finish().unwrap();
-                black_box(buffer.len());
-            })
-        },
-    );
+    let dictionary_cases = [(400, 8192), (8192, 8192), (16, 65_536), (8192, 65_536)];
+    for (referenced_values, num_values) in dictionary_cases {
+        group.bench_function(
+            format!(
+                "StreamWriter/write_1/dict/referenced_values={referenced_values}/values={num_values}/value_bytes=256"
+            ),
+            move |b| {
+                let batch = create_dict_batch_with_unreferenced_values(
+                    8192,
+                    referenced_values,
+                    num_values,
+                    256,
+                );
+                let schema = batch.schema();
+                let mut buffer = Vec::with_capacity(num_values * 256 + 1024 * 1024);
+                b.iter(move || {
+                    buffer.clear();
+                    let mut writer = StreamWriter::try_new(&mut buffer, schema.as_ref()).unwrap();
+                    writer.write(&batch).unwrap();
+                    writer.finish().unwrap();
+                    black_box(buffer.len());
+                })
+            },
+        );
+    }
 
     group.bench_function("StreamWriter/write_10/dict/delta", |b| {
         let batches = create_delta_dict_batches(10, 8192);
