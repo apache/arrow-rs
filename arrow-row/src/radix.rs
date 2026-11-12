@@ -35,8 +35,8 @@
 //!   Examples are strings with a few common prefixes and three or more
 //!   low-cardinality columns.
 //! - **A sort with a limit.** [`lexsort_to_indices`] takes a `limit` and orders
-//!   only the first `limit` rows, while [`radix_sort_to_indices`] sorts every
-//!   row.
+//!   only the first `limit` rows, while [`radix_sort_to_indices`] accepts a
+//!   `limit` but still sorts every row.
 //!
 //! [`lexsort_to_indices`]: https://docs.rs/arrow-ord/latest/arrow_ord/sort/fn.lexsort_to_indices.html
 
@@ -58,6 +58,10 @@ const KEY_BYTES: u32 = 12;
 /// the row indices in sorted order. The caller is responsible for encoding
 /// columns into row format and for using the returned indices to reorder the
 /// original arrays (e.g., via [`take`]).
+///
+/// If `limit` is `Some`, the result holds only the first `limit` indices in
+/// sorted order, or all of them if there are fewer rows. It currently sorts
+/// every row before truncating.
 ///
 /// Rows that compare equal can appear in any order in the result.
 ///
@@ -83,26 +87,31 @@ const KEY_BYTES: u32 = 12;
 /// let array: ArrayRef = Arc::new(Int32Array::from(vec![5, 3, 1, 4, 2]));
 /// let converter = RowConverter::new(vec![SortField::new(DataType::Int32)]).unwrap();
 /// let rows = converter.convert_columns(&[array]).unwrap();
-/// let indices = radix_sort_to_indices(&rows).unwrap();
+/// let indices = radix_sort_to_indices(&rows, None).unwrap();
 /// assert_eq!(indices.values(), &[2, 4, 1, 3, 0]); // points to [1, 2, 3, 4, 5]
+///
+/// // With a limit, only the first `limit` indices are returned
+/// let indices = radix_sort_to_indices(&rows, Some(2)).unwrap();
+/// assert_eq!(indices.values(), &[2, 4]);
 /// ```
 ///
 /// [`RowConverter::convert_columns`]: crate::RowConverter::convert_columns
 /// [`take`]: https://docs.rs/arrow/latest/arrow/compute/fn.take.html
 /// [`lexsort_to_indices`]: https://docs.rs/arrow-ord/latest/arrow_ord/sort/fn.lexsort_to_indices.html
-pub fn radix_sort_to_indices(rows: &Rows) -> Result<UInt32Array, ArrowError> {
+pub fn radix_sort_to_indices(rows: &Rows, limit: Option<usize>) -> Result<UInt32Array, ArrowError> {
     let n = rows.num_rows();
     // Entries store, and the result returns, each row's index as a u32
-    let len = u32::try_from(n)
+    u32::try_from(n)
         .map_err(|_| ArrowError::ComputeError(format!("cannot sort {n} rows with u32 indices")))?;
-    let Some(first) = rows.iter().next() else {
+    let keep = limit.map_or(n, |limit| limit.min(n));
+    let Some(first) = rows.iter().next().filter(|_| keep > 0) else {
         return Ok(UInt32Array::from(Vec::<u32>::new()));
     };
     // Input stored in key order often reaches a sort the planner can't remove.
     // The check stops at the first pair of rows out of order, so unsorted input
     // pays for little more than its first few rows.
     if rows.iter().is_sorted() {
-        return Ok(UInt32Array::from_iter_values(0..len));
+        return Ok(UInt32Array::from_iter_values(0..keep as u32));
     }
 
     // Bytes that every row shares can't order rows, so the key starts after
@@ -145,7 +154,7 @@ pub fn radix_sort_to_indices(rows: &Rows) -> Result<UInt32Array, ArrowError> {
     }
     // The low 32 bits of each entry are its row's index
     Ok(UInt32Array::from_iter_values(
-        entries.iter().map(|&e| e as u32),
+        entries[..keep].iter().map(|&e| e as u32),
     ))
 }
 
@@ -419,7 +428,49 @@ mod tests {
     use std::sync::Arc;
 
     fn sort(rows: &Rows) -> Vec<u32> {
-        radix_sort_to_indices(rows).unwrap().values().to_vec()
+        sort_limit(rows, None)
+    }
+
+    fn sort_limit(rows: &Rows, limit: Option<usize>) -> Vec<u32> {
+        radix_sort_to_indices(rows, limit)
+            .unwrap()
+            .values()
+            .to_vec()
+    }
+
+    /// Limits at and around the boundaries of a `len`-row input
+    fn limits(len: usize) -> Vec<Option<usize>> {
+        let mut limits = vec![
+            None,
+            Some(0),
+            Some(1),
+            Some(len / 2),
+            Some(len),
+            Some(len + 1),
+        ];
+        limits.extend(len.checked_sub(1).map(Some));
+        limits
+    }
+
+    /// Checks that sorting `rows` with `limit` returns the first `limit` rows
+    /// of `expected`, a full sort of the same rows. Rows that compare equal can
+    /// come back in either order, so the rows at each position must be equal.
+    fn assert_limit_matches(rows: &Rows, expected: &[u32], limit: Option<usize>) {
+        let indices = sort_limit(rows, limit);
+        let len = limit.map_or(expected.len(), |l| l.min(expected.len()));
+        assert_eq!(indices.len(), len, "limit {limit:?}");
+        let mut seen = vec![false; rows.num_rows()];
+        for (i, &index) in indices.iter().enumerate() {
+            assert!(
+                !std::mem::replace(&mut seen[index as usize], true),
+                "limit {limit:?}: index {index} repeated"
+            );
+            assert_eq!(
+                rows.row(index as usize),
+                rows.row(expected[i] as usize),
+                "limit {limit:?}: mismatch at position {i}"
+            );
+        }
     }
 
     fn assert_permutation(indices: &[u32], len: usize) {
@@ -710,6 +761,9 @@ mod tests {
             let indices = sort(&rows);
             assert_sorted(&rows, &indices);
             assert_permutation(&indices, len);
+            for limit in limits(len) {
+                assert_limit_matches(&rows, &indices, limit);
+            }
         }
     }
 
@@ -757,6 +811,9 @@ mod tests {
                     "mismatch at position {i}: radix idx={} vs comparison idx={}",
                     radix[i], comparison[i]
                 );
+            }
+            for limit in limits(len) {
+                assert_limit_matches(&rows, &comparison, limit);
             }
         }
     }
@@ -1143,5 +1200,65 @@ mod tests {
         let indices = sort(&rows);
         assert_sorted(&rows, &indices);
         assert_permutation(&indices, 2000);
+    }
+
+    #[test]
+    fn test_radix_sort_limit_empty_input() {
+        let converter = RowConverter::new(vec![SortField::new(DataType::Int32)]).unwrap();
+        let rows = converter
+            .convert_columns(&[Arc::new(Int32Array::from(Vec::<i32>::new())) as ArrayRef])
+            .unwrap();
+        for limit in [None, Some(0), Some(1)] {
+            assert!(sort_limit(&rows, limit).is_empty());
+        }
+    }
+
+    #[test]
+    fn test_radix_sort_limit_values() {
+        let array: ArrayRef = Arc::new(Int32Array::from(vec![5, 3, 1, 4, 2]));
+        let converter = RowConverter::new(vec![SortField::new(DataType::Int32)]).unwrap();
+        let rows = converter.convert_columns(&[array]).unwrap();
+        assert_eq!(sort_limit(&rows, Some(0)), Vec::<u32>::new());
+        assert_eq!(sort_limit(&rows, Some(2)), [2, 4]);
+        assert_eq!(sort_limit(&rows, Some(5)), [2, 4, 1, 3, 0]);
+        assert_eq!(sort_limit(&rows, Some(6)), [2, 4, 1, 3, 0]);
+        assert_eq!(sort_limit(&rows, Some(usize::MAX)), [2, 4, 1, 3, 0]);
+    }
+
+    #[test]
+    fn test_radix_sort_limit_sorted_input() {
+        let array: ArrayRef = Arc::new(Int32Array::from_iter_values(0..100));
+        let converter = RowConverter::new(vec![SortField::new(DataType::Int32)]).unwrap();
+        let rows = converter.convert_columns(&[array]).unwrap();
+        assert_eq!(sort_limit(&rows, Some(10)), (0..10).collect::<Vec<u32>>());
+        assert_eq!(sort_limit(&rows, Some(200)), (0..100).collect::<Vec<u32>>());
+    }
+
+    /// Limits that end inside a run of equal keys, with rows long enough to
+    /// need re-keying, and on each side of the comparison fallback threshold.
+    #[test]
+    fn test_radix_sort_limit_inside_ties() {
+        let mut rng = StdRng::seed_from_u64(0xCAFE);
+        let len = 5000;
+        let low: ArrayRef = Arc::new(Int32Array::from_iter_values(
+            (0..len).map(|_| rng.random_range(0..3)),
+        ));
+        let strings: ArrayRef = Arc::new(StringArray::from_iter_values((0..len).map(|_| {
+            format!(
+                "shared prefix longer than the key {}",
+                rng.random_range(0..400)
+            )
+        })));
+        let converter = RowConverter::new(vec![
+            SortField::new(DataType::Int32),
+            SortField::new(DataType::Utf8),
+        ])
+        .unwrap();
+        let rows = converter.convert_columns(&[low, strings]).unwrap();
+        let full = sort(&rows);
+        assert_sorted(&rows, &full);
+        for limit in [1, 31, 32, 33, 1000, 1666, 1667, 1668, 4999] {
+            assert_limit_matches(&rows, &full, Some(limit));
+        }
     }
 }

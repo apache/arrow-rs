@@ -197,7 +197,7 @@ fn do_bench(c: &mut Criterion, columns: &[Column], len: usize) {
                     .collect();
                 let converter = RowConverter::new(fields).unwrap();
                 let rows = converter.convert_columns(&arrays).unwrap();
-                radix_sort_to_indices(&rows).unwrap()
+                radix_sort_to_indices(&rows, None).unwrap()
             })
         })
     });
