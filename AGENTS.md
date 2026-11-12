@@ -71,6 +71,9 @@ guidance in CONTRIBUTING.md:
   Do not work on or submit a pull request for an issue assigned to someone
   other than the user you are assisting. Report the assignment to the user
   and suggest another issue.
+- If the issue's "Willingness to contribute" answer is "I plan to contribute
+  ... independently", treat the reporter as assigned, even when the issue
+  has no assignees.
 - Also check recent comments and linked pull requests for work already in
   progress. If another contributor is working on an unassigned issue, ask
   the user to coordinate with them before proceeding.
