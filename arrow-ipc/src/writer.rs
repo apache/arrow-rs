@@ -2916,18 +2916,39 @@ fn pad_to_alignment(alignment: u8, len: usize) -> usize {
 
 /// Whether [`write_array_data`] writes the view array `array_data` with only the bytes
 /// its views use. The compacted data buffer is addressed by `u32` offsets, so arrays whose
-/// data buffers hold more than `u32::MAX` bytes are written as they are.
+/// distinct data buffers hold more than `u32::MAX` bytes are written as they are.
 fn compact_view_buffers(array_data: &ArrayData, write_options: &IpcWriteOptions) -> bool {
-    write_options.compact_view_buffers
-        && u32::try_from(
-            array_data
-                .buffers()
-                .iter()
-                .skip(1)
-                .map(|b| b.len())
-                .sum::<usize>(),
-        )
-        .is_ok()
+    if !write_options.compact_view_buffers {
+        return false;
+    }
+    let buffers = &array_data.buffers()[1..];
+    let total = buffers
+        .iter()
+        .fold(0_usize, |n, b| n.saturating_add(b.len()));
+    if u32::try_from(total).is_ok() {
+        return true;
+    }
+    // Concatenation can list the same allocation many times. Count it once,
+    // just as compact_view_segments will when merging its referenced ranges.
+    let canonical = canonical_view_buffer_indices(buffers);
+    let unique = buffers.iter().enumerate().fold(0_usize, |n, (i, b)| {
+        if canonical[i] as usize == i {
+            n.saturating_add(b.len())
+        } else {
+            n
+        }
+    });
+    u32::try_from(unique).is_ok()
+}
+
+/// Map repeated entries of the same byte region to their first buffer index.
+fn canonical_view_buffer_indices(buffers: &[Buffer]) -> Vec<u32> {
+    let mut first = HashMap::with_capacity(buffers.len());
+    buffers
+        .iter()
+        .enumerate()
+        .map(|(i, b)| *first.entry((b.as_ptr(), b.len())).or_insert(i as u32))
+        .collect()
 }
 
 /// Returns the views of the view array `array_data` rewritten to point into a single
@@ -2936,6 +2957,7 @@ fn compact_view_buffers(array_data: &ArrayData, write_options: &IpcWriteOptions)
 /// that share bytes still share them.
 fn compact_view_segments(array_data: &ArrayData) -> (Buffer, Vec<Buffer>, usize) {
     let data_buffers = &array_data.buffers()[1..];
+    let canonical = canonical_view_buffer_indices(data_buffers);
     let views: &[u128] = &array_data.buffers()[0].typed_data::<u128>()
         [array_data.offset()..array_data.offset() + array_data.len()];
     let nulls = array_data.nulls();
@@ -2948,7 +2970,12 @@ fn compact_view_segments(array_data: &ArrayData) -> (Buffer, Vec<Buffer>, usize)
         })
         .map(|(row, &raw)| {
             let view = ByteView::from(raw);
-            (view.buffer_index, view.offset, view.length, row)
+            (
+                canonical[view.buffer_index as usize],
+                view.offset,
+                view.length,
+                row,
+            )
         })
         .collect();
     refs.sort_unstable();
@@ -4462,6 +4489,104 @@ mod tests {
         assert_eq!(
             column.data_buffers()[0].len(),
             batch.column(0).as_string_view().total_buffer_bytes_used()
+        );
+    }
+
+    // Same take/concat shape as DataFusion's shared_dictionary_views regression
+    // for apache/datafusion#23564: every input lists the same dictionary buffer.
+    fn shared_dictionary_views(dictionary_len: u32, inputs: usize, rows: u32) -> StringViewArray {
+        let values = StringArray::from_iter_values(
+            (0..dictionary_len).map(|i| format!("container-id-{i:0>50}")),
+        );
+        let dictionary = StringViewArray::from(&values);
+        assert_eq!(dictionary.data_buffers().len(), 1);
+        let indices = UInt32Array::from_iter_values((0..rows).map(|i| i % dictionary_len));
+        let selected = arrow_select::take::take(&dictionary, &indices, None).unwrap();
+        let arrays = vec![selected.as_ref(); inputs];
+        let merged = arrow_select::concat::concat(&arrays).unwrap();
+        merged.as_string_view().clone()
+    }
+
+    #[test]
+    fn compact_view_buffers_shared_dictionary() {
+        let merged = shared_dictionary_views(1000, 8, 1024);
+        assert_eq!(merged.data_buffers().len(), 8);
+        let dictionary_bytes = merged.data_buffers()[0].len();
+        let rows = merged.len();
+        let binary: ArrayRef = Arc::new(merged.clone().to_binary_view());
+        let values: ArrayRef = Arc::new(merged);
+        let entries = StructArray::from(vec![
+            (
+                Arc::new(Field::new("key", DataType::Utf8View, false)),
+                Arc::new(StringViewArray::from_iter_values(std::iter::repeat_n(
+                    "key", rows,
+                ))) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("value", DataType::Utf8View, false)),
+                Arc::clone(&values),
+            ),
+        ]);
+        let map = MapArray::new(
+            Arc::new(Field::new("entries", entries.data_type().clone(), false)),
+            arrow_buffer::OffsetBuffer::from_lengths(std::iter::repeat_n(1, rows)),
+            entries,
+            None,
+            false,
+        );
+        for array in [values, binary, Arc::new(map) as ArrayRef] {
+            let batch = RecordBatch::try_from_iter([("v", array)]).unwrap();
+            for codec in compact_view_test_options() {
+                let options = IpcWriteOptions::default()
+                    .try_with_compression(codec)
+                    .unwrap()
+                    .with_compact_view_buffers(true);
+                let bytes = write_stream(&batch.schema(), std::slice::from_ref(&batch), options);
+                let read = read_stream(bytes);
+                assert_eq!(read, vec![batch.clone()], "{codec:?}");
+                let column = match read[0].column(0).data_type() {
+                    DataType::Map(_, _) => read[0].column(0).as_map().values(),
+                    _ => read[0].column(0),
+                };
+                let data = column.to_data();
+                assert_eq!(data.buffers().len(), 2); // views plus one data buffer
+                assert_eq!(
+                    data.buffers()[1].len(),
+                    dictionary_bytes,
+                    "write the dictionary once, not once per input batch: {codec:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn compact_view_buffers_shared_dictionary_over_u32() {
+        // About 1 MiB of actual string storage, but more than 4 GiB when
+        // counting each of the 5000 references. Never serialize the raw form.
+        let merged = shared_dictionary_views(16_384, 5000, 1);
+        let data = merged.to_data();
+        assert!(
+            data.buffers()
+                .iter()
+                .skip(1)
+                .map(|b| b.len() as u64)
+                .sum::<u64>()
+                > u64::from(u32::MAX)
+        );
+        let options = IpcWriteOptions::default().with_compact_view_buffers(true);
+        assert!(
+            compact_view_buffers(&data, &options),
+            "repeated buffer entries must not disable compaction"
+        );
+        let batch = RecordBatch::try_from_iter([("v", Arc::new(merged) as ArrayRef)]).unwrap();
+        let bytes = write_stream(&batch.schema(), std::slice::from_ref(&batch), options);
+        // Views plus one 63-byte value and less than 1 KiB of IPC framing.
+        assert!(bytes.len() < batch.num_rows() * size_of::<u128>() + 1024);
+        let read = read_stream(bytes);
+        assert_eq!(read, vec![batch]);
+        assert_eq!(
+            read[0].column(0).as_string_view().data_buffers()[0].len(),
+            63
         );
     }
 
