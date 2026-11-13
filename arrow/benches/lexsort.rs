@@ -217,6 +217,41 @@ fn do_bench(c: &mut Criterion, columns: &[Column], len: usize) {
     });
 }
 
+/// Top-k sorts, where `lexsort_to_indices` orders only the first `limit` rows
+fn do_bench_limit(c: &mut Criterion, columns: &[Column], len: usize, limit: usize) {
+    let arrays: Vec<_> = columns.iter().map(|x| x.generate(len)).collect();
+    let sort_columns: Vec<_> = arrays
+        .iter()
+        .cloned()
+        .map(|values| SortColumn {
+            values,
+            options: None,
+        })
+        .collect();
+
+    c.bench_function(
+        &format!("lexsort_to_indices({columns:?}): {len} limit {limit}"),
+        |b| b.iter(|| hint::black_box(lexsort_to_indices(&sort_columns, Some(limit)).unwrap())),
+    );
+
+    c.bench_function(
+        &format!("lexsort_radix({columns:?}): {len} limit {limit}"),
+        |b| {
+            b.iter(|| {
+                hint::black_box({
+                    let fields = arrays
+                        .iter()
+                        .map(|a| SortField::new(a.data_type().clone()))
+                        .collect();
+                    let converter = RowConverter::new(fields).unwrap();
+                    let rows = converter.convert_columns(&arrays).unwrap();
+                    radix_sort_to_indices(&rows, Some(limit)).unwrap()
+                })
+            })
+        },
+    );
+}
+
 fn add_benchmark(c: &mut Criterion) {
     let cases: &[&[Column]] = &[
         // Single-column primitives
@@ -310,5 +345,20 @@ fn add_benchmark(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, add_benchmark);
+fn add_limit_benchmark(c: &mut Criterion) {
+    let cases: &[&[Column]] = &[
+        &[Column::SmallRangeI64, Column::RequiredI32],
+        &[Column::Optional16CharString, Column::Required16CharString],
+        &[Column::JoinItemI32, Column::JoinTicketI64],
+    ];
+    for case in cases {
+        for len in [4096 * 8, 1 << 20] {
+            for limit in [100, 1000, len / 10] {
+                do_bench_limit(c, case, len, limit);
+            }
+        }
+    }
+}
+
+criterion_group!(benches, add_benchmark, add_limit_benchmark);
 criterion_main!(benches);
