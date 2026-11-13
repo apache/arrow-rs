@@ -842,6 +842,44 @@ fn build_int32_list_page_iterator(
     InMemoryPageIterator::new(pages)
 }
 
+/// Builds pages of a nullable list of nullable INT32 where every list has
+/// `list_len` non-null items, the case where branches on the levels predict well.
+fn build_int32_fixed_list_page_iterator(
+    column_desc: ColumnDescPtr,
+    list_len: usize,
+    rows_per_page: usize,
+) -> impl PageIterator + Clone {
+    let max_def_level = column_desc.max_def_level();
+    let max_rep_level = column_desc.max_rep_level();
+    let mut rng = seedable_rng();
+    let mut pages: Vec<Vec<parquet::column::page::Page>> = Vec::new();
+    for _i in 0..NUM_ROW_GROUPS {
+        let mut column_chunk_pages = Vec::new();
+        for _j in 0..PAGES_PER_GROUP {
+            let mut values: Vec<i32> = Vec::with_capacity(rows_per_page * list_len);
+            let mut def_levels = Vec::with_capacity(rows_per_page * list_len);
+            let mut rep_levels = Vec::with_capacity(rows_per_page * list_len);
+            for _k in 0..rows_per_page {
+                rep_levels.push(0);
+                (1..list_len).for_each(|_| rep_levels.push(1));
+                for _l in 0..list_len {
+                    def_levels.push(3);
+                    values.push(rng.random());
+                }
+            }
+            let mut page_builder =
+                DataPageBuilderImpl::new(column_desc.clone(), values.len() as u32, true);
+            page_builder.add_rep_levels(max_rep_level, &rep_levels);
+            page_builder.add_def_levels(max_def_level, &def_levels);
+            page_builder.add_values::<Int32Type>(Encoding::PLAIN, &values);
+            column_chunk_pages.push(page_builder.consume());
+        }
+        pages.push(column_chunk_pages);
+    }
+
+    InMemoryPageIterator::new(pages)
+}
+
 fn create_int32_list_reader(
     page_iterator: impl PageIterator + 'static,
     column_desc: ColumnDescPtr,
@@ -861,6 +899,132 @@ fn create_int32_list_reader(
     let data_type = DataType::List(Arc::new(field));
     Box::new(ListArrayReader::<i32>::new(
         items, data_type, 2, 1, true, None,
+    ))
+}
+
+/// Exclusive upper bound on the length of each list in the nested list benchmark
+const MAX_NESTED_LIST_LEN: usize = 5;
+
+fn build_int32_list_list_desc() -> ColumnDescPtr {
+    use parquet::schema::{parser::parse_message_type, types::SchemaDescriptor};
+    let message_type = "
+        message test_schema {
+            OPTIONAL GROUP int32_list_list (LIST) {
+                repeated group list {
+                    optional group element (LIST) {
+                        repeated group list {
+                            optional INT32 element;
+                        }
+                    }
+                }
+            }
+        }
+        ";
+    let schema = parse_message_type(message_type)
+        .map(|t| SchemaDescriptor::new(Arc::new(t)))
+        .unwrap();
+    schema.column(0)
+}
+
+/// Builds pages of a nullable list of nullable lists of nullable INT32, where
+/// `null_density` is the chance of a null at each of the three levels.
+fn build_int32_list_list_page_iterator(
+    column_desc: ColumnDescPtr,
+    null_density: f32,
+) -> impl PageIterator + Clone {
+    let max_def_level = column_desc.max_def_level();
+    let max_rep_level = column_desc.max_rep_level();
+    assert_eq!(max_def_level, 5);
+    assert_eq!(max_rep_level, 2);
+
+    let mut rng = seedable_rng();
+    let mut pages: Vec<Vec<parquet::column::page::Page>> = Vec::new();
+    for _i in 0..NUM_ROW_GROUPS {
+        let mut column_chunk_pages = Vec::new();
+        for _j in 0..PAGES_PER_GROUP {
+            let mut values: Vec<i32> = Vec::new();
+            let mut def_levels = Vec::new();
+            let mut rep_levels = Vec::new();
+            for _k in 0..VALUES_PER_PAGE {
+                if rng.random::<f32>() < null_density {
+                    rep_levels.push(0);
+                    def_levels.push(0);
+                    continue;
+                }
+                let outer_len = rng.random_range(0..MAX_NESTED_LIST_LEN);
+                if outer_len == 0 {
+                    rep_levels.push(0);
+                    def_levels.push(1);
+                    continue;
+                }
+                for o in 0..outer_len {
+                    // The first entry of a list carries the enclosing list's rep level
+                    let outer_rep = i16::from(o != 0);
+                    if rng.random::<f32>() < null_density {
+                        rep_levels.push(outer_rep);
+                        def_levels.push(2);
+                        continue;
+                    }
+                    let inner_len = rng.random_range(0..MAX_NESTED_LIST_LEN);
+                    if inner_len == 0 {
+                        rep_levels.push(outer_rep);
+                        def_levels.push(3);
+                        continue;
+                    }
+                    for l in 0..inner_len {
+                        rep_levels.push(if l == 0 { outer_rep } else { 2 });
+                        if rng.random::<f32>() < null_density {
+                            def_levels.push(4);
+                        } else {
+                            def_levels.push(5);
+                            values.push(rng.random());
+                        }
+                    }
+                }
+            }
+            let mut page_builder =
+                DataPageBuilderImpl::new(column_desc.clone(), values.len() as u32, true);
+            page_builder.add_rep_levels(max_rep_level, &rep_levels);
+            page_builder.add_def_levels(max_def_level, &def_levels);
+            page_builder.add_values::<Int32Type>(Encoding::PLAIN, &values);
+            column_chunk_pages.push(page_builder.consume());
+        }
+        pages.push(column_chunk_pages);
+    }
+
+    InMemoryPageIterator::new(pages)
+}
+
+/// Builds the readers with the levels `ArrayReaderBuilder` assigns: each child
+/// pads to its parent list's def level, which the inner list also uses as its
+/// parent threshold.
+fn create_int32_list_list_reader(
+    page_iterator: impl PageIterator + 'static,
+    column_desc: ColumnDescPtr,
+) -> Box<dyn ArrayReader> {
+    use parquet::arrow::array_reader::PrimitiveArrayReader;
+    let items = Box::new(
+        PrimitiveArrayReader::<Int32Type>::new(
+            Box::new(page_iterator),
+            column_desc,
+            None,
+            DEFAULT_BATCH_SIZE,
+            Some(4),
+        )
+        .unwrap(),
+    ) as Box<dyn ArrayReader>;
+    let inner_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
+    let inner = Box::new(ListArrayReader::<i32>::new(
+        items,
+        inner_type.clone(),
+        4,
+        2,
+        true,
+        Some(2),
+    ));
+    let outer_type = DataType::List(Arc::new(Field::new_list_field(inner_type, true)));
+    Box::new(ListArrayReader::<i32>::new(
+        inner, outer_type, 2, 1, true, None,
     ))
 }
 
@@ -2716,6 +2880,37 @@ fn add_benches(c: &mut Criterion) {
                 count = bench_array_reader_runs(reader, run_len);
             });
             assert_eq!(count, EXPECTED_VALUE_COUNT);
+        });
+    }
+    group.finish();
+
+    let int32_list_list_desc = build_int32_list_list_desc();
+    let mut group = c.benchmark_group("arrow_array_reader/ListArray/Int32ListList");
+    for (label, null_density) in [("no NULLs", 0.0), ("half NULLs", 0.5)] {
+        let list_data =
+            build_int32_list_list_page_iterator(int32_list_list_desc.clone(), null_density);
+        group.bench_function(label, |b| {
+            b.iter(|| {
+                let reader =
+                    create_int32_list_list_reader(list_data.clone(), int32_list_list_desc.clone());
+                count = bench_array_reader(reader);
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
+        });
+    }
+    group.finish();
+
+    let mut group = c.benchmark_group("arrow_array_reader/ListArray/Int32LongList");
+    for (list_len, rows_per_page) in [(128, 10_000), (1024, 1_250)] {
+        let list_data =
+            build_int32_fixed_list_page_iterator(int32_list_desc.clone(), list_len, rows_per_page);
+        let rows = NUM_ROW_GROUPS * PAGES_PER_GROUP * rows_per_page;
+        group.bench_function(format!("{list_len} items, no NULLs"), |b| {
+            b.iter(|| {
+                let reader = create_int32_list_reader(list_data.clone(), int32_list_desc.clone());
+                count = bench_array_reader(reader);
+            });
+            assert_eq!(count, rows);
         });
     }
     group.finish();
