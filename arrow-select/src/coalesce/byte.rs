@@ -4,7 +4,6 @@
 
 use super::InProgressArray;
 use crate::filter::{FilterIndices, FilterPredicate, FilterSelection};
-use crate::take::{TakeOptions, take};
 use arrow_array::builder::GenericByteBuilder;
 use arrow_array::cast::AsArray;
 use arrow_array::types::ByteArrayType;
@@ -12,12 +11,6 @@ use arrow_array::{Array, ArrayRef, GenericByteArray, OffsetSizeTrait, UInt32Arra
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::ArrowError;
 use std::sync::Arc;
-
-const INDEXED_COPY_MAX_SELECTIVITY_DENOMINATOR: usize = 1024;
-
-fn should_use_indexed_copy(input_rows: usize, selected_rows: usize) -> bool {
-    selected_rows <= input_rows / INDEXED_COPY_MAX_SELECTIVITY_DENOMINATOR
-}
 
 pub(crate) struct InProgressByteArray<T: ByteArrayType> {
     source: Option<ArrayRef>,
@@ -137,7 +130,7 @@ where
     ///
     /// `indices` must not contain nulls, and every value must be less than
     /// `source.len()`.
-    unsafe fn copy_rows_by_indices(
+    unsafe fn copy_rows_by_sparse_indices(
         &mut self,
         source: &ArrayRef,
         indices: &UInt32Array,
@@ -147,18 +140,6 @@ where
         }
 
         let source = source.as_bytes::<T>();
-        if !should_use_indexed_copy(source.len(), indices.len()) {
-            // SAFETY: the caller validated the indices against `source.len()`.
-            let taken = take(
-                source,
-                indices,
-                Some(TakeOptions {
-                    check_bounds: false,
-                }),
-            )?;
-            return self.direct.append_array(taken.as_bytes::<T>());
-        }
-
         let index_values = indices.values();
         debug_assert!(
             index_values
@@ -311,19 +292,15 @@ mod tests {
         let indices = UInt32Array::from(vec![2047, 0]);
         let mut in_progress = InProgressByteArray::<GenericStringType<i32>>::new(indices.len());
 
-        assert!(should_use_indexed_copy(source.len(), indices.len()));
         // SAFETY: the indices are non-null and in bounds for `source`.
-        unsafe { in_progress.copy_rows_by_indices(&source, &indices).unwrap() };
+        unsafe {
+            in_progress
+                .copy_rows_by_sparse_indices(&source, &indices)
+                .unwrap()
+        };
 
         let actual = in_progress.finish().unwrap();
         let expected = StringArray::from(vec![Some("last"), None]);
         assert_eq!(actual.as_string::<i32>(), &expected);
-    }
-
-    #[test]
-    fn indexed_copy_threshold() {
-        assert!(should_use_indexed_copy(8192, 8));
-        assert!(!should_use_indexed_copy(8192, 9));
-        assert!(!should_use_indexed_copy(8192, 81));
     }
 }
