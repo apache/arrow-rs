@@ -601,9 +601,13 @@ impl Sbbf {
 
     /// Checks precomputed 64-bit hashes (see [`Self::insert_hashes`]).
     ///
-    /// Bit `i` of the result is set if `hashes[i]` may be in the filter. The
-    /// check has no data-dependent branches, which is much faster than
-    /// checking one hash at a time.
+    /// Bit `i` of the result is set if `hashes[i]` may be in the filter.
+    ///
+    /// Each check tests all 8 bits of its block without an early exit, so
+    /// it has no data-dependent branches. This is typically faster than
+    /// checking one hash at a time when hits and misses are mixed (and the
+    /// branch predictor cannot learn the pattern), and slightly slower when
+    /// nearly every hash misses, where the early exit pays off.
     #[cfg(feature = "arrow")]
     pub fn check_hashes(&self, hashes: &[u64]) -> arrow_buffer::BooleanBuffer {
         arrow_buffer::BooleanBuffer::collect_bool(hashes.len(), |i| {
