@@ -1296,12 +1296,11 @@ mod test {
     #[test]
     fn invalid_storage_checked_before_canonicalizing() {
         // `UInt8` is also an illegal shredded type, but the storage error must win
-        let fields = Fields::from(vec![
-            Field::new("metadata", DataType::BinaryView, false),
-            Field::new("value", DataType::UInt8, true),
-        ]);
-        let value = Arc::new(UInt8Array::from(vec![1])) as ArrayRef;
-        let array = StructArray::new(fields, vec![make_binary_view_array(), value], None);
+        let array = StructArrayAssembler::new()
+            .with_field("metadata", make_binary_view_array(), false)
+            .with_field("value", Arc::new(UInt8Array::from(vec![1])), true)
+            .build()
+            .unwrap();
         let err = VariantArray::try_new(&array).unwrap_err();
         assert_eq!(
             err.to_string(),
