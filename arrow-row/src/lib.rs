@@ -6242,8 +6242,8 @@ mod tests {
             column.to_data().validate_full().unwrap();
         }
 
-        // Nulls may change Union fields, and dictionaries decode to their value types.
-        // Even then, decoding and encoding again must preserve the comparison bytes.
+        // Nulls may change the selected Union field, and dictionaries decode to their
+        // value types. Decoding and encoding again must preserve the comparison bytes.
         let converter = RowConverter::new(fields(&decoded)).unwrap();
         let reencoded = converter.convert_columns(&decoded).unwrap();
         assert_eq!(
