@@ -4116,6 +4116,7 @@ impl<'a> DictionaryEncoding<'a> {
     pub const VT_INDEXTYPE: flatbuffers::VOffsetT = 6;
     pub const VT_ISORDERED: flatbuffers::VOffsetT = 8;
     pub const VT_DICTIONARYKIND: flatbuffers::VOffsetT = 10;
+    pub const VT_CUSTOM_METADATA: flatbuffers::VOffsetT = 12;
 
     #[inline]
     pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -4128,6 +4129,9 @@ impl<'a> DictionaryEncoding<'a> {
     ) -> flatbuffers::WIPOffset<DictionaryEncoding<'bldr>> {
         let mut builder = DictionaryEncodingBuilder::new(_fbb);
         builder.add_id(args.id);
+        if let Some(x) = args.custom_metadata {
+            builder.add_custom_metadata(x);
+        }
         if let Some(x) = args.indexType {
             builder.add_indexType(x);
         }
@@ -4194,6 +4198,20 @@ impl<'a> DictionaryEncoding<'a> {
                 .unwrap()
         }
     }
+    /// Metadata for the dictionary value type, e.g. the extension type of the values
+    #[inline]
+    pub fn custom_metadata(
+        &self,
+    ) -> Option<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<KeyValue<'a>>>> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab.get::<flatbuffers::ForwardsUOffset<
+                flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<KeyValue>>,
+            >>(DictionaryEncoding::VT_CUSTOM_METADATA, None)
+        }
+    }
 }
 
 impl flatbuffers::Verifiable for DictionaryEncoding<'_> {
@@ -4212,6 +4230,9 @@ impl flatbuffers::Verifiable for DictionaryEncoding<'_> {
             )?
             .visit_field::<bool>("isOrdered", Self::VT_ISORDERED, false)?
             .visit_field::<DictionaryKind>("dictionaryKind", Self::VT_DICTIONARYKIND, false)?
+            .visit_field::<flatbuffers::ForwardsUOffset<
+                flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<KeyValue>>,
+            >>("custom_metadata", Self::VT_CUSTOM_METADATA, false)?
             .finish();
         Ok(())
     }
@@ -4221,6 +4242,9 @@ pub struct DictionaryEncodingArgs<'a> {
     pub indexType: Option<flatbuffers::WIPOffset<Int<'a>>>,
     pub isOrdered: bool,
     pub dictionaryKind: DictionaryKind,
+    pub custom_metadata: Option<
+        flatbuffers::WIPOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<KeyValue<'a>>>>,
+    >,
 }
 impl<'a> Default for DictionaryEncodingArgs<'a> {
     #[inline]
@@ -4230,6 +4254,7 @@ impl<'a> Default for DictionaryEncodingArgs<'a> {
             indexType: None,
             isOrdered: false,
             dictionaryKind: DictionaryKind::DenseArray,
+            custom_metadata: None,
         }
     }
 }
@@ -4264,6 +4289,18 @@ impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> DictionaryEncodingBuilder<'a, '
         );
     }
     #[inline]
+    pub fn add_custom_metadata(
+        &mut self,
+        custom_metadata: flatbuffers::WIPOffset<
+            flatbuffers::Vector<'b, flatbuffers::ForwardsUOffset<KeyValue<'b>>>,
+        >,
+    ) {
+        self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+            DictionaryEncoding::VT_CUSTOM_METADATA,
+            custom_metadata,
+        );
+    }
+    #[inline]
     pub fn new(
         _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
     ) -> DictionaryEncodingBuilder<'a, 'b, A> {
@@ -4287,6 +4324,7 @@ impl core::fmt::Debug for DictionaryEncoding<'_> {
         ds.field("indexType", &self.indexType());
         ds.field("isOrdered", &self.isOrdered());
         ds.field("dictionaryKind", &self.dictionaryKind());
+        ds.field("custom_metadata", &self.custom_metadata());
         ds.finish()
     }
 }
