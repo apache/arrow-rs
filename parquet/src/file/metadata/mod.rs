@@ -40,6 +40,20 @@
 mod column_chunk;
 #[cfg(feature = "arrow")]
 mod dictionary;
+#[cfg(feature = "experimental")]
+#[doc(hidden)]
+#[expect(
+    dead_code,
+    reason = "Shared primitives are consumed by the following writer and reader commits"
+)]
+pub mod extensions;
+#[cfg(not(feature = "experimental"))]
+#[expect(
+    clippy::allow_attributes,
+    reason = "Experimental API remains available for in-crate tests"
+)]
+#[allow(dead_code)]
+pub(crate) mod extensions;
 mod footer_tail;
 mod memory;
 mod options;

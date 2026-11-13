@@ -26,6 +26,14 @@ use std::io::Error;
 use std::num::TryFromIntError;
 use std::str::Utf8Error;
 
+/// Maximum recursion budget for skipping one unknown Thrift value.
+///
+/// This is a defensive implementation limit, not a Parquet/Thrift wire-format
+/// restriction. Known Parquet metadata nests much less deeply, but unknown fields
+/// may contain additional structs or collections. The budget starts at the
+/// skipped value, excluding any enclosing structures already decoded normally.
+pub(crate) const MAX_SKIP_DEPTH: i8 = 64;
+
 #[derive(Debug)]
 pub(crate) enum ThriftProtocolError {
     Eof,
@@ -470,11 +478,9 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
         self.skip_bytes(len)
     }
 
-    /// Skip a field with type `field_type` recursively until the default
-    /// maximum skip depth (currently 64) is reached.
+    /// Skip a value by type up to [`MAX_SKIP_DEPTH`] levels.
     fn skip(&mut self, field_type: FieldType) -> ThriftProtocolResult<()> {
-        const DEFAULT_SKIP_DEPTH: i8 = 64;
-        self.skip_till_depth(field_type, DEFAULT_SKIP_DEPTH)
+        self.skip_till_depth(field_type, MAX_SKIP_DEPTH)
     }
 
     /// Empty structs in unions consist of a single byte of 0 for the field stop record.

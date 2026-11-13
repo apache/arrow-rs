@@ -463,3 +463,19 @@ the thrift macros. For instance, to see the implementations generated in the `ba
 ```sh
 % cargo expand -p parquet --lib --all-features basic
 ```
+
+## Binary protocol extensions
+
+The [Parquet specification](https://github.com/apache/parquet-format/blob/master/BinaryProtocolExtensions.md)
+reserves binary field **32767** for application-defined metadata. Append it before
+an ordinary struct's STOP using this Compact Protocol encoding:
+
+```text
+08 FE FF 03 | ULEB128(payload length) | payload bytes | 00 (STOP)
+```
+
+`08` identifies a binary field with an explicit ID; `FE FF 03` encodes
+ZigZag(32767). Conforming readers skip unknown fields.
+
+Public contracts and examples are documented on
+[`MetadataExtensionSelection`](src/file/metadata/extensions/selection.rs).
