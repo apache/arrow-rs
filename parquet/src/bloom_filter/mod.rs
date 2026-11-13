@@ -552,8 +552,15 @@ impl Sbbf {
         self.insert_hash(hash_as_bytes(value));
     }
 
-    /// Insert a hash into the filter
-    fn insert_hash(&mut self, hash: u64) {
+    /// Inserts a precomputed 64-bit hash.
+    ///
+    /// The filter can hold hashes from any well-mixed 64-bit hash function,
+    /// so values can be hashed in bulk with the caller's own hash function
+    /// (for example, a columnar hash of a multi-column key). [`Self::check`]
+    /// only finds values whose hashes were computed as the Parquet
+    /// specification requires (xxHash64, seed 0, of the plain encoding); use
+    /// [`Self::check_hashes`] with the same hash function instead.
+    pub fn insert_hash(&mut self, hash: u64) {
         let block_index = self.hash_to_block_index(hash);
         self.0[block_index].insert(hash as u32)
     }
@@ -587,19 +594,7 @@ impl Sbbf {
         self.0[block_index].check_branch_free(hash as u32)
     }
 
-    /// Inserts precomputed 64-bit hashes.
-    ///
-    /// The filter can hold hashes from any well-mixed 64-bit hash function,
-    /// but [`Self::check`] only finds values whose hashes were computed as
-    /// the Parquet specification requires (xxHash64, seed 0, of the plain
-    /// encoding). Use [`Self::check_hashes`] with the same hash function.
-    pub fn insert_hashes(&mut self, hashes: &[u64]) {
-        for &hash in hashes {
-            self.insert_hash(hash);
-        }
-    }
-
-    /// Checks precomputed 64-bit hashes (see [`Self::insert_hashes`]).
+    /// Checks precomputed 64-bit hashes (see [`Self::insert_hash`]).
     ///
     /// Bit `i` of the result is set if `hashes[i]` may be in the filter.
     ///
@@ -628,7 +623,7 @@ impl Sbbf {
     ///
     /// Both filters must have been populated with the same hash function
     /// (the Parquet xxHash64 used by [`Self::insert`], or the same function
-    /// used for [`Self::insert_hashes`]); otherwise the result is
+    /// used for [`Self::insert_hash`]); otherwise the result is
     /// meaningless. This cannot be checked.
     ///
     /// Returns an error if the sizes are incompatible, including if this
@@ -944,6 +939,23 @@ fn read_bloom_filter_header_and_length(buffer: &[u8]) -> Result<(BloomFilterHead
 mod tests {
     use super::*;
 
+    fn insert_all(f: &mut Sbbf, hashes: &[u64]) {
+        for &h in hashes {
+            f.insert_hash(h);
+        }
+    }
+
+    #[test]
+    fn test_insert_hash_matches_insert() {
+        let mut by_value = Sbbf::new_with_num_of_bytes(256);
+        let mut by_hash = Sbbf::new_with_num_of_bytes(256);
+        for i in 0..200u64 {
+            by_value.insert(&i);
+            by_hash.insert_hash(hash_as_bytes(&i));
+        }
+        assert_eq!(bitset(&by_value), bitset(&by_hash));
+    }
+
     fn bitset(f: &Sbbf) -> Vec<u8> {
         let mut out = vec![];
         f.write_bitset(&mut out).unwrap();
@@ -967,7 +979,7 @@ mod tests {
     fn test_check_hashes_matches_check_hash() {
         let hashes: Vec<u64> = (0..5000u64).map(|i| hash_as_bytes(&i)).collect();
         let mut filter = Sbbf::new_with_num_of_bytes(256);
-        filter.insert_hashes(&hashes[..200]);
+        insert_all(&mut filter, &hashes[..200]);
         let result = filter.check_hashes(&hashes);
         for (i, &h) in hashes.iter().enumerate() {
             assert_eq!(result.value(i), filter.check_hash(h));
@@ -979,11 +991,11 @@ mod tests {
     fn test_union_of_parts_matches_one_filter() {
         let hashes: Vec<u64> = (0..100_000u64).map(|i| hash_as_bytes(&i)).collect();
         let mut whole = Sbbf::new_with_num_of_bytes(1 << 20);
-        whole.insert_hashes(&hashes);
+        insert_all(&mut whole, &hashes);
         let mut merged = Sbbf::new_with_num_of_bytes(1 << 20);
         for chunk in hashes.chunks(7_000) {
             let mut part = Sbbf::new_with_num_of_bytes(1 << 20);
-            part.insert_hashes(chunk);
+            insert_all(&mut part, chunk);
             merged.union(&part).unwrap();
         }
         assert_eq!(bitset(&whole), bitset(&merged));
@@ -994,10 +1006,10 @@ mod tests {
         assert_eq!(bitset(&folded), bitset(&merged));
         // a larger filter is folded on the fly
         let mut small = Sbbf::new_with_num_of_bytes(1 << 16);
-        small.insert_hashes(&hashes[..10]);
+        insert_all(&mut small, &hashes[..10]);
         small.union(&whole).unwrap();
         let mut expected = Sbbf::new_with_num_of_bytes(1 << 16);
-        expected.insert_hashes(&hashes);
+        insert_all(&mut expected, &hashes);
         assert_eq!(bitset(&small), bitset(&expected));
         // a smaller filter cannot be unioned into a larger one
         assert!(whole.clone().union(&small).is_err());
