@@ -1799,7 +1799,9 @@ fn write_leaf(
 /// [`visit_i32`] and [`visit_i64`] hold the conversion from each Arrow type, and
 /// call [`Self::slice`] when the Arrow values are stored as they are, or
 /// [`Self::map`] when each value is converted. This lets the writer borrow the
-/// Arrow buffer when no conversion is needed.
+/// Arrow buffer when no conversion is needed, and lets
+/// [`ArrowSbbf`](crate::arrow::bloom_filter::ArrowSbbf) check converted values
+/// one at a time without collecting them.
 pub(crate) trait PrimitiveVisitor<T> {
     type Output;
 
@@ -1922,6 +1924,13 @@ pub(crate) fn visit_i64<V: PrimitiveVisitor<i64>>(
                 visitor.slice(column.as_primitive::<DurationNanosecondType>().values())
             }
         },
+        ArrowDataType::Decimal32(_, _) => {
+            // ArrowWriter stores Decimal32 as INT32, but ArrowSbbf can check
+            // Decimal32 values against an INT64 decimal column
+            visitor.map(column.as_primitive::<Decimal32Type>().values(), |v| {
+                v as i64
+            })
+        }
         ArrowDataType::Decimal64(_, _) => {
             visitor.slice(column.as_primitive::<Decimal64Type>().values())
         }
@@ -2047,25 +2056,39 @@ pub(crate) fn visit_fixed_len_byte_array<V: FixedLenByteArrayVisitor>(
 
 /// Passes the big-endian two's complement bytes of the values of `array` to `visitor`
 ///
-/// The values are truncated to their low [`FixedLenByteArrayVisitor::decimal_length`]
-/// bytes, which must not be more than the length of the Arrow decimal type. A value
-/// too large for the length is truncated, as [`ArrowWriter`] has always done, since
-/// Arrow does not validate precision.
+/// The values are resized to [`FixedLenByteArrayVisitor::decimal_length`] bytes:
+/// sign-extended if that is longer than the Arrow decimal type, or truncated to
+/// the low bytes if it is shorter. A value too large for the length is truncated,
+/// as [`ArrowWriter`] has always done, since Arrow does not validate precision.
 fn visit_decimal<T: NativeDecimalType, V: FixedLenByteArrayVisitor>(
     array: &PrimitiveArray<T>,
     visitor: V,
 ) -> Result<V::Output> {
     let length = visitor.decimal_length(array.precision(), T::BYTE_LENGTH);
     let be_bytes = |i| T::to_be_bytes(array.value(i));
-    if length == T::BYTE_LENGTH {
-        // Special-case that allows inlining memcpy.
-        visitor.values(length, |i, value| {
+    // Compare the lengths once, not for each value
+    match length.checked_sub(T::BYTE_LENGTH) {
+        // Same length, which lets the compiler inline the copy
+        Some(0) => visitor.values(length, |i, value| {
             value.copy_from_slice(be_bytes(i).as_ref());
-        })
-    } else {
-        visitor.values(length, |i, value| {
+        }),
+        Some(extension) => visitor.values(length, |i, value| {
+            let bytes = be_bytes(i);
+            value[..extension].fill(sign_byte(bytes.as_ref()));
+            value[extension..].copy_from_slice(bytes.as_ref());
+        }),
+        None => visitor.values(length, |i, value| {
             value.copy_from_slice(&be_bytes(i).as_ref()[T::BYTE_LENGTH - length..]);
-        })
+        }),
+    }
+}
+
+/// Returns the byte that sign-extends the big-endian two's complement integer `bytes`
+fn sign_byte(bytes: &[u8]) -> u8 {
+    if bytes.first().is_some_and(|b| (*b as i8) < 0) {
+        0xFF
+    } else {
+        0
     }
 }
 
@@ -2706,6 +2729,98 @@ mod tests {
         let arrays: Vec<ArrayRef> = vec![Arc::new(first), Arc::new(second), Arc::new(third)];
         // a, bb, ccc, zz, new value!!
         assert_eq!(write_string_dictionaries(&arrays), 5);
+    }
+
+    fn dictionary_writer_memory_size(array: ArrayRef, batch_size: usize) -> usize {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            array.data_type().clone(),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![array]).unwrap();
+        let props = WriterProperties::builder()
+            .set_write_batch_size(batch_size)
+            .build();
+        let mut writer = ArrowWriter::try_new(Vec::new(), schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.memory_size()
+    }
+
+    #[test]
+    fn arrow_writer_dictionary_cache_ignores_null_rows() {
+        let values: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("value"),
+            None,
+            Some("unused"),
+            Some("also unused"),
+        ]));
+
+        for non_null in [0, 2] {
+            let valid = |i| (3..3 + non_null).contains(&i);
+            let keys = Int32Array::from_iter((0..10).map(|i| valid(i).then_some(0)));
+            let null_keys: ArrayRef =
+                Arc::new(DictionaryArray::new(keys, values.clone()).slice(1, 8));
+            let keys = Int32Array::from_iter_values((0..10).map(|i| i32::from(!valid(i))));
+            let null_values: ArrayRef =
+                Arc::new(DictionaryArray::new(keys, values.clone()).slice(1, 8));
+            let child: ArrayRef = Arc::new(DictionaryArray::new(
+                Int32Array::from(vec![0; 10]),
+                values.clone(),
+            ));
+            let parent: ArrayRef = Arc::new(
+                StructArray::new(
+                    vec![Arc::new(Field::new(
+                        "item",
+                        child.data_type().clone(),
+                        true,
+                    ))]
+                    .into(),
+                    vec![child],
+                    Some(NullBuffer::from_iter((0..10).map(valid))),
+                )
+                .slice(1, 8),
+            );
+
+            for array in [null_keys, null_values, parent] {
+                let plain_type = match array.data_type() {
+                    DataType::Struct(_) => DataType::Struct(
+                        vec![Arc::new(Field::new("item", DataType::Utf8, true))].into(),
+                    ),
+                    _ => DataType::Utf8,
+                };
+                let plain = cast(&array, &plain_type).unwrap();
+                // Neither input should retain a cache for only zero or two encoded values.
+                assert_eq!(
+                    dictionary_writer_memory_size(array, 2),
+                    dictionary_writer_memory_size(plain, 2)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn arrow_writer_dictionary_cache_counts_rows_across_mini_batches() {
+        let values: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c", "d"]));
+        let array: ArrayRef = Arc::new(DictionaryArray::new(
+            Int32Array::from(vec![
+                Some(0),
+                Some(1),
+                None,
+                Some(2),
+                Some(3),
+                Some(0),
+                Some(1),
+                Some(2),
+                Some(3),
+            ]),
+            values,
+        ));
+        let plain = cast(&array, &DataType::Utf8).unwrap();
+        // Eight rows justify a four-slot cache, even with only two rows per mini-batch.
+        assert_eq!(
+            dictionary_writer_memory_size(array, 2),
+            dictionary_writer_memory_size(plain, 2) + 4 * std::mem::size_of::<u64>()
+        );
     }
 
     #[test]

@@ -24,24 +24,40 @@ where
 {
     let mut rng = StdRng::seed_from_u64(42);
     let array = PrimitiveArray::<T>::from_iter_values((0..SIZE).map(|_| rng.random()));
-    // A fifth of the values null, at random positions
-    let nulls = NullBuffer::from_iter((0..SIZE).map(|_| rng.random_ratio(4, 5)));
-    let with_nulls = PrimitiveArray::<T>::new(array.values().clone(), Some(nulls));
+    // A fifth, half, and nine tenths of the values null, at random positions. Visiting only the
+    // valid values does less work as the share of nulls grows
+    let with_nulls: Vec<_> = [
+        ("mixed_nulls", 4, 5),
+        ("half_nulls", 1, 2),
+        ("mostly_nulls", 1, 10),
+    ]
+    .into_iter()
+    .map(|(name, valid, of)| {
+        let nulls = NullBuffer::from_iter((0..SIZE).map(|_| rng.random_ratio(valid, of)));
+        (
+            name,
+            PrimitiveArray::<T>::new(array.values().clone(), Some(nulls)),
+        )
+    })
+    .collect();
     let mut group = c.benchmark_group(format!("integer_division_{name}"));
     group.throughput(Throughput::Elements(SIZE as u64));
     for (op, kernel) in [("div", div as Kernel), ("rem", rem)] {
-        // 16 is a power of two, which a precomputed divisor can replace with a shift or mask
-        for d in [13, 16] {
+        // A precomputed divisor picks a variant from the divisor: for unsigned types 7 needs a
+        // multiplier wider than N bits and 13 doesn't, and 16 is a power of two, which a shift
+        // or mask replaces
+        for d in [7, 13, 16] {
             let divisor = PrimitiveArray::<T>::new_scalar(T::Native::usize_as(d));
             group.bench_function(format!("{op}_{d}/no_nulls"), |b| {
                 b.iter(|| black_box(kernel(black_box(&array), black_box(&divisor)).unwrap()))
             });
         }
-        // `try_unary` visits only the valid values when the array has nulls
         let divisor = PrimitiveArray::<T>::new_scalar(T::Native::usize_as(13));
-        group.bench_function(format!("{op}_13/mixed_nulls"), |b| {
-            b.iter(|| black_box(kernel(black_box(&with_nulls), black_box(&divisor)).unwrap()))
-        });
+        for (nulls, array) in &with_nulls {
+            group.bench_function(format!("{op}_13/{nulls}"), |b| {
+                b.iter(|| black_box(kernel(black_box(array), black_box(&divisor)).unwrap()))
+            });
+        }
     }
     // A small array, where building a divisor is a larger share of the work. On fewer values,
     // the fixed cost of each call is far larger than building a divisor for these types.
