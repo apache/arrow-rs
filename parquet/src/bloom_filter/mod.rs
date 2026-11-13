@@ -566,6 +566,11 @@ impl Sbbf {
     /// hash was computed as the specification requires. The header always
     /// names xxHash64, so readers would get false negatives and skip row
     /// groups that hold matching rows.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the filter has no blocks. [`Self::new`] returns such a
+    /// filter for a bitset shorter than 32 bytes.
     pub fn insert_hash(&mut self, hash: u64) {
         let block_index = self.hash_to_block_index(hash);
         self.0[block_index].insert(hash as u32)
@@ -603,6 +608,7 @@ impl Sbbf {
     /// Checks precomputed 64-bit hashes (see [`Self::insert_hash`]).
     ///
     /// Bit `i` of the result is set if `hashes[i]` may be in the filter.
+    /// A filter with no blocks contains nothing, so every bit is unset.
     ///
     /// Each check tests all 8 bits of its block without an early exit, so
     /// it has no data-dependent branches. This is typically faster than
@@ -611,6 +617,9 @@ impl Sbbf {
     /// nearly every hash misses, where the early exit pays off.
     #[cfg(feature = "arrow")]
     pub fn check_hashes(&self, hashes: &[u64]) -> arrow_buffer::BooleanBuffer {
+        if self.0.is_empty() {
+            return arrow_buffer::BooleanBuffer::new_unset(hashes.len());
+        }
         arrow_buffer::BooleanBuffer::collect_bool(hashes.len(), |i| {
             self.check_hash_branch_free(hashes[i])
         })
@@ -1046,6 +1055,16 @@ mod tests {
         assert_eq!(bitset(&small), bitset(&expected));
         // a smaller filter cannot be unioned into a larger one
         assert!(whole.clone().union(&small).is_err());
+    }
+
+    #[cfg(feature = "arrow")]
+    #[test]
+    fn test_check_hashes_empty_filter() {
+        let empty = Sbbf::new(&[0; 31]);
+        assert_eq!(empty.num_blocks(), 0);
+        let result = empty.check_hashes(&[0, 1, u64::MAX]);
+        assert_eq!(result.len(), 3);
+        assert_eq!(result.count_set_bits(), 0);
     }
 
     #[test]
