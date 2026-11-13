@@ -7,29 +7,29 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::RunEndIndexType;
 use arrow_array::{Array, ArrayRef, PrimitiveArray, RunArray, make_array, new_empty_array};
 use arrow_buffer::ArrowNativeType;
-use arrow_cmp::{DynComparator, make_comparator};
+use arrow_cmp::make_comparator;
 use arrow_data::transform::MutableArrayData;
 use arrow_schema::{ArrowError, DataType, SortOptions};
-use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
+use std::sync::Arc;
+
+struct Run<R: RunEndIndexType> {
+    source: usize,
+    index: usize,
+    end: R::Native,
+}
 
 pub(crate) struct InProgressRunArray<R: RunEndIndexType> {
     /// The current source used by [`Self::copy_rows`].
     source: Option<ArrayRef>,
-    /// The data type to use when producing an empty array.
-    data_type: DataType,
-    /// The cumulative logical end of each output run.
-    run_ends: Vec<R::Native>,
     /// Value arrays referenced by the output runs.
     sources: Vec<ArrayRef>,
-    /// The `(source, physical index)` of each output run value.
-    indices: Vec<(usize, usize)>,
-    /// Comparators cached for pairs of value arrays.
-    comparators: HashMap<(usize, usize), DynComparator>,
-    /// The value array for the current source.
-    current_source: Option<usize>,
+    /// The value and cumulative logical end of each output run.
+    runs: Vec<Run<R>>,
     /// The number of logical rows copied into the output.
     len: usize,
+    /// The data type to use when producing an empty array.
+    data_type: DataType,
 }
 
 impl<R: RunEndIndexType> Debug for InProgressRunArray<R> {
@@ -42,50 +42,52 @@ impl<R: RunEndIndexType> InProgressRunArray<R> {
     pub(crate) fn new(data_type: DataType) -> Self {
         Self {
             source: None,
-            data_type,
-            run_ends: Vec::new(),
             sources: Vec::new(),
-            indices: Vec::new(),
-            comparators: HashMap::new(),
-            current_source: None,
+            runs: Vec::new(),
             len: 0,
+            data_type,
         }
     }
 
-    fn append_run(&mut self, source: usize, index: usize, len: usize) -> Result<(), ArrowError> {
+    fn next_run_end(&self, len: usize) -> Result<R::Native, ArrowError> {
         let next_len = self
             .len
             .checked_add(len)
             .ok_or_else(|| ArrowError::InvalidArgumentError("Run end overflow".into()))?;
-        let run_end = R::Native::from_usize(next_len)
-            .ok_or_else(|| ArrowError::InvalidArgumentError("Run end overflow".into()))?;
+        R::Native::from_usize(next_len)
+            .ok_or_else(|| ArrowError::InvalidArgumentError("Run end overflow".into()))
+    }
 
-        if let Some(&(last_source, last_index)) = self.indices.last() {
-            if (last_source, last_index) == (source, index) {
-                self.len = next_len;
-                *self.run_ends.last_mut().unwrap() = run_end;
-                return Ok(());
-            }
-            let key = (last_source, source);
-            if !self.comparators.contains_key(&key) {
-                let comparator = make_comparator(
-                    self.sources[last_source].as_ref(),
+    fn append_first_run(
+        &mut self,
+        source: usize,
+        index: usize,
+        len: usize,
+    ) -> Result<(), ArrowError> {
+        let end = self.next_run_end(len)?;
+
+        if let Some(last) = self.runs.last_mut() {
+            let equal = (last.source, last.index) == (source, index)
+                || make_comparator(
+                    self.sources[last.source].as_ref(),
                     self.sources[source].as_ref(),
                     SortOptions::default(),
-                )?;
-                self.comparators.insert(key, comparator);
-            }
-            if self.comparators[&key](last_index, index).is_eq() {
-                self.len = next_len;
-                *self.run_ends.last_mut().unwrap() = run_end;
-                *self.indices.last_mut().unwrap() = (source, index);
+                )?(last.index, index)
+                .is_eq();
+            if equal {
+                last.end = end;
+                self.len += len;
                 return Ok(());
             }
         }
 
-        self.len = next_len;
-        self.run_ends.push(run_end);
-        self.indices.push((source, index));
+        self.append_run(source, index, len)
+    }
+
+    fn append_run(&mut self, source: usize, index: usize, len: usize) -> Result<(), ArrowError> {
+        let end = self.next_run_end(len)?;
+        self.len += len;
+        self.runs.push(Run { source, index, end });
         Ok(())
     }
 }
@@ -93,7 +95,6 @@ impl<R: RunEndIndexType> InProgressRunArray<R> {
 impl<R: RunEndIndexType> InProgressArray for InProgressRunArray<R> {
     fn set_source(&mut self, source: Option<ArrayRef>) {
         self.source = source;
-        self.current_source = None;
     }
 
     /// Copies a logical row range directly into the output runs.
@@ -115,22 +116,15 @@ impl<R: RunEndIndexType> InProgressArray for InProgressRunArray<R> {
         let first = array.get_physical_index(offset);
         let last = array.get_physical_index(offset + len - 1);
 
-        let source_idx = match self.current_source {
-            Some(idx) => idx,
-            None => {
-                let values = array.values();
-                let idx = self
-                    .sources
-                    .iter()
-                    .position(|source| std::sync::Arc::ptr_eq(source, values))
-                    .unwrap_or_else(|| {
-                        self.sources.push(values.clone());
-                        self.sources.len() - 1
-                    });
-                self.current_source = Some(idx);
-                idx
-            }
-        };
+        let values = array.values();
+        let source_idx = self
+            .sources
+            .iter()
+            .position(|source| Arc::ptr_eq(source, values))
+            .unwrap_or_else(|| {
+                self.sources.push(values.clone());
+                self.sources.len() - 1
+            });
 
         let run_len = |index: usize| {
             let start = index
@@ -141,69 +135,33 @@ impl<R: RunEndIndexType> InProgressArray for InProgressRunArray<R> {
             let end = run_ends.values()[index].as_usize().min(selection_end);
             end - start
         };
-        self.append_run(source_idx, first, run_len(first))?;
-
-        let key = (source_idx, source_idx);
-        if first != last && !self.comparators.contains_key(&key) {
-            self.comparators.insert(
-                key,
-                make_comparator(
-                    array.values().as_ref(),
-                    array.values().as_ref(),
-                    Default::default(),
-                )?,
-            );
-        }
+        self.append_first_run(source_idx, first, run_len(first))?;
         for index in first + 1..=last {
-            let next_len = self
-                .len
-                .checked_add(run_len(index))
-                .ok_or_else(|| ArrowError::InvalidArgumentError("Run end overflow".into()))?;
-            let run_end = R::Native::from_usize(next_len)
-                .ok_or_else(|| ArrowError::InvalidArgumentError("Run end overflow".into()))?;
-            let last_index = self.indices.last().unwrap().1;
-            if self.comparators[&key](last_index, index).is_eq() {
-                *self.run_ends.last_mut().unwrap() = run_end;
-                *self.indices.last_mut().unwrap() = (source_idx, index);
-            } else {
-                self.run_ends.push(run_end);
-                self.indices.push((source_idx, index));
-            }
-            self.len = next_len;
+            self.append_run(source_idx, index, run_len(index))?;
         }
         Ok(())
     }
 
     /// Builds the run-end and value arrays directly from the accumulated runs.
     fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
-        if self.run_ends.is_empty() {
+        if self.runs.is_empty() {
             return Ok(new_empty_array(&self.data_type));
         }
 
         let data = self.sources.iter().map(|x| x.to_data()).collect::<Vec<_>>();
-        let mut values =
-            MutableArrayData::try_new(data.iter().collect(), false, self.indices.len())?;
-        let mut ranges = self.indices.iter().copied().peekable();
-        while let Some((source, start)) = ranges.next() {
-            let mut end = start + 1;
-            while ranges
-                .next_if(|&(next_source, next)| next_source == source && next == end)
-                .is_some()
-            {
-                end += 1;
-            }
-            values.try_extend(source, start, end)?;
+        let mut values = MutableArrayData::try_new(data.iter().collect(), false, self.runs.len())?;
+        let mut run_ends = Vec::with_capacity(self.runs.len());
+        for run in self.runs.drain(..) {
+            values.try_extend(run.source, run.index, run.index + 1)?;
+            run_ends.push(run.end);
         }
         let values = make_array(values.freeze());
-        let run_ends = PrimitiveArray::<R>::from_iter_values(self.run_ends.drain(..));
+        let run_ends = PrimitiveArray::<R>::from_iter_values(run_ends);
         let result = RunArray::<R>::try_new(&run_ends, values.as_ref())?;
 
         self.sources.clear();
-        self.indices.clear();
-        self.comparators.clear();
-        self.current_source = None;
         self.len = 0;
-        Ok(std::sync::Arc::new(result))
+        Ok(Arc::new(result))
     }
 
     fn size(&self) -> usize {
@@ -211,9 +169,8 @@ impl<R: RunEndIndexType> InProgressArray for InProgressRunArray<R> {
             .iter()
             .map(|x| x.get_array_memory_size())
             .sum::<usize>()
-            + self.run_ends.capacity() * size_of::<R::Native>()
             + self.sources.capacity() * size_of::<ArrayRef>()
-            + self.indices.capacity() * size_of::<(usize, usize)>()
+            + self.runs.capacity() * size_of::<Run<R>>()
     }
 }
 
@@ -222,8 +179,14 @@ mod tests {
     use super::*;
     use crate::filter::FilterBuilder;
     use arrow_array::types::{Int16Type, Int32Type, Int64Type};
-    use arrow_array::{BooleanArray, Int64Array, ListArray};
+    use arrow_array::{BooleanArray, Int32Array, Int64Array, ListArray};
     use std::sync::Arc;
+
+    fn assert_i32_runs(array: &ArrayRef, run_ends: &[i32], values: &[i32]) {
+        let array = array.as_run::<Int32Type>();
+        assert_eq!(array.run_ends().values(), run_ends);
+        assert_eq!(array.values().as_primitive::<Int32Type>().values(), values);
+    }
 
     fn sparse_copy<R: RunEndIndexType>(source: Arc<RunArray<R>>) {
         let source: ArrayRef = source;
@@ -276,5 +239,35 @@ mod tests {
         let result = result.as_run::<Int32Type>();
         assert_eq!(result.run_ends().values(), &[2]);
         assert_eq!(result.values().len(), 1);
+    }
+
+    #[test]
+    fn copy_rows_handles_partial_run_boundaries() {
+        let run_ends = Int32Array::from(vec![3, 7, 9]);
+        let values = Int32Array::from(vec![1, 2, 3]);
+        let source =
+            Arc::new(RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap()) as ArrayRef;
+        let mut output = InProgressRunArray::<Int32Type>::new(source.data_type().clone());
+
+        output.set_source(Some(source));
+        output.copy_rows(1, 4).unwrap();
+        output.copy_rows(5, 3).unwrap();
+
+        assert_i32_runs(&output.finish().unwrap(), &[2, 6, 7], &[1, 2, 3]);
+    }
+
+    #[test]
+    fn copy_rows_handles_sliced_run_array() {
+        let run_ends = Int32Array::from(vec![2, 5, 9, 11]);
+        let values = Int32Array::from(vec![0, 1, 2, 3]);
+        let source = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+        let source = Arc::new(source.slice(1, 9)) as ArrayRef;
+        let mut output = InProgressRunArray::<Int32Type>::new(source.data_type().clone());
+
+        output.set_source(Some(source));
+        output.copy_rows(1, 2).unwrap();
+        output.copy_rows(3, 4).unwrap();
+
+        assert_i32_runs(&output.finish().unwrap(), &[3, 6], &[1, 2]);
     }
 }
