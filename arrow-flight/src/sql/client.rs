@@ -401,6 +401,7 @@ where
             prepared_result.prepared_statement_handle,
             dataset_schema,
             parameter_schema,
+            prepared_result.is_update,
         ))
     }
 
@@ -491,6 +492,7 @@ pub struct PreparedStatement<T> {
     handle: Bytes,
     dataset_schema: Schema,
     parameter_schema: Schema,
+    is_update: Option<bool>,
 }
 
 impl<T> PreparedStatement<T>
@@ -505,6 +507,7 @@ where
         handle: impl Into<Bytes>,
         dataset_schema: Schema,
         parameter_schema: Schema,
+        is_update: Option<bool>,
     ) -> Self {
         PreparedStatement {
             flight_sql_client: flight_client,
@@ -512,6 +515,7 @@ where
             handle: handle.into(),
             dataset_schema,
             parameter_schema,
+            is_update,
         }
     }
 
@@ -560,6 +564,43 @@ where
     /// Retrieve the ResultSet schema from the query.
     pub fn dataset_schema(&self) -> Result<&Schema> {
         Ok(&self.dataset_schema)
+    }
+
+    /// Returns the server's indication of how this statement should be executed.
+    ///
+    /// `Some(true)` indicates [`Self::execute_update`], `Some(false)` indicates
+    /// [`Self::execute`], and `None` means the server did not provide this information.
+    ///
+    /// When the field is absent, the caller chooses an execution method based on
+    /// its knowledge of the statement. This example falls back to query execution
+    /// because it prepares a `SELECT` statement.
+    ///
+    /// ```no_run
+    /// # use arrow_flight::error::FlightError;
+    /// # use arrow_flight::sql::client::FlightSqlServiceClient;
+    /// # use tonic::transport::Channel;
+    /// # async fn example(mut client: FlightSqlServiceClient<Channel>) -> Result<(), FlightError> {
+    /// let mut statement = client.prepare("SELECT 1".to_string(), None).await?;
+    /// match statement.is_update() {
+    ///     Some(true) => {
+    ///         let affected_rows = statement.execute_update().await?;
+    ///         println!("{affected_rows} rows affected");
+    ///     }
+    ///     Some(false) => {
+    ///         let flight_info = statement.execute().await?;
+    ///         println!("{flight_info:?}");
+    ///     }
+    ///     None => {
+    ///         // The application knows this statement returns a result set.
+    ///         let flight_info = statement.execute().await?;
+    ///         println!("{flight_info:?}");
+    ///     }
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn is_update(&self) -> Option<bool> {
+        self.is_update
     }
 
     /// Set a RecordBatch that contains the parameters that will be bind.
