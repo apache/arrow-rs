@@ -293,6 +293,7 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
     }
 
     /// Read a ULEB128 encoded unsigned varint from the input.
+    #[inline(always)]
     fn read_vlq(&mut self) -> ThriftProtocolResult<u64> {
         // try the happy path first
         let byte = self.read_byte()?;
@@ -303,7 +304,10 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
         let mut shift = 7;
         loop {
             let byte = self.read_byte()?;
-            in_progress |= ((byte & 0x7F) as u64).wrapping_shl(shift);
+            if byte > 1 && shift == 63 {
+                return Err(ThriftProtocolError::IntegerOverflow);
+            }
+            in_progress |= ((byte & 0x7F) as u64) << shift;
             if byte & 0x80 == 0 {
                 return Ok(in_progress);
             }
@@ -453,13 +457,18 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
     fn read_double(&mut self) -> ThriftProtocolResult<f64>;
 
     /// Skip a ULEB128 encoded varint.
+    #[inline(always)]
     fn skip_vlq(&mut self) -> ThriftProtocolResult<()> {
-        loop {
+        for index in 0..10 {
             let byte = self.read_byte()?;
+            if index == 9 && byte > 1 {
+                return Err(ThriftProtocolError::IntegerOverflow);
+            }
             if byte & 0x80 == 0 {
                 return Ok(());
             }
         }
+        unreachable!()
     }
 
     /// Skip a thrift [binary].
@@ -1312,6 +1321,184 @@ pub(crate) mod tests {
         assert!(
             matches!(stream.read_bytes_owned(), Err(ThriftProtocolError::IO(e)) if e.kind() == ErrorKind::PermissionDenied)
         );
+    }
+
+    #[test]
+    fn test_read_and_skip_vlq_boundaries() {
+        let cases: &[(u64, &[u8])] = &[
+            (0, &[0]),
+            (127, &[127]),
+            (128, &[0x80, 1]),
+            (16383, &[0xff, 0x7f]),
+            (0, &[0x80, 0]),
+            (
+                (1_u64 << 63) - 1,
+                &[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f],
+            ),
+            (
+                1,
+                &[0x81, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0],
+            ),
+            (
+                1 << 63,
+                &[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 1],
+            ),
+            (
+                u64::MAX,
+                &[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 1],
+            ),
+        ];
+        for &(expected, bytes) in cases {
+            let mut data = bytes.to_vec();
+            data.push(42);
+            let mut slice = ThriftSliceInputProtocol::new(&data);
+            let mut stream = ThriftReadInputProtocol::new(data.as_slice());
+            assert_eq!(slice.read_vlq().unwrap(), expected);
+            assert_eq!(stream.read_vlq().unwrap(), expected);
+            assert_eq!(slice.read_byte().unwrap(), 42);
+            assert_eq!(stream.read_byte().unwrap(), 42);
+
+            let mut slice = ThriftSliceInputProtocol::new(&data);
+            let mut stream = ThriftReadInputProtocol::new(data.as_slice());
+            slice.skip_vlq().unwrap();
+            stream.skip_vlq().unwrap();
+            assert_eq!(slice.read_byte().unwrap(), 42);
+            assert_eq!(stream.read_byte().unwrap(), 42);
+        }
+    }
+
+    #[test]
+    fn test_read_zig_zag_signed_extrema() {
+        for value in [
+            i64::MIN,
+            i64::MAX,
+            i32::MIN as i64,
+            i32::MAX as i64,
+            -1,
+            0,
+            1,
+        ] {
+            let mut data = Vec::new();
+            ThriftCompactOutputProtocol::new(&mut data)
+                .write_zig_zag(value)
+                .unwrap();
+            let mut slice = ThriftSliceInputProtocol::new(&data);
+            let mut stream = ThriftReadInputProtocol::new(data.as_slice());
+            assert_eq!(slice.read_zig_zag().unwrap(), value);
+            assert_eq!(stream.read_zig_zag().unwrap(), value);
+        }
+    }
+
+    #[test]
+    fn test_read_and_skip_vlq_overflow() {
+        for last in 2..=255 {
+            let mut data = vec![0x80; 9];
+            data.extend_from_slice(&[last, 0]);
+            let mut slice = ThriftSliceInputProtocol::new(&data);
+            let mut stream = ThriftReadInputProtocol::new(data.as_slice());
+            assert!(matches!(
+                slice.read_vlq(),
+                Err(ThriftProtocolError::IntegerOverflow)
+            ));
+            assert!(matches!(
+                stream.read_vlq(),
+                Err(ThriftProtocolError::IntegerOverflow)
+            ));
+            assert_eq!(slice.read_byte().unwrap(), 0);
+            assert_eq!(stream.read_byte().unwrap(), 0);
+
+            let mut slice = ThriftSliceInputProtocol::new(&data);
+            let mut stream = ThriftReadInputProtocol::new(data.as_slice());
+            assert!(matches!(
+                slice.skip_vlq(),
+                Err(ThriftProtocolError::IntegerOverflow)
+            ));
+            assert!(matches!(
+                stream.skip_vlq(),
+                Err(ThriftProtocolError::IntegerOverflow)
+            ));
+            assert_eq!(slice.read_byte().unwrap(), 0);
+            assert_eq!(stream.read_byte().unwrap(), 0);
+        }
+    }
+
+    #[test]
+    fn test_read_and_skip_vlq_truncated() {
+        for len in 0..10 {
+            let data = vec![0x80; len];
+            let mut slice = ThriftSliceInputProtocol::new(&data);
+            let mut stream = ThriftReadInputProtocol::new(data.as_slice());
+            assert!(matches!(slice.read_vlq(), Err(ThriftProtocolError::Eof)));
+            assert!(
+                matches!(stream.read_vlq(), Err(ThriftProtocolError::IO(e)) if e.kind() == ErrorKind::UnexpectedEof)
+            );
+            assert!(slice.as_slice().is_empty());
+            assert!(stream.reader.is_empty());
+            let mut slice = ThriftSliceInputProtocol::new(&data);
+            let mut stream = ThriftReadInputProtocol::new(data.as_slice());
+            assert!(matches!(slice.skip_vlq(), Err(ThriftProtocolError::Eof)));
+            assert!(
+                matches!(stream.skip_vlq(), Err(ThriftProtocolError::IO(e)) if e.kind() == ErrorKind::UnexpectedEof)
+            );
+            assert!(slice.as_slice().is_empty());
+            assert!(stream.reader.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_read_and_skip_vlq_all_lengths() {
+        for len in 1..=10 {
+            let mut data = vec![0x80; len - 1];
+            data.push(1);
+            let expected = 1_u64 << ((len - 1) * 7);
+            for tail in [b"".as_slice(), &[42; 16]] {
+                let mut bytes = data.clone();
+                bytes.extend_from_slice(tail);
+                let mut slice = ThriftSliceInputProtocol::new(&bytes);
+                let mut stream = ThriftReadInputProtocol::new(bytes.as_slice());
+                assert_eq!(slice.read_vlq().unwrap(), expected);
+                assert_eq!(stream.read_vlq().unwrap(), expected);
+                assert_eq!(slice.as_slice(), tail);
+                assert_eq!(stream.reader, tail);
+
+                let mut slice = ThriftSliceInputProtocol::new(&bytes);
+                let mut stream = ThriftReadInputProtocol::new(bytes.as_slice());
+                slice.skip_vlq().unwrap();
+                stream.skip_vlq().unwrap();
+                assert_eq!(slice.as_slice(), tail);
+                assert_eq!(stream.reader, tail);
+            }
+        }
+    }
+
+    #[test]
+    fn test_read_and_skip_vlq_overflow_at_end() {
+        let data = [0x80; 10];
+        let mut slice = ThriftSliceInputProtocol::new(&data);
+        let mut stream = ThriftReadInputProtocol::new(data.as_slice());
+        assert!(matches!(
+            slice.read_vlq(),
+            Err(ThriftProtocolError::IntegerOverflow)
+        ));
+        assert!(matches!(
+            stream.read_vlq(),
+            Err(ThriftProtocolError::IntegerOverflow)
+        ));
+        assert!(slice.as_slice().is_empty());
+        assert!(stream.reader.is_empty());
+
+        let mut slice = ThriftSliceInputProtocol::new(&data);
+        let mut stream = ThriftReadInputProtocol::new(data.as_slice());
+        assert!(matches!(
+            slice.skip_vlq(),
+            Err(ThriftProtocolError::IntegerOverflow)
+        ));
+        assert!(matches!(
+            stream.skip_vlq(),
+            Err(ThriftProtocolError::IntegerOverflow)
+        ));
+        assert!(slice.as_slice().is_empty());
+        assert!(stream.reader.is_empty());
     }
 
     #[test]
