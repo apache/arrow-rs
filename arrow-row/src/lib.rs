@@ -962,7 +962,7 @@ enum Encoder<'a> {
     Map(Rows),
     /// The row encoding of the values array
     RunEndEncoded(Rows),
-    /// The row encoding of each union field's child array, type_ids buffer, offsets buffer (for Dense), and mode
+    /// The encoded child rows, type IDs, optional dense offsets, and logical nulls
     Union {
         child_rows: Vec<Rows>,
         field_to_type_ids: Vec<i8>,
