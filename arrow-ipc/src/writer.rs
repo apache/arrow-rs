@@ -2385,43 +2385,49 @@ fn get_list_view_array_buffers<O: OffsetSizeTrait>(
 ///
 /// Each child is narrowed to the range of rows that the slice references, and
 /// the offsets are rebased to the start of that range. A child that the slice
-/// does not reference is written empty. Rows inside a range that no slot
-/// references are still written.
+/// does not reference is written empty.
+///
+/// Rows inside a range that no slot references are still written. A slice with
+/// scattered offsets can therefore write most of a child. For example, two slots
+/// that reference the first and the last row of a child write the whole child.
+/// Gathering only the referenced rows would remove this cost, but it copies the
+/// child and gives up the zero-copy slice.
 fn get_dense_union_buffers(data: &ArrayData, fields: &UnionFields) -> (Buffer, Vec<ArrayData>) {
     let range = data.offset()..data.offset() + data.len();
     let type_ids = &data.buffers()[0].as_slice()[range.clone()];
     let offsets = &data.buffers()[1].typed_data::<i32>()[range];
 
-    // Maps a type id to its child index. Type ids are in 0..128.
-    let mut child_index = [0usize; 128];
-    for (index, (type_id, _)) in fields.iter().enumerate() {
-        child_index[type_id as usize] = index;
-    }
-
-    let mut ranges: Vec<Option<(i32, i32)>> = vec![None; fields.len()];
+    // Indexed by type id. A child that no slot references keeps `start > end`.
+    let mut starts = [i32::MAX; 128];
+    let mut ends = [0i32; 128];
     for (type_id, offset) in type_ids.iter().zip(offsets) {
-        let range = &mut ranges[child_index[*type_id as usize]];
-        *range = Some(match *range {
-            Some((start, end)) => (start.min(*offset), end.max(*offset + 1)),
-            None => (*offset, *offset + 1),
-        });
+        let type_id = *type_id as usize;
+        starts[type_id] = starts[type_id].min(*offset);
+        ends[type_id] = ends[type_id].max(*offset + 1);
     }
+    let child_type_ids: Vec<usize> = fields.iter().map(|(type_id, _)| type_id as usize).collect();
 
-    let offsets = type_ids
+    // When every referenced range starts at 0, the rebased offsets equal the
+    // input offsets. This keeps an unsliced union zero-copy.
+    let offsets = if child_type_ids
         .iter()
-        .zip(offsets)
-        .map(|(type_id, offset)| {
-            let (start, _) = ranges[child_index[*type_id as usize]].unwrap();
-            offset - start
-        })
-        .collect();
+        .all(|&t| starts[t] == 0 || starts[t] == i32::MAX)
+    {
+        data.buffers()[1].slice_with_length(data.offset() * 4, data.len() * 4)
+    } else {
+        type_ids
+            .iter()
+            .zip(offsets)
+            .map(|(type_id, offset)| offset - starts[*type_id as usize])
+            .collect()
+    };
     let children = data
         .child_data()
         .iter()
-        .zip(ranges)
-        .map(|(child, range)| match range {
-            Some((start, end)) => child.slice(start as usize, (end - start) as usize),
-            None => child.slice(0, 0),
+        .zip(child_type_ids)
+        .map(|(child, t)| match starts[t] {
+            i32::MAX => child.slice(0, 0),
+            start => child.slice(start as usize, (ends[t] - start) as usize),
         })
         .collect();
     (offsets, children)
@@ -5495,5 +5501,171 @@ mod tests {
         .unwrap();
         let (whole, sliced) = roundtrip_sliced_stream_sizes(Arc::new(union), 9_000, 10);
         assert!(sliced * 100 < whole, "whole: {whole}, sliced: {sliced}");
+    }
+
+    /// Writes `batch` with every writer and every enabled compression codec and
+    /// checks that it reads back equal and valid.
+    fn roundtrip_all_writers(batch: &RecordBatch) {
+        let mut codecs = vec![None];
+        #[cfg(feature = "lz4")]
+        codecs.push(Some(crate::CompressionType::LZ4_FRAME));
+        #[cfg(feature = "zstd")]
+        codecs.push(Some(crate::CompressionType::ZSTD));
+        for codec in codecs {
+            let options = IpcWriteOptions::default()
+                .try_with_compression(codec)
+                .unwrap();
+
+            let mut stream = vec![];
+            let mut writer =
+                StreamWriter::try_new_with_options(&mut stream, &batch.schema(), options.clone())
+                    .unwrap();
+            writer.write(batch).unwrap();
+            writer.finish().unwrap();
+            drop(writer);
+            let mut reader = StreamReader::try_new(Cursor::new(stream), None).unwrap();
+            let read = reader.next().unwrap().unwrap();
+            read.columns()
+                .iter()
+                .for_each(|c| c.to_data().validate_full().unwrap());
+            assert_eq!(&read, batch, "stream, {codec:?}");
+
+            let mut file = vec![];
+            let mut writer =
+                FileWriter::try_new_with_options(&mut file, &batch.schema(), options).unwrap();
+            writer.write(batch).unwrap();
+            writer.finish().unwrap();
+            drop(writer);
+            let mut reader = FileReader::try_new(Cursor::new(file), None).unwrap();
+            let read = reader.next().unwrap().unwrap();
+            read.columns()
+                .iter()
+                .for_each(|c| c.to_data().validate_full().unwrap());
+            assert_eq!(&read, batch, "file, {codec:?}");
+        }
+    }
+
+    fn single_column_batch(array: ArrayRef) -> RecordBatch {
+        let field = Field::new("a", array.data_type().clone(), true);
+        RecordBatch::try_new(Arc::new(Schema::new(vec![field])), vec![array]).unwrap()
+    }
+
+    /// Builds a dense union of an Int32 child (type id 0) and a Utf8 child
+    /// (type id 1) with the given type ids and offsets.
+    fn int_str_union(type_ids: Vec<i8>, offsets: Vec<i32>) -> UnionArray {
+        let fields = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("int", DataType::Int32, true),
+                Field::new("str", DataType::Utf8, true),
+            ],
+        )
+        .unwrap();
+        let ints = Int32Array::from_iter((0..100).map(|i| (i % 7 != 0).then_some(i)));
+        let strs = StringArray::from_iter((0..100).map(|i| (i % 5 != 0).then(|| format!("s{i}"))));
+        UnionArray::try_new(
+            fields,
+            type_ids.into(),
+            Some(offsets.into()),
+            vec![Arc::new(ints), Arc::new(strs)],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn dense_union_roundtrip_cases() {
+        // Repeated and out-of-order offsets.
+        let scattered = int_str_union(
+            vec![0, 1, 0, 1, 1, 0, 1, 0],
+            vec![40, 90, 40, 10, 90, 3, 55, 99],
+        );
+        // The same child array under two type ids.
+        let ints: ArrayRef = Arc::new(Int32Array::from_iter_values(0..100));
+        let shared_child = UnionArray::try_new(
+            UnionFields::try_new(
+                vec![2, 5],
+                vec![
+                    Field::new("x", DataType::Int32, false),
+                    Field::new("y", DataType::Int32, false),
+                ],
+            )
+            .unwrap(),
+            vec![2, 5, 5, 2, 5].into(),
+            Some(vec![10, 10, 80, 11, 20].into()),
+            vec![ints.clone(), ints],
+        )
+        .unwrap();
+        let no_fields = UnionArray::try_new(
+            UnionFields::empty(),
+            Vec::<i8>::new().into(),
+            Some(Vec::<i32>::new().into()),
+            vec![],
+        )
+        .unwrap();
+
+        let mut arrays: Vec<ArrayRef> = vec![
+            Arc::new(scattered.clone()),
+            Arc::new(scattered.slice(1, 6)),
+            Arc::new(scattered.slice(3, 0)),
+            Arc::new(scattered.slice(8, 0)),
+            Arc::new(shared_child.clone()),
+            Arc::new(shared_child.slice(1, 3)),
+            Arc::new(int_str_union(vec![], vec![])),
+            Arc::new(no_fields),
+        ];
+
+        // A union inside a sliced list or struct has a nonzero `ArrayData` offset.
+        let union: ArrayRef = Arc::new(scattered);
+        let field = Arc::new(Field::new("u", union.data_type().clone(), true));
+        let list = ListArray::new(
+            field.clone(),
+            arrow_buffer::OffsetBuffer::new(vec![0, 2, 5, 8].into()),
+            union.clone(),
+            None,
+        );
+        arrays.push(Arc::new(list.slice(1, 1)));
+        arrays.push(Arc::new(list.slice(2, 1)));
+        let st = StructArray::new(vec![field].into(), vec![union], None);
+        arrays.push(Arc::new(st.slice(2, 4)));
+
+        for array in arrays {
+            roundtrip_all_writers(&single_column_batch(array));
+        }
+    }
+
+    #[test]
+    fn dense_union_with_zero_based_ranges_reuses_offsets() {
+        let union = int_str_union(vec![0, 1, 1, 0], vec![0, 0, 1, 1]);
+        let data = union.to_data();
+        let DataType::Union(fields, _) = data.data_type() else {
+            unreachable!()
+        };
+        let (offsets, children) = get_dense_union_buffers(&data, fields);
+        assert_eq!(offsets.as_ptr(), data.buffers()[1].as_ptr());
+        assert_eq!(offsets.typed_data::<i32>(), &[0, 0, 1, 1]);
+        let child_ranges: Vec<_> = children.iter().map(|c| (c.offset(), c.len())).collect();
+        assert_eq!(child_ranges, vec![(0, 2), (0, 2)]);
+
+        let data = union.slice(1, 2).to_data();
+        let (offsets, children) = get_dense_union_buffers(&data, fields);
+        assert_eq!(offsets.as_ptr(), data.buffers()[1].as_ptr());
+        assert_eq!(offsets.typed_data::<i32>(), &[0, 1]);
+        let child_ranges: Vec<_> = children.iter().map(|c| (c.offset(), c.len())).collect();
+        assert_eq!(child_ranges, vec![(0, 0), (0, 2)]);
+    }
+
+    /// Pins a known limit: each child is narrowed to one `min..max` range, so
+    /// two slots that reference the first and the last row write the whole child.
+    #[test]
+    fn sliced_dense_union_with_scattered_offsets_writes_whole_range() {
+        let union = int_str_union(vec![1, 1, 1], vec![99, 0, 5]);
+        let data = union.slice(0, 2).to_data();
+        let DataType::Union(fields, _) = data.data_type() else {
+            unreachable!()
+        };
+        let (offsets, children) = get_dense_union_buffers(&data, fields);
+        assert_eq!(offsets.typed_data::<i32>(), &[99, 0]);
+        let child_ranges: Vec<_> = children.iter().map(|c| (c.offset(), c.len())).collect();
+        assert_eq!(child_ranges, vec![(0, 0), (0, 100)]);
     }
 }
