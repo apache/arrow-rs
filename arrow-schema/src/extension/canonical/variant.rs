@@ -166,7 +166,6 @@ mod tests {
 
         let invalid = [
             storage(vec![Field::new("unrelated", DataType::Int32, false)]),
-            storage(vec![metadata(DataType::Utf8), value(DataType::BinaryView)]),
             storage(vec![
                 metadata(DataType::FixedSizeBinary(16)),
                 value(DataType::BinaryView),

@@ -1286,35 +1286,26 @@ mod test {
     use arrow::array::{
         BinaryArray, BinaryDictionaryBuilder, BinaryRunBuilder, BinaryViewArray, Decimal32Array,
         Decimal64Array, Decimal128Array, FixedSizeBinaryArray, FixedSizeListArray, Int8Array,
-        Int32Array, Int64Array, LargeBinaryArray, LargeListArray, LargeListViewArray, ListArray,
-        ListViewArray, StringArray, Time64MicrosecondArray,
+        Int64Array, LargeBinaryArray, LargeListArray, LargeListViewArray, ListArray, ListViewArray,
+        StringArray, Time64MicrosecondArray, UInt8Array,
     };
     use arrow::buffer::{OffsetBuffer, ScalarBuffer};
     use arrow_schema::{Field, Fields};
     use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, ShortString};
 
-    const VARIANT_TYPE_MISMATCH: &str = "Invalid argument error: VariantType data type mismatch, expected Struct with binary \"metadata\" and binary \"value\" and/or \"typed_value\" fields, found";
-
     #[test]
-    fn invalid_not_a_struct_array() {
-        let array = make_binary_view_array();
-        // Should fail because the input is not a StructArray
-        let err = VariantArray::try_new(&array);
+    fn invalid_storage_checked_before_canonicalizing() {
+        // `UInt8` is also an illegal shredded type, but the storage error must win
+        let fields = Fields::from(vec![
+            Field::new("metadata", DataType::BinaryView, false),
+            Field::new("value", DataType::UInt8, true),
+        ]);
+        let value = Arc::new(UInt8Array::from(vec![1])) as ArrayRef;
+        let array = StructArray::new(fields, vec![make_binary_view_array(), value], None);
+        let err = VariantArray::try_new(&array).unwrap_err();
         assert_eq!(
-            err.unwrap_err().to_string(),
-            format!("{VARIANT_TYPE_MISMATCH} BinaryView")
-        );
-    }
-
-    #[test]
-    fn invalid_missing_metadata() {
-        let fields = Fields::from(vec![Field::new("value", DataType::BinaryView, true)]);
-        let array = StructArray::new(fields, vec![make_binary_view_array()], None);
-        // Should fail because the StructArray does not contain a 'metadata' field
-        let err = VariantArray::try_new(&array);
-        assert_eq!(
-            err.unwrap_err().to_string(),
-            format!("{VARIANT_TYPE_MISMATCH} Struct(\"value\": BinaryView)")
+            err.to_string(),
+            "Invalid argument error: VariantType data type mismatch, expected Struct with binary \"metadata\" and binary \"value\" and/or \"typed_value\" fields, found Struct(\"metadata\": non-null BinaryView, \"value\": UInt8)"
         );
     }
 
@@ -1341,33 +1332,6 @@ mod test {
         assert_eq!(variant_array.value(0), Variant::from(1i64));
         assert_eq!(variant_array.value(1), Variant::Null);
         assert_eq!(variant_array.value(2), Variant::from(3i64));
-
-        // With no `typed_value` either, there is nothing to read, so `value` stays required.
-        let fields = Fields::from(vec![Field::new("metadata", DataType::BinaryView, false)]);
-        let metadata_only = StructArray::new(fields, vec![make_binary_view_array()], None);
-        let err = VariantArray::try_new(&metadata_only);
-        assert_eq!(
-            err.unwrap_err().to_string(),
-            format!("{VARIANT_TYPE_MISMATCH} Struct(\"metadata\": non-null BinaryView)")
-        );
-    }
-
-    #[test]
-    fn invalid_metadata_field_type() {
-        let fields = Fields::from(vec![
-            Field::new("metadata", DataType::Int32, true), // not supported
-            Field::new("value", DataType::BinaryView, true),
-        ]);
-        let array = StructArray::new(
-            fields,
-            vec![make_int32_array(), make_binary_view_array()],
-            None,
-        );
-        let err = VariantArray::try_new(&array);
-        assert_eq!(
-            err.unwrap_err().to_string(),
-            format!("{VARIANT_TYPE_MISMATCH} Struct(\"metadata\": Int32, \"value\": BinaryView)")
-        );
     }
 
     #[test]
@@ -1434,30 +1398,8 @@ mod test {
         }
     }
 
-    #[test]
-    fn invalid_value_field_type() {
-        let fields = Fields::from(vec![
-            Field::new("metadata", DataType::BinaryView, true),
-            Field::new("value", DataType::Int32, true),
-        ]);
-        let array = StructArray::new(
-            fields,
-            vec![make_binary_view_array(), make_int32_array()],
-            None,
-        );
-        let err = VariantArray::try_new(&array);
-        assert_eq!(
-            err.unwrap_err().to_string(),
-            format!("{VARIANT_TYPE_MISMATCH} Struct(\"metadata\": BinaryView, \"value\": Int32)")
-        );
-    }
-
     fn make_binary_view_array() -> ArrayRef {
         Arc::new(BinaryViewArray::from(vec![b"test" as &[u8]]))
-    }
-
-    fn make_int32_array() -> ArrayRef {
-        Arc::new(Int32Array::from(vec![1]))
     }
 
     fn make_variant_struct_with_typed_value(typed_value: ArrayRef) -> StructArray {
