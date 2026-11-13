@@ -390,10 +390,10 @@ impl ByteArrayDecoderPlain {
             let len = u32::from_le_bytes(len_bytes);
 
             let start_offset = self.offset + 4;
-            let end_offset = start_offset + len as usize;
-            if end_offset > buf.len() {
-                return Err(ParquetError::EOF("eof decoding byte array".into()));
-            }
+            let end_offset = start_offset
+                .checked_add(len as usize)
+                .filter(|&end| end <= buf.len())
+                .ok_or_else(|| ParquetError::EOF("eof decoding byte array".into()))?;
 
             output.try_push(&buf[start_offset..end_offset], self.validate_utf8)?;
 
@@ -767,6 +767,20 @@ mod tests {
         assert_eq!(output.values.as_slice(), b"foo");
         assert_eq!(output.offsets.as_slice(), &[0, 3]);
         assert_eq!(decoder.max_remaining_values, 1);
+    }
+
+    #[test]
+    fn test_plain_decoder_read_length_overflow_returns_error() {
+        // A length of 0xFFFF_FFFC after a 4 byte prefix ends at offset 2^32,
+        // which is 0 in a 32-bit usize.
+        let buffer = Bytes::from_static(&[0xFC, 0xFF, 0xFF, 0xFF, b'a', b'b', b'c', b'd']);
+        let mut decoder = ByteArrayDecoderPlain::new(buffer, 1, Some(1), false);
+        let mut output = OffsetBuffer::<i32>::with_capacity(0);
+
+        let error = decoder.read(&mut output, 1).unwrap_err();
+        assert!(matches!(error, ParquetError::EOF(_)), "{error}");
+        assert_eq!(decoder.offset, 0);
+        assert!(output.values.is_empty());
     }
 
     #[test]
