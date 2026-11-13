@@ -90,7 +90,8 @@ pub(super) fn build_extend_dense(array: &ArrayData) -> Extend<'_> {
                 let dst_offset = dense_offset(child_data.len())?;
 
                 // Extend offsets
-                mutable.buffer2.push(dst_offset);
+                // SAFETY: The destination was reserved for every offset above.
+                unsafe { mutable.buffer2.push_unchecked(dst_offset) };
                 mutable.child_data[child_index].try_extend(index, src_offset, src_offset + 1)?;
             }
             Ok(())
@@ -128,10 +129,14 @@ pub(super) fn extend_nulls_dense(
 
     mutable.child_data[child_index].try_extend_nulls(len)?;
     for _ in 0..len {
-        mutable.buffer1.push(null_type_id);
+        // SAFETY: The type-id buffer was reserved for every value above.
+        unsafe { mutable.buffer1.push_unchecked(null_type_id) };
     }
     if let Some(offsets) = offsets {
-        mutable.buffer2.extend(offsets);
+        for offset in offsets {
+            // SAFETY: The offset buffer was reserved for every value above.
+            unsafe { mutable.buffer2.push_unchecked(offset) };
+        }
     }
     Ok(())
 }
@@ -152,7 +157,8 @@ pub(super) fn extend_nulls_sparse(
         child.try_extend_nulls(len)?;
     }
     for _ in 0..len {
-        mutable.buffer1.push(null_type_id);
+        // SAFETY: The type-id buffer was reserved for every value above.
+        unsafe { mutable.buffer1.push_unchecked(null_type_id) };
     }
     Ok(())
 }

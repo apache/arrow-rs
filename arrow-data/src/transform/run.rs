@@ -2,7 +2,10 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use super::{_MutableArrayData, ArrayData, Extend, utils::memory_error};
+use super::{
+    _MutableArrayData, ArrayData, Extend,
+    utils::{extend_from_slice_unchecked, memory_error},
+};
 use arrow_buffer::{ArrowNativeType, ToByteSlice};
 use arrow_schema::{ArrowError, DataType};
 use num_traits::CheckedAdd;
@@ -51,20 +54,18 @@ pub fn extend_nulls(mutable: &mut _MutableArrayData, len: usize) -> Result<(), A
                             .to_string(),
                     )
                 })?;
-            let new_value = new_value.to_byte_slice();
+            let new_value_bytes = new_value.to_byte_slice();
             mutable.child_data[0]
                 .data
                 .buffer1
-                .try_reserve(new_value.len())
+                .try_reserve(new_value_bytes.len())
                 .map_err(memory_error)?;
 
             // The values array has one entry per run. Reserve the run-end buffer first so
             // allocation failure cannot leave the children with different lengths.
             mutable.child_data[1].try_extend_nulls(1)?;
-            mutable.child_data[0]
-                .data
-                .buffer1
-                .extend_from_slice(new_value);
+            // SAFETY: The run-end buffer was reserved for this value above.
+            unsafe { mutable.child_data[0].data.buffer1.push_unchecked(new_value) };
         }};
     }
 
@@ -194,10 +195,10 @@ fn process_extends_batch<T: ArrowNativeType>(
         values_range.expect("values_range should be Some if run_ends_bytes is not empty");
     mutable.child_data[1].try_extend(source_array_idx, start_idx, end_idx)?;
 
-    mutable.child_data[0]
-        .data
-        .buffer1
-        .extend_from_slice(&run_ends_bytes);
+    // SAFETY: The run-end buffer was reserved for every byte above.
+    unsafe {
+        extend_from_slice_unchecked(&mut mutable.child_data[0].data.buffer1, &run_ends_bytes)
+    };
     mutable.child_data[0].data.len += run_ends_bytes.len() / std::mem::size_of::<T>();
     Ok(())
 }
