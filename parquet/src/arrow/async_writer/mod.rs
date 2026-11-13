@@ -50,6 +50,8 @@ mod store;
 #[cfg(feature = "object_store")]
 pub use store::*;
 
+#[cfg(any(feature = "experimental", test))]
+use crate::file::metadata::extensions::{MetadataExtensionHook, MetadataExtensionSelection};
 use crate::{
     arrow::ArrowWriter,
     arrow::arrow_writer::ArrowWriterOptions,
@@ -171,6 +173,27 @@ impl<W: AsyncFileWriter> AsyncArrowWriter<W> {
             sync_writer,
             async_writer: writer,
         })
+    }
+
+    /// Install the file's single [`MetadataExtensionHook`] and complete target list
+    /// for page headers and metadata. Call before writing record batches.
+    /// Callbacks run synchronously during serialization, before their bytes reach
+    /// the async output.
+    ///
+    /// # Errors
+    ///
+    /// Fails for empty targets, a second installation, or after writing starts.
+    #[cfg(any(feature = "experimental", test))]
+    #[doc(hidden)]
+    pub fn with_metadata_extension_hook<H: MetadataExtensionHook + 'static>(
+        mut self,
+        targets: impl IntoIterator<Item = MetadataExtensionSelection>,
+        hook: H,
+    ) -> Result<Self> {
+        self.sync_writer = self
+            .sync_writer
+            .with_metadata_extension_hook(targets, hook)?;
+        Ok(self)
     }
 
     /// Returns metadata for any flushed row groups

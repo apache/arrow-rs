@@ -258,11 +258,12 @@ impl<T> Deref for PrimitiveColumnIndex<T> {
 
 impl<T: ParquetValueType> WriteThrift for PrimitiveColumnIndex<T> {
     const ELEMENT_TYPE: ElementType = ElementType::Struct;
-    fn write_thrift<W: std::io::Write>(
+    fn write_thrift<W: std::io::Write, const TRACK: bool>(
         &self,
-        writer: &mut ThriftCompactOutputProtocol<W>,
+        writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
     ) -> Result<()> {
         use crate::file::metadata::thrift_fields::column_index as fields;
+        writer.write_struct_begin()?;
         self.null_pages
             .write_thrift_field(writer, fields::NULL_PAGES, 0)?;
 
@@ -306,7 +307,7 @@ impl<T: ParquetValueType> WriteThrift for PrimitiveColumnIndex<T> {
         if let Some(nan_counts) = &self.nan_counts {
             nan_counts.write_thrift_field(writer, fields::NAN_COUNTS, last_field_id)?;
         }
-        writer.write_struct_end()
+        writer.write_root_end()
     }
 }
 
@@ -480,11 +481,12 @@ impl Deref for ByteArrayColumnIndex {
 
 impl WriteThrift for ByteArrayColumnIndex {
     const ELEMENT_TYPE: ElementType = ElementType::Struct;
-    fn write_thrift<W: std::io::Write>(
+    fn write_thrift<W: std::io::Write, const TRACK: bool>(
         &self,
-        writer: &mut ThriftCompactOutputProtocol<W>,
+        writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
     ) -> Result<()> {
         use crate::file::metadata::thrift_fields::column_index as fields;
+        writer.write_struct_begin()?;
         self.null_pages
             .write_thrift_field(writer, fields::NULL_PAGES, 0)?;
 
@@ -528,7 +530,7 @@ impl WriteThrift for ByteArrayColumnIndex {
         if let Some(nan_counts) = &self.nan_counts {
             nan_counts.write_thrift_field(writer, fields::NAN_COUNTS, last_field_id)?;
         }
-        writer.write_struct_end()
+        writer.write_root_end()
     }
 }
 
@@ -735,9 +737,9 @@ column_index_iters!(FixedLenByteArray, FIXED_LEN_BYTE_ARRAY, |v| v
 impl WriteThrift for ColumnIndexMetaData {
     const ELEMENT_TYPE: ElementType = ElementType::Struct;
 
-    fn write_thrift<W: std::io::Write>(
+    fn write_thrift<W: std::io::Write, const TRACK: bool>(
         &self,
-        writer: &mut ThriftCompactOutputProtocol<W>,
+        writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
     ) -> Result<()> {
         match self {
             ColumnIndexMetaData::BOOLEAN(index) => index.write_thrift(writer),

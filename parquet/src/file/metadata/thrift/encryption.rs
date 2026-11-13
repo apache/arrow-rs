@@ -90,7 +90,7 @@ impl HeapSize for EncryptionAlgorithm {
     }
 }
 
-thrift_struct!(
+thrift_struct!(@root
 /// Crypto metadata for files with encrypted footer
 pub(crate) struct FileCryptoMetaData<'a> {
   /// Encryption algorithm. This field is only used for files

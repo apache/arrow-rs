@@ -32,7 +32,7 @@ pub struct PageLocation {
 }
 );
 
-thrift_struct!(
+thrift_struct!(@root
 /// [`OffsetIndex`] information for a column chunk. Contains offsets and sizes for each page
 /// in the chunk. Optionally stores fully decoded page sizes for BYTE_ARRAY columns.
 ///

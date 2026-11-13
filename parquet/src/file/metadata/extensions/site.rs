@@ -2,7 +2,8 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use super::{FooterScope, ThriftPathSegment};
+use super::{FooterScope, ThriftPathSegment, ThriftStruct};
+use crate::errors::Result;
 
 /// Semantic positions in the original file, before filtering or projection.
 /// These are not byte offsets, stored `RowGroup.ordinal` values, or schema IDs.
@@ -48,6 +49,88 @@ impl MetadataContext {
             row_group_ordinal,
             column_ordinal,
             page_ordinal: None,
+        }
+    }
+}
+
+pub(super) enum Source<'a> {
+    Writer {
+        binding: &'a super::writer::WriteBinding,
+        tracking: &'a super::writer::WriteTracking,
+    },
+}
+
+/// An extension's root, semantic ownership, and explicitly resolved relative path.
+///
+/// [`Self::root`], [`Self::context`] and [`Self::known_prefix`] never discover a
+/// path. Only [`Self::resolve_path`] can scan already-consumed input. No query performs I/O or inspects future bytes.
+///
+/// ```
+/// # #[cfg(feature = "experimental")]
+/// # {
+/// use parquet::file::metadata::extensions::{MetadataSite, ThriftStruct};
+/// fn first_page(site: &mut MetadataSite<'_>, column: usize) -> parquet::errors::Result<bool> {
+///     let context = site.context()?;
+///     Ok(site.root() == ThriftStruct::DataPage
+///         && context.column_ordinal == Some(column)
+///         && context.page_ordinal == Some(0)
+///         && site.at_root())
+/// }
+/// # }
+/// ```
+pub struct MetadataSite<'a> {
+    source: Source<'a>,
+}
+
+impl<'a> MetadataSite<'a> {
+    pub(super) fn writer(
+        binding: &'a super::writer::WriteBinding,
+        tracking: &'a super::writer::WriteTracking,
+    ) -> Self {
+        Self {
+            source: Source::Writer { binding, tracking },
+        }
+    }
+
+    /// Encoded root kind, available even if later context/path resolution fails.
+    #[inline]
+    pub fn root(&self) -> ThriftStruct {
+        match &self.source {
+            Source::Writer { binding, .. } => binding.info.thrift,
+        }
+    }
+
+    /// Positional ownership, without discovering a path. Invalid filtered-reader
+    /// mappings are reported rather than silently renumbering an event.
+    #[inline]
+    pub fn context(&self) -> Result<MetadataContext> {
+        match &self.source {
+            Source::Writer { binding, .. } => Ok(binding.context()),
+        }
+    }
+
+    /// Whether this event belongs to the encoded root. Root codecs identify their
+    /// own fields explicitly, so even unknown nested locations need no discovery.
+    #[inline]
+    pub fn at_root(&self) -> bool {
+        match &self.source {
+            Source::Writer { tracking, .. } => tracking.path().is_empty(),
+        }
+    }
+
+    /// Already known root-relative coordinates. This may be only a prefix of the
+    /// complete path; an empty prefix does not imply that the event is at root.
+    pub fn known_prefix(&self) -> MetadataPath<'_> {
+        match &self.source {
+            Source::Writer { binding, .. } => MetadataPath::known(binding.scope),
+        }
+    }
+
+    /// Resolve all relative coordinates once. The root and reserved extension
+    /// field are excluded. Iterating the result cannot fail or discover more data.
+    pub fn resolve_path(&mut self) -> Result<MetadataPath<'_>> {
+        match &mut self.source {
+            Source::Writer { tracking, .. } => Ok(MetadataPath::slice(tracking.path())),
         }
     }
 }

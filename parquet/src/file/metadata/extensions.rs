@@ -20,6 +20,28 @@ pub(crate) use scope::FooterScope;
 pub use selection::MetadataExtensionSelection;
 pub use site::{MetadataContext, MetadataPath};
 
+mod writer;
+pub(crate) use path::ThriftPath;
+use path::{MAX_THRIFT_FRAMES, MAX_THRIFT_PATH_SEGMENTS};
+pub(crate) use scope::KnownSite;
+#[cfg(any(feature = "experimental", test))]
+pub(crate) use selection::install;
+pub(crate) use selection::root_only;
+pub use site::MetadataSite;
+#[cfg(any(feature = "experimental", test))]
+pub(crate) use writer::HookState;
+#[cfg(any(feature = "experimental", test))]
+pub use writer::MetadataExtensionHook;
+#[cfg(all(feature = "experimental", feature = "encryption"))]
+pub use writer::SIGNED_FOOTER_EXTENSION_SUFFIX_SIZE;
+#[cfg(feature = "experimental")]
+pub use writer::UNSIGNED_FOOTER_EXTENSION_SUFFIX_SIZE;
+#[cfg(test)]
+pub(crate) use writer::write_with_hook;
+pub(crate) use writer::{HookHandle, HookStorage, WriteState, write_thrift, write_with_tracking};
+#[cfg(test)]
+pub(crate) mod test_util;
+
 /// One structural coordinate. Resolved library paths contain fields and collection
 /// entries relative to the encoded root, not byte offsets. Field IDs are
 /// relative to their containing struct and collection indices are zero-based. Named field IDs

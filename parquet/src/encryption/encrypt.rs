@@ -9,7 +9,6 @@ use crate::encryption::ciphers::{
 };
 use crate::errors::{ParquetError, Result};
 use crate::file::column_crypto_metadata::{ColumnCryptoMetaData, EncryptionWithColumnKey};
-use crate::parquet_thrift::{ThriftCompactOutputProtocol, WriteThrift};
 use crate::schema::types::{ColumnDescPtr, SchemaDescriptor};
 use ring::rand::{SecureRandom, SystemRandom};
 use std::collections::{HashMap, HashSet};
@@ -367,29 +366,29 @@ impl FileEncryptor {
     }
 }
 
-/// Write an encrypted Thrift serializable object
-pub(crate) fn encrypt_thrift_object<T: WriteThrift, W: Write>(
-    object: &T,
+/// Encode plaintext once, then encrypt it. The encoder may borrow mutable hook
+/// state; no immutable object wrapper or interior mutability is necessary.
+pub(crate) fn encrypt_thrift<W: Write>(
+    encode: impl FnOnce(&mut Vec<u8>) -> Result<()>,
     encryptor: &mut Box<dyn BlockEncryptor>,
     sink: &mut W,
     module_aad: &[u8],
 ) -> Result<()> {
-    let encrypted_buffer = encrypt_thrift_object_to_vec(object, encryptor, module_aad)?;
+    let mut buffer = Vec::new();
+    encode(&mut buffer)?;
+    let encrypted_buffer = encryptor.encrypt(&buffer, module_aad)?;
     sink.write_all(&encrypted_buffer)?;
     Ok(())
 }
 
-pub(crate) fn write_signed_plaintext_thrift_object<T: WriteThrift, W: Write>(
-    object: &T,
+pub(crate) fn write_signed_plaintext_thrift<W: Write>(
+    encode: impl FnOnce(&mut Vec<u8>) -> Result<()>,
     encryptor: &mut Box<dyn BlockEncryptor>,
     sink: &mut W,
     module_aad: &[u8],
 ) -> Result<()> {
-    let mut buffer: Vec<u8> = vec![];
-    {
-        let mut protocol = ThriftCompactOutputProtocol::new(&mut buffer);
-        object.write_thrift(&mut protocol)?;
-    }
+    let mut buffer = Vec::new();
+    encode(&mut buffer)?;
     sink.write_all(&buffer)?;
     buffer = encryptor.encrypt(buffer.as_ref(), module_aad)?;
 
@@ -400,21 +399,6 @@ pub(crate) fn write_signed_plaintext_thrift_object<T: WriteThrift, W: Write>(
     sink.write_all(tag)?;
 
     Ok(())
-}
-
-/// Encrypt a Thrift serializable object to a byte vector
-pub(crate) fn encrypt_thrift_object_to_vec<T: WriteThrift>(
-    object: &T,
-    encryptor: &mut Box<dyn BlockEncryptor>,
-    module_aad: &[u8],
-) -> Result<Vec<u8>> {
-    let mut buffer: Vec<u8> = vec![];
-    {
-        let mut unencrypted_protocol = ThriftCompactOutputProtocol::new(&mut buffer);
-        object.write_thrift(&mut unencrypted_protocol)?;
-    }
-
-    encryptor.encrypt(buffer.as_ref(), module_aad)
 }
 
 /// Get the crypto metadata for a column from the file encryption properties

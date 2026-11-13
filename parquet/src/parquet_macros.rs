@@ -62,13 +62,13 @@ macro_rules! thrift_enum {
         impl WriteThrift for $identifier {
             const ELEMENT_TYPE: ElementType = ElementType::I32;
 
-            fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+            fn write_thrift<W: Write, const TRACK: bool>(&self, writer: &mut ThriftCompactOutputProtocol<W, TRACK>) -> Result<()> {
                 writer.write_i32(*self as i32)
             }
         }
 
         impl WriteThriftField for $identifier {
-            fn write_thrift_field<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>, field_id: i16, last_field_id: i16) -> Result<i16> {
+            fn write_thrift_field<W: Write, const TRACK: bool>(&self, writer: &mut ThriftCompactOutputProtocol<W, TRACK>, field_id: i16, last_field_id: i16) -> Result<i16> {
                 writer.write_field_begin(FieldType::I32, field_id, last_field_id)?;
                 self.write_thrift(writer)?;
                 Ok(field_id)
@@ -112,9 +112,9 @@ macro_rules! thrift_enum {
 /// Macro used to generate Rust enums for Thrift unions in which all variants are typed with empty
 /// structs.
 ///
-/// Because the compact protocol does not write any struct type information, these empty structs
-/// become a single `0` (end-of-fields marker) upon serialization. Rather than trying to deserialize
-/// an empty struct, we can instead simply read the `0` and discard it.
+/// Without extensions, these structs serialize as a single `0` (STOP byte).
+/// Readers must still skip unknown fields through STOP, since nominally empty structs
+/// may contain extension fields.
 ///
 /// The resulting Rust enum will have all unit variants.
 ///
@@ -166,17 +166,17 @@ macro_rules! thrift_union_all_empty {
         impl WriteThrift for $identifier {
             const ELEMENT_TYPE: ElementType = ElementType::Struct;
 
-            fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+            fn write_thrift<W: Write, const TRACK: bool>(&self, writer: &mut ThriftCompactOutputProtocol<W, TRACK>) -> Result<()> {
+                writer.write_union_begin()?;
                 match *self {
                     $(Self::$field_name => writer.write_empty_struct($($field_id)? $($field_constant)?, 0)?,)*
                 };
-                // write end of struct for this union
-                writer.write_struct_end()
+                writer.write_union_end()
             }
         }
 
         impl WriteThriftField for $identifier {
-            fn write_thrift_field<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>, field_id: i16, last_field_id: i16) -> Result<i16> {
+            fn write_thrift_field<W: Write, const TRACK: bool>(&self, writer: &mut ThriftCompactOutputProtocol<W, TRACK>, field_id: i16, last_field_id: i16) -> Result<i16> {
                 writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
                 self.write_thrift(writer)?;
                 Ok(field_id)
@@ -241,17 +241,18 @@ macro_rules! thrift_union {
         impl $(<$lt>)? WriteThrift for $identifier $(<$lt>)? {
             const ELEMENT_TYPE: ElementType = ElementType::Struct;
 
-            fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+            fn write_thrift<W: Write, const TRACK: bool>(&self, writer: &mut ThriftCompactOutputProtocol<W, TRACK>) -> Result<()> {
+                writer.write_union_begin()?;
                 match self {
                     $($crate::__thrift_write_variant_lhs!($field_name $($field_type)?, variant_val) =>
                       $crate::__thrift_write_variant_rhs!($($field_id)? $($field_constant)? $($field_type)?, writer, variant_val),)*
                 };
-                writer.write_struct_end()
+                writer.write_union_end()
             }
         }
 
         impl $(<$lt>)? WriteThriftField for $identifier $(<$lt>)? {
-            fn write_thrift_field<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>, field_id: i16, last_field_id: i16) -> Result<i16> {
+            fn write_thrift_field<W: Write, const TRACK: bool>(&self, writer: &mut ThriftCompactOutputProtocol<W, TRACK>, field_id: i16, last_field_id: i16) -> Result<i16> {
                 writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
                 self.write_thrift(writer)?;
                 Ok(field_id)
@@ -322,18 +323,19 @@ macro_rules! thrift_union_with_unknown {
         impl $(<$lt>)? WriteThrift for $identifier $(<$lt>)? {
             const ELEMENT_TYPE: ElementType = ElementType::Struct;
 
-            fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+            fn write_thrift<W: Write, const TRACK: bool>(&self, writer: &mut ThriftCompactOutputProtocol<W, TRACK>) -> Result<()> {
+                writer.write_union_begin()?;
                 match self {
                     $($crate::__thrift_write_variant_lhs!($field_name $($field_type)?, variant_val) =>
                       $crate::__thrift_write_variant_rhs!($($field_id)? $($field_constant)? $($field_type)?, writer, variant_val),)*
                     Self::_Unknown{..} => return Err(general_err!("Trying to write unknown variant")),
                 };
-                writer.write_struct_end()
+                writer.write_union_end()
             }
         }
 
         impl $(<$lt>)? WriteThriftField for $identifier $(<$lt>)? {
-            fn write_thrift_field<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>, field_id: i16, last_field_id: i16) -> Result<i16> {
+            fn write_thrift_field<W: Write, const TRACK: bool>(&self, writer: &mut ThriftCompactOutputProtocol<W, TRACK>, field_id: i16, last_field_id: i16) -> Result<i16> {
                 writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
                 self.write_thrift(writer)?;
                 Ok(field_id)
@@ -352,8 +354,9 @@ macro_rules! thrift_union_with_unknown {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! thrift_struct {
+    (@root $($body:tt)*) => { $crate::thrift_struct!(@impl Root; $($body)*); };
     // A field ID can be a literal or a constant path.
-    ($(#[$($def_attrs:tt)*])* $vis:vis struct $identifier:ident $(< $lt:lifetime >)? { $($(#[$($field_attrs:tt)*])* $($field_id:literal)? $($field_constant:path)? : $required_or_optional:ident $field_type:ident $(< $field_lt:lifetime >)? $(< $element_type:ident >)? $field_name:ident $(= $default_value:literal)? $(;)?)* }) => {
+    (@impl $site:ident; $(#[$($def_attrs:tt)*])* $vis:vis struct $identifier:ident $(< $lt:lifetime >)? { $($(#[$($field_attrs:tt)*])* $($field_id:literal)? $($field_constant:path)? : $required_or_optional:ident $field_type:ident $(< $field_lt:lifetime >)? $(< $element_type:ident >)? $field_name:ident $(= $default_value:literal)? $(;)?)* }) => {
         $(#[cfg_attr(not(doctest), $($def_attrs)*)])*
         #[derive(Clone, Debug, Eq, PartialEq)]
         #[allow(clippy::allow_attributes)]
@@ -396,22 +399,26 @@ macro_rules! thrift_struct {
 
             #[allow(clippy::allow_attributes)]
             #[allow(unused_assignments)]
-            fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+            fn write_thrift<W: Write, const TRACK: bool>(&self, writer: &mut ThriftCompactOutputProtocol<W, TRACK>) -> Result<()> {
+                writer.write_struct_begin()?;
                 #[allow(unused_mut, unused_variables)]
                 let mut last_field_id = 0i16;
                 $($crate::__thrift_write_required_or_optional_field!($required_or_optional $field_name, $($field_id)? $($field_constant)?, $field_type, self, writer, last_field_id);)*
-                writer.write_struct_end()
+                if matches!($crate::file::metadata::extensions::KnownSite::$site,
+                    $crate::file::metadata::extensions::KnownSite::Root)
+                { writer.write_root_end() } else { writer.write_struct_end() }
             }
         }
 
         impl $(<$lt>)? WriteThriftField for $identifier $(<$lt>)? {
-            fn write_thrift_field<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>, field_id: i16, last_field_id: i16) -> Result<i16> {
+            fn write_thrift_field<W: Write, const TRACK: bool>(&self, writer: &mut ThriftCompactOutputProtocol<W, TRACK>, field_id: i16, last_field_id: i16) -> Result<i16> {
                 writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
                 self.write_thrift(writer)?;
                 Ok(field_id)
             }
         }
-    }
+    };
+    ($($body:tt)*) => { $crate::thrift_struct!(@impl Unknown; $($body)*); };
 }
 
 #[doc(hidden)]
@@ -420,7 +427,7 @@ macro_rules! thrift_struct {
 macro_rules! write_thrift_field {
     ($identifier:ident $(< $lt:lifetime >)?, $fld_type:expr) => {
         impl $(<$lt>)? WriteThriftField for $identifier $(<$lt>)? {
-            fn write_thrift_field<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>, field_id: i16, last_field_id: i16) -> Result<i16> {
+            fn write_thrift_field<W: Write, const TRACK: bool>(&self, writer: &mut ThriftCompactOutputProtocol<W, TRACK>, field_id: i16, last_field_id: i16) -> Result<i16> {
                 writer.write_field_begin($fld_type, field_id, last_field_id)?;
                 self.write_thrift(writer)?;
                 Ok(field_id)

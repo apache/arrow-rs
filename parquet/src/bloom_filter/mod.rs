@@ -135,7 +135,7 @@ const SALT: [u32; 8] = [
 
 use crate::file::metadata::thrift_fields::bloom_filter_header as fields;
 
-thrift_struct!(
+thrift_struct!(@root
 /// Bloom filter header is stored at beginning of Bloom filter data of each column
 /// and followed by its bitset.
 ///
@@ -440,7 +440,7 @@ impl Sbbf {
     }
 
     /// Create and populate [`BloomFilterHeader`] from this bitset for writing to serialized form
-    fn header(&self) -> BloomFilterHeader {
+    pub(crate) fn header(&self) -> BloomFilterHeader {
         BloomFilterHeader {
             // 8 i32 per block, 4 bytes per i32
             num_bytes: self.0.len() as i32 * 4 * 8,

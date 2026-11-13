@@ -10,6 +10,7 @@
 //! [Parquet metadata API]: crate::file::metadata
 //! [Parquet specification]: https://github.com/apache/parquet-format/tree/master
 
+use crate::file::metadata::extensions::FooterScope;
 use crate::file::metadata::thrift_fields::{
     bounding_box as bb, column_chunk as cc, column_meta_data as cm, data_page_header as dp,
     data_page_header_v2 as dp2, dictionary_page_header as dh, file_meta_data as fm,
@@ -1171,7 +1172,8 @@ impl DataPageHeaderV2 {
     }
 }
 
-thrift_struct!(
+thrift_struct!(@root
+
 pub(crate) struct PageHeader {
   /// the type of the page: indicates which of the *_header fields is set
   ph::TYPE: required PageType r#type
@@ -1316,12 +1318,14 @@ fn should_write_column_stats(_column_chunk: &ColumnChunkMetaData) -> bool {
 //   16: optional SizeStatistics size_statistics;
 //   17: optional GeospatialStatistics geospatial_statistics;
 // }
-pub(super) fn serialize_column_meta_data<W: Write>(
+pub(super) fn serialize_column_meta_data<W: Write, const TRACK: bool>(
     column_chunk: &ColumnChunkMetaData,
-    w: &mut ThriftCompactOutputProtocol<W>,
+    w: &mut ThriftCompactOutputProtocol<W, TRACK>,
+    root: bool,
 ) -> Result<()> {
     use crate::file::statistics::page_stats_to_thrift;
 
+    w.write_struct_begin()?;
     column_chunk
         .column_type()
         .write_thrift_field(w, cm::TYPE, 0)?;
@@ -1428,7 +1432,11 @@ pub(super) fn serialize_column_meta_data<W: Write>(
         }
     }
 
-    w.write_struct_end()
+    if root {
+        w.write_root_end()
+    } else {
+        w.write_struct_end()
+    }
 }
 
 // temp struct used for writing
@@ -1455,7 +1463,11 @@ impl WriteThrift for FileMeta<'_> {
 
     // needed for last_field_id w/o encryption
     #[cfg_attr(not(feature = "encryption"), expect(unused_assignments))]
-    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+    fn write_thrift<W: Write, const TRACK: bool>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
+    ) -> Result<()> {
+        writer.write_struct_begin()?;
         writer.set_write_path_in_schema(self.write_path_in_schema);
         // only write ordinal if all values will fit in an i16
         writer.set_write_row_group_ordinal(i16::try_from(self.row_groups.len()).is_ok());
@@ -1470,17 +1482,23 @@ impl WriteThrift for FileMeta<'_> {
         let schema_len = num_nodes(&root)?;
         writer.write_field_begin(FieldType::List, fm::SCHEMA, fm::VERSION)?;
         writer.write_list_begin(ElementType::Struct, schema_len)?;
-        // recursively write Type nodes as SchemaElements
-        write_schema(&root, writer)?;
+        // A row-group/page selection cannot match schema annotations.
+        if TRACK && !writer.schema_extensions() {
+            write_schema(&root, &mut writer.untracked())?;
+        } else {
+            write_schema(&root, writer)?;
+        }
 
         self.file_metadata
             .num_rows
             .write_thrift_field(writer, fm::NUM_ROWS, fm::SCHEMA)?;
 
-        // this will call RowGroupMetaData::write_thrift
-        let mut last_field_id =
-            self.row_groups
-                .write_thrift_field(writer, fm::ROW_GROUPS, fm::NUM_ROWS)?;
+        writer.write_field_begin(FieldType::List, fm::ROW_GROUPS, fm::NUM_ROWS)?;
+        writer.write_list_begin(ElementType::Struct, self.row_groups.len())?;
+        for (index, group) in self.row_groups.iter().enumerate() {
+            writer.write_footer_element(FooterScope::RowGroup(index), index, group)?;
+        }
+        let mut last_field_id = fm::ROW_GROUPS;
 
         if let Some(kv_metadata) = self.file_metadata.key_value_metadata() {
             last_field_id =
@@ -1490,8 +1508,12 @@ impl WriteThrift for FileMeta<'_> {
             last_field_id = created_by.write_thrift_field(writer, fm::CREATED_BY, last_field_id)?;
         }
         if let Some(column_orders) = self.file_metadata.column_orders() {
-            last_field_id =
-                column_orders.write_thrift_field(writer, fm::COLUMN_ORDERS, last_field_id)?;
+            writer.write_field_begin(FieldType::List, fm::COLUMN_ORDERS, last_field_id)?;
+            writer.write_list_begin(ElementType::Struct, column_orders.len())?;
+            for (index, order) in column_orders.iter().enumerate() {
+                writer.write_footer_element(FooterScope::ColumnOrder(index), index, order)?;
+            }
+            last_field_id = fm::COLUMN_ORDERS;
         }
         #[cfg(feature = "encryption")]
         if let Some(algo) = self.file_metadata.encryption_algorithm.as_ref() {
@@ -1507,24 +1529,48 @@ impl WriteThrift for FileMeta<'_> {
             )?;
         }
 
-        writer.write_struct_end()
+        writer.write_root_end()
     }
 }
 
-fn write_schema<W: Write>(
+fn write_schema<W: Write, const TRACK: bool>(
     schema: &TypePtr,
-    writer: &mut ThriftCompactOutputProtocol<W>,
+    writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
 ) -> Result<()> {
     if !schema.is_group() {
         return Err(general_err!("Root schema must be Group type"));
     }
-    write_schema_helper(schema, writer)
+    write_schema_helper(schema, writer, &mut 0, &mut 0)
 }
 
-fn write_schema_helper<W: Write>(
+fn write_schema_element<W: Write, const TRACK: bool>(
     node: &TypePtr,
-    writer: &mut ThriftCompactOutputProtocol<W>,
+    element: &SchemaElement<'_>,
+    writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
+    index: usize,
+    next_leaf: &mut usize,
 ) -> Result<()> {
+    let column = (TRACK && node.is_primitive()).then(|| {
+        let column = *next_leaf;
+        *next_leaf += 1;
+        column
+    });
+    writer.write_schema_element(element, index, column)
+}
+
+fn write_schema_helper<W: Write, const TRACK: bool>(
+    node: &TypePtr,
+    writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
+    index: &mut usize,
+    next_leaf: &mut usize,
+) -> Result<()> {
+    let node_index = if TRACK {
+        let node_index = *index;
+        *index += 1;
+        node_index
+    } else {
+        0
+    };
     match node.as_ref() {
         crate::schema::types::Type::PrimitiveType {
             basic_info,
@@ -1560,7 +1606,7 @@ fn write_schema_helper<W: Write>(
                 },
                 logical_type: basic_info.logical_type_ref().cloned(),
             };
-            element.write_thrift(writer)
+            write_schema_element(node, &element, writer, node_index, next_leaf)
         }
         crate::schema::types::Type::GroupType { basic_info, fields } => {
             let repetition = if basic_info.has_repetition() {
@@ -1589,11 +1635,10 @@ fn write_schema_helper<W: Write>(
                 logical_type: basic_info.logical_type_ref().cloned(),
             };
 
-            element.write_thrift(writer)?;
+            write_schema_element(node, &element, writer, node_index, next_leaf)?;
 
-            // Add child elements for a group
             for field in fields {
-                write_schema_helper(field, writer)?;
+                write_schema_helper(field, writer, index, next_leaf)?;
             }
             Ok(())
         }
@@ -1612,17 +1657,28 @@ fn write_schema_helper<W: Write>(
 impl WriteThrift for RowGroupMetaData {
     const ELEMENT_TYPE: ElementType = ElementType::Struct;
 
-    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
-        // this will call ColumnChunkMetaData::write_thrift
-        self.columns.write_thrift_field(writer, rg::COLUMNS, 0)?;
+    fn write_thrift<W: Write, const TRACK: bool>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
+    ) -> Result<()> {
+        writer.write_struct_begin()?;
+        writer.write_field_begin(FieldType::List, rg::COLUMNS, 0)?;
+        writer.write_list_begin(ElementType::Struct, self.columns.len())?;
+        for (index, column) in self.columns.iter().enumerate() {
+            writer.write_footer_column(index, false, column)?;
+        }
         self.total_byte_size
             .write_thrift_field(writer, rg::TOTAL_BYTE_SIZE, rg::COLUMNS)?;
         let mut last_field_id =
             self.num_rows
                 .write_thrift_field(writer, rg::NUM_ROWS, rg::TOTAL_BYTE_SIZE)?;
         if let Some(sorting_columns) = self.sorting_columns() {
-            last_field_id =
-                sorting_columns.write_thrift_field(writer, rg::SORTING_COLUMNS, last_field_id)?;
+            writer.write_field_begin(FieldType::List, rg::SORTING_COLUMNS, last_field_id)?;
+            writer.write_list_begin(ElementType::Struct, sorting_columns.len())?;
+            for (index, column) in sorting_columns.iter().enumerate() {
+                writer.write_footer_column(index, true, column)?;
+            }
+            last_field_id = rg::SORTING_COLUMNS;
         }
         if let Some(file_offset) = self.file_offset() {
             last_field_id =
@@ -1661,7 +1717,11 @@ impl WriteThrift for ColumnChunkMetaData {
     const ELEMENT_TYPE: ElementType = ElementType::Struct;
 
     #[cfg_attr(not(feature = "encryption"), expect(unused_assignments))]
-    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+    fn write_thrift<W: Write, const TRACK: bool>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
+    ) -> Result<()> {
+        writer.write_struct_begin()?;
         let mut last_field_id = 0i16;
         if let Some(file_path) = self.file_path() {
             last_field_id = file_path.write_thrift_field(writer, cc::FILE_PATH, last_field_id)?;
@@ -1683,7 +1743,15 @@ impl WriteThrift for ColumnChunkMetaData {
         // sensitive fields (statistics, bloom filter info, etc.) stripped out.
         if write_meta_data {
             writer.write_field_begin(FieldType::Struct, cc::META_DATA, last_field_id)?;
-            serialize_column_meta_data(self, writer)?;
+            #[cfg(feature = "encryption")]
+            let suppressed = self.encrypted_column_metadata.is_some();
+            #[cfg(not(feature = "encryption"))]
+            let suppressed = false;
+            if suppressed {
+                serialize_column_meta_data(self, &mut writer.untracked(), false)?;
+            } else {
+                serialize_column_meta_data(self, writer, false)?;
+            }
             last_field_id = cc::META_DATA;
         }
 
@@ -1744,7 +1812,11 @@ impl WriteThrift for ColumnChunkMetaData {
 impl WriteThrift for crate::geospatial::statistics::GeospatialStatistics {
     const ELEMENT_TYPE: ElementType = ElementType::Struct;
 
-    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+    fn write_thrift<W: Write, const TRACK: bool>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
+    ) -> Result<()> {
+        writer.write_struct_begin()?;
         let mut last_field_id = 0i16;
         if let Some(bbox) = self.bounding_box() {
             last_field_id = bbox.write_thrift_field(writer, gs::BBOX, last_field_id)?;
@@ -1774,7 +1846,11 @@ write_thrift_field!(RustGeospatialStatistics, FieldType::Struct);
 impl WriteThrift for crate::geospatial::bounding_box::BoundingBox {
     const ELEMENT_TYPE: ElementType = ElementType::Struct;
 
-    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+    fn write_thrift<W: Write, const TRACK: bool>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
+    ) -> Result<()> {
+        writer.write_struct_begin()?;
         self.get_xmin().write_thrift_field(writer, bb::XMIN, 0)?;
         self.get_xmax()
             .write_thrift_field(writer, bb::XMAX, bb::XMIN)?;

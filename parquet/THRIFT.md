@@ -94,8 +94,9 @@ union TimeUnit {
 }
 ```
 
-When serialized, these empty structs become a single `0` (to mark the end of the struct). As an
-optimization, and to allow for a simpler interface, the `thrift_union_all_empty` macro can be used.
+Without extension fields, these empty structs serialize as a single `0` (to mark the end of the
+struct). As an optimization, and to allow for a simpler interface, the `thrift_union_all_empty`
+macro can be used.
 
 ```rust
 thrift_union_all_empty!(
@@ -280,6 +281,7 @@ When a `field_id` of `0` is encountered, this marks the end of the struct and pr
 Here is an example of the processing loop:
 
 ```rust
+    prot.read_struct_begin()?;
     let mut last_field_id = 0i16;
     loop {
         // read the field id and field type. break if we encounter `Stop`
@@ -305,8 +307,7 @@ Here is an example of the processing loop:
                 let val = Encoding::read_thrift(&mut *prot)?;
                 repetition_level_encoding = Some(val);
             }
-            // Thrift structs are meant to be forward compatible, so do not error
-            // here. Instead, simply skip unknown fields.
+            // Skip unknown struct fields.
             _ => {
                 prot.skip(field_ident.field_type)?;
             }
@@ -322,6 +323,7 @@ can be eliminated, and only the `match` on the id performed. A subsequent call t
 the decoding of the `LogicalType` union:
 
 ```rust
+    prot.read_struct_begin()?; // unions use the struct wire format
     // read the discriminant, error if it is `0`
     let field_ident = prot.read_field_begin(0)?;
     if field_ident.field_type == FieldType::Stop {
@@ -351,6 +353,9 @@ the decoding of the `LogicalType` union:
     }
 ```
 
+Nominally empty union members must also tolerate unknown fields. Use `skip_empty_struct()`, which
+skips fields through the member's STOP, rather than assuming that its first byte is already STOP.
+
 ### WriteThrift Customization
 
 On the serialization side, there are two traits to implement. The first, `WriteThrift`, is used
@@ -364,7 +369,10 @@ custom serialization code for `ConvertedType`:
 impl WriteThrift for ConvertedType {
     const ELEMENT_TYPE: ElementType = ElementType::I32;
 
-    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+    fn write_thrift<W: Write, const TRACK: bool>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
+    ) -> Result<()> {
         // because we've added NONE, the variant values are off by 1, so correct that here
         writer.write_i32(*self as i32 - 1)
     }
@@ -374,10 +382,20 @@ impl WriteThrift for ConvertedType {
 Structs and unions are serialized by field. When performing the serialization, one needs to keep
 track of the last field that has been written, as this is needed to calculate the delta in the
 Thrift field header. For required fields this is not strictly necessary, but when writing
-optional fields it is. A typical `write_thrift` implementation will look like:
+optional fields it is. An implementation that writes a struct's fields directly must bracket them
+with `write_struct_begin()` and `write_struct_end()`. For a union, use `write_union_begin()` instead.
+These begin calls emit no bytes, but track the boundaries needed by metadata extension hooks.
+Forwarding implementations reuse the delegated serializer's boundaries. Use `write_empty_struct()`
+for an empty struct field, so it receives its own boundary tracking.
+
+A typical struct implementation looks like:
 
 ```rust
-    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+    fn write_thrift<W: Write, const TRACK: bool>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
+    ) -> Result<()> {
+        writer.write_struct_begin()?;
         // required field f1
         self.f1.write_thrift_field(writer, 1, 0)?; // field_id == 1, last_field_id == 0
         // required field f2
@@ -411,9 +429,9 @@ which expands to:
 
 ```rust
 impl WriteThriftField for MyNewStruct {
-    fn write_thrift_field<W: Write>(
+    fn write_thrift_field<W: Write, const TRACK: bool>(
         &self,
-        writer: &mut ThriftCompactOutputProtocol<W>,
+        writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
         field_id: i16,
         last_field_id: i16,
     ) -> Result<i16> {
@@ -444,14 +462,16 @@ that have been encoded, and then read elements one at a time.
     }
 ```
 
-Writing is simply the reverse: write the list header, and then serialize the elements:
+Writing is simply the reverse: write the list header, and then serialize the elements.
+Custom loops over structs or nested lists must use `with_list_element()` to record each element's
+index for extension callbacks. The `Vec<T>::write_thrift` implementation already does this.
 
 ```rust
     // write the list header
     writer.write_list_begin(ElementType::Struct, page_locations.len)?;
     // write the elements
     for i in 0..len {
-        page_locations[i].write_thrift(writer)?;
+        writer.with_list_element(i, |writer| page_locations[i].write_thrift(writer))?;
     }
 ```
 
@@ -478,4 +498,29 @@ an ordinary struct's STOP using this Compact Protocol encoding:
 ZigZag(32767). Conforming readers skip unknown fields.
 
 Public contracts and examples are documented on
+[`MetadataExtensionHook`](src/file/metadata/extensions/writer.rs),
+[`MetadataSite`](src/file/metadata/extensions/site.rs), and
 [`MetadataExtensionSelection`](src/file/metadata/extensions/selection.rs).
+The following rules apply when maintaining the codecs.
+
+### Serialization
+
+- Bracket ordinary structs with `write_struct_begin()` / `write_struct_end()` and
+  unions with `write_union_begin()` / `write_union_end()`. Empty ordinary union
+  members use `write_empty_struct()`. Union envelopes receive no callbacks.
+- Independently encoded roots end with `write_root_end()`, supplied by
+  `thrift_struct!(@root ...)` for generated codecs. This is the sole callback
+  boundary for root-only serialization, which uses `TRACK = false` for children.
+- Use field IDs from `file::metadata::thrift_fields` and `with_list_element()` for
+  compound-list entries. Typed footer scopes supply original row-group and
+  leaf-column positions. Schema-element positions follow the flattened wire list;
+  empty groups do not consume leaf-column positions.
+- Select applicable targets before locking the hook. Rejected footer children
+  use the untracked codec. Reset retained `ThriftPath` lengths at each root,
+  including after errors. Balance assertions are debug-only; capacity and
+  payload-length checks remain active in release builds.
+- Emit extensions after standard fields and children, before STOP. Validate
+  payload lengths before framing and consume borrowed bytes before the next call.
+- Extend page headers before buffering and encrypted/signed metadata before
+  encryption/signing. Stripped plaintext compatibility copies of encrypted column
+  metadata use the untracked codec.

@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use super::MetadataSite;
 use super::{MetadataContext, SiteInfo, ThriftStruct};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::{ColumnPath, SchemaDescriptor};
@@ -216,6 +217,29 @@ pub(crate) fn descendants(
         .filter(move |t| !t.root_only && t.accepts_root(root))
 }
 
+#[inline]
+pub(crate) fn matches(targets: &Targets, site: &MetadataSite<'_>) -> Result<bool> {
+    // Admission and the chosen codec already enforce this target's root/coverage.
+    if let [target] = targets
+        && !target.has_context()
+    {
+        return Ok(true);
+    }
+    let root = site.root();
+    let mut candidates = targets
+        .iter()
+        .filter(|t| t.accepts_kind(root) && (!t.root_only || site.at_root()));
+    // Do not resolve context unnecessarily, even if an earlier target needs it.
+    if candidates.clone().any(|t| !t.has_context()) {
+        return Ok(true);
+    }
+    if candidates.clone().next().is_none() {
+        return Ok(false);
+    }
+    let context = site.context()?;
+    Ok(candidates.any(|t| t.accepts_context(context)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,5 +330,26 @@ mod tests {
                 .contains("already configured")
         );
         assert_eq!(slot, Some(7));
+    }
+
+    #[cfg(feature = "experimental")]
+    #[test]
+    fn inherited_file_hook_cannot_be_replaced() -> Result<()> {
+        use crate::file::{properties::WriterProperties, writer::SerializedFileWriter};
+        fn hook(_: &mut MetadataSite<'_>) -> Result<Option<&'static [u8]>> {
+            Ok(None)
+        }
+        let (file, _) = crate::file::metadata::extensions::test_util::footer_fixture();
+        let schema = file.schema_descr().root_schema_ptr();
+        let mut writer =
+            SerializedFileWriter::new(Vec::new(), schema, Arc::new(WriterProperties::default()))?
+                .with_metadata_extension_hook([MetadataExtensionSelection::all()], hook)?;
+        let group = writer.next_row_group()?;
+        assert!(
+            group
+                .with_metadata_extension_hook([MetadataExtensionSelection::all()], hook)
+                .is_err()
+        );
+        Ok(())
     }
 }

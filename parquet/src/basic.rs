@@ -912,7 +912,10 @@ impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for EdgeInterpolat
 
 impl WriteThrift for EdgeInterpolationAlgorithm {
     const ELEMENT_TYPE: ElementType = ElementType::I32;
-    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+    fn write_thrift<W: Write, const TRACK: bool>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
+    ) -> Result<()> {
         let val: i32 = match *self {
             Self::SPHERICAL => 0,
             Self::VINCENTY => 1,
@@ -1246,32 +1249,24 @@ impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for ColumnOrder {
 impl WriteThrift for ColumnOrder {
     const ELEMENT_TYPE: ElementType = ElementType::Struct;
 
-    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+    fn write_thrift<W: Write, const TRACK: bool>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
+    ) -> Result<()> {
+        writer.write_union_begin()?;
         match *self {
             Self::TYPE_DEFINED_ORDER(_) => {
-                writer.write_field_begin(FieldType::Struct, fields::column_order::TYPE_ORDER, 0)?;
-                writer.write_struct_end()?;
+                writer.write_empty_struct(fields::column_order::TYPE_ORDER, 0)?;
             }
             Self::IEEE_754_TOTAL_ORDER => {
-                writer.write_field_begin(
-                    FieldType::Struct,
-                    fields::column_order::IEEE_754_TOTAL_ORDER,
-                    0,
-                )?;
-                writer.write_struct_end()?;
+                writer.write_empty_struct(fields::column_order::IEEE_754_TOTAL_ORDER, 0)?;
             }
             Self::INT96_TIMESTAMP_ORDER => {
-                writer.write_field_begin(
-                    FieldType::Struct,
-                    fields::column_order::INT96_TIMESTAMP_ORDER,
-                    0,
-                )?;
-                writer.write_struct_end()?;
+                writer.write_empty_struct(fields::column_order::INT96_TIMESTAMP_ORDER, 0)?;
             }
             _ => return Err(general_err!("Attempt to write undefined ColumnOrder")),
         }
-        // write end of struct for this union
-        writer.write_struct_end()
+        writer.write_union_end()
     }
 }
 

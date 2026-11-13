@@ -322,6 +322,11 @@ name = "metadata"
 harness = false
 
 [[bench]]
+name = "metadata_extensions"
+required-features = ["experimental"]
+harness = false
+
+[[bench]]
 name = "parquet_round_trip"
 required-features = ["arrow"]
 harness = false
