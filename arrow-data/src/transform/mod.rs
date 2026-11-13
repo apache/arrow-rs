@@ -70,8 +70,7 @@ fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits<
         Box::new(move |mutable, start, len| {
             let mutable_len = mutable.len;
             let out = mutable.null_buffer();
-            // `try_extend` grows the null buffer before calling this infallible callback.
-            debug_assert!(out.len() >= bit_util::ceil(mutable_len + len, 8));
+            utils::resize_for_bits(out, mutable_len + len);
             mutable.null_count += set_bits(
                 out.as_slice_mut(),
                 bytes,
@@ -84,8 +83,7 @@ fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits<
         Box::new(|mutable, _, len| {
             let mutable_len = mutable.len;
             let out = mutable.null_buffer();
-            // `try_extend` grows the null buffer before calling this infallible callback.
-            debug_assert!(out.len() >= bit_util::ceil(mutable_len + len, 8));
+            utils::resize_for_bits(out, mutable_len + len);
             let write_data = out.as_slice_mut();
             (0..len).for_each(|i| {
                 bit_util::set_bit(write_data, mutable_len + i);
@@ -216,7 +214,14 @@ fn build_extend_view(array: &ArrayData, buffer_offset: u32) -> Extend<'_> {
         move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
             let values = &views[start..start + len];
             utils::try_reserve(&mut mutable.buffer1, mem::size_of_val(values))?;
-            if buffer_offset == 0 {
+            if values.len() == 1 {
+                let mut value = values[0];
+                if value as u32 > MAX_INLINE_VIEW_LEN {
+                    value += (buffer_offset as u128) << 64;
+                }
+                // SAFETY: The destination was reserved for this view above.
+                unsafe { mutable.buffer1.push_unchecked(value) };
+            } else if buffer_offset == 0 {
                 mutable.buffer1.extend_from_slice(values);
             } else {
                 mutable.buffer1.extend(values.iter().map(|value| {
@@ -817,11 +822,6 @@ impl<'a> MutableArrayData<'a> {
         }
 
         let len = end - start;
-        let new_len = self.data.len + len;
-        // Grow here so allocation errors are returned before the infallible null-bit writer runs.
-        if let Some(nulls) = &mut self.data.null_buffer {
-            utils::try_resize_for_bits(nulls, new_len)?;
-        }
         (self.extend_null_bits[index])(&mut self.data, start, len);
         // Snapshot buffer lengths before attempting the extend so we can roll
         // back to a consistent state if it fails.
@@ -834,7 +834,7 @@ impl<'a> MutableArrayData<'a> {
             self.data.buffer2.truncate(buf2_len);
             return Err(e);
         }
-        self.data.len = new_len;
+        self.data.len += len;
         Ok(())
     }
 
@@ -862,8 +862,7 @@ impl<'a> MutableArrayData<'a> {
     /// # Errors
     ///
     /// Returns an error if this [`MutableArrayData`] was not created with `use_nulls` and none
-    /// of the source arrays are nullable, the run-end counter overflows, or memory allocation
-    /// fails.
+    /// of the source arrays are nullable, or if the run-end counter overflows.
     pub fn try_extend_nulls(&mut self, len: usize) -> Result<(), ArrowError> {
         if self.data.null_buffer.is_none() {
             return Err(ArrowError::InvalidArgumentError(
@@ -877,15 +876,14 @@ impl<'a> MutableArrayData<'a> {
             return Ok(());
         }
 
-        let new_len = self.data.len + len;
-        let bit_len = bit_util::ceil(new_len, 8);
+        (self.extend_nulls)(&mut self.data, len)?;
+
+        self.data.len += len;
+        let bit_len = bit_util::ceil(self.data.len, 8);
         self.data
             .null_buffer()
             .try_resize(bit_len, 0)
             .map_err(utils::memory_error)?;
-        (self.extend_nulls)(&mut self.data, len)?;
-
-        self.data.len = new_len;
         self.data.null_count += len;
         Ok(())
     }

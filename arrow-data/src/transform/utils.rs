@@ -24,15 +24,11 @@ pub(super) fn try_reserve(buffer: &mut MutableBuffer, additional: usize) -> Resu
 
 /// extends the `buffer` to be able to hold `len` bits, setting all bits of the new size to zero.
 #[inline]
-pub(super) fn try_resize_for_bits(
-    buffer: &mut MutableBuffer,
-    len: usize,
-) -> Result<(), ArrowError> {
+pub(super) fn resize_for_bits(buffer: &mut MutableBuffer, len: usize) {
     let needed_bytes = bit_util::ceil(len, 8);
     if buffer.len() < needed_bytes {
-        buffer.try_resize(needed_bytes, 0).map_err(memory_error)?;
+        buffer.resize(needed_bytes, 0);
     }
-    Ok(())
 }
 
 /// Extends `buffer` with the re-based offsets from `offsets`, returning an error on overflow.
