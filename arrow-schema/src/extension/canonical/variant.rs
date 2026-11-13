@@ -14,8 +14,10 @@ use crate::{ArrowError, DataType};
 /// of using this extension type.
 ///
 /// The storage type must be a struct with a binary `metadata` field and at
-/// least one of a binary `value` field or a `typed_value` field. Validating
-/// `typed_value` types and the encoded bytes is left to `VariantArray`.
+/// least one of a binary `value` field or a `typed_value` field. Nullability
+/// is not checked, so files written with a nullable unshredded `value` still
+/// read. Validating `typed_value` types and the encoded bytes is left to
+/// `VariantArray`.
 ///
 /// [`VariantArray`]: https://docs.rs/parquet-variant-compute/latest/parquet_variant_compute/struct.VariantArray.html
 #[derive(Debug, Clone, PartialEq)]
