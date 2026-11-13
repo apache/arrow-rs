@@ -5,18 +5,13 @@
 use super::InProgressArray;
 use arrow_array::cast::AsArray;
 use arrow_array::types::RunEndIndexType;
-use arrow_array::{Array, ArrayRef, PrimitiveArray, RunArray, make_array, new_empty_array};
+use arrow_array::{Array, ArrayRef, PrimitiveArray, RunArray, new_empty_array};
 use arrow_buffer::ArrowNativeType;
-use arrow_data::transform::MutableArrayData;
 use arrow_schema::{ArrowError, DataType};
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-struct ValueRange {
-    source: usize,
-    start: usize,
-    end: usize,
-}
+type ValueRange = (usize, usize, usize);
 
 pub(crate) struct InProgressRunArray<R: RunEndIndexType> {
     source: Option<ArrayRef>,
@@ -59,17 +54,15 @@ impl<R: RunEndIndexType> InProgressRunArray<R> {
             return;
         }
         if let Some(last) = self.value_ranges.last_mut()
-            && last.source == source
-            && last.end == start
+            && last.0 == source
+            && last.2 == start
         {
-            last.end = end;
+            last.2 = end;
             return;
         }
-        self.value_ranges.push(ValueRange { source, start, end });
+        self.value_ranges.push((source, start, end));
     }
 
-    /// Appends one contiguous logical row range, comparing only its first run
-    /// with the buffered tail before bulk-appending the remaining runs.
     fn copy_rows_from(
         &mut self,
         array: &RunArray<R>,
@@ -95,8 +88,7 @@ impl<R: RunEndIndexType> InProgressRunArray<R> {
             .ok_or_else(|| ArrowError::InvalidArgumentError("Run end overflow".into()))?;
         Self::native_run_end(output_end)?;
 
-        let first = array.get_physical_index(offset);
-        let last = array.get_physical_index(offset + len - 1);
+        let new_source = self.current_source.is_none();
         let source_idx = match self.current_source {
             Some(source) => source,
             None => {
@@ -107,15 +99,24 @@ impl<R: RunEndIndexType> InProgressRunArray<R> {
             }
         };
 
-        if output_start == 0 && offset == 0 && len == array.len() && source_run_ends.offset() == 0 {
-            self.run_ends
-                .extend_from_slice(&source_run_ends.values()[first..=last]);
-            self.append_value_range(source_idx, first, last + 1);
-            self.last_value = Some((source_idx, last));
+        if new_source && offset == 0 && len == array.len() && source_run_ends.offset() == 0 {
+            let ends = source_run_ends.values();
+            if output_start == 0 {
+                self.run_ends.extend_from_slice(ends);
+            } else {
+                self.run_ends.extend(
+                    ends.iter()
+                        .map(|end| R::Native::from_usize(output_start + end.as_usize()).unwrap()),
+                );
+            }
+            self.append_value_range(source_idx, 0, ends.len());
+            self.last_value = Some((source_idx, ends.len() - 1));
             self.len = output_end;
             return Ok(());
         }
 
+        let first = array.get_physical_index(offset);
+        let last = array.get_physical_index(offset + len - 1);
         let run_end = |index: usize| {
             let selected = source_run_ends.values()[index]
                 .as_usize()
@@ -153,10 +154,12 @@ impl<R: RunEndIndexType> InProgressArray for InProgressRunArray<R> {
     }
 
     fn copy_rows(&mut self, offset: usize, len: usize) -> Result<(), ArrowError> {
-        let source = self.source.clone().ok_or_else(|| {
+        let source = self.source.take().ok_or_else(|| {
             ArrowError::InvalidArgumentError("InProgressRunArray source not set".into())
         })?;
-        self.copy_rows_from(source.as_run::<R>(), offset, len)
+        let result = self.copy_rows_from(source.as_run::<R>(), offset, len);
+        self.source = Some(source);
+        result
     }
 
     fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
@@ -164,13 +167,12 @@ impl<R: RunEndIndexType> InProgressArray for InProgressRunArray<R> {
             return Ok(new_empty_array(&self.data_type));
         }
 
-        let data = self.sources.iter().map(|x| x.to_data()).collect::<Vec<_>>();
-        let mut values =
-            MutableArrayData::try_new(data.iter().collect(), false, self.run_ends.len())?;
-        for range in self.value_ranges.drain(..) {
-            values.try_extend(range.source, range.start, range.end)?;
-        }
-        let values = make_array(values.freeze());
+        let slices = self
+            .value_ranges
+            .drain(..)
+            .map(|r| self.sources[r.0].slice(r.1, r.2 - r.1))
+            .collect::<Vec<_>>();
+        let values = crate::concat::concat(&slices.iter().map(|x| x.as_ref()).collect::<Vec<_>>())?;
         let run_ends = PrimitiveArray::<R>::from_iter_values(self.run_ends.drain(..));
         let result = RunArray::<R>::try_new(&run_ends, values.as_ref())?;
 
@@ -265,20 +267,21 @@ mod tests {
     }
 
     #[test]
-    fn preserves_order_when_filtered_and_contiguous_copies_mix() {
+    fn preserves_order_across_whole_sources() {
         let first = i32_run(vec![2, 4], vec![1, 2]);
         let sparse = i32_run(vec![2, 4], vec![3, 4]);
         let last = i32_run(vec![2], vec![5]);
         let mut output = InProgressRunArray::<Int32Type>::new(first.data_type().clone());
 
         output.set_source(Some(first));
-        output.copy_rows(0, 2).unwrap();
+        output.copy_rows(0, 4).unwrap();
         output.set_source(Some(sparse));
-        output.copy_rows(1, 2).unwrap();
+        output.copy_rows(0, 4).unwrap();
         output.set_source(Some(last));
         output.copy_rows(0, 2).unwrap();
 
-        assert_runs(output.finish().unwrap(), &[2, 3, 4, 6], &[1, 3, 4, 5]);
+        let result = output.finish().unwrap();
+        assert_runs(result, &[2, 4, 6, 8, 10], &[1, 2, 3, 4, 5]);
     }
 
     #[test]
