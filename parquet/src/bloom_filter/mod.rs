@@ -561,6 +561,11 @@ impl Sbbf {
     /// only finds values whose hashes were computed as the Parquet
     /// specification requires (xxHash64, seed 0, of the plain encoding); use
     /// [`Self::check_hashes`] with the same hash function instead.
+    ///
+    /// Only write a filter to a Parquet file (with [`Self::write`]) if every
+    /// hash was computed as the specification requires. The header always
+    /// names xxHash64, so readers would get false negatives and skip row
+    /// groups that hold matching rows.
     pub fn insert_hash(&mut self, hash: u64) {
         let block_index = self.hash_to_block_index(hash);
         self.0[block_index].insert(hash as u32)
