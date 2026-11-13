@@ -656,8 +656,11 @@ impl Sbbf {
     ///
     /// // `b` has 4 times as many blocks as `a`, so it is folded on the fly
     /// a.union(&b).unwrap();
+    /// # #[cfg(feature = "arrow")]
+    /// # {
     /// let found = a.check_hashes(&[0x0123_4567_89ab_cdef, 0xfedc_ba98_7654_3210]);
     /// assert!(found.value(0) && found.value(1));
+    /// # }
     ///
     /// // A smaller filter cannot be unioned into a larger one
     /// assert!(b.union(&a).is_err());
