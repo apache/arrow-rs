@@ -16,7 +16,7 @@ use std::num::ParseIntError;
 use std::ops::{BitAnd, BitOr, BitXor, Neg, Not, Shl, Shr};
 use std::str::FromStr;
 
-mod div;
+pub(crate) mod div;
 
 /// An opaque error similar to [`std::num::ParseIntError`]
 #[derive(Debug)]
@@ -910,7 +910,7 @@ const fn split_array<const N: usize, const M: usize>(vals: [u8; N]) -> ([u8; M],
 ///
 /// This mirrors the x86 mulx instruction but for 128-bit types
 #[inline]
-const fn mulx(a: u128, b: u128) -> (u128, u128) {
+pub(crate) const fn mulx(a: u128, b: u128) -> (u128, u128) {
     const fn split(a: u128) -> (u128, u128) {
         (a & (u64::MAX as u128), a >> 64)
     }
