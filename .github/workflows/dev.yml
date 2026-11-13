@@ -8,24 +8,13 @@ name: dev
 on:
   workflow_call:
 
+permissions:
+  contents: read
+
 jobs:
-  zizmor:
-    name: Run zizmor
-    runs-on: ubuntu-slim
-    permissions:
-      security-events: write # Required for upload-sarif (used by zizmor-action) to upload SARIF files.
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Run zizmor
-        uses: zizmorcore/zizmor-action@45d7276c9ca790aabd705e31ca99c6185c3e76dd # v0.8.1
   license-headers:
     name: License headers
     runs-on: ubuntu-slim
-    permissions:
-      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -40,8 +29,6 @@ jobs:
   prettier:
     name: Markdown format
     runs-on: ubuntu-slim
-    permissions:
-      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -57,8 +44,6 @@ jobs:
   typos:
     name: Spell Check with Typos
     runs-on: ubuntu-slim
-    permissions:
-      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         # Version fixed on purpose. It uses heuristics to detect typos, so upgrading

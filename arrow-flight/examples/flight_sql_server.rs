@@ -733,7 +733,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::var("USE_TLS").ok().is_some() {
         let cert = std::fs::read_to_string("arrow-flight/examples/data/server.pem")?;
         let key = std::fs::read_to_string("arrow-flight/examples/data/server.key")?;
-        let client_ca = std::fs::read_to_string("arrow-flight/examples/data/client_ca.pem")?;
+        let client_ca = std::fs::read_to_string("arrow-flight/examples/data/ca_root.pem")?;
 
         let svc = FlightServiceServer::new(FlightSqlServiceImpl {});
         let tls_config = ServerTlsConfig::new()
