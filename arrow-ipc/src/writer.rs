@@ -2351,48 +2351,153 @@ fn get_list_array_buffers<O: OffsetSizeTrait>(data: &ArrayData) -> (Buffer, Arra
     (offsets, child_data)
 }
 
+/// The child range of the views in [`get_list_view_array_buffers`].
+struct ViewRange {
+    /// The smallest offset of a referencing view, or `usize::MAX` if no view references values.
+    start: usize,
+    /// The largest end of a referencing view.
+    end: usize,
+    /// The largest end of the other views. Null views can hold any value, so this saturates.
+    other_end: usize,
+    /// True if a null view has a non-zero size.
+    null_with_size: bool,
+}
+
+/// Computes the [`ViewRange`] of views without nulls. The loop has no
+/// branches and works on `O`, so that it vectorizes and the pass-through case
+/// stays cheap.
+fn view_range_no_nulls<O: OffsetSizeTrait>(offsets: &[O], sizes: &[O]) -> ViewRange {
+    let zero = O::usize_as(0);
+    let max = O::usize_as(O::MAX_OFFSET);
+    let (mut start, mut end, mut other_end) = (max, zero, zero);
+    for (&offset, &size) in offsets.iter().zip(sizes) {
+        let referenced = size > zero;
+        start = start.min(if referenced { offset } else { max });
+        end = end.max(if referenced { offset + size } else { zero });
+        other_end = other_end.max(if referenced { zero } else { offset });
+    }
+    // Every referencing view ends above zero, so `end == zero` means that no
+    // view references values.
+    ViewRange {
+        start: if end == zero {
+            usize::MAX
+        } else {
+            start.as_usize()
+        },
+        end: end.as_usize(),
+        other_end: other_end.as_usize(),
+        null_with_size: false,
+    }
+}
+
+/// Computes the [`ViewRange`] without branches, so that the loop vectorizes
+/// and the pass-through case stays cheap.
+fn view_range<O: OffsetSizeTrait>(
+    offsets: &[O],
+    sizes: &[O],
+    valid: impl Iterator<Item = bool>,
+) -> ViewRange {
+    let mut range = ViewRange {
+        start: usize::MAX,
+        end: 0,
+        other_end: 0,
+        null_with_size: false,
+    };
+    for ((offset, size), valid) in offsets.iter().zip(sizes).zip(valid) {
+        let (offset, size) = (offset.as_usize(), size.as_usize());
+        let view_end = offset.saturating_add(size);
+        let referenced = valid & (size > 0);
+        range.start = range
+            .start
+            .min(if referenced { offset } else { usize::MAX });
+        range.end = range.end.max(if referenced { view_end } else { 0 });
+        range.other_end = range.other_end.max(if referenced { 0 } else { view_end });
+        range.null_with_size |= !valid & (size > 0);
+    }
+    range
+}
+
 /// Returns the offsets, sizes, and child data buffers for a ListView array.
 ///
-/// The child data is narrowed to the range that the non-empty views of the
-/// slice reference, and the offsets are rebased to the start of that range.
+/// The child data is narrowed to the range that the valid, non-empty views of
+/// the slice reference, and the offsets are rebased to the start of that range.
 /// Views can overlap or be out of order, so the range runs from the smallest
 /// offset to the largest `offset + size`. Values inside the range that no view
-/// references are still written. Empty views get offset `0`, because their
-/// original offsets can lie outside the range.
+/// references are still written. Empty and null views get offset `0`, and null
+/// views get size `0`, because their original values can lie outside the range.
+///
+/// The offsets and sizes buffers pass through unchanged when the range starts
+/// at `0` and every other view already lies inside the range.
 fn get_list_view_array_buffers<O: OffsetSizeTrait>(
     data: &ArrayData,
 ) -> (Buffer, Buffer, ArrayData) {
     let element_size = size_of::<O>();
-    let sizes = data.buffers()[1]
-        .slice_with_length(data.offset() * element_size, data.len() * element_size);
-    let offsets = &data.buffers()[0].typed_data::<O>()[data.offset()..data.offset() + data.len()];
+    let byte_offset = data.offset() * element_size;
+    let byte_len = data.len() * element_size;
+    let offsets = data.buffers()[0].slice_with_length(byte_offset, byte_len);
+    let sizes = data.buffers()[1].slice_with_length(byte_offset, byte_len);
+    let offsets_slice = offsets.typed_data::<O>();
     let sizes_slice = sizes.typed_data::<O>();
+    let nulls = data.nulls();
+    let referenced =
+        |i: usize| sizes_slice[i].as_usize() > 0 && nulls.is_none_or(|n| n.is_valid(i));
 
-    let range = offsets
-        .iter()
-        .zip(sizes_slice)
-        .filter(|(_, size)| size.as_usize() > 0)
-        .map(|(offset, size)| (offset.as_usize(), offset.as_usize() + size.as_usize()))
-        .reduce(|(start, end), (s, e)| (start.min(s), end.max(e)));
-    let Some((start, end)) = range else {
-        let zeros = MutableBuffer::from_len_zeroed(data.len() * element_size).into();
-        return (zeros, sizes, data.child_data()[0].slice(0, 0));
+    let ViewRange {
+        start,
+        end,
+        other_end,
+        null_with_size,
+    } = match nulls {
+        None => view_range_no_nulls(offsets_slice, sizes_slice),
+        Some(n) => view_range(offsets_slice, sizes_slice, n.iter()),
     };
+    if start == usize::MAX {
+        let zeros: Buffer = MutableBuffer::from_len_zeroed(byte_len).into();
+        return (zeros.clone(), zeros, data.child_data()[0].slice(0, 0));
+    }
+    let child_data = data.child_data()[0].slice(start, end - start);
+    if start == 0 && other_end <= end {
+        return (offsets, sizes, child_data);
+    }
 
     let start_offset = O::usize_as(start);
-    let offsets = offsets
-        .iter()
-        .zip(sizes_slice)
-        .map(|(offset, size)| {
-            if size.as_usize() > 0 {
-                *offset - start_offset
-            } else {
-                O::usize_as(0)
-            }
-        })
-        .collect();
-    let child_data = data.child_data()[0].slice(start, end - start);
-    (offsets, sizes, child_data)
+    let zero = O::usize_as(0);
+    let new_offsets = match nulls {
+        None => offsets_slice
+            .iter()
+            .zip(sizes_slice)
+            .map(|(&offset, &size)| {
+                if size > zero {
+                    offset - start_offset
+                } else {
+                    zero
+                }
+            })
+            .collect(),
+        Some(_) => (0..data.len())
+            .map(|i| {
+                if referenced(i) {
+                    offsets_slice[i] - start_offset
+                } else {
+                    zero
+                }
+            })
+            .collect(),
+    };
+    let new_sizes = if null_with_size {
+        (0..data.len())
+            .map(|i| {
+                if referenced(i) {
+                    sizes_slice[i]
+                } else {
+                    O::usize_as(0)
+                }
+            })
+            .collect()
+    } else {
+        sizes.clone()
+    };
+    (new_offsets, new_sizes, child_data)
 }
 
 /// Returns the sliced views [`Buffer`] for a BinaryView/Utf8View array.
@@ -5409,5 +5514,117 @@ mod tests {
             10,
         );
         assert!(sliced * 100 < whole, "whole: {whole}, sliced: {sliced}");
+    }
+
+    #[test]
+    fn sliced_list_view_ignores_null_views_with_sizes() {
+        let values = Arc::new(Int32Array::from_iter_values(0..1000));
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        // Row 1 is null but its view covers the whole child.
+        let offsets = ScalarBuffer::from(vec![0, 0, 500, 0]);
+        let sizes = ScalarBuffer::from(vec![1000, 1000, 2, 1000]);
+        let nulls = NullBuffer::from(vec![true, false, true, true]);
+        let list = ListViewArray::new(field, offsets, sizes, values, Some(nulls));
+
+        let (whole, sliced) = roundtrip_sliced_stream_sizes(Arc::new(list.clone()), 1, 2);
+        assert!(sliced * 5 < whole, "whole: {whole}, sliced: {sliced}");
+
+        let data = list.slice(1, 2).to_data();
+        let (offsets, sizes, child) = get_list_view_array_buffers::<i32>(&data);
+        assert_eq!(offsets.typed_data::<i32>(), &[0, 0]);
+        assert_eq!(sizes.typed_data::<i32>(), &[0, 2]);
+        assert_eq!(child.offset(), 500);
+        assert_eq!(child.len(), 2);
+    }
+
+    #[test]
+    fn list_view_with_out_of_bounds_null_view() {
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        // SAFETY: the spec requires in-bounds offsets for null views too, but
+        // the writer must not panic on them.
+        let list = unsafe {
+            ListViewArray::new_unchecked(
+                field,
+                ScalarBuffer::from(vec![0, 1_000_000, 1]),
+                ScalarBuffer::from(vec![2, 7, 2]),
+                Arc::new(Int32Array::from_iter_values(0..3)),
+                Some(NullBuffer::from(vec![true, false, true])),
+            )
+        };
+        let (offsets, sizes, child) = get_list_view_array_buffers::<i32>(&list.to_data());
+        assert_eq!(offsets.typed_data::<i32>(), &[0, 0, 1]);
+        assert_eq!(sizes.typed_data::<i32>(), &[2, 0, 2]);
+        assert_eq!(child.len(), 3);
+
+        let expected = ListViewArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            ScalarBuffer::from(vec![0, 0, 1]),
+            ScalarBuffer::from(vec![2, 0, 2]),
+            Arc::new(Int32Array::from_iter_values(0..3)),
+            Some(NullBuffer::from(vec![true, false, true])),
+        );
+        let batch = RecordBatch::try_from_iter([("a", Arc::new(list) as ArrayRef)]).unwrap();
+        let read = deserialize_stream(serialize_stream(&batch));
+        assert_eq!(read.column(0).as_list_view::<i32>(), &expected);
+    }
+
+    #[test]
+    fn list_view_offsets_buffer_with_trailing_bytes() {
+        let mut bytes = Vec::new();
+        for offset in [0i32, 2, 1] {
+            bytes.extend_from_slice(&offset.to_ne_bytes());
+        }
+        bytes.push(0);
+        let list = ListViewArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            ScalarBuffer::<i32>::from(Buffer::from_vec(bytes)),
+            ScalarBuffer::from(vec![2, 1, 2]),
+            Arc::new(Int32Array::from_iter_values(0..4)),
+            None,
+        );
+        let batch = RecordBatch::try_from_iter([("a", Arc::new(list) as ArrayRef)]).unwrap();
+        let read = deserialize_stream(serialize_stream(&batch));
+        let read = read.column(0).as_list_view::<i32>();
+        assert_eq!(read.offsets().as_ref(), &[0, 2, 1]);
+        assert_eq!(read.sizes().as_ref(), &[2, 1, 2]);
+        assert_eq!(
+            read.values().as_primitive::<Int32Type>().values(),
+            &[0, 1, 2]
+        );
+    }
+
+    #[test]
+    fn unsliced_list_view_passes_buffers_through() {
+        let list = ListViewArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            ScalarBuffer::from(vec![2, 0, 3, 1]),
+            ScalarBuffer::from(vec![2, 1, 0, 0]),
+            Arc::new(Int32Array::from_iter_values(0..4)),
+            None,
+        );
+        let data = list.to_data();
+        let (offsets, sizes, child) = get_list_view_array_buffers::<i32>(&data);
+        assert_eq!(offsets.as_ptr(), data.buffers()[0].as_ptr());
+        assert_eq!(sizes.as_ptr(), data.buffers()[1].as_ptr());
+        assert_eq!(offsets.typed_data::<i32>(), &[2, 0, 3, 1]);
+        assert_eq!(child.len(), 4);
+    }
+
+    /// Pins a known limit: values between far-apart views are still written.
+    #[test]
+    fn sliced_list_view_keeps_values_between_views() {
+        let list = ListViewArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            ScalarBuffer::from(vec![0, 10, 990, 0]),
+            ScalarBuffer::from(vec![1000, 1, 1, 1000]),
+            Arc::new(Int32Array::from_iter_values(0..1000)),
+            None,
+        );
+        let data = list.slice(1, 2).to_data();
+        let (offsets, sizes, child) = get_list_view_array_buffers::<i32>(&data);
+        assert_eq!(offsets.typed_data::<i32>(), &[0, 980]);
+        assert_eq!(sizes.typed_data::<i32>(), &[1, 1]);
+        assert_eq!(child.offset(), 10);
+        assert_eq!(child.len(), 981);
     }
 }
