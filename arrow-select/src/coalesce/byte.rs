@@ -194,6 +194,23 @@ where
         Ok(())
     }
 
+    /// # Safety
+    ///
+    /// `indices` must not contain nulls, and every value must be less than
+    /// `source.len()`.
+    unsafe fn copy_rows_by_indices(
+        &mut self,
+        source: &ArrayRef,
+        indices: &UInt32Array,
+    ) -> Result<(), ArrowError> {
+        if indices.is_empty() {
+            return Ok(());
+        }
+
+        self.direct
+            .append_array_by_indices(source.as_bytes::<T>(), indices.values())
+    }
+
     fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
         Ok(Arc::new(self.direct.finish()))
     }

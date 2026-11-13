@@ -229,6 +229,8 @@ pub struct BatchCoalescer {
     has_non_specialized_filter_columns: bool,
     /// True if the schema contains a variable-width byte-array column.
     has_byte_array_columns: bool,
+    /// True if every column can gather directly into its in-progress builder.
+    has_only_primitive_or_byte_array_columns: bool,
     /// True if some column uses the byte-view indexed-copy path.
     has_byte_view_columns: bool,
     /// Buffered row count. Always less than `batch_size`
@@ -258,6 +260,13 @@ impl BatchCoalescer {
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary
             )
         });
+        let has_only_primitive_or_byte_array_columns = schema.fields().iter().all(|field| {
+            field.data_type().is_primitive()
+                || matches!(
+                    field.data_type(),
+                    DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary
+                )
+        });
         let has_byte_view_columns = schema
             .fields()
             .iter()
@@ -274,6 +283,7 @@ impl BatchCoalescer {
             in_progress_arrays,
             has_non_specialized_filter_columns,
             has_byte_array_columns,
+            has_only_primitive_or_byte_array_columns,
             has_byte_view_columns,
             // We will for sure store at least one completed batch
             completed: VecDeque::with_capacity(1),
@@ -440,7 +450,10 @@ impl BatchCoalescer {
         // materialized batch would not trigger the configured large-batch bypass.
         let exceeds_byte_view_threshold = self.has_byte_view_columns
             && !should_use_byte_view_indexed_copy(batch.num_rows(), indices.len());
-        let indexed_copy_allowed = should_use_indexed_copy(batch.num_rows(), indices.len())
+        let dense_byte_array_copy_allowed =
+            self.has_byte_array_columns && self.has_only_primitive_or_byte_array_columns;
+        let indexed_copy_allowed = (should_use_indexed_copy(batch.num_rows(), indices.len())
+            || dense_byte_array_copy_allowed)
             && !exceeds_byte_view_threshold;
 
         let fast_path_allowed = self
