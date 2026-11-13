@@ -7,6 +7,17 @@ use arrow_schema::ArrowError;
 use num_integer::Integer;
 use num_traits::CheckedAdd;
 
+/// Fallibly reserves `additional` bytes when the buffer's existing capacity is insufficient.
+#[inline]
+pub(super) fn try_reserve(buffer: &mut MutableBuffer, additional: usize) -> Result<(), ArrowError> {
+    if additional > buffer.capacity() - buffer.len() {
+        buffer
+            .try_reserve(additional)
+            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+    }
+    Ok(())
+}
+
 /// extends the `buffer` to be able to hold `len` bits, setting all bits of the new size to zero.
 #[inline]
 pub(super) fn try_resize_for_bits(

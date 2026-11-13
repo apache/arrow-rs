@@ -5,10 +5,10 @@
 use crate::ArrayData;
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::ArrowError;
-use std::mem::size_of;
+use std::mem::{size_of, size_of_val};
 use std::ops::Add;
 
-use super::{_MutableArrayData, Extend};
+use super::{_MutableArrayData, Extend, utils::try_reserve};
 
 pub(super) fn build_extend<T: ArrowNativeType>(array: &ArrayData) -> Extend<'_> {
     let values = array.buffer::<T>(0);
@@ -31,15 +31,11 @@ where
     Box::new(
         move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
             let values = &values[start..start + len];
-            let additional = values
-                .len()
-                .checked_mul(size_of::<T>())
-                .ok_or_else(|| ArrowError::MemoryError("buffer size overflow".into()))?;
-            mutable
-                .buffer1
-                .try_reserve(additional)
-                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
-            mutable.buffer1.extend(values.iter().map(|x| *x + offset));
+            try_reserve(&mut mutable.buffer1, size_of_val(values))?;
+            for value in values {
+                // SAFETY: `try_reserve` ensured capacity for every value in this slice.
+                unsafe { mutable.buffer1.push_unchecked(*value + offset) };
+            }
             Ok(())
         },
     )

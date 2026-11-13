@@ -3,7 +3,7 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::ArrayData;
-use crate::transform::_MutableArrayData;
+use crate::transform::{_MutableArrayData, utils::try_reserve};
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::ArrowError;
 use num_integer::Integer;
@@ -21,18 +21,15 @@ pub(super) fn build_extend<T: ArrowNativeType + Integer + CheckedAdd>(
             let additional = len
                 .checked_mul(size_of::<T>())
                 .ok_or_else(|| ArrowError::MemoryError("list-view buffer size overflow".into()))?;
-            mutable
-                .buffer1
-                .try_reserve(additional)
-                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
-            mutable
-                .buffer2
-                .try_reserve(additional)
-                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+            try_reserve(&mut mutable.buffer1, additional)?;
+            try_reserve(&mut mutable.buffer2, additional)?;
 
             for i in start..start + len {
-                mutable.buffer1.push(new_offset);
-                mutable.buffer2.push(sizes[i]);
+                // SAFETY: Both buffers were reserved for all values before the loop.
+                unsafe {
+                    mutable.buffer1.push_unchecked(new_offset);
+                    mutable.buffer2.push_unchecked(sizes[i]);
+                }
                 new_offset = new_offset.checked_add(&sizes[i]).ok_or_else(|| {
                     ArrowError::InvalidArgumentError(
                         "offset overflow: data exceeds the capacity of the offset type. \
@@ -62,15 +59,16 @@ pub(super) fn extend_nulls<T: ArrowNativeType>(
     let additional = len
         .checked_mul(size_of::<T>())
         .ok_or_else(|| ArrowError::MemoryError("list-view buffer size overflow".into()))?;
-    offset_buffer
-        .try_reserve(additional)
-        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
-    sizes_buffer
-        .try_reserve(additional)
-        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+    try_reserve(offset_buffer, additional)?;
+    try_reserve(sizes_buffer, additional)?;
 
     // We push 0 as a placeholder for NULL values in both the offsets and sizes
-    (0..len).for_each(|_| offset_buffer.push(T::default()));
-    (0..len).for_each(|_| sizes_buffer.push(T::default()));
+    for _ in 0..len {
+        // SAFETY: Both buffers were reserved for all values before the loop.
+        unsafe {
+            offset_buffer.push_unchecked(T::default());
+            sizes_buffer.push_unchecked(T::default());
+        }
+    }
     Ok(())
 }

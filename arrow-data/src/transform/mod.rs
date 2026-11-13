@@ -215,21 +215,24 @@ fn build_extend_view(array: &ArrayData, buffer_offset: u32) -> Extend<'_> {
     Box::new(
         move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
             let values = &views[start..start + len];
-            let dst_start = mutable.buffer1.len() / mem::size_of::<u128>();
-            mutable
-                .buffer1
-                .try_extend_from_slice(values)
-                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
-            if buffer_offset != 0 {
-                for view in &mut mutable.buffer1.typed_data_mut::<u128>()[dst_start..] {
-                    if *view as u32 > MAX_INLINE_VIEW_LEN {
+            if buffer_offset == 0 {
+                mutable
+                    .buffer1
+                    .try_extend_from_slice(values)
+                    .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+            } else {
+                utils::try_reserve(&mut mutable.buffer1, mem::size_of_val(values))?;
+                mutable.buffer1.extend(values.iter().map(|value| {
+                    if *value as u32 > MAX_INLINE_VIEW_LEN {
                         // The buffer index is bits 64 to 95 of a view. Adding
                         // `buffer_offset` gives the string's buffer index in the
                         // output, which fits in 32 bits, so the sum never carries
                         // into bit 96.
-                        *view += (buffer_offset as u128) << 64;
+                        value + ((buffer_offset as u128) << 64)
+                    } else {
+                        *value
                     }
-                }
+                }));
             }
             Ok(())
         },
