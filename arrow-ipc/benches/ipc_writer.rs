@@ -6,12 +6,12 @@ use arrow_array::builder::{
     Date32Builder, Decimal128Builder, Int32Builder, StringBuilder, StringDictionaryBuilder,
 };
 use arrow_array::types::UInt32Type;
-use arrow_array::{FixedSizeBinaryArray, RecordBatch};
+use arrow_array::{Array, FixedSizeBinaryArray, Int32Array, RecordBatch, StringArray, UnionArray};
 use arrow_ipc::CompressionType;
 use arrow_ipc::writer::{
     DictionaryHandling, FileWriter, IpcWriteOptions, StreamEncoder, StreamWriter,
 };
-use arrow_schema::{DataType, Field, Schema};
+use arrow_schema::{DataType, Field, Schema, UnionFields};
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::sync::Arc;
@@ -134,6 +134,27 @@ fn criterion_benchmark(c: &mut Criterion) {
             writer.finish().unwrap();
         })
     });
+
+    for (name, batch) in [
+        ("whole", create_dense_union_batch(8192)),
+        (
+            "sliced",
+            create_dense_union_batch(10 * 8192).slice(8192, 8192),
+        ),
+    ] {
+        group.bench_function(format!("StreamWriter/write_10/dense_union/{name}"), |b| {
+            let mut buffer = Vec::with_capacity(2 * 1024 * 1024);
+            b.iter(|| {
+                buffer.clear();
+                let mut writer =
+                    StreamWriter::try_new(&mut buffer, batch.schema().as_ref()).unwrap();
+                for _ in 0..10 {
+                    writer.write(&batch).unwrap();
+                }
+                writer.finish().unwrap();
+            })
+        });
+    }
 
     group.bench_function("StreamWriter/write_10/dict", |b| {
         let batches = create_unique_dict_batches(10, 8192);
@@ -275,6 +296,33 @@ fn create_unique_dict_batches(n: usize, num_rows: usize) -> Vec<RecordBatch> {
     }
 
     batches
+}
+
+/// Build a batch with one dense union column whose rows alternate between an
+/// Int32 child and a Utf8 child.
+fn create_dense_union_batch(num_rows: usize) -> RecordBatch {
+    let fields = UnionFields::try_new(
+        vec![0, 1],
+        vec![
+            Field::new("int", DataType::Int32, true),
+            Field::new("str", DataType::Utf8, true),
+        ],
+    )
+    .unwrap();
+    let half = num_rows.div_ceil(2);
+    let ints = Int32Array::from_iter_values(0..half as i32);
+    let strs = StringArray::from_iter_values((0..half).map(|i| format!("this is string {i}")));
+    let type_ids = (0..num_rows).map(|i| (i % 2) as i8).collect();
+    let offsets = (0..num_rows).map(|i| (i / 2) as i32).collect();
+    let union = UnionArray::try_new(
+        fields,
+        type_ids,
+        Some(offsets),
+        vec![Arc::new(ints), Arc::new(strs)],
+    )
+    .unwrap();
+    let schema = Schema::new(vec![Field::new("u", union.data_type().clone(), false)]);
+    RecordBatch::try_new(Arc::new(schema), vec![Arc::new(union)]).unwrap()
 }
 
 fn create_batch(num_rows: usize, allow_nulls: bool) -> RecordBatch {
