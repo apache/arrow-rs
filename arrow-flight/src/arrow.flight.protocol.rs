@@ -429,6 +429,76 @@ pub struct PutResult {
     pub app_metadata: ::prost::bytes::Bytes,
 }
 ///
+/// Request message for the "Close Session" action.
+///
+/// The existing session is referenced via a cookie header.
+#[allow(clippy::all)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CloseSessionRequest {}
+///
+/// The result of closing a session.
+#[allow(clippy::all)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CloseSessionResult {
+    #[prost(enumeration = "close_session_result::Status", tag = "1")]
+    pub status: i32,
+}
+/// Nested message and enum types in `CloseSessionResult`.
+pub mod close_session_result {
+    #[allow(clippy::all)]
+    #[derive(
+        Clone,
+        Copy,
+        Debug,
+        PartialEq,
+        Eq,
+        Hash,
+        PartialOrd,
+        Ord,
+        ::prost::Enumeration
+    )]
+    #[repr(i32)]
+    pub enum Status {
+        /// Protobuf deserialization fallback value: The session close status is unknown or
+        /// not recognized. Servers should avoid using this value (send a NOT_FOUND error if
+        /// the requested session is not known or expired). Clients can retry the request.
+        Unspecified = 0,
+        /// The session close request is complete. Subsequent requests with
+        /// the same session produce a NOT_FOUND error.
+        Closed = 1,
+        /// The session close request is in progress. The client may retry
+        /// the close request.
+        Closing = 2,
+        /// The session is not closeable. The client should not retry the
+        /// close request.
+        NotCloseable = 3,
+    }
+    impl Status {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "UNSPECIFIED",
+                Self::Closed => "CLOSED",
+                Self::Closing => "CLOSING",
+                Self::NotCloseable => "NOT_CLOSEABLE",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "UNSPECIFIED" => Some(Self::Unspecified),
+                "CLOSED" => Some(Self::Closed),
+                "CLOSING" => Some(Self::Closing),
+                "NOT_CLOSEABLE" => Some(Self::NotCloseable),
+                _ => None,
+            }
+        }
+    }
+}
+///
 /// The result of a cancel operation.
 ///
 /// This is used by CancelFlightInfoResult.status.
