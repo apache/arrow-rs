@@ -21,7 +21,7 @@ use arrow::datatypes::{
     TimestampMicrosecondType, TimestampNanosecondType,
 };
 use arrow::error::Result;
-use arrow_schema::extension::Uuid as UuidExtension;
+use arrow_schema::extension::{ExtensionType, Uuid as UuidExtension};
 use arrow_schema::{ArrowError, DataType, Field, FieldRef, TimeUnit};
 use chrono::{DateTime, NaiveTime};
 use parquet_variant::{
@@ -87,25 +87,6 @@ pub(crate) fn validate_binary_array(array: &dyn Array, field_name: &str) -> Resu
         DataType::Binary | DataType::LargeBinary | DataType::BinaryView => Ok(()),
         _ => Err(ArrowError::InvalidArgumentError(format!(
             "VariantArray '{field_name}' field must be Binary, LargeBinary, or BinaryView, got {}",
-            array.data_type()
-        ))),
-    }
-}
-
-/// Validates that a metadata array has binary-like logical values.
-fn validate_metadata_array(array: &dyn Array) -> Result<()> {
-    let is_binary = |data_type: &DataType| {
-        matches!(
-            data_type,
-            DataType::Binary | DataType::LargeBinary | DataType::BinaryView
-        )
-    };
-    match array.data_type() {
-        data_type if is_binary(data_type) => Ok(()),
-        DataType::Dictionary(_, values) if is_binary(values) => Ok(()),
-        DataType::RunEndEncoded(_, values) if is_binary(values.data_type()) => Ok(()),
-        _ => Err(ArrowError::InvalidArgumentError(format!(
-            "VariantArray 'metadata' field must be Binary, LargeBinary, BinaryView, or a Dictionary or RunEndEncoded array of one of those types, got {}",
             array.data_type()
         ))),
     }
@@ -274,39 +255,31 @@ impl VariantArray {
     /// - A new instance of `VariantArray`.
     ///
     /// # Errors:
-    /// - If the `StructArray` does not contain the required fields
+    /// - If the data type is not valid [`VariantType`] storage
     ///
     /// # Requirements of the `StructArray`
     ///
     /// 1. A required field named `metadata` which is binary, large_binary, or
     ///    binary_view, optionally dictionary or run-end-encoded
     ///
-    /// 2. A required field named `value` that is binary, large_binary, or
-    ///    binary_view
+    /// 2. A field named `value` that is binary, large_binary, or binary_view,
+    ///    required unless `typed_value` is present
     ///
     /// 3. An optional field named `typed_value` which can be any primitive type
     ///    or be a list, large_list, fixed_size_list, list_view or struct. Fixed-size lists are
     ///    normalized to variable-length lists on read.
     ///
     pub fn try_new(inner: &dyn Array) -> Result<Self> {
+        // Before canonicalizing, which would report a non-Variant struct's fields as illegal
+        // shredded types
+        VariantType.supports_data_type(inner.data_type())?;
+
         // Canonicalize shredded typed_value fields (e.g. decimal narrowing)
         let inner = canonicalize_shredded_types(inner)?;
-
-        let Some(inner) = inner.as_struct_opt() else {
-            return Err(ArrowError::InvalidArgumentError(
-                "Invalid VariantArray: requires StructArray as input".to_string(),
-            ));
-        };
-
-        // Note the specification allows for any order so we must search by name
-
-        // Ensure the StructArray has a metadata field with binary-like logical values
-        let Some(metadata_col) = inner.column_by_name("metadata") else {
-            return Err(ArrowError::InvalidArgumentError(
-                "Invalid VariantArray: StructArray must contain a 'metadata' field".to_string(),
-            ));
-        };
-        validate_metadata_array(metadata_col.as_ref())?;
+        let inner = inner.as_struct();
+        let metadata_col = inner
+            .column_by_name("metadata")
+            .expect("checked by VariantType");
 
         let shredding_state = ShreddingState::try_from(inner)?;
 
@@ -1320,6 +1293,8 @@ mod test {
     use arrow_schema::{Field, Fields};
     use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, ShortString};
 
+    const VARIANT_TYPE_MISMATCH: &str = "Invalid argument error: VariantType data type mismatch, expected Struct with binary \"metadata\" and binary \"value\" and/or \"typed_value\" fields, found";
+
     #[test]
     fn invalid_not_a_struct_array() {
         let array = make_binary_view_array();
@@ -1327,7 +1302,7 @@ mod test {
         let err = VariantArray::try_new(&array);
         assert_eq!(
             err.unwrap_err().to_string(),
-            "Invalid argument error: Invalid VariantArray: requires StructArray as input"
+            format!("{VARIANT_TYPE_MISMATCH} BinaryView")
         );
     }
 
@@ -1339,7 +1314,7 @@ mod test {
         let err = VariantArray::try_new(&array);
         assert_eq!(
             err.unwrap_err().to_string(),
-            "Invalid argument error: Invalid VariantArray: StructArray must contain a 'metadata' field"
+            format!("{VARIANT_TYPE_MISMATCH} Struct(\"value\": BinaryView)")
         );
     }
 
@@ -1373,7 +1348,7 @@ mod test {
         let err = VariantArray::try_new(&metadata_only);
         assert_eq!(
             err.unwrap_err().to_string(),
-            "Invalid argument error: Invalid VariantArray: StructArray must contain a 'value' field"
+            format!("{VARIANT_TYPE_MISMATCH} Struct(\"metadata\": non-null BinaryView)")
         );
     }
 
@@ -1391,7 +1366,7 @@ mod test {
         let err = VariantArray::try_new(&array);
         assert_eq!(
             err.unwrap_err().to_string(),
-            "Invalid argument error: VariantArray 'metadata' field must be Binary, LargeBinary, BinaryView, or a Dictionary or RunEndEncoded array of one of those types, got Int32"
+            format!("{VARIANT_TYPE_MISMATCH} Struct(\"metadata\": Int32, \"value\": BinaryView)")
         );
     }
 
@@ -1473,7 +1448,7 @@ mod test {
         let err = VariantArray::try_new(&array);
         assert_eq!(
             err.unwrap_err().to_string(),
-            "Invalid argument error: VariantArray 'value' field must be Binary, LargeBinary, or BinaryView, got Int32"
+            format!("{VARIANT_TYPE_MISMATCH} Struct(\"metadata\": BinaryView, \"value\": Int32)")
         );
     }
 

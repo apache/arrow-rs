@@ -15,9 +15,9 @@ use crate::{ArrowError, DataType};
 ///
 /// The storage type must be a struct with a binary `metadata` field and at
 /// least one of a binary `value` field or a `typed_value` field. Nullability
-/// is not checked, so files written with a nullable unshredded `value` still
-/// read. Validating `typed_value` types and the encoded bytes is left to
-/// `VariantArray`.
+/// is not checked, matching `VariantArray`, so files written with a nullable
+/// unshredded `value` still read. Validating `typed_value` types and the
+/// encoded bytes is left to `VariantArray`.
 ///
 /// [`VariantArray`]: https://docs.rs/parquet-variant-compute/latest/parquet_variant_compute/struct.VariantArray.html
 #[derive(Debug, Clone, PartialEq)]
@@ -143,7 +143,7 @@ mod tests {
                 value(DataType::BinaryView),
                 typed_value(DataType::Int64),
             ]),
-            // Missing `value` is out of spec, but `VariantArray` reads it
+            // Allowed by the Arrow spec, though the Parquet shredding spec requires `value`
             storage(vec![
                 metadata(DataType::BinaryView),
                 typed_value(DataType::Utf8),
@@ -167,6 +167,10 @@ mod tests {
         let invalid = [
             storage(vec![Field::new("unrelated", DataType::Int32, false)]),
             storage(vec![metadata(DataType::Utf8), value(DataType::BinaryView)]),
+            storage(vec![
+                metadata(DataType::FixedSizeBinary(16)),
+                value(DataType::BinaryView),
+            ]),
             storage(vec![
                 metadata(DataType::Dictionary(
                     Box::new(DataType::Int8),
