@@ -4,7 +4,6 @@
 
 //! Defines filter kernels
 
-use std::ops::AddAssign;
 use std::sync::Arc;
 
 use arrow_array::builder::BooleanBufferBuilder;
@@ -704,8 +703,7 @@ fn filter_run_end_array<R: RunEndIndexType>(
     predicate: &FilterPredicate,
 ) -> Result<RunArray<R>, ArrowError>
 where
-    R::Native: Into<i64> + From<bool>,
-    R::Native: AddAssign,
+    R::Native: Into<i64>,
 {
     let run_ends: &RunEndBuffer<R::Native> = array.run_ends();
     let start_physical = run_ends.get_start_physical_index();
@@ -717,23 +715,22 @@ where
 
     let mut start = 0u64;
     let mut j = 0;
-    let mut count = R::default_value();
+    let mut count = 0usize;
     let filter_values = predicate.filter.values();
     let run_ends = run_ends.inner();
 
     let pred: BooleanArray = BooleanBuffer::collect_bool(physical_len, |i| {
-        let mut keep = false;
         let mut end = (run_ends[i + start_physical].into() as u64).saturating_sub(offset);
         let difference = end.saturating_sub(filter_values.len() as u64);
         end -= difference;
 
-        // Safety: we subtract the difference off `end` so we are always within bounds
-        for pred in (start..end).map(|i| unsafe { filter_values.value_unchecked(i as usize) }) {
-            count += R::Native::from(pred);
-            keep |= pred
-        }
+        let selected = filter_values
+            .slice(start as usize, (end - start) as usize)
+            .count_set_bits();
+        count += selected;
+        let keep = selected != 0;
         // this is to avoid branching
-        new_run_ends[j] = count;
+        new_run_ends[j] = R::Native::from_usize(count).unwrap();
         j += keep as usize;
 
         start = end;
