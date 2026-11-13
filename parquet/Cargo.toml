@@ -343,6 +343,7 @@ required-features = ["arrow"]
 
 [[bench]]
 name = "bloom_filter"
+required-features = ["arrow"]
 harness = false
 
 [[bench]]
