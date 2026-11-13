@@ -212,37 +212,23 @@ fn build_extend_view(array: &ArrayData, buffer_offset: u32) -> Extend<'_> {
     let views = array.buffer::<u128>(0);
     Box::new(
         move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
-            let values = &views[start..start + len];
-            if buffer_offset == 0 {
-                mutable
-                    .buffer1
-                    .try_extend_from_slice(values)
-                    .map_err(utils::memory_error)?;
-            } else {
-                utils::try_reserve(&mut mutable.buffer1, mem::size_of_val(values))?;
-                if values.len() == 1 {
-                    let mut value = values[0];
-                    if value as u32 > MAX_INLINE_VIEW_LEN {
-                        value += (buffer_offset as u128) << 64;
-                    }
-                    // SAFETY: The destination was reserved for this view above.
-                    unsafe { mutable.buffer1.push_unchecked(value) };
-                } else {
-                    for value in values {
-                        let value = if *value as u32 > MAX_INLINE_VIEW_LEN {
-                            // The buffer index is bits 64 to 95 of a view. Adding
-                            // `buffer_offset` gives the string's buffer index in the
-                            // output, which fits in 32 bits, so the sum never carries
-                            // into bit 96.
-                            value + ((buffer_offset as u128) << 64)
-                        } else {
-                            *value
-                        };
-                        // SAFETY: The destination was reserved for every view above.
-                        unsafe { mutable.buffer1.push_unchecked(value) };
-                    }
-                }
-            }
+            mutable
+                .buffer1
+                .extend(views[start..start + len].iter().map(|v| {
+                    // A view of a string of 12 bytes or fewer stores the
+                    // string inline and has no buffer index, so adding 0
+                    // leaves it unchanged.
+                    let offset = if *v as u32 > MAX_INLINE_VIEW_LEN {
+                        buffer_offset
+                    } else {
+                        0
+                    };
+                    // The buffer index is bits 64 to 95 of a view. Adding
+                    // `buffer_offset` gives the string's buffer index in the
+                    // output, which fits in 32 bits, so the sum never carries
+                    // into bit 96.
+                    v + ((offset as u128) << 64)
+                }));
             Ok(())
         },
     )
