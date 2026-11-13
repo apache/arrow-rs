@@ -2798,6 +2798,29 @@ mod tests {
     }
 
     #[test]
+    fn test_null_if_overflow_precision_keeps_data_type() {
+        let array = Decimal32Array::from(vec![99])
+            .with_precision_and_scale(2, 1)
+            .unwrap();
+        assert_eq!(array.null_if_overflow_precision(2), array);
+
+        let array = Decimal64Array::from(vec![99])
+            .with_precision_and_scale(2, 1)
+            .unwrap();
+        assert_eq!(array.null_if_overflow_precision(2), array);
+
+        let array = Decimal128Array::from(vec![99])
+            .with_precision_and_scale(2, 1)
+            .unwrap();
+        assert_eq!(array.null_if_overflow_precision(2), array);
+
+        let array = Decimal256Array::from(vec![i256::from(99)])
+            .with_precision_and_scale(2, 1)
+            .unwrap();
+        assert_eq!(array.null_if_overflow_precision(2), array);
+    }
+
+    #[test]
     fn test_decimal256_iter() {
         let mut builder = Decimal256Builder::with_capacity(30);
         let decimal1 = i256::from_i128(12345);
