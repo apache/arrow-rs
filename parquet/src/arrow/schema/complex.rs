@@ -766,11 +766,7 @@ fn convert_field(
             }
             // Repeated elements are wrapped in a new list. The element already carries any
             // extension type, so don't annotate the wrapper list itself.
-            let is_list = matches!(
-                field.arrow_type,
-                DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _)
-            );
-            if is_list && get_repetition(parquet_type) == Repetition::REPEATED {
+            if field.arrow_type.is_list() && get_repetition(parquet_type) == Repetition::REPEATED {
                 return Ok(ret);
             }
             try_add_extension_type(ret, parquet_type)
