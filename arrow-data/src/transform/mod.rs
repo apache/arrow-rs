@@ -354,16 +354,17 @@ fn preallocate_offset_and_binary_buffer<Offset: ArrowNativeType + Integer>(
         .checked_add(1)
         .and_then(|len| len.checked_mul(mem::size_of::<Offset>()))
         .ok_or_else(|| ArrowError::MemoryError("offset buffer size overflow".into()))?;
-    let mut buffer =
-        MutableBuffer::try_with_capacity(offset_capacity).map_err(utils::memory_error)?;
+    let mut buffer = MutableBuffer::try_with_capacity(offset_capacity)
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
     // safety: `unsafe` code assumes that this buffer is initialized with one element
     buffer
         .try_extend_from_slice(&[Offset::zero()])
-        .map_err(utils::memory_error)?;
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
     Ok([
         buffer,
-        MutableBuffer::try_with_capacity(binary_size).map_err(utils::memory_error)?,
+        MutableBuffer::try_with_capacity(binary_size)
+            .map_err(|e| ArrowError::MemoryError(e.to_string()))?,
     ])
 }
 
@@ -873,10 +874,10 @@ impl<'a> MutableArrayData<'a> {
 
         self.data.len += len;
         let bit_len = bit_util::ceil(self.data.len, 8);
-        self.data
-            .null_buffer()
+        let nulls = self.data.null_buffer();
+        nulls
             .try_resize(bit_len, 0)
-            .map_err(utils::memory_error)?;
+            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
         self.data.null_count += len;
         Ok(())
     }

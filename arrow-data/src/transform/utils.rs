@@ -2,16 +2,10 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use arrow_buffer::{ArrowNativeType, MutableBuffer, MutableBufferError, bit_util};
+use arrow_buffer::{ArrowNativeType, MutableBuffer, bit_util};
 use arrow_schema::ArrowError;
 use num_integer::Integer;
 use num_traits::CheckedAdd;
-
-#[cold]
-#[inline(never)]
-pub(super) fn memory_error(error: MutableBufferError) -> ArrowError {
-    ArrowError::MemoryError(error.to_string())
-}
 
 /// extends the `buffer` to be able to hold `len` bits, setting all bits of the new size to zero.
 #[inline]
@@ -30,7 +24,7 @@ pub(super) fn try_extend_offsets<T: ArrowNativeType + Integer + CheckedAdd>(
 ) -> Result<(), ArrowError> {
     buffer
         .try_reserve(std::mem::size_of_val(offsets))
-        .map_err(memory_error)?;
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
     // Snapshot the length so we can roll back partial writes on overflow.
     let original_len = buffer.len();
     for window in offsets.windows(2) {
@@ -38,8 +32,7 @@ pub(super) fn try_extend_offsets<T: ArrowNativeType + Integer + CheckedAdd>(
         match last_offset.checked_add(&length) {
             Some(new_offset) => {
                 last_offset = new_offset;
-                // SAFETY: The destination was reserved for every offset above.
-                unsafe { buffer.push_unchecked(last_offset) };
+                buffer.push(last_offset);
             }
             None => {
                 // Restore the buffer to its state before this call so the
