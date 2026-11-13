@@ -799,8 +799,7 @@ impl<'a> MutableArrayData<'a> {
     /// Returns an error if
     /// * `index` >= the number of source arrays,
     /// * `start..end` is not a valid range within the `index`th array, or
-    /// * offset arithmetic overflows the underlying integer type, or
-    /// * memory allocation fails.
+    /// * offset arithmetic overflows the underlying integer type.
     pub fn try_extend(&mut self, index: usize, start: usize, end: usize) -> Result<(), ArrowError> {
         let Some(array_len) = self.arrays.get(index).map(|array| array.len()) else {
             return Err(ArrowError::InvalidArgumentError(format!(
