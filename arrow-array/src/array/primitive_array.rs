@@ -1726,6 +1726,7 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
     /// will be casted to Null
     pub fn null_if_overflow_precision(&self, precision: u8) -> Self {
         self.unary_opt::<_, T>(|v| T::is_valid_decimal_precision(v, precision).then_some(v))
+            .with_data_type(self.data_type().clone())
     }
 
     /// Returns [`Self::value`] formatted as a string
