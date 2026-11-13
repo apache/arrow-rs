@@ -44,9 +44,7 @@ pub fn make_byte_view_array_reader(
         },
     };
 
-    // Validate whenever a string array is built, not only for columns annotated
-    // as strings: for example, a schema passed to `ArrowReaderOptions::with_schema`
-    // can read an unannotated `BYTE_ARRAY` column as `Utf8View`.
+    // A supplied schema can read an unannotated `BYTE_ARRAY` column as a string.
     let validate_utf8 = matches!(data_type, ArrowType::Utf8View);
 
     match data_type {

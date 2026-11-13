@@ -66,7 +66,8 @@ pub struct GenericRecordReader<V, CV> {
     /// copied, and item-level nulls are padded. The companion `compact_bitmap`
     /// has the same compact length and becomes the leaf null bitmap.
     padding_threshold: Option<i16>,
-    /// Passed to each values decoder, see [`Self::set_validate_utf8`]
+    /// Kept here because [`Self::set_page_reader`] creates a new values decoder for
+    /// every column chunk.
     validate_utf8: bool,
     /// Compact bitmap accumulated during selective padding. Each bit
     /// corresponds to an item-level entry (def >= threshold): set when the
@@ -221,11 +222,7 @@ where
         self.padding_threshold = Some(threshold);
     }
 
-    /// Validate the decoded values as UTF-8, see
-    /// [`ColumnValueDecoder::set_validate_utf8`].
-    ///
-    /// Stored here rather than set on a decoder because [`Self::set_page_reader`]
-    /// creates a new values decoder for every column chunk.
+    /// Validate decoded values as UTF-8 even if the column is not annotated as a string.
     pub fn set_validate_utf8(&mut self, validate_utf8: bool) {
         self.validate_utf8 = validate_utf8;
     }
