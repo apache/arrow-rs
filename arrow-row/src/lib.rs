@@ -522,10 +522,11 @@ const DICTIONARY_GATHER_RATIO: usize = 4;
 ///
 /// ## Union Encoding
 ///
-/// A non-null union value is encoded as a validity byte `0x01`, followed by its
-/// type-ID byte and the selected child's row encoding. Descending order inverts
-/// the type-ID byte; the child converter applies the same sort options to the
-/// child value. The validity byte stays `0x01` in both sort directions.
+/// A non-null union value is encoded as its type ID plus one, followed by the
+/// selected child's row encoding. Arrow type IDs are in `0..=127`, so shifting
+/// them reserves `0x00` and `0xFF` for nulls. Descending order inverts the shifted
+/// type-ID byte; the child converter applies the same sort options to the child
+/// value.
 ///
 /// A logical null, as reported by [`UnionArray::logical_nulls`], is encoded as a
 /// single null byte, without a type ID or child encoding. The null byte is `0x00`
@@ -536,19 +537,17 @@ const DICTIONARY_GATHER_RATIO: usize = 4;
 /// [`SortOptions`] set to `descending: false` and `nulls_first: true`:
 ///
 /// ```text
-///                           ┌──┬──┬──────────────┐
-///  3                        │01│00│01│80│00│00│03│
-///                           └──┴──┴──────────────┘
-///                            │  │  └─ signed integer encoding (non-null)
-///                            │  └──── type ID
-///                            └─────── validity byte (non-null)
+///                           ┌──┬──────────────┐
+///  3                        │01│01│80│00│00│03│
+///                           └──┴──────────────┘
+///                            │  └─ signed integer encoding (non-null)
+///                            └──── type ID + 1
 ///
-///                           ┌──┬──┬────────────────────────────────┐
-/// "abc"                     │01│01│02│'a'│'b'│'c'│00│00│00│00│00│03│
-///                           └──┴──┴────────────────────────────────┘
-///                            │  │  └─ string encoding (non-null)
-///                            │  └──── type ID
-///                            └─────── validity byte (non-null)
+///                           ┌──┬────────────────────────────────┐
+/// "abc"                     │02│02│'a'│'b'│'c'│00│00│00│00│00│03│
+///                           └──┴────────────────────────────────┘
+///                            │  └─ string encoding (non-null)
+///                            └──── type ID + 1
 ///
 ///                           ┌──┐
 /// null Int32                │00│
@@ -910,17 +909,17 @@ impl Codec {
                     let type_id = field_to_type_ids[field_idx];
                     let child_array = union_array.child(type_id);
                     let rows = converter.convert_columns(std::slice::from_ref(child_array))?;
-                    child_rows.push(rows);
+                    child_rows.push(UnionChildRows {
+                        rows,
+                        nulls: child_array.logical_nulls().filter(|n| n.null_count() != 0),
+                    });
                 }
 
                 Ok(Encoder::Union {
                     child_rows,
                     field_to_type_ids: field_to_type_ids.clone(),
-                    type_ids,
+                    row_tags: type_ids,
                     offsets,
-                    nulls: union_array
-                        .logical_nulls()
-                        .filter(|nulls| nulls.null_count() != 0),
                 })
             }
         }
@@ -962,14 +961,23 @@ enum Encoder<'a> {
     Map(Rows),
     /// The row encoding of the values array
     RunEndEncoded(Rows),
-    /// The encoded child rows, type IDs, optional dense offsets, and logical nulls
+    /// Encoded child rows with logical nulls, row tags, and optional dense offsets
     Union {
-        child_rows: Vec<Rows>,
+        child_rows: Vec<UnionChildRows>,
         field_to_type_ids: Vec<i8>,
-        type_ids: ScalarBuffer<i8>,
+        // Negative tags mark logical nulls after row-length preparation.
+        row_tags: ScalarBuffer<i8>,
         offsets: Option<ScalarBuffer<i32>>,
-        nulls: Option<arrow_buffer::NullBuffer>,
     },
+}
+
+// Arrow type IDs occupy 0..=127, leaving negative tags for private encoder state.
+const UNION_NULL_TAG: i8 = -1;
+
+#[derive(Debug)]
+struct UnionChildRows {
+    rows: Rows,
+    nulls: Option<arrow_buffer::NullBuffer>,
 }
 
 /// Configure the data type and sort order for a given column
@@ -1108,7 +1116,7 @@ impl RowConverter {
             }
         }
 
-        let encoders = columns
+        let mut encoders = columns
             .iter()
             .zip(&self.codecs)
             .zip(self.fields.iter())
@@ -1125,7 +1133,7 @@ impl RowConverter {
             .collect::<Result<Vec<_>, _>>()?;
 
         let write_offset = rows.num_rows();
-        let lengths = row_lengths(columns, &encoders);
+        let lengths = prepare_rows(columns, &mut encoders);
         let total = lengths.extend_offsets(rows.offsets[write_offset], &mut rows.offsets);
         rows.buffer.resize(total, 0);
 
@@ -1893,8 +1901,17 @@ impl LengthTracker {
     }
 }
 
-/// Computes the length of each encoded [`Rows`] and returns an empty [`Rows`]
-fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
+fn fixed_encoded_len(data_type: &DataType) -> Option<usize> {
+    match data_type {
+        DataType::Null | DataType::Boolean => Some(2),
+        DataType::FixedSizeBinary(len) => len.to_usize().map(|len| 1 + len),
+        _ => data_type.primitive_width().map(|len| 1 + len),
+    }
+}
+
+/// Computes encoded row lengths and prepares encoders for writing.
+/// Called once per batch, before any column is encoded.
+fn prepare_rows(cols: &[ArrayRef], encoders: &mut [Encoder]) -> LengthTracker {
     use fixed::FixedLengthEncoding;
 
     let num_rows = cols.first().map(|x| x.len()).unwrap_or(0);
@@ -2021,29 +2038,90 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
             Encoder::Union {
                 child_rows,
                 field_to_type_ids,
-                type_ids,
+                row_tags,
                 offsets,
-                nulls,
             } => {
                 let mut type_id_to_field_idx = [0usize; 128];
                 for (field_idx, &type_id) in field_to_type_ids.iter().enumerate() {
                     type_id_to_field_idx[type_id as usize] = field_idx;
                 }
 
-                let lengths = (0..array.len()).map(|i| {
-                    if nulls.as_ref().is_some_and(|nulls| nulls.is_null(i)) {
-                        return 1;
-                    }
-                    let type_id = type_ids[i];
-                    let field_idx = type_id_to_field_idx[type_id as usize];
-                    let child_row_i = offsets.as_ref().map(|o| o[i] as usize).unwrap_or(i);
-                    let child_row_len = child_rows[field_idx].row_len(child_row_i);
+                if child_rows.iter().all(|child| {
+                    child.rows.num_rows() == 0
+                        || child
+                            .nulls
+                            .as_ref()
+                            .is_some_and(|nulls| nulls.null_count() == child.rows.num_rows())
+                }) {
+                    *row_tags = vec![UNION_NULL_TAG; array.len()].into();
+                    tracker.push_fixed(1);
+                    continue;
+                }
 
-                    // One validity byte, one type ID byte, and the child row.
-                    2 + child_row_len
+                let union_array = array.as_union();
+                let mut widths = field_to_type_ids
+                    .iter()
+                    .map(|id| fixed_encoded_len(union_array.child(*id).data_type()));
+                let fixed_width = widths
+                    .next()
+                    .flatten()
+                    .filter(|width| widths.all(|other| other == Some(*width)));
+
+                let selected_rows = (0..array.len()).map(|i| {
+                    let type_id = row_tags[i];
+                    let field_idx = type_id_to_field_idx[type_id as usize];
+                    let child_index = offsets.as_ref().map(|o| o[i] as usize).unwrap_or(i);
+                    (&child_rows[field_idx], child_index)
                 });
 
-                tracker.push_variable(lengths);
+                if child_rows.iter().all(|child| child.nulls.is_none()) {
+                    if let Some(width) = fixed_width {
+                        tracker.push_fixed(1 + width);
+                    } else {
+                        tracker.push_variable(
+                            selected_rows.map(|(child, index)| 1 + child.rows.row_len(index)),
+                        );
+                    }
+                    continue;
+                }
+
+                let mut tagged_ids: Option<Vec<i8>> = None;
+                if let Some(width) = fixed_width {
+                    for (i, (child, index)) in selected_rows.enumerate() {
+                        if child
+                            .nulls
+                            .as_ref()
+                            .is_some_and(|nulls| nulls.is_null(index))
+                        {
+                            tagged_ids.get_or_insert_with(|| row_tags.to_vec())[i] = UNION_NULL_TAG;
+                        }
+                    }
+                    if let Some(tags) = &tagged_ids {
+                        tracker.push_variable(tags.iter().map(|&tag| {
+                            let payload_width = usize::from(tag >= 0) * width;
+                            1 + payload_width
+                        }));
+                    } else {
+                        tracker.push_fixed(1 + width);
+                    }
+                } else {
+                    tracker.push_variable(selected_rows.enumerate().map(|(i, (child, index))| {
+                        if child
+                            .nulls
+                            .as_ref()
+                            .is_some_and(|nulls| nulls.is_null(index))
+                        {
+                            tagged_ids.get_or_insert_with(|| row_tags.to_vec())[i] = UNION_NULL_TAG;
+                            1
+                        } else {
+                            1 + child.rows.row_len(index)
+                        }
+                    }));
+                }
+
+                if let Some(tagged_ids) = tagged_ids {
+                    *row_tags = tagged_ids.into();
+                }
             }
         }
     }
@@ -2262,9 +2340,8 @@ fn encode_column(
         Encoder::Union {
             child_rows,
             field_to_type_ids,
-            type_ids,
+            row_tags,
             offsets: offsets_buf,
-            nulls,
         } => {
             let mut type_id_to_field_idx = [0usize; 128];
             for (field_idx, &type_id) in field_to_type_ids.iter().enumerate() {
@@ -2276,24 +2353,19 @@ fn encode_column(
                 .skip(1)
                 .enumerate()
                 .for_each(|(i, offset)| {
-                    if nulls.as_ref().is_some_and(|nulls| nulls.is_null(i)) {
+                    let type_id = row_tags[i];
+                    if type_id < 0 {
                         *offset += variable::encode_null(&mut data[*offset..], opts);
                         return;
                     }
-                    let type_id = type_ids[i];
                     let field_idx = type_id_to_field_idx[type_id as usize];
-
                     let child_row_idx = offsets_buf.as_ref().map(|o| o[i] as usize).unwrap_or(i);
-                    let child_bytes = child_rows[field_idx].row(child_row_idx).data();
+                    let child_bytes = child_rows[field_idx].rows.row(child_row_idx).data();
 
-                    data[*offset] = 1;
-                    data[*offset + 1] = if opts.descending {
-                        !(type_id as u8)
-                    } else {
-                        type_id as u8
-                    };
+                    let tag = type_id as u8 + 1;
+                    data[*offset] = if opts.descending { !tag } else { tag };
 
-                    let child_start = *offset + 2;
+                    let child_start = *offset + 1;
                     let child_end = child_start + child_bytes.len();
                     data[child_start..child_end].copy_from_slice(child_bytes);
 
@@ -2564,8 +2636,8 @@ unsafe fn decode_column(
                         null_rows[null_field_idx].data.as_ref(),
                     )
                 } else {
-                    let id = if options.descending { !row[1] } else { row[1] };
-                    (id as i8, &row[2..])
+                    let tag = if options.descending { !row[0] } else { row[0] };
+                    ((tag - 1) as i8, &row[1..])
                 };
                 type_ids.push(type_id);
 
@@ -2597,7 +2669,7 @@ unsafe fn decode_column(
                             let consumed_length = if rows[*row_idx][0] == null_sentinel {
                                 1
                             } else {
-                                2 + original_bytes.len() - remaining_bytes.len()
+                                1 + original_bytes.len() - remaining_bytes.len()
                             };
                             rows[*row_idx] = &rows[*row_idx][consumed_length..];
                         }
@@ -2630,7 +2702,7 @@ unsafe fn decode_column(
                             let consumed_length = if rows[*row_idx][0] == null_sentinel {
                                 1
                             } else {
-                                2 + child_row.len() - remaining_len
+                                1 + child_row.len() - remaining_len
                             };
                             rows[*row_idx] = &rows[*row_idx][consumed_length..];
                         }
@@ -6292,6 +6364,103 @@ mod tests {
             assert_eq!(sliced_rows.row(i), rows.row(i + 1));
         }
         rows
+    }
+
+    #[test]
+    fn union_equal_width_children_with_inactive_nulls() {
+        // Boolean and Int8 both have two-byte child encodings.
+        let fields = UnionFields::try_new(
+            [127, 0],
+            [
+                Field::new("bool", DataType::Boolean, true),
+                Field::new("int", DataType::Int8, true),
+            ],
+        )
+        .unwrap();
+        let before: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("long"),
+            None,
+            Some("x"),
+            Some(""),
+            Some("two"),
+        ]));
+        let after: ArrayRef = Arc::new(StringArray::from(vec!["a", "longer", "", "z", "end"]));
+
+        for mode in [UnionMode::Dense, UnionMode::Sparse] {
+            for last_int in [Some(7), None] {
+                // Logical rows: false, 5, true, last_int, false.
+                let (bools, ints) = match mode {
+                    UnionMode::Dense => (
+                        vec![Some(false), Some(true), Some(false)],
+                        vec![Some(5), last_int],
+                    ),
+                    UnionMode::Sparse => (
+                        vec![Some(false), None, Some(true), None, Some(false)],
+                        vec![None, Some(5), None, last_int, None],
+                    ),
+                };
+                let union: ArrayRef = Arc::new(
+                    UnionArray::try_new(
+                        fields.clone(),
+                        vec![127, 0, 127, 0, 127].into(),
+                        (mode == UnionMode::Dense).then(|| vec![0, 0, 1, 1, 2].into()),
+                        vec![
+                            Arc::new(BooleanArray::from(bools)),
+                            Arc::new(Int8Array::from(ints)),
+                        ],
+                    )
+                    .unwrap(),
+                );
+                let columns = [before.clone(), union, after.clone()];
+
+                for options in all_sort_options() {
+                    check_order_matches_native(&columns[1..], &[options; 2]);
+                    let decoded = check_reencoding(&columns, &[options; 3]);
+                    assert_eq!(decoded[0].as_string::<i32>(), before.as_string::<i32>());
+                    assert_eq!(decoded[2].as_string::<i32>(), after.as_string::<i32>());
+                    let decoded = decoded[1].as_union();
+                    assert_eq!(
+                        decoded.logical_nulls(),
+                        last_int
+                            .is_none()
+                            .then(|| NullBuffer::from(vec![true, true, true, false, true])),
+                    );
+                    assert_eq!(
+                        decoded.type_ids().as_ref(),
+                        &[127, 0, 127, if last_int.is_none() { 127 } else { 0 }, 127],
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn union_all_selected_nulls_with_repeated_dense_offsets() {
+        let tail: ArrayRef = Arc::new(StringArray::from(vec!["longer", "", "z"]));
+        for ints in [
+            vec![None, None, None],     // Every child value is null: take the shortcut.
+            vec![None, Some(99), None], // Unselected valid value: use the general path.
+        ] {
+            let union: ArrayRef = Arc::new(
+                UnionArray::try_new(
+                    int_string_fields(),
+                    vec![127; 3].into(),
+                    Some(vec![2, 0, 2].into()),
+                    vec![
+                        Arc::new(Int32Array::from(ints)),
+                        Arc::new(StringArray::from(Vec::<Option<&str>>::new())),
+                    ],
+                )
+                .unwrap(),
+            );
+            let columns = [union, tail.clone()];
+            for options in all_sort_options() {
+                check_order_matches_native(&columns, &[options; 2]);
+                let decoded = check_reencoding(&columns, &[options; 2]);
+                assert_eq!(decoded[0].logical_nulls().unwrap().null_count(), 3);
+                assert_eq!(decoded[1].as_string::<i32>(), tail.as_string::<i32>());
+            }
+        }
     }
 
     #[test]
