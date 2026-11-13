@@ -17,10 +17,12 @@ use arrow::util::bench_util::{
 };
 
 use arrow::util::data_gen::create_random_array;
-use arrow_array::Array;
 use arrow_array::types::{Int8Type, Int32Type};
-use arrow_schema::{DataType, Field};
+use arrow_array::{Array, UnionArray};
+use arrow_schema::{DataType, Field, UnionFields, UnionMode};
 use criterion::Criterion;
+use rand::rngs::StdRng;
+use rand::{RngExt, SeedableRng};
 use std::{hint, sync::Arc};
 
 fn do_bench(c: &mut Criterion, name: &str, cols: Vec<ArrayRef>) {
@@ -193,7 +195,93 @@ fn run_benchmark_on_medium_amount_and_types_of_columns_without_nesting(
     do_bench(c, format!("{batch_size} 53 columns").as_str(), cols);
 }
 
+fn create_union_array(
+    mode: UnionMode,
+    row_count: usize,
+    field_count: usize,
+    null_probability: f64,
+    null_inactive: bool,
+) -> UnionArray {
+    let mut rng = StdRng::seed_from_u64(42 + field_count as u64);
+    // Generate selected values first so dense and sparse inputs have the same logical rows.
+    let values: Vec<_> = (0..row_count)
+        .map(|_| {
+            let field = rng.random_range(0..field_count);
+            let value = rng.random::<i32>();
+            let is_null = rng.random::<f64>() < null_probability;
+            (field, (!is_null).then_some(value))
+        })
+        .collect();
+    let mut children = vec![Vec::new(); field_count];
+    let mut type_ids = Vec::with_capacity(row_count);
+    let mut offsets = Vec::with_capacity(row_count);
+    for (field, value) in values {
+        type_ids.push(field as i8);
+        offsets.push(children[field].len() as i32);
+        match mode {
+            UnionMode::Dense => children[field].push(value),
+            UnionMode::Sparse => {
+                for (child_field, child) in children.iter_mut().enumerate() {
+                    child.push(if child_field == field {
+                        value
+                    } else if null_inactive {
+                        None
+                    } else {
+                        let value = rng.random::<i32>();
+                        let is_null = rng.random::<f64>() < null_probability;
+                        (!is_null).then_some(value)
+                    });
+                }
+            }
+        }
+    }
+    let fields = UnionFields::try_new(
+        (0..field_count).map(|field| field as i8),
+        (0..field_count).map(|field| Field::new(format!("field_{field}"), DataType::Int32, true)),
+    )
+    .unwrap();
+    let children = children
+        .into_iter()
+        .map(|values| Arc::new(Int32Array::from(values)) as ArrayRef)
+        .collect();
+    UnionArray::try_new(
+        fields,
+        type_ids.into(),
+        (mode == UnionMode::Dense).then(|| offsets.into()),
+        children,
+    )
+    .unwrap()
+}
+
+fn bench_unions(c: &mut Criterion) {
+    for mode in [UnionMode::Dense, UnionMode::Sparse] {
+        for field_count in [2, 4, 8] {
+            for null_percent in [0, 20] {
+                let array = create_union_array(
+                    mode,
+                    4096,
+                    field_count,
+                    f64::from(null_percent) / 100.0,
+                    false,
+                );
+                let name =
+                    format!("4096 union_{mode:?}_{field_count}_fields_{null_percent}_pct_nulls");
+                do_bench(c, &name, vec![Arc::new(array)]);
+            }
+        }
+    }
+
+    let array = create_union_array(UnionMode::Sparse, 4096, 4, 0.0, true);
+    do_bench(
+        c,
+        "4096 union_Sparse_4_fields_inactive_nulls_only",
+        vec![Arc::new(array)],
+    );
+}
+
 fn row_bench(c: &mut Criterion) {
+    bench_unions(c);
+
     let cols = vec![Arc::new(create_primitive_array::<UInt64Type>(4096, 0.)) as ArrayRef];
     do_bench(c, "4096 u64(0)", cols);
 
