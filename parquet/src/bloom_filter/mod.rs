@@ -628,6 +628,25 @@ impl Sbbf {
     ///
     /// Returns an error if the sizes are incompatible, including if this
     /// filter has no blocks.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use parquet::bloom_filter::Sbbf;
+    /// // One filter per partition, filled with precomputed hashes
+    /// let mut a = Sbbf::new_with_num_of_bytes(1024);
+    /// a.insert_hash(0x0123_4567_89ab_cdef);
+    /// let mut b = Sbbf::new_with_num_of_bytes(4096);
+    /// b.insert_hash(0xfedc_ba98_7654_3210);
+    ///
+    /// // `b` has 4 times as many blocks as `a`, so it is folded on the fly
+    /// a.union(&b).unwrap();
+    /// let found = a.check_hashes(&[0x0123_4567_89ab_cdef, 0xfedc_ba98_7654_3210]);
+    /// assert!(found.value(0) && found.value(1));
+    ///
+    /// // A smaller filter cannot be unioned into a larger one
+    /// assert!(b.union(&a).is_err());
+    /// ```
     pub fn union(&mut self, other: &Sbbf) -> Result<(), ParquetError> {
         let (len, other_len) = (self.0.len(), other.0.len());
         // `checked_rem` also rejects an empty `self` (`len == 0`).
