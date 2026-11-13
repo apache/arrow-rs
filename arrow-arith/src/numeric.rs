@@ -1073,6 +1073,37 @@ fn date_op<T: DateOp>(
     }
 }
 
+/// Returns the scalar divisor `r` scaled by `r_mul`, when `l` is an array and dividing any value
+/// by it can't fail. That needs `r` to be valid and the product to fit and be neither 0 nor -1.
+///
+/// The kernel then needs no per-value checks of the divisor, which keeps the closure small
+/// enough for LLVM to inline into the loop of `try_unary`. Otherwise it returns `None`, and the
+/// kernel takes the general path, which reports any errors.
+fn scalar_divisor<T: DecimalType>(
+    l_s: bool,
+    r: &PrimitiveArray<T>,
+    r_s: bool,
+    r_mul: T::Native,
+) -> Option<T::Native>
+where
+    T::Native: CheckedMul,
+{
+    if l_s || !r_s || r.null_count() != 0 {
+        return None;
+    }
+    let divisor = r.value(0).checked_mul(&r_mul)?;
+    let minus_one = T::Native::ONE.neg_wrapping();
+    (!divisor.is_zero() && !divisor.is_eq(minus_one)).then_some(divisor)
+}
+
+/// [`ArrowNativeTypeOp::mul_checked`] out of line, for closures that call it only after
+/// `checked_mul` overflows, so that building the error doesn't stop them from being inlined
+#[cold]
+#[inline(never)]
+fn mul_checked_cold<T: ArrowNativeTypeOp>(l: T, r: T) -> Result<T, ArrowError> {
+    l.mul_checked(r)
+}
+
 /// Divides `l * 10^mul_pow` by `r` a digit at a time, without forming the scaled numerator.
 /// Used when scaling `l` would overflow `T::Native`, which it does well before the quotient
 /// does.
@@ -1241,16 +1272,26 @@ where
                 ),
             };
 
-            try_op!(
-                l,
-                l_s,
-                r,
-                r_s,
-                match l.checked_mul(&l_mul) {
-                    Some(scaled) => scaled.div_checked(r.mul_checked(r_mul)?),
-                    None => scaled_div::<T>(l, r, mul_pow),
+            match scalar_divisor(l_s, r, r_s, r_mul) {
+                Some(divisor) => {
+                    let r = r.value(0);
+                    l.try_unary(|l| match l.checked_mul(&l_mul) {
+                        // `divisor` is neither 0 nor -1, so the division can't fail
+                        Some(scaled) => Ok(scaled.div_wrapping(divisor)),
+                        None => scaled_div::<T>(l, r, mul_pow),
+                    })?
                 }
-            )
+                None => try_op!(
+                    l,
+                    l_s,
+                    r,
+                    r_s,
+                    match l.checked_mul(&l_mul) {
+                        Some(scaled) => scaled.div_checked(r.mul_checked(r_mul)?),
+                        None => scaled_div::<T>(l, r, mul_pow),
+                    }
+                ),
+            }
             .with_precision_and_scale(result_precision, result_scale)?
         }
 
@@ -1265,13 +1306,20 @@ where
             let l_mul = T::Native::usize_as(10).pow_checked((result_scale - s1) as _)?;
             let r_mul = T::Native::usize_as(10).pow_checked((result_scale - s2) as _)?;
 
-            try_op!(
-                l,
-                l_s,
-                r,
-                r_s,
-                l.mul_checked(l_mul)?.mod_checked(r.mul_checked(r_mul)?)
-            )
+            match scalar_divisor(l_s, r, r_s, r_mul) {
+                // `divisor` is neither 0 nor -1, so the remainder can't fail
+                Some(divisor) => l.try_unary(|l| match l.checked_mul(&l_mul) {
+                    Some(scaled) => Ok(scaled.mod_wrapping(divisor)),
+                    None => mul_checked_cold(l, l_mul).map(|scaled| scaled.mod_wrapping(divisor)),
+                })?,
+                None => try_op!(
+                    l,
+                    l_s,
+                    r,
+                    r_s,
+                    l.mul_checked(l_mul)?.mod_checked(r.mul_checked(r_mul)?)
+                ),
+            }
             .with_precision_and_scale(result_precision, result_scale as i8)?
         }
     };
@@ -2082,6 +2130,82 @@ mod tests {
                 "{l} * 10^{mul_pow} / {r}"
             );
         }
+    }
+
+    #[test]
+    fn test_decimal_div_rem_by_scalar() {
+        // `div` and `rem` by a scalar give the same results and errors as by an array that
+        // repeats it, which takes `try_binary`
+        fn check<T: DecimalType>() {
+            let one = T::Native::ONE;
+            let pow = T::Native::usize_as(1_000_000);
+            let (max, min) = (T::Native::MAX_TOTAL_ORDER, T::Native::MIN_TOTAL_ORDER);
+            let seven = T::Native::usize_as(7);
+            let values = [
+                Some(T::Native::ZERO),
+                Some(one),
+                Some(one.neg_wrapping()),
+                Some(seven.neg_wrapping()),
+                None,
+                Some(max.div_wrapping(pow)),
+                Some(max.div_wrapping(pow).add_wrapping(one)),
+                Some(min.div_wrapping(pow).sub_wrapping(one)),
+                Some(max),
+                Some(min.add_wrapping(one)),
+                Some(min),
+            ];
+            let divisors = [
+                T::Native::ZERO,
+                one,
+                one.neg_wrapping(),
+                seven,
+                seven.neg_wrapping(),
+                T::Native::usize_as(10_000),
+                max,
+                min,
+            ];
+            // Scale pairs where the multipliers of `div` and `rem` are 1, a power of ten, and
+            // one that overflows the divisor
+            let scales = [(2, 2), (2, 4), (4, 2), (2, -6), (0, 0)];
+            for (s1, s2) in scales {
+                let a = PrimitiveArray::<T>::from_iter(values)
+                    .with_precision_and_scale(T::MAX_PRECISION, s1)
+                    .unwrap();
+                let arrays = [
+                    a.clone(),
+                    a.slice(1, 6),
+                    a.slice(0, 0),
+                    PrimitiveArray::<T>::new_null(3)
+                        .with_precision_and_scale(T::MAX_PRECISION, s1)
+                        .unwrap(),
+                ];
+                for divisor in divisors {
+                    let repeat = |len| {
+                        PrimitiveArray::<T>::from_iter_values(vec![divisor; len])
+                            .with_precision_and_scale(T::MAX_PRECISION, s2)
+                            .unwrap()
+                    };
+                    let scalar = Scalar::new(repeat(1));
+                    for a in &arrays {
+                        let b = repeat(a.len());
+                        for kernel in [div, rem] {
+                            let msg = format!("{a:?} by {divisor:?} at scales {s1}, {s2}");
+                            match (kernel(a, &scalar), kernel(a, &b)) {
+                                (Ok(s), Ok(b)) => assert_eq!(s.to_data(), b.to_data(), "{msg}"),
+                                (Err(s), Err(b)) => {
+                                    assert_eq!(s.to_string(), b.to_string(), "{msg}")
+                                }
+                                (s, b) => panic!("{msg}: {s:?} != {b:?}"),
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        check::<Decimal32Type>();
+        check::<Decimal64Type>();
+        check::<Decimal128Type>();
+        check::<Decimal256Type>();
     }
 
     #[test]
