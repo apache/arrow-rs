@@ -199,6 +199,91 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
         Ok(())
     }
 
+    /// Appends values from `array` in the order specified by `indices`.
+    ///
+    /// Returns an error if an index is out of bounds or the resulting values
+    /// buffer cannot be represented by `T::Offset`.
+    pub fn append_array_by_indices(
+        &mut self,
+        array: &GenericByteArray<T>,
+        indices: &[u32],
+    ) -> Result<(), ArrowError> {
+        if indices.is_empty() {
+            return Ok(());
+        }
+
+        let input_offsets = array.value_offsets();
+        let nulls = array.nulls().filter(|nulls| nulls.null_count() != 0);
+        let mut next_offset = self.value_builder.len();
+
+        // Validate and compute the final offset before mutating the builder.
+        for &index in indices {
+            let index = index as usize;
+            if index >= array.len() {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Index {index} out of bounds for byte array of length {}",
+                    array.len()
+                )));
+            }
+            if nulls.is_none_or(|nulls| nulls.is_valid(index)) {
+                let len = input_offsets[index + 1].as_usize() - input_offsets[index].as_usize();
+                next_offset = next_offset
+                    .checked_add(len)
+                    .ok_or(ArrowError::OffsetOverflowError(usize::MAX))?;
+            }
+            T::Offset::from_usize(next_offset)
+                .ok_or(ArrowError::OffsetOverflowError(next_offset))?;
+        }
+
+        let additional_values = next_offset - self.value_builder.len();
+        self.value_builder.reserve(additional_values);
+        self.offsets_builder.reserve(indices.len());
+        let mut written = 0;
+        let dst = self.value_builder.spare_capacity_mut().as_mut_ptr();
+        let mut output_offset = self.value_builder.len();
+        for chunk in indices.chunks(64) {
+            let mut validity = 0u64;
+            for (bit, &index) in chunk.iter().enumerate() {
+                let index = index as usize;
+                if nulls.is_none_or(|nulls| nulls.is_valid(index)) {
+                    let start = input_offsets[index].as_usize();
+                    let end = input_offsets[index + 1].as_usize();
+                    let len = end - start;
+                    // SAFETY: all indices and the final offset were validated
+                    // above, `dst` has `additional_values` spare bytes, and
+                    // each source range comes from a valid byte array.
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(
+                            array.values().as_ptr().add(start),
+                            dst.add(written).cast::<u8>(),
+                            len,
+                        );
+                    }
+                    written += len;
+                    output_offset += len;
+                    validity |= 1 << bit;
+                }
+                self.offsets_builder.push(
+                    T::Offset::from_usize(output_offset)
+                        .expect("byte array offset was validated before mutation"),
+                );
+            }
+            if nulls.is_some() {
+                self.null_buffer_builder.append_word(validity, chunk.len());
+            }
+        }
+        debug_assert_eq!(written, additional_values);
+        // SAFETY: the loop above initialized exactly `additional_values` bytes.
+        unsafe {
+            self.value_builder
+                .set_len(self.value_builder.len() + additional_values);
+        }
+        if nulls.is_none() {
+            self.null_buffer_builder.append_n_non_nulls(indices.len());
+        }
+        Ok(())
+    }
+
     /// Builds the [`GenericByteArray`] and reset this builder.
     pub fn finish(&mut self) -> GenericByteArray<T> {
         let array_type = T::DATA_TYPE;
@@ -843,6 +928,47 @@ mod tests {
         builder.append_array(&arr).unwrap();
         let result = builder.finish();
         assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn test_append_array_by_indices() {
+        let array =
+            GenericStringArray::<i32>::from(vec![Some("zero"), None, Some("two"), Some("three")]);
+        let mut builder = GenericStringBuilder::<i32>::new();
+        builder.append_value("prefix");
+        builder
+            .append_array_by_indices(&array, &[3, 1, 0, 3])
+            .unwrap();
+
+        assert_eq!(
+            builder.finish(),
+            GenericStringArray::<i32>::from(vec![
+                Some("prefix"),
+                Some("three"),
+                None,
+                Some("zero"),
+                Some("three"),
+            ])
+        );
+    }
+
+    #[test]
+    fn test_append_array_by_indices_oob_is_atomic() {
+        let array = GenericStringArray::<i32>::from(vec!["zero", "one"]);
+        let mut builder = GenericStringBuilder::<i32>::new();
+        builder.append_value("prefix");
+
+        let err = builder
+            .append_array_by_indices(&array, &[1, 2])
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Index 2 out of bounds for byte array of length 2"
+        );
+        assert_eq!(
+            builder.finish(),
+            GenericStringArray::<i32>::from(vec!["prefix"])
+        );
     }
 
     #[test]

@@ -7,7 +7,7 @@ use crate::filter::{FilterIndices, FilterPredicate, FilterSelection};
 use arrow_array::builder::GenericByteBuilder;
 use arrow_array::cast::AsArray;
 use arrow_array::types::ByteArrayType;
-use arrow_array::{Array, ArrayRef, GenericByteArray, OffsetSizeTrait};
+use arrow_array::{Array, ArrayRef, GenericByteArray, OffsetSizeTrait, UInt32Array};
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::ArrowError;
 use std::sync::Arc;
@@ -126,6 +126,91 @@ where
         }
     }
 
+    /// # Safety
+    ///
+    /// `indices` must not contain nulls, and every value must be less than
+    /// `source.len()`.
+    unsafe fn copy_rows_by_sparse_indices(
+        &mut self,
+        source: &ArrayRef,
+        indices: &UInt32Array,
+    ) -> Result<(), ArrowError> {
+        if indices.is_empty() {
+            return Ok(());
+        }
+
+        let source = source.as_bytes::<T>();
+        let index_values = indices.values();
+        debug_assert!(
+            index_values
+                .iter()
+                .all(|&idx| (idx as usize) < source.len()),
+            "copy_rows_by_indices requires caller-validated in-bounds indices",
+        );
+
+        let offsets = source.value_offsets();
+        let additional_values_len = if let Some(nulls) = source.nulls() {
+            index_values.iter().try_fold(0usize, |total, &idx| {
+                let idx = idx as usize;
+                let len = if nulls.is_valid(idx) {
+                    offsets[idx + 1].as_usize() - offsets[idx].as_usize()
+                } else {
+                    0
+                };
+                total
+                    .checked_add(len)
+                    .ok_or(ArrowError::OffsetOverflowError(usize::MAX))
+            })?
+        } else {
+            index_values.iter().try_fold(0usize, |total, &idx| {
+                let idx = idx as usize;
+                let len = offsets[idx + 1].as_usize() - offsets[idx].as_usize();
+                total
+                    .checked_add(len)
+                    .ok_or(ArrowError::OffsetOverflowError(usize::MAX))
+            })?
+        };
+        Self::checked_values_len(self.direct.values_slice().len(), additional_values_len)?;
+        self.ensure_capacity(source, indices.len());
+
+        if let Some(nulls) = source.nulls() {
+            for &idx in index_values {
+                let idx = idx as usize;
+                if nulls.is_null(idx) {
+                    self.direct.append_null();
+                } else {
+                    // SAFETY: the caller validated every index against `source.len()`.
+                    self.direct
+                        .append_value(unsafe { source.value_unchecked(idx) });
+                }
+            }
+        } else {
+            for &idx in index_values {
+                // SAFETY: the caller validated every index against `source.len()`.
+                self.direct
+                    .append_value(unsafe { source.value_unchecked(idx as usize) });
+            }
+        }
+        Ok(())
+    }
+
+    /// # Safety
+    ///
+    /// `indices` must not contain nulls, and every value must be less than
+    /// `source.len()`.
+    unsafe fn copy_rows_by_indices(
+        &mut self,
+        source: &ArrayRef,
+        indices: &UInt32Array,
+    ) -> Result<(), ArrowError> {
+        if indices.is_empty() {
+            return Ok(());
+        }
+
+        self.direct
+            .append_array_by_indices(source.as_bytes::<T>(), indices.values())
+    }
+
     fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
         Ok(Arc::new(self.direct.finish()))
     }
@@ -184,5 +269,55 @@ mod tests {
         assert_eq!(Bytes::checked_values_len(max - 1, 1).unwrap(), max);
         assert!(Bytes::checked_values_len(max, 1).is_err());
         assert!(Bytes::checked_values_len(usize::MAX, 1).is_err());
+    }
+
+    #[test]
+    fn copy_rows_by_indices_fallback_preserves_order_nulls_and_slices() {
+        let source: ArrayRef = Arc::new(
+            StringArray::from(vec![
+                Some("padding"),
+                Some("zero"),
+                None,
+                Some("two"),
+                Some("three"),
+            ])
+            .slice(1, 4),
+        );
+        let indices = UInt32Array::from(vec![3, 1, 0, 3, 2]);
+        let mut in_progress = InProgressByteArray::<GenericStringType<i32>>::new(indices.len());
+
+        // SAFETY: the indices are non-null and in bounds for `source`.
+        unsafe { in_progress.copy_rows_by_indices(&source, &indices).unwrap() };
+
+        let actual = in_progress.finish().unwrap();
+        let expected = StringArray::from(vec![
+            Some("three"),
+            None,
+            Some("zero"),
+            Some("three"),
+            Some("two"),
+        ]);
+        assert_eq!(actual.as_string::<i32>(), &expected);
+    }
+
+    #[test]
+    fn copy_rows_by_indices_sparse_path_preserves_nulls_and_slices() {
+        let mut values = vec![Some("value"); 2049];
+        values[1] = None;
+        values[2048] = Some("last");
+        let source: ArrayRef = Arc::new(StringArray::from(values).slice(1, 2048));
+        let indices = UInt32Array::from(vec![2047, 0]);
+        let mut in_progress = InProgressByteArray::<GenericStringType<i32>>::new(indices.len());
+
+        // SAFETY: the indices are non-null and in bounds for `source`.
+        unsafe {
+            in_progress
+                .copy_rows_by_sparse_indices(&source, &indices)
+                .unwrap()
+        };
+
+        let actual = in_progress.finish().unwrap();
+        let expected = StringArray::from(vec![Some("last"), None]);
+        assert_eq!(actual.as_string::<i32>(), &expected);
     }
 }

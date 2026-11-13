@@ -109,12 +109,19 @@ const INDEXED_COPY_MAX_SELECTIVITY_DENOMINATOR: usize = 2;
 // Byte-view indexed copying is only faster for sparse selections.
 const BYTE_VIEW_INDEXED_COPY_MAX_SELECTIVITY_DENOMINATOR: usize = 16;
 
+// Variable-width byte-array indexed copying is only faster for very sparse selections.
+const BYTE_ARRAY_INDEXED_COPY_MAX_SELECTIVITY_DENOMINATOR: usize = 1024;
+
 fn should_use_indexed_copy(input_rows: usize, selected_rows: usize) -> bool {
     selected_rows <= input_rows / INDEXED_COPY_MAX_SELECTIVITY_DENOMINATOR
 }
 
 fn should_use_byte_view_indexed_copy(input_rows: usize, selected_rows: usize) -> bool {
     selected_rows <= input_rows / BYTE_VIEW_INDEXED_COPY_MAX_SELECTIVITY_DENOMINATOR
+}
+
+fn should_use_byte_array_indexed_copy(input_rows: usize, selected_rows: usize) -> bool {
+    selected_rows <= input_rows / BYTE_ARRAY_INDEXED_COPY_MAX_SELECTIVITY_DENOMINATOR
 }
 
 /// Concatenate multiple [`RecordBatch`]es
@@ -222,6 +229,8 @@ pub struct BatchCoalescer {
     has_non_specialized_filter_columns: bool,
     /// True if the schema contains a variable-width byte-array column.
     has_byte_array_columns: bool,
+    /// True if every column can gather directly into its in-progress builder.
+    has_only_primitive_or_byte_array_columns: bool,
     /// True if some column uses the byte-view indexed-copy path.
     has_byte_view_columns: bool,
     /// Buffered row count. Always less than `batch_size`
@@ -251,6 +260,13 @@ impl BatchCoalescer {
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary
             )
         });
+        let has_only_primitive_or_byte_array_columns = schema.fields().iter().all(|field| {
+            field.data_type().is_primitive()
+                || matches!(
+                    field.data_type(),
+                    DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary
+                )
+        });
         let has_byte_view_columns = schema
             .fields()
             .iter()
@@ -267,6 +283,7 @@ impl BatchCoalescer {
             in_progress_arrays,
             has_non_specialized_filter_columns,
             has_byte_array_columns,
+            has_only_primitive_or_byte_array_columns,
             has_byte_view_columns,
             // We will for sure store at least one completed batch
             completed: VecDeque::with_capacity(1),
@@ -433,7 +450,10 @@ impl BatchCoalescer {
         // materialized batch would not trigger the configured large-batch bypass.
         let exceeds_byte_view_threshold = self.has_byte_view_columns
             && !should_use_byte_view_indexed_copy(batch.num_rows(), indices.len());
-        let indexed_copy_allowed = should_use_indexed_copy(batch.num_rows(), indices.len())
+        let dense_byte_array_copy_allowed =
+            self.has_byte_array_columns && self.has_only_primitive_or_byte_array_columns;
+        let indexed_copy_allowed = (should_use_indexed_copy(batch.num_rows(), indices.len())
+            || dense_byte_array_copy_allowed)
             && !exceeds_byte_view_threshold;
 
         let fast_path_allowed = self
@@ -443,6 +463,11 @@ impl BatchCoalescer {
             && fast_path_allowed
             && let Some(u32_arr) = u32_indices
         {
+            if self.has_byte_array_columns
+                && should_use_byte_array_indexed_copy(batch.num_rows(), indices.len())
+            {
+                return self.push_batch_with_sparse_byte_index(batch, u32_arr);
+            }
             return self.push_batch_with_index(batch, u32_arr);
         }
 
@@ -500,6 +525,57 @@ impl BatchCoalescer {
                 // `batch.num_rows()`, which equals `column.len()`, and slicing the
                 // validated indices preserves both bounds and validity.
                 unsafe { in_progress.copy_rows_by_indices(column, chunk)? };
+            }
+            self.buffered_rows += take_n;
+            offset += take_n;
+            if self.buffered_rows >= self.target_batch_size {
+                self.finish_buffered_batch()?;
+            }
+        }
+        Ok(())
+    }
+
+    fn push_batch_with_sparse_byte_index(
+        &mut self,
+        batch: RecordBatch,
+        indices: &UInt32Array,
+    ) -> Result<(), ArrowError> {
+        if indices.is_empty() {
+            return Ok(());
+        }
+        let columns = batch.columns();
+        if columns.len() != self.in_progress_arrays.len() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Batch has {} columns but BatchCoalescer expects {}",
+                columns.len(),
+                self.in_progress_arrays.len()
+            )));
+        }
+        debug_assert!(
+            indices.null_count() == 0
+                && indices
+                    .values()
+                    .iter()
+                    .all(|&idx| (idx as usize) < batch.num_rows()),
+            "push_batch_with_sparse_byte_index requires caller-validated non-null, in-bounds indices",
+        );
+
+        let mut offset = 0;
+        while offset < indices.len() {
+            let room = self.target_batch_size - self.buffered_rows;
+            let take_n = (indices.len() - offset).min(room);
+            let sliced;
+            let chunk: &UInt32Array = if offset == 0 && take_n == indices.len() {
+                indices
+            } else {
+                sliced = indices.slice(offset, take_n);
+                &sliced
+            };
+            for (in_progress, column) in self.in_progress_arrays.iter_mut().zip(columns) {
+                // SAFETY: `push_batch_with_indices` validated every index against
+                // `batch.num_rows()`, which equals `column.len()`, and slicing the
+                // validated indices preserves both bounds and validity.
+                unsafe { in_progress.copy_rows_by_sparse_indices(column, chunk)? };
             }
             self.buffered_rows += take_n;
             offset += take_n;
@@ -1087,6 +1163,21 @@ trait InProgressArray: std::fmt::Debug + Send + Sync {
         result
     }
 
+    /// Copy very sparse rows at `indices` from `source` into the in-progress array.
+    ///
+    /// # Safety
+    ///
+    /// `indices` must not contain nulls, and every value must be less than
+    /// `source.len()`.
+    unsafe fn copy_rows_by_sparse_indices(
+        &mut self,
+        source: &ArrayRef,
+        indices: &UInt32Array,
+    ) -> Result<(), ArrowError> {
+        // SAFETY: this method has the same safety contract as `copy_rows_by_indices`.
+        unsafe { self.copy_rows_by_indices(source, indices) }
+    }
+
     /// Finish the currently in-progress array and return it as an `ArrayRef`
     fn finish(&mut self) -> Result<ArrayRef, ArrowError>;
 
@@ -1208,6 +1299,9 @@ mod tests {
         assert!(should_use_byte_view_indexed_copy(8192, 512));
         assert!(!should_use_byte_view_indexed_copy(8192, 513));
         assert!(!should_use_byte_view_indexed_copy(8192, 819));
+        assert!(should_use_byte_array_indexed_copy(8192, 8));
+        assert!(!should_use_byte_array_indexed_copy(8192, 9));
+        assert!(!should_use_byte_array_indexed_copy(8192, 81));
     }
 
     #[test]
