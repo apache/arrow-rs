@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Interleave elements from multiple arrays
 
@@ -312,21 +299,28 @@ fn interleave_merged_dictionaries<K: ArrowDictionaryKeyType>(
     dictionaries: &[&DictionaryArray<K>],
     indices: &[(usize, usize)],
 ) -> Result<ArrayRef, ArrowError> {
-    let mut masks: Vec<_> = dictionaries
+    let masks_and_lookups: Result<Vec<_>, ArrowError> = dictionaries
         .iter()
         .map(|dictionary| {
-            BooleanBufferBuilder::new_from_buffer(
-                MutableBuffer::new_null(dictionary.len()),
-                dictionary.len(),
-            )
+            let buffer = MutableBuffer::try_from_len_zeroed(bit_util::ceil(dictionary.len(), 8))
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+            Ok((
+                BooleanBufferBuilder::new_from_buffer(buffer, dictionary.len()),
+                0,
+            ))
         })
         .collect();
+    let mut masks_and_lookups = masks_and_lookups?;
     for &(array_idx, key_idx) in indices {
-        masks[array_idx].set_bit(key_idx, true);
+        masks_and_lookups[array_idx].0.set_bit(key_idx, true);
+        masks_and_lookups[array_idx].1 += 1;
     }
-    let masks: Vec<_> = masks.into_iter().map(|mut mask| mask.finish()).collect();
+    let (masks, key_lookups): (Vec<_>, Vec<_>) = masks_and_lookups
+        .into_iter()
+        .map(|(mut mask, lookups)| (mask.finish(), lookups))
+        .unzip();
 
-    let merged = merge_dictionary_values(dictionaries, Some(&masks))?;
+    let merged = merge_dictionary_values(dictionaries, Some(&masks), Some(&key_lookups))?;
 
     // Recompute keys
     let mut keys = PrimitiveBuilder::<K>::with_capacity(indices.len());
@@ -335,7 +329,11 @@ fn interleave_merged_dictionaries<K: ArrowDictionaryKeyType>(
         match old_keys.is_valid(*b) {
             true => {
                 let old_key = old_keys.values()[*b];
-                keys.append_value(merged.key_mappings[*a][old_key.as_usize()])
+                keys.append_value(
+                    merged.key_mappings[*a]
+                        .get(old_key.as_usize())
+                        .expect("referenced dictionary key should be mapped"),
+                )
             }
             false => keys.append_null(),
         }
@@ -530,7 +528,7 @@ fn interleave_list_like_primitive_child<L: ListLikeArray, T: ArrowPrimitiveType>
     indices: &[(usize, usize)],
     capacity: usize,
     data_type: &DataType,
-) -> ArrayRef {
+) -> Result<ArrayRef, ArrowError> {
     let child_arrays: Vec<&PrimitiveArray<T>> = interleaved
         .arrays
         .iter()
@@ -553,7 +551,8 @@ fn interleave_list_like_primitive_child<L: ListLikeArray, T: ArrowPrimitiveType>
     // - Sources without nulls: set the bit range to all 1s directly.
     let nulls = if has_child_nulls {
         let null_byte_len = bit_util::ceil(capacity, 8);
-        let mut output_null_buf = MutableBuffer::from_len_zeroed(null_byte_len);
+        let mut output_null_buf = MutableBuffer::try_from_len_zeroed(null_byte_len)
+            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
         let mut offset_write = 0;
         let mut output_null_count = 0usize;
@@ -592,7 +591,9 @@ fn interleave_list_like_primitive_child<L: ListLikeArray, T: ArrowPrimitiveType>
         None
     };
 
-    Arc::new(PrimitiveArray::<T>::new(values.into(), nulls).with_data_type(data_type.clone()))
+    Ok(Arc::new(
+        PrimitiveArray::<T>::new(values.into(), nulls).with_data_type(data_type.clone()),
+    ))
 }
 
 /// Interleave child values for non-primitive child types, shared by List and FixedSizeList.
@@ -643,7 +644,7 @@ fn interleave_list<O: OffsetSizeTrait>(
                 indices,
                 capacity,
                 field.data_type(),
-            )
+            )?
         };
     }
 
@@ -671,7 +672,10 @@ fn interleave_fixed_size_list(
     size: i32,
 ) -> Result<ArrayRef, ArrowError> {
     let interleaved = Interleave::<'_, FixedSizeListArray>::new(values, indices);
-    let capacity = indices.len() * size as usize;
+    let capacity = indices
+        .len()
+        .checked_mul(size as usize)
+        .ok_or_else(|| ArrowError::MemoryError("interleave output size overflow".into()))?;
 
     macro_rules! fsl_primitive_helper {
         ($t:ty) => {
@@ -680,7 +684,7 @@ fn interleave_fixed_size_list(
                 indices,
                 capacity,
                 field.data_type(),
-            )
+            )?
         };
     }
 
@@ -855,7 +859,7 @@ fn interleave_list_view_copy<O: OffsetSizeTrait>(
         .map(|list| list.values().to_data())
         .collect();
     let child_data_refs: Vec<_> = child_data.iter().collect();
-    let mut mutable_child = MutableArrayData::new(child_data_refs, false, capacity);
+    let mut mutable_child = MutableArrayData::try_new(child_data_refs, false, capacity)?;
     for &(array_idx, row_idx) in indices {
         let list = interleaved.arrays[array_idx];
         let start = list.offsets()[row_idx].as_usize();
@@ -1232,6 +1236,43 @@ mod tests {
         let vc = v.downcast_dict::<StringArray>().unwrap();
         let collected: Vec<_> = vc.into_iter().map(Option::unwrap).collect();
         assert_eq!(&collected, &["c", "c", "c"]);
+    }
+
+    #[test]
+    fn test_interleave_sparse_primitive_dictionaries_with_nulls() {
+        let values_len = 2 * crate::dictionary::MAX_DENSE_MAPPING_VALUES_PER_ROW + 1;
+        let last = values_len as i32 - 1;
+        let make_dictionary = |offset, null_value, keys| {
+            let values = Int32Array::from_iter(
+                (0..values_len).map(|idx| (idx != null_value).then_some(offset + idx as i32)),
+            );
+            DictionaryArray::<Int32Type>::new(Int32Array::from(keys), Arc::new(values))
+        };
+        let a = make_dictionary(0, 1, vec![Some(last), None, Some(1)]);
+        let b = make_dictionary(10_000, 2, vec![Some(2), Some(last - 1), None]);
+        let indices = [(0, 2), (1, 0), (0, 0), (1, 2)];
+        let masks = [
+            BooleanBuffer::from_iter([true, false, true]),
+            BooleanBuffer::from_iter([true, false, true]),
+        ];
+
+        let merged = merge_dictionary_values(&[&a, &b], Some(&masks), Some(&[2, 2])).unwrap();
+        assert!(
+            merged
+                .key_mappings
+                .iter()
+                .all(|mapping| matches!(mapping, crate::dictionary::KeyMapping::Sparse(_)))
+        );
+
+        let result = interleave(&[&a, &b], &indices).unwrap();
+        let actual = result
+            .as_dictionary::<Int32Type>()
+            .downcast_dict::<Int32Array>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        assert_eq!(actual, [None, None, Some(last), None]);
     }
 
     #[test]

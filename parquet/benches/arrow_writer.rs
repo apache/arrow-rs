@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 #[macro_use]
 extern crate criterion;
@@ -38,7 +25,7 @@ use arrow::datatypes::*;
 use arrow::util::bench_util::{create_f16_array, create_f32_array, create_f64_array};
 use arrow::util::test_util::seedable_rng;
 use arrow::{record_batch::RecordBatch, util::data_gen::*};
-use arrow_array::builder::{FixedSizeBinaryBuilder, ListBuilder, StringBuilder};
+use arrow_array::builder::{FixedSizeBinaryBuilder, Int32Builder, ListBuilder, StringBuilder};
 use arrow_array::{
     Array, ArrayRef, BooleanArray, Decimal128Array, DictionaryArray, FixedSizeBinaryArray,
     Float64Array, Int8Array, Int32Array, Int64Array, LargeBinaryArray, ListArray,
@@ -981,6 +968,52 @@ fn create_list_struct_with_list_batch(size: usize, null_density: f32) -> Result<
     )?)
 }
 
+/// `List<Int32>` with 0..=9 elements per row, 10% null lists and 10% null
+/// elements: definition and repetition levels change every few values.
+fn create_short_list_bench_batch(size: usize) -> RecordBatch {
+    let mut rng = seedable_rng();
+    let mut builder = ListBuilder::new(Int32Builder::new());
+    for _ in 0..size {
+        if rng.random_range(0..10) == 0 {
+            builder.append_null();
+            continue;
+        }
+        for _ in 0..rng.random_range(0..=9) {
+            if rng.random_range(0..10) == 0 {
+                builder.values().append_null();
+            } else {
+                builder.values().append_value(rng.random_range(0..1000));
+            }
+        }
+        builder.append(true);
+    }
+    let array: ArrayRef = Arc::new(builder.finish());
+    RecordBatch::try_from_iter([("_1", array)]).unwrap()
+}
+
+fn create_map_bench_batch(size: usize, null_density: f32) -> Result<RecordBatch> {
+    let entries = Field::new(
+        "entries",
+        DataType::Struct(Fields::from(vec![
+            Field::new("keys", DataType::Utf8, false),
+            Field::new("values", DataType::Int32, true),
+        ])),
+        false,
+    );
+    let fields = vec![Field::new(
+        "_1",
+        DataType::Map(Arc::new(entries), false),
+        true,
+    )];
+    let schema = Schema::new(fields);
+    Ok(create_random_batch(
+        Arc::new(schema),
+        size,
+        null_density,
+        0.75,
+    )?)
+}
+
 fn _create_nested_bench_batch(
     size: usize,
     null_density: f32,
@@ -1530,6 +1563,10 @@ fn create_batches() -> Vec<BatchBenchmark> {
         "list_struct_with_list",
         create_list_struct_with_list_batch(BATCH_SIZE, 0.25).unwrap()
     );
+
+    push_batch!("list_short", create_short_list_bench_batch(BATCH_SIZE));
+
+    push_batch!("map", create_map_bench_batch(BATCH_SIZE, 0.25).unwrap());
 
     push_batch!(
         "byte_array_sparse_99pct_null",

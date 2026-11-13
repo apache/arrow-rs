@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::arrow::array_reader::{ArrayReader, read_records, skip_records};
 use crate::arrow::buffer::bit_util::{iter_set_bits_rev, sign_extend_be, sign_extend_be_fixed};
@@ -215,14 +202,21 @@ impl ArrayReader for FixedLenByteArrayReader {
         let len = self.record_reader.values_written();
 
         let record_data = self.record_reader.consume_record_data();
-        debug_assert_eq!(
-            record_data.buffer.len(),
-            len * self.byte_length,
-            "fixed-len byte array buffer size mismatch: {} bytes for {} elements of size {}",
-            record_data.buffer.len(),
-            len,
-            self.byte_length,
-        );
+        let expected_len = len.checked_mul(self.byte_length).ok_or_else(|| {
+            general_err!(
+                "fixed-len byte array buffer size overflow: {} elements of size {}",
+                len,
+                self.byte_length
+            )
+        })?;
+        if record_data.buffer.len() != expected_len {
+            return Err(general_err!(
+                "fixed-len byte array buffer size mismatch: {} bytes for {} elements of size {}",
+                record_data.buffer.len(),
+                len,
+                self.byte_length
+            ));
+        }
         let null_bit_buffer = self.record_reader.consume_compact_bitmap();
 
         let array_data = ArrayDataBuilder::new(ArrowType::FixedSizeBinary(self.byte_length as i32))
@@ -230,6 +224,7 @@ impl ArrayReader for FixedLenByteArrayReader {
             .add_buffer(Buffer::from_vec(record_data.buffer))
             .null_bit_buffer(null_bit_buffer);
 
+        // SAFETY: the buffer is exactly `len * byte_length` bytes and the null bitmap has `len` bits
         let binary = FixedSizeBinaryArray::from(unsafe { array_data.build_unchecked() });
 
         // TODO: An improvement might be to do this conversion on read
@@ -451,10 +446,19 @@ impl ValueDecoder {
                     return Ok(0);
                 }
 
+                let dict_len = dict.len() / self.byte_length;
                 decoder.read(num_values, |keys| {
                     out.reserve(keys.len() * self.byte_length);
                     for key in keys {
-                        let offset = *key as usize * self.byte_length;
+                        let index = *key as usize;
+                        if index >= dict_len {
+                            return Err(general_err!(
+                                "dictionary index out of bounds: the len is {} but the index is {}",
+                                dict_len,
+                                key
+                            ));
+                        }
+                        let offset = index * self.byte_length;
                         out.extend_from_slice(&dict.as_ref()[offset..offset + self.byte_length]);
                     }
                     Ok(())
@@ -639,6 +643,7 @@ mod tests {
     };
     use crate::data_type::{FixedLenByteArray, FixedLenByteArrayType};
     use crate::file::writer::SerializedFileWriter;
+    use crate::schema::types::{ColumnDescriptor, ColumnPath};
     use arrow::datatypes::{Field, Schema};
     use arrow::error::Result as ArrowResult;
     use arrow_array::{Array, ListArray};
@@ -656,6 +661,45 @@ mod tests {
 
         buffer.reserve_exact(12);
         assert_eq!(buffer.values_capacity, Some(12));
+    }
+
+    #[test]
+    fn test_dictionary_index_out_of_bounds() {
+        let t = crate::schema::types::Type::primitive_type_builder(
+            "col",
+            crate::basic::Type::FIXED_LEN_BYTE_ARRAY,
+        )
+        .with_length(4)
+        .build()
+        .unwrap();
+        let column_desc = Arc::new(ColumnDescriptor::new(
+            Arc::new(t),
+            0,
+            0,
+            ColumnPath::new(vec![]),
+        ));
+        let mut decoder = ValueDecoder::new(&column_desc);
+        decoder
+            .set_dict(
+                Bytes::from_static(b"aaaabbbb"),
+                2,
+                Encoding::PLAIN_DICTIONARY,
+                false,
+            )
+            .unwrap();
+
+        // Bit width 8, then an RLE run of one value with dictionary index 2
+        let page = Bytes::from_static(&[8, 0b10, 2]);
+        decoder
+            .set_data(Encoding::RLE_DICTIONARY, page, 1, Some(1))
+            .unwrap();
+
+        let mut output = FixedLenByteArrayBuffer::with_capacity(4);
+        let err = decoder.read(&mut output, 1).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: dictionary index out of bounds: the len is 2 but the index is 2"
+        );
     }
 
     #[test]

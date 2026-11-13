@@ -1,21 +1,8 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use super::{RecordingReader, column, encode};
+use super::{RecordingReader, column, encode, metadata};
 use std::fs::File;
 
 use bytes::Bytes;
@@ -25,7 +12,10 @@ use parquet::{
         arrow_reader::{ArrowReaderMetadata, ParquetRecordBatchReaderBuilder},
     },
     bloom_filter::Sbbf,
-    file::properties::WriterProperties,
+    file::{
+        metadata::{ParquetMetaData, ParquetMetaDataReader},
+        properties::WriterProperties,
+    },
 };
 
 #[test]
@@ -74,6 +64,15 @@ fn test_get_row_group_column_bloom_filter(data: Bytes, with_length: bool) {
         .unwrap()
         .unwrap();
     assert!(standalone.check("Hello"));
+    let footer = ParquetMetaDataReader::new()
+        .parse_and_finish(&data)
+        .unwrap();
+    let requested = ParquetMetaDataReader::read_column_bloom_filter(&data, &footer, 0, 0)
+        .unwrap()
+        .unwrap();
+    assert!(requested.check("Hello"));
+    assert!(!requested.check("Hello_Not_Exists"));
+    assert_eq!(requested.num_blocks(), standalone.num_blocks());
 
     let sbbf = builder
         .get_row_group_column_bloom_filter(0, 0)
@@ -144,4 +143,41 @@ fn exact_responses_and_transport_errors_are_required() {
         assert!(error.to_string().contains("injected read failure"));
         assert_eq!(reader.requests().len(), failure_at + 1);
     }
+}
+
+#[test]
+fn sync_metadata_bloom_absence_and_invalid_requests_do_not_read() {
+    let reader = RecordingReader::default();
+    let absent = metadata(None, Some(-1));
+    assert!(
+        ParquetMetaDataReader::read_column_bloom_filter(&reader, &absent, 0, 0)
+            .unwrap()
+            .is_none()
+    );
+    assert!(ParquetMetaDataReader::read_column_bloom_filter(&reader, &absent, 1, 0).is_err());
+    assert!(reader.requests().is_empty());
+}
+
+#[test]
+fn sync_metadata_bloom_selects_requested_row_group() {
+    let bytes = encode(32, 32);
+    let absent = metadata(None, None);
+    let present = metadata(Some(9), Some(bytes.len() as i32));
+    let metadata = ParquetMetaData::new(
+        absent.file_metadata().clone(),
+        vec![absent.row_group(0).clone(), present.row_group(0).clone()],
+    );
+    let reader = RecordingReader::new([bytes.clone()]);
+    assert!(
+        ParquetMetaDataReader::read_column_bloom_filter(&reader, &metadata, 0, 0)
+            .unwrap()
+            .is_none()
+    );
+    assert!(reader.requests().is_empty());
+    let filter = ParquetMetaDataReader::read_column_bloom_filter(&reader, &metadata, 1, 0)
+        .unwrap()
+        .unwrap();
+    assert_eq!(filter.num_blocks(), 1);
+    assert!(!filter.check("absent"));
+    assert_eq!(reader.requests(), vec![9..9 + bytes.len() as u64]);
 }
