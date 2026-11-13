@@ -1,20 +1,7 @@
 <!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+  SPDX-License-Identifier: Apache-2.0
+  SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+  SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # Release Process
@@ -22,6 +9,9 @@
 ## Overview
 
 This file documents the release process for the "Rust Arrow Crates": `arrow`, `arrow-flight`, `parquet`, and `parquet-derive`.
+
+For more information on the Apache release process, see [release creation process](https://infra.apache.org/release-publishing.html)
+and [signing releases](https://infra.apache.org/release-signing.html).
 
 ### The Rust Arrow Crates
 
@@ -35,6 +25,26 @@ Otherwise the new minor version incremented (e.g. `9.0.2` to `9.1.0`).
 
 # Release Mechanics
 
+## Prerequisites
+
+The following tools need to be installed locally for these instructions:
+
+- [Subversion](https://subversion.apache.org/)
+- [`git-cliff`](https://git-cliff.org/docs/installation/)
+- [`hawkeye`](https://github.com/fast/hawkeye)
+- If on MacOS, [`gnu-tar`](https://formulae.brew.sh/formula/gnu-tar)
+
+Make sure `gpg` is installed and you have setup your key. See reference documentation
+on this process:
+
+- https://infra.apache.org/release-signing.html
+- https://infra.apache.org/openpgp.html
+- https://spark.apache.org/release-process.html
+
+Also ensure you have [an account on crates.io](https://doc.rust-lang.org/cargo/reference/publishing.html)
+and are owner of all the crates; see owners of the [arrow crate](https://crates.io/crates/arrow)
+who can invite you to be an owner.
+
 ## Process Overview
 
 As part of the Apache governance model, official releases consist of
@@ -46,8 +56,6 @@ crates.io, the Rust ecosystem's package manager.
 We create a `CHANGELOG.md` so our users know what has been changed between releases.
 
 ## Prepare CHANGELOG and version
-
-- Ensure [`git-cliff`](https://git-cliff.org/docs/installation/) is installed
 
 Now prepare a PR to update `CHANGELOG.md` and versions on `main` to reflect the planned release.
 
@@ -63,25 +71,28 @@ git checkout -b <RELEASE_BRANCH>
 # Update versions.
 sed -i '' -e 's/14.0.0/39.0.0/g' `find . -name 'Cargo.toml' -or -name '*.md' | grep -v CHANGELOG.md | grep -v CHANGELOG-old.md | grep -v README.md`
 cargo check # update Cargo.lock with new versions
-git commit -a -m 'Update version'
+
+# OPTIONAL: for non-major version updates, sanity check there are no semver violations
+# https://github.com/obi1kenobi/cargo-semver-checks
+cargo semver-checks --baseline-version <PREVIOUS_VERSION>
 
 # Assuming remote name is apache; if named differently ensure this is changed,
 # since we need the tags from the GitHub repository
 git fetch apache --tags
 
-# ensure your github token is available
+# Used by git-cliff to retrieve PR information from GitHub API
 export GITHUB_TOKEN=<TOKEN>
 
 # e.g. TAG=60.0.0; this is just used to format the CHANGELOG, so tag doesn't
 # need to exist yet, and don't put an RC tag either
-# (we are excluding our above version bump commit from the changelog)
-git-cliff --tag <TAG> --unreleased --output CHANGELOG.md --skip-commit $(git rev-parse HEAD)
+# Replace 59.3.0 with previous tag (on the same branch)
+git-cliff '59.3.0..' --tag <TAG> --output CHANGELOG.md
 
 # review change log, adjust labels on PR's as required
 # can rerun above git-cliff command if needed
 
-# commit the changelog
-git commit -a -m 'Create changelog'
+# commit the version bump & changelog
+git commit -a -m 'Bump version & create changelog'
 
 git push
 ```
@@ -91,6 +102,19 @@ Note that when reviewing the change log, rather than editing the
 (e.g. add `development-process` label to exclude them from release notes)
 
 Merge this PR to `main` prior to the next step.
+
+## Verify Miri results (required)
+
+Before cutting a release candidate, run the
+[Miri workflow](https://github.com/apache/arrow-rs/actions/workflows/miri.yaml)
+on `main`:
+
+```shell
+gh workflow run miri.yaml --repo apache/arrow-rs --ref main
+```
+
+All partitions must pass before creating the RC tag. Review the results and
+link the run in the release tracking issue.
 
 ## Prepare release candidate tarball
 
@@ -192,11 +216,6 @@ standards.
 An Arrow committer can publish this crate after an official project release has
 been made to crates.io using the following instructions.
 
-Follow [these
-instructions](https://doc.rust-lang.org/cargo/reference/publishing.html) to
-create an account and login to crates.io before asking to be added as an owner
-of the [arrow crate](https://crates.io/crates/arrow).
-
 Download and unpack the official release tarball
 
 Verify that the Cargo.toml in the tarball contains the correct version
@@ -231,4 +250,48 @@ Rust Arrow Crates:
 (cd parquet && cargo publish)
 (cd parquet_derive && cargo publish)
 (cd arrow-integration-test && cargo publish)
+```
+
+## Fish version
+
+Some commands which differ in fish shell:
+
+```fish
+set -gx GITHUB_TOKEN "token"
+sed -i '' -e 's/59.3.0/59.3.1/g' (find . -name 'Cargo.toml' -or -name '*.md' | grep -v CHANGELOG.md | grep -v CHANGELOG-old.md | grep -v README.md)
+
+# manually do arrow-buffer for sanity check
+cd arrow-buffer
+cargo publish
+cd ..
+for crate in \
+    arrow-schema \
+    arrow-data \
+    arrow-array \
+    arrow-cmp \
+    arrow-select \
+    arrow-ord \
+    arrow-cast \
+    arrow-ipc \
+    arrow-csv \
+    arrow-json \
+    arrow-arith \
+    arrow-string \
+    arrow-row \
+    arrow-pyarrow \
+    arrow \
+    arrow-avro \
+    arrow-flight \
+    parquet-variant \
+    parquet-variant-json \
+    parquet-variant-compute \
+    parquet-geospatial \
+    parquet \
+    parquet_derive \
+    arrow-integration-test
+    fish -c "cd $crate; and cargo publish"; or break
+end
+
+# Unset when done
+set -e GITHUB_TOKEN
 ```

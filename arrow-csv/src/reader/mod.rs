@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! CSV Reading: [`Reader`] and [`ReaderBuilder`]
 //!
@@ -41,6 +28,13 @@
 //! let mut csv = ReaderBuilder::new(Arc::new(schema)).build(file).unwrap();
 //! let batch = csv.next().unwrap().unwrap();
 //! ```
+//!
+//! # Timestamps
+//!
+//! Timestamps are parsed with [`arrow_cast::parse::string_to_datetime`]. A
+//! timestamp without an explicit offset that falls in a daylight savings gap or
+//! overlap of the target timezone is resolved as described there, rather than
+//! returning an error.
 //!
 //! # Example: Numeric calculations on CSV
 //! This code finds the maximum value in column 0 of a CSV file containing
@@ -2522,6 +2516,41 @@ mod tests {
             &[10_800_000, 0, -7_200_000],
         );
         test_parse_timestamp_impl::<TimestampSecondType>(Some("-03".into()), &[10_800, 0, -7_200]);
+    }
+
+    // A local time in a DST gap or overlap of the target timezone is resolved
+    // as described in `arrow_cast::parse::string_to_datetime`: an ambiguous
+    // reading takes the later instant, and a nonexistent reading is shifted
+    // forward by the length of the gap.
+    #[test]
+    fn test_parse_timestamp_dst_transitions() {
+        let csv = [
+            // Nonexistent: 02:30 is skipped, read as 03:30 EDT
+            "2024-03-10 02:30:00",
+            // Ambiguous: 01:30 happens twice, the later (EST) instant wins
+            "2024-11-03 01:30:00",
+        ]
+        .join("\n");
+        let timezone: Option<Arc<str>> = Some("America/New_York".into());
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "field",
+            DataType::Timestamp(TimeUnit::Second, timezone.clone()),
+            true,
+        )]));
+
+        let mut decoder = ReaderBuilder::new(schema).build_decoder();
+        let decoded = decoder.decode(csv.as_bytes()).unwrap();
+        assert_eq!(decoded, csv.len());
+        decoder.decode(&[]).unwrap();
+
+        let batch = decoder.flush().unwrap().unwrap();
+        let col = batch.column(0).as_primitive::<TimestampSecondType>();
+        // 2024-03-10T07:30:00Z and 2024-11-03T06:30:00Z
+        assert_eq!(col.values(), &[1_710_055_800, 1_730_615_400]);
+        assert_eq!(
+            col.data_type(),
+            &DataType::Timestamp(TimeUnit::Second, timezone)
+        );
     }
 
     #[test]

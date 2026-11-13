@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Module for converting Variant data to JSON format
 use arrow_schema::ArrowError;
@@ -192,26 +179,20 @@ impl VariantToJson for Variant<'_, '_> {
             }
             Variant::Time(time) => write!(buffer, "\"{}\"", format_time_ntz_str(time))?,
             Variant::Binary(bytes) => {
-                // Encode binary as base64 string
+                // Encode binary as base64 string and serialize it directly into the writer
                 let base64_str = format_binary_base64(bytes);
-                let json_str = serde_json::to_string(&base64_str).map_err(|e| {
-                    ArrowError::InvalidArgumentError(format!("JSON encoding error: {e}"))
-                })?;
-                write!(buffer, "{json_str}")?
+                serde_json::to_writer(&mut *buffer, &base64_str)
+                    .map_err(|e| json_encoding_error("JSON encoding error", e))?
             }
             Variant::String(s) => {
-                // Use serde_json to properly escape the string
-                let json_str = serde_json::to_string(s).map_err(|e| {
-                    ArrowError::InvalidArgumentError(format!("JSON encoding error: {e}"))
-                })?;
-                write!(buffer, "{json_str}")?
+                // Serialize directly into the writer, escaping as needed
+                serde_json::to_writer(&mut *buffer, s)
+                    .map_err(|e| json_encoding_error("JSON encoding error", e))?
             }
             Variant::ShortString(s) => {
-                // Use serde_json to properly escape the string
-                let json_str = serde_json::to_string(s.as_str()).map_err(|e| {
-                    ArrowError::InvalidArgumentError(format!("JSON encoding error: {e}"))
-                })?;
-                write!(buffer, "{json_str}")?
+                // Serialize directly into the writer, escaping as needed
+                serde_json::to_writer(&mut *buffer, s.as_str())
+                    .map_err(|e| json_encoding_error("JSON encoding error", e))?
             }
             Variant::Uuid(uuid) => {
                 write!(buffer, "\"{uuid}\"")?;
@@ -365,6 +346,16 @@ fn format_time_ntz_str(time: &chrono::NaiveTime) -> String {
     }
 }
 
+/// Maps a [`serde_json`] serialization failure, keeping writer failures as
+/// [`ArrowError::IoError`] just like [`write!`] does
+fn json_encoding_error(context: &str, error: serde_json::Error) -> ArrowError {
+    if error.is_io() {
+        ArrowError::IoError(error.to_string(), error.into())
+    } else {
+        ArrowError::InvalidArgumentError(format!("{context}: {error}"))
+    }
+}
+
 /// Convert object fields to JSON
 fn convert_object_to_json(buffer: &mut impl Write, obj: &VariantObject) -> Result<(), ArrowError> {
     write!(buffer, "{{")?;
@@ -378,11 +369,10 @@ fn convert_object_to_json(buffer: &mut impl Write, obj: &VariantObject) -> Resul
         }
         first = false;
 
-        // Write the key (properly escaped)
-        let json_key = serde_json::to_string(key).map_err(|e| {
-            ArrowError::InvalidArgumentError(format!("JSON key encoding error: {e}"))
-        })?;
-        write!(buffer, "{json_key}:")?;
+        // Write the key (properly escaped), directly into the writer
+        serde_json::to_writer(&mut *buffer, key)
+            .map_err(|e| json_encoding_error("JSON key encoding error", e))?;
+        write!(buffer, ":")?;
 
         // Recursively convert the value
         value.to_json(buffer)?;

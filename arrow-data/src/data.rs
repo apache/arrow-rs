@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Contains [`ArrayData`], a generic representation of Arrow array data which encapsulates
 //! common attributes and operations for Arrow array.
@@ -61,16 +48,27 @@ pub(crate) fn count_nulls(
     }
 }
 
-/// creates 2 [`MutableBuffer`]s with a given `capacity` (in slots).
+/// Creates 2 [`MutableBuffer`]s with a given `capacity` (in slots).
 #[inline]
-pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuffer; 2] {
-    let empty_buffer = MutableBuffer::new(0);
-    match data_type {
-        DataType::Null => [empty_buffer, MutableBuffer::new(0)],
+pub(crate) fn new_buffers(
+    data_type: &DataType,
+    capacity: usize,
+) -> Result<[MutableBuffer; 2], ArrowError> {
+    let new_buffer = |len| {
+        MutableBuffer::try_with_capacity(len).map_err(|e| ArrowError::MemoryError(e.to_string()))
+    };
+    let sized_buffer = |width: usize| {
+        let len = capacity
+            .checked_mul(width)
+            .ok_or_else(|| ArrowError::MemoryError("buffer size overflow".into()))?;
+        new_buffer(len)
+    };
+
+    Ok(match data_type {
+        DataType::Null => [MutableBuffer::default(), MutableBuffer::default()],
         DataType::Boolean => {
             let bytes = bit_util::ceil(capacity, 8);
-            let buffer = MutableBuffer::new(bytes);
-            [buffer, empty_buffer]
+            [new_buffer(bytes)?, MutableBuffer::default()]
         }
         DataType::UInt8
         | DataType::UInt16
@@ -94,69 +92,93 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
         | DataType::Duration(_)
         | DataType::Timestamp(_, _)
         | DataType::Interval(_) => [
-            MutableBuffer::new(capacity * data_type.primitive_width().unwrap()),
-            empty_buffer,
+            sized_buffer(data_type.primitive_width().unwrap())?,
+            MutableBuffer::default(),
         ],
         DataType::Utf8 | DataType::Binary => {
-            let mut buffer = MutableBuffer::new((1 + capacity) * mem::size_of::<i32>());
+            let offset_capacity = capacity
+                .checked_add(1)
+                .and_then(|len| len.checked_mul(mem::size_of::<i32>()))
+                .ok_or_else(|| ArrowError::MemoryError("offset buffer size overflow".into()))?;
+            let mut buffer = new_buffer(offset_capacity)?;
             // safety: `unsafe` code assumes that this buffer is initialized with one element
-            buffer.push(0i32);
-            [buffer, MutableBuffer::new(capacity * mem::size_of::<u8>())]
+            buffer
+                .try_extend_from_slice(&[0i32])
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+            [buffer, sized_buffer(mem::size_of::<u8>())?]
         }
         DataType::LargeUtf8 | DataType::LargeBinary => {
-            let mut buffer = MutableBuffer::new((1 + capacity) * mem::size_of::<i64>());
+            let offset_capacity = capacity
+                .checked_add(1)
+                .and_then(|len| len.checked_mul(mem::size_of::<i64>()))
+                .ok_or_else(|| ArrowError::MemoryError("offset buffer size overflow".into()))?;
+            let mut buffer = new_buffer(offset_capacity)?;
             // safety: `unsafe` code assumes that this buffer is initialized with one element
-            buffer.push(0i64);
-            [buffer, MutableBuffer::new(capacity * mem::size_of::<u8>())]
+            buffer
+                .try_extend_from_slice(&[0i64])
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+            [buffer, sized_buffer(mem::size_of::<u8>())?]
         }
         DataType::BinaryView | DataType::Utf8View => [
-            MutableBuffer::new(capacity * mem::size_of::<u128>()),
-            empty_buffer,
+            sized_buffer(mem::size_of::<u128>())?,
+            MutableBuffer::default(),
         ],
         DataType::List(_) | DataType::Map(_, _) => {
             // offset buffer always starts with a zero
-            let mut buffer = MutableBuffer::new((1 + capacity) * mem::size_of::<i32>());
-            buffer.push(0i32);
-            [buffer, empty_buffer]
+            let offset_capacity = capacity
+                .checked_add(1)
+                .and_then(|len| len.checked_mul(mem::size_of::<i32>()))
+                .ok_or_else(|| ArrowError::MemoryError("offset buffer size overflow".into()))?;
+            let mut buffer = new_buffer(offset_capacity)?;
+            buffer
+                .try_extend_from_slice(&[0i32])
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+            [buffer, MutableBuffer::default()]
         }
         DataType::ListView(_) => [
-            MutableBuffer::new(capacity * mem::size_of::<i32>()),
-            MutableBuffer::new(capacity * mem::size_of::<i32>()),
+            sized_buffer(mem::size_of::<i32>())?,
+            sized_buffer(mem::size_of::<i32>())?,
         ],
         DataType::LargeList(_) => {
             // offset buffer always starts with a zero
-            let mut buffer = MutableBuffer::new((1 + capacity) * mem::size_of::<i64>());
-            buffer.push(0i64);
-            [buffer, empty_buffer]
+            let offset_capacity = capacity
+                .checked_add(1)
+                .and_then(|len| len.checked_mul(mem::size_of::<i64>()))
+                .ok_or_else(|| ArrowError::MemoryError("offset buffer size overflow".into()))?;
+            let mut buffer = new_buffer(offset_capacity)?;
+            buffer
+                .try_extend_from_slice(&[0i64])
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+            [buffer, MutableBuffer::default()]
         }
         DataType::LargeListView(_) => [
-            MutableBuffer::new(capacity * mem::size_of::<i64>()),
-            MutableBuffer::new(capacity * mem::size_of::<i64>()),
+            sized_buffer(mem::size_of::<i64>())?,
+            sized_buffer(mem::size_of::<i64>())?,
         ],
         DataType::FixedSizeBinary(size) => {
             if *size < 0 {
                 panic!("cannot construct buffers from FixedSizeBinary({size})");
             }
-            [MutableBuffer::new(capacity * *size as usize), empty_buffer]
+            [sized_buffer(*size as usize)?, MutableBuffer::default()]
         }
         DataType::Dictionary(k, _) => [
-            MutableBuffer::new(capacity * k.primitive_width().unwrap()),
-            empty_buffer,
+            sized_buffer(k.primitive_width().unwrap())?,
+            MutableBuffer::default(),
         ],
         DataType::FixedSizeList(_, _) | DataType::Struct(_) | DataType::RunEndEncoded(_, _) => {
-            [empty_buffer, MutableBuffer::new(0)]
+            [MutableBuffer::default(), MutableBuffer::default()]
         }
         DataType::Union(_, mode) => {
-            let type_ids = MutableBuffer::new(capacity * mem::size_of::<i8>());
+            let type_ids = sized_buffer(mem::size_of::<i8>())?;
             match mode {
-                UnionMode::Sparse => [type_ids, empty_buffer],
+                UnionMode::Sparse => [type_ids, MutableBuffer::default()],
                 UnionMode::Dense => {
-                    let offsets = MutableBuffer::new(capacity * mem::size_of::<i32>());
+                    let offsets = sized_buffer(mem::size_of::<i32>())?;
                     [type_ids, offsets]
                 }
             }
         }
-    }
+    })
 }
 
 /// A generic representation of Arrow array data which encapsulates common attributes
@@ -1139,7 +1161,21 @@ impl ArrayData {
             )));
         }
 
-        Ok(&buffer.typed_data::<T>()[self.offset..required_elements])
+        // Only the bytes in use are typed: the buffer may be longer than
+        // `required_len` by a number of bytes that is not a multiple of
+        // `byte_width`, which `Buffer::typed_data` would assert on.
+        let bytes = &buffer.as_slice()[..required_len];
+        // SAFETY: ArrowNativeType is trivially transmutable and sealed (as in
+        // `Buffer::typed_data`); alignment is checked below
+        let (prefix, values, suffix) = unsafe { bytes.align_to::<T>() };
+        if !prefix.is_empty() || !suffix.is_empty() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Buffer {idx} of {} is not aligned to {} bytes",
+                self.data_type,
+                mem::align_of::<T>()
+            )));
+        }
+        Ok(&values[self.offset..])
     }
 
     /// Does a cheap sanity check that the `self.len` values in `buffer` are valid
@@ -1289,9 +1325,12 @@ impl ArrayData {
 
                 let len_plus_offset =
                     checked_len_plus_offset(&self.data_type, self.len, self.offset)?;
-                let expected_values_len = len_plus_offset
-                    .checked_mul(list_size)
-                    .expect("integer overflow computing expected number of expected values in FixedListSize");
+                let expected_values_len = len_plus_offset.checked_mul(list_size).ok_or_else(|| {
+                    ArrowError::InvalidArgumentError(format!(
+                        "Integer overflow computing expected number of values in {}: length + offset ({}) multiplied by list size ({}) exceeds usize",
+                        self.data_type, len_plus_offset, list_size
+                    ))
+                })?;
 
                 if values_data.len < expected_values_len {
                     return Err(ArrowError::InvalidArgumentError(format!(
@@ -1321,6 +1360,9 @@ impl ArrayData {
                 }
             }
             DataType::RunEndEncoded(run_ends_field, values_field) => {
+                // See the `RunArray` invariants for the rules enforced here and
+                // in `check_run_ends`:
+                // https://docs.rs/arrow/latest/arrow/array/struct.RunArray.html#offset-and-len
                 self.validate_num_child_data(2)?;
                 let run_ends_data = self.get_valid_child_data(0, run_ends_field.data_type())?;
                 let values_data = self.get_valid_child_data(1, values_field.data_type())?;
@@ -1836,7 +1878,11 @@ impl ArrayData {
         })
     }
 
-    /// Validates that each value in run_ends array is positive and strictly increasing.
+    /// Validates that each value in run_ends array is positive and strictly
+    /// increasing, and that the last value covers the parent's `offset + len`
+    /// (when the parent is non-empty), as required by the [`RunArray` invariants].
+    ///
+    /// [`RunArray` invariants]: https://docs.rs/arrow/latest/arrow/array/struct.RunArray.html#offset-and-len
     fn check_run_ends<T>(
         &self,
         parent_len: usize,
@@ -2716,6 +2762,62 @@ mod tests {
             .unwrap_err()
             .to_string();
             assert!(err.contains("Values length 4 is less than"));
+        }
+    }
+
+    #[test]
+    fn test_fixed_size_list_validation_child_len_mul_overflow() {
+        // Empty child and no parent null buffer: huge logical lengths allocate nothing.
+        let child = ArrayData::builder(DataType::Int32)
+            .len(0)
+            .add_buffer(Buffer::from_slice_ref([0i32; 0]))
+            .build()
+            .unwrap();
+        let list_size = 2i32;
+        let data_type = DataType::FixedSizeList(
+            Arc::new(Field::new("item", DataType::Int32, true)),
+            list_size,
+        );
+        // `(len + offset) * list_size` overflows; the addition itself does not.
+        let len_plus_offset = (usize::MAX / 2) + 1;
+        let overflow_cases = [(len_plus_offset, 0usize), (usize::MAX / 2, 1)];
+
+        for (len, offset) in overflow_cases {
+            let err = ArrayData::builder(data_type.clone())
+                .len(len)
+                .offset(offset)
+                .add_child_data(child.clone())
+                .build()
+                .unwrap_err();
+
+            match err {
+                ArrowError::InvalidArgumentError(msg) => assert_eq!(
+                    msg,
+                    format!(
+                        "Integer overflow computing expected number of values in {data_type}: length + offset ({len_plus_offset}) multiplied by list size ({list_size}) exceeds usize"
+                    )
+                ),
+                other => panic!("unexpected error type {other}"),
+            }
+        }
+
+        // Same product is representable here, so validation reports a short child.
+        let err = ArrayData::builder(data_type.clone())
+            .len(usize::MAX / 2)
+            .offset(0)
+            .add_child_data(child)
+            .build()
+            .unwrap_err();
+
+        match err {
+            ArrowError::InvalidArgumentError(msg) => assert_eq!(
+                msg,
+                format!(
+                    "Values length 0 is less than the length + offset ({}) multiplied by the value size ({list_size}) for {data_type}",
+                    usize::MAX / 2
+                )
+            ),
+            other => panic!("unexpected error type {other}"),
         }
     }
 
@@ -3752,6 +3854,21 @@ mod tests {
             err.to_string(),
             "Invalid argument error: Buffer 0 of Dictionary(Int32, Int32) isn't large enough. Expected 16 bytes got 8"
         );
+    }
+
+    /// `validate` only requires a minimum buffer size, so an offsets buffer
+    /// may carry trailing bytes that are not a whole number of offsets.
+    #[test]
+    fn test_validate_offsets_buffer_with_trailing_bytes() {
+        let mut offsets = Buffer::from_slice_ref([0_i32, 2, 5]).as_slice().to_vec();
+        offsets.extend_from_slice(&[0, 0]);
+        let data = ArrayData::builder(DataType::Utf8)
+            .len(2)
+            .add_buffer(Buffer::from_slice_ref(&offsets))
+            .add_buffer(Buffer::from_slice_ref(b"hello"))
+            .build()
+            .unwrap();
+        data.validate_full().unwrap();
     }
 
     #[test]

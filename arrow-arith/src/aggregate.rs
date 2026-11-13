@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Defines aggregations over Arrow arrays.
 
@@ -990,7 +977,10 @@ pub fn product_checked<T: ArrowNumericType>(
 }
 
 /// Returns the minimum value in the array, according to the natural order.
-/// For floating point arrays any NaN values are considered to be greater than any other non-null value
+///
+/// Floating point values are compared using IEEE 754 totalOrder (see [`f64::total_cmp`]):
+/// a positive NaN is greater than every non-NaN value, including positive infinity, and a
+/// negative NaN is less than every non-NaN value, including negative infinity.
 ///
 /// # Example
 /// ```rust
@@ -1005,7 +995,10 @@ pub fn min<T: ArrowNumericType>(array: &PrimitiveArray<T>) -> Option<T::Native> 
 }
 
 /// Returns the maximum value in the array, according to the natural order.
-/// For floating point arrays any NaN values are considered to be greater than any other non-null value
+///
+/// Floating point values are compared using IEEE 754 totalOrder (see [`f64::total_cmp`]):
+/// a positive NaN is greater than every non-NaN value, including positive infinity, and a
+/// negative NaN is less than every non-NaN value, including negative infinity.
 ///
 /// # Example
 /// ```rust

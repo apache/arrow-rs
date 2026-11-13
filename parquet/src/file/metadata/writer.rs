@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::file::metadata::page_index::PageIndexProvider;
 use crate::file::metadata::thrift::FileMeta;
@@ -439,7 +426,9 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
         let schema_descr = Arc::new(SchemaDescriptor::new(schema.clone()));
         let created_by = file_metadata.created_by().map(str::to_string);
 
-        let row_groups = self.metadata.row_groups.clone();
+        // need to clone because ThriftMetadataWriter wants to update page
+        // index pointers. we throw this clone away upon calling encoder.finish()
+        let row_groups = self.metadata.row_groups.as_ref().to_vec();
 
         let key_value_metadata = file_metadata.key_value_metadata().cloned();
 

@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 name: dev
 
@@ -21,27 +8,44 @@ name: dev
 on:
   workflow_call:
 
-permissions:
-  contents: read
-
 jobs:
-  rat:
-    name: Release Audit Tool (RAT)
-    runs-on: ubuntu-latest
+  zizmor:
+    name: Run zizmor
+    runs-on: ubuntu-slim
+    permissions:
+      security-events: write # Required for upload-sarif (used by zizmor-action) to upload SARIF files.
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run zizmor
+        uses: zizmorcore/zizmor-action@45d7276c9ca790aabd705e31ca99c6185c3e76dd # v0.8.1
+  license-headers:
+    name: License headers
+    runs-on: ubuntu-slim
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - name: Setup Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          python-version: 3.8
-      - name: Audit licenses
-        run: ./dev/release/run-rat.sh .
+          persist-credentials: false
+      - name: Install HawkEye
+        uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2  # v2.90.2
+        with:
+          tool: hawkeye
+      - name: Check license headers
+        run: hawkeye check --fail-on-unknown
 
   prettier:
     name: Markdown format
     runs-on: ubuntu-slim
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
           node-version: "14"
@@ -52,7 +56,9 @@ jobs:
           git diff --exit-code
   typos:
     name: Spell Check with Typos
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         # Version fixed on purpose. It uses heuristics to detect typos, so upgrading
@@ -61,7 +67,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install typos
-        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8  # v2.87.28
+        uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2  # v2.90.2
         with:
           tool: typos@1.37.0
       - name: Run typos check

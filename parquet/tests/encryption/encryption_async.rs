@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! This module contains tests for reading encrypted Parquet files with the async Arrow API
 
@@ -947,7 +934,8 @@ async fn test_concurrent_encrypted_writing_over_multiple_row_groups() {
 
     let writer =
         SerializedFileWriter::new(&temp_file, parquet_schema.root_schema_ptr(), props).unwrap();
-    let row_group_writer_factory = ArrowRowGroupWriterFactory::new(&writer, Arc::clone(schema));
+    let row_group_writer_factory =
+        ArrowRowGroupWriterFactory::try_new(&writer, Arc::clone(schema)).unwrap();
     let max_row_groups = 1;
 
     let (serialize_tx, serialize_rx) =
@@ -1012,7 +1000,8 @@ async fn test_multi_threaded_encrypted_writing() {
     let temp_file = tempfile::tempfile().unwrap();
     let mut writer =
         SerializedFileWriter::new(&temp_file, parquet_schema.root_schema_ptr(), props).unwrap();
-    let row_group_writer_factory = ArrowRowGroupWriterFactory::new(&writer, Arc::clone(&schema));
+    let row_group_writer_factory =
+        ArrowRowGroupWriterFactory::try_new(&writer, Arc::clone(&schema)).unwrap();
 
     let (serialize_tx, mut serialize_rx) =
         tokio::sync::mpsc::channel::<JoinHandle<RBStreamSerializeResult>>(1);

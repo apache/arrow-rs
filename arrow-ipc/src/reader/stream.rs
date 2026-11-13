@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -157,7 +144,12 @@ impl StreamDecoder {
     /// }
     /// ```
     pub fn decode(&mut self, buffer: &mut Buffer) -> Result<Option<RecordBatch>, ArrowError> {
-        while !buffer.is_empty() {
+        while !buffer.is_empty()
+            || matches!(
+                    &self.state,
+                    DecoderState::Body { message } if message.as_ref().bodyLength() == 0
+            )
+        {
             match &mut self.state {
                 DecoderState::Header {
                     buf,
@@ -257,6 +249,7 @@ impl StreamDecoder {
                                 &version,
                             )?
                             .with_require_alignment(self.require_alignment)
+                            .with_skip_validation(self.skip_validation.clone())
                             .read_record_batch()?;
                             self.state = DecoderState::default();
                             return Ok(Some(batch));
@@ -392,6 +385,25 @@ mod tests {
 
         let err = decoder.finish().unwrap_err().to_string();
         assert_eq!(err, "Ipc error: Unexpected End of Stream");
+    }
+
+    #[test]
+    fn test_schema_without_eos() {
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+
+        let mut buf = Vec::new();
+        let writer = StreamWriter::try_new(&mut buf, &schema).unwrap();
+        // The schema has a zero-length body. Drop without finish to omit EOS.
+        drop(writer);
+
+        let mut buffer = Buffer::from_vec(buf);
+        let mut decoder = StreamDecoder::new();
+        let output = decoder.decode(&mut buffer).unwrap();
+
+        assert!(output.is_none());
+        assert!(buffer.is_empty());
+        assert_eq!(decoder.schema(), Some(schema));
+        decoder.finish().unwrap();
     }
 
     #[test]

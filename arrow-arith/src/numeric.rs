@@ -1,23 +1,11 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Defines numeric arithmetic kernels on [`PrimitiveArray`], such as [`add`]
 
 use std::cmp::Ordering;
+use std::convert::Infallible;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
@@ -26,7 +14,10 @@ use arrow_array::temporal_conversions::{NANOSECONDS, SECONDS_IN_DAY};
 use arrow_array::timezone::Tz;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, IntervalDayTime, IntervalMonthDayNano};
+use arrow_buffer::{
+    ArrowNativeType, DivisorI32, DivisorI64, DivisorU32, DivisorU64, IntervalDayTime,
+    IntervalMonthDayNano,
+};
 use arrow_schema::{ArrowError, DataType, IntervalUnit, TimeUnit};
 use num_traits::{CheckedMul, ToPrimitive};
 
@@ -235,6 +226,18 @@ fn arithmetic_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<ArrayRef, A
 
     let (l, l_scalar) = lhs.get();
     let (r, r_scalar) = rhs.get();
+    if matches!(op, Op::Div | Op::Rem) && !l_scalar && r_scalar {
+        let array = match (l.data_type(), r.data_type()) {
+            (Int32, Int32) => divisor_op_i32(op, l, r),
+            (Int64, Int64) => divisor_op_i64(op, l, r),
+            (UInt32, UInt32) => divisor_op_u32(op, l, r),
+            (UInt64, UInt64) => divisor_op_u64(op, l, r),
+            _ => None,
+        };
+        if let Some(array) = array {
+            return Ok(array);
+        }
+    }
     downcast_integer! {
         l.data_type(), r.data_type() => (integer_helper, op, l, l_scalar, r, r_scalar),
         (Float16, Float16) => float_op::<Float16Type>(op, l, l_scalar, r, r_scalar),
@@ -323,6 +326,105 @@ macro_rules! try_op_ref {
         Arc::new(array)
     }};
 }
+
+/// Defines `$fn`, which computes `/` or `%` of an array by a scalar with a precomputed divisor.
+/// It returns `None` for an op other than `/` and `%`, when the scalar is null, or when a value
+/// could fail to divide by it (zero, or `$fallible` for `/`), so that `integer_op` returns an
+/// error only for a valid value that fails. Otherwise no value can fail, and `unary` divides
+/// every slot, null or not, unless the array has more than `$max_nulls` nulls, where dividing
+/// only the valid values with `try_unary` costs less
+macro_rules! divisor_op {
+    (
+        $fn:ident,
+        $t:ty,
+        $divisor:ident,
+        |$d:ident| $fallible:expr,
+        |$len:ident| $max_nulls:expr,
+        [$($variant:ident),+]
+    ) => {
+        fn $fn(op: Op, l: &dyn Array, r: &dyn Array) -> Option<ArrayRef> {
+            let r = r.as_primitive::<$t>();
+            if r.null_count() != 0 {
+                return None;
+            }
+            let $d = r.value(0);
+            if matches!(op, Op::Div) && $fallible {
+                return None;
+            }
+            let divisor = $divisor::new($d)?;
+            let l = l.as_primitive::<$t>();
+            let $len = l.len();
+            if l.null_count() > $max_nulls {
+                // Calling the enum's `wrapping_div_rem`, which matches on the variant, keeps this
+                // to one `try_unary` per op
+                let Ok(array) = match op {
+                    Op::Div => l.try_unary::<_, $t, Infallible>(move |n| {
+                        Ok(divisor.wrapping_div_rem(n).0)
+                    }),
+                    Op::Rem => l.try_unary::<_, $t, Infallible>(move |n| {
+                        Ok(divisor.wrapping_div_rem(n).1)
+                    }),
+                    _ => return None,
+                };
+                return Some(Arc::new(array));
+            }
+            // Match on the variant once, outside the loop, and move it into the closure, so the
+            // loop doesn't branch on the variant. The `Op::Div` and `Op::Rem` arms after the
+            // variants cover variants that arrow-buffer may add later
+            let array: PrimitiveArray<$t> = match (op, divisor) {
+                $(
+                    (Op::Div, $divisor::$variant(d)) => l.unary(move |n| d.wrapping_div_rem(n).0),
+                    (Op::Rem, $divisor::$variant(d)) => l.unary(move |n| d.wrapping_div_rem(n).1),
+                )+
+                (Op::Div, d) => l.unary(move |n| d.wrapping_div_rem(n).0),
+                (Op::Rem, d) => l.unary(move |n| d.wrapping_div_rem(n).1),
+                _ => return None,
+            };
+            Some(Arc::new(array))
+        }
+    };
+}
+
+// `MIN / -1` overflows, but `%` by -1 doesn't, because `integer_op` computes `%` with
+// `mod_wrapping`.
+//
+// `unary` costs the same whatever the nulls, and `try_unary` visits only the valid values. On x86,
+// `unary` is slower than `integer_op`'s `try_unary` with a hardware divide above roughly 60% nulls
+// for `Int32` and `Int64`, so more than half null takes `try_unary`. `UInt32`'s `unary` loop is
+// the cheapest, and on x86 its `try_unary` costs about as much as `integer_op`'s, so it stays on
+// `unary` up to three quarters null. Its `%` on `unary` falls behind `integer_op`'s at roughly 80%
+divisor_op!(
+    divisor_op_i32,
+    Int32Type,
+    DivisorI32,
+    |d| d == -1,
+    |len| len / 2,
+    [PowerOfTwo, AddIndicator]
+);
+divisor_op!(
+    divisor_op_i64,
+    Int64Type,
+    DivisorI64,
+    |d| d == -1,
+    |len| len / 2,
+    [PowerOfTwo, AddIndicator]
+);
+divisor_op!(
+    divisor_op_u32,
+    UInt32Type,
+    DivisorU32,
+    |_d| false,
+    |len| len / 4 * 3,
+    [PowerOfTwo, Up, Down, AddIndicator]
+);
+divisor_op!(
+    divisor_op_u64,
+    UInt64Type,
+    DivisorU64,
+    |_d| false,
+    |len| len / 2,
+    [PowerOfTwo, Up, AddIndicator]
+);
 
 /// Perform an arithmetic operation on integers
 fn integer_op<T: ArrowPrimitiveType>(
@@ -790,8 +892,12 @@ fn interval_mul_f64(
     let month_remainder_days = month_remainder
         .to_i32()
         .ok_or_else(|| overflow("month remainder"))?;
-    let mut seconds_remainder =
-        timestamp_round((days_product.fract() + month_remainder.fract()) * SECONDS_PER_DAY);
+    // Same order of operations as DuckDB; float arithmetic isn't associative and we're aiming
+    // to replicate DuckDB accuracy
+    let mut seconds_remainder = timestamp_round(
+        (days_product - f64::from(days) + month_remainder - f64::from(month_remainder_days))
+            * SECONDS_PER_DAY,
+    );
 
     if seconds_remainder.abs() >= SECONDS_PER_DAY {
         let remainder_days = (seconds_remainder / SECONDS_PER_DAY)
@@ -1177,7 +1283,7 @@ where
 mod tests {
     use super::*;
     use arrow_array::temporal_conversions::{as_date, as_datetime};
-    use arrow_buffer::{ScalarBuffer, i256};
+    use arrow_buffer::{NullBuffer, ScalarBuffer, i256};
     use chrono::{DateTime, NaiveDate};
 
     // The valid date range of NaiveDate is from January 1, -262143 to December 31, 262142 (Gregorian calendar).
@@ -1196,6 +1302,118 @@ mod tests {
 
     const fn date_to_days(date: NaiveDate) -> i32 {
         date.signed_duration_since(EPOCH).num_days() as i32
+    }
+
+    fn assert_kernel_result<T: ArrowPrimitiveType>(
+        actual: Result<ArrayRef, ArrowError>,
+        expected: Result<Vec<Option<T::Native>>, ArrowError>,
+        context: &str,
+    ) {
+        match (actual, expected) {
+            (Ok(actual), Ok(expected)) => {
+                let actual: Vec<_> = actual.as_primitive::<T>().iter().collect();
+                assert_eq!(actual, expected, "{context}");
+            }
+            (Err(actual), Err(expected)) => {
+                assert_eq!(actual.to_string(), expected.to_string(), "{context}")
+            }
+            (actual, expected) => panic!("{context}: {actual:?} != {expected:?}"),
+        }
+    }
+
+    /// Checks `div` and `rem` of `values` by each of `divisors` and by a null divisor, against
+    /// `div_checked` and `mod_wrapping` on each valid value, as `integer_op` computes them.
+    /// `values` is repeated to 64 values so that the vectorized loop runs, and is also checked
+    /// sliced to 50 values, which leaves a remainder for the scalar loop, with seven in eight
+    /// values null, all null, and empty
+    fn test_div_rem_by_scalar<T: ArrowPrimitiveType>(
+        values: &[Option<T::Native>],
+        divisors: &[T::Native],
+    ) {
+        let values: PrimitiveArray<T> = values.iter().cycle().take(64).collect();
+        let mostly_null = NullBuffer::from_iter((0..values.len()).map(|i| i % 8 == 0));
+        let arrays = [
+            values.slice(3, 50),
+            PrimitiveArray::new(values.values().clone(), Some(mostly_null)),
+            values.slice(0, 0),
+            PrimitiveArray::new_null(2),
+            values,
+        ];
+        for array in &arrays {
+            for &d in divisors {
+                let divisor = PrimitiveArray::<T>::new_scalar(d);
+                let expected = array
+                    .iter()
+                    .map(|v| v.map(|v| v.div_checked(d)).transpose())
+                    .collect();
+                assert_kernel_result::<T>(div(array, &divisor), expected, &format!("/ {d:?}"));
+                let expected = array
+                    .iter()
+                    .map(|v| {
+                        v.map(|v| match d.is_zero() {
+                            true => Err(ArrowError::DivideByZero),
+                            false => Ok(v.mod_wrapping(d)),
+                        })
+                        .transpose()
+                    })
+                    .collect();
+                assert_kernel_result::<T>(rem(array, &divisor), expected, &format!("% {d:?}"));
+            }
+            // A null divisor gives a null result, whatever its slot holds
+            for slot in [0, 7] {
+                let slot = vec![T::Native::usize_as(slot)].into();
+                let divisor = Scalar::new(PrimitiveArray::<T>::new(
+                    slot,
+                    Some(NullBuffer::new_null(1)),
+                ));
+                assert_eq!(div(array, &divisor).unwrap().null_count(), array.len());
+                assert_eq!(rem(array, &divisor).unwrap().null_count(), array.len());
+            }
+        }
+    }
+
+    #[test]
+    fn test_div_rem_by_scalar_integer() {
+        // 16, 13, 7, -16 and -7 reach each variant of the precomputed divisor. 0, and -1 for `/`, fall back
+        // to `integer_op`, which returns an error for a valid value and `Ok` otherwise
+        let values = [
+            Some(i32::MIN),
+            Some(i32::MIN + 1),
+            Some(-7),
+            None,
+            Some(0),
+            Some(13),
+            Some(i32::MAX),
+        ];
+        test_div_rem_by_scalar::<Int32Type>(&values, &[16, 13, 7, -16, -7, 0, -1]);
+        let values = [
+            Some(i64::MIN),
+            Some(i64::MIN + 1),
+            Some(-7),
+            None,
+            Some(0),
+            Some(13),
+            Some(i64::MAX),
+        ];
+        test_div_rem_by_scalar::<Int64Type>(&values, &[16, 13, 7, -16, -7, 0, -1]);
+        let values = [
+            Some(0),
+            Some(1),
+            None,
+            Some(13),
+            Some(u32::MAX - 1),
+            Some(u32::MAX),
+        ];
+        test_div_rem_by_scalar::<UInt32Type>(&values, &[16, 13, 7, 0]);
+        let values = [
+            Some(0),
+            Some(1),
+            None,
+            Some(13),
+            Some(u64::MAX - 1),
+            Some(u64::MAX),
+        ];
+        test_div_rem_by_scalar::<UInt64Type>(&values, &[16, 13, 7, 0]);
     }
 
     fn test_neg_primitive<T: ArrowPrimitiveType>(
@@ -2252,6 +2470,37 @@ mod tests {
     }
 
     #[test]
+    fn test_interval_mul_div_f64_matches_duckdb_rounding() {
+        // Regression test for https://github.com/apache/arrow-rs/issues/12004: each of these
+        // results is off by 1 ns unless the sub-day remainder is summed in DuckDB's order.
+        let interval = IntervalMonthDayNanoArray::from(vec![
+            IntervalMonthDayNanoType::make_value(1, 1, 0),
+            IntervalMonthDayNanoType::make_value(1, 1, 0),
+            IntervalMonthDayNanoType::make_value(1, 2, 0),
+            IntervalMonthDayNanoType::make_value(1, 1, 0),
+        ]);
+        let factor = Float64Array::from(vec![32. / 7., 10. / 13., 5. / 7., -32. / 7.]);
+        let expected = IntervalMonthDayNanoArray::from(vec![
+            IntervalMonthDayNanoType::make_value(4, 21, 61_714_285_726_628),
+            IntervalMonthDayNanoType::make_value(0, 23, 73_107_692_314_339),
+            IntervalMonthDayNanoType::make_value(0, 22, 74_057_142_894_171),
+            IntervalMonthDayNanoType::make_value(-4, -21, -61_714_285_726_628),
+        ]);
+        assert_eq!(mul(&interval, &factor).unwrap().as_ref(), &expected);
+
+        // Division multiplies by the reciprocal, so it follows the same order.
+        let interval =
+            IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNanoType::make_value(1, 1, 0)]);
+        let factor = Float64Array::new_scalar(7. / 32.);
+        let expected = IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNanoType::make_value(
+            4,
+            21,
+            61_714_285_726_628,
+        )]);
+        assert_eq!(div(&interval, &factor).unwrap().as_ref(), &expected);
+    }
+
+    #[test]
     fn test_interval_mul_div_f64_errors() {
         let factor = Float64Array::new_scalar(2.);
         let year_month = IntervalYearMonthArray::new_scalar(1);
@@ -2861,5 +3110,30 @@ mod tests {
     fn test_date_month_day_nano_operations() {
         test_month_day_nano_ops!(Date32Type, date_to_days);
         test_month_day_nano_ops!(Date64Type, date_to_millis);
+    }
+
+    #[test]
+    fn test_date_sub_interval_min_months() {
+        // Subtracting i32::MIN months requires negating i32::MIN, which
+        // overflows i32: the date kernels must return the Date arithmetic
+        // overflow error instead of panicking in debug builds
+        // https://github.com/apache/arrow-rs/issues/11600
+        let dates: [ArrayRef; 2] = [
+            Arc::new(Date32Array::from(vec![0])),
+            Arc::new(Date64Array::from(vec![0])),
+        ];
+        let year_month = IntervalYearMonthArray::from(vec![i32::MIN]);
+        let month_day_nano =
+            IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNano::new(i32::MIN, 0, 0)]);
+        for dates in &dates {
+            assert_eq!(
+                sub(dates, &year_month).unwrap_err().to_string(),
+                "Compute error: Date arithmetic overflow: 0 - -2147483648 months"
+            );
+            assert_eq!(
+                sub(dates, &month_day_nano).unwrap_err().to_string(),
+                "Compute error: Date arithmetic overflow: 0 - IntervalMonthDayNano { months: -2147483648, days: 0, nanoseconds: 0 }"
+            );
+        }
     }
 }
