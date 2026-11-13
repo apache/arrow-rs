@@ -96,7 +96,7 @@ mod tests {
         StructArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
         Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
         TimestampNanosecondArray, TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array,
-        UInt64Array, UnionArray,
+        UInt64Array, UnionArray, new_empty_array, new_null_array,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow::datatypes::{
@@ -107,7 +107,7 @@ mod tests {
     use arrow_schema::{
         DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION, DECIMAL128_MAX_PRECISION,
     };
-    use arrow_schema::{DataType, Field, Fields, UnionFields};
+    use arrow_schema::{DataType, Field, Fields, IntervalUnit, TimeUnit, UnionFields, UnionMode};
     use chrono::{DateTime, NaiveDate, NaiveTime};
     use half::f16;
     use parquet_variant::{
@@ -1140,6 +1140,58 @@ mod tests {
                 }
                 _ => panic!("Expected InvalidArgumentError"),
             }
+        }
+    }
+
+    #[test]
+    fn test_cast_to_variant_duration_or_interval_errors_empty_or_all_null() {
+        let unsupported = [
+            DataType::Duration(TimeUnit::Second),
+            DataType::Duration(TimeUnit::Millisecond),
+            DataType::Duration(TimeUnit::Microsecond),
+            DataType::Duration(TimeUnit::Nanosecond),
+            DataType::Interval(IntervalUnit::YearMonth),
+            DataType::Interval(IntervalUnit::DayTime),
+            DataType::Interval(IntervalUnit::MonthDayNano),
+        ];
+        for data_type in unsupported {
+            let field = Field::new("value", data_type.clone(), true);
+            let union_fields = UnionFields::from_fields(vec![
+                Field::new("int", DataType::Int32, true),
+                field.clone(),
+            ]);
+            for data_type in [
+                DataType::new_list(data_type.clone(), true),
+                DataType::Struct(Fields::from(vec![field])),
+                // new_null_array points every union row at the first (Int32) child
+                DataType::Union(union_fields, UnionMode::Sparse),
+                data_type,
+            ] {
+                for array in [new_empty_array(&data_type), new_null_array(&data_type, 2)] {
+                    let result = cast_to_variant(array.as_ref());
+                    let Err(ArrowError::InvalidArgumentError(msg)) = &result else {
+                        panic!(
+                            "{data_type} with {} rows: {:?}",
+                            array.len(),
+                            result.map(|_| ())
+                        );
+                    };
+                    assert!(msg.contains("duration/interval"), "{msg}");
+                }
+            }
+        }
+
+        let union_fields = UnionFields::from_fields(vec![
+            Field::new("int", DataType::Int32, true),
+            Field::new("string", DataType::Utf8, true),
+        ]);
+        for data_type in [
+            DataType::Int64,
+            DataType::new_list(DataType::Int64, true),
+            DataType::Union(union_fields, UnionMode::Sparse),
+        ] {
+            run_test(new_empty_array(&data_type), vec![]);
+            run_test(new_null_array(&data_type, 2), vec![None, None]);
         }
     }
 
