@@ -25,11 +25,18 @@
 //! is larger than the visible data. `minify` copies it, so the total memory in
 //! use can grow until the other arrays drop the shared buffer.
 //!
+//! A buffer can also appear more than once inside `array`, for example in
+//! two struct columns over the same array, or in two dictionaries over the
+//! same values. Struct columns over the same rows of the same buffers share
+//! one minified column. In other cases `minify` can copy the buffer once per
+//! reference. If the result then uses more memory than `array` (beyond 64
+//! bytes per allocation), `minify` returns `array` unchanged.
+//!
 //! # Null rows
 //!
 //! `minify` gives every null row of a byte, list, map or list view array an
-//! empty value range. The child array or value buffer then holds only the data
-//! of valid rows.
+//! empty value range, and every null row of a byte view array an empty view.
+//! The child array or value buffers then hold only the data of valid rows.
 //!
 //! An O(rows) check over the offsets and the null bitmap finds out if any null
 //! row has a non-empty range. If none has, `minify` copies or slices the
@@ -39,7 +46,12 @@
 //! # Limitations
 //!
 //! * `minify` does not deduplicate dictionary values or merge equal runs.
+//! * Null rows of a struct or fixed size list array keep their child data.
+//!   The child rows stay at the same positions, so `minify` cannot drop them.
+//! * The rows of a sparse union keep the data of all children, also of the
+//!   children that their type ids do not select.
 
+use std::collections::HashSet;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -51,7 +63,7 @@ use arrow_buffer::{
     ScalarBuffer, bit_util,
 };
 use arrow_data::transform::{Capacities, MutableArrayData};
-use arrow_data::{ArrayData, MAX_INLINE_VIEW_LEN};
+use arrow_data::{ArrayData, ByteView, MAX_INLINE_VIEW_LEN};
 use arrow_schema::{
     ArrowError, DataType, FieldRef, IntervalUnit, TimeUnit, UnionFields, UnionMode,
 };
@@ -61,7 +73,9 @@ use crate::take::take;
 /// Returns an array that is logically equal to `array` and whose buffers hold
 /// only the data that its rows reference.
 ///
-/// The result has an offset of zero. `minify` applies itself recursively to
+/// The result has an offset of zero, except when `minify` returns `array`
+/// unchanged because aliased buffers would make the result larger (see the
+/// [module documentation](self)). `minify` applies itself recursively to
 /// child arrays, dictionary values and run-end encoded values.
 ///
 /// See the [module documentation](self) for the policy on when `minify`
@@ -89,6 +103,66 @@ use crate::take::take;
 /// with an invalid run end type. It also returns the error of an array
 /// constructor that rejects the minified parts.
 pub fn minify(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
+    let minified = minify_inner(array)?;
+    // Buffers that `array` references more than once can be copied once per
+    // reference. Then `array` itself uses less memory. The slack of 64 bytes
+    // per allocation ignores the rounding of small allocations.
+    let (after, allocations) = allocated_memory(&minified.to_data());
+    let (before, _) = allocated_memory(&array.to_data());
+    if after > before + 64 * allocations {
+        return Ok(make_array(array.to_data()));
+    }
+    Ok(minified)
+}
+
+/// Returns the capacity and the number of all distinct allocations that
+/// `data` and its children reference.
+fn allocated_memory(data: &ArrayData) -> (usize, usize) {
+    fn visit(data: &ArrayData, seen: &mut HashSet<*const u8>, total: &mut usize) {
+        let buffers = data
+            .buffers()
+            .iter()
+            .chain(data.nulls().map(|n| n.buffer()));
+        for b in buffers {
+            if seen.insert(b.data_ptr().as_ptr()) {
+                *total += b.capacity();
+            }
+        }
+        data.child_data().iter().for_each(|c| visit(c, seen, total));
+    }
+    let mut total = 0;
+    let mut seen = HashSet::new();
+    visit(data, &mut seen, &mut total);
+    (total, seen.len())
+}
+
+/// Returns `true` if `a` and `b` describe the same rows of the same buffers.
+fn same_data(a: &ArrayData, b: &ArrayData) -> bool {
+    let same_buffer = |x: &Buffer, y: &Buffer| x.as_ptr() == y.as_ptr() && x.len() == y.len();
+    let same_nulls = match (a.nulls(), b.nulls()) {
+        (None, None) => true,
+        (Some(x), Some(y)) => {
+            x.offset() == y.offset() && x.len() == y.len() && same_buffer(x.buffer(), y.buffer())
+        }
+        _ => false,
+    };
+    a.data_type() == b.data_type()
+        && a.len() == b.len()
+        && a.offset() == b.offset()
+        && same_nulls
+        && a.buffers().len() == b.buffers().len()
+        && a.buffers()
+            .iter()
+            .zip(b.buffers())
+            .all(|(x, y)| same_buffer(x, y))
+        && a.child_data().len() == b.child_data().len()
+        && a.child_data()
+            .iter()
+            .zip(b.child_data())
+            .all(|(x, y)| same_data(x, y))
+}
+
+fn minify_inner(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     macro_rules! primitive {
         ($t:ty) => {
             Ok(Arc::new(minify_primitive(array.as_primitive::<$t>())))
@@ -167,7 +241,7 @@ pub fn minify(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
         DataType::FixedSizeList(field, size) => {
             let array = array.as_fixed_size_list();
             // `FixedSizeListArray::slice` already slices the child array
-            let values = minify(array.values().as_ref())?;
+            let values = minify_inner(array.values().as_ref())?;
             Ok(Arc::new(FixedSizeListArray::try_new_with_length(
                 Arc::clone(field),
                 *size,
@@ -191,11 +265,21 @@ pub fn minify(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
         DataType::Struct(fields) => {
             let array = array.as_struct();
             // `StructArray::slice` already slices the child arrays
-            let columns = array
-                .columns()
-                .iter()
-                .map(|c| minify(c.as_ref()))
-                .collect::<Result<Vec<_>, _>>()?;
+            // Columns over the same data share one minified column
+            let mut done: Vec<(ArrayData, ArrayRef)> = vec![];
+            let mut columns = Vec::with_capacity(array.num_columns());
+            for c in array.columns() {
+                let data = c.to_data();
+                let column = match done.iter().find(|(d, _)| same_data(d, &data)) {
+                    Some((_, m)) => Arc::clone(m),
+                    None => {
+                        let m = minify_inner(c.as_ref())?;
+                        done.push((data, Arc::clone(&m)));
+                        m
+                    }
+                };
+                columns.push(column);
+            }
             Ok(Arc::new(StructArray::try_new_with_length(
                 fields.clone(),
                 columns,
@@ -512,7 +596,7 @@ fn gather_ranges(values: &dyn Array, ranges: &[Range<usize>]) -> Result<ArrayRef
         | DataType::BinaryView
         | DataType::FixedSizeBinary(_) => return gather_ranges_copy(values, ranges, len),
     };
-    minify(gathered.as_ref())
+    minify_inner(gathered.as_ref())
 }
 
 /// Copies `ranges` of `values` with `MutableArrayData`.
@@ -543,7 +627,7 @@ fn gather_ranges_copy(
     for r in ranges {
         mutable.try_extend(0, r.start, r.end)?;
     }
-    minify(make_array(mutable.freeze()).as_ref())
+    minify_inner(make_array(mutable.freeze()).as_ref())
 }
 
 /// Returns the offsets of `ranges` of rows back to back, plus the child
@@ -672,7 +756,7 @@ fn minify_list_child<O: OffsetSizeTrait>(
     match nulls_with_ranges(offsets, nulls) {
         None => {
             let (offsets, start, end) = rebase_offsets(offsets);
-            Ok((offsets, minify(&values.slice(start, end - start))?))
+            Ok((offsets, minify_inner(&values.slice(start, end - start))?))
         }
         Some(nulls) => {
             let (offsets, ranges) = compact_offsets(offsets, nulls);
@@ -710,43 +794,159 @@ fn minify_bytes<T: ByteArrayType>(array: &GenericByteArray<T>) -> GenericByteArr
     unsafe { GenericByteArray::new_unchecked(offsets, values, minify_nulls(array.nulls())) }
 }
 
-/// Returns the out-of-line bytes that `views` reference. A byte that several
-/// views share counts once per view.
-fn view_data_len(views: &[u128]) -> usize {
-    views
-        .iter()
-        .map(|v| *v as u32)
-        .filter(|len| *len > MAX_INLINE_VIEW_LEN)
-        .map(|len| len as usize)
-        .sum()
+/// The out-of-line bytes that the valid rows of a view array reference.
+struct ViewData {
+    /// The disjoint, sorted ranges as `(buffer index, start, end)`. Bytes
+    /// that several views share appear once.
+    merged: Vec<(u32, u32, u32)>,
+    /// The bytes in `merged` per data buffer
+    referenced: Vec<usize>,
+    /// `true` if a null row has an out-of-line view
+    null_views: bool,
 }
 
-/// Returns `true` if `minify` keeps `buffers` of a view array whose views
-/// reference `referenced` out-of-line bytes, and `false` if it runs `gc`.
+/// Merges the out-of-line ranges of the valid views of `array`.
 ///
-/// Views can share bytes, so `referenced` can exceed the allocated bytes.
-/// `gc` copies shared bytes once per view, so it runs only if the data
-/// buffers hold more than the views reference.
-fn keeps_view_buffers(buffers: &[Buffer], referenced: usize) -> bool {
-    let allocated: usize = buffers.iter().map(|b| b.capacity()).sum();
-    allocated <= referenced + 64 * buffers.len()
+/// Null rows reference nothing. `minify` gives them an empty view, as it
+/// gives null rows of a byte array an empty range.
+fn view_data<T: ByteViewType + ?Sized>(
+    array: &GenericByteViewArray<T>,
+    nulls: Option<&NullBuffer>,
+) -> ViewData {
+    let mut ranges = vec![];
+    let mut null_views = false;
+    for (i, v) in array.views().iter().enumerate() {
+        let len = *v as u32;
+        if len <= MAX_INLINE_VIEW_LEN {
+            continue;
+        }
+        if nulls.is_some_and(|n| n.is_null(i)) {
+            null_views = true;
+            continue;
+        }
+        let view = ByteView::from(*v);
+        ranges.push((view.buffer_index, view.offset, view.offset + len));
+    }
+    // Builders and `gc` write views in order, so the sort is often not needed
+    if !ranges.is_sorted() {
+        ranges.sort_unstable();
+    }
+    let mut merged: Vec<(u32, u32, u32)> = vec![];
+    for (b, s, e) in ranges {
+        match merged.last_mut() {
+            Some((mb, _, me)) if *mb == b && s <= *me => *me = (*me).max(e),
+            _ => merged.push((b, s, e)),
+        }
+    }
+    let mut referenced = vec![0; array.data_buffers().len()];
+    for (b, s, e) in &merged {
+        referenced[*b as usize] += (e - s) as usize;
+    }
+    ViewData {
+        merged,
+        referenced,
+        null_views,
+    }
 }
 
+/// Returns `true` if `minify` keeps `buffer`, a data buffer whose valid
+/// views reference `referenced` distinct bytes. The views must reference
+/// every byte, and the allocation must not be oversized.
+fn keeps_view_buffer(buffer: &Buffer, referenced: usize) -> bool {
+    referenced > 0 && referenced == buffer.len() && !is_oversized(buffer)
+}
+
+/// Byte views can share bytes, appear out of order and leave gaps in the
+/// data buffers.
+///
+/// `minify` keeps each data buffer whose bytes the valid views all reference.
+/// It copies the referenced ranges of the other buffers back to back into new
+/// buffers, and moves each view to the copy of its range. Views that share
+/// bytes keep sharing them. Unreferenced buffers go away.
 fn minify_byte_view<T: ByteViewType + ?Sized>(
     array: &GenericByteViewArray<T>,
 ) -> GenericByteViewArray<T> {
-    let referenced = view_data_len(array.views());
-    let array = if keeps_view_buffers(array.data_buffers(), referenced) {
-        array.clone()
-    } else {
-        array.gc()
-    };
-    let (views, buffers, nulls) = array.into_parts();
-    // `gc` can return the views unchanged, for example when there are no data buffers
-    let views = minify_scalar_buffer(&views);
-    let nulls = minify_nulls(nulls.as_ref());
-    // SAFETY: the views, data buffers and null bits stay the same
-    unsafe { GenericByteViewArray::new_unchecked(views, buffers, nulls) }
+    let nulls = minify_nulls(array.nulls());
+    let ViewData {
+        merged,
+        referenced,
+        null_views,
+    } = view_data(array, nulls.as_ref());
+    let old_buffers = array.data_buffers();
+    let kept: Vec<bool> = old_buffers
+        .iter()
+        .zip(&referenced)
+        .map(|(b, r)| keeps_view_buffer(b, *r))
+        .collect();
+    if !null_views && kept.iter().all(|k| *k) {
+        let views = minify_scalar_buffer(array.views());
+        // SAFETY: the views, data buffers and null bits stay the same
+        return unsafe { GenericByteViewArray::new_unchecked(views, old_buffers.clone(), nulls) };
+    }
+
+    // The new index of each kept buffer
+    let mut new_index = vec![0u32; old_buffers.len()];
+    let mut buffers = vec![];
+    for (i, b) in old_buffers.iter().enumerate().filter(|(i, _)| kept[*i]) {
+        new_index[i] = buffers.len() as u32;
+        buffers.push(b.clone());
+    }
+    // The new buffer index and offset of each copied range in `merged`
+    let copied: Vec<usize> = (0..merged.len())
+        .filter(|i| !kept[merged[*i].0 as usize])
+        .collect();
+    let mut moved = vec![(0u32, 0u32); merged.len()];
+    let mut start = 0;
+    while start < copied.len() {
+        // A view offset is a `u32`. `gc` limits a buffer to `i32::MAX` bytes.
+        let mut end = start;
+        let mut len = 0usize;
+        while end < copied.len() {
+            let (_, s, e) = merged[copied[end]];
+            let range_len = (e - s) as usize;
+            if end > start && len + range_len > i32::MAX as usize {
+                break;
+            }
+            len += range_len;
+            end += 1;
+        }
+        let mut bytes = Vec::with_capacity(len);
+        for i in &copied[start..end] {
+            let (b, s, e) = merged[*i];
+            moved[*i] = (buffers.len() as u32, bytes.len() as u32);
+            bytes.extend_from_slice(&old_buffers[b as usize][s as usize..e as usize]);
+        }
+        buffers.push(Buffer::from_vec(bytes));
+        start = end;
+    }
+
+    let views = array
+        .views()
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let len = *v as u32;
+            if len <= MAX_INLINE_VIEW_LEN {
+                return *v;
+            }
+            if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
+                return 0;
+            }
+            let view = ByteView::from(*v);
+            let (b, o) = (view.buffer_index, view.offset);
+            if kept[b as usize] {
+                return view.with_buffer_index(new_index[b as usize]).as_u128();
+            }
+            let r = merged.partition_point(|(mb, ms, _)| (*mb, *ms) <= (b, o)) - 1;
+            let (new_buffer, base) = moved[r];
+            view.with_buffer_index(new_buffer)
+                .with_offset(base + o - merged[r].1)
+                .as_u128()
+        })
+        .collect();
+    // SAFETY: every view of a valid row points at a copy of its bytes or at
+    // its kept buffer, and null rows have an empty view
+    unsafe { GenericByteViewArray::new_unchecked(views, buffers.into(), nulls) }
 }
 
 fn minify_list<O: OffsetSizeTrait>(
@@ -847,7 +1047,7 @@ fn minify_list_view<O: OffsetSizeTrait>(
     let (offsets, sizes, values) = match merged.as_slice() {
         [] | [_] => {
             let range = merged.first().cloned().unwrap_or(0..0);
-            let values = minify(&array.values().slice(range.start, range.len()))?;
+            let values = minify_inner(&array.values().slice(range.start, range.len()))?;
             if range.start == 0 && !null_views && empty_end <= range.end {
                 let offsets = minify_scalar_buffer(array.offsets());
                 let sizes = minify_scalar_buffer(array.sizes());
@@ -893,7 +1093,7 @@ fn minify_union(
         UnionMode::Sparse => {
             let children = fields
                 .iter()
-                .map(|(type_id, _)| minify(array.child(type_id).as_ref()))
+                .map(|(type_id, _)| minify_inner(array.child(type_id).as_ref()))
                 .collect::<Result<Vec<_>, _>>()?;
             // SAFETY: the type ids and the child rows they reference stay the same
             Ok(Arc::new(unsafe {
@@ -914,7 +1114,7 @@ fn minify_union(
             {
                 let children = fields
                     .iter()
-                    .map(|(type_id, _)| minify(array.child(type_id).as_ref()))
+                    .map(|(type_id, _)| minify_inner(array.child(type_id).as_ref()))
                     .collect::<Result<Vec<_>, _>>()?;
                 let offsets = Some(minify_scalar_buffer(old_offsets));
                 // SAFETY: the type ids, offsets and child rows stay the same
@@ -961,23 +1161,37 @@ struct DenseUnionRows {
 fn dense_union_rows(
     array: &UnionArray,
     fields: &UnionFields,
-    rows: impl Iterator<Item = usize>,
+    rows: impl Iterator<Item = usize> + Clone,
 ) -> DenseUnionRows {
     let type_ids = array.type_ids();
     let old_offsets = array.offsets().expect("dense union has offsets");
     // Type ids are in `0..128`, so a `Vec` can index them
     let mut indices: Vec<Vec<u32>> = vec![Vec::new(); 128];
-    // Maps each child row to its new offset, or -1 if no row uses it yet
+    // The smallest and largest offset per type id. The lookup tables span
+    // only these offsets, so the cost depends on the rows and not on the
+    // child length.
+    let mut bounds = vec![(i32::MAX, -1); 128];
+    for i in rows.clone() {
+        let (min, max) = &mut bounds[type_ids[i] as usize];
+        *min = (*min).min(old_offsets[i]);
+        *max = (*max).max(old_offsets[i]);
+    }
+    // Maps each child row in the bounds to its new offset, or -1 if no row
+    // uses it yet
     let mut new_offsets: Vec<Vec<i32>> = vec![Vec::new(); 128];
     for (type_id, _) in fields.iter() {
-        new_offsets[type_id as usize] = vec![-1; array.child(type_id).len()];
+        let (min, max) = bounds[type_id as usize];
+        if max >= min {
+            new_offsets[type_id as usize] = vec![-1; (max - min) as usize + 1];
+        }
     }
     let mut in_order = true;
     let offsets = rows
         .map(|i| {
             let (type_id, offset) = (type_ids[i] as usize, old_offsets[i]);
             let child_indices = &mut indices[type_id];
-            let new_offset = &mut new_offsets[type_id][offset as usize];
+            let min = bounds[type_id].0;
+            let new_offset = &mut new_offsets[type_id][(offset - min) as usize];
             if *new_offset < 0 {
                 *new_offset = child_indices.len() as i32;
                 child_indices.push(offset as u32);
@@ -998,7 +1212,7 @@ fn minify_dictionary<K: ArrowDictionaryKeyType>(
 ) -> Result<ArrayRef, ArrowError> {
     let array = garbage_collect_values(array)?;
     let keys = minify_primitive(array.keys());
-    let values = minify(array.values().as_ref())?;
+    let values = minify_inner(array.values().as_ref())?;
     // SAFETY: `garbage_collect_dictionary` returns valid keys, and `minify`
     // keeps the keys and the length of the values
     Ok(Arc::new(unsafe {
@@ -1050,7 +1264,7 @@ fn minify_run<R: RunEndIndexType>(array: &RunArray<R>) -> Result<ArrayRef, Arrow
     } else {
         PrimitiveArray::<R>::from_iter_values(run_ends.sliced_values())
     };
-    let values = minify(values.as_ref())?;
+    let values = minify_inner(values.as_ref())?;
     Ok(Arc::new(RunArray::<R>::try_new(
         &run_ends,
         values.as_ref(),
@@ -1071,11 +1285,9 @@ mod tests {
 
     const N: usize = 200;
 
-    /// Sums the allocated bytes of all buffers, including children.
+    /// Sums the capacity of all distinct allocations, including children.
     fn allocated(data: &ArrayData) -> usize {
-        data.buffers().iter().map(|b| b.capacity()).sum::<usize>()
-            + data.nulls().map_or(0, |n| n.buffer().capacity())
-            + data.child_data().iter().map(allocated).sum::<usize>()
+        allocated_memory(data).0
     }
 
     /// Collects the start pointer of every buffer, including children.
@@ -1308,9 +1520,9 @@ mod tests {
     }
 
     #[test]
-    fn test_byte_views_reuse_buffers_within_slack() {
-        // Each buffer holds 50 unreferenced bytes, which is within the slack
-        // of 64 bytes per buffer
+    fn test_byte_views_copy_partly_used_buffers() {
+        // Each buffer holds 50 unreferenced bytes. The referenced bytes of
+        // both buffers move into one new buffer.
         let buffers = vec![
             Buffer::from_vec(vec![b'x'; 63]),
             Buffer::from_vec(vec![b'y'; 63]),
@@ -1318,10 +1530,163 @@ mod tests {
         let array = byte_views(buffers, &[(0, 0, 13), (1, 50, 13)]);
         let minified = minify(&array).unwrap();
         assert_eq!(minified.to_data(), array.to_data());
+        let buffers = minified.as_binary_view().data_buffers();
+        assert_eq!(buffers.len(), 1);
+        assert_eq!(buffers[0].as_slice(), [[b'x'; 13], [b'y'; 13]].concat());
+    }
+
+    #[test]
+    fn test_byte_views_reuse_fully_used_buffers() {
+        let buffers = vec![
+            Buffer::from_vec(vec![b'x'; 13]),
+            Buffer::from_vec(vec![b'y'; 26]),
+        ];
+        let array = byte_views(buffers, &[(0, 0, 13), (1, 13, 13), (1, 0, 13)]);
+        let minified = minify(&array).unwrap();
+        assert_eq!(minified.to_data(), array.to_data());
         let (mut a, mut b) = (vec![], vec![]);
         pointers(&array.to_data(), &mut a);
         pointers(&minified.to_data(), &mut b);
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn test_byte_views_repeated_views_copy_bytes_once() {
+        // `take` with repeated indices repeats views over a 1 MB buffer
+        let mut builder = StringViewBuilder::new();
+        for i in 0..10_000 {
+            builder.append_value(format!("{i:0100}"));
+        }
+        let array = builder.finish();
+        for (indices, distinct) in [
+            (vec![0u32; 10_000], 1),
+            ((0..10_000).map(|i| i % 2).collect(), 2),
+            (vec![0u32; 5_000], 1),
+        ] {
+            let taken = take(&array, &UInt32Array::from(indices.clone()), None).unwrap();
+            let minified = minify(&taken).unwrap();
+            assert_eq!(minified.to_data(), taken.to_data());
+            let minified = minified.as_string_view();
+            let buffers: Vec<usize> = minified.data_buffers().iter().map(|b| b.len()).collect();
+            assert_eq!(buffers, [100 * distinct]);
+            assert_eq!(minified.views().inner().capacity(), 16 * indices.len());
+        }
+    }
+
+    #[test]
+    fn test_byte_views_null_rows_reference_nothing() {
+        let mut builder = StringViewBuilder::new();
+        for i in 0..10_000 {
+            builder.append_value(format!("{i:0100}"));
+        }
+        let array = builder.finish();
+        let mask = BooleanArray::from_iter((0..10_000).map(|i| Some(i != 0)));
+        let array = crate::nullif::nullif(&array, &mask).unwrap();
+        let minified = minify(&array).unwrap();
+        assert_eq!(minified.to_data(), array.to_data());
+        let minified = minified.as_string_view();
+        let buffers: Vec<usize> = minified.data_buffers().iter().map(|b| b.len()).collect();
+        assert_eq!(buffers, [100]);
+        assert_eq!(minified.value(0), format!("{:0100}", 0));
+        assert!(minified.views()[1..].iter().all(|v| *v == 0));
+    }
+
+    #[test]
+    fn test_byte_views_drop_unreferenced_small_buffers() {
+        // 10000 buffers of 60 bytes, and the slice references 13 bytes of one
+        let buffers: Vec<Buffer> = (0..10_000)
+            .map(|_| Buffer::from_vec(vec![b'x'; 60]))
+            .collect();
+        let views: Vec<(u32, u32, u32)> = (0..10_000).map(|b| (b, 0, 13)).collect();
+        let array = byte_views(buffers, &views);
+        let minified = minify(&array.slice(0, 1)).unwrap();
+        let buffers: Vec<usize> = minified
+            .as_binary_view()
+            .data_buffers()
+            .iter()
+            .map(|b| b.len())
+            .collect();
+        assert_eq!(buffers, [13]);
+    }
+
+    #[test]
+    fn test_aliased_struct_columns() {
+        let s: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..10_000).map(|i| format!("{i:0100}")),
+        ));
+        let field = |name| Arc::new(Field::new(name, DataType::Utf8, false));
+        let before_bytes = allocated(&s.to_data());
+
+        // Equal columns share one minified column
+        let array = StructArray::from(vec![(field("x"), s.clone()), (field("y"), s.clone())])
+            .slice(1, 9_999);
+        let minified = minify(&array).unwrap();
+        assert_eq!(minified.to_data(), array.to_data());
+        let columns = minified.as_struct().columns();
+        assert!(Arc::ptr_eq(&columns[0], &columns[1]));
+        // 999900 value bytes rounded up to 64, and 10000 offsets
+        assert_eq!(allocated(&minified.to_data()), 999_936 + 40_000);
+
+        // Different slices of the same buffer are not copied twice
+        let array = StructArray::from(vec![
+            (field("x"), s.slice(0, 9_000)),
+            (field("y"), s.slice(1_000, 9_000)),
+        ]);
+        let minified = minify(&array).unwrap();
+        assert_eq!(minified.to_data(), array.to_data());
+        assert_eq!(allocated(&minified.to_data()), before_bytes);
+    }
+
+    #[test]
+    fn test_aliased_dictionary_values() {
+        let values: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..10_000).map(|i| format!("{i:0100}")),
+        ));
+        let keys =
+            |skip: i32| Int32Array::from_iter_values((0..10_000).filter(move |k| *k != skip));
+        let field = |name| {
+            Arc::new(Field::new_dictionary(
+                name,
+                DataType::Int32,
+                DataType::Utf8,
+                false,
+            ))
+        };
+        let array = StructArray::from(vec![
+            (
+                field("x"),
+                Arc::new(DictionaryArray::new(keys(0), values.clone())) as ArrayRef,
+            ),
+            (
+                field("y"),
+                Arc::new(DictionaryArray::new(keys(1), values.clone())) as ArrayRef,
+            ),
+        ]);
+        let before = allocated(&array.to_data());
+        let minified = minify(&array).unwrap();
+        assert_eq!(minified.to_data(), array.to_data());
+        assert_eq!(allocated(&minified.to_data()), before);
+    }
+
+    #[test]
+    fn test_dense_union_table_spans_visible_offsets() {
+        let n = 1_000_000;
+        let child: ArrayRef = Arc::new(Int8Array::from(vec![7i8; n]));
+        let fields = UnionFields::try_new([0], [Field::new("a", DataType::Int8, false)]).unwrap();
+        let offsets: Vec<i32> = (0..n as i32).collect();
+        let array = UnionArray::try_new(
+            fields.clone(),
+            vec![0i8; n].into(),
+            Some(offsets.into()),
+            vec![child],
+        )
+        .unwrap();
+        let rows = dense_union_rows(&array, &fields, [6, 5, 6].into_iter());
+        assert_eq!(rows.offsets, [0, 1, 0]);
+        assert_eq!(rows.indices[0], [6, 5]);
+        let minified = minify(&array.slice(5, 1)).unwrap();
+        let minified = minified.as_union();
+        assert_eq!(minified.child(0).as_primitive::<Int8Type>().values(), &[7]);
     }
 
     #[test]
