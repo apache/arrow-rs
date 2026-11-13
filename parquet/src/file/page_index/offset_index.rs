@@ -10,7 +10,7 @@ use std::io::Write;
 
 use crate::parquet_thrift::{
     ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol, ThriftCompactOutputProtocol,
-    WriteThrift, WriteThriftField, read_thrift_vec, validate_list_type,
+    WriteThrift, WriteThriftField, check_list_size, read_thrift_vec, validate_list_type,
 };
 use crate::{
     errors::{ParquetError, Result},
@@ -78,7 +78,10 @@ impl OffsetIndexMetaData {
         // we have to do this manually because we want to use the fast PageLocation decoder
         let list_ident = prot.read_list_begin()?;
         validate_list_type(ElementType::Struct, &list_ident)?;
-        let mut page_locations = Vec::with_capacity(list_ident.size as usize);
+        // list_ident.size is already guaranteed to fit in i32 by read_list_begin()
+        let size = list_ident.size as usize;
+        check_list_size(prot.remaining_bytes(), size)?;
+        let mut page_locations = Vec::with_capacity(size);
         for _ in 0..list_ident.size {
             page_locations.push(read_page_location(prot)?);
         }
@@ -155,7 +158,49 @@ fn read_page_location<'a, R: ThriftCompactInputProtocol<'a>>(prot: &mut R) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parquet_thrift::tests::test_roundtrip;
+    use crate::file::page_index::index_reader::decode_offset_index;
+    use crate::parquet_thrift::{ThriftSliceInputProtocol, tests::test_roundtrip};
+
+    #[test]
+    fn test_offset_idx_rejects_count_exceeding_remaining_input() {
+        // Field 1: list<struct> declaring 4096 entries, with no payload.
+        let data = [0x19, 0xfc, 0x80, 0x20];
+        let mut prot = ThriftSliceInputProtocol::new(&data);
+        let err = OffsetIndexMetaData::try_from_fast(&mut prot).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Thrift list size 4096 exceeds remaining input length 0"),
+            "{err}"
+        );
+        assert!(decode_offset_index(&data).is_err());
+    }
+
+    #[test]
+    fn test_offset_idx_fast_path_roundtrip() {
+        for page_locations in [
+            Vec::new(),
+            vec![PageLocation {
+                offset: 0,
+                compressed_page_size: 10,
+                first_row_index: 0,
+            }],
+        ] {
+            let index = OffsetIndexMetaData {
+                page_locations,
+                unencoded_byte_array_data_bytes: None,
+            };
+            let mut data = Vec::new();
+            index
+                .write_thrift(&mut ThriftCompactOutputProtocol::new(&mut data))
+                .unwrap();
+            let mut prot = ThriftSliceInputProtocol::new(&data);
+            assert_eq!(
+                OffsetIndexMetaData::try_from_fast(&mut prot).unwrap(),
+                index
+            );
+            assert_eq!(decode_offset_index(&data).unwrap(), index);
+        }
+    }
 
     #[test]
     fn test_offset_idx_roundtrip() {

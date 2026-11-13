@@ -717,7 +717,9 @@ fn plan_with_empty_offset_index() {
             if (row_group, column) == (0, 0) {
                 offset_index.page_locations.clear();
             }
-            page_index_builder.put_offset_index(offset_index, row_group, column);
+            page_index_builder
+                .try_put_offset_index(offset_index, row_group, column)
+                .unwrap();
         }
     }
     let parquet_metadata = parquet_metadata
