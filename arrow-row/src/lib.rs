@@ -6579,6 +6579,113 @@ mod tests {
     }
 
     #[test]
+    fn unions_inside_unions_follow_same_ordering() {
+        // Row  Selected value
+        //  0   inner integer 2
+        //  1   outer integer 5
+        //  2   inner integer NULL
+        //  3   inner string NULL
+        //  4   outer integer NULL
+        //  5   inner string "a"
+        //  6   inner string "longer than one block"
+        let tail: ArrayRef = Arc::new(StringArray::from(vec!["z", "b", "a", "a", "a", "m", "n"]));
+        for inner_mode in [UnionMode::Dense, UnionMode::Sparse] {
+            for outer_mode in [UnionMode::Dense, UnionMode::Sparse] {
+                let (inner_values, outer_ints, outer_offsets) = match outer_mode {
+                    UnionMode::Dense => (
+                        vec![
+                            Int(Some(2)),
+                            Int(None),
+                            Str(None),
+                            Str(Some("a")),
+                            Str(Some("longer than one block")),
+                        ],
+                        vec![Some(5), None],
+                        Some(vec![0, 0, 1, 2, 1, 3, 4].into()),
+                    ),
+                    UnionMode::Sparse => (
+                        vec![
+                            Int(Some(2)),
+                            Int(None),
+                            Int(None),
+                            Str(None),
+                            Int(None),
+                            Str(Some("a")),
+                            Str(Some("longer than one block")),
+                        ],
+                        vec![None, Some(5), None, None, None, None, None],
+                        None,
+                    ),
+                };
+                let inner = int_string_union(inner_mode, &int_string_fields(), &inner_values);
+                let fields = UnionFields::try_new(
+                    [127, 3],
+                    [
+                        Field::new("inner", inner.data_type().clone(), true),
+                        Field::new("int", DataType::Int32, true),
+                    ],
+                )
+                .unwrap();
+                let union = Arc::new(
+                    UnionArray::try_new(
+                        fields,
+                        vec![127, 3, 127, 127, 3, 127, 127].into(),
+                        outer_offsets,
+                        vec![Arc::new(inner), Arc::new(Int32Array::from(outer_ints))],
+                    )
+                    .unwrap(),
+                );
+                let input_nulls = union.logical_nulls().unwrap();
+                assert_eq!(
+                    input_nulls,
+                    NullBuffer::from(vec![true, true, false, false, false, true, true])
+                );
+                let columns = [union.clone() as ArrayRef, tail.clone()];
+                for options in all_sort_options() {
+                    let options = [
+                        options,
+                        SortOptions {
+                            descending: true,
+                            nulls_first: false,
+                        },
+                    ];
+                    let context =
+                        format!("{inner_mode:?} inner, {outer_mode:?} outer, {options:?}");
+                    check_order_matches_native(&columns, &options);
+                    let decoded = check_reencoding(&columns, &options);
+                    let decoded_union = decoded[0].as_union();
+                    assert_eq!(
+                        decoded_union.type_ids().as_ref(),
+                        &[127, 3, 127, 127, 127, 127, 127],
+                        "{context}"
+                    );
+                    assert_eq!(
+                        decoded_union.logical_nulls().as_ref(),
+                        Some(&input_nulls),
+                        "{context}"
+                    );
+                    for row in 0..union.len() {
+                        let value = decoded_union.value(row);
+                        if input_nulls.is_null(row) {
+                            // Nulls at either level decode as an inner integer null.
+                            let inner = value.as_union();
+                            assert_eq!(inner.type_ids().as_ref(), &[127], "{context}, row {row}");
+                            assert!(inner.value(0).is_null(0), "{context}, row {row}");
+                        } else {
+                            assert_eq!(
+                                value.to_data(),
+                                union.value(row).to_data(),
+                                "{context}, row {row}"
+                            );
+                        }
+                    }
+                    assert_eq!(decoded[1].to_data(), tail.to_data(), "{context}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_row_converter_roundtrip_with_many_union_columns() {
         // col 1: Union(Int32, Utf8) [67, "hello"]
         let fields1 = UnionFields::try_new(
