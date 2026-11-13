@@ -16,8 +16,8 @@ use arrow_array::timezone::Tz;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{
-    ArrowNativeType, DivisorI32, DivisorI64, DivisorU32, DivisorU64, IntervalDayTime,
-    IntervalMonthDayNano, NullBuffer,
+    ArrowNativeType, BooleanBuffer, DivisorI32, DivisorI64, DivisorU32, DivisorU64,
+    IntervalDayTime, IntervalMonthDayNano, NullBuffer,
 };
 use arrow_schema::{ArrowError, DataType, IntervalUnit, TimeUnit};
 use num_traits::{CheckedMul, ToPrimitive};
@@ -335,6 +335,10 @@ macro_rules! try_op_ref {
 /// `llvm.sadd.with.overflow` and `llvm.ssub.with.overflow`, which LLVM doesn't
 /// vectorize, so the signed impls test the sign bits instead.
 trait OverflowingOp: Sized {
+    /// Whether the checked kernels use the one-pass path for this type. When
+    /// it's false, [`overflowing_op`] returns `None` without doing any work.
+    const ONE_PASS: bool = true;
+
     fn add_overflowing(self, rhs: Self) -> (Self, bool);
     fn sub_overflowing(self, rhs: Self) -> (Self, bool);
     fn mul_overflowing(self, rhs: Self) -> (Self, bool);
@@ -411,8 +415,12 @@ fn overflowing_op<T, F>(
 ) -> Result<Option<PrimitiveArray<T>>, ArrowError>
 where
     T: ArrowPrimitiveType,
+    T::Native: OverflowingOp,
     F: Fn(T::Native, T::Native) -> (T::Native, bool),
 {
+    if !T::Native::ONE_PASS {
+        return Ok(None);
+    }
     match (l_s, r_s) {
         (true, true) | (false, false) => {
             if l.len() != r.len() {
@@ -421,26 +429,23 @@ where
             let pairs = l.values().iter().zip(r.values());
             let values = collect_overflowing(pairs.map(|(&l, &r)| op(l, r)))?;
             let nulls = NullBuffer::union(l.nulls(), r.nulls());
-            Ok(unless_valid_overflow(values, nulls, |i| {
-                op(l.value(i), r.value(i)).1
-            }))
+            let (l, r) = (l.values(), r.values());
+            Ok(unless_valid_overflow(values, nulls, |i| op(l[i], r[i]).1))
         }
         (true, false) => match (l.null_count() == 0).then(|| l.value(0)) {
             None => Ok(Some(PrimitiveArray::new_null(r.len()))),
             Some(l) => {
                 let values = collect_overflowing(r.values().iter().map(|&r| op(l, r)))?;
-                Ok(unless_valid_overflow(values, r.nulls().cloned(), |i| {
-                    op(l, r.value(i)).1
-                }))
+                let (nulls, r) = (r.nulls().cloned(), r.values());
+                Ok(unless_valid_overflow(values, nulls, |i| op(l, r[i]).1))
             }
         },
         (false, true) => match (r.null_count() == 0).then(|| r.value(0)) {
             None => Ok(Some(PrimitiveArray::new_null(l.len()))),
             Some(r) => {
                 let values = collect_overflowing(l.values().iter().map(|&l| op(l, r)))?;
-                Ok(unless_valid_overflow(values, l.nulls().cloned(), |i| {
-                    op(l.value(i), r).1
-                }))
+                let (nulls, l) = (l.nulls().cloned(), l.values());
+                Ok(unless_valid_overflow(values, nulls, |i| op(l[i], r).1))
             }
         },
     }
@@ -450,18 +455,19 @@ where
 /// `None` if a valid row overflowed.
 ///
 /// A null slot can hold any value, such as the 0 that builders write, which
-/// overflows unsigned `0 - 1`. So when a slot overflowed, this checks the
-/// valid rows with `overflowed` before reporting an error, instead of making
-/// the caller rerun the whole batch.
+/// overflows unsigned `0 - 1`. So when a slot overflowed, this recomputes the
+/// overflow of every row with `overflowed` and masks it with the validity
+/// bits, instead of making the caller rerun the whole batch.
 fn unless_valid_overflow<T: ArrowPrimitiveType>(
     (values, overflow): (Vec<T::Native>, bool),
     nulls: Option<NullBuffer>,
     overflowed: impl Fn(usize) -> bool,
 ) -> Option<PrimitiveArray<T>> {
     let valid_overflow = overflow
-        && nulls
-            .as_ref()
-            .is_none_or(|n| n.valid_indices().any(overflowed));
+        && nulls.as_ref().is_none_or(|n| {
+            let overflowed = BooleanBuffer::collect_bool(n.len(), overflowed);
+            (n.inner() & &overflowed).count_set_bits() != 0
+        });
     (!valid_overflow).then(|| PrimitiveArray::new(values.into(), nulls))
 }
 
