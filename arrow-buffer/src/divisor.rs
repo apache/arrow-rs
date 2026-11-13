@@ -562,8 +562,9 @@ signed_divisor!(
     },
     // Figure 5.1 computes `n + MULSH(m', n)`, and `i128` has no wider type to compute `MULSH`
     // in. Section 3 of the paper gives `MULSH(x, y) = MULUH(x, y) - AND(x, XSIGN(y))
-    // - AND(y, XSIGN(x))`. `m'` is negative for every divisor but ±1, which are powers of two,
-    // so `AND(n, XSIGN(m'))` is `n` and cancels the add, leaving `MULUH(m', n) - AND(m', XSIGN(n))`
+    // - AND(y, XSIGN(x))`, which is program (1) in section 8-3 of Warren, "Hacker's Delight", 2nd
+    // edition. `m'` is negative for every divisor but 1 and -1, which are powers of two, so
+    // `AND(n, XSIGN(m'))` is `n` and cancels the add, leaving `MULUH(m', n) - AND(m', XSIGN(n))`
     |m, n| (mulx(m as u128, n as u128).1 as i128).wrapping_sub((n >> 127) & m),
     [
         ///
@@ -592,6 +593,9 @@ signed_divisor!(
     ]
 );
 
+// `signed_divisor!` can't build `DivisorI256`, because `i256` has no `BITS` or `unsigned_abs` and
+// its operators can't be called in a `const fn`. Its variants compute on the parts of the values
+// with the helpers below `impl DivisorI256` instead
 divisor_enum!(
     DivisorI256,
     i256,
@@ -673,10 +677,8 @@ impl DivisorI256 {
 /// table 3.1 of Granlund and Montgomery for `0..=255` bits
 ///
 /// It branches on the shift, so the `i256` variants branch on the divisor, unlike the other
-/// divisor types. The shift is the same for every value, so the branch is predicted, and LLVM
-/// moves it out of the loop for [`PowerOfTwoDivisorI256`]. A branch-free form that shifts both
-/// halves and selects was 1.33x slower for [`PowerOfTwoDivisorI256`] and 1.06x slower for
-/// [`AddIndicatorDivisorI256`] in the `divisor` benchmark on aarch64
+/// divisor types. The shift is the same for every value, so the branch is predicted. A
+/// branch-free form that shifts both halves and selects was slower
 const fn shr(x: i256, shift: u32) -> i256 {
     let (low, high) = x.to_parts();
     if shift == 0 {
@@ -823,10 +825,7 @@ impl PowerOfTwoDivisorI256 {
 /// as [`AddIndicatorDivisorI64`] does.
 #[derive(Debug, Clone, Copy)]
 pub struct AddIndicatorDivisorI256 {
-    /// `|divisor|`, which is below 2^255 because `MIN`'s magnitude is a power of two
-    magnitude: i256,
-    /// -1 if the divisor is negative, otherwise 0
-    sign: i256,
+    divisor: i256,
     /// `m'` in figure 5.1
     multiplier: i256,
     /// `sh_post` in figure 5.1
@@ -858,8 +857,7 @@ impl AddIndicatorDivisorI256 {
             (q[2] as u128 | ((q[3] as u128) << 64)) as i128,
         );
         Self {
-            magnitude,
-            sign: sign(divisor),
+            divisor,
             multiplier: q.wrapping_add(i256::ONE),
             shift: l - 1,
         }
@@ -882,13 +880,16 @@ impl AddIndicatorDivisorI256 {
         let high = mul_high_u256(self.multiplier, n).wrapping_sub(and(sign(n), self.multiplier));
         // The shift rounds down, and subtracting the sign of `n` rounds toward zero instead
         let q = shr(high, self.shift).wrapping_sub(sign(n));
+        let divisor_sign = sign(self.divisor);
         // Figure 5.1 gives only the quotient. The remainder doesn't depend on the sign of the
         // divisor, as section 3.1 of Lemire, Kaser and Kurz, "Faster Remainder by Direct
         // Computation", https://arxiv.org/abs/1902.01961, states, so it uses `q` before the sign
-        // fix and `|divisor|`, which saves negating `q` before the multiply
+        // fix and `|divisor|`, which saves negating `q` before the multiply. `divisor` is never
+        // `MIN`, whose magnitude is a power of two
+        let magnitude = xor(self.divisor, divisor_sign).wrapping_sub(divisor_sign);
         (
-            xor(q, self.sign).wrapping_sub(self.sign),
-            n.wrapping_sub(q.wrapping_mul(self.magnitude)),
+            xor(q, divisor_sign).wrapping_sub(divisor_sign),
+            n.wrapping_sub(q.wrapping_mul(magnitude)),
         )
     }
 }

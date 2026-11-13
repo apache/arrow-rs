@@ -61,7 +61,8 @@ macro_rules! bench_divisor {
 
 /// Divides `SIZE` values by a divisor of each variant and by a power of ten that a decimal kernel
 /// divides by, with `/` and `%`, and with the divisor type. `full` values use every bit, and
-/// `narrow` values fit in the next narrower type, where `/` and `%` take a faster path
+/// `narrow` values fit in the next narrower type, where `/` and `%` take a faster path. `new`
+/// builds one divisor, which a kernel does once per batch
 macro_rules! bench_wide {
     ($c:expr, $divisor:ident, $t:ty, $full:expr, $narrow:expr, $divisors:expr, $variants:tt) => {{
         let mut rng = StdRng::seed_from_u64(42);
@@ -86,6 +87,12 @@ macro_rules! bench_wide {
                     b.iter(|| div_rem_all!(values, divisor, $divisor, 1, $variants))
                 });
             }
+        }
+        group.throughput(Throughput::Elements(1));
+        for (label, d) in $divisors {
+            group.bench_function(format!("new {label}"), |b| {
+                b.iter(|| $divisor::new(hint::black_box(d)))
+            });
         }
         group.finish();
     }};
