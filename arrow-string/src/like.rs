@@ -328,9 +328,13 @@ fn run_end_encoded_op(
     } else if left_is_scalar {
         Ok(expand_runs(right, &like_op(op, lhs, &run_values(right))?))
     } else if left.is_empty() {
-        // An empty run array has no values, and the dictionary kernels panic on
-        // a dictionary without values.
-        Ok(BooleanArray::from(Vec::<bool>::new()))
+        // The dictionary kernels panic on a dictionary without values, so match the
+        // run values instead. They are empty too, and like_op still checks their types.
+        let left_values = left_is_ree.then(|| run_values(left));
+        let right_values = right_is_ree.then(|| run_values(right));
+        let lhs: &dyn Datum = left_values.as_ref().map_or(lhs, |values| values);
+        let rhs: &dyn Datum = right_values.as_ref().map_or(rhs, |values| values);
+        like_op(op, lhs, rhs)
     } else {
         // Rows of two arrays need not share run boundaries, so look up each row
         // through a dictionary view, which does not copy the values.
@@ -1814,6 +1818,18 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "Invalid argument error: Invalid string/binary operation: Utf8 LIKE LargeUtf8"
+        );
+
+        let empty: RunArray<Int32Type> = std::iter::empty::<&str>().collect();
+        let err = like(&empty, &Int32Array::from(Vec::<i32>::new())).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Invalid string/binary operation: Utf8 LIKE Int32"
+        );
+        let err = like(&Int32Array::from(Vec::<i32>::new()), &empty).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Invalid string/binary operation: Int32 LIKE Utf8"
         );
     }
 
