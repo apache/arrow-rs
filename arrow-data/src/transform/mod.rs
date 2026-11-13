@@ -822,11 +822,7 @@ impl<'a> MutableArrayData<'a> {
         }
 
         let len = end - start;
-        let new_len = self
-            .data
-            .len
-            .checked_add(len)
-            .ok_or_else(|| ArrowError::MemoryError("length overflow".into()))?;
+        let new_len = self.data.len + len;
         // Grow here so allocation errors are returned before the infallible null-bit writer runs.
         if let Some(nulls) = &mut self.data.null_buffer {
             utils::try_resize_for_bits(nulls, new_len)?;
@@ -871,8 +867,8 @@ impl<'a> MutableArrayData<'a> {
     /// # Errors
     ///
     /// Returns an error if this [`MutableArrayData`] was not created with `use_nulls` and none
-    /// of the source arrays are nullable, the resulting length or run-end counter overflows, or
-    /// memory allocation fails.
+    /// of the source arrays are nullable, the run-end counter overflows, or memory allocation
+    /// fails.
     pub fn try_extend_nulls(&mut self, len: usize) -> Result<(), ArrowError> {
         if self.data.null_buffer.is_none() {
             return Err(ArrowError::InvalidArgumentError(
@@ -886,11 +882,7 @@ impl<'a> MutableArrayData<'a> {
             return Ok(());
         }
 
-        let new_len = self
-            .data
-            .len
-            .checked_add(len)
-            .ok_or_else(|| ArrowError::MemoryError("length overflow".into()))?;
+        let new_len = self.data.len + len;
         let bit_len = bit_util::ceil(new_len, 8);
         self.data
             .null_buffer()
