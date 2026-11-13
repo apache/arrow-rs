@@ -4,7 +4,7 @@
 
 use std::{array::TryFromSliceError, borrow::Cow, ops::Range, str};
 
-use crate::VariantPathElement;
+use crate::{QuotedKeyEscapes, VariantPathElement};
 use arrow_schema::ArrowError;
 
 use std::cmp::Ordering;
@@ -133,172 +133,130 @@ pub(crate) const fn expect_size_of<T>(expected: usize) {
     }
 }
 
-/// Parse a path string into a vector of [`VariantPathElement`].
+/// Parse a Spark-style path string into a vector of [`VariantPathElement`].
 ///
-/// # Syntax
-/// - `.field` or `field` - access object field (do not support special char)
-/// - `[index]` - access array element by index
-/// - `[field]` - access object field (support special char with escape `\`)
+/// Follows Spark's `VariantPathParser`. See [`VariantPath`] for the syntax.
 ///
-/// # Escape Rules
-/// Inside brackets `[...]`:
-/// - `\\` -> literal `\`
-/// - `\]` -> literal `]`
-/// - Any other `\x` -> literal `x`
-/// - An unescaped `]` inside a quoted field is literal
-///
-/// Outside brackets, no escaping is supported.
-///
-/// # Examples
-/// - `""` -> empty path
-/// - `"foo"` -> single field `foo`
-/// - `"foo.bar"` -> nested fields `foo`, `bar`
-/// - `"[1]"` -> array index 1
-/// - `"['1']"` or `"["1"]"`-> field `1`
-/// - `"foo[1].bar"` -> field `foo`, index 1, field `bar`
-/// - `"['a.b']"` -> field `a.b` (dot is literal inside bracket)
-/// - `"['a\]b']"` -> field `a]b` (escaped `]`
-/// - `"['a]b']"` -> field `a]b` (`]` is literal inside quotes)
-/// - etc.
-///
-/// # Errors
-/// - Leading `.` (e.g., `".foo"`)
-/// - Trailing `.` (e.g., `"foo."`)
-/// - Unclosed '[' (e.g., `"foo[1"`)
-/// - Unexpected ']' (e.g., `"foo]"`)
-/// - Trailing `\` inside bracket (treated as unclosed bracket)
-#[inline]
-pub(crate) fn parse_path(s: &str) -> Result<Vec<VariantPathElement<'_>>, ArrowError> {
-    let scan_field = |start: usize| {
-        s[start..]
-            .find(['.', '[', ']'])
-            .map_or_else(|| s.len(), |p| start + p)
+/// [`VariantPath`]: crate::VariantPath
+pub(crate) fn parse_path(
+    path: &str,
+    escapes: QuotedKeyEscapes,
+) -> Result<Vec<VariantPathElement<'_>>, ArrowError> {
+    let invalid = |rest: &str, reason: &str| {
+        let offset = path.len() - rest.len();
+        ArrowError::ParseError(format!(
+            "Invalid variant path {path:?} at byte {offset}: {reason}"
+        ))
     };
 
-    let bytes = s.as_bytes();
-    if bytes.first() == Some(&b'.') {
-        return Err(ArrowError::ParseError("Unexpected leading '.'".into()));
-    }
-
+    let mut rest = path
+        .strip_prefix('$')
+        .ok_or_else(|| invalid(path, "expected `$`"))?;
     let mut elements = Vec::new();
-    let mut i = 0;
-
-    while i < bytes.len() {
-        let (elem, end) = match bytes[i] {
-            b'.' => {
-                i += 1; // skip the dot; a field must follow
-                let end = scan_field(i);
-                if end == i {
-                    return Err(ArrowError::ParseError(match bytes.get(i) {
-                        None => "Unexpected trailing '.'".into(),
-                        Some(&c) => format!("Unexpected '{}' at byte {i}", c as char),
-                    }));
-                }
-                (VariantPathElement::field(&s[i..end]), end)
+    while !rest.is_empty() {
+        let (element, tail) = if let Some(name) = rest.strip_prefix('.') {
+            let end = name.find(['.', '[']).unwrap_or(name.len());
+            if end == 0 {
+                return Err(invalid(name, "expected a field name after `.`"));
             }
-            b'[' => {
-                let (element, end) = parse_in_bracket(s, i)?;
-                (element, end)
-            }
-            b']' => {
-                return Err(ArrowError::ParseError(format!(
-                    "Unexpected ']' at byte {i}"
-                )));
-            }
-            _ => {
-                let end = scan_field(i);
-                (VariantPathElement::field(&s[i..end]), end)
-            }
+            (VariantPathElement::field(&name[..end]), &name[end..])
+        } else if let Some(body) = rest.strip_prefix('[') {
+            parse_bracket(body, escapes).map_err(|reason| invalid(rest, reason))?
+        } else {
+            return Err(invalid(rest, "expected `.` or `[`"));
         };
-        elements.push(elem);
-        i = end;
+        elements.push(element);
+        rest = tail;
     }
-
     Ok(elements)
 }
 
-/// Parse `[digits | field]` starting at `i` (which points to `[`).
-/// Returns (VariantPathElement, position after `]`).
-fn parse_in_bracket(s: &str, i: usize) -> Result<(VariantPathElement<'_>, usize), ArrowError> {
-    let start = i + 1; // skip '['
-
-    let mut unescaped = None;
-    let mut chars = s[start..].char_indices();
-    let mut end = None;
-    let mut quote = None;
-
-    while let Some((offset, c)) = chars.next() {
-        match c {
-            // Escape: take next char literally
-            '\\' => {
-                let unescaped =
-                    unescaped.get_or_insert_with(|| String::from(&s[start..start + offset]));
-                if let Some((_, next)) = chars.next() {
-                    unescaped.push(next);
-                }
-                // Trailing backslash will be handled as 'unclosed [' below
-            }
-            '\'' | '"' if quote == Some(c) => {
-                quote = None;
-                if let Some(unescaped) = &mut unescaped {
-                    unescaped.push(c);
-                }
-            }
-            // Every consumed char advances the offset, so a quote can only
-            // open the bracket content at offset 0
-            '\'' | '"' if quote.is_none() && offset == 0 => {
-                quote = Some(c);
-            }
-            ']' if quote.is_none() => {
-                // An unescaped ']' outside quotes ends the bracket
-                end = Some(start + offset);
-                break;
-            }
-            _ => {
-                if let Some(unescaped) = &mut unescaped {
-                    unescaped.push(c);
-                }
-            }
-        }
+/// Parse the element after a `[`, returning it and the rest of the path after `]`.
+fn parse_bracket(
+    body: &str,
+    escapes: QuotedKeyEscapes,
+) -> Result<(VariantPathElement<'_>, &str), &'static str> {
+    if let Some(quote @ ('\'' | '"')) = body.chars().next() {
+        let (name, after) =
+            read_quoted(&body[1..], quote, escapes).ok_or("unterminated quoted field name")?;
+        let rest = after
+            .strip_prefix(']')
+            .ok_or("expected `]` after the quoted field name")?;
+        return Ok((VariantPathElement::field(name), rest));
     }
 
-    let Some(end) = end else {
-        return Err(ArrowError::ParseError(format!("Unclosed '[' at byte {i}")));
+    let (token, rest) = body.split_once(']').ok_or("unclosed `[`")?;
+    let element = if token == "*" {
+        VariantPathElement::list_element()
+    } else if !token.is_empty() && token.bytes().all(|b| b.is_ascii_digit()) {
+        // Spark rejects indexes that do not fit in an i32
+        let index: i32 = token.parse().map_err(|_| "list index out of range")?;
+        VariantPathElement::index(index as usize)
+    } else {
+        return Err("expected an index, `*`, or a quoted field name");
     };
-
-    let value = match unescaped {
-        Some(value) => Cow::Owned(value),
-        None => Cow::Borrowed(&s[start..end]),
-    };
-    let element = parse_bracket_element(value)?;
-
-    Ok((element, end + 1))
+    Ok((element, rest))
 }
 
-fn parse_bracket_element(value: Cow<'_, str>) -> Result<VariantPathElement<'_>, ArrowError> {
-    let quoted = matches!(value.as_bytes(), [b'\'', .., b'\''] | [b'"', .., b'"']);
-
-    if quoted {
-        // Quoted field name, e.g., ['field'] or ['123'] or ["123"]
-        return Ok(VariantPathElement::field(match value {
-            Cow::Borrowed(value) => Cow::Borrowed(&value[1..value.len() - 1]),
-            Cow::Owned(mut value) => {
-                value.pop();
-                value.remove(0);
-                Cow::Owned(value)
-            }
-        }));
+/// Read a quoted field name up to its closing `quote`, returning the name and
+/// the text after the quote.
+fn read_quoted(
+    quoted: &str,
+    quote: char,
+    escapes: QuotedKeyEscapes,
+) -> Option<(Cow<'_, str>, &str)> {
+    let stop = |c: char| c == quote || (c == '\\' && escapes == QuotedKeyEscapes::Decode);
+    let end = quoted.find(stop)?;
+    if quoted[end..].starts_with(quote) {
+        return Some((Cow::Borrowed(&quoted[..end]), &quoted[end + 1..]));
     }
 
-    let element = if value == "*" {
-        VariantPathElement::list_element()
-    } else {
-        let Ok(idx) = value.parse() else {
-            return Err(ArrowError::ParseError(format!(
-                "Invalid token in bracket request: `{value}`. Expected `*`, a quoted string, or a number(e.g., `[*]`, `['field']`, or `[123]`)"
-            )));
-        };
-        VariantPathElement::index(idx)
+    let mut name = quoted[..end].to_string();
+    let mut rest = &quoted[end..];
+    while let Some(escape) = rest.strip_prefix('\\') {
+        rest = &escape[unescape(escape, quote, &mut name)?..];
+        let end = rest.find(stop)?;
+        name.push_str(&rest[..end]);
+        rest = &rest[end..];
+    }
+    Some((Cow::Owned(name), &rest[1..]))
+}
+
+/// Decode the escape after a backslash into `out`, returning its length.
+///
+/// Unknown escapes and unpaired surrogates keep the backslash, as in Spark.
+fn unescape(escape: &str, quote: char, out: &mut String) -> Option<usize> {
+    let c = escape.chars().next()?;
+    let decoded = match c {
+        'b' => Some('\u{8}'),
+        'f' => Some('\u{c}'),
+        'n' => Some('\n'),
+        'r' => Some('\r'),
+        't' => Some('\t'),
+        '/' | '\\' => Some(c),
+        _ if c == quote => Some(c),
+        _ => None,
     };
-    Ok(element)
+    if let Some(decoded) = decoded {
+        out.push(decoded);
+        return Some(1);
+    }
+    if let Some(unit) = escape.strip_prefix('u').and_then(hex4) {
+        let low = escape[5..].strip_prefix("\\u").and_then(hex4);
+        if let Some(Ok(decoded)) = char::decode_utf16(std::iter::once(unit).chain(low)).next() {
+            out.push(decoded);
+            return Some(if decoded.len_utf16() == 2 { 11 } else { 5 });
+        }
+    }
+    out.push('\\');
+    out.push(c);
+    Some(c.len_utf8())
+}
+
+/// Parse four leading hex digits.
+fn hex4(s: &str) -> Option<u16> {
+    let digits = s.get(..4)?;
+    digits
+        .chars()
+        .try_fold(0, |n, c| Some(n * 16 + c.to_digit(16)? as u16))
 }

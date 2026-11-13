@@ -14,15 +14,33 @@ use std::{borrow::Cow, ops::Deref};
 ///
 /// [`Variant::get_path`]: crate::Variant::get_path
 ///
-/// Create a [`VariantPath`] from a vector of [`VariantPathElement`], or
-/// from a single field name or index.
+/// Create a [`VariantPath`] from a vector of [`VariantPathElement`], from a
+/// single field name or index, or by parsing a path string.
+///
+/// # Path strings
+///
+/// [`VariantPath::try_from`] parses the paths that Spark's `variant_get`
+/// accepts: `$` followed by any number of
+///
+/// - `.name`: the field `name`, which runs to the next `.` or `[`
+/// - `['name']` or `["name"]`: the field `name`, which may contain `.`, `[` and `]`
+/// - `[N]`: the list element at index `N`, at most `i32::MAX`
+///
+/// `$` alone is the empty path. A backslash in a quoted field name starts an
+/// escape (`\\`, `\'`, `\"`, `\/`, `\b`, `\f`, `\n`, `\r`, `\t`, `\uXXXX`), as in
+/// Spark 4.4. Other escapes and unpaired surrogates stay literal. To keep every
+/// backslash literal, as in Spark 4.2 and 4.3, parse with
+/// [`QuotedKeyEscapes::Literal`].
+///
+/// `[*]` is not part of Spark's syntax. It parses to
+/// [`VariantPathElement::ListElement`], which only shredding schemas accept.
 ///
 /// # Example: Simple paths
 /// ```rust
 /// # use parquet_variant::{VariantPath, VariantPathElement};
 /// // access the field "foo" in a variant object value
-/// let path = VariantPath::try_from("foo").unwrap();
-/// // access the first element in a variant list vale
+/// let path = VariantPath::try_from("$.foo").unwrap();
+/// // access the first element in a variant list value
 /// let path = VariantPath::from(0);
 /// ```
 ///
@@ -31,7 +49,7 @@ use std::{borrow::Cow, ops::Deref};
 /// # use parquet_variant::{VariantPath, VariantPathElement};
 /// /// You can also create a path by joining elements together:
 /// // access the field "foo" and then the first element in a variant list value
-/// let path = VariantPath::try_from("foo").unwrap().join(0);
+/// let path = VariantPath::try_from("$.foo").unwrap().join(0);
 /// // this is the same as the previous one
 /// let path2 = VariantPath::from_iter(["foo".into(), 0.into()]);
 /// assert_eq!(path, path2);
@@ -43,13 +61,22 @@ use std::{borrow::Cow, ops::Deref};
 /// assert_eq!(path, path3);
 /// ```
 ///
-/// # Example: From Dot notation strings
+/// # Example: Path strings
 /// ```
-/// # use parquet_variant::{VariantPath, VariantPathElement};
-/// /// You can also convert strings directly into paths using dot notation
-/// let path = VariantPath::try_from("foo.bar.baz").unwrap();
-/// let expected = VariantPath::try_from("foo").unwrap().join("bar").join("baz");
+/// # use parquet_variant::{QuotedKeyEscapes, VariantPath, VariantPathElement};
+/// let path = VariantPath::try_from("$.a['b.c'].d[2]['3']").unwrap();
+/// let expected = VariantPath::from_iter([VariantPathElement::field("a"),
+///     VariantPathElement::field("b.c"),
+///     VariantPathElement::field("d"),
+///     VariantPathElement::index(2),
+///     VariantPathElement::field("3")]);
 /// assert_eq!(path, expected);
+///
+/// // `\n` is a newline by default, and a backslash followed by `n` in literal mode
+/// let path = VariantPath::try_from(r"$['a\nb']").unwrap();
+/// assert_eq!(path[0], VariantPathElement::field("a\nb"));
+/// let path = VariantPath::parse(r"$['a\nb']", QuotedKeyEscapes::Literal).unwrap();
+/// assert_eq!(path[0], VariantPathElement::field(r"a\nb"));
 /// ```
 ///
 /// # Example: Accessing Compound paths
@@ -57,22 +84,10 @@ use std::{borrow::Cow, ops::Deref};
 /// # use parquet_variant::{VariantPath, VariantPathElement};
 /// /// You can access the paths using slices
 /// // access the field "foo" and then the first element in a variant list value
-/// let path = VariantPath::try_from("foo").unwrap()
+/// let path = VariantPath::try_from("$.foo").unwrap()
 ///   .join("bar")
 ///   .join("baz");
 /// assert_eq!(path[1], VariantPathElement::field("bar"));
-/// ```
-///
-/// # Example: Accessing field with bracket
-/// ```
-/// # use parquet_variant::{VariantPath, VariantPathElement};
-/// let path = VariantPath::try_from("a['b.c'].d[2]['3']").unwrap();
-/// let expected = VariantPath::from_iter([VariantPathElement::field("a"),
-///     VariantPathElement::field("b.c"),
-///     VariantPathElement::field("d"),
-///     VariantPathElement::index(2),
-///     VariantPathElement::field("3")]);
-/// assert_eq!(path, expected)
 /// ```
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct VariantPath<'a>(Vec<VariantPathElement<'a>>);
@@ -81,6 +96,14 @@ impl<'a> VariantPath<'a> {
     /// Create a new `VariantPath` from a vector of `VariantPathElement`.
     pub fn new(path: Vec<VariantPathElement<'a>>) -> Self {
         Self(path)
+    }
+
+    /// Parse a path string, choosing how backslashes in quoted field names are read.
+    ///
+    /// See [`VariantPath`] for the syntax. [`VariantPath::try_from`] uses
+    /// [`QuotedKeyEscapes::Decode`].
+    pub fn parse(path: &'a str, escapes: QuotedKeyEscapes) -> Result<Self, ArrowError> {
+        parse_path(path, escapes).map(VariantPath::new)
     }
 
     /// Return the inner path elements.
@@ -111,12 +134,22 @@ impl<'a> From<Vec<VariantPathElement<'a>>> for VariantPath<'a> {
     }
 }
 
-/// Create from &str with support for dot notation
+/// How [`VariantPath::parse`] reads backslashes in quoted field names
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum QuotedKeyEscapes {
+    /// Decode escapes, as in Spark 4.4
+    #[default]
+    Decode,
+    /// Keep backslashes literal, as in Spark 4.2 and 4.3
+    Literal,
+}
+
+/// Parse a path string. See [`VariantPath`] for the syntax.
 impl<'a> TryFrom<&'a str> for VariantPath<'a> {
     type Error = ArrowError;
 
     fn try_from(path: &'a str) -> Result<Self, Self::Error> {
-        parse_path(path).map(VariantPath::new)
+        Self::parse(path, QuotedKeyEscapes::default())
     }
 }
 
@@ -210,16 +243,19 @@ impl From<usize> for VariantPathElement<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Variant, VariantBuilder};
+
+    // Expected results below match Spark's `VariantPathParser`, run on Spark 4.3.0
+    // (literal backslashes) and 4.4.0-SNAPSHOT (escapes).
+
+    fn parse_both(path: &str) -> [Result<VariantPath<'_>, ArrowError>; 2] {
+        [QuotedKeyEscapes::Decode, QuotedKeyEscapes::Literal]
+            .map(|escapes| VariantPath::parse(path, escapes))
+    }
 
     #[test]
     fn test_variant_path_empty() {
         let path = VariantPath::from_iter([]);
-        assert!(path.is_empty());
-    }
-
-    #[test]
-    fn test_variant_path_empty_str() {
-        let path = VariantPath::try_from("").unwrap();
         assert!(path.is_empty());
     }
 
@@ -231,175 +267,161 @@ mod tests {
     }
 
     #[test]
-    fn test_variant_path_dot_notation_with_array_index() {
-        let path = VariantPath::try_from("city.store.books[3].title").unwrap();
+    fn test_parse_valid_paths() {
+        #[rustfmt::skip]
+        let cases: &[(&str, Vec<VariantPathElement>)] = &[
+            ("$",                    vec![]),
+            ("$.a",                  vec!["a".into()]),
+            ("$.a.b[0]",             vec!["a".into(), "b".into(), 0.into()]),
+            ("$['a.b']",             vec!["a.b".into()]),
+            (r#"$["a.b"]"#,          vec!["a.b".into()]),
+            ("$['a]b']",             vec!["a]b".into()]),
+            (r#"$["[0]"][1]"#,       vec!["[0]".into(), 1.into()]),
+            ("$['']",                vec!["".into()]),
+            ("$['a'].b",             vec!["a".into(), "b".into()]),
+            (r#"$["it's"]"#,         vec!["it's".into()]),
+            ("$[0]['0']",            vec![0.into(), "0".into()]),
+            ("$[01]",                vec![1.into()]),
+            ("$[2147483647]",        vec![(i32::MAX as usize).into()]),
+            // Dotted names run to the next `.` or `[`, and never decode escapes
+            ("$.a]b",                vec!["a]b".into()]),
+            ("$.$",                  vec!["$".into()]),
+            (r"$.a\nb",              vec![r"a\nb".into()]),
+            // `[*]` is not Spark syntax. It exists for shredding schemas.
+            ("$.a[*]['*']",          vec!["a".into(), VariantPathElement::list_element(), "*".into()]),
+        ];
 
-        let expected = VariantPath::try_from("city")
-            .unwrap()
-            .join("store")
-            .join("books")
-            .join(3)
-            .join("title");
-
-        assert_eq!(path, expected);
-    }
-
-    #[test]
-    fn test_variant_path_dot_notation_with_only_array_index() {
-        let path = VariantPath::try_from("[3]").unwrap();
-
-        let expected = VariantPath::from(3);
-
-        assert_eq!(path, expected);
-    }
-
-    #[test]
-    fn test_variant_path_dot_notation_with_starting_array_index() {
-        let path = VariantPath::try_from("[3].title").unwrap();
-
-        let expected = VariantPath::from(3).join("title");
-
-        assert_eq!(path, expected);
-    }
-
-    #[test]
-    fn test_variant_path_field_in_bracket() {
-        // field with index
-        let path = VariantPath::try_from("foo[0].bar").unwrap();
-        let expected = VariantPath::from_iter([
-            VariantPathElement::field("foo"),
-            VariantPathElement::index(0),
-            VariantPathElement::field("bar"),
-        ]);
-        assert_eq!(path, expected);
-
-        // index in the end
-        let path = VariantPath::try_from("foo.bar[42]").unwrap();
-        let expected = VariantPath::from_iter([
-            VariantPathElement::field("foo"),
-            VariantPathElement::field("bar"),
-            VariantPathElement::index(42),
-        ]);
-        assert_eq!(path, expected);
-
-        // list wildcard is distinct from a quoted field named "*"
-        let path = VariantPath::try_from("foo[*]['*']").unwrap();
-        let expected = VariantPath::from_iter([
-            VariantPathElement::field("foo"),
-            VariantPathElement::list_element(),
-            VariantPathElement::field("*"),
-        ]);
-        assert_eq!(path, expected);
-
-        // invalid index will be treated as field
-        let path = VariantPath::try_from("foo.bar['abc'][\"def\"]").unwrap();
-        let expected = VariantPath::from_iter([
-            VariantPathElement::field("foo"),
-            VariantPathElement::field("bar"),
-            VariantPathElement::field("abc"),
-            VariantPathElement::field("def"),
-        ]);
-        assert_eq!(path, expected);
-
-        // a number quoted with `'` is treated as field, not index
-        let path = VariantPath::try_from("foo['0'].bar[\"1\"]").unwrap();
-        let expected = VariantPath::from_iter([
-            VariantPathElement::field("foo"),
-            VariantPathElement::field("0"),
-            VariantPathElement::field("bar"),
-            VariantPathElement::field("1"),
-        ]);
-        assert_eq!(path, expected);
-
-        // an unescaped closing bracket is literal inside a quoted field
-        for input in [r#"["a]b"]"#, "['a]b']"] {
-            let path = VariantPath::try_from(input).unwrap();
-            let expected = VariantPath::from_iter([VariantPathElement::field("a]b")]);
-            assert_eq!(path, expected);
+        for (input, expected) in cases {
+            for path in parse_both(input) {
+                assert_eq!(path.unwrap()[..], expected[..], "{input}");
+            }
         }
-
-        // quoted brackets do not consume the following path element
-        let path = VariantPath::try_from(r#"["[0]"][1]"#).unwrap();
-        let expected = VariantPath::from_iter([
-            VariantPathElement::field("[0]"),
-            VariantPathElement::index(1),
-        ]);
-        assert_eq!(path, expected);
-
-        // escaped quotes and an unescaped bracket remain one quoted field
-        let path = VariantPath::try_from(r#"["\"][\""]"#).unwrap();
-        let expected = VariantPath::from_iter([VariantPathElement::field(r#""][""#)]);
-        assert_eq!(path, expected);
-
-        // the existing escaped spelling remains supported
-        let path = VariantPath::try_from(r#"["a\]b"]"#).unwrap();
-        let expected = VariantPath::from_iter([VariantPathElement::field("a]b")]);
-        assert_eq!(path, expected);
     }
 
     #[test]
-    fn test_variant_path_bracket_field_ownership() {
+    fn test_parse_invalid_paths() {
+        let cases = [
+            "", "a", "[0].a", "$..a", "$[-1]", "$[]", "$[1 ]", "$['a", r#"$["a"#, "$['a'b']",
+            "$['a']]",
+        ];
+
+        for input in cases {
+            for path in parse_both(input) {
+                assert!(path.is_err(), "{input} parsed as {path:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_quoted_escapes() {
+        // (path, decoded as in Spark 4.4, literal as in Spark 4.2 and 4.3)
+        #[rustfmt::skip]
+        let cases = [
+            (r"$['a\nb']",                Some("a\nb"),              Some(r"a\nb")),
+            (r"$['a\bb']",                Some("a\u{8}b"),           Some(r"a\bb")),
+            (r"$['a\/b']",                Some("a/b"),               Some(r"a\/b")),
+            (r"$['a\\b']",                Some(r"a\b"),              Some(r"a\\b")),
+            (r"$['a\\']",                 Some(r"a\"),               Some(r"a\\")),
+            (r"$['a\']",                  None,                      Some(r"a\")),
+            (r"$['a\'b']",                Some("a'b"),               None),
+            (r#"$["a\"b"]"#,              Some("a\"b"),              None),
+            // Escaping the other quote, or an unknown escape, keeps the backslash
+            (r#"$["a\'b"]"#,              Some(r"a\'b"),             Some(r"a\'b")),
+            (r"$['a\qb']",                Some(r"a\qb"),             Some(r"a\qb")),
+            (r"$['a\]b']",                Some(r"a\]b"),             Some(r"a\]b")),
+            ("$['a\\\u{1F600}b']",        Some("a\\\u{1F600}b"),     Some("a\\\u{1F600}b")),
+            (r"$['\u00e9']",              Some("é"),                 Some(r"\u00e9")),
+            (r"$['a\u0027b']",            Some("a'b"),               Some(r"a\u0027b")),
+            (r"$['\u12']",                Some(r"\u12"),             Some(r"\u12")),
+            // Surrogates decode only as a valid pair
+            (r"$['\uD83D\uDE00']",        Some("\u{1F600}"),         Some(r"\uD83D\uDE00")),
+            (r"$['\uD83D']",              Some(r"\uD83D"),           Some(r"\uD83D")),
+            (r"$['\uD83D\uD83D\uDE00']",  Some("\\uD83D\u{1F600}"),  Some(r"\uD83D\uD83D\uDE00")),
+            (r"$['\uDE00\uD83D']",        Some(r"\uDE00\uD83D"),     Some(r"\uDE00\uD83D")),
+            (r"$['\uD83D\u0041']",        Some(r"\uD83DA"),          Some(r"\uD83D\u0041")),
+        ];
+
+        for (input, decoded, literal) in cases {
+            for (result, expected) in parse_both(input).into_iter().zip([decoded, literal]) {
+                match expected {
+                    Some(name) => {
+                        assert_eq!(
+                            result.unwrap()[..],
+                            [VariantPathElement::from(name)],
+                            "{input}"
+                        )
+                    }
+                    None => assert!(result.is_err(), "{input} parsed as {result:?}"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_escapes_select_different_fields() {
+        let mut builder = VariantBuilder::new();
+        builder
+            .new_object()
+            .with_field("anb", 1)
+            .with_field(r"a\nb", 2)
+            .with_field("a\nb", 3)
+            .finish();
+        let (metadata, value) = builder.finish();
+        let variant = Variant::new(&metadata, &value);
+
+        let [decoded, literal] = parse_both(r"$['a\nb']").map(Result::unwrap);
+        assert_eq!(variant.get_path(&decoded), Some(Variant::from(3)));
+        assert_eq!(variant.get_path(&literal), Some(Variant::from(2)));
+    }
+
+    #[test]
+    fn test_parse_borrows_unescaped_names() {
         use VariantPathElement::Field;
 
-        let path = VariantPath::try_from(r#"[""]["plain"]["escaped\]field"]['a]b']"#).unwrap();
-
+        let input = r"$['plain'][''].dotted['esc\'aped']['back\slash']";
+        let path = VariantPath::try_from(input).unwrap();
         assert!(matches!(
             &path[..],
             [
-                Field { name: Cow::Borrowed("") },
                 Field { name: Cow::Borrowed("plain") },
+                Field { name: Cow::Borrowed("") },
+                Field { name: Cow::Borrowed("dotted") },
                 Field { name: Cow::Owned(escaped) },
-                Field { name: Cow::Borrowed("a]b") },
-            ] if escaped == "escaped]field"
+                Field { name: Cow::Owned(unknown) },
+            ] if escaped == "esc'aped" && unknown == r"back\slash"
         ));
+
+        let input = r"$['plain']['back\slash']";
+        let path = VariantPath::parse(input, QuotedKeyEscapes::Literal).unwrap();
+        assert!(path.iter().all(|e| matches!(
+            e,
+            Field {
+                name: Cow::Borrowed(_)
+            }
+        )));
     }
 
     #[test]
-    fn test_invalid_path_parse() {
-        // Leading dot
-        let err = VariantPath::try_from(".foo.bar").unwrap_err();
-        assert_eq!(err.to_string(), "Parser error: Unexpected leading '.'");
+    fn test_parse_error_messages() {
+        #[rustfmt::skip]
+        let cases = [
+            ("a.b",           r#"Invalid variant path "a.b" at byte 0: expected `$`"#),
+            ("$.a.",          r#"Invalid variant path "$.a." at byte 4: expected a field name after `.`"#),
+            ("$a",            r#"Invalid variant path "$a" at byte 1: expected `.` or `[`"#),
+            ("$.a['b",        r#"Invalid variant path "$.a['b" at byte 3: unterminated quoted field name"#),
+            ("$['a'x]",       r#"Invalid variant path "$['a'x]" at byte 1: expected `]` after the quoted field name"#),
+            ("$[0",           r#"Invalid variant path "$[0" at byte 1: unclosed `[`"#),
+            ("$[x]",          r#"Invalid variant path "$[x]" at byte 1: expected an index, `*`, or a quoted field name"#),
+            ("$[2147483648]", r#"Invalid variant path "$[2147483648]" at byte 1: list index out of range"#),
+        ];
 
-        // Trailing dot
-        let err = VariantPath::try_from("foo.bar.").unwrap_err();
-        assert_eq!(err.to_string(), "Parser error: Unexpected trailing '.'");
-
-        // No ']' will be treated as error
-        let err = VariantPath::try_from("foo.bar[2.baz").unwrap_err();
-        assert_eq!(err.to_string(), "Parser error: Unclosed '[' at byte 7");
-
-        // No ']' because of escaped.
-        let err = VariantPath::try_from("foo.bar[2\\].fds").unwrap_err();
-        assert_eq!(err.to_string(), "Parser error: Unclosed '[' at byte 7");
-
-        // Trailing backslash in bracket
-        let err = VariantPath::try_from("foo.bar[fdafa\\").unwrap_err();
-        assert_eq!(err.to_string(), "Parser error: Unclosed '[' at byte 7");
-
-        // No '[' before ']'
-        let err = VariantPath::try_from("foo.bar]baz").unwrap_err();
-        assert_eq!(err.to_string(), "Parser error: Unexpected ']' at byte 7");
-
-        // Invalid number(without quote) parse
-        let err = VariantPath::try_from("foo.bar[123abc]").unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "Parser error: Invalid token in bracket request: `123abc`. Expected `*`, a quoted string, or a number(e.g., `[*]`, `['field']`, or `[123]`)"
-        );
-
-        let err = VariantPath::try_from("foo.bar[abc]").unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "Parser error: Invalid token in bracket request: `abc`. Expected `*`, a quoted string, or a number(e.g., `[*]`, `['field']`, or `[123]`)"
-        );
-
-        // Out-of-range integer indexes are invalid path tokens.
-        let too_large_index = (usize::MAX as u128) + 1;
-        let err = VariantPath::try_from(format!("[{too_large_index}]").as_str()).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("Parser error: Invalid token in bracket request"),
-            "{err}"
-        );
+        for (input, expected) in cases {
+            let err = VariantPath::try_from(input).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                format!("Parser error: {expected}"),
+                "{input}"
+            );
+        }
     }
 }
