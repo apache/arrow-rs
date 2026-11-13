@@ -522,11 +522,10 @@ const DICTIONARY_GATHER_RATIO: usize = 4;
 ///
 /// ## Union Encoding
 ///
-/// A non-null union value is encoded as its type ID plus one, followed by the
-/// selected child's row encoding. Arrow type IDs are in `0..=127`, so shifting
-/// them reserves `0x00` and `0xFF` for nulls. Descending order inverts the shifted
-/// type-ID byte; the child converter applies the same sort options to the child
-/// value.
+/// A non-null union value is encoded as a validity byte `0x01`, followed by its
+/// type-ID byte and the selected child's row encoding. Descending order inverts
+/// the type-ID byte; the child converter applies the same sort options to the
+/// child value. The validity byte stays `0x01` in both sort directions.
 ///
 /// A logical null, as reported by [`UnionArray::logical_nulls`], is encoded as a
 /// single null byte, without a type ID or child encoding. The null byte is `0x00`
@@ -537,17 +536,19 @@ const DICTIONARY_GATHER_RATIO: usize = 4;
 /// [`SortOptions`] set to `descending: false` and `nulls_first: true`:
 ///
 /// ```text
-///                           ┌──┬──────────────┐
-///  3                        │01│01│80│00│00│03│
-///                           └──┴──────────────┘
-///                            │  └─ signed integer encoding (non-null)
-///                            └──── type ID + 1
+///                           ┌──┬──┬──────────────┐
+///  3                        │01│00│01│80│00│00│03│
+///                           └──┴──┴──────────────┘
+///                            │  │  └─ signed integer encoding (non-null)
+///                            │  └──── type ID
+///                            └─────── validity byte (non-null)
 ///
-///                           ┌──┬────────────────────────────────┐
-/// "abc"                     │02│02│'a'│'b'│'c'│00│00│00│00│00│03│
-///                           └──┴────────────────────────────────┘
-///                            │  └─ string encoding (non-null)
-///                            └──── type ID + 1
+///                           ┌──┬──┬────────────────────────────────┐
+/// "abc"                     │01│01│02│'a'│'b'│'c'│00│00│00│00│00│03│
+///                           └──┴──┴────────────────────────────────┘
+///                            │  │  └─ string encoding (non-null)
+///                            │  └──── type ID
+///                            └─────── validity byte (non-null)
 ///
 ///                           ┌──┐
 /// null Int32                │00│
@@ -2076,10 +2077,10 @@ fn prepare_rows(cols: &[ArrayRef], encoders: &mut [Encoder]) -> LengthTracker {
 
                 if child_rows.iter().all(|child| child.nulls.is_none()) {
                     if let Some(width) = fixed_width {
-                        tracker.push_fixed(1 + width);
+                        tracker.push_fixed(2 + width);
                     } else {
                         tracker.push_variable(
-                            selected_rows.map(|(child, index)| 1 + child.rows.row_len(index)),
+                            selected_rows.map(|(child, index)| 2 + child.rows.row_len(index)),
                         );
                     }
                     continue;
@@ -2098,11 +2099,11 @@ fn prepare_rows(cols: &[ArrayRef], encoders: &mut [Encoder]) -> LengthTracker {
                     }
                     if let Some(tags) = &tagged_ids {
                         tracker.push_variable(tags.iter().map(|&tag| {
-                            let payload_width = usize::from(tag >= 0) * width;
+                            let payload_width = usize::from(tag >= 0) * (1 + width);
                             1 + payload_width
                         }));
                     } else {
-                        tracker.push_fixed(1 + width);
+                        tracker.push_fixed(2 + width);
                     }
                 } else {
                     tracker.push_variable(selected_rows.enumerate().map(|(i, (child, index))| {
@@ -2114,7 +2115,7 @@ fn prepare_rows(cols: &[ArrayRef], encoders: &mut [Encoder]) -> LengthTracker {
                             tagged_ids.get_or_insert_with(|| row_tags.to_vec())[i] = UNION_NULL_TAG;
                             1
                         } else {
-                            1 + child.rows.row_len(index)
+                            2 + child.rows.row_len(index)
                         }
                     }));
                 }
@@ -2362,10 +2363,14 @@ fn encode_column(
                     let child_row_idx = offsets_buf.as_ref().map(|o| o[i] as usize).unwrap_or(i);
                     let child_bytes = child_rows[field_idx].rows.row(child_row_idx).data();
 
-                    let tag = type_id as u8 + 1;
-                    data[*offset] = if opts.descending { !tag } else { tag };
+                    data[*offset] = 0x01;
+                    data[*offset + 1] = if opts.descending {
+                        !(type_id as u8)
+                    } else {
+                        type_id as u8
+                    };
 
-                    let child_start = *offset + 1;
+                    let child_start = *offset + 2;
                     let child_end = child_start + child_bytes.len();
                     data[child_start..child_end].copy_from_slice(child_bytes);
 
@@ -2636,8 +2641,8 @@ unsafe fn decode_column(
                         null_rows[null_field_idx].data.as_ref(),
                     )
                 } else {
-                    let tag = if options.descending { !row[0] } else { row[0] };
-                    ((tag - 1) as i8, &row[1..])
+                    let id = if options.descending { !row[1] } else { row[1] };
+                    (id as i8, &row[2..])
                 };
                 type_ids.push(type_id);
 
@@ -2669,7 +2674,7 @@ unsafe fn decode_column(
                             let consumed_length = if rows[*row_idx][0] == null_sentinel {
                                 1
                             } else {
-                                1 + original_bytes.len() - remaining_bytes.len()
+                                2 + original_bytes.len() - remaining_bytes.len()
                             };
                             rows[*row_idx] = &rows[*row_idx][consumed_length..];
                         }
@@ -2702,7 +2707,7 @@ unsafe fn decode_column(
                             let consumed_length = if rows[*row_idx][0] == null_sentinel {
                                 1
                             } else {
-                                1 + child_row.len() - remaining_len
+                                2 + child_row.len() - remaining_len
                             };
                             rows[*row_idx] = &rows[*row_idx][consumed_length..];
                         }
