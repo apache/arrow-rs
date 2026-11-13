@@ -246,8 +246,9 @@ impl Block {
 
 impl Block {
     /// Same result as [`Block::check`], but tests all 8 words without an early
-    /// exit. This has no data-dependent branch, so it is faster when many
-    /// hashes are checked in a loop.
+    /// exit. This avoids a mispredicted branch when hits and misses are mixed
+    /// or the filter is well filled. The early exit is faster when nearly
+    /// every hash misses a sparse filter.
     #[cfg_attr(not(any(feature = "arrow", test)), expect(dead_code))]
     #[inline(always)]
     fn check_branch_free(&self, hash: u32) -> bool {
