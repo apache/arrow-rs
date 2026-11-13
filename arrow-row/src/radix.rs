@@ -177,8 +177,7 @@ pub fn radix_sort_to_indices(rows: &Rows, limit: Option<usize>) -> Result<UInt32
 /// How many leading entries `msd_radix_sort` has to put in key order.
 ///
 /// A sort of every entry takes `Unlimited`, a zero-sized type, so it has the
-/// same arguments and code as a sort without limits. An extra argument slowed
-/// that sort by 10% on small inputs.
+/// same arguments and code as a sort without limits.
 trait Limit: Copy {
     /// Whether the sort can stop early
     const LIMITED: bool;
