@@ -85,7 +85,6 @@ fn has_sparse_filter_copy(data_type: &DataType) -> bool {
                 | DataType::List(_)
                 | DataType::LargeList(_)
         )
-        || matches!(data_type, DataType::RunEndEncoded(_, _))
 }
 
 /// Maximum selected row fraction for the fused sparse-filter copy path.
@@ -2078,7 +2077,7 @@ mod tests {
             true,
         )]));
         let coalescer = BatchCoalescer::new(run_end, 100);
-        assert!(!coalescer.has_non_specialized_filter_columns);
+        assert!(coalescer.has_non_specialized_filter_columns);
 
         let utf8 = Arc::new(Schema::new(vec![Field::new("utf8", DataType::Utf8, true)]));
         let coalescer = BatchCoalescer::new(utf8, 100);

@@ -3,7 +3,6 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use super::InProgressArray;
-use crate::filter::{FilterPredicate, FilterSelection};
 use arrow_array::cast::AsArray;
 use arrow_array::types::RunEndIndexType;
 use arrow_array::{Array, ArrayRef, PrimitiveArray, RunArray, make_array, new_empty_array};
@@ -20,21 +19,13 @@ struct ValueRange {
 }
 
 pub(crate) struct InProgressRunArray<R: RunEndIndexType> {
-    /// The current source used by [`Self::copy_rows`].
     source: Option<ArrayRef>,
-    /// Value arrays referenced by the output runs.
     sources: Vec<ArrayRef>,
-    /// Cumulative logical end of each output run.
     run_ends: Vec<R::Native>,
-    /// Contiguous ranges of values to copy at finish.
     value_ranges: Vec<ValueRange>,
-    /// Source and physical index of the final output run value.
     last_value: Option<(usize, usize)>,
-    /// Index in `sources` for the array selected by [`Self::set_source`].
     current_source: Option<usize>,
-    /// The number of logical rows copied into the output.
     len: usize,
-    /// The data type to use when producing an empty array.
     data_type: DataType,
 }
 
@@ -63,12 +54,6 @@ impl<R: RunEndIndexType> InProgressRunArray<R> {
             .ok_or_else(|| ArrowError::InvalidArgumentError("Run end overflow".into()))
     }
 
-    fn first_value_matches(&self, source: usize, index: usize) -> bool {
-        // As with RunArray interleave and concat, preserve distinct physical
-        // runs even when their values happen to compare equal.
-        self.last_value == Some((source, index))
-    }
-
     fn append_value_range(&mut self, source: usize, start: usize, end: usize) {
         if start == end {
             return;
@@ -90,7 +75,6 @@ impl<R: RunEndIndexType> InProgressRunArray<R> {
         array: &RunArray<R>,
         offset: usize,
         len: usize,
-        physical: Option<(usize, usize)>,
     ) -> Result<(), ArrowError> {
         if len == 0 {
             return Ok(());
@@ -111,12 +95,8 @@ impl<R: RunEndIndexType> InProgressRunArray<R> {
             .ok_or_else(|| ArrowError::InvalidArgumentError("Run end overflow".into()))?;
         Self::native_run_end(output_end)?;
 
-        let (first, last) = physical.unwrap_or_else(|| {
-            (
-                array.get_physical_index(offset),
-                array.get_physical_index(offset + len - 1),
-            )
-        });
+        let first = array.get_physical_index(offset);
+        let last = array.get_physical_index(offset + len - 1);
         let source_idx = match self.current_source {
             Some(source) => source,
             None => {
@@ -141,12 +121,11 @@ impl<R: RunEndIndexType> InProgressRunArray<R> {
                 .as_usize()
                 .min(selection_end)
                 - selection_start;
-            // `output_end` was checked above, and every selected run end is no
-            // greater than it.
             R::Native::from_usize(output_start + selected).unwrap()
         };
 
-        let merged_first = self.first_value_matches(source_idx, first);
+        // Preserve distinct physical runs, as RunArray interleave and concat do.
+        let merged_first = self.last_value == Some((source_idx, first));
         let first_end = run_end(first);
         if merged_first {
             *self.run_ends.last_mut().unwrap() = first_end;
@@ -177,47 +156,9 @@ impl<R: RunEndIndexType> InProgressArray for InProgressRunArray<R> {
         let source = self.source.clone().ok_or_else(|| {
             ArrowError::InvalidArgumentError("InProgressRunArray source not set".into())
         })?;
-        self.copy_rows_from(source.as_run::<R>(), offset, len, None)
+        self.copy_rows_from(source.as_run::<R>(), offset, len)
     }
 
-    fn copy_rows_by_filter_from(
-        &mut self,
-        source: ArrayRef,
-        filter: &FilterPredicate,
-    ) -> Result<(), ArrowError> {
-        super::check_filter_len(filter, source.len())?;
-        self.current_source = None;
-        let array = source.as_run::<R>();
-        let result = match filter.selection() {
-            FilterSelection::None => Ok(()),
-            FilterSelection::All { len } => self.copy_rows_from(array, 0, len, None),
-            FilterSelection::Slices(slices) => {
-                let run_ends = array.run_ends();
-                let logical_offset = run_ends.offset();
-                let values = run_ends.values();
-                let mut physical = array.get_physical_index(0);
-                slices.try_for_each(|(start, end)| {
-                    let selection_start = logical_offset + start;
-                    while values[physical].as_usize() <= selection_start {
-                        physical += 1;
-                    }
-                    let first = physical;
-                    let selection_end = logical_offset + end;
-                    while values[physical].as_usize() < selection_end {
-                        physical += 1;
-                    }
-                    self.copy_rows_from(array, start, end - start, Some((first, physical)))
-                })
-            }
-            FilterSelection::Indices(indices) => {
-                indices.try_for_each(|idx| self.copy_rows_from(array, idx, 1, None))
-            }
-        };
-        self.current_source = None;
-        result
-    }
-
-    /// Builds the run-end and value arrays directly from the accumulated runs.
     fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
         if self.run_ends.is_empty() {
             return Ok(new_empty_array(&self.data_type));
@@ -254,33 +195,37 @@ impl<R: RunEndIndexType> InProgressArray for InProgressRunArray<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::filter::FilterBuilder;
     use arrow_array::types::{Int16Type, Int32Type, Int64Type};
     use arrow_array::{BooleanArray, Int32Array, Int64Array, ListArray};
-    use std::sync::Arc;
 
-    fn assert_i32_runs(array: &ArrayRef, run_ends: &[i32], values: &[i32]) {
+    fn assert_runs(array: ArrayRef, run_ends: &[i32], values: &[i32]) {
         let array = array.as_run::<Int32Type>();
         assert_eq!(array.run_ends().values(), run_ends);
         assert_eq!(array.values().as_primitive::<Int32Type>().values(), values);
     }
+    fn i32_run(run_ends: Vec<i32>, values: Vec<i32>) -> ArrayRef {
+        Arc::new(
+            RunArray::<Int32Type>::try_new(&Int32Array::from(run_ends), &Int32Array::from(values))
+                .unwrap(),
+        )
+    }
 
     fn sparse_copy<R: RunEndIndexType>(source: Arc<RunArray<R>>) {
         let source: ArrayRef = source;
-        let filter = BooleanArray::from(
-            (0..source.len())
-                .map(|idx| matches!(idx, 0 | 64 | 129 | 255))
-                .collect::<Vec<_>>(),
-        );
-        let predicate = FilterBuilder::new(&filter).build();
+        let selected = [0, 64, 129, 255];
+        let filter =
+            BooleanArray::from_iter((0..source.len()).map(|i| Some(selected.contains(&i))));
         let expected = crate::filter::filter(source.as_ref(), &filter).unwrap();
         let mut output = InProgressRunArray::<R>::new(source.data_type().clone());
-        output.copy_rows_by_filter_from(source, &predicate).unwrap();
+        output.set_source(Some(source));
+        for index in selected {
+            output.copy_rows(index, 1).unwrap();
+        }
         assert_eq!(output.finish().unwrap().as_ref(), expected.as_ref());
     }
 
     #[test]
-    fn supports_all_run_end_widths_and_dynamic_values() {
+    fn supports_run_end_widths_slices_and_dynamic_values() {
         sparse_copy(Arc::new(RunArray::<Int16Type>::from_iter(
             (0..256).map(|idx| Some(["a", "b", "c", "d"][idx / 64])),
         )));
@@ -302,82 +247,50 @@ mod tests {
     }
 
     #[test]
-    fn preserves_equal_values_across_sources_as_distinct_runs() {
-        let first = Arc::new(RunArray::<Int32Type>::from_iter([Some("same")])) as ArrayRef;
-        let second = Arc::new(RunArray::<Int32Type>::from_iter([Some("same")])) as ArrayRef;
-        let mut output = InProgressRunArray::<Int32Type>::new(first.data_type().clone());
-
-        output.set_source(Some(first));
-        output.copy_rows(0, 1).unwrap();
-        output.set_source(Some(second));
-        output.copy_rows(0, 1).unwrap();
-
-        let result = output.finish().unwrap();
-        let result = result.as_run::<Int32Type>();
-        assert_eq!(result.run_ends().values(), &[1, 2]);
-        assert_eq!(result.values().len(), 2);
-    }
-
-    #[test]
-    fn copy_rows_handles_partial_run_boundaries() {
-        let run_ends = Int32Array::from(vec![3, 7, 9]);
-        let values = Int32Array::from(vec![1, 2, 3]);
-        let source =
-            Arc::new(RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap()) as ArrayRef;
+    fn handles_partial_and_sliced_run_boundaries() {
+        let source = i32_run(vec![3, 7, 9], vec![1, 2, 3]);
         let mut output = InProgressRunArray::<Int32Type>::new(source.data_type().clone());
-
         output.set_source(Some(source));
         output.copy_rows(1, 4).unwrap();
         output.copy_rows(5, 3).unwrap();
+        assert_runs(output.finish().unwrap(), &[2, 6, 7], &[1, 2, 3]);
 
-        assert_i32_runs(&output.finish().unwrap(), &[2, 6, 7], &[1, 2, 3]);
-    }
-
-    #[test]
-    fn copy_rows_handles_sliced_run_array() {
-        let run_ends = Int32Array::from(vec![2, 5, 9, 11]);
-        let values = Int32Array::from(vec![0, 1, 2, 3]);
-        let source = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
-        let source = Arc::new(source.slice(1, 9)) as ArrayRef;
+        let source = i32_run(vec![2, 5, 9, 11], vec![0, 1, 2, 3]);
+        let source = Arc::new(source.as_run::<Int32Type>().slice(1, 9)) as ArrayRef;
         let mut output = InProgressRunArray::<Int32Type>::new(source.data_type().clone());
-
         output.set_source(Some(source));
         output.copy_rows(1, 2).unwrap();
         output.copy_rows(3, 4).unwrap();
-
-        assert_i32_runs(&output.finish().unwrap(), &[3, 6], &[1, 2]);
+        assert_runs(output.finish().unwrap(), &[3, 6], &[1, 2]);
     }
 
     #[test]
     fn preserves_order_when_filtered_and_contiguous_copies_mix() {
-        let first = Arc::new(
-            RunArray::<Int32Type>::try_new(
-                &Int32Array::from(vec![2, 4]),
-                &Int32Array::from(vec![1, 2]),
-            )
-            .unwrap(),
-        ) as ArrayRef;
-        let sparse = Arc::new(
-            RunArray::<Int32Type>::try_new(
-                &Int32Array::from(vec![2, 4]),
-                &Int32Array::from(vec![3, 4]),
-            )
-            .unwrap(),
-        ) as ArrayRef;
-        let last = Arc::new(
-            RunArray::<Int32Type>::try_new(&Int32Array::from(vec![2]), &Int32Array::from(vec![5]))
-                .unwrap(),
-        ) as ArrayRef;
-        let filter = BooleanArray::from(vec![false, true, true, false]);
-        let predicate = FilterBuilder::new(&filter).build();
+        let first = i32_run(vec![2, 4], vec![1, 2]);
+        let sparse = i32_run(vec![2, 4], vec![3, 4]);
+        let last = i32_run(vec![2], vec![5]);
         let mut output = InProgressRunArray::<Int32Type>::new(first.data_type().clone());
 
         output.set_source(Some(first));
         output.copy_rows(0, 2).unwrap();
-        output.copy_rows_by_filter_from(sparse, &predicate).unwrap();
+        output.set_source(Some(sparse));
+        output.copy_rows(1, 2).unwrap();
         output.set_source(Some(last));
         output.copy_rows(0, 2).unwrap();
 
-        assert_i32_runs(&output.finish().unwrap(), &[2, 3, 4, 6], &[1, 3, 4, 5]);
+        assert_runs(output.finish().unwrap(), &[2, 3, 4, 6], &[1, 3, 4, 5]);
+    }
+
+    #[test]
+    fn preserves_equal_values_in_distinct_sources_as_distinct_runs() {
+        let first = Arc::new(RunArray::<Int32Type>::from_iter([Some("same")])) as ArrayRef;
+        let second = first.clone();
+        let mut output = InProgressRunArray::<Int32Type>::new(first.data_type().clone());
+        output.set_source(Some(first));
+        output.copy_rows(0, 1).unwrap();
+        output.set_source(Some(second));
+        output.copy_rows(0, 1).unwrap();
+        let result = output.finish().unwrap();
+        assert_eq!(result.as_run::<Int32Type>().run_ends().values(), &[1, 2]);
     }
 }
