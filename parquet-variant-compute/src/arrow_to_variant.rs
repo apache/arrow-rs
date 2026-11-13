@@ -663,11 +663,10 @@ pub(crate) struct UnionArrowToVariantBuilder<'a> {
 impl<'a> UnionArrowToVariantBuilder<'a> {
     pub(crate) fn new(array: &'a dyn Array, options: &'a CastOptions) -> Result<Self, ArrowError> {
         let union_array = array.as_union();
-        let type_ids = union_array.type_ids();
 
         // Create child builders for each union field
         let mut child_builders = HashMap::new();
-        for &type_id in type_ids {
+        for (type_id, _) in union_array.fields().iter() {
             let child_array = union_array.child(type_id);
             let child_builder = make_arrow_to_variant_row_builder(
                 child_array.data_type(),
