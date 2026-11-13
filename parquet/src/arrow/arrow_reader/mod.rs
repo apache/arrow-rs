@@ -243,6 +243,11 @@ pub struct ArrowReaderBuilder<T> {
     pub(crate) metrics: ArrowReaderMetrics,
 
     pub(crate) max_predicate_cache_size: usize,
+
+    /// Byte limit of each `Utf8`/`Binary` array in an output batch, see
+    /// [`capacity_staging`]. `None` disables staging; limits below `i32::MAX`
+    /// are only used by tests.
+    pub(crate) byte_array_capacity: Option<usize>,
 }
 
 impl<T: Debug> Debug for ArrowReaderBuilder<T> {
@@ -260,6 +265,10 @@ impl<T: Debug> Debug for ArrowReaderBuilder<T> {
             .field("limit", &self.limit)
             .field("offset", &self.offset)
             .field("metrics", &self.metrics)
+            .field(
+                "byte_array_batch_splitting",
+                &self.byte_array_capacity.is_some(),
+            )
             .finish()
     }
 }
@@ -283,6 +292,7 @@ impl<T> ArrowReaderBuilder<T> {
             offset: None,
             metrics: ArrowReaderMetrics::Disabled,
             max_predicate_cache_size: 100 * 1024 * 1024, // 100MB default cache size
+            byte_array_capacity: Some(i32::MAX as usize),
         }
     }
 
@@ -307,10 +317,47 @@ impl<T> ArrowReaderBuilder<T> {
     /// guarantee exact internal buffer capacities.
     ///
     /// If `batch_size` is more than the file row count, use the file row count.
+    ///
+    /// With [byte-array batch splitting](Self::with_byte_array_batch_splitting)
+    /// enabled, a batch can have fewer rows when a top-level `Utf8` or `Binary`
+    /// column would contain more than `i32::MAX` data bytes.
+    /// The remaining rows are returned in later batches, each containing
+    /// complete top-level rows. Requesting `LargeUtf8`/`LargeBinary` or
+    /// `Utf8View`/`BinaryView` for the affected column avoids this byte limit.
+    /// Nested byte arrays retain their existing capacity limits.
     pub fn with_batch_size(self, batch_size: usize) -> Self {
         // Try to avoid allocate large buffer
         let batch_size = batch_size.min(self.metadata.file_metadata().num_rows() as usize);
         Self { batch_size, ..self }
+    }
+
+    /// Set whether to split oversized batches for top-level `Utf8` and `Binary` columns.
+    ///
+    /// Enabled by default. The reader can decode eligible columns with 64-bit
+    /// offsets, then split the output at row boundaries and restore the requested
+    /// types. Size statistics allow the reader to use 32-bit offsets throughout
+    /// when the scanned data fits. The reader can decode an entire window before
+    /// splitting its output.
+    ///
+    /// With splitting disabled, a decoded window exceeding `i32::MAX` bytes for
+    /// a column can return an offset overflow error. This includes unselected
+    /// rows that are decoded before filtering.
+    ///
+    /// This option applies to sync, async, and push readers built through this
+    /// builder, including predicate evaluation and caching. The low-level
+    /// [`ParquetRecordBatchReader::try_new_with_row_groups`] constructor always
+    /// enables splitting.
+    pub fn with_byte_array_batch_splitting(mut self, enabled: bool) -> Self {
+        self.byte_array_capacity = enabled.then_some(i32::MAX as usize);
+        self
+    }
+
+    /// Override the byte limit of each `Utf8`/`Binary` output array, or
+    /// disable staging with `None` to read through the unstaged readers.
+    #[cfg(test)]
+    pub(crate) fn with_byte_array_capacity(mut self, limit: Option<usize>) -> Self {
+        self.byte_array_capacity = limit.map(|limit| limit.min(i32::MAX as usize));
+        self
     }
 
     /// Only read data from the provided row group indexes
@@ -1359,6 +1406,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             metrics,
             // Not used for the sync reader, see https://github.com/apache/arrow-rs/issues/8000
             max_predicate_cache_size: _,
+            byte_array_capacity,
         } = self;
 
         // Try to avoid allocate large buffer
@@ -1389,19 +1437,26 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
                 let mut cache_projection = predicate.projection().clone();
                 cache_projection.intersect(&projection);
 
-                let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
+                let (array_reader, predicate_schema) = ArrayReaderBuilder::new(&reader, &metrics)
                     .with_batch_size(batch_size)
                     .with_parquet_metadata(&reader.metadata)
-                    .build_array_reader(fields.as_deref(), predicate.projection())?;
+                    .with_byte_array_capacity(byte_array_capacity)
+                    .build_array_reader_with_logical_schema(
+                        fields.as_deref(),
+                        predicate.projection(),
+                    )?;
 
-                plan_builder = plan_builder.with_predicate(array_reader, predicate.as_mut())?;
+                let options = PredicateOptions::new(array_reader, predicate.as_mut())
+                    .with_capacity_staging(predicate_schema, byte_array_capacity);
+                plan_builder = plan_builder.with_predicate_options(options)?;
             }
         }
 
-        let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
+        let (array_reader, schema) = ArrayReaderBuilder::new(&reader, &metrics)
             .with_batch_size(batch_size)
             .with_parquet_metadata(&reader.metadata)
-            .build_array_reader(fields.as_deref(), &projection)?;
+            .with_byte_array_capacity(byte_array_capacity)
+            .build_array_reader_with_logical_schema(fields.as_deref(), &projection)?;
 
         let read_plan = plan_builder
             .limited(reader.num_rows())
@@ -1410,7 +1465,12 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             .build_limited()
             .build();
 
-        Ok(ParquetRecordBatchReader::new(array_reader, read_plan))
+        Ok(ParquetRecordBatchReader::new_with_capacity_staging(
+            array_reader,
+            read_plan,
+            schema,
+            byte_array_capacity,
+        ))
     }
 }
 
@@ -1504,6 +1564,11 @@ impl<T: ChunkReader + 'static> PageIterator for ReaderPageIterator<T> {}
 ///
 /// Typically, either reads from a file or an in memory buffer [`Bytes`]
 ///
+/// When this reader uses 64-bit offsets for
+/// [byte-array batch splitting](ArrowReaderBuilder::with_byte_array_batch_splitting),
+/// it returns the first error, releases any pending window, and ends iteration.
+/// This matches the push decoder's terminal error behavior.
+///
 /// Created by [`ParquetRecordBatchReaderBuilder`]
 ///
 /// [`Bytes`]: bytes::Bytes
@@ -1511,6 +1576,17 @@ pub struct ParquetRecordBatchReader {
     array_reader: Box<dyn ArrayReader>,
     schema: SchemaRef,
     read_plan: ReadPlan,
+    staging: CapacityStaging,
+}
+
+/// State of top-level byte-array restoration for this reader.
+enum CapacityStaging {
+    /// Staging is disabled, or no projected column requires it.
+    Disabled,
+    /// Restore staged columns and split oversized windows.
+    Active(capacity_staging::CapacitySplitter),
+    /// An error ended the staged reader and released its pending window.
+    Failed,
 }
 
 /// Accumulates filter masks for decoded chunks in one logical output batch.
@@ -1674,6 +1750,40 @@ impl ParquetRecordBatchReader {
     /// Returns `Result<Option<..>>` rather than `Option<Result<..>>` to
     /// simplify error handling with `?`
     fn next_inner(&mut self) -> Result<Option<RecordBatch>> {
+        match std::mem::replace(&mut self.staging, CapacityStaging::Failed) {
+            CapacityStaging::Disabled => {
+                self.staging = CapacityStaging::Disabled;
+                self.next_decoded()
+            }
+            CapacityStaging::Failed => Ok(None),
+            CapacityStaging::Active(mut splitter) => {
+                let result = self.next_restored(&mut splitter);
+                if result.is_ok() {
+                    self.staging = CapacityStaging::Active(splitter);
+                }
+                result
+            }
+        }
+    }
+
+    /// Emit the rest of the pending window, or decode and push the next one.
+    fn next_restored(
+        &mut self,
+        splitter: &mut capacity_staging::CapacitySplitter,
+    ) -> Result<Option<RecordBatch>> {
+        loop {
+            if let Some(batch) = splitter.next_batch()? {
+                return Ok(Some(batch));
+            }
+            let Some(batch) = self.next_decoded()? else {
+                return Ok(None);
+            };
+            splitter.push(batch)?;
+        }
+    }
+
+    /// Decode and filter the next planned batch in the readers' own types.
+    fn next_decoded(&mut self) -> Result<Option<RecordBatch>> {
         let mut read_records = 0;
         let batch_size = self.batch_size();
         if batch_size == 0 {
@@ -1756,10 +1866,12 @@ impl ParquetRecordBatchReader {
             .build()
     }
 
-    /// Create a new [`ParquetRecordBatchReader`] from the provided [`RowGroups`]
+    /// Create a new [`ParquetRecordBatchReader`] from the provided [`RowGroups`].
     ///
-    /// Note: this is a low-level interface see [`ParquetRecordBatchReader::try_new`] for a
-    /// higher-level interface for reading parquet data from a file
+    /// This low-level constructor always enables splitting oversized top-level
+    /// `Utf8` and `Binary` batches. To configure
+    /// [byte-array batch splitting](ArrowReaderBuilder::with_byte_array_batch_splitting)
+    /// when reading from a file, use [`ParquetRecordBatchReaderBuilder`].
     pub fn try_new_with_row_groups(
         levels: &FieldLevels,
         row_groups: &dyn RowGroups,
@@ -1768,20 +1880,25 @@ impl ParquetRecordBatchReader {
     ) -> Result<Self> {
         // note metrics are not supported in this API
         let metrics = ArrowReaderMetrics::disabled();
-        let array_reader = ArrayReaderBuilder::new(row_groups, &metrics)
+        let byte_array_capacity = Some(i32::MAX as usize);
+        let (array_reader, schema) = ArrayReaderBuilder::new(row_groups, &metrics)
             .with_batch_size(batch_size)
             .with_parquet_metadata(row_groups.metadata())
-            .build_array_reader(levels.levels.as_ref(), &ProjectionMask::all())?;
-
+            .with_byte_array_capacity(byte_array_capacity)
+            .build_array_reader_with_logical_schema(
+                levels.levels.as_ref(),
+                &ProjectionMask::all(),
+            )?;
         let read_plan = ReadPlanBuilder::new(batch_size)
             .with_selection(selection)
             .build();
 
-        Ok(Self {
+        Ok(Self::new_with_capacity_staging(
             array_reader,
-            schema: Arc::new(Schema::new(levels.fields.clone())),
             read_plan,
-        })
+            schema,
+            byte_array_capacity,
+        ))
     }
 
     /// Create a new [`ParquetRecordBatchReader`] that will read at most `batch_size` rows at
@@ -1797,6 +1914,58 @@ impl ParquetRecordBatchReader {
             array_reader,
             schema: Arc::new(schema),
             read_plan,
+            staging: CapacityStaging::Disabled,
+        }
+    }
+
+    /// Create a reader whose top-level `Utf8`/`Binary` columns may have been staged as
+    /// `LargeUtf8`/`LargeBinary` by [`ArrayReaderBuilder::with_byte_array_capacity`].
+    ///
+    /// `schema` is the requested logical schema. Output batches are restored
+    /// to it, and split so that each `Utf8`/`Binary` array holds at most
+    /// `byte_array_capacity` bytes. With no staged column, or with `None`, this
+    /// is the same as [`Self::new`].
+    pub(crate) fn new_with_capacity_staging(
+        array_reader: Box<dyn ArrayReader>,
+        read_plan: ReadPlan,
+        schema: SchemaRef,
+        byte_array_capacity: Option<usize>,
+    ) -> Self {
+        let staged = match byte_array_capacity {
+            Some(capacity)
+                if array_reader.get_data_type() != &ArrowType::Struct(schema.fields().clone()) =>
+            {
+                Some(capacity)
+            }
+            _ => None,
+        };
+        let Some(capacity) = staged else {
+            let ArrowType::Struct(fields) = array_reader.get_data_type() else {
+                unreachable!("Struct array reader's data type is not struct!");
+            };
+            debug_assert_eq!(
+                fields,
+                schema.fields(),
+                "projected logical schema must match the unstaged readers"
+            );
+            return Self {
+                array_reader,
+                schema,
+                read_plan,
+                staging: CapacityStaging::Disabled,
+            };
+        };
+        debug_assert!(capacity_staging::can_restore_type(
+            array_reader.get_data_type(),
+            &ArrowType::Struct(schema.fields().clone()),
+        ));
+        Self {
+            array_reader,
+            schema: schema.clone(),
+            read_plan,
+            staging: CapacityStaging::Active(capacity_staging::CapacitySplitter::new(
+                schema, capacity,
+            )),
         }
     }
 
@@ -1805,6 +1974,10 @@ impl ParquetRecordBatchReader {
         self.read_plan.batch_size()
     }
 }
+
+mod capacity_staging;
+#[cfg(test)]
+mod capacity_staging_tests;
 
 #[cfg(test)]
 pub(crate) mod tests;
