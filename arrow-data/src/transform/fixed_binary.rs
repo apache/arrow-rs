@@ -13,9 +13,8 @@ pub(super) fn build_extend(array: &ArrayData) -> Extend<'_> {
     Box::new(
         move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
             let buffer = &mut mutable.buffer1;
-            buffer
-                .try_extend_from_slice(&values[start * size..(start + len) * size])
-                .map_err(memory_error)
+            buffer.extend_from_slice(&values[start * size..(start + len) * size]);
+            Ok(())
         },
     )
 }
