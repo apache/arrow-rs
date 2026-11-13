@@ -70,6 +70,8 @@ fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits<
         Box::new(move |mutable, start, len| {
             let mutable_len = mutable.len;
             let out = mutable.null_buffer();
+            // `try_extend` grows the null buffer before calling this infallible callback.
+            debug_assert!(out.len() >= bit_util::ceil(mutable_len + len, 8));
             mutable.null_count += set_bits(
                 out.as_slice_mut(),
                 bytes,
@@ -82,6 +84,8 @@ fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits<
         Box::new(|mutable, _, len| {
             let mutable_len = mutable.len;
             let out = mutable.null_buffer();
+            // `try_extend` grows the null buffer before calling this infallible callback.
+            debug_assert!(out.len() >= bit_util::ceil(mutable_len + len, 8));
             let write_data = out.as_slice_mut();
             (0..len).for_each(|i| {
                 bit_util::set_bit(write_data, mutable_len + i);
@@ -219,6 +223,10 @@ fn build_extend_view(array: &ArrayData, buffer_offset: u32) -> Extend<'_> {
             if buffer_offset != 0 {
                 for view in &mut mutable.buffer1.typed_data_mut::<u128>()[dst_start..] {
                     if *view as u32 > MAX_INLINE_VIEW_LEN {
+                        // The buffer index is bits 64 to 95 of a view. Adding
+                        // `buffer_offset` gives the string's buffer index in the
+                        // output, which fits in 32 bits, so the sum never carries
+                        // into bit 96.
                         *view += (buffer_offset as u128) << 64;
                     }
                 }
@@ -816,6 +824,7 @@ impl<'a> MutableArrayData<'a> {
             .len
             .checked_add(len)
             .ok_or_else(|| ArrowError::MemoryError("length overflow".into()))?;
+        // Grow here so allocation errors are returned before the infallible null-bit writer runs.
         if let Some(nulls) = &mut self.data.null_buffer {
             utils::try_resize_for_bits(nulls, new_len)?;
         }
