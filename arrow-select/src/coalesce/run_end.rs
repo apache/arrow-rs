@@ -25,7 +25,7 @@ pub(crate) struct InProgressRunArray<R: RunEndIndexType> {
     generic: GenericInProgressArray,
     /// Number of logical rows buffered by `generic`.
     generic_len: usize,
-    /// The current source used by [`Self::copy_rows`].
+    /// The current source used by [`Self::copy_rows_sparse`].
     source: Option<ArrayRef>,
     /// Value arrays referenced by the output runs.
     sources: Vec<ArrayRef>,
@@ -187,13 +187,22 @@ impl<R: RunEndIndexType> InProgressRunArray<R> {
         }
         Ok(())
     }
+
+    fn set_sparse_source(&mut self, source: Option<ArrayRef>) {
+        self.source = source;
+        self.current_source = None;
+    }
 }
 
 impl<R: RunEndIndexType> InProgressArray for InProgressRunArray<R> {
     fn set_source(&mut self, source: Option<ArrayRef>) {
-        self.generic.set_source(source.clone());
-        self.source = source;
-        self.current_source = None;
+        if self.runs.is_empty() {
+            self.source = None;
+            self.generic.set_source(source);
+        } else {
+            self.generic.set_source(source.clone());
+            self.source = source;
+        }
     }
 
     /// Buffers ordinary row ranges as slices for the generic concat path.
@@ -217,8 +226,7 @@ impl<R: RunEndIndexType> InProgressArray for InProgressRunArray<R> {
         filter: &FilterPredicate,
     ) -> Result<(), ArrowError> {
         super::check_filter_len(filter, source.len())?;
-        self.source = Some(source);
-        self.current_source = None;
+        self.set_sparse_source(Some(source));
         let result = match filter.selection() {
             FilterSelection::None => Ok(()),
             FilterSelection::All { len } => self.copy_rows_sparse(0, len),
@@ -229,8 +237,7 @@ impl<R: RunEndIndexType> InProgressArray for InProgressRunArray<R> {
                 indices.try_for_each(|idx| self.copy_rows_sparse(idx, 1))
             }
         };
-        self.source = None;
-        self.current_source = None;
+        self.set_sparse_source(None);
         result
     }
 
@@ -317,9 +324,9 @@ mod tests {
         let second = Arc::new(RunArray::<Int32Type>::from_iter([Some("same")])) as ArrayRef;
         let mut output = InProgressRunArray::<Int32Type>::new(first.data_type().clone());
 
-        output.set_source(Some(first));
+        output.set_sparse_source(Some(first));
         output.copy_rows_sparse(0, 1).unwrap();
-        output.set_source(Some(second));
+        output.set_sparse_source(Some(second));
         output.copy_rows_sparse(0, 1).unwrap();
 
         let result = output.finish().unwrap();
@@ -336,7 +343,7 @@ mod tests {
             Arc::new(RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap()) as ArrayRef;
         let mut output = InProgressRunArray::<Int32Type>::new(source.data_type().clone());
 
-        output.set_source(Some(source));
+        output.set_sparse_source(Some(source));
         output.copy_rows_sparse(1, 4).unwrap();
         output.copy_rows_sparse(5, 3).unwrap();
 
@@ -351,7 +358,7 @@ mod tests {
         let source = Arc::new(source.slice(1, 9)) as ArrayRef;
         let mut output = InProgressRunArray::<Int32Type>::new(source.data_type().clone());
 
-        output.set_source(Some(source));
+        output.set_sparse_source(Some(source));
         output.copy_rows_sparse(1, 2).unwrap();
         output.copy_rows_sparse(3, 4).unwrap();
 
