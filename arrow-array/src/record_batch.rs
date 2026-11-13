@@ -326,7 +326,7 @@ impl RecordBatch {
             })?;
 
         for (c, f) in columns.iter().zip(&schema.fields) {
-            if !f.is_nullable() && c.null_count() > 0 {
+            if !f.is_nullable() && c.logical_null_count() > 0 {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "Column '{}' is declared as non-nullable but contains null values",
                     f.name()
@@ -1727,6 +1727,63 @@ mod tests {
             format!("{}", maybe_batch.err().unwrap())
         );
     }
+    #[test]
+    fn test_logical_nulls_in_non_nullable_field() {
+        use crate::types::{Int8Type, Int32Type};
+        use crate::{ArrayRef, DictionaryArray, Int8Array, NullArray, RunArray};
+
+        let columns: Vec<ArrayRef> = vec![
+            // valid keys pointing to a null dictionary value
+            Arc::new(
+                DictionaryArray::<Int8Type>::try_new(
+                    Int8Array::from(vec![0, 0]),
+                    Arc::new(Int32Array::from(vec![None])),
+                )
+                .unwrap(),
+            ),
+            // a run whose value is null
+            Arc::new(
+                RunArray::<Int32Type>::try_new(
+                    &Int32Array::from(vec![2]),
+                    &Int32Array::from(vec![None]),
+                )
+                .unwrap(),
+            ),
+            Arc::new(NullArray::new(2)),
+        ];
+        for column in columns {
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "a",
+                column.data_type().clone(),
+                false,
+            )]));
+            let err = RecordBatch::try_new(schema, vec![column]).unwrap_err();
+            assert_eq!(
+                "Invalid argument error: Column 'a' is declared as non-nullable but contains null values",
+                err.to_string()
+            );
+        }
+    }
+
+    #[test]
+    fn test_no_logical_nulls_in_non_nullable_field() {
+        use crate::types::Int8Type;
+        use crate::{DictionaryArray, Int8Array};
+
+        // the null dictionary value is not referenced by any key
+        let dict = DictionaryArray::<Int8Type>::try_new(
+            Int8Array::from(vec![1, 1]),
+            Arc::new(Int32Array::from(vec![None, Some(7)])),
+        )
+        .unwrap();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            dict.data_type().clone(),
+            false,
+        )]));
+        RecordBatch::try_new(schema, vec![Arc::new(dict)]).unwrap();
+    }
+
     #[test]
     fn test_record_batch_options() {
         let options = RecordBatchOptions::new()
