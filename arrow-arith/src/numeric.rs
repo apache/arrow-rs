@@ -345,7 +345,7 @@ trait OverflowingOp: Sized {
 }
 
 macro_rules! signed_overflowing_op {
-    ($($t:ty => $wide:ty),*) => {$(
+    ($($t:ty $(=> $wide:ty)?),*) => {$(
         impl OverflowingOp for $t {
             #[inline]
             fn add_overflowing(self, rhs: Self) -> (Self, bool) {
@@ -364,16 +364,30 @@ macro_rules! signed_overflowing_op {
 
             #[inline]
             fn mul_overflowing(self, rhs: Self) -> (Self, bool) {
-                let product = <$wide>::from(self) * <$wide>::from(rhs);
-                // The truncating cast is the wrapping product. It overflowed iff
-                // widening it back doesn't give the full product.
-                (product as $t, <$wide>::from(product as $t) != product)
+                signed_mul_overflowing!(self, rhs, $t $(, $wide)?)
             }
         }
     )*};
 }
 
-signed_overflowing_op!(i8 => i16, i16 => i32, i32 => i64, i64 => i128);
+/// The wrapping product of two signed integers and whether it overflowed.
+macro_rules! signed_mul_overflowing {
+    // The truncating cast is the wrapping product. It overflowed iff widening
+    // it back doesn't give the full product.
+    ($l:expr, $r:expr, $t:ty, $wide:ty) => {{
+        let product = <$wide>::from($l) * <$wide>::from($r);
+        (product as $t, <$wide>::from(product as $t) != product)
+    }};
+    // Widened to `i128`, an `i64` multiply stays a scalar `imul` on x86-64, and
+    // LLVM packs each row's overflow flag into vector registers around it,
+    // which made the loop slower than the checked kernel with
+    // `-C target-cpu=x86-64-v3`.
+    ($l:expr, $r:expr, $t:ty) => {
+        $l.overflowing_mul($r)
+    };
+}
+
+signed_overflowing_op!(i8 => i16, i16 => i32, i32 => i64, i64);
 
 macro_rules! unsigned_overflowing_op {
     ($($t:ty),*) => {$(
