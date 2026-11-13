@@ -4,6 +4,7 @@
 
 //! Encryption support for Thrift serialization
 
+use crate::file::metadata::extensions::ThriftStruct;
 use crate::file::metadata::thrift_fields::{
     aes_gcm_ctr_v1 as ctr, aes_gcm_v1 as gcm, encryption_algorithm as algorithm,
     file_crypto_meta_data as crypto,
@@ -91,6 +92,7 @@ impl HeapSize for EncryptionAlgorithm {
 }
 
 thrift_struct!(@root
+
 /// Crypto metadata for files with encrypted footer
 pub(crate) struct FileCryptoMetaData<'a> {
   /// Encryption algorithm. This field is only used for files
@@ -106,6 +108,7 @@ pub(crate) struct FileCryptoMetaData<'a> {
 
 fn row_group_from_encrypted_thrift(
     mut rg: RowGroupMetaData,
+    row_group_index: usize,
     decryptor: Option<&FileDecryptor>,
     options: Option<&ParquetMetaDataOptions>,
 ) -> Result<RowGroupMetaData> {
@@ -198,8 +201,19 @@ fn row_group_from_encrypted_thrift(
                 })?;
 
             // parse decrypted buffer and then replace fields in 'c'
-            let mut prot = ThriftSliceInputProtocol::new(&decrypted_cc_buf);
-            let mask = read_column_metadata(&mut prot, &mut c, i, options)?;
+            let root = super::SiteInfo::column(
+                ThriftStruct::ColumnMetaData,
+                Some(row_group_index),
+                Some(i),
+            );
+            let observer = options.and_then(|o| o.extension_observer.as_ref());
+            let mask = crate::file::metadata::extensions::with_read_extensions!(
+                ThriftSliceInputProtocol::new(&decrypted_cc_buf),
+                observer,
+                root,
+                with_observer,
+                |mut prot| read_column_metadata(&mut prot, None, &mut c, i, options)
+            )?;
             validate_column_metadata(mask)?;
 
             columns.push(c);
@@ -245,11 +259,16 @@ pub(crate) fn parquet_metadata_with_encryption(
     let decrypted_fmd_buf;
 
     if encrypted_footer {
-        let mut prot = ThriftSliceInputProtocol::new(buf);
         if let Some(file_decryption_properties) = file_decryption_properties {
-            let t_file_crypto_metadata: FileCryptoMetaData =
-                FileCryptoMetaData::read_thrift(&mut prot)
-                    .map_err(|e| general_err!("Could not parse crypto metadata: {}", e))?;
+            let (crypto_metadata, footer_bytes) = crate::file::metadata::extensions::with_read_extensions!(
+                ThriftSliceInputProtocol::new(buf),
+                options.and_then(|o| o.extension_observer.as_ref()),
+                super::SiteInfo::new(ThriftStruct::FileCryptoMetaData),
+                with_observer,
+                |mut prot| (FileCryptoMetaData::read_thrift(&mut prot), prot.as_slice())
+            );
+            let t_file_crypto_metadata = crypto_metadata
+                .map_err(|e| general_err!("Could not parse crypto metadata: {}", e))?;
             let supply_aad_prefix = match &t_file_crypto_metadata.encryption_algorithm {
                 EncryptionAlgorithm::AES_GCM_V1(algo) => algo.supply_aad_prefix,
                 EncryptionAlgorithm::AES_GCM_CTR_V1(_) => Some(false),
@@ -270,7 +289,7 @@ pub(crate) fn parquet_metadata_with_encryption(
             let aad_footer = crate::encryption::modules::create_footer_aad(decryptor.file_aad())?;
 
             decrypted_fmd_buf = footer_decryptor?
-                .decrypt(prot.as_slice().as_ref(), aad_footer.as_ref())
+                .decrypt(footer_bytes, aad_footer.as_ref())
                 .map_err(|_| {
                     general_err!(
                         "Provided footer key and AAD were unable to decrypt parquet footer"
@@ -312,7 +331,10 @@ pub(crate) fn parquet_metadata_with_encryption(
     // decrypt column chunk info
     let row_groups = row_groups
         .into_iter()
-        .map(|rg| row_group_from_encrypted_thrift(rg, file_decryptor.as_ref(), options))
+        .enumerate()
+        .map(|(index, rg)| {
+            row_group_from_encrypted_thrift(rg, index, file_decryptor.as_ref(), options)
+        })
         .collect::<Result<Vec<_>>>()?;
 
     let metadata = ParquetMetaDataBuilder::new(file_metadata)

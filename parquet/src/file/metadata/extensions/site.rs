@@ -58,6 +58,7 @@ pub(super) enum Source<'a> {
         binding: &'a super::writer::WriteBinding,
         tracking: &'a super::writer::WriteTracking,
     },
+    Reader(&'a mut super::reader::ReadSite<'a>),
 }
 
 /// An extension's root, semantic ownership, and explicitly resolved relative path.
@@ -92,11 +93,18 @@ impl<'a> MetadataSite<'a> {
         }
     }
 
+    pub(super) fn reader(source: &'a mut super::reader::ReadSite<'a>) -> Self {
+        Self {
+            source: Source::Reader(source),
+        }
+    }
+
     /// Encoded root kind, available even if later context/path resolution fails.
     #[inline]
     pub fn root(&self) -> ThriftStruct {
         match &self.source {
             Source::Writer { binding, .. } => binding.info.thrift,
+            Source::Reader(s) => s.info.thrift,
         }
     }
 
@@ -106,6 +114,7 @@ impl<'a> MetadataSite<'a> {
     pub fn context(&self) -> Result<MetadataContext> {
         match &self.source {
             Source::Writer { binding, .. } => Ok(binding.context()),
+            Source::Reader(s) => s.context(),
         }
     }
 
@@ -115,6 +124,7 @@ impl<'a> MetadataSite<'a> {
     pub fn at_root(&self) -> bool {
         match &self.source {
             Source::Writer { tracking, .. } => tracking.path().is_empty(),
+            Source::Reader(s) => s.at_root(),
         }
     }
 
@@ -123,6 +133,7 @@ impl<'a> MetadataSite<'a> {
     pub fn known_prefix(&self) -> MetadataPath<'_> {
         match &self.source {
             Source::Writer { binding, .. } => MetadataPath::known(binding.scope),
+            Source::Reader(s) => s.known_prefix(),
         }
     }
 
@@ -131,6 +142,7 @@ impl<'a> MetadataSite<'a> {
     pub fn resolve_path(&mut self) -> Result<MetadataPath<'_>> {
         match &mut self.source {
             Source::Writer { tracking, .. } => Ok(MetadataPath::slice(tracking.path())),
+            Source::Reader(s) => s.resolve_path(),
         }
     }
 }

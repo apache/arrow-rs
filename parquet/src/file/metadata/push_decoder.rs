@@ -8,7 +8,7 @@ use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::FOOTER_SIZE;
 use crate::file::metadata::page_index::PageIndex;
-use crate::file::metadata::parser::{MetadataParser, parse_page_index};
+use crate::file::metadata::parser::MetadataParser;
 use crate::file::metadata::{
     ColumnChunkMask, FooterTail, PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions,
 };
@@ -572,7 +572,7 @@ impl ParquetMetaDataPushDecoder {
                 return Err(error);
             }
         };
-        let page_index = match parse_page_index(
+        let page_index = match self.metadata_parser.parse_page_index(
             &metadata,
             self.column_index_policy,
             self.offset_index_policy,

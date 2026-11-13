@@ -42,10 +42,6 @@ mod column_chunk;
 mod dictionary;
 #[cfg(feature = "experimental")]
 #[doc(hidden)]
-#[expect(
-    dead_code,
-    reason = "Shared primitives are consumed by the following writer and reader commits"
-)]
 pub mod extensions;
 #[cfg(not(feature = "experimental"))]
 #[expect(

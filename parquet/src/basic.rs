@@ -1213,6 +1213,7 @@ impl ColumnOrder {
 
 impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for ColumnOrder {
     fn read_thrift(prot: &mut R) -> Result<Self> {
+        prot.read_struct_begin()?;
         let field_ident = prot.read_field_begin(0)?;
         if field_ident.field_type == FieldType::Stop {
             return Err(general_err!("Received empty union from remote ColumnOrder"));
@@ -1232,6 +1233,7 @@ impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for ColumnOrder {
                 Self::INT96_TIMESTAMP_ORDER
             }
             _ => {
+                // Union variants are values, not extension-bearing envelope fields.
                 prot.skip(field_ident.field_type)?;
                 Self::UNKNOWN
             }

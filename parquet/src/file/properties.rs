@@ -9,6 +9,10 @@ pub use crate::encodings::encoding::DeltaBinaryPackedEncoderOptions;
 #[cfg(feature = "encryption")]
 use crate::encryption::encrypt::FileEncryptionProperties;
 use crate::errors::{ParquetError, Result};
+#[cfg(feature = "experimental")]
+use crate::file::metadata::extensions::{
+    self, MetadataExtensionListener, MetadataExtensionSelection,
+};
 use crate::file::metadata::{KeyValue, SortingColumn};
 use crate::schema::types::ColumnPath;
 use std::str::FromStr;
@@ -2091,6 +2095,7 @@ pub struct ReaderProperties {
     codec_options: CodecOptions,
     read_bloom_filter: bool,
     read_page_stats: bool,
+    pub(crate) extension_observer: Option<crate::file::metadata::extensions::ObserverHandle>,
 }
 
 impl ReaderProperties {
@@ -2121,6 +2126,7 @@ pub struct ReaderPropertiesBuilder {
     codec_options_builder: CodecOptionsBuilder,
     read_bloom_filter: Option<bool>,
     read_page_stats: Option<bool>,
+    extension_observer: Option<crate::file::metadata::extensions::ObserverHandle>,
 }
 
 /// Reader properties builder.
@@ -2131,6 +2137,7 @@ impl ReaderPropertiesBuilder {
             codec_options_builder: CodecOptionsBuilder::default(),
             read_bloom_filter: None,
             read_page_stats: None,
+            extension_observer: None,
         }
     }
 
@@ -2140,7 +2147,24 @@ impl ReaderPropertiesBuilder {
             codec_options: self.codec_options_builder.build(),
             read_bloom_filter: self.read_bloom_filter.unwrap_or(DEFAULT_READ_BLOOM_FILTER),
             read_page_stats: self.read_page_stats.unwrap_or(DEFAULT_READ_PAGE_STATS),
+            extension_observer: self.extension_observer,
         }
+    }
+
+    /// Install one concurrent listener and its complete target list.
+    /// Empty lists and a second installation are errors; overlapping targets notify once.
+    /// See [`crate::file::metadata::extensions::MetadataExtensionListener`] for
+    /// callback lifetimes, errors and authentication semantics.
+    #[cfg(feature = "experimental")]
+    pub fn set_metadata_extension_listener(
+        mut self,
+        targets: impl IntoIterator<Item = MetadataExtensionSelection>,
+        listener: impl MetadataExtensionListener + 'static,
+    ) -> Result<Self> {
+        extensions::install(&mut self.extension_observer, targets, |targets| {
+            extensions::ObserverHandle::new(targets, listener)
+        })?;
+        Ok(self)
     }
 
     /// Enable/disable backward compatible LZ4.

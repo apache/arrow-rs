@@ -139,6 +139,7 @@ macro_rules! thrift_union_all_empty {
 
         impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for $identifier {
             fn read_thrift(prot: &mut R) -> Result<Self> {
+                prot.read_struct_begin()?;
                 let field_ident = prot.read_field_begin(0)?;
                 if field_ident.field_type == FieldType::Stop {
                     return Err(general_err!("Received empty union from remote {}", stringify!($identifier)));
@@ -215,6 +216,7 @@ macro_rules! thrift_union {
 
         impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for $identifier $(<$lt>)? {
             fn read_thrift(prot: &mut R) -> Result<Self> {
+                prot.read_struct_begin()?;
                 let field_ident = prot.read_field_begin(0)?;
                 if field_ident.field_type == FieldType::Stop {
                     return Err(general_err!("Received empty union from remote {}", stringify!($identifier)));
@@ -294,6 +296,7 @@ macro_rules! thrift_union_with_unknown {
 
         impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for $identifier $(<$lt>)? {
             fn read_thrift(prot: &mut R) -> Result<Self> {
+                prot.read_struct_begin()?;
                 let field_ident = prot.read_field_begin(0)?;
                 if field_ident.field_type == FieldType::Stop {
                     return Err(general_err!("Received empty union from remote {}", stringify!($identifier)));
@@ -304,6 +307,7 @@ macro_rules! thrift_union_with_unknown {
                         val
                     })*
                     _ => {
+                        // Skip the variant value, not an extension field on the envelope.
                         prot.skip(field_ident.field_type)?;
                         Self::_Unknown {
                             field_id: field_ident.id,
@@ -355,6 +359,7 @@ macro_rules! thrift_union_with_unknown {
 #[macro_export]
 macro_rules! thrift_struct {
     (@root $($body:tt)*) => { $crate::thrift_struct!(@impl Root; $($body)*); };
+    (@site $site:ident; $($body:tt)*) => { $crate::thrift_struct!(@impl $site; $($body)*); };
     // A field ID can be a literal or a constant path.
     (@impl $site:ident; $(#[$($def_attrs:tt)*])* $vis:vis struct $identifier:ident $(< $lt:lifetime >)? { $($(#[$($field_attrs:tt)*])* $($field_id:literal)? $($field_constant:path)? : $required_or_optional:ident $field_type:ident $(< $field_lt:lifetime >)? $(< $element_type:ident >)? $field_name:ident $(= $default_value:literal)? $(;)?)* }) => {
         $(#[cfg_attr(not(doctest), $($def_attrs)*)])*
@@ -369,6 +374,7 @@ macro_rules! thrift_struct {
 
         impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for $identifier $(<$lt>)? {
             fn read_thrift(prot: &mut R) -> Result<Self> {
+                prot.read_struct_begin()?;
                 $(let mut $field_name: Option<$crate::__thrift_field_type!($field_type $($field_lt)? $($element_type)?)> = None;)*
                 let mut last_field_id = 0i16;
                 loop {
@@ -382,7 +388,7 @@ macro_rules! thrift_struct {
                             $field_name = Some(val);
                         })*
                         _ => {
-                            prot.skip(field_ident.field_type)?;
+                            prot.skip_field_at_site(field_ident, $crate::file::metadata::extensions::KnownSite::$site)?;
                         }
                     };
                     last_field_id = field_ident.id;

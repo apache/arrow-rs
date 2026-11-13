@@ -11,7 +11,8 @@ use std::io::Write;
 
 use crate::parquet_thrift::{
     ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol, ThriftCompactOutputProtocol,
-    WriteThrift, WriteThriftField, check_list_size, read_thrift_vec, validate_list_type,
+    ThriftSliceInputProtocol, WriteThrift, WriteThriftField, check_list_size, read_thrift_vec,
+    validate_list_type,
 };
 use crate::{
     errors::{ParquetError, Result},
@@ -33,6 +34,7 @@ pub struct PageLocation {
 );
 
 thrift_struct!(@root
+
 /// [`OffsetIndex`] information for a column chunk. Contains offsets and sizes for each page
 /// in the chunk. Optionally stores fully decoded page sizes for BYTE_ARRAY columns.
 ///
@@ -61,12 +63,12 @@ impl OffsetIndexMetaData {
         self.unencoded_byte_array_data_bytes.as_ref()
     }
 
-    // Fast-path read of offset index. This works because we expect all field deltas to be 1,
-    // and there's no nesting beyond PageLocation, so no need to save the last field id. Like
-    // read_page_locations(), this will fail if absolute field id's are used.
-    pub(super) fn try_from_fast<'a, R: ThriftCompactInputProtocol<'a>>(
-        prot: &mut R,
-    ) -> Result<Self> {
+    // Fast-path read of canonical fields, optionally followed by one root
+    // extension. No listener is invoked here. Return a borrowed payload only
+    // after validating the root STOP; all other layouts use the general decoder.
+    pub(super) fn try_from_fast<'a>(
+        prot: &mut ThriftSliceInputProtocol<'a>,
+    ) -> Result<(Self, Option<&'a [u8]>)> {
         // Offset index is a struct with 2 fields. First field is an array of PageLocations,
         // the second an optional array of i64.
 
@@ -90,30 +92,50 @@ impl OffsetIndexMetaData {
         let mut unencoded_byte_array_data_bytes: Option<Vec<i64>> = None;
 
         // read second field...if it's Stop we're done
-        let (mut field_type, delta) = prot.read_field_header()?;
+        let (mut field_type, mut delta) = prot.read_field_header()?;
         if field_type == FieldType::List as u8 {
             if i16::from(delta) != oi::UNENCODED_BYTE_ARRAY_DATA_BYTES - oi::PAGE_LOCATIONS {
                 return Err(general_err!(
                     "encountered unknown field while reading OffsetIndex"
                 ));
             }
-            let vec = read_thrift_vec::<i64, R>(&mut *prot)?;
+            let vec = read_thrift_vec::<i64, _>(&mut *prot)?;
             unencoded_byte_array_data_bytes = Some(vec);
 
-            // this one should be Stop
-            (field_type, _) = prot.read_field_header()?;
+            (field_type, delta) = prot.read_field_header()?;
         }
 
+        let mut extension = None;
+        if field_type == FieldType::Binary as u8 && delta == 0 {
+            if prot.read_i16()? != i16::MAX {
+                return Err(general_err!(
+                    "encountered unknown field while reading OffsetIndex"
+                ));
+            }
+            let len = i32::try_from(prot.read_vlq()?)
+                .map_err(|_| general_err!("Invalid extension length"))?
+                as usize;
+            extension = Some(
+                prot.as_slice()
+                    .get(..len)
+                    .ok_or_else(|| eof_err!("Unexpected EOF"))?,
+            );
+            prot.skip_bytes(len)?;
+            (field_type, _) = prot.read_field_header()?;
+        }
         if field_type != FieldType::Stop as u8 {
             return Err(general_err!(
                 "encountered unknown field while reading OffsetIndex"
             ));
         }
 
-        Ok(Self {
-            page_locations,
-            unencoded_byte_array_data_bytes,
-        })
+        Ok((
+            Self {
+                page_locations,
+                unencoded_byte_array_data_bytes,
+            },
+            extension,
+        ))
     }
 }
 
@@ -201,7 +223,7 @@ mod tests {
             let mut prot = ThriftSliceInputProtocol::new(&data);
             assert_eq!(
                 OffsetIndexMetaData::try_from_fast(&mut prot).unwrap(),
-                index
+                (index.clone(), None)
             );
             assert_eq!(decode_offset_index(&data).unwrap(), index);
         }

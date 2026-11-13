@@ -10,7 +10,7 @@ use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::FOOTER_SIZE;
 #[cfg(feature = "arrow")]
-use crate::file::metadata::dictionary::decode_dictionary_page;
+use crate::file::metadata::dictionary::read_dictionary_page;
 use crate::file::metadata::page_index::{PageIndex, PageIndexProvider};
 use crate::file::metadata::parser::decode_metadata;
 use crate::file::metadata::thrift::parquet_schema_from_bytes;
@@ -18,6 +18,8 @@ use crate::file::metadata::{
     FooterTail, ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataPushDecoder,
 };
 use crate::file::reader::ChunkReader;
+#[cfg(feature = "arrow")]
+use crate::file::serialized_reader::SerializedPageReaderContext;
 use crate::schema::types::SchemaDescriptor;
 #[cfg(feature = "arrow")]
 use arrow_array::ArrayRef;
@@ -912,27 +914,115 @@ impl ParquetMetaDataReader {
         row_group_idx: usize,
         column_idx: usize,
     ) -> Result<Option<ArrayRef>> {
+        Self::read_column_dictionary_impl(reader, metadata, row_group_idx, column_idx, None)
+    }
+
+    /// Like [`Self::read_column_dictionary`], with metadata extension observation options.
+    /// Does not change which dictionary bytes are requested.
+    #[cfg(all(feature = "arrow", feature = "experimental"))]
+    #[doc(hidden)]
+    pub fn read_column_dictionary_with_options<R: ChunkReader>(
+        reader: &R,
+        metadata: &ParquetMetaData,
+        row_group_idx: usize,
+        column_idx: usize,
+        options: Option<&ParquetMetaDataOptions>,
+    ) -> Result<Option<ArrayRef>> {
+        Self::read_column_dictionary_impl(
+            reader,
+            metadata,
+            row_group_idx,
+            column_idx,
+            options.and_then(|o| o.extension_observer.as_ref()),
+        )
+    }
+
+    #[cfg(feature = "arrow")]
+    fn read_column_dictionary_impl<R: ChunkReader>(
+        reader: &R,
+        metadata: &ParquetMetaData,
+        row_group_idx: usize,
+        column_idx: usize,
+        observer: Option<&super::extensions::ObserverHandle>,
+    ) -> Result<Option<ArrayRef>> {
         let Some(range) = dictionary_page_byte_range(metadata, row_group_idx, column_idx)? else {
             return Ok(None);
         };
         let length = usize::try_from(range.end - range.start)?;
         let buffer = reader.get_bytes(range.start, length)?;
-        decode_dictionary_page(buffer, metadata, row_group_idx, column_idx).map(Some)
+        Self::decode_dictionary(buffer, metadata, row_group_idx, column_idx, observer).map(Some)
     }
 
     /// Asynchronous version of [`Self::read_column_dictionary`].
     #[cfg(all(feature = "async", feature = "arrow"))]
     pub async fn read_column_dictionary_async<F: MetadataFetch>(
+        fetch: F,
+        metadata: &ParquetMetaData,
+        row_group_idx: usize,
+        column_idx: usize,
+    ) -> Result<Option<ArrayRef>> {
+        Self::read_column_dictionary_async_impl(fetch, metadata, row_group_idx, column_idx, None)
+            .await
+    }
+
+    /// Asynchronous version of [`Self::read_column_dictionary_with_options`].
+    #[cfg(all(feature = "async", feature = "arrow", feature = "experimental"))]
+    #[doc(hidden)]
+    pub async fn read_column_dictionary_async_with_options<F: MetadataFetch>(
+        fetch: F,
+        metadata: &ParquetMetaData,
+        row_group_idx: usize,
+        column_idx: usize,
+        options: Option<&ParquetMetaDataOptions>,
+    ) -> Result<Option<ArrayRef>> {
+        Self::read_column_dictionary_async_impl(
+            fetch,
+            metadata,
+            row_group_idx,
+            column_idx,
+            options.and_then(|o| o.extension_observer.as_ref()),
+        )
+        .await
+    }
+
+    #[cfg(all(feature = "async", feature = "arrow"))]
+    pub(crate) async fn read_column_dictionary_async_impl<F: MetadataFetch>(
         mut fetch: F,
         metadata: &ParquetMetaData,
         row_group_idx: usize,
         column_idx: usize,
+        observer: Option<&super::extensions::ObserverHandle>,
     ) -> Result<Option<ArrayRef>> {
         let Some(range) = dictionary_page_byte_range(metadata, row_group_idx, column_idx)? else {
             return Ok(None);
         };
         let buffer = fetch.fetch(range).await?;
-        decode_dictionary_page(buffer, metadata, row_group_idx, column_idx).map(Some)
+        Self::decode_dictionary(buffer, metadata, row_group_idx, column_idx, observer).map(Some)
+    }
+
+    #[cfg(feature = "arrow")]
+    fn decode_dictionary(
+        buffer: Bytes,
+        metadata: &ParquetMetaData,
+        row_group: usize,
+        column: usize,
+        observer: Option<&super::extensions::ObserverHandle>,
+    ) -> Result<ArrayRef> {
+        let column_metadata = metadata.row_group(row_group).column(column);
+        let context = SerializedPageReaderContext {
+            read_stats: true,
+            extension_observer: observer.cloned(),
+            row_group: Some(row_group),
+            column: Some(column),
+            #[cfg(feature = "encryption")]
+            crypto_context: super::dictionary::dictionary_page_crypto_context(
+                metadata,
+                column_metadata,
+                row_group,
+                column,
+            )?,
+        };
+        read_dictionary_page(buffer, column_metadata, &context)
     }
 
     #[cfg(all(feature = "async", feature = "arrow"))]
@@ -1322,7 +1412,7 @@ fn parse_page_index_data(
 
 /// Returns the `[start, end)` byte range of a column chunk's dictionary
 /// page, or `None` if the column chunk has no dictionary page or is not a
-/// `BYTE_ARRAY` column (the only physical type [`decode_dictionary_page`]
+/// `BYTE_ARRAY` column (the only physical type [`read_dictionary_page`]
 /// currently supports).
 #[cfg(feature = "arrow")]
 fn dictionary_page_byte_range(

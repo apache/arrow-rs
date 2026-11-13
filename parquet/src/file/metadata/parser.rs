@@ -2,278 +2,266 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-//! Internal metadata parsing routines
-//!
-//! These functions parse thrift-encoded metadata from a byte slice
-//! into the corresponding Rust structures
+//! Internal metadata parsing routines.
 
+use crate::file::metadata::extensions::ThriftStruct;
+use std::borrow::Cow;
 use std::ops::Range;
+use std::sync::Arc;
 
-use bytes::Bytes;
-
+#[cfg(feature = "encryption")]
+use crate::encryption::decrypt::{CryptoContext, FileDecryptionProperties};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::column_chunk::{ColumnChunkEntries, ColumnChunkKey};
+use crate::file::metadata::extensions::{ObserverHandle, SiteInfo};
 use crate::file::metadata::page_index::{PageIndex, PageIndexProvider};
 use crate::file::metadata::thrift::parquet_metadata_from_bytes;
 use crate::file::metadata::{
     ColumnChunkMask, ColumnChunkMetaData, PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions,
 };
-
 use crate::file::page_index::column_index::ColumnIndexMetaData;
-use crate::file::page_index::index_reader::{decode_column_index, decode_offset_index};
+use crate::file::page_index::index_reader::{
+    read_column_index, read_offset_index, read_offset_index_with_listener,
+};
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
+use crate::parquet_thrift::ThriftSliceInputProtocol;
 
-/// Helper struct for metadata parsing
-///
-/// This structure parses thrift-encoded bytes into the correct Rust structs,
-/// such as [`ParquetMetaData`], handling decryption if necessary.
-//
-// Note this structure is used to minimize the number of
-// places to add `#[cfg(feature = "encryption")]` checks.
-pub(crate) use inner::MetadataParser;
+/// The on-disk index kind, independent of extension observation.
+#[derive(Clone, Copy)]
+enum PageIndexKind {
+    Column,
+    Offset,
+}
 
-#[cfg(feature = "encryption")]
-mod inner {
-    use std::sync::Arc;
+/// Configuration shared by footer and page-index parsing, including decryption.
+#[derive(Debug, Default)]
+pub(crate) struct MetadataParser {
+    #[cfg(feature = "encryption")]
+    file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
+    metadata_options: Option<Arc<ParquetMetaDataOptions>>,
+}
 
-    use super::*;
-    use crate::encryption::decrypt::FileDecryptionProperties;
-
-    /// API for decoding metadata that may be encrypted
-    #[derive(Debug, Default)]
-    pub(crate) struct MetadataParser {
-        // the credentials and keys needed to decrypt metadata
-        file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
-        // metadata parsing options
-        metadata_options: Option<Arc<ParquetMetaDataOptions>>,
+impl MetadataParser {
+    pub(crate) fn new() -> Self {
+        Self::default()
     }
 
-    impl MetadataParser {
-        pub(crate) fn new() -> Self {
-            MetadataParser::default()
-        }
+    #[cfg(feature = "encryption")]
+    pub(crate) fn with_file_decryption_properties(
+        mut self,
+        properties: Option<Arc<FileDecryptionProperties>>,
+    ) -> Self {
+        self.file_decryption_properties = properties;
+        self
+    }
 
-        pub(crate) fn with_file_decryption_properties(
-            mut self,
-            file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
-        ) -> Self {
-            self.file_decryption_properties = file_decryption_properties;
-            self
-        }
+    pub(crate) fn with_metadata_options(
+        mut self,
+        options: Option<Arc<ParquetMetaDataOptions>>,
+    ) -> Self {
+        self.metadata_options = options;
+        self
+    }
 
-        pub(crate) fn with_metadata_options(
-            self,
-            options: Option<Arc<ParquetMetaDataOptions>>,
-        ) -> Self {
-            Self {
-                metadata_options: options,
-                ..self
-            }
+    pub(crate) fn decode_metadata(
+        &self,
+        buf: &[u8],
+        encrypted_footer: bool,
+    ) -> Result<ParquetMetaData> {
+        #[cfg(feature = "encryption")]
+        if encrypted_footer || self.file_decryption_properties.is_some() {
+            return super::thrift::encryption::parquet_metadata_with_encryption(
+                self.file_decryption_properties.as_ref(),
+                encrypted_footer,
+                buf,
+                self.metadata_options.as_deref(),
+            );
         }
+        if encrypted_footer {
+            return Err(general_err!(
+                "Parquet file has an encrypted footer but the encryption feature is disabled"
+            ));
+        }
+        decode_metadata(buf, self.metadata_options.as_deref())
+    }
 
-        pub(crate) fn decode_metadata(
-            &self,
-            buf: &[u8],
-            encrypted_footer: bool,
-        ) -> Result<ParquetMetaData> {
-            if encrypted_footer || self.file_decryption_properties.is_some() {
-                crate::file::metadata::thrift::encryption::parquet_metadata_with_encryption(
-                    self.file_decryption_properties.as_ref(),
-                    encrypted_footer,
-                    buf,
-                    self.metadata_options.as_deref(),
+    /// Resolve observation once per serialized root, before choosing its protocol.
+    fn observer(&self) -> Option<&ObserverHandle> {
+        self.metadata_options.as_ref()?.extension_observer.as_ref()
+    }
+
+    /// Borrow plaintext indexes; only encrypted indexes need an owned buffer.
+    fn index_bytes<'a>(
+        bytes: &'a [u8],
+        metadata: &ParquetMetaData,
+        column: &ColumnChunkMetaData,
+        row_group: usize,
+        column_index: usize,
+        kind: PageIndexKind,
+    ) -> Result<Cow<'a, [u8]>> {
+        #[cfg(feature = "encryption")]
+        if let Some(crypto_metadata) = &column.column_crypto_metadata {
+            let file_decryptor = metadata.file_decryptor.as_ref().ok_or_else(|| {
+                general_err!(
+                    "Cannot decrypt {} index, no file decryptor set",
+                    match kind {
+                        PageIndexKind::Column => "column",
+                        PageIndexKind::Offset => "offset",
+                    }
                 )
-            } else {
-                decode_metadata(buf, self.metadata_options.as_deref())
-            }
+            })?;
+            let crypto = CryptoContext::for_column(
+                file_decryptor,
+                crypto_metadata,
+                row_group,
+                column_index,
+            )?;
+            let aad = match kind {
+                PageIndexKind::Column => crypto.create_column_index_aad()?,
+                PageIndexKind::Offset => crypto.create_offset_index_aad()?,
+            };
+            let plaintext = crypto.metadata_decryptor().decrypt(bytes, &aad)?;
+            return Ok(Cow::Owned(plaintext));
+        }
+        #[cfg(not(feature = "encryption"))]
+        let _ = (metadata, column, row_group, column_index, kind);
+        Ok(Cow::Borrowed(bytes))
+    }
+
+    /// Parse requested indexes from an already fetched range. Policies and masks
+    /// control which roots are decoded; observation never changes those choices.
+    #[expect(clippy::too_many_arguments)]
+    pub(crate) fn parse_page_index(
+        &self,
+        metadata: &ParquetMetaData,
+        column_index_policy: PageIndexPolicy,
+        offset_index_policy: PageIndexPolicy,
+        column_index_mask: &ColumnChunkMask,
+        offset_index_mask: &ColumnChunkMask,
+        bytes: &[u8],
+        start_offset: u64,
+    ) -> Result<Option<PageIndex>> {
+        let column_indexes = if column_index_policy == PageIndexPolicy::Skip {
+            None
+        } else {
+            Some(self.parse_column_index(metadata, column_index_mask, bytes, start_offset)?)
+        };
+        let offset_indexes = if offset_index_policy == PageIndexPolicy::Skip {
+            None
+        } else {
+            Some(self.parse_offset_index(
+                metadata,
+                offset_index_policy,
+                offset_index_mask,
+                bytes,
+                start_offset,
+            )?)
+        };
+        let page_index = PageIndex::from_entries(column_indexes, offset_indexes);
+        if page_index.has_column_indexes() || page_index.has_offset_indexes() {
+            Ok(Some(page_index))
+        } else {
+            Ok(None)
         }
     }
 
-    pub(super) fn parse_single_column_index(
-        bytes: &[u8],
+    fn parse_column_index(
+        &self,
         metadata: &ParquetMetaData,
-        column: &ColumnChunkMetaData,
-        row_group_index: usize,
-        col_index: usize,
-    ) -> Result<ColumnIndexMetaData> {
-        use crate::encryption::decrypt::CryptoContext;
-        match &column.column_crypto_metadata {
-            Some(crypto_metadata) => {
-                let file_decryptor = metadata.file_decryptor.as_ref().ok_or_else(|| {
-                    general_err!("Cannot decrypt column index, no file decryptor set")
-                })?;
-                let crypto_context = CryptoContext::for_column(
-                    file_decryptor,
-                    crypto_metadata,
-                    row_group_index,
-                    col_index,
-                )?;
-                let column_decryptor = crypto_context.metadata_decryptor();
-                let aad = crypto_context.create_column_index_aad()?;
-                let plaintext = column_decryptor.decrypt(bytes, &aad)?;
-                decode_column_index(&plaintext, column.column_type())
+        mask: &ColumnChunkMask,
+        bytes: &[u8],
+        start_offset: u64,
+    ) -> Result<ColumnChunkEntries<ColumnIndexMetaData>> {
+        let mut entries =
+            reserve_index_entries(metadata, mask, ColumnChunkMetaData::column_index_range)?;
+        // Mask axes are sorted and unique, so present entries remain in row-major
+        // order even when selected chunks have no index.
+        for rg_idx in mask.row_group_indices(metadata.num_row_groups()) {
+            let rg = metadata.row_group(rg_idx);
+            for col_idx in mask.column_indices(rg.num_columns()) {
+                let col = rg.column(col_idx);
+                if let Some(range) = col.column_index_range() {
+                    let bytes = get_index_bytes(bytes, start_offset, range)?;
+                    let bytes = Self::index_bytes(
+                        bytes,
+                        metadata,
+                        col,
+                        rg_idx,
+                        col_idx,
+                        PageIndexKind::Column,
+                    )?;
+                    let index = crate::file::metadata::extensions::with_read_extensions!(
+                        ThriftSliceInputProtocol::new(&bytes),
+                        self.observer(),
+                        SiteInfo::column(ThriftStruct::ColumnIndex, Some(rg_idx), Some(col_idx)),
+                        with_observer,
+                        |mut prot| read_column_index(&mut prot, col.column_type())
+                    )?;
+                    entries.push((ColumnChunkKey::try_new(rg_idx, col_idx)?, index));
+                }
             }
-            None => decode_column_index(bytes, column.column_type()),
         }
+        ColumnChunkEntries::try_from_sorted_entries(
+            metadata.num_row_groups(),
+            metadata.file_metadata().schema_descr().num_columns(),
+            entries,
+        )
     }
 
-    pub(super) fn parse_single_offset_index(
-        bytes: &[u8],
+    fn parse_offset_index(
+        &self,
         metadata: &ParquetMetaData,
-        column: &ColumnChunkMetaData,
-        row_group_index: usize,
-        col_index: usize,
-    ) -> Result<OffsetIndexMetaData> {
-        use crate::encryption::decrypt::CryptoContext;
-        match &column.column_crypto_metadata {
-            Some(crypto_metadata) => {
-                let file_decryptor = metadata.file_decryptor.as_ref().ok_or_else(|| {
-                    general_err!("Cannot decrypt offset index, no file decryptor set")
-                })?;
-                let crypto_context = CryptoContext::for_column(
-                    file_decryptor,
-                    crypto_metadata,
-                    row_group_index,
-                    col_index,
-                )?;
-                let column_decryptor = crypto_context.metadata_decryptor();
-                let aad = crypto_context.create_offset_index_aad()?;
-                let plaintext = column_decryptor.decrypt(bytes, &aad)?;
-                decode_offset_index(&plaintext)
+        policy: PageIndexPolicy,
+        mask: &ColumnChunkMask,
+        bytes: &[u8],
+        start_offset: u64,
+    ) -> Result<ColumnChunkEntries<OffsetIndexMetaData>> {
+        let mut entries =
+            reserve_index_entries(metadata, mask, ColumnChunkMetaData::offset_index_range)?;
+        for rg_idx in mask.row_group_indices(metadata.num_row_groups()) {
+            let rg = metadata.row_group(rg_idx);
+            for col_idx in mask.column_indices(rg.num_columns()) {
+                let col = rg.column(col_idx);
+                if let Some(range) = col.offset_index_range() {
+                    let bytes = get_index_bytes(bytes, start_offset, range)?;
+                    let bytes = Self::index_bytes(
+                        bytes,
+                        metadata,
+                        col,
+                        rg_idx,
+                        col_idx,
+                        PageIndexKind::Offset,
+                    )?;
+                    let index = if let Some(observer) = self.observer() {
+                        let root = SiteInfo::column(
+                            ThriftStruct::OffsetIndex,
+                            Some(rg_idx),
+                            Some(col_idx),
+                        );
+                        read_offset_index_with_listener(&bytes, observer, root)?
+                    } else {
+                        read_offset_index(&mut ThriftSliceInputProtocol::new(&bytes))?
+                    };
+                    entries.push((ColumnChunkKey::try_new(rg_idx, col_idx)?, index));
+                } else if policy == PageIndexPolicy::Required {
+                    return Err(general_err!("missing offset index"));
+                }
             }
-            None => decode_offset_index(bytes),
         }
+        ColumnChunkEntries::try_from_sorted_entries(
+            metadata.num_row_groups(),
+            metadata.file_metadata().schema_descr().num_columns(),
+            entries,
+        )
     }
 }
 
-#[cfg(not(feature = "encryption"))]
-mod inner {
-    use super::*;
-    use std::sync::Arc;
-    /// parallel implementation when encryption feature is not enabled
-    ///
-    /// This has the same API as the encryption-enabled version
-    #[derive(Debug, Default)]
-    pub(crate) struct MetadataParser {
-        // metadata parsing options
-        metadata_options: Option<Arc<ParquetMetaDataOptions>>,
-    }
-
-    impl MetadataParser {
-        pub(crate) fn new() -> Self {
-            MetadataParser::default()
-        }
-
-        pub(crate) fn with_metadata_options(
-            self,
-            options: Option<Arc<ParquetMetaDataOptions>>,
-        ) -> Self {
-            Self {
-                metadata_options: options,
-            }
-        }
-
-        pub(crate) fn decode_metadata(
-            &self,
-            buf: &[u8],
-            encrypted_footer: bool,
-        ) -> Result<ParquetMetaData> {
-            if encrypted_footer {
-                Err(general_err!(
-                    "Parquet file has an encrypted footer but the encryption feature is disabled"
-                ))
-            } else {
-                decode_metadata(buf, self.metadata_options.as_deref())
-            }
-        }
-    }
-
-    pub(super) fn parse_single_column_index(
-        bytes: &[u8],
-        _metadata: &ParquetMetaData,
-        column: &ColumnChunkMetaData,
-        _row_group_index: usize,
-        _col_index: usize,
-    ) -> Result<ColumnIndexMetaData> {
-        decode_column_index(bytes, column.column_type())
-    }
-
-    pub(super) fn parse_single_offset_index(
-        bytes: &[u8],
-        _metadata: &ParquetMetaData,
-        _column: &ColumnChunkMetaData,
-        _row_group_index: usize,
-        _col_index: usize,
-    ) -> Result<OffsetIndexMetaData> {
-        decode_offset_index(bytes)
-    }
-}
-
-/// Decodes [`ParquetMetaData`] from the provided bytes.
-///
-/// Typically this is used to decode the metadata from the end of a parquet
-/// file. The format of `buf` is the Thrift compact binary protocol, as specified
-/// by the [Parquet Spec].
-///
-/// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
+/// Decode a plaintext Thrift footer (without the length/magic trailer).
 pub(crate) fn decode_metadata(
     buf: &[u8],
     options: Option<&ParquetMetaDataOptions>,
 ) -> Result<ParquetMetaData> {
     parquet_metadata_from_bytes(buf, options)
-}
-
-/// Parses page indexes from the provided bytes.
-///
-/// Arguments
-/// * `metadata` - The footer metadata describing the page index locations.
-/// * `column_index_policy` - The policy for handling column index parsing (e.g.,
-///   Required, Optional, Skip).
-/// * `offset_index_policy` - The policy for handling offset index parsing (e.g.,
-///   Required, Optional, Skip).
-/// * `column_index_mask` - The row groups and leaf columns whose column indexes are parsed.
-///   Ignored when `column_index_policy` is [`PageIndexPolicy::Skip`].
-/// * `offset_index_mask` - The row groups and leaf columns whose offset indexes are parsed.
-///   Ignored when `offset_index_policy` is [`PageIndexPolicy::Skip`].
-/// * `bytes` - The byte slice containing the page index data.
-/// * `start_offset` - The offset where `bytes` begin in the file.
-pub(crate) fn parse_page_index(
-    metadata: &ParquetMetaData,
-    column_index_policy: PageIndexPolicy,
-    offset_index_policy: PageIndexPolicy,
-    column_index_mask: &ColumnChunkMask,
-    offset_index_mask: &ColumnChunkMask,
-    bytes: &Bytes,
-    start_offset: u64,
-) -> Result<Option<PageIndex>> {
-    let column_indexes = if column_index_policy == PageIndexPolicy::Skip {
-        None
-    } else {
-        Some(parse_column_index(
-            metadata,
-            column_index_mask,
-            bytes,
-            start_offset,
-        )?)
-    };
-    let offset_indexes = if offset_index_policy == PageIndexPolicy::Skip {
-        None
-    } else {
-        Some(parse_offset_index(
-            metadata,
-            offset_index_policy,
-            offset_index_mask,
-            bytes,
-            start_offset,
-        )?)
-    };
-
-    let page_index = PageIndex::from_entries(column_indexes, offset_indexes);
-    if page_index.has_column_indexes() || page_index.has_offset_indexes() {
-        Ok(Some(page_index))
-    } else {
-        Ok(None)
-    }
 }
 
 /// Reserve only for selected chunks that actually have an index range. An extra
@@ -303,67 +291,6 @@ fn reserve_index_entries<T>(
         ))
     })?;
     Ok(entries)
-}
-
-fn parse_column_index(
-    metadata: &ParquetMetaData,
-    mask: &ColumnChunkMask,
-    bytes: &Bytes,
-    start_offset: u64,
-) -> Result<ColumnChunkEntries<ColumnIndexMetaData>> {
-    let mut entries =
-        reserve_index_entries(metadata, mask, ColumnChunkMetaData::column_index_range)?;
-    // Mask axes are sorted and unique, so present entries remain in row-major
-    // order even when selected chunks have no index.
-    for rg_idx in mask.row_group_indices(metadata.num_row_groups()) {
-        let rg = metadata.row_group(rg_idx);
-        for col_idx in mask.column_indices(rg.num_columns()) {
-            let col = rg.column(col_idx);
-            if let Some(r) = col.column_index_range() {
-                let idx_bytes = get_index_bytes(bytes, start_offset, r)?;
-                let idx =
-                    inner::parse_single_column_index(idx_bytes, metadata, col, rg_idx, col_idx)?;
-                entries.push((ColumnChunkKey::try_new(rg_idx, col_idx)?, idx));
-            }
-        }
-    }
-
-    ColumnChunkEntries::try_from_sorted_entries(
-        metadata.num_row_groups(),
-        metadata.file_metadata().schema_descr().num_columns(),
-        entries,
-    )
-}
-
-fn parse_offset_index(
-    metadata: &ParquetMetaData,
-    offset_index_policy: PageIndexPolicy,
-    mask: &ColumnChunkMask,
-    bytes: &Bytes,
-    start_offset: u64,
-) -> Result<ColumnChunkEntries<OffsetIndexMetaData>> {
-    let mut entries =
-        reserve_index_entries(metadata, mask, ColumnChunkMetaData::offset_index_range)?;
-    for rg_idx in mask.row_group_indices(metadata.num_row_groups()) {
-        let rg = metadata.row_group(rg_idx);
-        for col_idx in mask.column_indices(rg.num_columns()) {
-            let col = rg.column(col_idx);
-            if let Some(r) = col.offset_index_range() {
-                let idx_bytes = get_index_bytes(bytes, start_offset, r)?;
-                let idx =
-                    inner::parse_single_offset_index(idx_bytes, metadata, col, rg_idx, col_idx)?;
-                entries.push((ColumnChunkKey::try_new(rg_idx, col_idx)?, idx));
-            } else if offset_index_policy == PageIndexPolicy::Required {
-                return Err(general_err!("missing offset index"));
-            }
-        }
-    }
-
-    ColumnChunkEntries::try_from_sorted_entries(
-        metadata.num_row_groups(),
-        metadata.file_metadata().schema_descr().num_columns(),
-        entries,
-    )
 }
 
 fn get_index_bytes(bytes: &[u8], start_offset: u64, range: Range<u64>) -> Result<&[u8]> {

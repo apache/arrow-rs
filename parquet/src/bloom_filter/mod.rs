@@ -99,18 +99,21 @@
 //! [sbbf-paper]: https://arxiv.org/pdf/2101.01719
 //! [bf-formulae]: http://tfk.mit.edu/pdf/bloom.pdf
 
+use crate::DecodeResult;
 #[cfg(all(feature = "arrow", feature = "async"))]
 use crate::arrow::async_reader::{AsyncFileReader, MetadataFetch};
 use crate::basic::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
 use crate::data_type::AsBytes;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::ColumnChunkMetaData;
+use crate::file::metadata::extensions::ThriftStruct;
+use crate::file::metadata::extensions::{ObserverHandle, SiteInfo};
 use crate::file::reader::ChunkReader;
 use crate::parquet_thrift::{
     ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol, ThriftCompactOutputProtocol,
     ThriftSliceInputProtocol, WriteThrift, WriteThriftField,
 };
-use crate::{DecodeResult, thrift_struct};
+use crate::thrift_struct;
 use bytes::Bytes;
 #[cfg(all(feature = "arrow", feature = "async"))]
 use futures::future::BoxFuture;
@@ -119,6 +122,7 @@ use std::ops::Range;
 use twox_hash::XxHash64;
 
 mod push;
+use push::ObservedBloom;
 pub use push::SbbfPushDecoder;
 
 /// Salt as defined in the [spec](https://github.com/apache/parquet-format/blob/master/BloomFilter.md#technical-approach).
@@ -136,6 +140,7 @@ const SALT: [u32; 8] = [
 use crate::file::metadata::thrift_fields::bloom_filter_header as fields;
 
 thrift_struct!(@root
+
 /// Bloom filter header is stored at beginning of Bloom filter data of each column
 /// and followed by its bitset.
 ///
@@ -462,20 +467,45 @@ impl Sbbf {
         column_metadata: &ColumnChunkMetaData,
         reader: &R,
     ) -> Result<Option<Self>> {
+        Self::read_with_observation(column_metadata, reader, None)
+    }
+
+    /// Read a filter with the caller's observer and any known ownership coordinates.
+    /// Decoder setup and the header's Thrift root identity stay in the bloom reader.
+    pub(crate) fn read_from_column_chunk_with_context<R: ChunkReader>(
+        column_metadata: &ColumnChunkMetaData,
+        reader: &R,
+        observer: Option<&ObserverHandle>,
+        row_group: Option<usize>,
+        column: Option<usize>,
+    ) -> Result<Option<Self>> {
+        Self::read_with_observation(
+            column_metadata,
+            reader,
+            observer.map(|observer| ObservedBloom {
+                observer,
+                root: SiteInfo::column(ThriftStruct::BloomFilterHeader, row_group, column),
+            }),
+        )
+    }
+
+    fn read_with_observation<R: ChunkReader>(
+        column_metadata: &ColumnChunkMetaData,
+        reader: &R,
+        observation: Option<ObservedBloom<'_>>,
+    ) -> Result<Option<Self>> {
         let Some(mut decoder) = SbbfPushDecoder::try_new(column_metadata)? else {
             return Ok(None);
         };
-
         loop {
-            let result = decoder.try_decode()?;
-            match result {
+            match decoder.try_decode_with(observation.as_ref())? {
                 DecodeResult::NeedsData(ranges) => {
                     for range in ranges {
                         let buffer = read_bloom_filter_bytes(reader, &range)?;
                         decoder.push_range(range, buffer)?;
                     }
                 }
-                DecodeResult::Data(sbbf) => return Ok(Some(sbbf)),
+                DecodeResult::Data(filter) => return Ok(Some(filter)),
                 DecodeResult::Finished => {
                     return Err(general_err!("invalid value returned from SbbfPushDecoder"));
                 }
@@ -503,22 +533,48 @@ impl Sbbf {
     #[cfg(all(feature = "arrow", feature = "async"))]
     pub(crate) async fn read_from_column_chunk_with_fetch<F: MetadataFetch>(
         column_metadata: &ColumnChunkMetaData,
+        fetch: F,
+    ) -> Result<Option<Self>> {
+        Self::read_async_with_observation(column_metadata, fetch, None).await
+    }
+
+    #[cfg(all(feature = "arrow", feature = "async"))]
+    pub(crate) async fn read_from_column_chunk_async_with_context<R: AsyncFileReader + ?Sized>(
+        column_metadata: &ColumnChunkMetaData,
+        reader: &mut R,
+        observer: Option<&ObserverHandle>,
+        row_group: Option<usize>,
+        column: Option<usize>,
+    ) -> Result<Option<Self>> {
+        Self::read_async_with_observation(
+            column_metadata,
+            AsyncReaderFetch(reader),
+            observer.map(|observer| ObservedBloom {
+                observer,
+                root: SiteInfo::column(ThriftStruct::BloomFilterHeader, row_group, column),
+            }),
+        )
+        .await
+    }
+
+    #[cfg(all(feature = "arrow", feature = "async"))]
+    async fn read_async_with_observation<F: MetadataFetch>(
+        column_metadata: &ColumnChunkMetaData,
         mut fetch: F,
+        observation: Option<ObservedBloom<'_>>,
     ) -> Result<Option<Self>> {
         let Some(mut decoder) = SbbfPushDecoder::try_new(column_metadata)? else {
             return Ok(None);
         };
-
         loop {
-            let result = decoder.try_decode()?;
-            match result {
+            match decoder.try_decode_with(observation.as_ref())? {
                 DecodeResult::NeedsData(ranges) => {
                     for range in ranges {
                         let buffer = read_bloom_filter_bytes_async(&mut fetch, &range).await?;
                         decoder.push_range(range, buffer)?;
                     }
                 }
-                DecodeResult::Data(sbbf) => return Ok(Some(sbbf)),
+                DecodeResult::Data(filter) => return Ok(Some(filter)),
                 DecodeResult::Finished => {
                     return Err(general_err!("invalid value returned from SbbfPushDecoder"));
                 }
@@ -871,7 +927,10 @@ impl Sbbf {
     /// # }
     /// ```
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ParquetError> {
-        let range = bloom_filter_bitset_range(bytes, Some(bytes.len()))?;
+        let range = bloom_filter_bitset_range(
+            &mut ThriftSliceInputProtocol::new(bytes),
+            Some(bytes.len()),
+        )?;
         Ok(Self::new(&bytes[range]))
     }
 }
@@ -913,8 +972,13 @@ async fn read_bloom_filter_bytes_async<F: MetadataFetch>(
 
 /// Parses the header and returns the bitset's range relative to the filter start.
 /// When the complete filter length is known, the bitset must consume it exactly.
-fn bloom_filter_bitset_range(buffer: &[u8], length: Option<usize>) -> Result<Range<usize>> {
-    let (header, header_length) = read_bloom_filter_header_and_length(buffer)?;
+fn bloom_filter_bitset_range<S: crate::parquet_thrift::InputTracking>(
+    prot: &mut ThriftSliceInputProtocol<'_, S>,
+    length: Option<usize>,
+) -> Result<Range<usize>> {
+    let initial_len = prot.as_slice().len();
+    let header = BloomFilterHeader::read_thrift(prot)?;
+    let header_length = initial_len - prot.as_slice().len();
 
     // Force an explicit decision if supported variants change.
     match header.algorithm {
@@ -967,6 +1031,7 @@ fn validate_bloom_filter_read(bytes: Bytes, length: usize) -> Result<Bytes> {
 }
 
 /// Parses a Bloom filter header and returns the number of bytes consumed.
+#[cfg(test)]
 fn read_bloom_filter_header_and_length(buffer: &[u8]) -> Result<(BloomFilterHeader, usize)> {
     let mut prot = ThriftSliceInputProtocol::new(buffer);
     let header = BloomFilterHeader::read_thrift(&mut prot)

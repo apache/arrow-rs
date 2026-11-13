@@ -42,6 +42,47 @@ pub(crate) use writer::{HookHandle, HookStorage, WriteState, write_thrift, write
 #[cfg(test)]
 pub(crate) mod test_util;
 
+mod location;
+mod reader;
+#[cfg(feature = "experimental")]
+pub use reader::MetadataExtensionListener;
+pub(crate) use reader::{
+    BufferedReadExtensions, DecoderScope, ObserverHandle, ReadExtensions, RootObserver,
+    RootReadExtensions,
+};
+
+// Dispatch at the encoded-root boundary, not in I/O drivers or primitive reads.
+// A macro lets all three statically typed protocols share the same decoder body.
+macro_rules! with_read_extensions {
+    ($input:expr, $observer:expr, $root:expr, $binding:ident, |$prot:pat_param| $body:expr) => {{
+        let input = $input;
+        let observer = match $observer {
+            Some(observer) => {
+                let root = $root;
+                observer
+                    .bind(root)?
+                    .map(|root_only| (observer, root, root_only))
+            }
+            None => None,
+        };
+        match observer {
+            None => {
+                let $prot = input;
+                $body
+            }
+            Some((observer, root, true)) => {
+                let $prot = input.with_root_observer(observer, root);
+                $body
+            }
+            Some((observer, root, false)) => {
+                let $prot = input.$binding(observer, root);
+                $body
+            }
+        }
+    }};
+}
+pub(crate) use with_read_extensions;
+
 /// One structural coordinate. Resolved library paths contain fields and collection
 /// entries relative to the encoded root, not byte offsets. Field IDs are
 /// relative to their containing struct and collection indices are zero-based. Named field IDs

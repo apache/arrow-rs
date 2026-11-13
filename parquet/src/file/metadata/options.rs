@@ -7,6 +7,8 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+#[cfg(feature = "experimental")]
+use super::extensions::{self, MetadataExtensionListener, MetadataExtensionSelection};
 use crate::schema::types::SchemaDescPtr;
 
 /// Enum to control decoding of some Parquet statistics fields.
@@ -81,6 +83,7 @@ pub struct ParquetMetaDataOptions {
     encoding_stats_policy: ParquetStatisticsPolicy,
     column_stats_policy: ParquetStatisticsPolicy,
     size_stats_policy: ParquetStatisticsPolicy,
+    pub(crate) extension_observer: Option<super::extensions::ObserverHandle>,
 }
 
 impl Default for ParquetMetaDataOptions {
@@ -91,11 +94,28 @@ impl Default for ParquetMetaDataOptions {
             encoding_stats_policy: ParquetStatisticsPolicy::KeepAll,
             column_stats_policy: ParquetStatisticsPolicy::KeepAll,
             size_stats_policy: ParquetStatisticsPolicy::KeepAll,
+            extension_observer: None,
         }
     }
 }
 
 impl ParquetMetaDataOptions {
+    /// Install one concurrent listener and its complete target list.
+    /// Empty lists and a second installation are errors; overlapping targets notify once.
+    /// See [`super::extensions::MetadataExtensionListener`] for callback lifetimes,
+    /// errors and authentication semantics.
+    #[cfg(feature = "experimental")]
+    pub fn with_metadata_extension_listener(
+        mut self,
+        targets: impl IntoIterator<Item = MetadataExtensionSelection>,
+        listener: impl MetadataExtensionListener + 'static,
+    ) -> crate::errors::Result<Self> {
+        extensions::install(&mut self.extension_observer, targets, |targets| {
+            extensions::ObserverHandle::new(targets, listener)
+        })?;
+        Ok(self)
+    }
+
     /// Return a new default [`ParquetMetaDataOptions`].
     pub fn new() -> Self {
         Default::default()

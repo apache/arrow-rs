@@ -307,9 +307,9 @@ Here is an example of the processing loop:
                 let val = Encoding::read_thrift(&mut *prot)?;
                 repetition_level_encoding = Some(val);
             }
-            // Skip unknown struct fields.
+            // Skip unknown struct fields, observing extensions when enabled.
             _ => {
-                prot.skip(field_ident.field_type)?;
+                prot.skip_field(field_ident)?;
             }
         };
         // set the last seen field id to calculate the next field_id
@@ -499,6 +499,7 @@ ZigZag(32767). Conforming readers skip unknown fields.
 
 Public contracts and examples are documented on
 [`MetadataExtensionHook`](src/file/metadata/extensions/writer.rs),
+[`MetadataExtensionListener`](src/file/metadata/extensions/reader.rs),
 [`MetadataSite`](src/file/metadata/extensions/site.rs), and
 [`MetadataExtensionSelection`](src/file/metadata/extensions/selection.rs).
 The following rules apply when maintaining the codecs.
@@ -524,3 +525,33 @@ The following rules apply when maintaining the codecs.
 - Extend page headers before buffering and encrypted/signed metadata before
   encryption/signing. Stripped plaintext compatibility copies of encrypted column
   metadata use the untracked codec.
+
+### Decoding
+
+- Choose unobserved, root-only, or anywhere decoding at the encoded-root boundary.
+  Filtered row-group translation applies to observation, independently of crypto
+  coordinates. Footer scopes retain physical positions, not stored ordinals.
+- Struct and union codecs call `read_struct_begin()`; STOP ends the scope.
+  Ordinary structs use `skip_field` for unknown or skipped fields. Unions use
+  `skip(field_type)` for unknown variants and retain single-field validation.
+- `thrift_struct!(@root ...)` supplies explicit root locations. `@site Scope`
+  identifies the current lexical footer scope; `@site ColumnStatistics` adds the
+  statistics suffix. Handwritten codecs supply equivalent hints at extension
+  fields. Root placement is not inferred from remaining STOP bytes.
+- Buffered decoding borrows payloads and retains the nearest known footer scope.
+  Unknown suffixes are resolved on demand by scanning already-consumed bytes.
+  Scope changes can restart the scan; failures remain sticky. Discovery performs
+  no I/O or callbacks and never examines input after the event.
+- Anywhere streaming observation retains bounded ancestry. Observed payloads are
+  buffered as they arrive, receiving up to 128 bytes before allocating. Root-only
+  decoding skips nested payloads without owning them. Tracking bounds include
+  known-schema capacity plus `MAX_SKIP_DEPTH` (64); these are defensive
+  implementation limits, not wire-format restrictions.
+- Offset-index probes are callback-free. Deliver a final root extension once the
+  probe succeeds; otherwise enter general decoding before notifying listeners.
+  Bound reservations by remaining input.
+
+Sequential page-header reads, peeks, and skips use the slice decoder when
+`ChunkReader::try_get_buffered_range` supplies an already-resident column range.
+They perform no extra I/O or copying to obtain it. Other inputs use the streaming
+fallback.

@@ -256,7 +256,7 @@ fn test_batch_size_overallocate() {
     let test_file = File::open(path).unwrap();
 
     let builder = ParquetRecordBatchReaderBuilder::try_new(test_file).unwrap();
-    let num_rows = builder.metadata.file_metadata().num_rows();
+    let num_rows = builder.metadata().file_metadata().num_rows();
     let reader = builder
         .with_batch_size(1024)
         .with_projection(ProjectionMask::all())

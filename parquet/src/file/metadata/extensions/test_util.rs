@@ -4,9 +4,20 @@
 
 //! Shared assertions and footer fixture for extension codec tests.
 
-use super::{MetadataSite, ThriftPathSegment};
+use super::{MetadataContext, MetadataSite, SiteInfo, ThriftPathSegment, ThriftStruct};
 use crate::errors::Result;
 use crate::file::metadata::{FileMetaData, RowGroupMetaData};
+
+// Compare operation-entry identity separately from enclosing footer ownership.
+pub(crate) fn entry(site: &MetadataSite<'_>) -> Result<SiteInfo> {
+    let mut info = SiteInfo::new(site.root());
+    info.context = if info.thrift == ThriftStruct::FileMetaData {
+        MetadataContext::default()
+    } else {
+        site.context()?
+    };
+    Ok(info)
+}
 
 pub(crate) fn coordinates(site: &mut MetadataSite<'_>) -> Result<Vec<ThriftPathSegment>> {
     Ok(site.resolve_path()?.iter().collect())

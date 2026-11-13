@@ -10,7 +10,8 @@
 //! [Parquet metadata API]: crate::file::metadata
 //! [Parquet specification]: https://github.com/apache/parquet-format/tree/master
 
-use crate::file::metadata::extensions::FooterScope;
+use crate::file::metadata::extensions::ThriftStruct;
+use crate::file::metadata::extensions::{FooterScope, SiteInfo};
 use crate::file::metadata::thrift_fields::{
     bounding_box as bb, column_chunk as cc, column_meta_data as cm, data_page_header as dp,
     data_page_header_v2 as dp2, dictionary_page_header as dh, file_meta_data as fm,
@@ -45,7 +46,7 @@ use crate::{
     parquet_thrift::{
         ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol,
         ThriftCompactOutputProtocol, ThriftSliceInputProtocol, WriteThrift, WriteThriftField,
-        check_list_size, read_thrift_vec, validate_list_type,
+        check_list_size, read_thrift_vec, read_thrift_vec_with, validate_list_type,
     },
     schema::types::{
         ColumnDescriptor, SchemaDescriptor, TypePtr, num_nodes, parquet_schema_from_array,
@@ -56,7 +57,7 @@ use crate::{
 };
 
 // this needs to be visible to the schema conversion code
-thrift_struct!(
+thrift_struct!(@site Scope;
 pub(crate) struct SchemaElement<'a> {
   /// Data type for this field. Not set if the current element is a non-leaf node
   se::TYPE: optional Type r#type;
@@ -97,7 +98,7 @@ pub(crate) struct SchemaElement<'a> {
 }
 );
 
-thrift_struct!(
+thrift_struct!(@site ColumnStatistics;
 struct Statistics<'a> {
    st::MAX: optional binary<'a> max;
    st::MIN: optional binary<'a> min;
@@ -391,15 +392,17 @@ fn validate_column_metadata(mask: u16) -> Result<()> {
     Ok(())
 }
 
-fn read_encoding_stats_as_mask(prot: &mut ThriftSliceInputProtocol<'_>) -> Result<EncodingMask> {
+fn read_encoding_stats_as_mask<S: crate::parquet_thrift::InputTracking>(
+    prot: &mut ThriftSliceInputProtocol<'_, S>,
+) -> Result<EncodingMask> {
     // read the vector of stats, setting mask bits for data pages
     let mut mask = 0i32;
     let list_ident = prot.read_list_begin()?;
     // check for PageEncodingStats struct
     validate_list_type(ElementType::Struct, &list_ident)?;
 
-    for _ in 0..list_ident.size {
-        let pes = PageEncodingStats::read_thrift(prot)?;
+    for i in 0..list_ident.size as usize {
+        let pes = prot.with_list_element(i, PageEncodingStats::read_thrift)?;
         match pes.page_type {
             PageType::DATA_PAGE | PageType::DATA_PAGE_V2 => mask |= 1 << pes.encoding as i32,
             _ => {}
@@ -410,13 +413,19 @@ fn read_encoding_stats_as_mask(prot: &mut ThriftSliceInputProtocol<'_>) -> Resul
 
 // Decode `ColumnMetaData`. Returns a mask of all required fields that were observed.
 // This mask can be passed to `validate_column_metadata`.
-#[expect(clippy::useless_let_if_seq)] // the `let mut … if let …` below is more readable than the suggestion
-fn read_column_metadata(
-    prot: &mut ThriftSliceInputProtocol<'_>,
+#[expect(clippy::useless_let_if_seq)]
+// the `let mut … if let …` below is more readable than the suggestion
+// Outlining this shared decoder avoided a measured wide-footer regression when
+// it was inlined into the per-column scope wrapper.
+#[inline(never)]
+fn read_column_metadata<S: crate::parquet_thrift::InputTracking>(
+    prot: &mut ThriftSliceInputProtocol<'_, S>,
+    footer_row_group: Option<usize>,
     column: &mut ColumnChunkMetaData,
     col_index: usize,
     options: Option<&ParquetMetaDataOptions>,
 ) -> Result<u16> {
+    prot.read_struct_begin()?;
     // mask for seen required fields in ColumnMetaData
     let mut seen_mask = 0u16;
 
@@ -471,7 +480,7 @@ fn read_column_metadata(
                 seen_mask |= COL_META_ENCODINGS;
             }
             // The path is redundant; column key/value metadata is not exposed.
-            cm::PATH_IN_SCHEMA | cm::KEY_VALUE_METADATA => prot.skip(field_ident.field_type)?,
+            cm::PATH_IN_SCHEMA | cm::KEY_VALUE_METADATA => prot.skip_field(field_ident)?,
             cm::CODEC => {
                 column.compression = CompressionCodec::read_thrift(&mut *prot)?;
                 seen_mask |= COL_META_CODEC;
@@ -507,8 +516,7 @@ fn read_column_metadata(
                     let val = read_encoding_stats_as_mask(&mut *prot)?;
                     column.encoding_stats = Some(ParquetPageEncodingStats::Mask(val));
                 } else {
-                    let val =
-                        read_thrift_vec::<PageEncodingStats, ThriftSliceInputProtocol>(&mut *prot)?;
+                    let val = read_thrift_vec::<PageEncodingStats, _>(&mut *prot)?;
                     column.encoding_stats = Some(ParquetPageEncodingStats::Full(val));
                 }
             }
@@ -531,7 +539,15 @@ fn read_column_metadata(
                 column.geo_statistics = Some(Box::new(convert_geo_stats(val)));
             }
             _ => {
-                prot.skip(field_ident.field_type)?;
+                prot.skip_field_at_scope(
+                    field_ident,
+                    footer_row_group.map_or(FooterScope::Root, |row_group| {
+                        FooterScope::ColumnMetadata {
+                            row_group,
+                            column: col_index,
+                        }
+                    }),
+                )?;
             }
         }
         last_field_id = field_ident.id;
@@ -542,12 +558,14 @@ fn read_column_metadata(
 
 // using ThriftSliceInputProtocol rather than ThriftCompactInputProtocol trait because
 // these are all internal and operate on slices.
-fn read_column_chunk(
-    prot: &mut ThriftSliceInputProtocol<'_>,
+fn read_column_chunk<S: crate::parquet_thrift::InputTracking>(
+    prot: &mut ThriftSliceInputProtocol<'_, S>,
+    row_group_index: usize,
     column_descr: &Arc<ColumnDescriptor>,
     col_index: usize,
     options: Option<&ParquetMetaDataOptions>,
 ) -> Result<ColumnChunkMetaData> {
+    prot.read_struct_begin()?;
     // create a default initialized ColumnMetaData
     let mut col = ColumnChunkMetaDataBuilder::new(column_descr.clone()).build()?;
 
@@ -583,7 +601,13 @@ fn read_column_chunk(
                 has_file_offset = true;
             }
             cc::META_DATA => {
-                col_meta_mask = read_column_metadata(&mut *prot, &mut col, col_index, options)?;
+                col_meta_mask = read_column_metadata(
+                    &mut *prot,
+                    Some(row_group_index),
+                    &mut col,
+                    col_index,
+                    options,
+                )?;
             }
             cc::OFFSET_INDEX_OFFSET => {
                 col.offset_index_offset = Some(i64::read_thrift(&mut *prot)?);
@@ -607,7 +631,13 @@ fn read_column_chunk(
                 col.encrypted_column_metadata = Some(<&[u8]>::read_thrift(&mut *prot)?.to_vec());
             }
             _ => {
-                prot.skip(field_ident.field_type)?;
+                prot.skip_field_at_scope(
+                    field_ident,
+                    FooterScope::Column {
+                        row_group: row_group_index,
+                        column: col_index,
+                    },
+                )?;
             }
         }
         last_field_id = field_ident.id;
@@ -630,11 +660,13 @@ fn read_column_chunk(
     Ok(col)
 }
 
-fn read_row_group(
-    prot: &mut ThriftSliceInputProtocol,
+fn read_row_group<S: crate::parquet_thrift::InputTracking>(
+    prot: &mut ThriftSliceInputProtocol<'_, S>,
+    row_group_index: usize,
     schema_descr: &Arc<SchemaDescriptor>,
     options: Option<&ParquetMetaDataOptions>,
 ) -> Result<RowGroupMetaData> {
+    prot.read_struct_begin()?;
     // create default initialized RowGroupMetaData
     let mut row_group = RowGroupMetaDataBuilder::new(schema_descr.clone()).build_unchecked();
 
@@ -674,7 +706,23 @@ fn read_row_group(
                     ));
                 }
                 for i in 0..list_ident.size as usize {
-                    let col = read_column_chunk(prot, &schema_descr.columns()[i], i, options)?;
+                    let col = prot.with_list_element(i, |prot| {
+                        prot.with_footer_scope(
+                            FooterScope::Column {
+                                row_group: row_group_index,
+                                column: i,
+                            },
+                            |prot| {
+                                read_column_chunk(
+                                    prot,
+                                    row_group_index,
+                                    &schema_descr.columns()[i],
+                                    i,
+                                    options,
+                                )
+                            },
+                        )
+                    })?;
                     row_group.columns.push(col);
                 }
                 mask |= RG_COLUMNS;
@@ -688,7 +736,15 @@ fn read_row_group(
                 mask |= RG_NUM_ROWS;
             }
             rg::SORTING_COLUMNS => {
-                let val = read_thrift_vec::<SortingColumn, ThriftSliceInputProtocol>(&mut *prot)?;
+                let val = read_thrift_vec_with::<SortingColumn, _>(&mut *prot, |index, prot| {
+                    prot.with_footer_scope(
+                        FooterScope::SortingColumn {
+                            row_group: row_group_index,
+                            index,
+                        },
+                        SortingColumn::read_thrift,
+                    )
+                })?;
                 row_group.sorting_columns = Some(val);
             }
             rg::FILE_OFFSET => {
@@ -699,7 +755,7 @@ fn read_row_group(
                 row_group.ordinal = Some(i16::read_thrift(&mut *prot)? as i32);
             }
             _ => {
-                prot.skip(field_ident.field_type)?;
+                prot.skip_field_at_scope(field_ident, FooterScope::RowGroup(row_group_index))?;
             }
         }
         last_field_id = field_ident.id;
@@ -724,6 +780,7 @@ fn read_row_group(
 /// Parquet footer.
 pub(crate) fn parquet_schema_from_bytes(buf: &[u8]) -> Result<SchemaDescriptor> {
     let mut prot = ThriftSliceInputProtocol::new(buf);
+    prot.read_struct_begin()?;
 
     let mut last_field_id = 0i16;
     loop {
@@ -738,7 +795,7 @@ pub(crate) fn parquet_schema_from_bytes(buf: &[u8]) -> Result<SchemaDescriptor> 
                 let val = parquet_schema_from_array(val)?;
                 return Ok(SchemaDescriptor::new(val));
             }
-            _ => prot.skip(field_ident.field_type)?,
+            _ => prot.skip_field(field_ident)?,
         }
         last_field_id = field_ident.id;
     }
@@ -759,7 +816,20 @@ pub(crate) fn file_metadata_and_row_groups_from_bytes(
     buf: &[u8],
     options: Option<&ParquetMetaDataOptions>,
 ) -> Result<(FileMetaData, Vec<RowGroupMetaData>)> {
-    let mut prot = ThriftSliceInputProtocol::new(buf);
+    crate::file::metadata::extensions::with_read_extensions!(
+        ThriftSliceInputProtocol::new(buf),
+        options.and_then(|options| options.extension_observer.as_ref()),
+        SiteInfo::new(ThriftStruct::FileMetaData),
+        with_footer_observer,
+        |prot| read_file_metadata(prot, options)
+    )
+}
+
+fn read_file_metadata<S: crate::parquet_thrift::InputTracking>(
+    mut prot: ThriftSliceInputProtocol<'_, S>,
+    options: Option<&ParquetMetaDataOptions>,
+) -> Result<(FileMetaData, Vec<RowGroupMetaData>)> {
+    prot.read_struct_begin()?;
 
     // begin reading the file metadata
     let mut version: Option<i32> = None;
@@ -802,11 +872,45 @@ pub(crate) fn file_metadata_and_row_groups_from_bytes(
             fm::SCHEMA => {
                 // If schema was passed in, skip parsing it
                 if schema_descr.is_some() {
-                    prot.skip(field_ident.field_type)?;
+                    if field_ident.field_type == FieldType::List {
+                        let list = prot.read_list_begin()?;
+                        if list.element_type == ElementType::Bool {
+                            prot.skip_bool_list(
+                                list.size,
+                                crate::parquet_thrift::MAX_SKIP_DEPTH - 1,
+                            )?;
+                        } else {
+                            let kind: FieldType = list.element_type.into();
+                            for index in 0..list.size as usize {
+                                prot.with_list_element(index, |prot| {
+                                    if kind == FieldType::Struct {
+                                        prot.with_footer_scope(FooterScope::Schema(index), |prot| {
+                                            prot.skip_till_depth(
+                                                kind,
+                                                crate::parquet_thrift::MAX_SKIP_DEPTH - 1,
+                                            )
+                                        })
+                                    } else {
+                                        prot.skip_till_depth(
+                                            kind,
+                                            crate::parquet_thrift::MAX_SKIP_DEPTH - 1,
+                                        )
+                                    }
+                                })?;
+                            }
+                        }
+                    } else {
+                        prot.skip_field(field_ident)?;
+                    }
                 } else {
                     // read schema and convert to SchemaDescriptor for use when reading row groups
                     let val =
-                        read_thrift_vec::<SchemaElement, ThriftSliceInputProtocol>(&mut prot)?;
+                        read_thrift_vec_with::<SchemaElement, _>(&mut prot, |index, prot| {
+                            prot.with_footer_scope(
+                                FooterScope::Schema(index),
+                                SchemaElement::read_thrift,
+                            )
+                        })?;
                     let val = parquet_schema_from_array(val)?;
                     schema_descr = Some(Arc::new(SchemaDescriptor::new(val)));
                 }
@@ -827,26 +931,40 @@ pub(crate) fn file_metadata_and_row_groups_from_bytes(
                 check_list_size(prot.remaining_bytes(), size)?;
                 let mut rg_vec = Vec::with_capacity(size);
 
-                for _ in 0..list_ident.size {
-                    rg_vec.push(read_row_group(&mut prot, schema_descr, options)?);
+                for i in 0..list_ident.size as usize {
+                    rg_vec.push(prot.with_list_element(i, |prot| {
+                        prot.with_footer_scope(FooterScope::RowGroup(i), |prot| {
+                            read_row_group(prot, i, schema_descr, options)
+                        })
+                    })?);
                 }
                 ensure_row_group_ordinals(&mut rg_vec)?;
                 row_groups = Some(rg_vec);
             }
             fm::KEY_VALUE_METADATA => {
-                let val = read_thrift_vec::<KeyValue, ThriftSliceInputProtocol>(&mut prot)?;
+                let val = read_thrift_vec_with::<KeyValue, _>(&mut prot, |index, prot| {
+                    prot.with_footer_scope(FooterScope::KeyValue(index), KeyValue::read_thrift)
+                })?;
                 key_value_metadata = Some(val);
             }
             fm::CREATED_BY => {
                 created_by = Some(<&str>::read_thrift(&mut prot)?);
             }
             fm::COLUMN_ORDERS => {
-                let val = read_thrift_vec::<ColumnOrder, ThriftSliceInputProtocol>(&mut prot)?;
+                let val = read_thrift_vec_with::<ColumnOrder, _>(&mut prot, |index, prot| {
+                    prot.with_footer_scope(
+                        FooterScope::ColumnOrder(index),
+                        ColumnOrder::read_thrift,
+                    )
+                })?;
                 column_orders = Some(val);
             }
             #[cfg(feature = "encryption")]
             fm::ENCRYPTION_ALGORITHM => {
-                let val = EncryptionAlgorithm::read_thrift(&mut prot)?;
+                let val = prot.with_footer_scope(
+                    FooterScope::Field(fm::ENCRYPTION_ALGORITHM),
+                    EncryptionAlgorithm::read_thrift,
+                )?;
                 encryption_algorithm = Some(val);
             }
             #[cfg(feature = "encryption")]
@@ -854,7 +972,7 @@ pub(crate) fn file_metadata_and_row_groups_from_bytes(
                 footer_signing_key_metadata = Some(<&[u8]>::read_thrift(&mut prot)?);
             }
             _ => {
-                prot.skip(field_ident.field_type)?;
+                prot.skip_field_at_scope(field_ident, FooterScope::Root)?;
             }
         }
         last_field_id = field_ident.id;
@@ -1010,6 +1128,7 @@ impl DataPageHeader {
     where
         R: ThriftCompactInputProtocol<'a>,
     {
+        prot.read_struct_begin()?;
         let mut num_values: Option<i32> = None;
         let mut encoding: Option<Encoding> = None;
         let mut definition_level_encoding: Option<Encoding> = None;
@@ -1039,7 +1158,7 @@ impl DataPageHeader {
                     repetition_level_encoding = Some(val);
                 }
                 _ => {
-                    prot.skip(field_ident.field_type)?;
+                    prot.skip_field(field_ident)?;
                 }
             }
             last_field_id = field_ident.id;
@@ -1089,6 +1208,7 @@ impl DataPageHeaderV2 {
     where
         R: ThriftCompactInputProtocol<'a>,
     {
+        prot.read_struct_begin()?;
         let mut num_values: Option<i32> = None;
         let mut num_nulls: Option<i32> = None;
         let mut num_rows: Option<i32> = None;
@@ -1132,7 +1252,7 @@ impl DataPageHeaderV2 {
                     is_compressed = Some(field_ident.bool_val()?);
                 }
                 _ => {
-                    prot.skip(field_ident.field_type)?;
+                    prot.skip_field(field_ident)?;
                 }
             }
             last_field_id = field_ident.id;
@@ -1203,6 +1323,7 @@ impl PageHeader {
     where
         R: ThriftCompactInputProtocol<'a>,
     {
+        prot.read_struct_begin()?;
         let mut type_: Option<PageType> = None;
         let mut uncompressed_page_size: Option<i32> = None;
         let mut compressed_page_size: Option<i32> = None;
@@ -1251,7 +1372,7 @@ impl PageHeader {
                     data_page_header_v2 = Some(val);
                 }
                 _ => {
-                    prot.skip(field_ident.field_type)?;
+                    prot.skip_field_at_scope(field_ident, FooterScope::Root)?;
                 }
             }
             last_field_id = field_ident.id;
@@ -1907,7 +2028,7 @@ pub(crate) mod tests {
         schema_descr: Arc<SchemaDescriptor>,
     ) -> Result<RowGroupMetaData> {
         let mut reader = ThriftSliceInputProtocol::new(buf);
-        crate::file::metadata::thrift::read_row_group(&mut reader, &schema_descr, None)
+        crate::file::metadata::thrift::read_row_group::<_>(&mut reader, 0, &schema_descr, None)
     }
 
     pub(crate) fn read_column_chunk(
@@ -1923,7 +2044,7 @@ pub(crate) mod tests {
         options: Option<&ParquetMetaDataOptions>,
     ) -> Result<ColumnChunkMetaData> {
         let mut reader = ThriftSliceInputProtocol::new(buf);
-        crate::file::metadata::thrift::read_column_chunk(&mut reader, &column_descr, 0, options)
+        crate::file::metadata::thrift::read_column_chunk(&mut reader, 0, &column_descr, 0, options)
     }
 
     pub(crate) fn roundtrip_schema(schema: TypePtr) -> Result<TypePtr> {

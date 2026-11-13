@@ -352,4 +352,70 @@ mod tests {
         );
         Ok(())
     }
+
+    #[cfg(feature = "experimental")]
+    #[test]
+    fn reader_targets_preserve_union_and_single_target_admission() -> Result<()> {
+        use crate::file::metadata::{
+            ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataReader, ParquetMetaDataWriter,
+        };
+        use std::sync::Mutex;
+        let (file, groups) = crate::file::metadata::extensions::test_util::footer_fixture();
+        let metadata = ParquetMetaData::new(file, groups);
+        let mut bytes = Vec::new();
+        ParquetMetaDataWriter::new(&mut bytes, &metadata)
+            .with_metadata_extension_hook(
+                [MetadataExtensionSelection::all()],
+                |_: &mut MetadataSite<'_>| -> Result<Option<&'static [u8]>> { Ok(Some(b"test")) },
+            )?
+            .finish()?;
+        bytes.truncate(bytes.len() - 8);
+        let column = MetadataExtensionSelection::all().row_group(0).column(1);
+        let footer = MetadataExtensionSelection::roots([ThriftStruct::FileMetaData]).root_only();
+        let mut results = Vec::new();
+        for (targets, manual) in [
+            (vec![MetadataExtensionSelection::all()], true),
+            (vec![column, footer, column], false),
+            (vec![MetadataExtensionSelection::all()], false),
+            (vec![MetadataExtensionSelection::all(); 2], false),
+            (vec![footer], false),
+            (vec![footer; 2], false),
+            (
+                vec![MetadataExtensionSelection::roots([ThriftStruct::DataPage])],
+                false,
+            ),
+        ] {
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let events = seen.clone();
+            let options = ParquetMetaDataOptions::new().with_metadata_extension_listener(
+                targets,
+                move |site: &mut MetadataSite<'_>, payload: &[u8]| {
+                    assert_eq!(payload, b"test");
+                    let owner = site.context()?;
+                    if !manual
+                        || site.at_root()
+                        || owner.row_group_ordinal == Some(0) && owner.column_ordinal == Some(1)
+                    {
+                        events
+                            .lock()
+                            .unwrap()
+                            .push(site.resolve_path()?.iter().collect::<Vec<_>>());
+                    }
+                    Ok(())
+                },
+            )?;
+            ParquetMetaDataReader::decode_metadata_with_options(&bytes, Some(&options))?;
+            results.push(seen.lock().unwrap().clone());
+        }
+        assert!(results[0].len() >= 3);
+        assert_eq!(results[0], results[1]);
+        // A single unconstrained target takes the matcher fast path; duplicates
+        // use general matching. Admission/coverage must agree for both routes.
+        assert!(results[2].len() > results[0].len());
+        assert_eq!(results[2], results[3]);
+        assert_eq!(results[4], vec![vec![]]); // Only the footer root, not its children.
+        assert_eq!(results[4], results[5]);
+        assert!(results[6].is_empty()); // A page target cannot observe a footer.
+        Ok(())
+    }
 }
