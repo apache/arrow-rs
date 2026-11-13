@@ -364,9 +364,6 @@ impl ByteViewArrayDecoderPlain {
                     .unwrap(),
             );
 
-            // `checked_add` because the length comes from the page: on a 32-bit
-            // target a corrupt one could wrap `end_offset` below `start_offset`
-            // and pass the bounds check below.
             end_offset = start_offset
                 .checked_add(len as usize)
                 .filter(|&end| end <= buf_len)

@@ -390,8 +390,6 @@ impl ByteArrayDecoderPlain {
             let len = u32::from_le_bytes(len_bytes);
 
             let start_offset = self.offset + 4;
-            // `checked_add` because the length comes from the page: on a 32-bit
-            // target a corrupt one could wrap `end_offset` below `start_offset`.
             let end_offset = start_offset
                 .checked_add(len as usize)
                 .filter(|&end| end <= buf.len())
