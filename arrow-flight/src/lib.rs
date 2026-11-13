@@ -65,6 +65,12 @@ pub mod flight_descriptor {
     pub use r#gen::flight_descriptor::DescriptorType;
 }
 
+/// Defines the status returned when closing a session.
+pub mod close_session_result {
+    use super::r#gen;
+    pub use r#gen::close_session_result::Status;
+}
+
 /// Low Level [tonic] [`FlightServiceClient`](gen::flight_service_client::FlightServiceClient).
 pub mod flight_service_client {
     use super::r#gen;
@@ -100,6 +106,8 @@ pub use r#gen::BasicAuth;
 pub use r#gen::CancelFlightInfoRequest;
 pub use r#gen::CancelFlightInfoResult;
 pub use r#gen::CancelStatus;
+pub use r#gen::CloseSessionRequest;
+pub use r#gen::CloseSessionResult;
 pub use r#gen::Criteria;
 pub use r#gen::Empty;
 pub use r#gen::FlightData;

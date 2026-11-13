@@ -22,6 +22,7 @@ use crate::encode::FlightDataEncoderBuilder;
 use crate::error::FlightError;
 use crate::error::Result;
 use crate::flight_service_client::FlightServiceClient;
+use crate::r#gen::CloseSessionRequest;
 use crate::sql::r#gen::action_end_transaction_request::EndTransaction;
 use crate::sql::server::{
     BEGIN_TRANSACTION, CLOSE_PREPARED_STATEMENT, CREATE_PREPARED_STATEMENT, END_TRANSACTION,
@@ -39,8 +40,8 @@ use crate::sql::{
 use crate::streams::FallibleRequestStream;
 use crate::trailers::extract_lazy_trailers;
 use crate::{
-    Action, FlightData, FlightDescriptor, FlightInfo, HandshakeRequest, HandshakeResponse,
-    IpcMessage, PutResult, Ticket,
+    Action, CloseSessionResult, FlightData, FlightDescriptor, FlightInfo, HandshakeRequest,
+    HandshakeResponse, IpcMessage, PutResult, Ticket,
 };
 use arrow_array::RecordBatch;
 use arrow_schema::{ArrowError, Schema};
@@ -442,15 +443,19 @@ where
         Ok(())
     }
 
-    /// Explicitly shut down and clean up the client.
-    #[expect(
-        clippy::unused_async,
-        clippy::unused_async_trait_impl,
-        reason = "public API: dropping `async` would break callers that `.await` it"
-    )]
-    pub async fn close(&mut self) -> Result<()> {
-        // TODO: consume self instead of &mut self to explicitly prevent reuse?
-        Ok(())
+    /// Close the current server session using the configured request headers.
+    ///
+    /// Returns the server's close status for the caller to handle.
+    pub async fn close(&mut self) -> Result<CloseSessionResult> {
+        let action = Action::new("CloseSession", CloseSessionRequest {}.encode_to_vec());
+        let mut results = self.do_action(action).await?;
+        let result = results.message().await?.ok_or_else(|| {
+            FlightError::protocol("Server closed the stream without sending a result")
+        })?;
+        let result = CloseSessionResult::decode(result.body)?;
+        while results.message().await?.is_some() {}
+
+        Ok(result)
     }
 
     fn set_request_headers<M>(&self, mut req: tonic::Request<M>) -> Result<tonic::Request<M>> {
