@@ -220,6 +220,36 @@ impl CompressionCodec {
         Ok(output.len() - original_output_len)
     }
 
+    /// Like [`Self::compress_to_vec`], for one buffer given as `segments` of `total`
+    /// bytes in all. The segments are fed to a streaming encoder, so they are not
+    /// first copied into one contiguous buffer.
+    pub(crate) fn compress_segments_to_vec(
+        &self,
+        segments: &[Buffer],
+        total: usize,
+        output: &mut Vec<u8>,
+    ) -> Result<usize, ArrowError> {
+        let original_output_len = output.len();
+        if total == 0 {
+            return Ok(0);
+        }
+        output.extend_from_slice(&(total as i64).to_le_bytes());
+        match self {
+            CompressionCodec::Lz4Frame => compress_lz4_segments(segments, output)?,
+            CompressionCodec::Zstd(level) => {
+                compress_zstd_segments(segments, total, output, *level)?
+            }
+        }
+        if output.len() - original_output_len > total {
+            output.truncate(original_output_len);
+            output.extend_from_slice(&LENGTH_NO_COMPRESSED_DATA.to_le_bytes());
+            for segment in segments {
+                output.extend_from_slice(segment.as_slice());
+            }
+        }
+        Ok(output.len() - original_output_len)
+    }
+
     /// Decompresses the input into a [`Buffer`]
     ///
     /// The input should look like:
@@ -407,6 +437,56 @@ fn compress_zstd(
     _input: &[u8],
     _output: &mut Vec<u8>,
     _context: &mut IpcWriteContext,
+    _level: i32,
+) -> Result<(), ArrowError> {
+    Err(ArrowError::InvalidArgumentError(
+        "zstd IPC compression requires the zstd feature".to_string(),
+    ))
+}
+
+#[cfg(feature = "lz4")]
+fn compress_lz4_segments(segments: &[Buffer], output: &mut Vec<u8>) -> Result<(), ArrowError> {
+    use std::io::Write;
+    let mut encoder = lz4_flex::frame::FrameEncoder::new(output);
+    for segment in segments {
+        encoder.write_all(segment.as_slice())?;
+    }
+    encoder
+        .finish()
+        .map_err(|e| ArrowError::ExternalError(Box::new(e)))?;
+    Ok(())
+}
+
+#[cfg(not(feature = "lz4"))]
+fn compress_lz4_segments(_segments: &[Buffer], _output: &mut Vec<u8>) -> Result<(), ArrowError> {
+    Err(ArrowError::InvalidArgumentError(
+        "lz4 IPC compression requires the lz4 feature".to_string(),
+    ))
+}
+
+#[cfg(feature = "zstd")]
+fn compress_zstd_segments(
+    segments: &[Buffer],
+    total: usize,
+    output: &mut Vec<u8>,
+    level: i32,
+) -> Result<(), ArrowError> {
+    use std::io::Write;
+    let mut encoder = zstd::stream::write::Encoder::new(output, level)?;
+    encoder.set_pledged_src_size(Some(total as u64))?;
+    encoder.include_contentsize(true)?;
+    for segment in segments {
+        encoder.write_all(segment.as_slice())?;
+    }
+    encoder.finish()?;
+    Ok(())
+}
+
+#[cfg(not(feature = "zstd"))]
+fn compress_zstd_segments(
+    _segments: &[Buffer],
+    _total: usize,
+    _output: &mut Vec<u8>,
     _level: i32,
 ) -> Result<(), ArrowError> {
     Err(ArrowError::InvalidArgumentError(

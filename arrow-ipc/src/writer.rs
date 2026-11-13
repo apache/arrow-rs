@@ -23,7 +23,7 @@ use arrow_array::cast::*;
 use arrow_array::types::{Int16Type, Int32Type, Int64Type, RunEndIndexType};
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer, ToByteSlice};
-use arrow_data::{ArrayData, ArrayDataBuilder, BufferSpec, layout};
+use arrow_data::{ArrayData, ArrayDataBuilder, BufferSpec, ByteView, MAX_INLINE_VIEW_LEN, layout};
 use arrow_schema::*;
 
 use crate::CONTINUATION_MARKER;
@@ -56,6 +56,8 @@ pub struct IpcWriteOptions {
     batch_compression_level: Option<i32>,
     /// How to handle updating dictionaries in IPC messages
     dictionary_handling: DictionaryHandling,
+    /// Whether to write only the bytes of view data buffers that the views use
+    compact_view_buffers: bool,
 }
 
 /// A single buffer segment ready to be written to the output stream.
@@ -68,6 +70,9 @@ enum EncodedBuffer {
     Raw(Buffer),
     /// Compressed: owned scratch bytes produced by the codec.
     Compressed(Vec<u8>),
+    /// Uncompressed: one piece of a buffer written as several pieces, followed by
+    /// exactly `pad` bytes of padding.
+    Segment(Buffer, usize),
 }
 
 impl EncodedBuffer {
@@ -75,6 +80,15 @@ impl EncodedBuffer {
         match self {
             EncodedBuffer::Raw(b) => b.as_slice(),
             EncodedBuffer::Compressed(v) => v.as_slice(),
+            EncodedBuffer::Segment(b, _) => b.as_slice(),
+        }
+    }
+
+    /// The padding to write after this buffer.
+    fn pad(&self, alignment: u8) -> usize {
+        match self {
+            EncodedBuffer::Segment(_, pad) => *pad,
+            _ => pad_to_alignment(alignment, self.len()),
         }
     }
 
@@ -82,6 +96,7 @@ impl EncodedBuffer {
         match self {
             EncodedBuffer::Raw(b) => b.len(),
             EncodedBuffer::Compressed(v) => v.len(),
+            EncodedBuffer::Segment(b, _) => b.len(),
         }
     }
 }
@@ -283,9 +298,9 @@ trait IpcRecordBatchSink: IpcMessageSinkExt {
         self.write_slice(metadata)?;
         self.write_padding(layout.metadata_padding)?;
         for enc in encoded_buffers.drain(..) {
-            let len = enc.len();
+            let pad = enc.pad(alignment);
             self.write_encoded_buffer(enc)?;
-            self.write_padding(pad_to_alignment(alignment, len))?;
+            self.write_padding(pad)?;
         }
 
         Ok((layout.padded_header_len, body_len))
@@ -323,7 +338,7 @@ where
         self.write_all(&PADDING[..layout.metadata_padding])?;
         for enc in encoded_buffers.iter_mut() {
             self.write_all(enc.as_slice())?;
-            self.write_all(&PADDING[..pad_to_alignment(alignment, enc.len())])?;
+            self.write_all(&PADDING[..enc.pad(alignment)])?;
         }
         // Clearing the buffers after the loop instead of draining the vec is
         // a deliberate choice. It seems to perform much better on certain
@@ -360,6 +375,7 @@ impl IpcMessageSink for Buffers<'_> {
         match buffer {
             EncodedBuffer::Raw(buffer) => self.out.push(buffer),
             EncodedBuffer::Compressed(bytes) => self.out.push(Buffer::from(bytes)),
+            EncodedBuffer::Segment(buffer, _) => self.out.push(buffer),
         }
         Ok(())
     }
@@ -488,6 +504,7 @@ impl IpcWriteOptions {
                 batch_compression_type: None,
                 batch_compression_level: None,
                 dictionary_handling: DictionaryHandling::default(),
+                compact_view_buffers: false,
             }),
             crate::MetadataVersion::V5 => {
                 if write_legacy_ipc_format {
@@ -502,6 +519,7 @@ impl IpcWriteOptions {
                         batch_compression_type: None,
                         batch_compression_level: None,
                         dictionary_handling: DictionaryHandling::default(),
+                        compact_view_buffers: false,
                     })
                 }
             }
@@ -509,6 +527,21 @@ impl IpcWriteOptions {
                 "Unsupported crate::MetadataVersion {z:?}"
             ))),
         }
+    }
+
+    /// Write only the bytes of `Utf8View` / `BinaryView` data buffers that the views use.
+    ///
+    /// By default the data buffers of a view array are written in full, so writing a
+    /// slice of a large array writes the data of every row. With this option, the used
+    /// byte ranges are written as one data buffer and the views are rewritten to point
+    /// into it. Without compression the ranges are written as zero-copy slices of the
+    /// source buffers; with compression they are streamed into the codec. This avoids
+    /// calling `gc()` before writing, which copies the bytes into new buffers first.
+    ///
+    /// Defaults to `false`.
+    pub fn with_compact_view_buffers(mut self, compact: bool) -> Self {
+        self.compact_view_buffers = compact;
+        self
     }
 
     /// Configure how dictionaries are handled in IPC messages
@@ -527,6 +560,7 @@ impl Default for IpcWriteOptions {
             batch_compression_type: None,
             batch_compression_level: None,
             dictionary_handling: DictionaryHandling::default(),
+            compact_view_buffers: false,
         }
     }
 }
@@ -1197,7 +1231,7 @@ impl IpcDataGenerator {
                 ipc_write_context,
                 write_options,
             )?;
-            append_variadic_buffer_counts(&mut variadic_buffer_counts, &array_data);
+            append_variadic_buffer_counts(&mut variadic_buffer_counts, &array_data, write_options);
         }
 
         // Each buffer is padded to the alignment as it is written, so `offset` is
@@ -1274,12 +1308,20 @@ fn ensure_supported_ipc_data_type(
     }
 }
 
-fn append_variadic_buffer_counts(counts: &mut Vec<i64>, array: &ArrayData) {
+fn append_variadic_buffer_counts(
+    counts: &mut Vec<i64>,
+    array: &ArrayData,
+    write_options: &IpcWriteOptions,
+) {
     match array.data_type() {
         DataType::BinaryView | DataType::Utf8View => {
             // The spec documents the counts only includes the variadic buffers, not the view/null buffers.
             // https://arrow.apache.org/docs/format/Columnar.html#variadic-buffers
-            counts.push(array.buffers().len() as i64 - 1);
+            if compact_view_buffers(array, write_options) {
+                counts.push(1);
+            } else {
+                counts.push(array.buffers().len() as i64 - 1);
+            }
         }
         DataType::Dictionary(_, _) => {
             // Do nothing
@@ -1287,7 +1329,7 @@ fn append_variadic_buffer_counts(counts: &mut Vec<i64>, array: &ArrayData) {
         }
         _ => {
             for child in array.child_data() {
-                append_variadic_buffer_counts(counts, child)
+                append_variadic_buffer_counts(counts, child, write_options)
             }
         }
     }
@@ -2461,26 +2503,12 @@ fn write_array_data(
             )?;
         }
     } else if matches!(data_type, DataType::BinaryView | DataType::Utf8View) {
-        // Slicing the views buffer is safe and easy,
-        // but pruning unneeded data buffers is much more nuanced since it's complicated to prove that no views reference the pruned buffers
-        //
-        // Current implementation just serialize the raw arrays as given and not try to optimize anything.
-        // If users wants to "compact" the arrays prior to sending them over IPC,
-        // they should consider the gc API suggested in #5513
-        let views = get_or_truncate_buffer(array_data);
-        offset = encode_sink_buffer(
-            views,
-            meta,
-            sink,
-            offset,
-            compression_codec,
-            ipc_write_context,
-            write_options.alignment,
-        )?;
-
-        for buffer in array_data.buffers().iter().skip(1) {
+        if compact_view_buffers(array_data, write_options) {
+            // Write the used bytes of the data buffers as one data buffer, made of
+            // zero-copy slices of the source buffers (see `IpcWriteOptions::with_compact_view_buffers`).
+            let (views, segments, total) = compact_view_segments(array_data);
             offset = encode_sink_buffer(
-                buffer.clone(),
+                views,
                 meta,
                 sink,
                 offset,
@@ -2488,6 +2516,57 @@ fn write_array_data(
                 ipc_write_context,
                 write_options.alignment,
             )?;
+            let len = match compression_codec {
+                Some(codec) => {
+                    let mut scratch = Vec::new();
+                    let len = codec.compress_segments_to_vec(&segments, total, &mut scratch)?;
+                    sink.write(
+                        pad_to_alignment(write_options.alignment, len),
+                        EncodedBuffer::Compressed(scratch),
+                    );
+                    len
+                }
+                None => {
+                    let pad = pad_to_alignment(write_options.alignment, total);
+                    let last = segments.len().saturating_sub(1);
+                    for (i, segment) in segments.into_iter().enumerate() {
+                        let pad = if i == last { pad } else { 0 };
+                        sink.write(pad, EncodedBuffer::Segment(segment, pad));
+                    }
+                    total
+                }
+            };
+            meta.buffers.push(crate::Buffer::new(offset, len as i64));
+            offset += (len + pad_to_alignment(write_options.alignment, len)) as i64;
+        } else {
+            // Slicing the views buffer is safe and easy,
+            // but pruning unneeded data buffers is much more nuanced since it's complicated to prove that no views reference the pruned buffers
+            //
+            // Without `IpcWriteOptions::with_compact_view_buffers`, serialize the raw arrays as given.
+            // If users wants to "compact" the arrays prior to sending them over IPC,
+            // they should consider the gc API suggested in #5513
+            let views = get_or_truncate_buffer(array_data);
+            offset = encode_sink_buffer(
+                views,
+                meta,
+                sink,
+                offset,
+                compression_codec,
+                ipc_write_context,
+                write_options.alignment,
+            )?;
+
+            for buffer in array_data.buffers().iter().skip(1) {
+                offset = encode_sink_buffer(
+                    buffer.clone(),
+                    meta,
+                    sink,
+                    offset,
+                    compression_codec,
+                    ipc_write_context,
+                    write_options.alignment,
+                )?;
+            }
         }
     } else if matches!(data_type, DataType::LargeBinary | DataType::LargeUtf8) {
         for buffer in get_byte_array_buffers::<i64>(array_data) {
@@ -2820,6 +2899,109 @@ fn estimate_encoded_buffer_count(dt: &DataType) -> usize {
 fn pad_to_alignment(alignment: u8, len: usize) -> usize {
     let a = usize::from(alignment - 1);
     ((len + a) & !a) - len
+}
+
+/// Whether [`write_array_data`] writes the view array `array_data` with only the bytes
+/// its views use. The compacted data buffer is addressed by `u32` offsets, so arrays whose
+/// distinct data buffers hold more than `u32::MAX` bytes are written as they are.
+fn compact_view_buffers(array_data: &ArrayData, write_options: &IpcWriteOptions) -> bool {
+    if !write_options.compact_view_buffers {
+        return false;
+    }
+    let buffers = &array_data.buffers()[1..];
+    let total = buffers
+        .iter()
+        .fold(0_usize, |n, b| n.saturating_add(b.len()));
+    if u32::try_from(total).is_ok() {
+        return true;
+    }
+    // Concatenation can list the same allocation many times. Count it once,
+    // just as compact_view_segments will when merging its referenced ranges.
+    let canonical = canonical_view_buffer_indices(buffers);
+    let unique = buffers.iter().enumerate().fold(0_usize, |n, (i, b)| {
+        if canonical[i] as usize == i {
+            n.saturating_add(b.len())
+        } else {
+            n
+        }
+    });
+    u32::try_from(unique).is_ok()
+}
+
+/// Map repeated entries of the same byte region to their first buffer index.
+fn canonical_view_buffer_indices(buffers: &[Buffer]) -> Vec<u32> {
+    let mut first = HashMap::with_capacity(buffers.len());
+    buffers
+        .iter()
+        .enumerate()
+        .map(|(i, b)| *first.entry((b.as_ptr(), b.len())).or_insert(i as u32))
+        .collect()
+}
+
+/// Returns the views of the view array `array_data` rewritten to point into a single
+/// data buffer, that buffer as zero-copy slices of the source data buffers, and its
+/// length. Overlapping and adjacent ranges of a source buffer are written once, so views
+/// that share bytes still share them.
+fn compact_view_segments(array_data: &ArrayData) -> (Buffer, Vec<Buffer>, usize) {
+    let data_buffers = &array_data.buffers()[1..];
+    let canonical = canonical_view_buffer_indices(data_buffers);
+    let views: &[u128] = &array_data.buffers()[0].typed_data::<u128>()
+        [array_data.offset()..array_data.offset() + array_data.len()];
+    let nulls = array_data.nulls();
+    // (buffer index, offset, length, row) of each view that points into a data buffer
+    let mut refs: Vec<(u32, u32, u32, usize)> = views
+        .iter()
+        .enumerate()
+        .filter(|&(row, &raw)| {
+            (raw as u32) > MAX_INLINE_VIEW_LEN && nulls.is_none_or(|n| n.is_valid(row))
+        })
+        .map(|(row, &raw)| {
+            let view = ByteView::from(raw);
+            (
+                canonical[view.buffer_index as usize],
+                view.offset,
+                view.length,
+                row,
+            )
+        })
+        .collect();
+    refs.sort_unstable();
+
+    let mut new_views = views.to_vec();
+    let mut segments = Vec::new();
+    let mut total = 0;
+    // The source range being merged: buffer index, start, end, and its offset in the output
+    let mut range: Option<(u32, u32, u32, usize)> = None;
+    for &(buffer_index, start, length, row) in &refs {
+        let end = start + length;
+        range = match range {
+            Some((b, s, e, out)) if b == buffer_index && start <= e => {
+                Some((b, s, e.max(end), out))
+            }
+            previous => {
+                if let Some((b, s, e, _)) = previous {
+                    segments.push(
+                        data_buffers[b as usize].slice_with_length(s as usize, (e - s) as usize),
+                    );
+                    total += (e - s) as usize;
+                }
+                Some((buffer_index, start, end, total))
+            }
+        };
+        let (_, s, _, out) = range.expect("set above");
+        let view = ByteView::from(views[row]);
+        new_views[row] = ByteView {
+            buffer_index: 0,
+            offset: (out + (start - s) as usize) as u32,
+            ..view
+        }
+        .as_u128();
+    }
+    if let Some((b, s, e, _)) = range {
+        segments.push(data_buffers[b as usize].slice_with_length(s as usize, (e - s) as usize));
+        total += (e - s) as usize;
+    }
+    (Buffer::from_vec(new_views), segments, total)
 }
 
 #[cfg(test)]
@@ -4188,6 +4370,231 @@ mod tests {
 
     /// Ensure when serde full & sliced versions they are equal to original input.
     /// Also ensure serialized sliced version is significantly smaller than serialized full.
+    /// A view array with several data buffers, inline values, nulls, and views that
+    /// share bytes (from `take`), for the `compact_view_buffers` tests.
+    fn compact_view_test_batch() -> RecordBatch {
+        let long = StringViewArray::from_iter((0..2_000).map(|i| match i % 7 {
+            0 => None,
+            1 => Some(format!("short{i}")),
+            _ => Some(format!("value-{i:06}-").repeat(1 + i % 50)),
+        }));
+        // `take` copies views, not bytes, so repeated indices share bytes
+        let indices = UInt32Array::from_iter_values((0..2_000).map(|i| (i * 7 % 2_000) as u32));
+        let shared = arrow_select::take::take(&long, &indices, None).unwrap();
+        let binary: ArrayRef = Arc::new(BinaryViewArray::from_iter(
+            long.iter().map(|v| v.map(|v| v.as_bytes().to_vec())),
+        ));
+        let structs: ArrayRef = Arc::new(StructArray::from(vec![(
+            Arc::new(Field::new("inner", DataType::Utf8View, true)),
+            Arc::new(long.clone()) as ArrayRef,
+        )]));
+        RecordBatch::try_from_iter(vec![
+            ("long", Arc::new(long) as ArrayRef),
+            ("shared", shared),
+            ("binary", binary),
+            ("struct", structs),
+        ])
+        .unwrap()
+    }
+
+    fn compact_view_test_options() -> Vec<Option<crate::CompressionType>> {
+        vec![
+            None,
+            #[cfg(feature = "lz4")]
+            Some(crate::CompressionType::LZ4_FRAME),
+            #[cfg(feature = "zstd")]
+            Some(crate::CompressionType::ZSTD),
+        ]
+    }
+
+    fn read_stream(bytes: Vec<u8>) -> Vec<RecordBatch> {
+        StreamReader::try_new(Cursor::new(bytes), None)
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn compact_view_buffers_roundtrip_slices() {
+        let batch = compact_view_test_batch();
+        let slices: Vec<_> = [(0, 2_000), (0, 100), (777, 333), (1_999, 1), (5, 0)]
+            .iter()
+            .map(|&(offset, len)| batch.slice(offset, len))
+            .collect();
+        for codec in compact_view_test_options() {
+            let plain = IpcWriteOptions::default()
+                .try_with_compression(codec)
+                .unwrap();
+            let compact = plain.clone().with_compact_view_buffers(true);
+
+            let plain_bytes = write_stream(&batch.schema(), &slices, plain);
+            let compact_bytes = write_stream(&batch.schema(), &slices, compact.clone());
+            assert_eq!(read_stream(compact_bytes.clone()), slices, "{codec:?}");
+            assert!(
+                compact_bytes.len() < plain_bytes.len(),
+                "{codec:?}: {} >= {}",
+                compact_bytes.len(),
+                plain_bytes.len()
+            );
+
+            // The sans-IO encoder writes the same bytes as the stream writer
+            assert_eq!(
+                encode_stream(&batch.schema(), &slices, compact.clone()),
+                compact_bytes,
+                "{codec:?}"
+            );
+
+            // File format
+            let mut file = Vec::new();
+            let mut writer =
+                FileWriter::try_new_with_options(&mut file, &batch.schema(), compact).unwrap();
+            for slice in &slices {
+                writer.write(slice).unwrap();
+            }
+            writer.finish().unwrap();
+            drop(writer);
+            let read: Vec<_> = FileReader::try_new(Cursor::new(file), None)
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            assert_eq!(read, slices, "{codec:?}");
+        }
+    }
+
+    #[test]
+    fn compact_view_buffers_one_data_buffer_per_array() {
+        let batch = compact_view_test_batch().slice(100, 50);
+        let options = IpcWriteOptions::default().with_compact_view_buffers(true);
+        let read = read_stream(write_stream(
+            &batch.schema(),
+            std::slice::from_ref(&batch),
+            options,
+        ));
+        let column = read[0].column(0).as_string_view();
+        assert_eq!(column.data_buffers().len(), 1);
+        // Only the bytes the 50 rows use are written
+        assert_eq!(
+            column.data_buffers()[0].len(),
+            batch.column(0).as_string_view().total_buffer_bytes_used()
+        );
+    }
+
+    // Same take/concat shape as DataFusion's shared_dictionary_views regression
+    // for apache/datafusion#23564: every input lists the same dictionary buffer.
+    fn shared_dictionary_views(dictionary_len: u32, inputs: usize, rows: u32) -> StringViewArray {
+        let values = StringArray::from_iter_values(
+            (0..dictionary_len).map(|i| format!("container-id-{i:0>50}")),
+        );
+        let dictionary = StringViewArray::from(&values);
+        assert_eq!(dictionary.data_buffers().len(), 1);
+        let indices = UInt32Array::from_iter_values((0..rows).map(|i| i % dictionary_len));
+        let selected = arrow_select::take::take(&dictionary, &indices, None).unwrap();
+        let arrays = vec![selected.as_ref(); inputs];
+        let merged = arrow_select::concat::concat(&arrays).unwrap();
+        merged.as_string_view().clone()
+    }
+
+    #[test]
+    fn compact_view_buffers_shared_dictionary() {
+        let merged = shared_dictionary_views(1000, 8, 1024);
+        assert_eq!(merged.data_buffers().len(), 8);
+        let dictionary_bytes = merged.data_buffers()[0].len();
+        let rows = merged.len();
+        let binary: ArrayRef = Arc::new(merged.clone().to_binary_view());
+        let values: ArrayRef = Arc::new(merged);
+        let entries = StructArray::from(vec![
+            (
+                Arc::new(Field::new("key", DataType::Utf8View, false)),
+                Arc::new(StringViewArray::from_iter_values(std::iter::repeat_n(
+                    "key", rows,
+                ))) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("value", DataType::Utf8View, false)),
+                Arc::clone(&values),
+            ),
+        ]);
+        let map = MapArray::new(
+            Arc::new(Field::new("entries", entries.data_type().clone(), false)),
+            arrow_buffer::OffsetBuffer::from_lengths(std::iter::repeat_n(1, rows)),
+            entries,
+            None,
+            false,
+        );
+        for array in [values, binary, Arc::new(map) as ArrayRef] {
+            let batch = RecordBatch::try_from_iter([("v", array)]).unwrap();
+            for codec in compact_view_test_options() {
+                let options = IpcWriteOptions::default()
+                    .try_with_compression(codec)
+                    .unwrap()
+                    .with_compact_view_buffers(true);
+                let bytes = write_stream(&batch.schema(), std::slice::from_ref(&batch), options);
+                let read = read_stream(bytes);
+                assert_eq!(read, vec![batch.clone()], "{codec:?}");
+                let column = match read[0].column(0).data_type() {
+                    DataType::Map(_, _) => read[0].column(0).as_map().values(),
+                    _ => read[0].column(0),
+                };
+                let data = column.to_data();
+                assert_eq!(data.buffers().len(), 2); // views plus one data buffer
+                assert_eq!(
+                    data.buffers()[1].len(),
+                    dictionary_bytes,
+                    "write the dictionary once, not once per input batch: {codec:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn compact_view_buffers_shared_dictionary_over_u32() {
+        // About 1 MiB of actual string storage, but more than 4 GiB when
+        // counting each of the 5000 references. Never serialize the raw form.
+        let merged = shared_dictionary_views(16_384, 5000, 1);
+        let data = merged.to_data();
+        assert!(
+            data.buffers()
+                .iter()
+                .skip(1)
+                .map(|b| b.len() as u64)
+                .sum::<u64>()
+                > u64::from(u32::MAX)
+        );
+        let options = IpcWriteOptions::default().with_compact_view_buffers(true);
+        assert!(
+            compact_view_buffers(&data, &options),
+            "repeated buffer entries must not disable compaction"
+        );
+        let batch = RecordBatch::try_from_iter([("v", Arc::new(merged) as ArrayRef)]).unwrap();
+        let bytes = write_stream(&batch.schema(), std::slice::from_ref(&batch), options);
+        // Views plus one 63-byte value and less than 1 KiB of IPC framing.
+        assert!(bytes.len() < batch.num_rows() * size_of::<u128>() + 1024);
+        let read = read_stream(bytes);
+        assert_eq!(read, vec![batch]);
+        assert_eq!(
+            read[0].column(0).as_string_view().data_buffers()[0].len(),
+            63
+        );
+    }
+
+    #[test]
+    fn compact_view_buffers_inline_and_null_only() {
+        let array = StringViewArray::from_iter([Some("a"), None, Some("bcd")]);
+        let batch = RecordBatch::try_from_iter(vec![("v", Arc::new(array) as ArrayRef)]).unwrap();
+        for codec in compact_view_test_options() {
+            let options = IpcWriteOptions::default()
+                .try_with_compression(codec)
+                .unwrap()
+                .with_compact_view_buffers(true);
+            let read = read_stream(write_stream(
+                &batch.schema(),
+                std::slice::from_ref(&batch),
+                options,
+            ));
+            assert_eq!(read, vec![batch.clone()], "{codec:?}");
+        }
+    }
+
     fn roundtrip_ensure_sliced_smaller(in_batch: RecordBatch, expected_size_factor: usize) {
         // test both full and sliced versions
         let in_sliced = in_batch.slice(999, 1);
