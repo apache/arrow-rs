@@ -5,7 +5,7 @@
 //! Configuration via [`WriterProperties`] and [`ReaderProperties`]
 use crate::basic::{Compression, Encoding};
 use crate::compression::{CodecOptions, CodecOptionsBuilder};
-pub use crate::encodings::encoding::DeltaBinaryPackedEncoderOptions;
+pub use crate::encodings::encoding::{AlpEncoderOptions, DeltaBinaryPackedEncoderOptions};
 #[cfg(feature = "encryption")]
 use crate::encryption::encrypt::FileEncryptionProperties;
 use crate::errors::{ParquetError, Result};
@@ -486,6 +486,13 @@ impl WriterProperties {
         )
     }
 
+    /// Returns custom ALP encoder options for a specific column.
+    ///
+    /// See [`AlpEncoderOptions`] for the vector-size trade-offs.
+    pub fn alp_encoder_options(&self, col: &ColumnPath) -> Option<AlpEncoderOptions> {
+        resolve_alp_encoder_options(self.column_override(col), &self.default_column_properties)
+    }
+
     /// Returns custom delta binary packed encoder options for a specific column.
     ///
     /// See [`DeltaBinaryPackedEncoderOptions`] for layout trade-offs. These options also apply to
@@ -607,6 +614,7 @@ impl WriterProperties {
             delta_binary_packed_encoder_options: resolve_delta_binary_packed_encoder_options(
                 column, default,
             ),
+            alp_encoder_options: resolve_alp_encoder_options(column, default),
         }
     }
 
@@ -1081,6 +1089,16 @@ impl WriterPropertiesBuilder {
         self
     }
 
+    /// Sets the default ALP encoder options for all columns.
+    ///
+    /// See [`AlpEncoderOptions`] for the vector-size trade-offs. Only affects columns
+    /// written with [`Encoding::ALP`].
+    pub fn set_alp_encoder_options(mut self, value: AlpEncoderOptions) -> Self {
+        self.default_column_properties
+            .set_alp_encoder_options(value);
+        self
+    }
+
     /// Sets the default delta binary packed encoder block layout for all columns.
     ///
     /// See [`DeltaBinaryPackedEncoderOptions`] for layout trade-offs. These options also apply to
@@ -1400,6 +1418,19 @@ impl WriterPropertiesBuilder {
     ) -> Self {
         self.get_mut_props(col)
             .set_data_page_v2_compression_ratio_threshold(value);
+        self
+    }
+
+    /// Sets the ALP encoder options for a specific column.
+    ///
+    /// Takes precedence over [`Self::set_alp_encoder_options`].
+    /// See [`AlpEncoderOptions`] for the vector-size trade-offs.
+    pub fn set_column_alp_encoder_options(
+        mut self,
+        col: ColumnPath,
+        value: AlpEncoderOptions,
+    ) -> Self {
+        self.get_mut_props(col).set_alp_encoder_options(value);
         self
     }
 
@@ -1730,6 +1761,7 @@ struct ColumnProperties {
     bloom_filter_ndv_is_set: bool,
     data_page_v2_compression_ratio_threshold: Option<f64>,
     delta_binary_packed_encoder_options: Option<DeltaBinaryPackedEncoderOptions>,
+    alp_encoder_options: Option<AlpEncoderOptions>,
 }
 
 impl ColumnProperties {
@@ -1847,6 +1879,10 @@ impl ColumnProperties {
         self.delta_binary_packed_encoder_options = Some(value);
     }
 
+    fn set_alp_encoder_options(&mut self, value: AlpEncoderOptions) {
+        self.alp_encoder_options = Some(value);
+    }
+
     /// Returns optional encoding for this column.
     fn encoding(&self) -> Option<Encoding> {
         self.encoding
@@ -1907,6 +1943,11 @@ impl ColumnProperties {
         self.delta_binary_packed_encoder_options
     }
 
+    /// Returns optional ALP encoder options for this column.
+    fn alp_encoder_options(&self) -> Option<AlpEncoderOptions> {
+        self.alp_encoder_options
+    }
+
     /// If bloom filter is enabled and NDV was not explicitly set, resolve it to the
     /// given `default_ndv` (typically derived from `max_row_group_row_count`).
     fn resolve_bloom_filter_ndv(&mut self, default_ndv: u64) {
@@ -1946,6 +1987,8 @@ pub(crate) struct ResolvedColumnProperties {
     pub(crate) bloom_filter_properties: Option<BloomFilterProperties>,
     /// See [`WriterProperties::delta_binary_packed_encoder_options`].
     pub(crate) delta_binary_packed_encoder_options: Option<DeltaBinaryPackedEncoderOptions>,
+    /// See [`WriterProperties::alp_encoder_options`].
+    pub(crate) alp_encoder_options: Option<AlpEncoderOptions>,
 }
 
 /// Returns the setting read by `get` for `column` if it sets one, otherwise the
@@ -2050,6 +2093,13 @@ fn resolve_bloom_filter_properties<'a>(
     column
         .and_then(ColumnProperties::bloom_filter_properties)
         .or_else(|| default.bloom_filter_properties())
+}
+
+fn resolve_alp_encoder_options(
+    column: Option<&ColumnProperties>,
+    default: &ColumnProperties,
+) -> Option<AlpEncoderOptions> {
+    column_or_default(column, default, ColumnProperties::alp_encoder_options)
 }
 
 fn resolve_delta_binary_packed_encoder_options(
@@ -2314,6 +2364,49 @@ mod tests {
                 .delta_binary_packed_encoder_options(&ColumnPath::from("col"))
                 .is_none()
         );
+        assert!(
+            props
+                .alp_encoder_options(&ColumnPath::from("col"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_writer_properties_alp_encoder_options() {
+        let default = AlpEncoderOptions::try_new(10).unwrap();
+        let overridden = AlpEncoderOptions::try_new(13).unwrap();
+        let column = ColumnPath::from("column");
+        let props = WriterProperties::builder()
+            .set_alp_encoder_options(default)
+            .set_column_alp_encoder_options(column.clone(), overridden)
+            .build();
+
+        assert_eq!(props.alp_encoder_options(&column), Some(overridden));
+        assert_eq!(
+            props.alp_encoder_options(&ColumnPath::from("other")),
+            Some(default)
+        );
+        assert_eq!(
+            props.resolve_column_properties(&column).alp_encoder_options,
+            Some(overridden)
+        );
+    }
+
+    #[test]
+    fn test_alp_encoder_options_validation() {
+        // The format permits log_vector_size 3..=15.
+        assert_eq!(AlpEncoderOptions::try_new(3).unwrap().vector_size(), 8);
+        assert_eq!(AlpEncoderOptions::try_new(15).unwrap().vector_size(), 32768);
+        assert_eq!(AlpEncoderOptions::default().log_vector_size(), 10);
+        assert_eq!(AlpEncoderOptions::default().vector_size(), 1024);
+
+        for bad in [0u8, 2, 16, 64] {
+            let err = AlpEncoderOptions::try_new(bad).unwrap_err().to_string();
+            assert!(
+                err.contains("log_vector_size must be between 3 and 15"),
+                "unexpected error for {bad}: {err}"
+            );
+        }
     }
 
     #[test]
