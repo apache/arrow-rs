@@ -98,18 +98,6 @@ impl<R: RunEndIndexType> InProgressArray for InProgressRunArray<R> {
     }
 
     /// Copies a logical row range directly into the output runs.
-    ///
-    /// Only the first selected run can match the last buffered run. The remaining
-    /// source runs already have the correct boundaries and can be appended directly.
-    ///
-    /// ```text
-    /// source:           | A A A | B B B B | C C |
-    /// selected 2..8:        [ A | B B B B | C ]
-    /// buffered output:  | ... | A |
-    ///                            ^ compare this boundary
-    /// result:           | ... | A A | B B B B | C |
-    ///                          merge     append    append
-    /// ```
     fn copy_rows(&mut self, offset: usize, len: usize) -> Result<(), ArrowError> {
         if len == 0 {
             return Ok(());
