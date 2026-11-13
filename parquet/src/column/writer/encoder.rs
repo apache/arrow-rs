@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use bytes::Bytes;
 
@@ -97,7 +84,19 @@ pub trait ColumnValueEncoder {
     fn write(&mut self, values: &Self::Values, offset: usize, len: usize) -> Result<()>;
 
     /// Write the values at the indexes in `indices` to this [`ColumnValueEncoder`]
-    fn write_gather(&mut self, values: &Self::Values, indices: &[usize]) -> Result<()>;
+    ///
+    /// `num_values_in_batch` is the number of non-null values in the whole write. The
+    /// column writer may split one write into several calls of this method (for
+    /// example by `write_batch_size` or the page size limit), so it can be larger than
+    /// `indices.len()`. It is the length of the write's full index list, which has one
+    /// entry per non-null value. The byte array encoder uses it to decide whether a
+    /// dictionary cache pays off.
+    fn write_gather(
+        &mut self,
+        values: &Self::Values,
+        indices: &[usize],
+        num_values_in_batch: usize,
+    ) -> Result<()>;
 
     /// Returns the largest `k` such that the first `k` values in
     /// `values[offset..offset + len]` encode to at most `byte_budget`
@@ -323,7 +322,12 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
         self.write_slice(slice)
     }
 
-    fn write_gather(&mut self, values: &Self::Values, indices: &[usize]) -> Result<()> {
+    fn write_gather(
+        &mut self,
+        values: &Self::Values,
+        indices: &[usize],
+        _num_values_in_batch: usize,
+    ) -> Result<()> {
         self.num_values += indices.len();
         let slice: Vec<_> = indices.iter().map(|idx| values[*idx].clone()).collect();
         self.write_slice(&slice)

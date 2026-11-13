@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! JSON reader
 //!
@@ -24,6 +11,13 @@
 //! The reader ignores whitespace between JSON values, including `\n` and `\r`, allowing
 //! parsing of sequences of one or more arbitrarily formatted JSON values, including
 //! but not limited to newline-delimited JSON.
+//!
+//! # Timestamps
+//!
+//! Timestamps are parsed with [`arrow_cast::parse::string_to_datetime`]. A
+//! timestamp without an explicit offset that falls in a daylight savings gap or
+//! overlap of the target timezone is resolved as described there, rather than
+//! returning an error.
 //!
 //! # Basic Usage
 //!
@@ -201,6 +195,7 @@ pub struct ReaderBuilder {
     coerce_primitive: bool,
     strict_mode: bool,
     ignore_type_conflicts: bool,
+    allow_non_finite_floats: bool,
     is_field: bool,
     struct_mode: StructMode,
     flatten_top_level_arrays: bool,
@@ -223,6 +218,7 @@ impl ReaderBuilder {
             coerce_primitive: false,
             strict_mode: false,
             ignore_type_conflicts: false,
+            allow_non_finite_floats: false,
             is_field: false,
             struct_mode: Default::default(),
             flatten_top_level_arrays: false,
@@ -267,6 +263,7 @@ impl ReaderBuilder {
             coerce_primitive: false,
             strict_mode: false,
             ignore_type_conflicts: false,
+            allow_non_finite_floats: false,
             is_field: true,
             struct_mode: Default::default(),
             flatten_top_level_arrays: false,
@@ -285,6 +282,18 @@ impl ReaderBuilder {
     pub fn with_coerce_primitive(self, coerce_primitive: bool) -> Self {
         Self {
             coerce_primitive,
+            ..self
+        }
+    }
+
+    /// Accepts the nonstandard number literals `NaN`, `Infinity`, and `-Infinity`.
+    ///
+    /// Disabled by default. Floating-point columns preserve their IEEE values;
+    /// other types follow the existing coercion and type-conflict options.
+    /// Applies to known-schema readers only, not schema inference.
+    pub fn with_allow_non_finite_floats(self, allow_non_finite_floats: bool) -> Self {
+        Self {
+            allow_non_finite_floats,
             ..self
         }
     }
@@ -399,6 +408,7 @@ impl ReaderBuilder {
                 batch_size: self.batch_size,
                 num_fields,
                 flatten_top_level_arrays: self.flatten_top_level_arrays,
+                allow_non_finite_floats: self.allow_non_finite_floats,
             }),
             batch_size: self.batch_size,
             schema: self.schema,
@@ -2016,6 +2026,29 @@ mod tests {
         test_timestamp::<TimestampNanosecondType>();
     }
 
+    // A local time in a DST gap or overlap of the target timezone is resolved
+    // as described in `arrow_cast::parse::string_to_datetime`: an ambiguous
+    // reading takes the later instant, and a nonexistent reading is shifted
+    // forward by the length of the gap.
+    #[test]
+    fn test_timestamp_dst_transitions() {
+        let buf = r#"
+        {"a": "2024-03-10 02:30:00"}
+        {"a": "2024-11-03 01:30:00"}
+        "#;
+        let data_type = DataType::Timestamp(TimeUnit::Second, Some("America/New_York".into()));
+        let schema = Arc::new(Schema::new(vec![Field::new("a", data_type, true)]));
+
+        let batches = do_read(buf, 1024, true, false, schema);
+        assert_eq!(batches.len(), 1);
+
+        let col = batches[0].column(0).as_primitive::<TimestampSecondType>();
+        assert_eq!(col.null_count(), 0);
+        // Nonexistent 02:30 is read as 03:30 EDT (2024-03-10T07:30:00Z), and
+        // ambiguous 01:30 takes the later EST instant (2024-11-03T06:30:00Z)
+        assert_eq!(col.values(), &[1_710_055_800, 1_730_615_400]);
+    }
+
     fn test_time<T: ArrowTemporalType>() {
         let buf = r#"
         {"a": 1, "b": "09:26:56.123 AM", "c": 38.30}
@@ -2258,6 +2291,52 @@ mod tests {
             .column(0)
             .as_primitive::<TimestampNanosecondType>();
         assert_eq!(i64.values(), &[i64::MAX, i64::MIN, 900000]);
+    }
+
+    #[test]
+    fn test_timestamp_float_out_of_range() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "time",
+            DataType::Timestamp(TimeUnit::Second, None),
+            true,
+        )]));
+
+        // -2^63 is the smallest representable value
+        let batch = ReaderBuilder::new(schema.clone())
+            .build(Cursor::new(
+                r#"{"time": -9.223372036854775808e18}"#.as_bytes(),
+            ))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+        let col = batch.column(0).as_primitive::<TimestampSecondType>();
+        assert_eq!(col.value(0), i64::MIN);
+
+        for buf in [
+            r#"{"time": 1e30}"#,
+            r#"{"time": -1e30}"#,
+            r#"{"time": 9.223372036854775808e18}"#,
+            r#"{"time": 1e999}"#,
+        ] {
+            let err = ReaderBuilder::new(schema.clone())
+                .build(Cursor::new(buf.as_bytes()))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("failed to parse"), "{buf}: {err}");
+
+            let batch = ReaderBuilder::new(schema.clone())
+                .with_ignore_type_conflicts(true)
+                .build(Cursor::new(buf.as_bytes()))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap();
+            assert!(batch.column(0).is_null(0), "{buf}");
+        }
     }
 
     #[test]
@@ -4439,5 +4518,41 @@ mod tests {
 
         let err = read(false);
         assert!(err.contains("returned 0 values for 1 rows"), "{err}");
+    }
+
+    #[test]
+    fn test_non_finite_floats() {
+        let schema = infer_json_schema_from_iterator(std::iter::once(Ok(json!({
+            "metadata": {"year": 0.0}, "values": [0.0], "text": ""
+        }))))
+        .unwrap();
+        let builder = ReaderBuilder::new(Arc::new(schema));
+        let input = r#"{"metadata":{"year":NaN},"values":[Infinity,-Infinity,null],"text":"NaN \"Infinity\""}"#;
+        let mut reader = builder.clone().build(input.as_bytes()).unwrap();
+        assert!(reader.next().unwrap().is_err());
+
+        // Existing helper covers small I/O buffers and multiple batch sizes.
+        let builder = builder.with_allow_non_finite_floats(true);
+        let batches = do_read_config(&format!("{input}\n{input}"), builder.clone());
+        let batch = &batches[0];
+        let year = batch
+            .column_by_name("metadata")
+            .unwrap()
+            .as_struct()
+            .column_by_name("year")
+            .unwrap()
+            .as_primitive::<Float64Type>();
+        assert_eq!(year.null_count(), 0);
+        assert!(year.values().iter().all(|value| value.is_nan()));
+        let lists = batch.column_by_name("values").unwrap().as_list::<i32>();
+        let text = batch.column_by_name("text").unwrap().as_string::<i32>();
+        for row in 0..batch.num_rows() {
+            let values = lists.value(row);
+            let values = values.as_primitive::<Float64Type>();
+            assert_eq!(values.value(0), f64::INFINITY);
+            assert_eq!(values.value(1), f64::NEG_INFINITY);
+            assert!(values.is_null(2));
+            assert_eq!(text.value(row), r#"NaN "Infinity""#);
+        }
     }
 }

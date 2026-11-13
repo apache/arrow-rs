@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::arrow::buffer::bit_util::iter_set_bits_rev;
 use crate::arrow::record_reader::buffer::ValuesBuffer;
@@ -61,6 +48,9 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
     /// Note: This does not verify that the entirety of `data` is valid
     /// UTF-8. This should be done by calling [`Self::check_valid_utf8`] after
     /// all data has been written
+    // Always inlined, as it is called for every value by the PLAIN and
+    // DELTA_BYTE_ARRAY decoders, and is otherwise not inlined into their loops
+    #[inline(always)]
     pub fn try_push(&mut self, data: &[u8], validate_utf8: bool) -> Result<()> {
         if validate_utf8 && let Some(&b) = data.first() {
             // A valid code-point iff it does not start with 0b10xxxxxx

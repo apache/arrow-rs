@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Benchmarks for the `coalesce` kernels in Arrow.
 
@@ -22,8 +9,6 @@ use arrow::util::data_gen::create_random_array;
 use std::sync::Arc;
 
 use arrow::array::*;
-use arrow_array::FixedSizeBinaryArray;
-use arrow_array::builder::FixedSizeBinaryBuilder;
 use arrow_array::types::{Float64Type, Int32Type, TimestampNanosecondType};
 use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow_select::coalesce::BatchCoalescer;
@@ -1502,10 +1487,10 @@ impl DataStreamBuilder {
                     .collect::<DictionaryArray<Int32Type>>(),
                 )
             }
-            DataType::FixedSizeBinary(size) => Arc::new(create_fixed_size_binary_array(
+            DataType::FixedSizeBinary(size) => Arc::new(create_fsb_array_with_seed(
                 self.batch_size,
                 self.null_density,
-                *size,
+                *size as usize,
                 seed,
             )),
             DataType::Boolean => Arc::new(create_boolean_array_with_seed(
@@ -1535,24 +1520,4 @@ impl DataStreamBuilder {
             _ => panic!("Unsupported data type: {field:?}"),
         }
     }
-}
-
-fn create_fixed_size_binary_array(
-    batch_size: usize,
-    null_density: f32,
-    value_length: i32,
-    seed: u64,
-) -> FixedSizeBinaryArray {
-    let size = value_length as usize;
-    let mut rng = StdRng::seed_from_u64(seed);
-    let mut builder = FixedSizeBinaryBuilder::with_capacity(batch_size, value_length);
-    for _ in 0..batch_size {
-        if rng.random::<f32>() < null_density {
-            builder.append_null();
-        } else {
-            let value: Vec<u8> = (0..size).map(|_| rng.random::<u8>()).collect();
-            builder.append_value(&value).unwrap();
-        }
-    }
-    builder.finish()
 }

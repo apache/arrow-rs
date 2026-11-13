@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::hint;
 
@@ -70,19 +57,21 @@ fn with_random_nulls<T: DecimalType>(array: &PrimitiveArray<T>) -> PrimitiveArra
 }
 
 /// Benchmarks `div` and `rem` of values with scale `scale` by a scalar, for each pair of value
-/// and divisor digit counts in `div_cases` and `rem_cases`, and `div` of the first `div` case
-/// on arrays of each length in `small_lens`
+/// and divisor digit counts in `div_cases`, `rem_cases` and `rem_rescaled_cases`, and `div` of
+/// the first `div` case on arrays of each length in `small_lens`
 ///
 /// For `div` the divisor has scale 2, so `div` scales the values by 10^6. The last `div` case
 /// overflows when scaled, which `div` handles one digit at a time. For `rem` the divisor has
 /// scale `scale`, because `rem` scales the divisor to the larger scale, which would change its
-/// digit count.
+/// digit count. For `rem_rescaled` the divisor has scale `scale + 2`, so `rem` scales the values
+/// by 100.
 fn benchmark_scalar<T: DecimalType>(
     c: &mut Criterion,
     name: &str,
     scale: i8,
     div_cases: &[(u32, u32)],
     rem_cases: &[(u32, u32)],
+    rem_rescaled_cases: &[(u32, u32)],
     small_lens: &[usize],
 ) {
     let mut group = c.benchmark_group(format!("{name}_scalar"));
@@ -91,6 +80,7 @@ fn benchmark_scalar<T: DecimalType>(
     let ops = [
         ("div", div as Kernel, 2, div_cases),
         ("rem", rem as Kernel, scale, rem_cases),
+        ("rem_rescaled", rem as Kernel, scale + 2, rem_rescaled_cases),
     ];
     let mut small = None;
     for (op, kernel, divisor_scale, cases) in ops {
@@ -140,7 +130,15 @@ fn benchmark_scalar<T: DecimalType>(
 fn decimal_scalar_division(c: &mut Criterion) {
     // Values that fit after scaling and values that overflow. For each overflowing value, `div`
     // also builds an `ArrowError` and discards it before falling back.
-    benchmark_scalar::<Decimal32Type>(c, "decimal32", 2, &[(3, 4), (6, 4)], &[(9, 4)], &[128]);
+    benchmark_scalar::<Decimal32Type>(
+        c,
+        "decimal32",
+        2,
+        &[(3, 4), (6, 4)],
+        &[(9, 4)],
+        &[(7, 4)],
+        &[128],
+    );
     // A value that fits in 32 bits after scaling, a wider one, and one that overflows
     benchmark_scalar::<Decimal64Type>(
         c,
@@ -148,17 +146,20 @@ fn decimal_scalar_division(c: &mut Criterion) {
         2,
         &[(3, 4), (12, 4), (15, 4)],
         &[(18, 4)],
+        &[(16, 4)],
         &[128],
     );
     // A value that fits in 64 bits after scaling, a wider one, a divisor wider than 64 bits, and a
-    // value that overflows. `rem` doesn't scale the values, so it has no overflow case. Building
-    // a divisor for these types costs more, so they also run on 1 and 16 values.
+    // value that overflows. `rem` has no overflow case, because a value that overflows when
+    // `rem` scales it is an error. Building a divisor for these types costs more, so they also
+    // run on 1 and 16 values.
     benchmark_scalar::<Decimal128Type>(
         c,
         "decimal128",
         10,
         &[(10, 4), (30, 4), (30, 21), (34, 4)],
         &[(10, 4), (30, 4), (30, 21)],
+        &[(30, 4)],
         &[1, 16, 128],
     );
     // The same cases for 128 bits
@@ -168,6 +169,7 @@ fn decimal_scalar_division(c: &mut Criterion) {
         10,
         &[(30, 4), (60, 4), (60, 40), (72, 4)],
         &[(30, 4), (60, 4), (60, 40)],
+        &[(60, 4)],
         &[1, 16, 128],
     );
 }

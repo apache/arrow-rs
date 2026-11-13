@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 #[macro_use]
 extern crate criterion;
@@ -197,6 +184,42 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("concat str_dict_sparse 1024", |b| {
         b.iter(|| bench_concat(&v1, &v2))
     });
+
+    const DICTIONARY_SLICE_ROWS: usize = 682;
+    const DICTIONARY_SLICE_COUNT: usize = 12;
+    for values_per_key in [12, 16, 24, 128, 256, 400, 1024] {
+        for (key_order, scattered) in [("contiguous", false), ("scattered", true)] {
+            let values_len = DICTIONARY_SLICE_ROWS * values_per_key;
+            let inputs = (0..DICTIONARY_SLICE_COUNT)
+                .map(|dictionary_idx| {
+                    let values = StringArray::from_iter_values(
+                        (0..values_len)
+                            .map(|value_idx| format!("{dictionary_idx:02}_{value_idx:017}")),
+                    );
+                    let mut keys = (0..values_len as i32).collect::<Vec<_>>();
+                    if scattered {
+                        for row_idx in 0..DICTIONARY_SLICE_ROWS {
+                            keys[values_len - DICTIONARY_SLICE_ROWS + row_idx] =
+                                (row_idx * values_per_key) as i32;
+                        }
+                    }
+                    let dictionary =
+                        DictionaryArray::<Int32Type>::new(Int32Array::from(keys), Arc::new(values));
+                    dictionary.slice(values_len - DICTIONARY_SLICE_ROWS, DICTIONARY_SLICE_ROWS)
+                })
+                .collect::<Vec<_>>();
+            let arrays = inputs
+                .iter()
+                .map(|array| array as &dyn Array)
+                .collect::<Vec<_>>();
+            c.bench_function(
+                &format!(
+                    "concat str_dict_slice rows={DICTIONARY_SLICE_ROWS} values_per_key={values_per_key} key_order={key_order} count={DICTIONARY_SLICE_COUNT}"
+                ),
+                |b| b.iter(|| bench_concat_arrays(&arrays)),
+            );
+        }
+    }
 
     let v1 = FixedSizeListArray::try_new(
         Arc::new(Field::new_list_field(DataType::Int32, true)),

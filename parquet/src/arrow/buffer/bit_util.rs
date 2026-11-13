@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow_buffer::bit_chunk_iterator::UnalignedBitChunk;
 use std::ops::Range;
@@ -59,6 +46,22 @@ pub fn sign_extend_be<const N: usize>(b: &[u8]) -> [u8; N] {
     for (d, s) in result.iter_mut().skip(N - b.len()).zip(b) {
         *d = *s;
     }
+    result
+}
+
+/// Sign extends `b`, a big-endian two's complement value of `W` bytes, to `N` bytes.
+///
+/// Equivalent to [`sign_extend_be`] for a width known at compile time, which keeps the
+/// copy a constant-size move.
+#[inline]
+pub fn sign_extend_be_fixed<const W: usize, const N: usize>(b: &[u8; W]) -> [u8; N] {
+    const { assert!(W > 0 && W <= N, "invalid width for sign extension") };
+    let mut result = if b[0] & 0x80 != 0 {
+        [u8::MAX; N]
+    } else {
+        [0; N]
+    };
+    result[N - W..].copy_from_slice(b);
     result
 }
 

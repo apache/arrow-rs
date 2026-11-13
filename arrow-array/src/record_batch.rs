@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! A two-dimensional batch of column-oriented data with a defined
 //! [schema](arrow_schema::Schema).
@@ -115,6 +102,8 @@ macro_rules! create_array {
     (@from TimestampMillisecond) => { $crate::TimestampMillisecondArray };
     (@from TimestampMicrosecond) => { $crate::TimestampMicrosecondArray };
     (@from TimestampNanosecond) => { $crate::TimestampNanosecondArray };
+    (@from Date32) => { $crate::Date32Array };
+    (@from Date64) => { $crate::Date64Array };
 
     (@from $ty: ident) => {
         compile_error!(concat!("Unsupported data type: ", stringify!($ty)))
@@ -954,7 +943,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Int32Type, Int64Type};
+    use crate::types::{Date64Type, Int32Type, Int64Type};
     use crate::{
         BooleanArray, Int8Array, Int32Array, Int64Array, ListArray, StringArray, StringViewArray,
     };
@@ -1079,6 +1068,26 @@ mod tests {
         ]);
         assert_eq!(&expected, record_batch.schema().as_ref());
         assert_eq!(1, record_batch.column(1).null_count());
+    }
+
+    #[test]
+    fn create_record_batch_macro_date_types() {
+        let record_batch = record_batch!(
+            ("d32", Date32, [Some(1), None]),
+            ("d64", Date64, [86_400_000, 172_800_000])
+        )
+        .unwrap();
+
+        let expected = Schema::new(vec![
+            Field::new("d32", DataType::Date32, true),
+            Field::new("d64", DataType::Date64, true),
+        ]);
+        assert_eq!(&expected, record_batch.schema().as_ref());
+        assert_eq!(1, record_batch.column(0).null_count());
+        assert_eq!(
+            &[86_400_000, 172_800_000],
+            record_batch.column(1).as_primitive::<Date64Type>().values()
+        );
     }
 
     #[test]

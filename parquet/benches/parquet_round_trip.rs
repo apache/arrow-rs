@@ -1,38 +1,20 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::{DataType, Field, Float32Type, Float64Type, Int32Type, Int64Type, Schema};
 use arrow::util::bench_util::{
-    create_binary_array_with_len_range_and_prefix_and_seed, create_primitive_array_with_seed,
-    create_string_array_with_len_range_and_prefix_and_seed,
+    create_binary_array_with_len_range_and_prefix_and_seed, create_fsb_array_with_seed,
+    create_primitive_array_with_seed, create_string_array_with_len_range_and_prefix_and_seed,
+    create_string_view_array_with_len_range_and_seed,
 };
-use arrow_array::{FixedSizeBinaryArray, StringViewArray};
 use bytes::Bytes;
 use criterion::{Criterion, criterion_group, criterion_main};
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::basic::Encoding;
 use parquet::file::properties::WriterProperties;
-use rand::{
-    RngExt, SeedableRng,
-    distr::{Alphanumeric, StandardUniform},
-    prelude::StdRng,
-};
 use std::sync::Arc;
 
 #[derive(Copy, Clone)]
@@ -45,61 +27,6 @@ pub enum ColumnType {
     Int64,
     Float,
     Double,
-}
-
-// arrow::util::bench_util::create_fsb_array with a seed
-
-/// Creates a random (but fixed-seeded) array of fixed size with a given null density and length
-fn create_fsb_array_with_seed(
-    size: usize,
-    null_density: f32,
-    fixed_len: i32,
-    seed: u64,
-) -> FixedSizeBinaryArray {
-    let mut rng = StdRng::seed_from_u64(seed);
-
-    let rng = &mut rng;
-    FixedSizeBinaryArray::try_from_sparse_iter_with_size(
-        (0..size).map(|_| {
-            if rng.random::<f32>() < null_density {
-                None
-            } else {
-                let value = rng
-                    .sample_iter::<u8, _>(StandardUniform)
-                    .take(fixed_len as usize)
-                    .collect::<Vec<u8>>();
-                Some(value)
-            }
-        }),
-        fixed_len,
-    )
-    .unwrap()
-}
-
-// arrow::util::bench_util::create_string_view_array_with_max_len with a seed
-
-/// Creates a random (but fixed-seeded) array of rand size with a given max size, null density and length
-pub fn create_string_view_array_with_seed(
-    size: usize,
-    null_density: f32,
-    max_str_len: usize,
-    seed: u64,
-) -> StringViewArray {
-    let mut rng = StdRng::seed_from_u64(seed);
-
-    let rng = &mut rng;
-    (0..size)
-        .map(|_| {
-            if rng.random::<f32>() < null_density {
-                None
-            } else {
-                let str_len = rng.random_range(max_str_len / 2..max_str_len);
-                let value = rng.sample_iter(&Alphanumeric).take(str_len).collect();
-                let value = String::from_utf8(value).unwrap();
-                Some(value)
-            }
-        })
-        .collect()
 }
 
 fn schema(column_type: ColumnType, num_columns: usize) -> Arc<Schema> {
@@ -161,10 +88,10 @@ fn create_batch(
         ColumnType::StringView(max_str_len) => {
             for i in 0..num_columns {
                 let array_seed = seed * num_columns + i;
-                let array = create_string_view_array_with_seed(
+                let array = create_string_view_array_with_len_range_and_seed(
                     num_rows,
                     null_density,
-                    max_str_len,
+                    max_str_len / 2..max_str_len,
                     array_seed as u64,
                 );
                 arrays.push(Arc::new(array));
@@ -173,8 +100,12 @@ fn create_batch(
         ColumnType::FixedLen(size) => {
             for i in 0..num_columns {
                 let array_seed = seed * num_columns + i;
-                let array =
-                    create_fsb_array_with_seed(num_rows, null_density, size, array_seed as u64);
+                let array = create_fsb_array_with_seed(
+                    num_rows,
+                    null_density,
+                    size as usize,
+                    array_seed as u64,
+                );
                 arrays.push(Arc::new(array));
             }
         }

@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 name: CI
 
@@ -29,6 +16,9 @@ on:
       # Merge queue commits are validated by the merge_group event, not push.
       # A skipped Required Checks job on a queue-branch push can satisfy the gate early.
       - 'gh-readonly-queue/**'
+      # Dependabot branches live upstream, so their push runs skip Required Checks.
+      # That skip can let the PR enter the merge queue before its PR run finishes.
+      - 'dependabot/**'
   workflow_dispatch:
 
 concurrency:
@@ -54,7 +44,7 @@ jobs:
           # PR routing uses the merge base, including changes from all commits.
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: '3.12'
       - name: Install CI configuration dependency
@@ -83,41 +73,41 @@ jobs:
   arrow:
     needs: changes
     if: contains(fromJSON(needs.changes.outputs.suites), 'arrow')
-    uses: ./.github/workflows/arrow.yml
+    uses: $/.github/workflows/arrow.yml
 
   arrow-flight:
     needs: changes
     if: contains(fromJSON(needs.changes.outputs.suites), 'arrow-flight')
-    uses: ./.github/workflows/arrow_flight.yml
+    uses: $/.github/workflows/arrow_flight.yml
 
   parquet:
     needs: changes
     if: contains(fromJSON(needs.changes.outputs.suites), 'parquet')
-    uses: ./.github/workflows/parquet.yml
+    uses: $/.github/workflows/parquet.yml
     with:
       cache-refresh-only: ${{ needs.changes.outputs.cache-refresh-only == 'true' }}
 
   integration:
     needs: changes
     if: contains(fromJSON(needs.changes.outputs.suites), 'integration')
-    uses: ./.github/workflows/integration.yml
+    uses: $/.github/workflows/integration.yml
     with:
       cache-refresh-only: ${{ needs.changes.outputs.cache-refresh-only == 'true' }}
 
   audit:
     needs: changes
     if: contains(fromJSON(needs.changes.outputs.suites), 'audit')
-    uses: ./.github/workflows/audit.yml
+    uses: $/.github/workflows/audit.yml
 
   dev:
     needs: changes
     if: contains(fromJSON(needs.changes.outputs.suites), 'dev')
-    uses: ./.github/workflows/dev.yml
+    uses: $/.github/workflows/dev.yml
 
   rust:
     needs: changes
     if: contains(fromJSON(needs.changes.outputs.suites), 'rust')
-    uses: ./.github/workflows/rust.yml
+    uses: $/.github/workflows/rust.yml
     with:
       lint-only: ${{ needs.changes.outputs.fork-pr == 'true' }}
 
@@ -127,7 +117,7 @@ jobs:
     # Only the deploy job in docs.yml requests write access, on push to main.
     permissions:
       contents: write
-    uses: ./.github/workflows/docs.yml
+    uses: $/.github/workflows/docs.yml
 
   required-checks:
     # Like datafusion-comet: one stable check name even when a reusable
