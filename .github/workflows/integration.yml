@@ -90,42 +90,49 @@ jobs:
           repository: apache/arrow
           submodules: true
           fetch-depth: 1
+          persist-credentials: false
       - name: Checkout Arrow Rust
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           path: rust
           submodules: true
           fetch-depth: 1
+          persist-credentials: false
       - name: Checkout Arrow .NET
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           repository: apache/arrow-dotnet
           path: dotnet
           fetch-depth: 1
+          persist-credentials: false
       - name: Checkout Arrow Go
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           repository: apache/arrow-go
           path: go
           fetch-depth: 1
+          persist-credentials: false
       - name: Checkout Arrow Java
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           repository: apache/arrow-java
           path: java
           fetch-depth: 1
+          persist-credentials: false
       - name: Checkout Arrow JavaScript
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           repository: apache/arrow-js
           path: js
           fetch-depth: 1
+          persist-credentials: false
       - name: Checkout Arrow nanoarrow
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           repository: apache/arrow-nanoarrow
           path: nanoarrow
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Monitor disk usage - After checkouts
         run: |
@@ -167,6 +174,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
+          persist-credentials: false
       - name: Setup Rust toolchain
         run: |
           rustup toolchain install ${{ matrix.rust }}
@@ -194,7 +202,9 @@ jobs:
         run: |
           virtualenv venv
           source venv/bin/activate
-          pip install maturin toml pytest pytz pyarrow==${{ matrix.pyarrow }}
+          pip install maturin toml pytest pytz pyarrow==${MATRIX_PYARROW}
+        env:
+          MATRIX_PYARROW: ${{ matrix.pyarrow }}
       - name: Run Rust tests
         if: ${{ !inputs.cache-refresh-only }}
         run: |

@@ -28,6 +28,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
+          persist-credentials: false
       - name: Install protoc with brew
         run: brew install protobuf
       - name: Setup Rust toolchain
@@ -52,6 +53,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
+          persist-credentials: false
       - name: Install protobuf compiler in /d/protoc
         shell: bash
         run: |
@@ -80,8 +82,10 @@ jobs:
     runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-rustup
+        uses: $/.github/actions/setup-rustup
       - name: Setup rustfmt
         run: rustup component add rustfmt
       - name: Format workspace
@@ -92,8 +96,10 @@ jobs:
     runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-rustup
+        uses: $/.github/actions/setup-rustup
       - name: Install cargo-shear
         id: install-shear
         uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2  # v2.90.2
@@ -114,11 +120,13 @@ jobs:
     name: Verify MSRV (Minimum Supported Rust Version)
     runs-on: ubuntu-latest
     container:
-      image: amd64/rust
+      image: amd64/rust@sha256:5b5938cbb2951fc2869eaf891a6616f722ef5bf28c90dc6a074c35c141e31537 # v1.99.1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
       - name: Install cargo-msrv
         uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2  # v2.90.2
         with:

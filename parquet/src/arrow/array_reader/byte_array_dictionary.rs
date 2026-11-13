@@ -8,7 +8,8 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::{
-    Array, ArrayRef, BinaryViewArray, OffsetSizeTrait, StringViewArray, new_empty_array,
+    Array, ArrayRef, BinaryViewArray, LargeStringArray, OffsetSizeTrait, StringArray,
+    StringViewArray, new_empty_array,
 };
 use arrow_buffer::{ArrowNativeType, MutableBuffer};
 use arrow_schema::DataType as ArrowType;
@@ -38,12 +39,13 @@ macro_rules! make_reader {
         match ($k, $v) {
             $(
                 ($key_arrow, $value_arrow) => {
+                    let buffer_value_type = byte_array_value_type::<$value_type>(&$column_desc);
                     let mut reader = GenericRecordReader::new($column_desc, $batch_size);
                     if let Some(threshold) = $padding_threshold {
                         reader.set_padding_threshold(threshold);
                     }
                     Ok(Box::new(ByteArrayDictionaryReader::<$key_type, $value_type>::try_new(
-                        $pages, $data_type, reader,
+                        $pages, $data_type, buffer_value_type, reader,
                     )?))
                 }
             )+
@@ -111,32 +113,46 @@ pub fn make_byte_array_dictionary_reader(
     }
 }
 
-/// Convert a dictionary-typed array with string or binary typed values
-/// to one with string or binary view typed values.
-fn convert_values_to_view(array: ArrayRef, to_type: &ArrowType) -> Result<ArrayRef> {
-    let ArrowType::Dictionary(_, to_value_type) = to_type else {
-        return Err(general_err!(
-            "Cannot convert {} dictionary values to non-dictionary type {}",
-            array.data_type(),
-            to_type
-        ));
-    };
+/// Returns the string or binary type produced when decoding a byte array column.
+fn byte_array_value_type<V: OffsetSizeTrait>(column_desc: &ColumnDescPtr) -> ArrowType {
+    match (
+        V::IS_LARGE,
+        column_desc.converted_type() == ConvertedType::UTF8,
+    ) {
+        (true, true) => ArrowType::LargeUtf8,
+        (true, false) => ArrowType::LargeBinary,
+        (false, true) => ArrowType::Utf8,
+        (false, false) => ArrowType::Binary,
+    }
+}
 
-    let array = array.as_any_dictionary();
-    let values = array.values();
-
-    let new_values: ArrayRef = match to_value_type.as_ref() {
-        ArrowType::Utf8View => Arc::new(StringViewArray::from(values.as_string::<i32>())),
-        ArrowType::BinaryView => Arc::new(BinaryViewArray::from(values.as_binary::<i32>())),
-        other => {
+/// Convert dictionary values without expanding the dictionary keys.
+fn convert_dictionary_values(values: &ArrayRef, to_type: &ArrowType) -> Result<ArrayRef> {
+    let new_values: ArrayRef = match (values.data_type(), to_type) {
+        (ArrowType::Binary, ArrowType::Utf8) => Arc::new(StringArray::try_from_binary(
+            values.as_binary::<i32>().clone(),
+        )?),
+        (ArrowType::LargeBinary, ArrowType::LargeUtf8) => Arc::new(
+            LargeStringArray::try_from_binary(values.as_binary::<i64>().clone())?,
+        ),
+        (ArrowType::Utf8, ArrowType::Utf8View) => {
+            Arc::new(StringViewArray::from(values.as_string::<i32>()))
+        }
+        (ArrowType::Binary, ArrowType::Utf8View) => {
+            let values = StringArray::try_from_binary(values.as_binary::<i32>().clone())?;
+            Arc::new(StringViewArray::from(&values))
+        }
+        (ArrowType::Binary, ArrowType::BinaryView) => {
+            Arc::new(BinaryViewArray::from(values.as_binary::<i32>()))
+        }
+        (from, to) => {
             return Err(general_err!(
-                "Cannot convert dictionary values to {}",
-                other
+                "Cannot convert dictionary values from {from} to {to}"
             ));
         }
     };
 
-    Ok(array.with_values(new_values))
+    Ok(new_values)
 }
 
 /// An [`ArrayReader`] for dictionary encoded byte arrays
@@ -152,6 +168,11 @@ struct ByteArrayDictionaryReader<K: ArrowNativeType, V: OffsetSizeTrait> {
     record_reader: GenericRecordReader<DictionaryBuffer<K, V>, DictionaryDecoder<K, V>>,
     /// Reusable scratch space for hashing byte slices when building dictionaries from plain-encoded values.
     hash_scratch: MutableBuffer,
+    /// Cached `(source_values, converted_values)` for the current dictionary page.
+    ///
+    /// `source_values` is retained for pointer-identity checks, while
+    /// `converted_values` is reused across batches backed by the same dictionary page.
+    converted_values_cache: Option<(ArrayRef, ArrayRef)>,
 }
 
 impl<K, V> ByteArrayDictionaryReader<K, V>
@@ -162,6 +183,7 @@ where
     fn try_new(
         pages: Box<dyn PageIterator>,
         data_type: ArrowType,
+        buffer_value_type: ArrowType,
         record_reader: GenericRecordReader<DictionaryBuffer<K, V>, DictionaryDecoder<K, V>>,
     ) -> Result<Self> {
         let ArrowType::Dictionary(key_type, value_type) = &data_type else {
@@ -172,13 +194,10 @@ where
         };
 
         let buffer_type = match value_type.as_ref() {
-            ArrowType::Utf8View => Some(ArrowType::Dictionary(
+            ArrowType::FixedSizeBinary(_) => None,
+            _ if value_type.as_ref() != &buffer_value_type => Some(ArrowType::Dictionary(
                 key_type.clone(),
-                Box::new(ArrowType::Utf8),
-            )),
-            ArrowType::BinaryView => Some(ArrowType::Dictionary(
-                key_type.clone(),
-                Box::new(ArrowType::Binary),
+                Box::new(buffer_value_type),
             )),
             _ => None,
         };
@@ -191,6 +210,7 @@ where
             rep_levels_buffer: None,
             record_reader,
             hash_scratch: MutableBuffer::new(0),
+            converted_values_cache: None,
         })
     }
 }
@@ -227,13 +247,37 @@ where
         let buffer = self.record_reader.consume_record_data();
         let null_buffer = self.record_reader.consume_compact_bitmap();
 
+        let ArrowType::Dictionary(_, output_value_type) = &self.data_type else {
+            unreachable!()
+        };
+        let cache_converted_values = matches!(&buffer, DictionaryBuffer::Dict { .. });
+
+        // Plain-encoded pages also decode into `buffer_type` and convert, so that
+        // `convert_dictionary_values` validates UTF-8 for unannotated BINARY columns.
         let array = match &self.buffer_type {
-            None => buffer.into_array(null_buffer, &self.data_type, &mut self.hash_scratch)?,
             Some(buffer_type) => {
                 let buffer_array =
                     buffer.into_array(null_buffer, buffer_type, &mut self.hash_scratch)?;
-                convert_values_to_view(buffer_array, &self.data_type)?
+                let array = buffer_array.as_any_dictionary();
+                let values = array.values();
+                let converted = match (cache_converted_values, &self.converted_values_cache) {
+                    // Reuse the conversion for another batch from the same dictionary page.
+                    (true, Some((source, converted))) if Arc::ptr_eq(source, values) => {
+                        Arc::clone(converted)
+                    }
+                    // Convert and cache values from the first batch of a dictionary page.
+                    (true, _) => {
+                        let converted = convert_dictionary_values(values, output_value_type)?;
+                        self.converted_values_cache =
+                            Some((Arc::clone(values), Arc::clone(&converted)));
+                        converted
+                    }
+                    // Convert batch-local plain-page values without caching them.
+                    (false, _) => convert_dictionary_values(values, output_value_type)?,
+                };
+                array.with_values(converted)
             }
+            None => buffer.into_array(null_buffer, &self.data_type, &mut self.hash_scratch)?,
         };
 
         self.record_reader.reset();
@@ -303,12 +347,7 @@ where
     fn new(col: &ColumnDescPtr) -> Self {
         let validate_utf8 = col.converted_type() == ConvertedType::UTF8;
 
-        let value_type = match (V::IS_LARGE, col.converted_type() == ConvertedType::UTF8) {
-            (true, true) => ArrowType::LargeUtf8,
-            (true, false) => ArrowType::LargeBinary,
-            (false, true) => ArrowType::Utf8,
-            (false, false) => ArrowType::Binary,
-        };
+        let value_type = byte_array_value_type::<V>(col);
 
         Self {
             dict: None,

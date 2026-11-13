@@ -13,6 +13,8 @@ SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one
 
 [files]
 excludes = [
+  # Exclusion file for ATR which runs its own header check
+  ".rat-excludes",
   # License and attribution texts do not need source-file headers.
   "**/LICENSE*",
   "**/NOTICE*",
