@@ -763,6 +763,8 @@ impl Codec {
                 let mut type_ids = Vec::with_capacity(fields.len());
                 let mut null_rows = Vec::with_capacity(fields.len());
 
+                // Child rows need the Union's full sort options: only the type-ID byte
+                // is inverted separately when encoding descending order.
                 for (type_id, field) in fields.iter() {
                     let sort_field =
                         SortField::new_with_options(field.data_type().clone(), sort_field.options);
