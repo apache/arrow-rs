@@ -73,41 +73,44 @@ jobs:
   arrow:
     needs: changes
     if: contains(fromJSON(needs.changes.outputs.suites), 'arrow')
-    uses: ./.github/workflows/arrow.yml
+    uses: $/.github/workflows/arrow.yml
 
   arrow-flight:
     needs: changes
     if: contains(fromJSON(needs.changes.outputs.suites), 'arrow-flight')
-    uses: ./.github/workflows/arrow_flight.yml
+    uses: $/.github/workflows/arrow_flight.yml
 
   parquet:
     needs: changes
     if: contains(fromJSON(needs.changes.outputs.suites), 'parquet')
-    uses: ./.github/workflows/parquet.yml
+    uses: $/.github/workflows/parquet.yml
     with:
       cache-refresh-only: ${{ needs.changes.outputs.cache-refresh-only == 'true' }}
 
   integration:
     needs: changes
     if: contains(fromJSON(needs.changes.outputs.suites), 'integration')
-    uses: ./.github/workflows/integration.yml
+    uses: $/.github/workflows/integration.yml
     with:
       cache-refresh-only: ${{ needs.changes.outputs.cache-refresh-only == 'true' }}
 
   audit:
     needs: changes
     if: contains(fromJSON(needs.changes.outputs.suites), 'audit')
-    uses: ./.github/workflows/audit.yml
+    uses: $/.github/workflows/audit.yml
 
   dev:
     needs: changes
     if: contains(fromJSON(needs.changes.outputs.suites), 'dev')
-    uses: ./.github/workflows/dev.yml
+    permissions:
+      security-events: write # for zizmor
+      contents: read
+    uses: $/.github/workflows/dev.yml
 
   rust:
     needs: changes
     if: contains(fromJSON(needs.changes.outputs.suites), 'rust')
-    uses: ./.github/workflows/rust.yml
+    uses: $/.github/workflows/rust.yml
     with:
       lint-only: ${{ needs.changes.outputs.fork-pr == 'true' }}
 
@@ -117,7 +120,7 @@ jobs:
     # Only the deploy job in docs.yml requests write access, on push to main.
     permissions:
       contents: write
-    uses: ./.github/workflows/docs.yml
+    uses: $/.github/workflows/docs.yml
 
   required-checks:
     # Like datafusion-comet: one stable check name even when a reusable
