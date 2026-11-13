@@ -865,7 +865,8 @@ impl AddIndicatorDivisorI256 {
     /// let (q, r) = divisor.wrapping_div_rem(i256::from_i128(-100));
     /// assert_eq!((q, r), (i256::from_i128(14), i256::from_i128(-2)));
     /// ```
-    // At `#[inline]`, LLVM calls this out of line for each value
+    // At `#[inline]`, LLVM calls this out of line for each value, without LTO and with thin or
+    // fat LTO, at 16 codegen units and at 1
     #[inline(always)]
     pub const fn wrapping_div_rem(self, n: i256) -> (i256, i256) {
         // `n + MULSH(m', n)` from figure 5.1, computed as `MULUH(m', n) - AND(m', XSIGN(n))`,
