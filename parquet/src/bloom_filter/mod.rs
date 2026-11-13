@@ -1002,8 +1002,16 @@ mod tests {
         // union then fold == fold then union
         let mut folded = whole.clone();
         folded.fold_to_target_fpp(0.01);
-        merged.fold_to_target_fpp(0.01);
-        assert_eq!(bitset(&folded), bitset(&merged));
+        let num_folds = (whole.num_blocks() / folded.num_blocks()).trailing_zeros();
+        assert!(num_folds > 0);
+        let mut merged_folded = Sbbf::new_with_num_of_bytes(folded.num_blocks() * 32);
+        for chunk in hashes.chunks(7_000) {
+            let mut part = Sbbf::new_with_num_of_bytes(1 << 20);
+            insert_all(&mut part, chunk);
+            part.fold_n(num_folds);
+            merged_folded.union(&part).unwrap();
+        }
+        assert_eq!(bitset(&folded), bitset(&merged_folded));
         // a larger filter is folded on the fly
         let mut small = Sbbf::new_with_num_of_bytes(1 << 16);
         insert_all(&mut small, &hashes[..10]);
