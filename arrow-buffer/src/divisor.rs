@@ -43,6 +43,7 @@ macro_rules! divisor_enum {
                 "let divisor = ", stringify!($name), "::new(7).unwrap();\n",
                 "assert_eq!(divisor.wrapping_div_rem(100), (14, 2));",
             ),
+            "They don't branch on the divisor, so the loop doesn't depend on the compiler moving a branch out of it.",
             [$(#[$enum_doc])*],
             $($(#[$doc])* $variant($inner),)+
         );
@@ -52,6 +53,7 @@ macro_rules! divisor_enum {
         $t:ty,
         $example:expr,
         $div_rem_example:expr,
+        $branch_doc:expr,
         [$(#[$enum_doc:meta])*],
         $($(#[$doc:meta])* $variant:ident($inner:ident),)+
     ) => {
@@ -63,11 +65,12 @@ macro_rules! divisor_enum {
         /// shifts and additions. [`Self::new`] picks the variant from the divisor and the target.
         ///
         /// To divide many values, match on the variant once, before the loop, and call the
-        /// variant's methods in the loop. They don't branch on the divisor, so the loop doesn't
-        /// depend on the compiler moving a branch out of it. Move the variant into the loop's
-        /// closure, so that the compiler doesn't reload its fields through a reference for each
-        /// value. [`Self::wrapping_div_rem`] matches on each call, so a match can fall back to it
-        /// for the variants it doesn't specialize, including variants added later.
+        /// variant's methods in the loop.
+        #[doc = $branch_doc]
+        /// Move the variant into the loop's closure, so that the compiler doesn't reload its
+        /// fields through a reference for each value. [`Self::wrapping_div_rem`] matches on each
+        /// call, so a match can fall back to it for the variants it doesn't specialize, including
+        /// variants added later.
         $(#[$enum_doc])*
         ///
         /// # Example
@@ -570,8 +573,9 @@ signed_divisor!(
         ///
         /// When every value of a batch fits in `i64`, dividing in `i64` with [`DivisorI64`] gives
         /// the same results, except for a divisor of -1, because `i64::MIN / -1` overflows in
-        /// `i64` but not in `i128`. A divisor that doesn't fit in `i64` exceeds every such value,
-        /// so the quotient is 0 and the remainder is the value.
+        /// `i64` but not in `i128`. A divisor that doesn't fit in `i64` gives a quotient of 0 and
+        /// leaves the value as the remainder, except that `i64::MIN / 2^63` is -1 with a
+        /// remainder of 0.
         ///
         /// ```
         /// # use arrow_buffer::{DivisorI128, DivisorI64};
@@ -615,16 +619,14 @@ divisor_enum!(
         "let (q, r) = divisor.wrapping_div_rem(i256::from_i128(100));\n",
         "assert_eq!((q, r), (i256::from_i128(14), i256::from_i128(2)));",
     ),
+    "Unlike those of the other divisor types, they branch on the divisor's shift. The shift is the same for every value, so the branch is predicted, and a form without it was slower.",
     [
-        ///
-        /// Unlike the other divisor types, the variants' methods branch on the divisor's shift. The
-        /// shift is the same for every value, so the branch is predicted, and a form without it
-        /// was slower.
         ///
         /// When every value of a batch fits in `i128`, dividing in `i128` with [`DivisorI128`]
         /// gives the same results, except for a divisor of -1, because `i128::MIN / -1` overflows
-        /// in `i128` but not in `i256`. A divisor that doesn't fit in `i128` exceeds every such
-        /// value, so the quotient is 0 and the remainder is the value.
+        /// in `i128` but not in `i256`. A divisor that doesn't fit in `i128` gives a quotient of 0
+        /// and leaves the value as the remainder, except that `i128::MIN / 2^127` is -1 with a
+        /// remainder of 0.
     ],
     /// A divisor whose magnitude is a power of two
     PowerOfTwo(PowerOfTwoDivisorI256),
