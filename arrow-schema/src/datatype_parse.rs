@@ -1124,7 +1124,10 @@ mod test {
             r#""\u1234""#,
             r#""\u{1234""#,
         ] {
-            assert!(Tokenizer::new(input).next().unwrap().is_err(), "{input}");
+            assert!(matches!(
+                Tokenizer::new(input).next().unwrap(),
+                Err(ArrowError::ParseError(_))
+            ));
         }
     }
 
