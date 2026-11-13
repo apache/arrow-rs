@@ -6449,6 +6449,87 @@ mod tests {
     }
 
     #[test]
+    fn union_selected_dictionary_values_and_nulls() {
+        // Rows: dictionary NULL (valid key), dictionary "selected", integer 5.
+        // The integer row checks null ordering across different type IDs.
+        let dictionary: ArrayRef = Arc::new(
+            DictionaryArray::<Int8Type>::try_new(
+                Int8Array::from(vec![Some(1), Some(0), None]),
+                Arc::new(StringArray::from(vec![Some("selected"), None])),
+            )
+            .unwrap(),
+        );
+        let structure = StructArray::new(
+            vec![Field::new("value", dictionary.data_type().clone(), true)].into(),
+            vec![dictionary.clone()],
+            None,
+        );
+        let cases = [
+            (
+                dictionary,
+                DataType::Utf8,
+                Some(NullBuffer::from(vec![false, true, true])),
+            ),
+            (
+                Arc::new(structure) as ArrayRef,
+                DataType::Struct(vec![Field::new("value", DataType::Utf8, true)].into()),
+                None,
+            ),
+        ];
+        for (child, decoded_type, expected_nulls) in cases {
+            let fields = UnionFields::try_new(
+                [127, 3],
+                [
+                    Field::new("dictionary", child.data_type().clone(), true),
+                    Field::new("int", DataType::Int32, true),
+                ],
+            )
+            .unwrap();
+            let decoded_fields = UnionFields::try_new(
+                [127, 3],
+                [
+                    Field::new("dictionary", decoded_type, true),
+                    Field::new("int", DataType::Int32, true),
+                ],
+            )
+            .unwrap();
+            for mode in [UnionMode::Dense, UnionMode::Sparse] {
+                let union = UnionArray::try_new(
+                    fields.clone(),
+                    vec![127, 127, 3].into(),
+                    (mode == UnionMode::Dense).then(|| vec![0, 1, 2].into()),
+                    vec![
+                        child.clone(),
+                        Arc::new(Int32Array::from(vec![None, None, Some(5)])),
+                    ],
+                )
+                .unwrap();
+                let columns = [Arc::new(union) as ArrayRef];
+                for options in all_sort_options() {
+                    check_order_matches_native(&columns, &[options]);
+                    let decoded = check_reencoding(&columns, &[options]);
+                    let decoded = decoded[0].as_union();
+                    assert_eq!(
+                        decoded.data_type(),
+                        &DataType::Union(decoded_fields.clone(), mode)
+                    );
+                    assert_eq!(decoded.type_ids().as_ref(), &[127, 127, 3]);
+                    assert_eq!(decoded.logical_nulls(), expected_nulls);
+                    let child = decoded.child(127).slice(0, 2);
+                    let values = match child.data_type() {
+                        DataType::Struct(_) => child.as_struct().column(0),
+                        _ => &child,
+                    };
+                    assert_eq!(
+                        values.as_string::<i32>(),
+                        &StringArray::from(vec![None, Some("selected")])
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn unions_inside_structs_and_lists_follow_same_ordering() {
         // Each container has seven rows. A null parent is different from a present
         // parent containing a Union null; an empty list is different from both.
