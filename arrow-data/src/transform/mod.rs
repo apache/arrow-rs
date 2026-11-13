@@ -215,13 +215,10 @@ fn build_extend_view(array: &ArrayData, buffer_offset: u32) -> Extend<'_> {
     Box::new(
         move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
             let values = &views[start..start + len];
+            utils::try_reserve(&mut mutable.buffer1, mem::size_of_val(values))?;
             if buffer_offset == 0 {
-                mutable
-                    .buffer1
-                    .try_extend_from_slice(values)
-                    .map_err(utils::memory_error)?;
+                mutable.buffer1.extend_from_slice(values);
             } else {
-                utils::try_reserve(&mut mutable.buffer1, mem::size_of_val(values))?;
                 mutable.buffer1.extend(values.iter().map(|value| {
                     if *value as u32 > MAX_INLINE_VIEW_LEN {
                         // The buffer index is bits 64 to 95 of a view. Adding

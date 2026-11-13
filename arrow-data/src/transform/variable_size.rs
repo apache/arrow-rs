@@ -11,7 +11,7 @@ use num_traits::{AsPrimitive, CheckedAdd};
 use super::utils::memory_error;
 use super::{
     _MutableArrayData, Extend,
-    utils::{get_last_offset, try_extend_offsets},
+    utils::{get_last_offset, try_extend_offsets, try_reserve},
 };
 
 #[inline]
@@ -25,9 +25,9 @@ fn extend_offset_values<T: ArrowNativeType + AsPrimitive<usize>>(
     let start_values = offsets[start].as_();
     let end_values: usize = offsets[start + len].as_();
     let new_values = &values[start_values..end_values];
-    buffer
-        .try_extend_from_slice(new_values)
-        .map_err(memory_error)
+    try_reserve(buffer, new_values.len())?;
+    buffer.extend_from_slice(new_values);
+    Ok(())
 }
 
 pub(super) fn build_extend<T: ArrowNativeType + Integer + CheckedAdd + AsPrimitive<usize>>(

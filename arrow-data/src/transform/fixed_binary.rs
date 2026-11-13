@@ -2,7 +2,10 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use super::{_MutableArrayData, Extend, utils::memory_error};
+use super::{
+    _MutableArrayData, Extend,
+    utils::{memory_error, try_reserve},
+};
 use crate::ArrayData;
 use crate::data::get_fixed_size_binary_width;
 use arrow_schema::ArrowError;
@@ -13,9 +16,9 @@ pub(super) fn build_extend(array: &ArrayData) -> Extend<'_> {
     Box::new(
         move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
             let buffer = &mut mutable.buffer1;
-            buffer
-                .try_extend_from_slice(&values[start * size..(start + len) * size])
-                .map_err(memory_error)?;
+            let values = &values[start * size..(start + len) * size];
+            try_reserve(buffer, values.len())?;
+            buffer.extend_from_slice(values);
             Ok(())
         },
     )
