@@ -726,7 +726,8 @@ impl<'a> MutableArrayData<'a> {
         let null_buffer = use_nulls
             .then(|| {
                 let null_bytes = bit_util::ceil(array_capacity, 8);
-                MutableBuffer::try_from_len_zeroed(null_bytes).map_err(utils::memory_error)
+                MutableBuffer::try_from_len_zeroed(null_bytes)
+                    .map_err(|e| ArrowError::MemoryError(e.to_string()))
             })
             .transpose()?;
 
