@@ -6,7 +6,6 @@ use crate::builder::ArrayBuilder;
 use crate::types::*;
 use crate::{Array, ArrayRef, PrimitiveArray};
 use arrow_buffer::{Buffer, MutableBuffer, NullBufferBuilder, ScalarBuffer};
-use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
 use std::sync::Arc;
@@ -350,31 +349,22 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
 
     /// Builds the [`PrimitiveArray`] and reset this builder.
     pub fn finish(&mut self) -> PrimitiveArray<T> {
-        let len = self.len();
-        let nulls = self.null_buffer_builder.finish();
-        let builder = ArrayData::builder(self.data_type.clone())
-            .len(len)
-            .add_buffer(std::mem::take(&mut self.values_builder).into())
-            .nulls(nulls);
-
-        // SAFETY: builder is constructed from valid primitive value buffer and null buffer with matching lengths
-        let array_data = unsafe { builder.build_unchecked() };
-        PrimitiveArray::<T>::from(array_data)
+        let nulls = self
+            .null_buffer_builder
+            .finish()
+            .filter(|n| n.null_count() > 0);
+        let values = std::mem::take(&mut self.values_builder).into();
+        PrimitiveArray::new(values, nulls).with_data_type(self.data_type.clone())
     }
 
     /// Builds the [`PrimitiveArray`] without resetting the builder.
     pub fn finish_cloned(&self) -> PrimitiveArray<T> {
-        let len = self.len();
-        let nulls = self.null_buffer_builder.finish_cloned();
-        let values_buffer = Buffer::from_slice_ref(self.values_builder.as_slice());
-        let builder = ArrayData::builder(self.data_type.clone())
-            .len(len)
-            .add_buffer(values_buffer)
-            .nulls(nulls);
-
-        // SAFETY: builder is constructed from valid primitive value buffer and null buffer with matching lengths
-        let array_data = unsafe { builder.build_unchecked() };
-        PrimitiveArray::<T>::from(array_data)
+        let nulls = self
+            .null_buffer_builder
+            .finish_cloned()
+            .filter(|n| n.null_count() > 0);
+        let values = Buffer::from_slice_ref(self.values_builder.as_slice()).into();
+        PrimitiveArray::new(values, nulls).with_data_type(self.data_type.clone())
     }
 
     /// Returns the current values buffer as a slice
@@ -457,6 +447,15 @@ mod tests {
     use crate::array::Date32Array;
     use crate::array::Int32Array;
     use crate::array::TimestampSecondArray;
+
+    #[test]
+    fn test_finish_materialized_without_nulls() {
+        let mut builder = Int32Builder::new();
+        builder.append_nulls(0);
+        builder.append_value(1);
+        assert!(builder.finish_cloned().nulls().is_none());
+        assert!(builder.finish().nulls().is_none());
+    }
 
     #[test]
     fn test_primitive_array_builder_i32() {
