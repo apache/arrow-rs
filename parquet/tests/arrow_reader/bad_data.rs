@@ -136,6 +136,65 @@ fn test_arrow_gh_47662() {
     );
 }
 
+/// A primitive column whose data page claims dictionary encoding but whose
+/// dictionary page is missing (its header type is mutated to INDEX_PAGE, so
+/// the page reader skips it) must error on every read attempt instead of
+/// panicking, matching the byte-array readers.
+///
+/// The file is generated and mutated in memory because it cannot be
+/// constructed without breaking a valid file.
+#[test]
+fn test_arrow_rs_gh_12129_missing_dictionary_page() {
+    use arrow_array::{Int32Array, RecordBatch};
+    use parquet::arrow::ArrowWriter;
+    use parquet::file::reader::{FileReader, SerializedFileReader};
+    use std::sync::Arc;
+
+    let column = Int32Array::from(vec![7, 8, 7, 8]);
+    let batch = RecordBatch::try_from_iter([("i", Arc::new(column) as _)]).unwrap();
+    let mut bytes = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut bytes, batch.schema(), None).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+
+    let reader = SerializedFileReader::new(Bytes::from(bytes.clone())).unwrap();
+    let dict_offset = reader
+        .metadata()
+        .row_group(0)
+        .column(0)
+        .dictionary_page_offset()
+        .expect("writer must emit a dictionary page for dictionary-encoded data")
+        as usize;
+    // In the compact protocol the PageHeader starts with field 1 (type, i32):
+    // 0x15, then zigzag(DICTIONARY_PAGE = 2) = 0x04.
+    assert_eq!(
+        &bytes[dict_offset..dict_offset + 2],
+        &[0x15, 0x04],
+        "dictionary page header"
+    );
+    bytes[dict_offset + 1] = 0x02; // zigzag(INDEX_PAGE = 1)
+
+    let mut reader = ArrowReaderBuilder::try_new(Bytes::from(bytes))
+        .unwrap()
+        .build()
+        .unwrap();
+    let err = reader.next().unwrap().unwrap_err().to_string();
+    assert!(
+        err.contains("missing dictionary page for column"),
+        "unexpected error: {err}"
+    );
+    // A retry must also error instead of panicking. The iterator errors on
+    // every attempt and never ends on its own, so pin further attempts
+    // rather than asserting natural termination.
+    for _ in 0..2 {
+        let err = reader.next().unwrap().unwrap_err().to_string();
+        assert!(
+            err.contains("the current data page failed to decode"),
+            "unexpected error: {err}"
+        );
+    }
+}
+
 /// Reads the file and tries to return the total row count
 /// Returns an error if the file is invalid
 fn read_file(name: &str) -> Result<usize, ParquetError> {

@@ -3179,6 +3179,51 @@ mod tests {
         assert_eq!(values, vec![1, 2, 3, 4, 5]);
     }
 
+    /// A data page claiming dictionary encoding with no dictionary page must
+    /// error, not panic, matching the byte-array readers. The dictionary page
+    /// header's type is mutated to INDEX_PAGE, so the page reader skips it and
+    /// the following data page has no dictionary installed.
+    #[test]
+    fn dict_encoded_data_page_without_dictionary_page_errors() {
+        let (bytes, _) = dict_column_file();
+        let reader = SerializedFileReader::new(bytes.clone()).unwrap();
+        let dict_offset = reader
+            .metadata()
+            .row_group(0)
+            .column(0)
+            .dictionary_page_offset()
+            .expect("writer must emit a dictionary page for dictionary-encoded data")
+            as usize;
+        // In the compact protocol the PageHeader starts with field 1 (type,
+        // i32): 0x15, then zigzag(DICTIONARY_PAGE = 2) = 0x04.
+        assert_eq!(
+            &bytes[dict_offset..dict_offset + 2],
+            &[0x15, 0x04],
+            "dictionary page header"
+        );
+        let mut mutated = bytes.to_vec();
+        mutated[dict_offset + 1] = 0x02; // zigzag(INDEX_PAGE = 1)
+
+        let mut reader = int32_reader(Bytes::from(mutated));
+        let mut values = Vec::new();
+        let err = reader
+            .read_records(5, None, None, &mut values)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("missing dictionary page for column"), "{err}");
+
+        // A retry must also error instead of panicking, so a looping reader
+        // surfaces the same failure as the byte-array decoders.
+        let err = reader
+            .read_records(5, None, None, &mut values)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("the current data page failed to decode"),
+            "{err}"
+        );
+    }
+
     /// A [`PageReader`] that implements only what existed before deferral: it
     /// forwards the required trait methods and takes the defaults for
     /// `supports_deferred_dictionary` (`false`) and `take_deferred_dictionary`
