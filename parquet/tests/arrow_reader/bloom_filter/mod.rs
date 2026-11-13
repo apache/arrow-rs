@@ -14,11 +14,14 @@ use futures::future::{BoxFuture, ready};
 use parquet::arrow::{arrow_reader::ArrowReaderOptions, async_reader::AsyncFileReader};
 use parquet::basic::Type as PhysicalType;
 use parquet::errors::{ParquetError, Result};
-use parquet::file::metadata::ColumnChunkMetaData;
-#[cfg(feature = "async")]
-use parquet::file::metadata::ParquetMetaData;
+use parquet::file::metadata::{
+    ColumnChunkMetaData, FileMetaData, ParquetMetaData, RowGroupMetaData,
+};
 use parquet::file::reader::{ChunkReader, Length};
-use parquet::schema::types::{ColumnDescriptor, ColumnPath, Type};
+use parquet::schema::{
+    parser::parse_message_type,
+    types::{ColumnDescriptor, ColumnPath, SchemaDescriptor, Type},
+};
 use std::collections::VecDeque;
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
@@ -106,6 +109,20 @@ fn column(offset: Option<i64>, length: Option<i32>) -> ColumnChunkMetaData {
         .set_bloom_filter_length(length)
         .build()
         .unwrap()
+}
+
+fn metadata(offset: Option<i64>, length: Option<i32>) -> ParquetMetaData {
+    let schema = Arc::new(SchemaDescriptor::new(Arc::new(
+        parse_message_type("message schema { REQUIRED BYTE_ARRAY value; }").unwrap(),
+    )));
+    let row_group = RowGroupMetaData::builder(schema.clone())
+        .set_column_metadata(vec![column(offset, length)])
+        .build()
+        .unwrap();
+    ParquetMetaData::new(
+        FileMetaData::new(1, 0, None, None, schema, None),
+        vec![row_group],
+    )
 }
 
 fn encode(num_bytes: i32, bitset_length: usize) -> Bytes {

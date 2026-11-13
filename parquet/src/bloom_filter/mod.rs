@@ -100,7 +100,7 @@
 //! [bf-formulae]: http://tfk.mit.edu/pdf/bloom.pdf
 
 #[cfg(all(feature = "arrow", feature = "async"))]
-use crate::arrow::async_reader::AsyncFileReader;
+use crate::arrow::async_reader::{AsyncFileReader, MetadataFetch};
 use crate::basic::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
 use crate::data_type::AsBytes;
 use crate::errors::{ParquetError, Result};
@@ -112,6 +112,8 @@ use crate::parquet_thrift::{
 };
 use crate::{DecodeResult, thrift_struct};
 use bytes::Bytes;
+#[cfg(all(feature = "arrow", feature = "async"))]
+use futures::future::BoxFuture;
 use std::io::Write;
 use std::ops::Range;
 use twox_hash::XxHash64;
@@ -476,6 +478,14 @@ impl Sbbf {
         column_metadata: &ColumnChunkMetaData,
         reader: &mut R,
     ) -> Result<Option<Self>> {
+        Self::read_from_column_chunk_with_fetch(column_metadata, AsyncReaderFetch(reader)).await
+    }
+
+    #[cfg(all(feature = "arrow", feature = "async"))]
+    pub(crate) async fn read_from_column_chunk_with_fetch<F: MetadataFetch>(
+        column_metadata: &ColumnChunkMetaData,
+        mut fetch: F,
+    ) -> Result<Option<Self>> {
         let Some(mut decoder) = SbbfPushDecoder::try_new(column_metadata)? else {
             return Ok(None);
         };
@@ -485,7 +495,7 @@ impl Sbbf {
             match result {
                 DecodeResult::NeedsData(ranges) => {
                     for range in ranges {
-                        let buffer = read_bloom_filter_bytes_async(reader, &range).await?;
+                        let buffer = read_bloom_filter_bytes_async(&mut fetch, &range).await?;
                         decoder.push_range(range, buffer)?;
                     }
                 }
@@ -533,6 +543,14 @@ impl Sbbf {
     }
 
     /// Check if an [AsBytes] value is probably present or definitely absent in the filter
+    ///
+    /// `value` must have the Parquet physical type of the column. To check a
+    /// filter written by [`ArrowWriter`] with Arrow values, which may have been
+    /// converted to a different type before they were written, use
+    /// [`ArrowSbbf`].
+    ///
+    /// [`ArrowWriter`]: crate::arrow::ArrowWriter
+    /// [`ArrowSbbf`]: crate::arrow::bloom_filter::ArrowSbbf
     pub fn check<T: AsBytes + ?Sized>(&self, value: &T) -> bool {
         self.check_hash(hash_as_bytes(value))
     }
@@ -752,13 +770,24 @@ fn read_bloom_filter_bytes<R: ChunkReader>(reader: &R, range: &Range<u64>) -> Re
     validate_bloom_filter_read(reader.get_bytes(range.start, length)?, length)
 }
 
+// Adapt unsized async readers without widening the public MetadataFetch blanket impl.
 #[cfg(all(feature = "arrow", feature = "async"))]
-async fn read_bloom_filter_bytes_async<R: AsyncFileReader + ?Sized>(
-    reader: &mut R,
+struct AsyncReaderFetch<'a, R: ?Sized>(&'a mut R);
+
+#[cfg(all(feature = "arrow", feature = "async"))]
+impl<R: AsyncFileReader + ?Sized> MetadataFetch for AsyncReaderFetch<'_, R> {
+    fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
+        self.0.get_bytes(range)
+    }
+}
+
+#[cfg(all(feature = "arrow", feature = "async"))]
+async fn read_bloom_filter_bytes_async<F: MetadataFetch>(
+    fetch: &mut F,
     range: &Range<u64>,
 ) -> Result<Bytes> {
     let length = usize::try_from(range.end - range.start)?;
-    validate_bloom_filter_read(reader.get_bytes(range.clone()).await?, length)
+    validate_bloom_filter_read(fetch.fetch(range.clone()).await?, length)
 }
 
 /// Parses the header and returns the bitset's range relative to the filter start.

@@ -1125,9 +1125,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         }
 
         match value_indices {
-            Some(indices) => {
-                let indices = &indices[values_offset..values_offset + values_to_write];
-                self.encoder.write_gather(values, indices)?;
+            Some(all_indices) => {
+                let indices = &all_indices[values_offset..values_offset + values_to_write];
+                self.encoder
+                    .write_gather(values, indices, all_indices.len())?;
             }
             None => self.encoder.write(values, values_offset, values_to_write)?,
         }
