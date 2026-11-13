@@ -1339,8 +1339,14 @@ fn minify_run<R: RunEndIndexType>(array: &RunArray<R>) -> Result<ArrayRef, Arrow
 /// capacity: `minify` can reuse a buffer whose allocation is up to 63 bytes
 /// larger than its length.
 ///
+/// The count is also not the size of an IPC message. An IPC writer pads each
+/// buffer, by default to a multiple of 64 bytes, and adds metadata. For
+/// small arrays with many buffers the IPC body can be many times larger.
+///
 /// `compacted_size` makes the same decisions as `minify` about which rows,
-/// child rows and buffers to keep, so the result is exact.
+/// child rows and buffers to keep, so the result is exact. The exception is
+/// an array that references the same buffer more than once: `minify` can then
+/// return the array unchanged (see the [module documentation](self)).
 ///
 /// # Example
 ///
@@ -1645,7 +1651,8 @@ fn run_size<R: RunEndIndexType>(
 /// | Run end and run value of a run-end encoded array | Each row of the run |
 ///
 /// A null row of a byte, list or map array pays only its offset, because
-/// `minify` empties its range.
+/// `minify` empties its range. A null row of a byte view array pays only its
+/// view, because `minify` gives it an empty view.
 ///
 /// # Error bound
 ///
@@ -1660,9 +1667,12 @@ fn run_size<R: RunEndIndexType>(
 ///
 /// Rows can share data: dictionary values, the runs of a run-end encoded
 /// array, dense union child rows, the child rows of overlapping list views,
-/// and the bytes of views that point to the same bytes. `row_sizes` charges shared data to every row that references
-/// it, and `compacted_size` counts it once. Then `s` can exceed `c` by the
-/// size of the shared data times the number of extra references.
+/// and the bytes of views that point to the same bytes. `row_sizes` charges
+/// shared data to every row that references it, and `compacted_size` counts
+/// it once. Then `s` can exceed `c` by the size of the shared data times the
+/// number of extra references.
+///
+/// The additions saturate at `u64::MAX`.
 ///
 /// # Errors
 ///
@@ -1683,11 +1693,16 @@ pub fn row_sizes(array: &dyn Array, sizes: &mut [u64]) -> Result<(), ArrowError>
 
 /// Adds 1 byte to each row whose index is a multiple of 8.
 fn add_bitmap(sizes: &mut [u64]) {
-    sizes.iter_mut().step_by(8).for_each(|s| *s += 1);
+    sizes
+        .iter_mut()
+        .step_by(8)
+        .for_each(|s| *s = s.saturating_add(1));
 }
 
 fn add_each(sizes: &mut [u64], size: usize) {
-    sizes.iter_mut().for_each(|s| *s += size as u64);
+    sizes
+        .iter_mut()
+        .for_each(|s| *s = s.saturating_add(size as u64));
 }
 
 /// Returns the row sizes of `array`.
@@ -1702,7 +1717,7 @@ fn child_prefix_sizes(array: &dyn Array) -> Result<Vec<u64>, ArrowError> {
     let mut sizes = vec![0; array.len() + 1];
     add_row_sizes(array, &mut sizes[1..])?;
     for i in 1..sizes.len() {
-        sizes[i] += sizes[i - 1];
+        sizes[i] = sizes[i].saturating_add(sizes[i - 1]);
     }
     Ok(sizes)
 }
@@ -1721,14 +1736,16 @@ fn add_row_sizes(array: &dyn Array, sizes: &mut [u64]) -> Result<(), ArrowError>
         DataType::LargeBinary => add_bytes(array.as_bytes::<LargeBinaryType>(), sizes),
         DataType::Utf8View | DataType::BinaryView => {
             let data = array.to_data();
-            for (s, v) in sizes.iter_mut().zip(data.buffer::<u128>(0)) {
+            let views = data.buffer::<u128>(0);
+            for (i, (s, v)) in sizes.iter_mut().zip(views).enumerate() {
                 let len = *v as u32;
-                *s += 16
-                    + if len > MAX_INLINE_VIEW_LEN {
-                        len as u64
-                    } else {
-                        0
-                    };
+                // `minify` gives a null row an empty view
+                let bytes = if len > MAX_INLINE_VIEW_LEN && array.is_valid(i) {
+                    len as u64
+                } else {
+                    0
+                };
+                *s = s.saturating_add(16 + bytes);
             }
         }
         DataType::List(_) => {
@@ -1752,7 +1769,7 @@ fn add_row_sizes(array: &dyn Array, sizes: &mut [u64]) -> Result<(), ArrowError>
                 let child = child_row_sizes(a.values().as_ref())?;
                 // `minify` keeps the child rows of null rows
                 for (s, c) in sizes.iter_mut().zip(child.chunks(size)) {
-                    *s += c.iter().sum::<u64>();
+                    *s = c.iter().fold(*s, |a, b| a.saturating_add(*b));
                 }
             }
         }
@@ -1776,7 +1793,7 @@ fn add_row_sizes(array: &dyn Array, sizes: &mut [u64]) -> Result<(), ArrowError>
             }
             let offsets = array.offsets().expect("dense union has offsets");
             for ((s, type_id), offset) in sizes.iter_mut().zip(array.type_ids()).zip(offsets) {
-                *s += 1 + 4 + children[*type_id as usize][*offset as usize];
+                *s = s.saturating_add(1 + 4 + children[*type_id as usize][*offset as usize]);
             }
         }
         DataType::Dictionary(key, _) => match key.as_ref() {
@@ -1842,17 +1859,17 @@ fn add_bytes<T: ByteArrayType>(array: &GenericByteArray<T>, sizes: &mut [u64]) {
     match array.nulls().filter(|n| n.null_count() > 0) {
         None => {
             for (s, o) in sizes.iter_mut().zip(offsets) {
-                *s += width + (o[1] - o[0]).as_usize() as u64;
+                *s = s.saturating_add(width + (o[1] - o[0]).as_usize() as u64);
             }
         }
         Some(nulls) => {
             for ((s, o), valid) in sizes.iter_mut().zip(offsets).zip(nulls.iter()) {
-                *s += width
-                    + if valid {
-                        (o[1] - o[0]).as_usize() as u64
-                    } else {
-                        0
-                    };
+                let bytes = if valid {
+                    (o[1] - o[0]).as_usize() as u64
+                } else {
+                    0
+                };
+                *s = s.saturating_add(width + bytes);
             }
         }
     }
@@ -1869,9 +1886,9 @@ fn add_list<O: OffsetSizeTrait>(
     let child = child_prefix_sizes(&values.slice(start, end - start))?;
     let width = O::get_byte_width() as u64;
     for (i, (s, o)) in sizes.iter_mut().zip(offsets.windows(2)).enumerate() {
-        *s += width;
+        *s = s.saturating_add(width);
         if nulls.is_none_or(|n| n.is_valid(i)) {
-            *s += child[o[1].as_usize() - start] - child[o[0].as_usize() - start];
+            *s = s.saturating_add(child[o[1].as_usize() - start] - child[o[0].as_usize() - start]);
         }
     }
     Ok(())
@@ -1894,7 +1911,7 @@ fn add_list_view<O: OffsetSizeTrait>(
     let child = child_prefix_sizes(&array.values().slice(start, end - start))?;
     add_each(sizes, 2 * O::get_byte_width());
     for (i, s, e) in views() {
-        sizes[i] += child[e - start] - child[s - start];
+        sizes[i] = sizes[i].saturating_add(child[e - start] - child[s - start]);
     }
     Ok(())
 }
@@ -1907,9 +1924,9 @@ fn add_dictionary<K: ArrowDictionaryKeyType>(
     let width = K::Native::get_byte_width() as u64;
     let keys = array.keys();
     for (i, (s, k)) in sizes.iter_mut().zip(keys.values()).enumerate() {
-        *s += width;
+        *s = s.saturating_add(width);
         if keys.is_valid(i) {
-            *s += values[k.as_usize()];
+            *s = s.saturating_add(values[k.as_usize()]);
         }
     }
     Ok(())
@@ -1929,7 +1946,7 @@ fn add_run<R: RunEndIndexType>(array: &RunArray<R>, sizes: &mut [u64]) -> Result
         let run_end = run_end.as_usize();
         sizes[run_start..run_end]
             .iter_mut()
-            .for_each(|s| *s += width + value);
+            .for_each(|s| *s = s.saturating_add(width.saturating_add(value)));
         run_start = run_end;
     }
     Ok(())
@@ -1941,6 +1958,18 @@ fn add_run<R: RunEndIndexType>(array: &RunArray<R>, sizes: &mut [u64]) -> Result
 /// A row larger than `max_size` gets a range of its own. Pass the result of
 /// [`row_sizes`], summed over the columns of a batch, to split the batch.
 ///
+/// The sizes are estimates, so [`compacted_size`] of a range is not a hard
+/// cap (see the error bound of [`row_sizes`]):
+///
+/// * A range can compact to more than `max_size`. Each offset buffer holds
+///   one offset more than its rows, and each bitmap can need one byte more
+///   than its charge. This overhead grows with the number of offset buffers
+///   and bitmaps in the schema, and matters most for small ranges.
+/// * Shared data counts once per row that references it. A dictionary with
+///   large values, a run-end encoded array with long runs, or views that
+///   share bytes can then make every range one row long, although the whole
+///   array compacts to less than `max_size`.
+///
 /// ```
 /// # use arrow_select::minify::split_by_size;
 /// assert_eq!(split_by_size(&[4, 4, 4, 9, 1], 8), vec![0..2, 2..3, 3..4, 4..5]);
@@ -1948,14 +1977,14 @@ fn add_run<R: RunEndIndexType>(array: &RunArray<R>, sizes: &mut [u64]) -> Result
 pub fn split_by_size(sizes: &[u64], max_size: u64) -> Vec<Range<usize>> {
     let mut ranges = vec![];
     let mut start = 0;
-    let mut sum = 0;
+    let mut sum = 0u64;
     for (i, size) in sizes.iter().enumerate() {
-        if i > start && sum + size > max_size {
+        if i > start && sum.checked_add(*size).is_none_or(|s| s > max_size) {
             ranges.push(start..i);
             start = i;
             sum = 0;
         }
-        sum += size;
+        sum = sum.saturating_add(*size);
     }
     if start < sizes.len() {
         ranges.push(start..sizes.len());
@@ -3347,6 +3376,87 @@ mod tests {
         assert_eq!(split_by_size(&[], 8), Vec::<Range<usize>>::new());
         assert_eq!(split_by_size(&[9], 8), vec![0..1]);
         assert_eq!(split_by_size(&[0, 8, 0, 1], 8), vec![0..3, 3..4]);
+    }
+
+    #[test]
+    fn test_split_by_size_saturates() {
+        assert_eq!(split_by_size(&[u64::MAX, 1], u64::MAX), vec![0..1, 1..2]);
+        assert_eq!(split_by_size(&[u64::MAX - 1, 2, 5], 10), vec![0..1, 1..3]);
+
+        let mut sizes = [u64::MAX, 0, 0];
+        row_sizes(&Int32Array::from(vec![1, 2, 3]), &mut sizes).unwrap();
+        assert_eq!(sizes, [u64::MAX, 4, 4]);
+    }
+
+    #[test]
+    fn test_sizes_views_over_many_small_buffers() {
+        // `gc` and `concat` give one data buffer of 20 bytes per row
+        let parts: Vec<StringViewArray> = (0..1000)
+            .map(|i| StringViewArray::from(vec![format!("{i:020}")]).gc())
+            .collect();
+        let parts: Vec<&dyn Array> = parts.iter().map(|a| a as &dyn Array).collect();
+        let array = crate::concat::concat(&parts).unwrap();
+        assert_eq!(array.as_string_view().data_buffers().len(), 1000);
+
+        let slice = array.slice(0, 1);
+        assert_eq!(compacted_size(&slice).unwrap(), 36);
+        assert_eq!(buffer_bytes(&minify(&slice).unwrap().to_data()), 36);
+        assert_eq!(sizes_of(&slice), [36]);
+
+        let sizes = sizes_of(&array);
+        let ranges = split_by_size(&sizes, 360);
+        assert_eq!(ranges.len(), 100);
+        for r in ranges {
+            assert_eq!(compacted_size(&array.slice(r.start, r.len())).unwrap(), 360);
+        }
+    }
+
+    #[test]
+    fn test_sizes_views_share_bytes() {
+        // 100 views share 1000 bytes, and a second buffer is unused
+        let shared = Buffer::from_vec(vec![b'x'; 1000]);
+        let unused = Buffer::from_vec(vec![b'y'; 200_000]);
+        let view = ByteView::new(1000, b"xxxx").as_u128();
+        let array =
+            StringViewArray::try_new(vec![view; 100].into(), vec![shared, unused], None).unwrap();
+        assert_eq!(compacted_size(&array).unwrap(), 16 * 100 + 1000);
+        assert_eq!(
+            buffer_bytes(&minify(&array).unwrap().to_data()),
+            16 * 100 + 1000
+        );
+        // Every row pays the shared bytes
+        assert_eq!(sizes_of(&array), [16 + 1000; 100]);
+    }
+
+    #[test]
+    fn test_sizes_view_null_rows() {
+        let long = "x".repeat(44);
+        let array = StringViewArray::from(vec![long.as_str(), long.as_str()]);
+        let (views, buffers, _) = array.into_parts();
+        let nulls = NullBuffer::from(vec![true, false]);
+        let array = StringViewArray::try_new(views, buffers, Some(nulls)).unwrap();
+        // Two views, the bytes of row 0 and 1 bitmap byte
+        assert_eq!(compacted_size(&array).unwrap(), 2 * 16 + 44 + 1);
+        assert_eq!(buffer_bytes(&minify(&array).unwrap().to_data()), 77);
+        assert_eq!(sizes_of(&array), [16 + 44 + 1, 16]);
+    }
+
+    #[test]
+    fn test_split_by_size_is_not_a_hard_cap() {
+        // Each range of 2 rows sums to 16, but holds 3 offsets
+        let array = StringArray::from(vec!["abcd"; 8]);
+        let ranges = split_by_size(&sizes_of(&array), 16);
+        assert_eq!(ranges, vec![0..2, 2..4, 4..6, 6..8]);
+        for r in ranges {
+            assert_eq!(compacted_size(&array.slice(r.start, r.len())).unwrap(), 20);
+        }
+
+        // A value that every row shares makes every range one row long
+        let values = StringArray::from(vec!["x".repeat(1000), "small".to_string()]);
+        let dict = DictionaryArray::new(Int32Array::from(vec![0; 10]), Arc::new(values));
+        assert_eq!(compacted_size(&dict).unwrap(), 10 * 4 + 2 * 4 + 1000);
+        let ranges = split_by_size(&sizes_of(&dict), 2000);
+        assert_eq!(ranges.len(), 10);
     }
 
     /// Sums the buffer lengths of all buffers, including children.
