@@ -617,6 +617,10 @@ divisor_enum!(
     ),
     [
         ///
+        /// Unlike the other divisor types, the variants' methods branch on the divisor's shift. The
+        /// shift is the same for every value, so the branch is predicted, and a form without it
+        /// was slower.
+        ///
         /// When every value of a batch fits in `i128`, dividing in `i128` with [`DivisorI128`]
         /// gives the same results, except for a divisor of -1, because `i128::MIN / -1` overflows
         /// in `i128` but not in `i256`. A divisor that doesn't fit in `i128` exceeds every such
@@ -670,20 +674,23 @@ impl DivisorI256 {
 }
 
 /// `i256` operations that a `const fn` can call, on the parts of the values. `shr` is `SRA` from
-/// table 3.1 of Granlund and Montgomery for `0..=255` bits. Unlike `i256`'s `>>`, it doesn't
-/// branch on the shift, so the methods that call it don't branch on the divisor
+/// table 3.1 of Granlund and Montgomery for `0..=255` bits
+///
+/// It branches on the shift, so the `i256` variants branch on the divisor, unlike the other
+/// divisor types. The shift is the same for every value, so the branch is predicted. A
+/// branch-free form that shifts both halves and selects was slower
 const fn shr(x: i256, shift: u32) -> i256 {
     let (low, high) = x.to_parts();
-    let s = shift & 127;
-    // `<< 1 << (127 - s)` is `<< (128 - s)`, which would overflow for `s == 0`, where it gives 0
-    let narrow_low = (low >> s) | ((high as u128) << 1 << (127 - s));
-    let narrow_high = high >> s;
-    // Every bit is set when `shift >= 128`, and then the result is `high >> s` and its sign
-    let wide = ((shift >> 7) as i128).wrapping_neg();
-    i256::from_parts(
-        (narrow_low & !wide as u128) | (narrow_high & wide) as u128,
-        (narrow_high & !wide) | ((high >> 127) & wide),
-    )
+    if shift == 0 {
+        x
+    } else if shift < 128 {
+        i256::from_parts(
+            (low >> shift) | ((high as u128) << (128 - shift)),
+            high >> shift,
+        )
+    } else {
+        i256::from_parts((high >> (shift - 128)) as u128, high >> 127)
+    }
 }
 
 const fn and(a: i256, b: i256) -> i256 {
