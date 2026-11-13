@@ -22,31 +22,6 @@ pub(super) fn try_reserve(buffer: &mut MutableBuffer, additional: usize) -> Resu
     Ok(())
 }
 
-/// Extends `buffer` from `values` after the caller has reserved sufficient capacity.
-///
-/// # Safety
-///
-/// The buffer must have at least `size_of_val(values)` bytes of spare capacity.
-#[inline]
-pub(super) unsafe fn extend_from_slice_unchecked<T: ArrowNativeType>(
-    buffer: &mut MutableBuffer,
-    values: &[T],
-) {
-    let additional = std::mem::size_of_val(values);
-    debug_assert!(additional <= buffer.capacity() - buffer.len());
-    let old_len = buffer.len();
-    // SAFETY: The caller reserved `additional` bytes, and the source and destination do not
-    // overlap because `values` belongs to a different allocation.
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            values.as_ptr().cast::<u8>(),
-            buffer.as_mut_ptr().add(old_len),
-            additional,
-        );
-        buffer.set_len(old_len + additional);
-    }
-}
-
 /// extends the `buffer` to be able to hold `len` bits, setting all bits of the new size to zero.
 #[inline]
 pub(super) fn resize_for_bits(buffer: &mut MutableBuffer, len: usize) {

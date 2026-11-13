@@ -17,6 +17,7 @@ pub(super) fn build_extend<T: ArrowNativeType + Integer + CheckedAdd>(
     Box::new(
         move |mutable: &mut _MutableArrayData, index: usize, start: usize, len: usize| {
             let mut new_offset = T::usize_as(mutable.child_data[0].len());
+
             for i in start..start + len {
                 mutable.buffer1.push(new_offset);
                 mutable.buffer2.push(sizes[i]);
@@ -46,6 +47,7 @@ pub(super) fn extend_nulls<T: ArrowNativeType>(
 ) -> Result<(), ArrowError> {
     let offset_buffer = &mut mutable.buffer1;
     let sizes_buffer = &mut mutable.buffer2;
+
     // We push 0 as a placeholder for NULL values in both the offsets and sizes
     (0..len).for_each(|_| offset_buffer.push(T::default()));
     (0..len).for_each(|_| sizes_buffer.push(T::default()));

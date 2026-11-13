@@ -3,13 +3,13 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::ArrayData;
-use arrow_buffer::{ArrowNativeType, MutableBuffer, ToByteSlice};
+use arrow_buffer::{ArrowNativeType, MutableBuffer};
 use num_integer::Integer;
 use num_traits::{AsPrimitive, CheckedAdd};
 
 use super::{
     _MutableArrayData, Extend,
-    utils::{get_last_offset, memory_error, try_extend_offsets},
+    utils::{get_last_offset, try_extend_offsets},
 };
 
 #[inline]
@@ -56,8 +56,6 @@ pub(super) fn extend_nulls<T: ArrowNativeType>(
     // this is safe due to how offset is built. See details on `get_last_offset`
     let last_offset: T = unsafe { get_last_offset(offset_buffer) };
 
-    offset_buffer
-        .try_repeat_slice_n_times(last_offset.to_byte_slice(), len)
-        .map_err(memory_error)?;
+    (0..len).for_each(|_| offset_buffer.push(last_offset));
     Ok(())
 }

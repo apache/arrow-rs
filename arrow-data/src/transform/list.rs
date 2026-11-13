@@ -4,10 +4,10 @@
 
 use super::{
     _MutableArrayData, Extend,
-    utils::{get_last_offset, memory_error, try_extend_offsets},
+    utils::{get_last_offset, try_extend_offsets},
 };
 use crate::ArrayData;
-use arrow_buffer::{ArrowNativeType, ToByteSlice};
+use arrow_buffer::ArrowNativeType;
 use arrow_schema::ArrowError;
 use num_integer::Integer;
 use num_traits::CheckedAdd;
@@ -44,8 +44,6 @@ pub(super) fn extend_nulls<T: ArrowNativeType>(
     // this is safe due to how offset is built. See details on `get_last_offset`
     let last_offset: T = unsafe { get_last_offset(offset_buffer) };
 
-    offset_buffer
-        .try_repeat_slice_n_times(last_offset.to_byte_slice(), len)
-        .map_err(memory_error)?;
+    (0..len).for_each(|_| offset_buffer.push(last_offset));
     Ok(())
 }

@@ -2,10 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use super::{
-    _MutableArrayData, ArrayData, Extend,
-    utils::{extend_from_slice_unchecked, memory_error},
-};
+use super::{_MutableArrayData, ArrayData, Extend};
 use arrow_buffer::{ArrowNativeType, ToByteSlice};
 use arrow_schema::{ArrowError, DataType};
 use num_traits::CheckedAdd;
@@ -33,6 +30,10 @@ pub fn extend_nulls(mutable: &mut _MutableArrayData, len: usize) -> Result<(), A
         return Ok(());
     }
 
+    // For REE, we always need to add a value entry when adding a new run
+    // The values array should have one entry per run, not per logical element
+    mutable.child_data[1].try_extend_nulls(1)?;
+
     // Determine the run end type from the data type
     let run_end_type = if let DataType::RunEndEncoded(run_ends_field, _) = &mutable.data_type {
         run_ends_field.data_type()
@@ -54,18 +55,11 @@ pub fn extend_nulls(mutable: &mut _MutableArrayData, len: usize) -> Result<(), A
                             .to_string(),
                     )
                 })?;
-            let new_value_bytes = new_value.to_byte_slice();
             mutable.child_data[0]
                 .data
                 .buffer1
-                .try_reserve(new_value_bytes.len())
-                .map_err(memory_error)?;
-
-            // The values array has one entry per run. Reserve the run-end buffer first so
-            // allocation failure cannot leave the children with different lengths.
-            mutable.child_data[1].try_extend_nulls(1)?;
-            // SAFETY: The run-end buffer was reserved for this value above.
-            unsafe { mutable.child_data[0].data.buffer1.push_unchecked(new_value) };
+                .try_extend_from_slice(new_value.to_byte_slice())
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
         }};
     }
 
@@ -183,24 +177,17 @@ fn process_extends_batch<T: ArrowNativeType>(
         return Ok(());
     }
 
-    // Reserve before extending the values child so the remaining writes cannot fail.
+    // Batch extend the run_ends array with all bytes at once
     mutable.child_data[0]
         .data
         .buffer1
-        .try_reserve(run_ends_bytes.len())
-        .map_err(memory_error)?;
+        .extend_from_slice(&run_ends_bytes);
+    mutable.child_data[0].data.len += run_ends_bytes.len() / std::mem::size_of::<T>();
 
     // Batch extend the values array using the range
     let (start_idx, end_idx) =
         values_range.expect("values_range should be Some if run_ends_bytes is not empty");
-    mutable.child_data[1].try_extend(source_array_idx, start_idx, end_idx)?;
-
-    // SAFETY: The run-end buffer was reserved for every byte above.
-    unsafe {
-        extend_from_slice_unchecked(&mut mutable.child_data[0].data.buffer1, &run_ends_bytes)
-    };
-    mutable.child_data[0].data.len += run_ends_bytes.len() / std::mem::size_of::<T>();
-    Ok(())
+    mutable.child_data[1].try_extend(source_array_idx, start_idx, end_idx)
 }
 
 /// Returns a function that extends the run encoded array.
