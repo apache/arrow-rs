@@ -17,10 +17,10 @@ pub(super) fn build_extend<T: ArrowNativeType>(array: &ArrayData) -> Extend<'_> 
     let values = array.buffer::<T>(0);
     Box::new(
         move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
-            let values = &values[start..start + len];
-            try_reserve(&mut mutable.buffer1, size_of_val(values))?;
-            mutable.buffer1.extend_from_slice(values);
-            Ok(())
+            mutable
+                .buffer1
+                .try_extend_from_slice(&values[start..start + len])
+                .map_err(memory_error)
         },
     )
 }

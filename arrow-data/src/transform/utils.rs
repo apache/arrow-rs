@@ -47,7 +47,8 @@ pub(super) fn try_extend_offsets<T: ArrowNativeType + Integer + CheckedAdd>(
         match last_offset.checked_add(&length) {
             Some(new_offset) => {
                 last_offset = new_offset;
-                buffer.push(last_offset);
+                // SAFETY: The destination was reserved for every offset above.
+                unsafe { buffer.push_unchecked(last_offset) };
             }
             None => {
                 // Restore the buffer to its state before this call so the

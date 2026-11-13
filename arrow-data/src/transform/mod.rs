@@ -213,28 +213,35 @@ fn build_extend_view(array: &ArrayData, buffer_offset: u32) -> Extend<'_> {
     Box::new(
         move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
             let values = &views[start..start + len];
-            utils::try_reserve(&mut mutable.buffer1, mem::size_of_val(values))?;
-            if values.len() == 1 {
-                let mut value = values[0];
-                if value as u32 > MAX_INLINE_VIEW_LEN {
-                    value += (buffer_offset as u128) << 64;
-                }
-                // SAFETY: The destination was reserved for this view above.
-                unsafe { mutable.buffer1.push_unchecked(value) };
-            } else if buffer_offset == 0 {
-                mutable.buffer1.extend_from_slice(values);
+            if buffer_offset == 0 {
+                mutable
+                    .buffer1
+                    .try_extend_from_slice(values)
+                    .map_err(utils::memory_error)?;
             } else {
-                mutable.buffer1.extend(values.iter().map(|value| {
-                    if *value as u32 > MAX_INLINE_VIEW_LEN {
-                        // The buffer index is bits 64 to 95 of a view. Adding
-                        // `buffer_offset` gives the string's buffer index in the
-                        // output, which fits in 32 bits, so the sum never carries
-                        // into bit 96.
-                        value + ((buffer_offset as u128) << 64)
-                    } else {
-                        *value
+                utils::try_reserve(&mut mutable.buffer1, mem::size_of_val(values))?;
+                if values.len() == 1 {
+                    let mut value = values[0];
+                    if value as u32 > MAX_INLINE_VIEW_LEN {
+                        value += (buffer_offset as u128) << 64;
                     }
-                }));
+                    // SAFETY: The destination was reserved for this view above.
+                    unsafe { mutable.buffer1.push_unchecked(value) };
+                } else {
+                    for value in values {
+                        let value = if *value as u32 > MAX_INLINE_VIEW_LEN {
+                            // The buffer index is bits 64 to 95 of a view. Adding
+                            // `buffer_offset` gives the string's buffer index in the
+                            // output, which fits in 32 bits, so the sum never carries
+                            // into bit 96.
+                            value + ((buffer_offset as u128) << 64)
+                        } else {
+                            *value
+                        };
+                        // SAFETY: The destination was reserved for every view above.
+                        unsafe { mutable.buffer1.push_unchecked(value) };
+                    }
+                }
             }
             Ok(())
         },
