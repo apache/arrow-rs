@@ -2,18 +2,22 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use arrow_buffer::{ArrowNativeType, MutableBuffer, bit_util};
+use arrow_buffer::{ArrowNativeType, MutableBuffer, MutableBufferError, bit_util};
 use arrow_schema::ArrowError;
 use num_integer::Integer;
 use num_traits::CheckedAdd;
+
+#[cold]
+#[inline(never)]
+pub(super) fn memory_error(error: MutableBufferError) -> ArrowError {
+    ArrowError::MemoryError(error.to_string())
+}
 
 /// Fallibly reserves `additional` bytes when the buffer's existing capacity is insufficient.
 #[inline]
 pub(super) fn try_reserve(buffer: &mut MutableBuffer, additional: usize) -> Result<(), ArrowError> {
     if additional > buffer.capacity() - buffer.len() {
-        buffer
-            .try_reserve(additional)
-            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+        buffer.try_reserve(additional).map_err(memory_error)?;
     }
     Ok(())
 }
@@ -26,9 +30,7 @@ pub(super) fn try_resize_for_bits(
 ) -> Result<(), ArrowError> {
     let needed_bytes = bit_util::ceil(len, 8);
     if buffer.len() < needed_bytes {
-        buffer
-            .try_resize(needed_bytes, 0)
-            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+        buffer.try_resize(needed_bytes, 0).map_err(memory_error)?;
     }
     Ok(())
 }
@@ -41,7 +43,7 @@ pub(super) fn try_extend_offsets<T: ArrowNativeType + Integer + CheckedAdd>(
 ) -> Result<(), ArrowError> {
     buffer
         .try_reserve(std::mem::size_of_val(offsets))
-        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+        .map_err(memory_error)?;
     // Snapshot the length so we can roll back partial writes on overflow.
     let original_len = buffer.len();
     for window in offsets.windows(2) {

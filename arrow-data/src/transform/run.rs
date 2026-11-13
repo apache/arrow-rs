@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use super::{_MutableArrayData, ArrayData, Extend};
+use super::{_MutableArrayData, ArrayData, Extend, utils::memory_error};
 use arrow_buffer::{ArrowNativeType, ToByteSlice};
 use arrow_schema::{ArrowError, DataType};
 use num_traits::CheckedAdd;
@@ -56,7 +56,7 @@ pub fn extend_nulls(mutable: &mut _MutableArrayData, len: usize) -> Result<(), A
                 .data
                 .buffer1
                 .try_reserve(new_value.len())
-                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+                .map_err(memory_error)?;
 
             // The values array has one entry per run. Reserve the run-end buffer first so
             // allocation failure cannot leave the children with different lengths.
@@ -187,7 +187,7 @@ fn process_extends_batch<T: ArrowNativeType>(
         .data
         .buffer1
         .try_reserve(run_ends_bytes.len())
-        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+        .map_err(memory_error)?;
 
     // Batch extend the values array using the range
     let (start_idx, end_idx) =

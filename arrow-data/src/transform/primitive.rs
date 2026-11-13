@@ -8,7 +8,10 @@ use arrow_schema::ArrowError;
 use std::mem::{size_of, size_of_val};
 use std::ops::Add;
 
-use super::{_MutableArrayData, Extend, utils::try_reserve};
+use super::{
+    _MutableArrayData, Extend,
+    utils::{memory_error, try_reserve},
+};
 
 pub(super) fn build_extend<T: ArrowNativeType>(array: &ArrayData) -> Extend<'_> {
     let values = array.buffer::<T>(0);
@@ -17,7 +20,7 @@ pub(super) fn build_extend<T: ArrowNativeType>(array: &ArrayData) -> Extend<'_> 
             mutable
                 .buffer1
                 .try_extend_from_slice(&values[start..start + len])
-                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+                .map_err(memory_error)?;
             Ok(())
         },
     )
@@ -51,6 +54,6 @@ pub(super) fn extend_nulls<T: ArrowNativeType>(
     mutable
         .buffer1
         .try_extend_zeros(byte_len)
-        .map_err(|e| arrow_schema::ArrowError::MemoryError(e.to_string()))?;
+        .map_err(memory_error)?;
     Ok(())
 }

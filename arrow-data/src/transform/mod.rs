@@ -219,7 +219,7 @@ fn build_extend_view(array: &ArrayData, buffer_offset: u32) -> Extend<'_> {
                 mutable
                     .buffer1
                     .try_extend_from_slice(values)
-                    .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+                    .map_err(utils::memory_error)?;
             } else {
                 utils::try_reserve(&mut mutable.buffer1, mem::size_of_val(values))?;
                 mutable.buffer1.extend(values.iter().map(|value| {
@@ -359,17 +359,16 @@ fn preallocate_offset_and_binary_buffer<Offset: ArrowNativeType + Integer>(
         .checked_add(1)
         .and_then(|len| len.checked_mul(mem::size_of::<Offset>()))
         .ok_or_else(|| ArrowError::MemoryError("offset buffer size overflow".into()))?;
-    let mut buffer = MutableBuffer::try_with_capacity(offset_capacity)
-        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+    let mut buffer =
+        MutableBuffer::try_with_capacity(offset_capacity).map_err(utils::memory_error)?;
     // safety: `unsafe` code assumes that this buffer is initialized with one element
     buffer
         .try_extend_from_slice(&[Offset::zero()])
-        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+        .map_err(utils::memory_error)?;
 
     Ok([
         buffer,
-        MutableBuffer::try_with_capacity(binary_size)
-            .map_err(|e| ArrowError::MemoryError(e.to_string()))?,
+        MutableBuffer::try_with_capacity(binary_size).map_err(utils::memory_error)?,
     ])
 }
 
@@ -732,8 +731,7 @@ impl<'a> MutableArrayData<'a> {
         let null_buffer = use_nulls
             .then(|| {
                 let null_bytes = bit_util::ceil(array_capacity, 8);
-                MutableBuffer::try_from_len_zeroed(null_bytes)
-                    .map_err(|e| ArrowError::MemoryError(e.to_string()))
+                MutableBuffer::try_from_len_zeroed(null_bytes).map_err(utils::memory_error)
             })
             .transpose()?;
 
@@ -887,7 +885,7 @@ impl<'a> MutableArrayData<'a> {
         self.data
             .null_buffer()
             .try_resize(bit_len, 0)
-            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+            .map_err(utils::memory_error)?;
         (self.extend_nulls)(&mut self.data, len)?;
 
         self.data.len = new_len;

@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use super::{_MutableArrayData, Extend};
+use super::{_MutableArrayData, Extend, utils::memory_error};
 use crate::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 use std::mem::size_of;
@@ -37,7 +37,7 @@ pub(super) fn build_extend_sparse(array: &ArrayData) -> Extend<'_> {
             mutable
                 .buffer1
                 .try_extend_from_slice(&type_ids[start..start + len])
-                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+                .map_err(memory_error)?;
 
             let child_start = start.checked_add(offset).ok_or_else(|| {
                 ArrowError::InvalidArgumentError(format!(
@@ -70,14 +70,14 @@ pub(super) fn build_extend_dense(array: &ArrayData) -> Extend<'_> {
             mutable
                 .buffer1
                 .try_extend_from_slice(&type_ids[start..start + len])
-                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+                .map_err(memory_error)?;
             let offsets_len = len
                 .checked_mul(size_of::<i32>())
                 .ok_or_else(|| ArrowError::MemoryError("union offset size overflow".into()))?;
             mutable
                 .buffer2
                 .try_reserve(offsets_len)
-                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+                .map_err(memory_error)?;
 
             for i in start..start + len {
                 let type_id = type_ids[i];
@@ -120,14 +120,11 @@ pub(super) fn extend_nulls_dense(
     let offsets_len = len
         .checked_mul(size_of::<i32>())
         .ok_or_else(|| ArrowError::MemoryError("union offset size overflow".into()))?;
-    mutable
-        .buffer1
-        .try_reserve(len)
-        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+    mutable.buffer1.try_reserve(len).map_err(memory_error)?;
     mutable
         .buffer2
         .try_reserve(offsets_len)
-        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+        .map_err(memory_error)?;
 
     mutable.child_data[child_index].try_extend_nulls(len)?;
     for _ in 0..len {
@@ -148,10 +145,7 @@ pub(super) fn extend_nulls_sparse(
     };
     let (_, null_type_id) = nullable_union_field(fields)?;
 
-    mutable
-        .buffer1
-        .try_reserve(len)
-        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+    mutable.buffer1.try_reserve(len).map_err(memory_error)?;
 
     // Sparse: extend nulls in ALL children
     for child in &mut mutable.child_data {

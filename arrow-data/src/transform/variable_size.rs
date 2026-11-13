@@ -8,6 +8,7 @@ use arrow_schema::ArrowError;
 use num_integer::Integer;
 use num_traits::{AsPrimitive, CheckedAdd};
 
+use super::utils::memory_error;
 use super::{
     _MutableArrayData, Extend,
     utils::{get_last_offset, try_extend_offsets},
@@ -26,7 +27,7 @@ fn extend_offset_values<T: ArrowNativeType + AsPrimitive<usize>>(
     let new_values = &values[start_values..end_values];
     buffer
         .try_extend_from_slice(new_values)
-        .map_err(|e| ArrowError::MemoryError(e.to_string()))
+        .map_err(memory_error)
 }
 
 pub(super) fn build_extend<T: ArrowNativeType + Integer + CheckedAdd + AsPrimitive<usize>>(
@@ -61,6 +62,6 @@ pub(super) fn extend_nulls<T: ArrowNativeType>(
 
     offset_buffer
         .try_repeat_slice_n_times(last_offset.to_byte_slice(), len)
-        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+        .map_err(memory_error)?;
     Ok(())
 }
