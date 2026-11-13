@@ -34,9 +34,11 @@
 //!   again on the bytes after the key, which reads the rows in random order.
 //!   Examples are strings with a few common prefixes and three or more
 //!   low-cardinality columns.
-//! - **A sort with a limit.** [`lexsort_to_indices`] takes a `limit` and orders
-//!   only the first `limit` rows, while [`radix_sort_to_indices`] accepts a
-//!   `limit` but still sorts every row.
+//! - **A sort with a small limit.** [`lexsort_to_indices`] orders only the
+//!   first `limit` rows. [`radix_sort_to_indices`] stops early too, but it
+//!   still encodes every row and makes one pass over all of them, so
+//!   [`lexsort_to_indices`] is faster for a `limit` below about 1% to 3% of the
+//!   rows. Radix sort is faster above that.
 //!
 //! [`lexsort_to_indices`]: https://docs.rs/arrow-ord/latest/arrow_ord/sort/fn.lexsort_to_indices.html
 
@@ -60,8 +62,8 @@ const KEY_BYTES: u32 = 12;
 /// original arrays (e.g., via [`take`]).
 ///
 /// If `limit` is `Some`, the result holds only the first `limit` indices in
-/// sorted order, or all of them if there are fewer rows. It currently sorts
-/// every row before truncating.
+/// sorted order, or all of them if there are fewer rows. The sort stops
+/// ordering rows once the first `limit` positions are final.
 ///
 /// Rows that compare equal can appear in any order in the result.
 ///
@@ -137,7 +139,15 @@ pub fn radix_sort_to_indices(rows: &Rows, limit: Option<usize>) -> Result<UInt32
         .map(|(i, w)| entry(buffer, w[0] + prefix, i))
         .collect();
     let mut temp = vec![0u128; n];
-    msd_radix_sort::<true>(&mut entries, &mut temp, 0, true);
+    // Only the first `keep` entries are final. The sort returns how many
+    // entries it left in key order, which is at least `keep`, and the rest of
+    // `entries` is not valid.
+    let sorted = if keep < n {
+        msd_radix_sort::<true, _>(&mut entries, &mut temp, 0, true, First(keep))
+    } else {
+        msd_radix_sort::<true, _>(&mut entries, &mut temp, 0, true, Unlimited)
+    };
+    let entries = &mut entries[..sorted];
 
     // Entries with equal keys come from rows that agree on every byte before
     // prefix + KEY_BYTES, so the rest of each row decides their order. When no
@@ -146,9 +156,15 @@ pub fn radix_sort_to_indices(rows: &Rows, limit: Option<usize>) -> Result<UInt32
     let suffix = prefix + KEY_BYTES as usize;
     if max_len > suffix {
         let mut stack = Vec::new();
+        let mut start = 0;
         for run in entries.chunk_by_mut(|&a, &b| key(a) == key(b)) {
+            if start >= keep {
+                break;
+            }
+            let limit = keep - start;
+            start += run.len();
             if run.len() > 1 {
-                sort_ties(rows, run, suffix, &mut stack);
+                sort_ties(rows, run, suffix, limit, &mut stack);
             }
         }
     }
@@ -158,11 +174,57 @@ pub fn radix_sort_to_indices(rows: &Rows, limit: Option<usize>) -> Result<UInt32
     ))
 }
 
+/// How many leading entries `msd_radix_sort` has to put in key order.
+///
+/// A sort of every entry takes `Unlimited`, a zero-sized type, so it has the
+/// same arguments and code as a sort without limits. An extra argument slowed
+/// that sort by 10% on small inputs.
+trait Limit: Copy {
+    /// Whether the sort can stop early
+    const LIMITED: bool;
+    /// The number of leading entries that must be in key order
+    fn get(self) -> usize;
+    /// The limit for a bucket that starts `start` entries in
+    fn skip(self, start: usize) -> Self;
+}
+
+#[derive(Clone, Copy)]
+struct Unlimited;
+
+impl Limit for Unlimited {
+    const LIMITED: bool = false;
+    fn get(self) -> usize {
+        usize::MAX
+    }
+    fn skip(self, _: usize) -> Self {
+        self
+    }
+}
+
+#[derive(Clone, Copy)]
+struct First(usize);
+
+impl Limit for First {
+    const LIMITED: bool = true;
+    fn get(self) -> usize {
+        self.0
+    }
+    fn skip(self, start: usize) -> Self {
+        First(self.0 - start)
+    }
+}
+
 /// MSD radix sort of entries by their key.
 ///
 /// Each level scatters from `src` into `dst` and recurses with the two
 /// swapped, so no level copies its entries back. `result_in_src` says whether
 /// the caller expects the sorted entries in `src` or in `dst`.
+///
+/// Only the first `limit` entries need to be in key order. A limited sort
+/// skips each bucket that starts at or after `limit`, and returns the length of the
+/// prefix of `result` it left in key order. That prefix is at least `limit`
+/// and ends at a bucket boundary, so the entries after it never extend a run
+/// of equal keys. The rest of the result is not valid.
 ///
 /// `byte` is the key byte to split on, counted from the most significant.
 /// Every entry in `src` agrees on the bytes before it. When every entry also
@@ -172,12 +234,13 @@ pub fn radix_sort_to_indices(rows: &Rows, limit: Option<usize>) -> Result<UInt32
 /// `HIGH` is whether `byte` is in the high 64 bits of an entry (key bytes 0
 /// to 7) rather than the low 64 bits (key bytes 8 to 11). Fixing the half for
 /// a whole pass keeps extracting a key byte to one 64-bit shift.
-fn msd_radix_sort<const HIGH: bool>(
+fn msd_radix_sort<const HIGH: bool, L: Limit>(
     src: &mut [u128],
     dst: &mut [u128],
     mut byte: u32,
     result_in_src: bool,
-) {
+    limit: L,
+) -> usize {
     if src.len() <= FALLBACK_THRESHOLD {
         let out = if result_in_src {
             src
@@ -188,7 +251,7 @@ fn msd_radix_sort<const HIGH: bool>(
         // Entries compare by key, then by index. Comparing integers costs
         // less than another radix pass on a bucket this small.
         out.sort_unstable();
-        return;
+        return out.len();
     }
 
     // u32 counts halve the array zeroed at each level. They can't overflow,
@@ -200,10 +263,10 @@ fn msd_radix_sort<const HIGH: bool>(
             if !result_in_src {
                 dst.copy_from_slice(src);
             }
-            return;
+            return src.len();
         }
         if HIGH && byte >= 8 {
-            return msd_radix_sort::<false>(src, dst, byte, result_in_src);
+            return msd_radix_sort::<false, L>(src, dst, byte, result_in_src, limit);
         }
         // Moves key byte `byte` to the low byte of its half of an entry
         let shift = (120 - 8 * byte) % 64;
@@ -237,14 +300,21 @@ fn msd_radix_sort<const HIGH: bool>(
 
     let mut start = 0;
     for &end in &counts {
+        if L::LIMITED && start >= limit.get() {
+            break;
+        }
         let end = end as usize;
         if end - start > 1 {
-            msd_radix_sort::<HIGH>(
+            let sorted = msd_radix_sort::<HIGH, L>(
                 &mut dst[start..end],
                 &mut src[start..end],
                 byte + 1,
                 !result_in_src,
+                limit.skip(start),
             );
+            if L::LIMITED && sorted < end - start {
+                return start + sorted;
+            }
         } else if end - start == 1 && result_in_src {
             // A singleton bucket doesn't recurse. Its entry is in dst, so copy
             // it back when the caller expects the result in src.
@@ -252,6 +322,7 @@ fn msd_radix_sort<const HIGH: bool>(
         }
         start = end;
     }
+    start
 }
 
 /// The entry for row `index`, keyed by the 12 bytes of the rows buffer that
@@ -288,7 +359,9 @@ fn entry(buffer: &[u8], start: usize, index: usize) -> u128 {
 /// frame per round in progress instead of recursion, because rows can be
 /// arbitrarily long, so its length is bounded by the longest row divided by
 /// 12, not by the number of rows. It is empty on entry and on return.
-fn sort_ties(rows: &Rows, run: &mut [u128], offset: usize, stack: &mut Vec<Frame>) {
+///
+/// Only the first `limit` rows of `run` need to be in order.
+fn sort_ties(rows: &Rows, run: &mut [u128], offset: usize, limit: usize, stack: &mut Vec<Frame>) {
     if let Some(next) = sort_round(rows, run, offset) {
         stack.push(Frame {
             start: 0,
@@ -298,7 +371,8 @@ fn sort_ties(rows: &Rows, run: &mut [u128], offset: usize, stack: &mut Vec<Frame
     }
     while let Some(frame) = stack.last_mut() {
         let Frame { start, end, next } = *frame;
-        if start == end {
+        // Sub-runs that start at or after `limit` can stay unordered
+        if start == end || start >= limit {
             stack.pop();
             continue;
         }
@@ -1025,7 +1099,7 @@ mod tests {
             let rows = converter.convert_columns(&[strings, ints]).unwrap();
 
             let mut entries: Vec<u128> = (0..len as u128).collect();
-            sort_ties(&rows, &mut entries, 0, &mut vec![]);
+            sort_ties(&rows, &mut entries, 0, usize::MAX, &mut vec![]);
             let indices: Vec<u32> = entries.iter().map(|&e| e as u32).collect();
             assert_sorted(&rows, &indices);
             assert_permutation(&indices, len);
@@ -1116,7 +1190,7 @@ mod tests {
 
             let mut entries: Vec<u128> = (0..len as u128).collect();
             let mut stack = Vec::new();
-            sort_ties(&rows, &mut entries, 0, &mut stack);
+            sort_ties(&rows, &mut entries, 0, usize::MAX, &mut stack);
             assert!(stack.capacity() <= 8, "capacity {}", stack.capacity());
             let indices: Vec<u32> = entries.iter().map(|&e| e as u32).collect();
             assert_sorted(&rows, &indices);
