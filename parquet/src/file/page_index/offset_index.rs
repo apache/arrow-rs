@@ -78,6 +78,7 @@ impl OffsetIndexMetaData {
         // we have to do this manually because we want to use the fast PageLocation decoder
         let list_ident = prot.read_list_begin()?;
         validate_list_type(ElementType::Struct, &list_ident)?;
+        // list_ident.size is already guaranteed to fit in i32 by read_list_begin()
         let size = list_ident.size as usize;
         check_list_size(prot.remaining_bytes(), size)?;
         let mut page_locations = Vec::with_capacity(size);
