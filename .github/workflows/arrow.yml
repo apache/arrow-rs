@@ -37,6 +37,8 @@ jobs:
           cargo test -p arrow-array --all-features
           # Disable feature `force_validate`
           cargo test -p arrow-array --features=ffi
+          # `--all-features` resolves named timezones with jiff, so test chrono-tz on its own
+          cargo test -p arrow-array --features=chrono-tz
       - name: Test arrow-cmp
         run: cargo test -p arrow-cmp --all-features
       - name: Test arrow-select
@@ -49,6 +51,11 @@ jobs:
         run: cargo test -p arrow-csv --all-features
       - name: Test arrow-json
         run: cargo test -p arrow-json --all-features
+      - name: Test arrow-cast, arrow-csv and arrow-json with named timezones resolved by jiff
+        run: |
+          cargo test -p arrow-cast --all-features --features arrow-array/jiff
+          cargo test -p arrow-csv --all-features --features arrow-array/jiff
+          cargo test -p arrow-json --all-features --features arrow-array/jiff
       - name: Test arrow-avro
         run: cargo test -p arrow-avro --all-features
       - name: Test arrow-string
@@ -65,6 +72,8 @@ jobs:
         run: cargo test -p arrow
       - name: Test arrow except pyarrow
         run: cargo test -p arrow --features=force_validate,prettyprint,ipc_compression,ffi,chrono-tz
+      - name: Test arrow with named timezones resolved by jiff
+        run: cargo test -p arrow --features=force_validate,prettyprint,ipc_compression,ffi,chrono-tz,jiff
       - name: Run examples
         run: |
           # Test arrow examples
@@ -150,6 +159,8 @@ jobs:
         run: cargo check -p arrow --no-default-features --all-targets --features ffi
       - name: Check compilation --no-default-features --all-targets --features chrono-tz
         run: cargo check -p arrow --no-default-features --all-targets --features chrono-tz
+      - name: Check compilation --no-default-features --all-targets --features jiff
+        run: cargo check -p arrow --no-default-features --all-targets --features jiff
 
 
   # test the arrow crate builds against wasm32 in nightly rust
@@ -170,7 +181,7 @@ jobs:
           rustup target add wasm32-unknown-unknown
           rustup target add wasm32-wasip1
       - name: Build wasm32-unknown-unknown
-        run: cargo build -p arrow --no-default-features --features=json,csv,ipc,ffi --target wasm32-unknown-unknown
+        run: cargo build -p arrow --no-default-features --features=json,csv,ipc,ffi,jiff --target wasm32-unknown-unknown
       - name: Build wasm32-wasip1
         run: cargo build -p arrow --no-default-features --features=json,csv,ipc,ffi --target wasm32-wasip1
 
@@ -194,7 +205,10 @@ jobs:
       - name: Clippy arrow-schema
         run: cargo clippy -p arrow-schema --all-targets --all-features -- -D warnings
       - name: Clippy arrow-array
-        run: cargo clippy -p arrow-array --all-targets --all-features -- -D warnings
+        run: |
+          cargo clippy -p arrow-array --all-targets --all-features -- -D warnings
+          # `--all-features` resolves named timezones with jiff, so lint chrono-tz on its own
+          cargo clippy -p arrow-array --all-targets --features chrono-tz -- -D warnings
       - name: Clippy arrow-cmp
         run: cargo clippy -p arrow-cmp --all-targets --all-features -- -D warnings
       - name: Clippy arrow-select

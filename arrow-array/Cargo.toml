@@ -42,6 +42,11 @@ arrow-schema = { workspace = true }
 arrow-data = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = { version = "0.10.3", optional = true }
+# Named timezones are built from the IANA database in jiff-tzdb, much as chrono-tz compiles in
+# its own, and never from the host's zoneinfo files. `tz-fat` and `perf-inline` are jiff defaults
+# that speed up offset lookups.
+jiff = { version = "0.2", default-features = false, features = ["std", "tz-fat", "perf-inline"], optional = true }
+jiff-tzdb = { version = "0.1.8", optional = true }
 futures = { version = "0.3", optional = true }
 num-complex = { version = "0.4.6", default-features = false, features = ["std"] }
 num-integer = { version = "0.1.46", default-features = false, features = ["std"] }
@@ -56,6 +61,10 @@ all-features = true
 async = ["dep:futures"]
 ffi = ["arrow-schema/ffi", "arrow-data/ffi", "dep:libc"]
 force_validate = ["arrow-data/force_validate"]
+# Resolve named (IANA) timezones with jiff instead of chrono-tz. Takes precedence over `chrono-tz`
+# when both are enabled, so enabling it for any crate in a build changes how every crate in the
+# build resolves named timezones. See the `timezone` module documentation.
+jiff = ["dep:jiff", "dep:jiff-tzdb"]
 # Enable memory tracking support
 pool = ["arrow-buffer/pool", "arrow-data/pool"]
 
