@@ -5,6 +5,7 @@
 //! Defines numeric arithmetic kernels on [`PrimitiveArray`], such as [`add`]
 
 use std::cmp::Ordering;
+use std::collections::TryReserveError;
 use std::convert::Infallible;
 use std::fmt::Formatter;
 use std::sync::Arc;
@@ -464,6 +465,17 @@ fn unless_valid_overflow<T: ArrowPrimitiveType>(
     (!valid_overflow).then(|| PrimitiveArray::new(values.into(), nulls))
 }
 
+/// Converts an allocation failure in [`collect_overflowing`].
+///
+/// One shared, out-of-line copy keeps the formatting code out of every
+/// instance of [`collect_overflowing`], as [`mul_checked_cold`] does for the
+/// decimal `div` and `rem` closures.
+#[cold]
+#[inline(never)]
+fn memory_error(e: TryReserveError) -> ArrowError {
+    ArrowError::MemoryError(e.to_string())
+}
+
 /// Collects the values of `iter`, and whether any was flagged as overflowed.
 ///
 /// This intentional `inline(never)` keeps `overflow` in a register. Inlined
@@ -479,9 +491,7 @@ fn collect_overflowing<N>(
     iter: impl ExactSizeIterator<Item = (N, bool)>,
 ) -> Result<(Vec<N>, bool), ArrowError> {
     let mut values = Vec::new();
-    values
-        .try_reserve_exact(iter.len())
-        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+    values.try_reserve_exact(iter.len()).map_err(memory_error)?;
     let mut overflow = false;
     let mut written = 0;
     for (slot, (value, overflowed)) in values.spare_capacity_mut().iter_mut().zip(iter) {
