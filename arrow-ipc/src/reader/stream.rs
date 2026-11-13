@@ -755,9 +755,6 @@ mod tests {
         }
     }
 
-    // ---------------------------------------------------------------
-    // BufferStreamReader
-    // ---------------------------------------------------------------
 
     fn make_int_batch(rows: usize) -> (RecordBatch, Arc<Schema>) {
         let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int32, false)]));
