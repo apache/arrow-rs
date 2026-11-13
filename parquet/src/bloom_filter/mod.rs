@@ -622,6 +622,11 @@ impl Sbbf {
     /// to this size. This lets independent filters (for example, one per
     /// thread) be built and then merged.
     ///
+    /// Both filters must have been populated with the same hash function
+    /// (the Parquet xxHash64 used by [`Self::insert`], or the same function
+    /// used for [`Self::insert_hashes`]); otherwise the result is
+    /// meaningless. This cannot be checked.
+    ///
     /// Returns an error if the sizes are incompatible, including if this
     /// filter has no blocks.
     pub fn union(&mut self, other: &Sbbf) -> Result<(), ParquetError> {
