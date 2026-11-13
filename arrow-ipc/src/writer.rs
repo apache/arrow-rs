@@ -54,8 +54,7 @@ pub struct IpcWriteOptions {
     batch_compression_type: Option<crate::CompressionType>,
     // Compression level
     batch_compression_level: Option<i32>,
-    /// The lz4 frame block size; `None` selects 256 KiB. Set through
-    /// [`IpcWriteOptions::try_with_lz4_block_size`], which validates the value.
+    /// The lz4 frame block size; `None` selects 256 KiB.
     batch_lz4_block_size: Option<Lz4BlockSize>,
     /// How to handle updating dictionaries in IPC messages
     dictionary_handling: DictionaryHandling,
@@ -3292,6 +3291,8 @@ mod tests {
     fn test_lz4_block_size_configurable_end_to_end() {
         let batch = lz4_block_size_batch();
         let schema = batch.schema();
+        let data_gen = IpcDataGenerator::default();
+        let mut ipc_write_context = IpcWriteContext::default();
 
         let sizes: [Option<usize>; 5] = [
             None,
@@ -3309,11 +3310,27 @@ mod tests {
                 .try_with_lz4_block_size(block_size)
                 .unwrap();
 
+            let mut dictionary_tracker = DictionaryTracker::new(false);
             let mut encoded = Vec::new();
-            let mut writer =
-                StreamWriter::try_new_with_options(&mut encoded, &schema, options).unwrap();
-            writer.write(&batch).unwrap();
-            writer.finish().unwrap();
+            let schema_data = data_gen.schema_to_bytes_with_dictionary_tracker(
+                &schema,
+                &mut dictionary_tracker,
+                &options,
+            );
+            write_message(&mut encoded, schema_data, &options).unwrap();
+
+            let (encoded_dictionaries, encoded_batch) = data_gen
+                .encode(
+                    &batch,
+                    &mut dictionary_tracker,
+                    &options,
+                    &mut ipc_write_context,
+                )
+                .unwrap();
+            for dictionary in encoded_dictionaries {
+                write_message(&mut encoded, dictionary, &options).unwrap();
+            }
+            write_message(&mut encoded, encoded_batch, &options).unwrap();
 
             // Reading must not depend on the block size the writer chose.
             let mut reader = StreamReader::try_new(Cursor::new(encoded.as_slice()), None).unwrap();

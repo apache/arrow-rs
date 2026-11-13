@@ -11,10 +11,10 @@ const LENGTH_NO_COMPRESSED_DATA: i64 = -1;
 const LENGTH_OF_PREFIX_DATA: i64 = 8;
 const DEFAULT_ZSTD_COMPRESSION_LEVEL: i32 = 3;
 
-/// LZ4 frame block sizes representable by the frame header.
+/// LZ4 frame block sizes representable by the frame header. See the [LZ4 frame format] for the
+/// block size codes; `lz4_flex`'s 8 MiB option sets a reserved bit, which the decoder rejects.
 ///
-/// `lz4_flex` also offers an 8 MiB block size, but encodes it by setting the frame header's
-/// reserved bit, which the decoder rejects.
+/// [LZ4 frame format]: https://github.com/lz4/lz4/blob/dev/doc/lz4_Frame_format.md
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Lz4BlockSize {
     Max64KiB,
@@ -24,7 +24,6 @@ pub(crate) enum Lz4BlockSize {
 }
 
 impl Lz4BlockSize {
-    /// Default block size balances compression throughput and retained encoder buffers.
     pub(crate) const DEFAULT: Self = Self::Max256KiB;
 
     pub(crate) const fn from_bytes(bytes: usize) -> Option<Self> {
@@ -85,8 +84,7 @@ impl IpcWriteContext {
     /// Set the lz4 frame block size used by the cached lz4 encoder.
     ///
     /// A cached encoder is dropped when the size changes so the next compression call builds one
-    /// with the new block size. The options builder validates the size before it reaches this
-    /// point.
+    /// with the new block size.
     pub(crate) fn set_lz4_block_size(&mut self, block_size: Lz4BlockSize) {
         if self.lz4_block_size != Some(block_size) {
             self.lz4_block_size = Some(block_size);
@@ -351,10 +349,8 @@ struct Lz4Compressor {
 #[cfg(feature = "lz4")]
 impl Lz4Compressor {
     fn new(block_size: Lz4BlockSize) -> Self {
-        // Pin the block size: with `BlockSize::Auto` the first buffer written would fix it for
-        // every subsequent frame of the reused encoder. 256KB keeps large buffers as fast as
-        // with bigger blocks while the encoder retains only ~0.5MB of buffers; callers can pick
-        // another supported size via `IpcWriteOptions::try_with_lz4_block_size`.
+        // `BlockSize::Auto` fixes a reused encoder's size from its first buffer. Pin the selected
+        // size so later frames keep using the block size requested in the write options.
         let frame_info =
             lz4_flex::frame::FrameInfo::new().block_size(to_lz4_block_size(block_size));
         Self {
