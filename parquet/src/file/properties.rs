@@ -800,6 +800,9 @@ impl WriterPropertiesBuilder {
     ///
     /// Row groups are flushed when their estimated encoded size exceeds this threshold.
     /// This is similar to the official Java implementation for `parquet.block.size`'s behavior.
+    /// The Arrow writer estimates incoming values' sizes and calibrates them against
+    /// the encoded size of buffered data to choose row group boundaries. This is a
+    /// best-effort limit: encoding efficiency can change and a single row may exceed it.
     ///
     /// If both `max_row_group_row_count` and `max_row_group_bytes` are set,
     /// the row group with the smaller limit will be produced.

@@ -48,6 +48,7 @@ use levels::{ArrayLevels, calculate_array_levels};
 
 mod byte_array;
 mod levels;
+mod size;
 
 #[doc(inline)]
 pub use crate::column::page_store::{
@@ -380,39 +381,39 @@ impl<W: Write + Send> ArrowWriter<W> {
                 _ => None,
             };
 
-            // Check byte limit: if we have buffered data, use measured average row size
-            // to split batch proactively before exceeding byte limit. Both limits apply to
-            // the same rows, so measure against whatever the row limit already trimmed
-            // `remaining` down to; otherwise the row limit would always win.
             let candidate_rows = split_at.unwrap_or_else(|| remaining.num_rows());
-
-            if self.max_row_group_bytes.is_some() && buffered_rows == 0 {
-                // There is no row size to extrapolate from yet: write a single row first,
-                // so that the byte limit also applies to the rest of the batch instead of
-                // letting a batch larger than the limit fill the row group on its own.
-                if candidate_rows > 1 {
-                    split_at = Some(1);
-                }
-            } else if let Some(max_bytes) = self.max_row_group_bytes {
+            if let Some(max_bytes) = self.max_row_group_bytes {
                 let current_bytes = in_progress.get_estimated_total_bytes();
-
-                if current_bytes >= max_bytes {
+                if buffered_rows != 0 && current_bytes >= max_bytes {
+                    // We are already beyond the limit, flush
                     self.flush()?;
                     continue;
                 }
 
-                let avg_row_bytes = current_bytes / buffered_rows;
-                if let Some(rows_that_fit) = (max_bytes - current_bytes).checked_div(avg_row_bytes)
+                // Calibrate logical input bytes against the encoded size observed in this
+                // row group. Start with a ratio of one when there is no sample yet.
+                let input_budget =
+                    size::input_byte_budget(max_bytes, current_bytes, in_progress.input_bytes);
+                // Limit input between checks in case upcoming values encode less
+                // efficiently. A single row may exceed this cap.
+                let rows = size::number_of_first_rows_within_budget(
+                    &remaining,
+                    candidate_rows,
+                    input_budget.min(max_bytes),
+                );
+                if rows == 0
+                    && buffered_rows != 0
+                    && size::batch_bytes_size(&remaining, 1) > input_budget
                 {
-                    // At this point, `current_bytes < max_bytes` (checked above)
-                    if candidate_rows > rows_that_fit {
-                        if rows_that_fit > 0 {
-                            split_at = Some(rows_that_fit);
-                        } else {
-                            self.flush()?;
-                            continue;
-                        }
-                    }
+                    // Flush only if the row exceeds the calibrated budget, not just the cap.
+                    self.flush()?;
+                    continue;
+                }
+                // Allow one row beyond the cap when it fits the calibrated budget.
+                // An empty row group must also accept an oversized row to make progress.
+                let rows = rows.max(1);
+                if rows < remaining.num_rows() {
+                    split_at = Some(rows);
                 }
             }
 
@@ -423,6 +424,11 @@ impl<W: Write + Send> ArrowWriter<W> {
             });
 
             let in_progress = self.in_progress.as_mut().unwrap();
+            if self.max_row_group_bytes.is_some() {
+                in_progress.input_bytes = in_progress
+                    .input_bytes
+                    .saturating_add(size::batch_bytes_size(&remaining, remaining.num_rows()));
+            }
             match self.cdc_chunkers.as_mut() {
                 Some(chunkers) => in_progress.write_with_chunkers(&remaining, chunkers)?,
                 None => in_progress.write(&remaining)?,
@@ -1338,6 +1344,8 @@ struct ArrowRowGroupWriter {
     writers: Vec<ArrowColumnWriter>,
     schema_plan: Arc<ArrowWriteSchemaPlan>,
     buffered_rows: usize,
+    /// Logical input size used to calibrate the row group encoded-size estimate.
+    input_bytes: usize,
 }
 
 impl ArrowRowGroupWriter {
@@ -1347,6 +1355,7 @@ impl ArrowRowGroupWriter {
             writers,
             schema_plan,
             buffered_rows: 0,
+            input_bytes: 0,
         }
     }
 
@@ -5933,6 +5942,221 @@ mod tests {
                 "Row groups should stay within one row of the byte limit, got {}",
                 row_group.total_byte_size(),
             );
+        }
+    }
+
+    #[test]
+    fn test_row_group_limit_bytes_skewed_slices() {
+        // The first row is tiny; later rows are much larger and vary between
+        // columns. The sliced arrays also retain large unused allocations.
+        let strings: Vec<String> = std::iter::once("unused".repeat(100_000))
+            .chain((0..60).map(|i| {
+                if i == 0 {
+                    "a".into()
+                } else {
+                    format!("{i:0>1000}")
+                }
+            }))
+            .collect();
+        let views: Vec<String> = (0..61).map(|i| format!("{i:0>200}")).collect();
+        let batch = RecordBatch::try_from_iter(vec![
+            ("str", Arc::new(StringArray::from(strings)) as ArrayRef),
+            ("view", Arc::new(StringViewArray::from(views))),
+        ])
+        .unwrap()
+        .slice(1, 60);
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(false)
+            .set_max_row_group_row_count(Some(20))
+            .set_max_row_group_bytes(Some(3500))
+            .build();
+        let mut writer = ArrowWriter::try_new(Vec::new(), batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        let builder =
+            ParquetRecordBatchReaderBuilder::try_new(Bytes::from(writer.into_inner().unwrap()))
+                .unwrap();
+        assert!(builder.metadata().num_row_groups() > 1);
+        for group in builder.metadata().row_groups() {
+            assert!(group.num_rows() <= 3, "{} rows", group.num_rows());
+            assert!(
+                group.total_byte_size() < 5000,
+                "{} bytes",
+                group.total_byte_size()
+            );
+        }
+        let output = arrow_select::concat::concat_batches(
+            &batch.schema(),
+            &builder
+                .build()
+                .unwrap()
+                .collect::<ArrowResult<Vec<_>>>()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(output, batch);
+    }
+
+    #[test]
+    fn test_row_group_limit_bytes_calibrates_encoding_ratio() {
+        let batch = RecordBatch::try_from_iter(vec![(
+            "str",
+            Arc::new(StringArray::from(vec!["x".repeat(1000); 100])) as ArrayRef,
+        )])
+        .unwrap();
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(None)
+            .set_max_row_group_bytes(Some(3500))
+            .build();
+        let mut writer = ArrowWriter::try_new(Vec::new(), batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        let builder =
+            ParquetRecordBatchReaderBuilder::try_new(Bytes::from(writer.into_inner().unwrap()))
+                .unwrap();
+        // The dictionary stores the repeated payload once. A raw-size-only
+        // policy would produce roughly 34 groups instead of one.
+        assert_eq!(row_group_sizes(builder.metadata()), vec![100]);
+    }
+
+    #[test]
+    fn test_row_group_limit_bytes_encoding_ratio_changes() {
+        let repeated = RecordBatch::try_from_iter(vec![(
+            "str",
+            Arc::new(StringArray::from(vec!["x".repeat(1000); 1000])) as ArrayRef,
+        )])
+        .unwrap();
+        let unique = RecordBatch::try_from_iter(vec![(
+            "str",
+            Arc::new(StringArray::from_iter_values(
+                (0..1000).map(|i| format!("{i:0>1000}")),
+            )) as ArrayRef,
+        )])
+        .unwrap();
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(None)
+            .set_max_row_group_bytes(Some(3500))
+            .build();
+        let mut writer = ArrowWriter::try_new(Vec::new(), repeated.schema(), Some(props)).unwrap();
+        writer.write(&repeated).unwrap();
+        assert!(writer.in_progress_rows() > 0);
+        writer.write(&unique).unwrap();
+        let builder =
+            ParquetRecordBatchReaderBuilder::try_new(Bytes::from(writer.into_inner().unwrap()))
+                .unwrap();
+        // A stale ratio can overshoot, but it must not authorize an entire
+        // megabyte of unique values before checking the encoded size again.
+        for group in builder.metadata().row_groups() {
+            assert!(
+                group.total_byte_size() <= 2 * 3500 + 256,
+                "{} bytes",
+                group.total_byte_size()
+            );
+        }
+        let output = arrow_select::concat::concat_batches(
+            &repeated.schema(),
+            &builder
+                .build()
+                .unwrap()
+                .collect::<ArrowResult<Vec<_>>>()
+                .unwrap(),
+        )
+        .unwrap();
+        let expected =
+            arrow_select::concat::concat_batches(&repeated.schema(), &[repeated, unique]).unwrap();
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn test_row_group_limit_bytes_compressible_rows_larger_than_input_cap() {
+        let batch = RecordBatch::try_from_iter(vec![(
+            "str",
+            Arc::new(StringArray::from(vec!["x".repeat(10_000); 20])) as ArrayRef,
+        )])
+        .unwrap();
+        for row_limit in [None, Some(3)] {
+            let props = WriterProperties::builder()
+                .set_dictionary_enabled(false)
+                .set_compression(crate::basic::Compression::SNAPPY)
+                .set_data_page_size_limit(1024)
+                .set_max_row_group_row_count(row_limit)
+                .set_max_row_group_bytes(Some(3500))
+                .build();
+            let mut writer = ArrowWriter::try_new(Vec::new(), batch.schema(), Some(props)).unwrap();
+            writer.write(&batch).unwrap();
+            let builder =
+                ParquetRecordBatchReaderBuilder::try_new(Bytes::from(writer.into_inner().unwrap()))
+                    .unwrap();
+            assert!(builder.metadata().num_row_groups() < batch.num_rows());
+            for group in builder.metadata().row_groups() {
+                assert!(group.compressed_size() <= 3500);
+                if let Some(limit) = row_limit {
+                    assert!(group.num_rows() <= limit as i64);
+                }
+            }
+            let output = arrow_select::concat::concat_batches(
+                &batch.schema(),
+                &builder
+                    .build()
+                    .unwrap()
+                    .collect::<ArrowResult<Vec<_>>>()
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(output, batch);
+        }
+    }
+
+    #[test]
+    fn test_row_group_limit_bytes_oversized_dictionary_values() {
+        let values: ArrayRef = Arc::new(StringArray::from(vec!["x".repeat(10_000), "a".into()]));
+        let array = DictionaryArray::<Int8Type>::new(Int8Array::from(vec![0, 1, 0]), values);
+        let batch =
+            RecordBatch::try_from_iter(vec![("dict", Arc::new(array) as ArrayRef)]).unwrap();
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(None)
+            .set_max_row_group_bytes(Some(3500))
+            .build();
+        let mut writer = ArrowWriter::try_new(Vec::new(), batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        let builder =
+            ParquetRecordBatchReaderBuilder::try_new(Bytes::from(writer.into_inner().unwrap()))
+                .unwrap();
+        assert_eq!(row_group_sizes(builder.metadata()), vec![1, 1, 1]);
+        let output = arrow_select::concat::concat_batches(
+            &batch.schema(),
+            &builder
+                .build()
+                .unwrap()
+                .collect::<ArrowResult<Vec<_>>>()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(output, batch);
+    }
+
+    #[test]
+    fn test_row_group_limit_bytes_nested_rows() {
+        let list = ListArray::from_iter_primitive::<Int32Type, _, _>((0..60).map(|row| {
+            if row % 5 == 0 {
+                None
+            } else {
+                Some(
+                    (0..1000)
+                        .map(|value| Some(row * 1000 + value))
+                        .collect::<Vec<_>>(),
+                )
+            }
+        }));
+        let batch = RecordBatch::try_from_iter(vec![("list", Arc::new(list) as ArrayRef)]).unwrap();
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(false)
+            .set_max_row_group_row_count(None)
+            .set_max_row_group_bytes(Some(10_000))
+            .build();
+        let data = roundtrip_opts(&batch, props);
+        let builder = ParquetRecordBatchReaderBuilder::try_new(data).unwrap();
+        assert!(builder.metadata().num_row_groups() > 1);
+        for group in builder.metadata().row_groups() {
+            assert!(group.total_byte_size() < 14_500);
         }
     }
 
