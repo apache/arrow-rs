@@ -2366,18 +2366,15 @@ struct ViewRange {
 /// Computes the [`ViewRange`] of views without nulls. The loop has no
 /// branches and works on `O`, so that it vectorizes and the pass-through case
 /// stays cheap.
-///
-/// The end includes the offsets of empty views. This can keep a few more child
-/// values, but it saves an accumulator in a loop that touches every view, and
-/// it lets the buffers pass through when an empty view lies past the last
-/// referenced value.
 fn view_range_no_nulls<O: OffsetSizeTrait>(offsets: &[O], sizes: &[O]) -> ViewRange {
     let zero = O::usize_as(0);
     let max = O::usize_as(O::MAX_OFFSET);
-    let (mut start, mut end) = (max, zero);
+    let (mut start, mut end, mut other_end) = (max, zero, zero);
     for (&offset, &size) in offsets.iter().zip(sizes) {
-        start = start.min(if size > zero { offset } else { max });
-        end = end.max(offset + size);
+        let referenced = size > zero;
+        start = start.min(if referenced { offset } else { max });
+        end = end.max(if referenced { offset + size } else { zero });
+        other_end = other_end.max(if referenced { zero } else { offset });
     }
     // Every referencing view ends above zero, so `end == zero` means that no
     // view references values.
@@ -2388,7 +2385,7 @@ fn view_range_no_nulls<O: OffsetSizeTrait>(offsets: &[O], sizes: &[O]) -> ViewRa
             start.as_usize()
         },
         end: end.as_usize(),
-        other_end: end.as_usize(),
+        other_end: other_end.as_usize(),
         null_with_size: false,
     }
 }
@@ -2430,7 +2427,9 @@ fn view_range<O: OffsetSizeTrait>(
 /// views get size `0`, because their original values can lie outside the range.
 ///
 /// The offsets and sizes buffers pass through unchanged when the range starts
-/// at `0` and every other view already lies inside the range.
+/// at `0` and every other view already lies inside the range. A range that
+/// starts at most `len / 8` values in is treated as starting at `0`, because a
+/// rebase copies both buffers to drop only a few child values.
 fn get_list_view_array_buffers<O: OffsetSizeTrait>(
     data: &ArrayData,
 ) -> (Buffer, Buffer, ArrayData) {
@@ -2442,7 +2441,6 @@ fn get_list_view_array_buffers<O: OffsetSizeTrait>(
     let offsets_slice = offsets.typed_data::<O>();
     let sizes_slice = sizes.typed_data::<O>();
     let nulls = data.nulls();
-
     let ViewRange {
         start,
         end,
@@ -2456,8 +2454,9 @@ fn get_list_view_array_buffers<O: OffsetSizeTrait>(
         let zeros: Buffer = MutableBuffer::from_len_zeroed(byte_len).into();
         return (zeros.clone(), zeros, data.child_data()[0].slice(0, 0));
     }
-    // An empty view can have an offset past the child in an unchecked array.
-    let end = end.min(data.child_data()[0].len());
+    // Rebasing copies both buffers. When it drops only a few leading child
+    // values, writing those values is cheaper.
+    let start = if start <= data.len() / 8 { 0 } else { start };
     let child_data = data.child_data()[0].slice(start, end - start);
     if start == 0 && other_end <= end {
         return (offsets, sizes, child_data);
@@ -5430,7 +5429,10 @@ mod tests {
         let sliced_bytes = serialize_stream(&sliced);
         let sizes = (whole_bytes.len(), sliced_bytes.len());
         assert_eq!(deserialize_stream(whole_bytes), whole);
-        assert_eq!(deserialize_stream(sliced_bytes), sliced);
+        let read = deserialize_stream(sliced_bytes.clone());
+        assert_eq!(read, sliced);
+        // Writing the read batch again gives the same bytes.
+        assert_eq!(serialize_stream(&read), sliced_bytes);
         sizes
     }
 
@@ -5609,29 +5611,6 @@ mod tests {
         assert_eq!(child.len(), 4);
     }
 
-    /// Without nulls, the child range covers the offsets of empty views, so
-    /// the buffers pass through.
-    #[test]
-    fn list_view_keeps_values_up_to_empty_view_offsets() {
-        let list = ListViewArray::new(
-            Arc::new(Field::new_list_field(DataType::Int32, true)),
-            ScalarBuffer::from(vec![0, 3]),
-            ScalarBuffer::from(vec![1, 0]),
-            Arc::new(Int32Array::from_iter_values(0..4)),
-            None,
-        );
-        let data = list.to_data();
-        let (offsets, sizes, child) = get_list_view_array_buffers::<i32>(&data);
-        assert_eq!(offsets.as_ptr(), data.buffers()[0].as_ptr());
-        assert_eq!(sizes.as_ptr(), data.buffers()[1].as_ptr());
-        assert_eq!(child.len(), 3);
-
-        let batch =
-            RecordBatch::try_from_iter([("a", Arc::new(list.clone()) as ArrayRef)]).unwrap();
-        let read = deserialize_stream(serialize_stream(&batch));
-        assert_eq!(read.column(0).as_list_view::<i32>(), &list);
-    }
-
     /// Pins a known limit: values between far-apart views are still written.
     #[test]
     fn sliced_list_view_keeps_values_between_views() {
@@ -5648,5 +5627,76 @@ mod tests {
         assert_eq!(sizes.typed_data::<i32>(), &[1, 1]);
         assert_eq!(child.offset(), 10);
         assert_eq!(child.len(), 981);
+    }
+
+    /// An empty view below the referenced range neither widens the child nor
+    /// gets a negative offset.
+    #[test]
+    fn list_view_empty_view_below_referenced_range() {
+        let list = ListViewArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            ScalarBuffer::from(vec![0, 5, 7]),
+            ScalarBuffer::from(vec![0, 2, 3]),
+            Arc::new(Int32Array::from_iter_values(0..10)),
+            None,
+        );
+        let (offsets, sizes, child) = get_list_view_array_buffers::<i32>(&list.to_data());
+        assert_eq!(offsets.typed_data::<i32>(), &[0, 0, 2]);
+        assert_eq!(sizes.typed_data::<i32>(), &[0, 2, 3]);
+        assert_eq!((child.offset(), child.len()), (5, 5));
+    }
+
+    /// When every null view has size 0, the writer rebases the offsets and
+    /// reuses the sizes buffer.
+    #[test]
+    fn list_view_with_empty_null_views_reuses_sizes_buffer() {
+        let list = ListViewArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            ScalarBuffer::from(vec![5, 0, 7, 9]),
+            ScalarBuffer::from(vec![2, 0, 1, 1]),
+            Arc::new(Int32Array::from_iter_values(0..10)),
+            Some(NullBuffer::from(vec![true, false, true, true])),
+        );
+        let data = list.to_data();
+        let (offsets, sizes, child) = get_list_view_array_buffers::<i32>(&data);
+        assert_eq!(offsets.typed_data::<i32>(), &[0, 0, 2, 4]);
+        assert_eq!(sizes.as_ptr(), data.buffers()[1].as_ptr());
+        assert_eq!((child.offset(), child.len()), (5, 5));
+    }
+
+    /// Empty views at non-zero offsets reference no values, so the child is
+    /// empty.
+    #[test]
+    fn list_view_with_only_empty_views_at_nonzero_offsets() {
+        let list = ListViewArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            ScalarBuffer::from(vec![3]),
+            ScalarBuffer::from(vec![0]),
+            Arc::new(Int32Array::from_iter_values(0..5)),
+            None,
+        );
+        let (offsets, sizes, child) = get_list_view_array_buffers::<i32>(&list.to_data());
+        assert_eq!(offsets.typed_data::<i32>(), &[0]);
+        assert_eq!(sizes.typed_data::<i32>(), &[0]);
+        assert_eq!(child.len(), 0);
+        roundtrip_sliced_stream_sizes(Arc::new(list), 0, 1);
+    }
+
+    /// A range that starts a few values in keeps the buffers zero-copy and
+    /// writes those few values.
+    #[test]
+    fn list_view_with_small_leading_gap_passes_buffers_through() {
+        let list = ListViewArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            ScalarBuffer::from_iter(1..101),
+            ScalarBuffer::from(vec![1; 100]),
+            Arc::new(Int32Array::from_iter_values(0..101)),
+            Some(NullBuffer::from_iter((0..100).map(|i| i != 0))),
+        );
+        let data = list.to_data();
+        let (offsets, sizes, child) = get_list_view_array_buffers::<i32>(&data);
+        assert_eq!(offsets.as_ptr(), data.buffers()[0].as_ptr());
+        assert_eq!(sizes.as_ptr(), data.buffers()[1].as_ptr());
+        assert_eq!((child.offset(), child.len()), (0, 101));
     }
 }
