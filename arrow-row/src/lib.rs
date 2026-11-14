@@ -131,6 +131,22 @@
 //! assert_eq!(converted[0].data_type(), &DataType::Utf8);
 //! ```
 //!
+//! # Normalizing Union Nulls
+//!
+//! In a [`UnionArray`], a type ID (or tag) identifies the selected child field.
+//! A Union value is a logical null when its selected child value is null, as
+//! reported by [`UnionArray::logical_nulls`]. These nulls compare equal regardless
+//! of their type IDs, so they share one row encoding.
+//!
+//! Decoding represents every logical null using the first field marked nullable
+//! in schema order, or the first field if none is marked nullable. This can change
+//! the type ID at null positions. The decoded Union array can therefore compare
+//! unequal to the input under Arrow array equality, which distinguishes these
+//! type IDs. Non-null type IDs and values are preserved.
+//!
+//! Dictionary children are flattened as described above, and the decoded Union
+//! fields use the flattened data types.
+//!
 //! [non-comparison sorts]: https://en.wikipedia.org/wiki/Sorting_algorithm#Non-comparison_sorts
 //! [radix sort]: https://en.wikipedia.org/wiki/Radix_sort
 //! [normalized for sorting]: http://wwwlgis.informatik.uni-kl.de/archiv/wwwdvs.informatik.uni-kl.de/courses/DBSREAL/SS2005/Vorlesungsunterlagen/Implementing_Sorting.pdf
@@ -506,36 +522,49 @@ const DICTIONARY_GATHER_RATIO: usize = 4;
 ///
 /// ## Union Encoding
 ///
-/// A union value is encoded as a single type-id byte followed by the row encoding of the selected child value.
-/// The type-id byte is always present; union arrays have no top-level null marker, so nulls are represented by the child encoding.
+/// A non-null union value is encoded as a validity byte `0x01`, followed by its
+/// type-ID byte and the selected child's row encoding. Descending order inverts
+/// the type-ID byte; the child converter applies the same sort options to the
+/// child value. The validity byte stays `0x01` in both sort directions.
 ///
-/// For example, given a union of Int32 (type_id = 0) and Utf8 (type_id = 1):
+/// A logical null, as reported by [`UnionArray::logical_nulls`], is encoded as a
+/// single null byte, without a type ID or child encoding. The null byte is `0x00`
+/// when [`SortOptions::nulls_first`] is true and `0xFF` otherwise, independently
+/// of [`SortOptions::descending`].
+///
+/// For example, given a union of Int32 (type ID 0) and Utf8 (type ID 1), with
+/// [`SortOptions`] set to `descending: false` and `nulls_first: true`:
 ///
 /// ```text
-///                           ┌──┬──────────────┐
-///  3                        │00│01│80│00│00│03│
-///                           └──┴──────────────┘
-///                            │  └─ signed integer encoding (non-null)
-///                            └──── type_id
+///                           ┌──┬──┬──────────────┐
+///  3                        │01│00│01│80│00│00│03│
+///                           └──┴──┴──────────────┘
+///                            │  │  └─ signed integer encoding (non-null)
+///                            │  └──── type ID
+///                            └─────── validity byte (non-null)
 ///
-///                           ┌──┬────────────────────────────────┐
-/// "abc"                     │01│02│'a'│'b'│'c'│00│00│00│00│00│03│
-///                           └──┴────────────────────────────────┘
-///                            │  └─ string encoding (non-null)
-///                            └──── type_id
+///                           ┌──┬──┬────────────────────────────────┐
+/// "abc"                     │01│01│02│'a'│'b'│'c'│00│00│00│00│00│03│
+///                           └──┴──┴────────────────────────────────┘
+///                            │  │  └─ string encoding (non-null)
+///                            │  └──── type ID
+///                            └─────── validity byte (non-null)
 ///
-///                           ┌──┬──────────────┐
-/// null Int32                │00│00│00│00│00│00│
-///                           └──┴──────────────┘
-///                            │  └─ signed integer encoding (null)
-///                            └──── type_id
+///                           ┌──┐
+/// null Int32                │00│
+///                           └──┘
+///                            └──── logical null
 ///
-///                           ┌──┬──┐
-/// null Utf8                 │01│00│
-///                           └──┴──┘
-///                            │  └─ string encoding (null)
-///                            └──── type_id
+///                           ┌──┐
+/// null Utf8                 │00│
+///                           └──┘
+///                            └──── logical null
 /// ```
+///
+/// All logical nulls have the same one-byte encoding, regardless of their active
+/// type ID. Decoding represents them as a null in the first nullable field in
+/// schema order, or the first field if none is marked nullable. Non-null values
+/// retain their type IDs; null type IDs are canonicalized.
 ///
 /// See [`UnionArray`] for more details on union types.
 ///
@@ -557,9 +586,9 @@ const DICTIONARY_GATHER_RATIO: usize = 4;
 ///
 /// ## Union Ordering
 ///
-/// Values of the same type are ordered according to the ordering of that type.
-/// Values of different types are ordered by their type id.
-/// The type_id is negated when descending order is specified.
+/// Logical nulls compare equal across type IDs and sort first or last according
+/// to [`SortOptions::nulls_first`]. Non-null values are ordered by type ID, then
+/// child value; [`SortOptions::descending`] reverses both comparisons.
 ///
 /// ## Reverse Column Ordering
 ///
@@ -730,20 +759,15 @@ impl Codec {
                 Ok(Self::Struct(converter, owned))
             }
             DataType::Union(fields, _mode) => {
-                // similar to dictionaries and lists, we set descending to false and negate nulls_first
-                // since the encoded contents will be inverted if descending is set
-                let options = SortOptions {
-                    descending: false,
-                    nulls_first: sort_field.options.nulls_first != sort_field.options.descending,
-                };
-
                 let mut converters = Vec::with_capacity(fields.len());
                 let mut type_ids = Vec::with_capacity(fields.len());
                 let mut null_rows = Vec::with_capacity(fields.len());
 
+                // Child rows need the Union's full sort options: only the type-ID byte
+                // is inverted separately when encoding descending order.
                 for (type_id, field) in fields.iter() {
                     let sort_field =
-                        SortField::new_with_options(field.data_type().clone(), options);
+                        SortField::new_with_options(field.data_type().clone(), sort_field.options);
                     let converter = RowConverter::new(vec![sort_field])?;
 
                     let null_array = new_null_array(field.data_type(), 1);
@@ -876,10 +900,7 @@ impl Codec {
                 Ok(Encoder::RunEndEncoded(rows))
             }
             Codec::Union(converters, field_to_type_ids, _) => {
-                let union_array = array
-                    .as_any()
-                    .downcast_ref::<UnionArray>()
-                    .expect("expected Union array");
+                let union_array = array.as_union();
 
                 let type_ids = union_array.type_ids().clone();
                 let offsets = union_array.offsets().cloned();
@@ -889,13 +910,16 @@ impl Codec {
                     let type_id = field_to_type_ids[field_idx];
                     let child_array = union_array.child(type_id);
                     let rows = converter.convert_columns(std::slice::from_ref(child_array))?;
-                    child_rows.push(rows);
+                    child_rows.push(UnionChildRows {
+                        rows,
+                        nulls: child_array.logical_nulls().filter(|n| n.null_count() != 0),
+                    });
                 }
 
                 Ok(Encoder::Union {
                     child_rows,
                     field_to_type_ids: field_to_type_ids.clone(),
-                    type_ids,
+                    row_tags: type_ids,
                     offsets,
                 })
             }
@@ -938,13 +962,23 @@ enum Encoder<'a> {
     Map(Rows),
     /// The row encoding of the values array
     RunEndEncoded(Rows),
-    /// The row encoding of each union field's child array, type_ids buffer, offsets buffer (for Dense), and mode
+    /// Encoded child rows with logical nulls, row tags, and optional dense offsets
     Union {
-        child_rows: Vec<Rows>,
+        child_rows: Vec<UnionChildRows>,
         field_to_type_ids: Vec<i8>,
-        type_ids: ScalarBuffer<i8>,
+        // Negative tags mark logical nulls after row-length preparation.
+        row_tags: ScalarBuffer<i8>,
         offsets: Option<ScalarBuffer<i32>>,
     },
+}
+
+// Arrow type IDs occupy 0..=127, leaving negative tags for private encoder state.
+const UNION_NULL_TAG: i8 = -1;
+
+#[derive(Debug)]
+struct UnionChildRows {
+    rows: Rows,
+    nulls: Option<arrow_buffer::NullBuffer>,
 }
 
 /// Configure the data type and sort order for a given column
@@ -1083,7 +1117,7 @@ impl RowConverter {
             }
         }
 
-        let encoders = columns
+        let mut encoders = columns
             .iter()
             .zip(&self.codecs)
             .zip(self.fields.iter())
@@ -1100,7 +1134,7 @@ impl RowConverter {
             .collect::<Result<Vec<_>, _>>()?;
 
         let write_offset = rows.num_rows();
-        let lengths = row_lengths(columns, &encoders);
+        let lengths = prepare_rows(columns, &mut encoders);
         let total = lengths.extend_offsets(rows.offsets[write_offset], &mut rows.offsets);
         rows.buffer.resize(total, 0);
 
@@ -1868,8 +1902,17 @@ impl LengthTracker {
     }
 }
 
-/// Computes the length of each encoded [`Rows`] and returns an empty [`Rows`]
-fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
+fn fixed_encoded_len(data_type: &DataType) -> Option<usize> {
+    match data_type {
+        DataType::Null | DataType::Boolean => Some(2),
+        DataType::FixedSizeBinary(len) => len.to_usize().map(|len| 1 + len),
+        _ => data_type.primitive_width().map(|len| 1 + len),
+    }
+}
+
+/// Computes encoded row lengths and prepares encoders for writing.
+/// Called once per batch, before any column is encoded.
+fn prepare_rows(cols: &[ArrayRef], encoders: &mut [Encoder]) -> LengthTracker {
     use fixed::FixedLengthEncoding;
 
     let num_rows = cols.first().map(|x| x.len()).unwrap_or(0);
@@ -1996,30 +2039,90 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
             Encoder::Union {
                 child_rows,
                 field_to_type_ids,
-                type_ids,
+                row_tags,
                 offsets,
             } => {
-                let union_array = array
-                    .as_any()
-                    .downcast_ref::<UnionArray>()
-                    .expect("expected UnionArray");
-
                 let mut type_id_to_field_idx = [0usize; 128];
                 for (field_idx, &type_id) in field_to_type_ids.iter().enumerate() {
                     type_id_to_field_idx[type_id as usize] = field_idx;
                 }
 
-                let lengths = (0..union_array.len()).map(|i| {
-                    let type_id = type_ids[i];
-                    let field_idx = type_id_to_field_idx[type_id as usize];
-                    let child_row_i = offsets.as_ref().map(|o| o[i] as usize).unwrap_or(i);
-                    let child_row_len = child_rows[field_idx].row_len(child_row_i);
+                if child_rows.iter().all(|child| {
+                    child.rows.num_rows() == 0
+                        || child
+                            .nulls
+                            .as_ref()
+                            .is_some_and(|nulls| nulls.null_count() == child.rows.num_rows())
+                }) {
+                    *row_tags = vec![UNION_NULL_TAG; array.len()].into();
+                    tracker.push_fixed(1);
+                    continue;
+                }
 
-                    // length: 1 byte type_id + child row bytes
-                    1 + child_row_len
+                let union_array = array.as_union();
+                let mut widths = field_to_type_ids
+                    .iter()
+                    .map(|id| fixed_encoded_len(union_array.child(*id).data_type()));
+                let fixed_width = widths
+                    .next()
+                    .flatten()
+                    .filter(|width| widths.all(|other| other == Some(*width)));
+
+                let selected_rows = (0..array.len()).map(|i| {
+                    let type_id = row_tags[i];
+                    let field_idx = type_id_to_field_idx[type_id as usize];
+                    let child_index = offsets.as_ref().map(|o| o[i] as usize).unwrap_or(i);
+                    (&child_rows[field_idx], child_index)
                 });
 
-                tracker.push_variable(lengths);
+                if child_rows.iter().all(|child| child.nulls.is_none()) {
+                    if let Some(width) = fixed_width {
+                        tracker.push_fixed(2 + width);
+                    } else {
+                        tracker.push_variable(
+                            selected_rows.map(|(child, index)| 2 + child.rows.row_len(index)),
+                        );
+                    }
+                    continue;
+                }
+
+                let mut tagged_ids: Option<Vec<i8>> = None;
+                if let Some(width) = fixed_width {
+                    for (i, (child, index)) in selected_rows.enumerate() {
+                        if child
+                            .nulls
+                            .as_ref()
+                            .is_some_and(|nulls| nulls.is_null(index))
+                        {
+                            tagged_ids.get_or_insert_with(|| row_tags.to_vec())[i] = UNION_NULL_TAG;
+                        }
+                    }
+                    if let Some(tags) = &tagged_ids {
+                        tracker.push_variable(tags.iter().map(|&tag| {
+                            let payload_width = usize::from(tag >= 0) * (1 + width);
+                            1 + payload_width
+                        }));
+                    } else {
+                        tracker.push_fixed(2 + width);
+                    }
+                } else {
+                    tracker.push_variable(selected_rows.enumerate().map(|(i, (child, index))| {
+                        if child
+                            .nulls
+                            .as_ref()
+                            .is_some_and(|nulls| nulls.is_null(index))
+                        {
+                            tagged_ids.get_or_insert_with(|| row_tags.to_vec())[i] = UNION_NULL_TAG;
+                            1
+                        } else {
+                            2 + child.rows.row_len(index)
+                        }
+                    }));
+                }
+
+                if let Some(tagged_ids) = tagged_ids {
+                    *row_tags = tagged_ids.into();
+                }
             }
         }
     }
@@ -2238,7 +2341,7 @@ fn encode_column(
         Encoder::Union {
             child_rows,
             field_to_type_ids,
-            type_ids,
+            row_tags,
             offsets: offsets_buf,
         } => {
             let mut type_id_to_field_idx = [0usize; 128];
@@ -2251,21 +2354,23 @@ fn encode_column(
                 .skip(1)
                 .enumerate()
                 .for_each(|(i, offset)| {
-                    let type_id = type_ids[i];
+                    let type_id = row_tags[i];
+                    if type_id < 0 {
+                        *offset += variable::encode_null(&mut data[*offset..], opts);
+                        return;
+                    }
                     let field_idx = type_id_to_field_idx[type_id as usize];
-
                     let child_row_idx = offsets_buf.as_ref().map(|o| o[i] as usize).unwrap_or(i);
-                    let child_row = child_rows[field_idx].row(child_row_idx);
-                    let child_bytes = child_row.as_ref();
+                    let child_bytes = child_rows[field_idx].rows.row(child_row_idx).data();
 
-                    let type_id_byte = if opts.descending {
+                    data[*offset] = 0x01;
+                    data[*offset + 1] = if opts.descending {
                         !(type_id as u8)
                     } else {
                         type_id as u8
                     };
-                    data[*offset] = type_id_byte;
 
-                    let child_start = *offset + 1;
+                    let child_start = *offset + 2;
                     let child_end = child_start + child_bytes.len();
                     data[child_start..child_end].copy_from_slice(child_bytes);
 
@@ -2509,6 +2614,7 @@ unsafe fn decode_column(
         },
         Codec::Union(converters, field_to_type_ids, null_rows) => {
             let len = rows.len();
+            let null_sentinel = null_sentinel(options);
 
             let DataType::Union(union_fields, mode) = &field.data_type else {
                 unreachable!()
@@ -2521,19 +2627,27 @@ unsafe fn decode_column(
 
             let mut type_ids = Vec::with_capacity(len);
             let mut rows_by_field: Vec<Vec<(usize, &[u8])>> = vec![Vec::new(); converters.len()];
+            let null_field_idx = union_fields
+                .iter()
+                .position(|(_, field)| field.is_nullable())
+                .unwrap_or(0);
 
-            for (idx, row) in rows.iter_mut().enumerate() {
-                let type_id_byte = {
-                    let id = row[0];
-                    if options.descending { !id } else { id }
+            for (idx, row) in rows.iter().enumerate() {
+                let (type_id, child_row) = if row[0] == null_sentinel {
+                    // Decode nulls through a synthetic child row; the input contains only
+                    // the null marker and cannot preserve the original active tag.
+                    (
+                        field_to_type_ids[null_field_idx],
+                        null_rows[null_field_idx].data.as_ref(),
+                    )
+                } else {
+                    let id = if options.descending { !row[1] } else { row[1] };
+                    (id as i8, &row[2..])
                 };
-
-                let type_id = type_id_byte as i8;
                 type_ids.push(type_id);
 
                 let field_idx = type_id_to_field_idx[type_id as usize];
 
-                let child_row = &row[1..];
                 rows_by_field[field_idx].push((idx, child_row));
             }
 
@@ -2545,12 +2659,6 @@ unsafe fn decode_column(
 
                 match &mode {
                     UnionMode::Dense => {
-                        if field_rows.is_empty() {
-                            let (_, field) = union_fields.iter().nth(field_idx).unwrap();
-                            child_arrays.push(arrow_array::new_empty_array(field.data_type()));
-                            continue;
-                        }
-
                         let mut child_data = field_rows
                             .iter()
                             .map(|(_, bytes)| *bytes)
@@ -2563,7 +2671,11 @@ unsafe fn decode_column(
                         for ((row_idx, original_bytes), remaining_bytes) in
                             field_rows.iter().zip(child_data)
                         {
-                            let consumed_length = 1 + original_bytes.len() - remaining_bytes.len();
+                            let consumed_length = if rows[*row_idx][0] == null_sentinel {
+                                1
+                            } else {
+                                2 + original_bytes.len() - remaining_bytes.len()
+                            };
                             rows[*row_idx] = &rows[*row_idx][consumed_length..];
                         }
 
@@ -2592,7 +2704,11 @@ unsafe fn decode_column(
                         // advance row slices by the bytes consumed for rows that belong to this field
                         for (row_idx, child_row) in field_rows {
                             let remaining_len = sparse_data[*row_idx].len();
-                            let consumed_length = 1 + child_row.len() - remaining_len;
+                            let consumed_length = if rows[*row_idx][0] == null_sentinel {
+                                1
+                            } else {
+                                2 + child_row.len() - remaining_len
+                            };
                             rows[*row_idx] = &rows[*row_idx][consumed_length..];
                         }
 
@@ -2615,8 +2731,21 @@ unsafe fn decode_column(
             let type_ids_buffer = ScalarBuffer::from(type_ids);
             let offsets_buffer = offsets.map(ScalarBuffer::from);
 
+            // Dictionary children, including nested ones, decode to their value types.
+            let decoded_fields = union_fields
+                .iter()
+                .zip(&child_arrays)
+                .map(|((type_id, field), child)| {
+                    let field = field
+                        .as_ref()
+                        .clone()
+                        .with_data_type(child.data_type().clone());
+                    (type_id, Arc::new(field))
+                })
+                .collect();
+
             let union_array = UnionArray::try_new(
-                union_fields.clone(),
+                decoded_fields,
                 type_ids_buffer,
                 offsets_buffer,
                 child_arrays,
@@ -5907,12 +6036,10 @@ mod tests {
         let back = converter.convert_rows(&rows).unwrap();
         let back_union = back[0].as_any().downcast_ref::<UnionArray>().unwrap();
 
-        assert_eq!(union_array.len(), back_union.len());
+        let nulls = union_array.logical_nulls();
+        assert_eq!(nulls, back_union.logical_nulls());
         for i in 0..union_array.len() {
-            let expected_null = union_array.is_null(i);
-            let actual_null = back_union.is_null(i);
-            assert_eq!(expected_null, actual_null, "Null mismatch at index {i}");
-            if !expected_null {
+            if nulls.as_ref().is_none_or(|nulls| nulls.is_valid(i)) {
                 assert_eq!(union_array.type_id(i), back_union.type_id(i));
             }
         }
@@ -6030,12 +6157,10 @@ mod tests {
         let back = converter.convert_rows(&rows).unwrap();
         let back_union = back[0].as_any().downcast_ref::<UnionArray>().unwrap();
 
-        assert_eq!(union_array.len(), back_union.len());
+        let nulls = union_array.logical_nulls();
+        assert_eq!(nulls, back_union.logical_nulls());
         for i in 0..union_array.len() {
-            let expected_null = union_array.is_null(i);
-            let actual_null = back_union.is_null(i);
-            assert_eq!(expected_null, actual_null, "Null mismatch at index {i}");
-            if !expected_null {
+            if nulls.as_ref().is_none_or(|nulls| nulls.is_valid(i)) {
                 assert_eq!(union_array.type_id(i), back_union.type_id(i));
             }
         }
@@ -6095,6 +6220,645 @@ mod tests {
         // among strigns
         // "a" < "z"
         assert!(rows.row(3) < rows.row(1));
+    }
+
+    // Keep the test data in terms of values: Int(None) is a null from the integer
+    // field, while Str(None) is a null from the string field.
+    #[derive(Clone, Copy)]
+    enum UnionValue {
+        Int(Option<i32>),
+        Str(Option<&'static str>),
+    }
+    use UnionValue::{Int, Str};
+
+    #[rustfmt::skip]
+    const UNION_INPUT: [(UnionValue, UnionValue, Option<&str>); 7] = [
+        // Union input      Expected after decoding    Following sort column
+        (Int(Some(2)),      Int(Some(2)),              None),       // row 0
+        (Str(Some("z")),    Str(Some("z")),            Some("z")),  // row 1
+        (Int(None),         Int(None),                 Some("a")),  // row 2
+        (Str(None),         Int(None),                 Some("a")),  // row 3
+        (Int(Some(-1)),     Int(Some(-1)),             None),       // row 4
+        (Str(Some("a")),    Str(Some("a")),            Some("z")),  // row 5
+        (Str(Some("z")),    Str(Some("z")),            Some("a")),  // row 6
+    ];
+
+    fn int_string_fields() -> UnionFields {
+        // Put integer first in the schema, but give string the smaller type ID.
+        // Ordering uses type IDs; choosing a field for decoded nulls uses schema order.
+        UnionFields::try_new(
+            [127, 0],
+            [
+                Field::new("int", DataType::Int32, true),
+                Field::new("str", DataType::Utf8, true),
+            ],
+        )
+        .unwrap()
+    }
+
+    fn int_string_union(
+        mode: UnionMode,
+        fields: &UnionFields,
+        values: &[UnionValue],
+    ) -> UnionArray {
+        let mut fields_iter = fields.iter();
+        let int_id = fields_iter.next().unwrap().0;
+        let str_id = fields_iter.next().unwrap().0;
+        let mut type_ids = Vec::new();
+        let mut offsets = Vec::new();
+        let mut ints = Vec::new();
+        let mut strings = Vec::new();
+        for &value in values {
+            // Dense children keep only their selected values. Sparse children have a
+            // slot for every row, so fill the unselected child's slot with a null.
+            match value {
+                Int(value) => {
+                    type_ids.push(int_id);
+                    offsets.push(ints.len() as i32);
+                    ints.push(value);
+                    if mode == UnionMode::Sparse {
+                        strings.push(None);
+                    }
+                }
+                Str(value) => {
+                    type_ids.push(str_id);
+                    offsets.push(strings.len() as i32);
+                    strings.push(value);
+                    if mode == UnionMode::Sparse {
+                        ints.push(None);
+                    }
+                }
+            }
+        }
+        UnionArray::try_new(
+            fields.clone(),
+            type_ids.into(),
+            (mode == UnionMode::Dense).then(|| offsets.into()),
+            vec![
+                Arc::new(Int32Array::from(ints)),
+                Arc::new(StringArray::from(strings)),
+            ],
+        )
+        .unwrap()
+    }
+
+    fn check_reencoding(columns: &[ArrayRef], options: &[SortOptions]) -> Vec<ArrayRef> {
+        let fields = |columns: &[ArrayRef]| {
+            columns
+                .iter()
+                .zip(options)
+                .map(|(column, &options)| {
+                    SortField::new_with_options(column.data_type().clone(), options)
+                })
+                .collect()
+        };
+        let converter = RowConverter::new(fields(columns)).unwrap();
+        let rows = converter.convert_columns(columns).unwrap();
+        let decoded = converter.convert_rows(&rows).unwrap();
+        for column in &decoded {
+            column.to_data().validate_full().unwrap();
+        }
+
+        // Nulls may change the selected Union field, and dictionaries decode to their
+        // value types. Decoding and encoding again must preserve the comparison bytes.
+        let converter = RowConverter::new(fields(&decoded)).unwrap();
+        let reencoded = converter.convert_columns(&decoded).unwrap();
+        assert_eq!(
+            rows.try_into_binary().unwrap(),
+            reencoded.try_into_binary().unwrap()
+        );
+        decoded
+    }
+
+    fn check_order_matches_native(columns: &[ArrayRef], options: &[SortOptions]) -> Rows {
+        let fields = columns
+            .iter()
+            .zip(options)
+            .map(|(column, &options)| {
+                SortField::new_with_options(column.data_type().clone(), options)
+            })
+            .collect();
+        let converter = RowConverter::new(fields).unwrap();
+        let rows = converter.convert_columns(columns).unwrap();
+        let sort_columns: Vec<_> = columns
+            .iter()
+            .zip(options)
+            .map(|(values, &options)| SortColumn {
+                values: values.clone(),
+                options: Some(options),
+            })
+            .collect();
+        let comparator = LexicographicalComparator::try_new(&sort_columns).unwrap();
+        for i in 0..rows.num_rows() {
+            for j in 0..rows.num_rows() {
+                // Check equality too: differently tagged nulls must compare equal,
+                // rather than merely happening to land next to each other in a sort.
+                assert_eq!(
+                    rows.row(i).cmp(&rows.row(j)),
+                    comparator.compare(i, j),
+                    "rows {i}, {j}, {options:?}, {:?}",
+                    columns[0].data_type()
+                );
+            }
+        }
+
+        // Starting at row 1 catches code that incorrectly assumes an unsliced array.
+        let sliced: Vec<_> = columns.iter().map(|c| c.slice(1, c.len() - 1)).collect();
+        let sliced_rows = converter.convert_columns(&sliced).unwrap();
+        for i in 0..sliced_rows.num_rows() {
+            assert_eq!(sliced_rows.row(i), rows.row(i + 1));
+        }
+        rows
+    }
+
+    #[test]
+    fn union_equal_width_children_with_inactive_nulls() {
+        // Boolean and Int8 both have two-byte child encodings.
+        let fields = UnionFields::try_new(
+            [127, 0],
+            [
+                Field::new("bool", DataType::Boolean, true),
+                Field::new("int", DataType::Int8, true),
+            ],
+        )
+        .unwrap();
+        let before: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("long"),
+            None,
+            Some("x"),
+            Some(""),
+            Some("two"),
+        ]));
+        let after: ArrayRef = Arc::new(StringArray::from(vec!["a", "longer", "", "z", "end"]));
+
+        for mode in [UnionMode::Dense, UnionMode::Sparse] {
+            for last_int in [Some(7), None] {
+                // Logical rows: false, 5, true, last_int, false.
+                let (bools, ints) = match mode {
+                    UnionMode::Dense => (
+                        vec![Some(false), Some(true), Some(false)],
+                        vec![Some(5), last_int],
+                    ),
+                    UnionMode::Sparse => (
+                        vec![Some(false), None, Some(true), None, Some(false)],
+                        vec![None, Some(5), None, last_int, None],
+                    ),
+                };
+                let union: ArrayRef = Arc::new(
+                    UnionArray::try_new(
+                        fields.clone(),
+                        vec![127, 0, 127, 0, 127].into(),
+                        (mode == UnionMode::Dense).then(|| vec![0, 0, 1, 1, 2].into()),
+                        vec![
+                            Arc::new(BooleanArray::from(bools)),
+                            Arc::new(Int8Array::from(ints)),
+                        ],
+                    )
+                    .unwrap(),
+                );
+                let columns = [before.clone(), union, after.clone()];
+
+                for options in all_sort_options() {
+                    check_order_matches_native(&columns[1..], &[options; 2]);
+                    let decoded = check_reencoding(&columns, &[options; 3]);
+                    assert_eq!(decoded[0].as_string::<i32>(), before.as_string::<i32>());
+                    assert_eq!(decoded[2].as_string::<i32>(), after.as_string::<i32>());
+                    let decoded = decoded[1].as_union();
+                    assert_eq!(
+                        decoded.logical_nulls(),
+                        last_int
+                            .is_none()
+                            .then(|| NullBuffer::from(vec![true, true, true, false, true])),
+                    );
+                    assert_eq!(
+                        decoded.type_ids().as_ref(),
+                        &[127, 0, 127, if last_int.is_none() { 127 } else { 0 }, 127],
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn union_all_selected_nulls_with_repeated_dense_offsets() {
+        let tail: ArrayRef = Arc::new(StringArray::from(vec!["longer", "", "z"]));
+        for ints in [
+            vec![None, None, None],     // Every child value is null: take the shortcut.
+            vec![None, Some(99), None], // Unselected valid value: use the general path.
+        ] {
+            let union: ArrayRef = Arc::new(
+                UnionArray::try_new(
+                    int_string_fields(),
+                    vec![127; 3].into(),
+                    Some(vec![2, 0, 2].into()),
+                    vec![
+                        Arc::new(Int32Array::from(ints)),
+                        Arc::new(StringArray::from(Vec::<Option<&str>>::new())),
+                    ],
+                )
+                .unwrap(),
+            );
+            let columns = [union, tail.clone()];
+            for options in all_sort_options() {
+                check_order_matches_native(&columns, &[options; 2]);
+                let decoded = check_reencoding(&columns, &[options; 2]);
+                assert_eq!(decoded[0].logical_nulls().unwrap().null_count(), 3);
+                assert_eq!(decoded[1].as_string::<i32>(), tail.as_string::<i32>());
+            }
+        }
+    }
+
+    #[test]
+    fn union_rows_follow_requested_sort_order() {
+        // The integers below are row numbers in UNION_INPUT. The following column always sorts
+        // descending, with its nulls last; these options apply to the Union column only.
+        #[rustfmt::skip]
+        const SORT_CASES: [(&str, SortOptions, [usize; 7]); 4] = [
+            ("ascending, nulls first",  SortOptions { descending: false, nulls_first: true  }, [2, 3, 5, 1, 6, 4, 0]),
+            ("ascending, nulls last",   SortOptions { descending: false, nulls_first: false }, [5, 1, 6, 4, 0, 2, 3]),
+            ("descending, nulls first", SortOptions { descending: true,  nulls_first: true  }, [2, 3, 0, 4, 1, 6, 5]),
+            ("descending, nulls last",  SortOptions { descending: true,  nulls_first: false }, [0, 4, 1, 6, 5, 2, 3]),
+        ];
+
+        let fields = int_string_fields();
+        let input: Vec<_> = UNION_INPUT.iter().map(|row| row.0).collect();
+        let expected: Vec<_> = UNION_INPUT.iter().map(|row| row.1).collect();
+        let tail: ArrayRef = Arc::new(StringArray::from_iter(UNION_INPUT.iter().map(|row| row.2)));
+        for mode in [UnionMode::Dense, UnionMode::Sparse] {
+            let union = int_string_union(mode, &fields, &input);
+            let expected = int_string_union(mode, &fields, &expected);
+            let columns = [Arc::new(union) as ArrayRef, tail.clone()];
+            for (name, options, expected_order) in SORT_CASES {
+                let options = [
+                    options,
+                    SortOptions {
+                        descending: true,
+                        nulls_first: false,
+                    },
+                ];
+                let rows = check_order_matches_native(&columns, &options);
+                let mut order: Vec<_> = (0..UNION_INPUT.len()).collect();
+                // A stable sort keeps the equal null rows 2 and 3 in their input order.
+                // Rows 1 and 6 have the same Union value; the following column orders them.
+                order.sort_by(|&a, &b| rows.row(a).cmp(&rows.row(b)));
+                assert_eq!(order, expected_order, "{mode:?}, {name}");
+                let decoded = check_reencoding(&columns, &options);
+                assert_eq!(decoded[0].to_data(), expected.to_data(), "{mode:?}, {name}");
+                assert_eq!(decoded[1].to_data(), tail.to_data());
+            }
+        }
+    }
+
+    #[test]
+    fn union_nulls_decode_into_first_nullable_field() {
+        #[rustfmt::skip]
+        let cases = [
+            // Description                      Integer nullable  String nullable  Decoded null
+            ("both nullable: use first field",   true,             true,            Int(None)),
+            ("only string is nullable",          false,            true,            Str(None)),
+            ("neither nullable: use first",      false,            false,           Int(None)),
+        ];
+        for (name, int_nullable, str_nullable, decoded_null) in cases {
+            let fields = UnionFields::try_new(
+                [127, 3],
+                [
+                    Field::new("int", DataType::Int32, int_nullable),
+                    Field::new("str", DataType::Utf8, str_nullable),
+                ],
+            )
+            .unwrap();
+            let input = [Int(Some(5)), Str(None), Str(Some("a"))];
+            let expected = [Int(Some(5)), decoded_null, Str(Some("a"))];
+            for mode in [UnionMode::Dense, UnionMode::Sparse] {
+                let union = int_string_union(mode, &fields, &input);
+                let expected = int_string_union(mode, &fields, &expected);
+                for options in all_sort_options() {
+                    let decoded = check_reencoding(&[Arc::new(union.clone())], &[options]);
+                    assert_eq!(
+                        decoded[0].to_data(),
+                        expected.to_data(),
+                        "{mode:?}, {name}, {options:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn union_dictionary_children_decode_to_value_types() {
+        let dictionary_type =
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8));
+        let dictionary_field = Field::new("value", dictionary_type.clone(), true)
+            .with_metadata([("source", "dictionary")]);
+        let cases = [
+            ("dictionary", dictionary_type, DataType::Utf8),
+            (
+                "dictionary inside a Struct",
+                DataType::Struct(vec![dictionary_field.clone()].into()),
+                DataType::Struct(vec![dictionary_field.with_data_type(DataType::Utf8)].into()),
+            ),
+        ];
+        for (name, child_type, decoded_type) in cases {
+            let child_field = Field::new("dictionary", child_type.clone(), true)
+                .with_metadata([("source", "union")]);
+            let int_field = Field::new("int", DataType::Int32, true);
+            let fields =
+                UnionFields::try_new([127, 3], [child_field.clone(), int_field.clone()]).unwrap();
+            let decoded_fields = UnionFields::try_new(
+                [127, 3],
+                [child_field.with_data_type(decoded_type), int_field],
+            )
+            .unwrap();
+            for mode in [UnionMode::Dense, UnionMode::Sparse] {
+                // Input rows: integer 5, integer NULL, integer 1. The dictionary field
+                // starts unused, but becomes the home of the decoded null.
+                let child = match mode {
+                    UnionMode::Dense => new_empty_array(&child_type),
+                    UnionMode::Sparse => new_null_array(&child_type, 3),
+                };
+                let union = UnionArray::try_new(
+                    fields.clone(),
+                    vec![3; 3].into(),
+                    (mode == UnionMode::Dense).then(|| vec![0, 1, 2].into()),
+                    vec![
+                        child,
+                        Arc::new(Int32Array::from(vec![Some(5), None, Some(1)])),
+                    ],
+                )
+                .unwrap();
+                #[rustfmt::skip]
+                let selections: [(&str, std::ops::Range<usize>, &[i8]); 3] = [
+                    // Description                   Input rows  Expected decoded type IDs
+                    ("null selects dictionary",      0..3,       &[3, 127, 3]),
+                    ("dictionary stays unused",      0..1,       &[3]),
+                    ("no rows at all",               0..0,       &[]),
+                ];
+                for (selection, range, expected_ids) in selections {
+                    let input = union.slice(range.start, range.len());
+                    let nulls = input
+                        .logical_nulls()
+                        .filter(|nulls| nulls.null_count() != 0);
+                    for options in all_sort_options() {
+                        let decoded = check_reencoding(&[Arc::new(input.clone())], &[options]);
+                        let decoded = decoded[0].as_union();
+                        // Even empty or unused fields must get the decoded type. Comparing
+                        // the whole schema also checks that both levels keep their metadata.
+                        assert_eq!(
+                            decoded.data_type(),
+                            &DataType::Union(decoded_fields.clone(), mode),
+                            "{mode:?}, {name}, {selection}, {options:?}"
+                        );
+                        assert_eq!(decoded.type_ids().as_ref(), expected_ids);
+                        assert_eq!(
+                            decoded.logical_nulls().filter(|n| n.null_count() != 0),
+                            nulls
+                        );
+                        for (i, &id) in expected_ids.iter().enumerate() {
+                            if id == 3 {
+                                assert_eq!(decoded.value(i).to_data(), input.value(i).to_data());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn union_selected_dictionary_values_and_nulls() {
+        // Rows: dictionary NULL (valid key), dictionary "selected", integer 5.
+        // The integer row checks null ordering across different type IDs.
+        let dictionary: ArrayRef = Arc::new(
+            DictionaryArray::<Int8Type>::try_new(
+                Int8Array::from(vec![Some(1), Some(0), None]),
+                Arc::new(StringArray::from(vec![Some("selected"), None])),
+            )
+            .unwrap(),
+        );
+        let structure = StructArray::new(
+            vec![Field::new("value", dictionary.data_type().clone(), true)].into(),
+            vec![dictionary.clone()],
+            None,
+        );
+        let cases = [
+            (
+                dictionary,
+                DataType::Utf8,
+                Some(NullBuffer::from(vec![false, true, true])),
+            ),
+            (
+                Arc::new(structure) as ArrayRef,
+                DataType::Struct(vec![Field::new("value", DataType::Utf8, true)].into()),
+                None,
+            ),
+        ];
+        for (child, decoded_type, expected_nulls) in cases {
+            let fields = UnionFields::try_new(
+                [127, 3],
+                [
+                    Field::new("dictionary", child.data_type().clone(), true),
+                    Field::new("int", DataType::Int32, true),
+                ],
+            )
+            .unwrap();
+            let decoded_fields = UnionFields::try_new(
+                [127, 3],
+                [
+                    Field::new("dictionary", decoded_type, true),
+                    Field::new("int", DataType::Int32, true),
+                ],
+            )
+            .unwrap();
+            for mode in [UnionMode::Dense, UnionMode::Sparse] {
+                let union = UnionArray::try_new(
+                    fields.clone(),
+                    vec![127, 127, 3].into(),
+                    (mode == UnionMode::Dense).then(|| vec![0, 1, 2].into()),
+                    vec![
+                        child.clone(),
+                        Arc::new(Int32Array::from(vec![None, None, Some(5)])),
+                    ],
+                )
+                .unwrap();
+                let columns = [Arc::new(union) as ArrayRef];
+                for options in all_sort_options() {
+                    check_order_matches_native(&columns, &[options]);
+                    let decoded = check_reencoding(&columns, &[options]);
+                    let decoded = decoded[0].as_union();
+                    assert_eq!(
+                        decoded.data_type(),
+                        &DataType::Union(decoded_fields.clone(), mode)
+                    );
+                    assert_eq!(decoded.type_ids().as_ref(), &[127, 127, 3]);
+                    assert_eq!(decoded.logical_nulls(), expected_nulls);
+                    let child = decoded.child(127).slice(0, 2);
+                    let values = match child.data_type() {
+                        DataType::Struct(_) => child.as_struct().column(0),
+                        _ => &child,
+                    };
+                    assert_eq!(
+                        values.as_string::<i32>(),
+                        &StringArray::from(vec![None, Some("selected")])
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unions_inside_structs_and_lists_follow_same_ordering() {
+        // Each container has seven rows. A null parent is different from a present
+        // parent containing a Union null; an empty list is different from both.
+        // Row     Struct field       List contents
+        //  0      integer 2          [integer 2]
+        //  1      NULL parent        NULL parent (hides string "z")
+        //  2      integer NULL       []
+        //  3      string NULL        [integer NULL, string NULL]
+        //  4      integer -1         [integer -1]
+        //  5      string "a"         [string "a"]
+        //  6      string "z"         [string "z"]
+        let values: Vec<_> = UNION_INPUT.iter().map(|row| row.0).collect();
+        let tail: ArrayRef = Arc::new(StringArray::from_iter(UNION_INPUT.iter().map(|row| row.2)));
+        for mode in [UnionMode::Dense, UnionMode::Sparse] {
+            let union: ArrayRef = Arc::new(int_string_union(mode, &int_string_fields(), &values));
+            let field = Arc::new(Field::new("union", union.data_type().clone(), true));
+            let valid = Some(NullBuffer::from(vec![
+                true, false, true, true, true, true, true,
+            ]));
+            let structure = StructArray::new(
+                vec![field.clone()].into(),
+                vec![union.clone()],
+                valid.clone(),
+            );
+            let list = ListArray::new(
+                field,
+                OffsetBuffer::from_lengths([1, 1, 0, 2, 1, 1, 1]),
+                union,
+                valid,
+            );
+            for array in [Arc::new(structure) as ArrayRef, Arc::new(list)] {
+                let columns = [array, tail.clone()];
+                for options in all_sort_options() {
+                    let options = [
+                        options,
+                        SortOptions {
+                            descending: true,
+                            nulls_first: false,
+                        },
+                    ];
+                    check_order_matches_native(&columns, &options);
+                    let decoded = check_reencoding(&columns, &options);
+                    assert_eq!(decoded[1].to_data(), tail.to_data());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unions_inside_unions_follow_same_ordering() {
+        // Row  Selected value
+        //  0   inner integer 2
+        //  1   outer integer 5
+        //  2   inner integer NULL
+        //  3   inner string NULL
+        //  4   outer integer NULL
+        //  5   inner string "a"
+        //  6   inner string "longer than one block"
+        let tail: ArrayRef = Arc::new(StringArray::from(vec!["z", "b", "a", "a", "a", "m", "n"]));
+        for inner_mode in [UnionMode::Dense, UnionMode::Sparse] {
+            for outer_mode in [UnionMode::Dense, UnionMode::Sparse] {
+                let (inner_values, outer_ints, outer_offsets) = match outer_mode {
+                    UnionMode::Dense => (
+                        vec![
+                            Int(Some(2)),
+                            Int(None),
+                            Str(None),
+                            Str(Some("a")),
+                            Str(Some("longer than one block")),
+                        ],
+                        vec![Some(5), None],
+                        Some(vec![0, 0, 1, 2, 1, 3, 4].into()),
+                    ),
+                    UnionMode::Sparse => (
+                        vec![
+                            Int(Some(2)),
+                            Int(None),
+                            Int(None),
+                            Str(None),
+                            Int(None),
+                            Str(Some("a")),
+                            Str(Some("longer than one block")),
+                        ],
+                        vec![None, Some(5), None, None, None, None, None],
+                        None,
+                    ),
+                };
+                let inner = int_string_union(inner_mode, &int_string_fields(), &inner_values);
+                let fields = UnionFields::try_new(
+                    [127, 3],
+                    [
+                        Field::new("inner", inner.data_type().clone(), true),
+                        Field::new("int", DataType::Int32, true),
+                    ],
+                )
+                .unwrap();
+                let union = Arc::new(
+                    UnionArray::try_new(
+                        fields,
+                        vec![127, 3, 127, 127, 3, 127, 127].into(),
+                        outer_offsets,
+                        vec![Arc::new(inner), Arc::new(Int32Array::from(outer_ints))],
+                    )
+                    .unwrap(),
+                );
+                let input_nulls = union.logical_nulls().unwrap();
+                assert_eq!(
+                    input_nulls,
+                    NullBuffer::from(vec![true, true, false, false, false, true, true])
+                );
+                let columns = [union.clone() as ArrayRef, tail.clone()];
+                for options in all_sort_options() {
+                    let options = [
+                        options,
+                        SortOptions {
+                            descending: true,
+                            nulls_first: false,
+                        },
+                    ];
+                    let context =
+                        format!("{inner_mode:?} inner, {outer_mode:?} outer, {options:?}");
+                    check_order_matches_native(&columns, &options);
+                    let decoded = check_reencoding(&columns, &options);
+                    let decoded_union = decoded[0].as_union();
+                    assert_eq!(
+                        decoded_union.type_ids().as_ref(),
+                        &[127, 3, 127, 127, 127, 127, 127],
+                        "{context}"
+                    );
+                    assert_eq!(
+                        decoded_union.logical_nulls().as_ref(),
+                        Some(&input_nulls),
+                        "{context}"
+                    );
+                    for row in 0..union.len() {
+                        let value = decoded_union.value(row);
+                        if input_nulls.is_null(row) {
+                            // Nulls at either level decode as an inner integer null.
+                            let inner = value.as_union();
+                            assert_eq!(inner.type_ids().as_ref(), &[127], "{context}, row {row}");
+                            assert!(inner.value(0).is_null(0), "{context}, row {row}");
+                        } else {
+                            assert_eq!(
+                                value.to_data(),
+                                union.value(row).to_data(),
+                                "{context}, row {row}"
+                            );
+                        }
+                    }
+                    assert_eq!(decoded[1].to_data(), tail.to_data(), "{context}");
+                }
+            }
+        }
     }
 
     #[test]
