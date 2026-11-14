@@ -609,7 +609,7 @@ impl<'a> TryFrom<&Schema<'a>> for AvroField {
         match schema {
             Schema::Complex(ComplexType::Record(r)) => {
                 let mut resolver = Maker::new(false, false, Tz::default());
-                let data_type = resolver.make_data_type(schema, None, None)?;
+                let data_type = resolver.make_data_type(schema, None, None, None)?;
                 Ok(AvroField {
                     data_type,
                     name: r.name.to_string(),
@@ -678,7 +678,7 @@ impl<'a> AvroFieldBuilder<'a> {
             Schema::Complex(ComplexType::Record(r)) => {
                 let mut resolver = Maker::new(self.use_utf8view, self.strict_mode, self.tz);
                 let data_type =
-                    resolver.make_data_type(self.writer_schema, self.reader_schema, None)?;
+                    resolver.make_data_type(self.writer_schema, self.reader_schema, None, None)?;
                 Ok(AvroField {
                     name: r.name.to_string(),
                     data_type,
@@ -1423,11 +1423,14 @@ impl<'a> Maker<'a> {
         &mut self,
         writer_schema: &'s Schema<'a>,
         reader_schema: Option<&'s Schema<'a>>,
-        namespace: Option<&'a str>,
+        writer_ns: Option<&'a str>,
+        reader_ns: Option<&'a str>,
     ) -> Result<AvroDataType, ArrowError> {
         match reader_schema {
-            Some(reader_schema) => self.resolve_type(writer_schema, reader_schema, namespace),
-            None => self.parse_type(writer_schema, namespace),
+            Some(reader_schema) => {
+                self.resolve_type(writer_schema, reader_schema, writer_ns, reader_ns)
+            }
+            None => self.parse_type(writer_schema, writer_ns),
         }
     }
 
@@ -1813,7 +1816,8 @@ impl<'a> Maker<'a> {
         &mut self,
         writer_schema: &'s Schema<'a>,
         reader_schema: &'s Schema<'a>,
-        namespace: Option<&'a str>,
+        writer_ns: Option<&'a str>,
+        reader_ns: Option<&'a str>,
     ) -> Result<AvroDataType, ArrowError> {
         if let (Some(write_primitive), Some(read_primitive)) =
             (primitive_of(writer_schema), primitive_of(reader_schema))
@@ -1829,7 +1833,8 @@ impl<'a> Maker<'a> {
                     nullable_union_variants(reader_variants),
                 ) {
                     (Some((w_nb, w_nonnull)), Some((r_nb, r_nonnull))) => {
-                        let mut dt = self.resolve_type(w_nonnull, r_nonnull, namespace)?;
+                        let mut dt =
+                            self.resolve_type(w_nonnull, r_nonnull, writer_ns, reader_ns)?;
                         let mut writer_to_reader = vec![None, None];
                         writer_to_reader[w_nb.non_null_index()] = Some((
                             r_nb.non_null_index(),
@@ -1847,14 +1852,16 @@ impl<'a> Maker<'a> {
                         Self::propagate_nullability_into_ree(&mut dt, w_nb);
                         Ok(dt)
                     }
-                    _ => self.resolve_unions(writer_variants, reader_variants, namespace),
+                    _ => {
+                        self.resolve_unions(writer_variants, reader_variants, writer_ns, reader_ns)
+                    }
                 }
             }
             (Schema::Union(writer_variants), reader_non_union) => {
                 let writer_to_reader: Vec<Option<(usize, ResolutionInfo)>> = writer_variants
                     .iter()
                     .map(|writer| {
-                        self.resolve_type(writer, reader_non_union, namespace)
+                        self.resolve_type(writer, reader_non_union, writer_ns, reader_ns)
                             .ok()
                             .map(|tmp| {
                                 let resolution = tmp
@@ -1864,7 +1871,7 @@ impl<'a> Maker<'a> {
                             })
                     })
                     .collect();
-                let mut dt = self.parse_type(reader_non_union, namespace)?;
+                let mut dt = self.parse_type(reader_non_union, reader_ns)?;
                 dt.resolution = Some(ResolutionInfo::Union(ResolvedUnion {
                     writer_to_reader: Arc::from(writer_to_reader),
                     writer_is_union: true,
@@ -1876,7 +1883,8 @@ impl<'a> Maker<'a> {
                 if let Some((nullability, non_null_branch)) =
                     nullable_union_variants(reader_variants)
                 {
-                    let mut dt = self.resolve_type(writer_non_union, non_null_branch, namespace)?;
+                    let mut dt =
+                        self.resolve_type(writer_non_union, non_null_branch, writer_ns, reader_ns)?;
                     #[cfg(feature = "avro_custom_types")]
                     Self::propagate_nullability_into_ree(&mut dt, nullability);
                     dt.nullability = Some(nullability);
@@ -1887,9 +1895,12 @@ impl<'a> Maker<'a> {
                     }
                     Ok(dt)
                 } else {
-                    let Some((match_idx, mut match_dt)) =
-                        self.find_best_union_match(writer_non_union, reader_variants, namespace)
-                    else {
+                    let Some((match_idx, mut match_dt)) = self.find_best_union_match(
+                        writer_non_union,
+                        reader_variants,
+                        writer_ns,
+                        reader_ns,
+                    ) else {
                         return Err(ArrowError::SchemaError(
                             "Writer schema does not match any reader union branch".to_string(),
                         ));
@@ -1911,7 +1922,7 @@ impl<'a> Maker<'a> {
                             if idx == match_idx {
                                 Ok(match_dt.take().unwrap())
                             } else {
-                                self.parse_type(variant, namespace)
+                                self.parse_type(variant, reader_ns)
                             }
                         })
                         .collect::<Result<Vec<_>, _>>()?;
@@ -1932,25 +1943,37 @@ impl<'a> Maker<'a> {
             (
                 Schema::Complex(ComplexType::Array(writer_array)),
                 Schema::Complex(ComplexType::Array(reader_array)),
-            ) => self.resolve_array(writer_array, reader_array, namespace),
+            ) => self.resolve_array(writer_array, reader_array, writer_ns, reader_ns),
             (
                 Schema::Complex(ComplexType::Map(writer_map)),
                 Schema::Complex(ComplexType::Map(reader_map)),
-            ) => self.resolve_map(writer_map, reader_map, namespace),
+            ) => self.resolve_map(writer_map, reader_map, writer_ns, reader_ns),
             (
                 Schema::Complex(ComplexType::Fixed(writer_fixed)),
                 Schema::Complex(ComplexType::Fixed(reader_fixed)),
-            ) => self.resolve_fixed(writer_fixed, reader_fixed, reader_schema, namespace),
+            ) => self.resolve_fixed(
+                writer_fixed,
+                reader_fixed,
+                reader_schema,
+                writer_ns,
+                reader_ns,
+            ),
             (
                 Schema::Complex(ComplexType::Record(writer_record)),
                 Schema::Complex(ComplexType::Record(reader_record)),
-            ) => self.resolve_records(writer_record, reader_record, namespace),
+            ) => self.resolve_records(writer_record, reader_record, writer_ns, reader_ns),
             (
                 Schema::Complex(ComplexType::Enum(writer_enum)),
                 Schema::Complex(ComplexType::Enum(reader_enum)),
-            ) => self.resolve_enums(writer_enum, reader_enum, reader_schema, namespace),
-            (Schema::TypeName(TypeName::Ref(_)), _) => self.parse_type(reader_schema, namespace),
-            (_, Schema::TypeName(TypeName::Ref(_))) => self.parse_type(reader_schema, namespace),
+            ) => self.resolve_enums(
+                writer_enum,
+                reader_enum,
+                reader_schema,
+                writer_ns,
+                reader_ns,
+            ),
+            (Schema::TypeName(TypeName::Ref(_)), _) => self.parse_type(reader_schema, reader_ns),
+            (_, Schema::TypeName(TypeName::Ref(_))) => self.parse_type(reader_schema, reader_ns),
             _ => Err(ArrowError::NotYetImplemented(
                 "Other resolutions not yet implemented".to_string(),
             )),
@@ -1961,11 +1984,12 @@ impl<'a> Maker<'a> {
         &mut self,
         writer: &Schema<'a>,
         reader_variants: &[Schema<'a>],
-        namespace: Option<&'a str>,
+        writer_ns: Option<&'a str>,
+        reader_ns: Option<&'a str>,
     ) -> Option<(usize, AvroDataType)> {
         let mut first_resolution = None;
         for (reader_index, reader) in reader_variants.iter().enumerate() {
-            if let Ok(dt) = self.resolve_type(writer, reader, namespace) {
+            if let Ok(dt) = self.resolve_type(writer, reader, writer_ns, reader_ns) {
                 match &dt.resolution {
                     None | Some(ResolutionInfo::Promotion(Promotion::Direct)) => {
                         // An exact match is best, return immediately.
@@ -1987,13 +2011,14 @@ impl<'a> Maker<'a> {
         &mut self,
         writer_variants: &'s [Schema<'a>],
         reader_variants: &'s [Schema<'a>],
-        namespace: Option<&'a str>,
+        writer_ns: Option<&'a str>,
+        reader_ns: Option<&'a str>,
     ) -> Result<AvroDataType, ArrowError> {
         let mut resolved_reader_encodings = HashMap::new();
         let writer_to_reader: Vec<Option<(usize, ResolutionInfo)>> = writer_variants
             .iter()
             .map(|writer| {
-                self.find_best_union_match(writer, reader_variants, namespace)
+                self.find_best_union_match(writer, reader_variants, writer_ns, reader_ns)
                     .map(|(match_idx, mut match_dt)| {
                         let resolution = match_dt
                             .resolution
@@ -2013,7 +2038,7 @@ impl<'a> Maker<'a> {
                 if let Some(resolved) = resolved_reader_encodings.remove(&reader_idx) {
                     Ok(resolved)
                 } else {
-                    self.parse_type(reader_schema, namespace)
+                    self.parse_type(reader_schema, reader_ns)
                 }
             })
             .collect::<Result<_, _>>()?;
@@ -2035,7 +2060,8 @@ impl<'a> Maker<'a> {
         &mut self,
         writer_array: &Array<'a>,
         reader_array: &Array<'a>,
-        namespace: Option<&'a str>,
+        writer_ns: Option<&'a str>,
+        reader_ns: Option<&'a str>,
     ) -> Result<AvroDataType, ArrowError> {
         Ok(AvroDataType {
             nullability: None,
@@ -2043,7 +2069,8 @@ impl<'a> Maker<'a> {
             codec: Codec::List(Arc::new(self.make_data_type(
                 writer_array.items.as_ref(),
                 Some(reader_array.items.as_ref()),
-                namespace,
+                writer_ns,
+                reader_ns,
             )?)),
             resolution: None,
         })
@@ -2053,7 +2080,8 @@ impl<'a> Maker<'a> {
         &mut self,
         writer_map: &Map<'a>,
         reader_map: &Map<'a>,
-        namespace: Option<&'a str>,
+        writer_ns: Option<&'a str>,
+        reader_ns: Option<&'a str>,
     ) -> Result<AvroDataType, ArrowError> {
         Ok(AvroDataType {
             nullability: None,
@@ -2061,7 +2089,8 @@ impl<'a> Maker<'a> {
             codec: Codec::Map(Arc::new(self.make_data_type(
                 &writer_map.values,
                 Some(&reader_map.values),
-                namespace,
+                writer_ns,
+                reader_ns,
             )?)),
             resolution: None,
         })
@@ -2072,15 +2101,20 @@ impl<'a> Maker<'a> {
         writer_fixed: &Fixed<'a>,
         reader_fixed: &Fixed<'a>,
         reader_schema: &'s Schema<'a>,
-        namespace: Option<&'a str>,
+        writer_parent_ns: Option<&'a str>,
+        reader_parent_ns: Option<&'a str>,
     ) -> Result<AvroDataType, ArrowError> {
+        let writer_ns =
+            named_type_namespace(writer_fixed.name, writer_fixed.namespace, writer_parent_ns);
+        let reader_ns =
+            named_type_namespace(reader_fixed.name, reader_fixed.namespace, reader_parent_ns);
         ensure_names_match(
             "Fixed",
             writer_fixed.name,
-            writer_fixed.namespace,
+            writer_ns,
             &writer_fixed.aliases,
             reader_fixed.name,
-            reader_fixed.namespace,
+            reader_ns,
             &reader_fixed.aliases,
         )?;
         if writer_fixed.size != reader_fixed.size {
@@ -2089,7 +2123,7 @@ impl<'a> Maker<'a> {
                 reader_fixed.name, writer_fixed.size, reader_fixed.size
             )));
         }
-        self.parse_type(reader_schema, namespace)
+        self.parse_type(reader_schema, reader_ns)
     }
 
     fn resolve_primitives(
@@ -2181,19 +2215,24 @@ impl<'a> Maker<'a> {
         writer_enum: &Enum<'a>,
         reader_enum: &Enum<'a>,
         reader_schema: &Schema<'a>,
-        namespace: Option<&'a str>,
+        writer_parent_ns: Option<&'a str>,
+        reader_parent_ns: Option<&'a str>,
     ) -> Result<AvroDataType, ArrowError> {
+        let writer_ns =
+            named_type_namespace(writer_enum.name, writer_enum.namespace, writer_parent_ns);
+        let reader_ns =
+            named_type_namespace(reader_enum.name, reader_enum.namespace, reader_parent_ns);
         ensure_names_match(
             "Enum",
             writer_enum.name,
-            writer_enum.namespace,
+            writer_ns,
             &writer_enum.aliases,
             reader_enum.name,
-            reader_enum.namespace,
+            reader_ns,
             &reader_enum.aliases,
         )?;
         if writer_enum.symbols == reader_enum.symbols {
-            return self.parse_type(reader_schema, namespace);
+            return self.parse_type(reader_schema, reader_ns);
         }
         let reader_index: HashMap<&str, i32> = reader_enum
             .symbols
@@ -2226,12 +2265,11 @@ impl<'a> Maker<'a> {
                 reader_enum.name
             )));
         }
-        let mut dt = self.parse_type(reader_schema, namespace)?;
+        let mut dt = self.parse_type(reader_schema, reader_ns)?;
         dt.resolution = Some(ResolutionInfo::EnumMapping(EnumMapping {
             mapping: Arc::from(mapping),
             default_index,
         }));
-        let reader_ns = named_type_namespace(reader_enum.name, reader_enum.namespace, namespace);
         self.resolver
             .register(reader_enum.name, reader_ns, dt.clone());
         Ok(dt)
@@ -2268,21 +2306,28 @@ impl<'a> Maker<'a> {
         &mut self,
         writer_record: &Record<'a>,
         reader_record: &Record<'a>,
-        namespace: Option<&'a str>,
+        writer_parent_ns: Option<&'a str>,
+        reader_parent_ns: Option<&'a str>,
     ) -> Result<AvroDataType, ArrowError> {
+        let writer_ns = named_type_namespace(
+            writer_record.name,
+            writer_record.namespace,
+            writer_parent_ns,
+        );
+        let reader_ns = named_type_namespace(
+            reader_record.name,
+            reader_record.namespace,
+            reader_parent_ns,
+        );
         ensure_names_match(
             "Record",
             writer_record.name,
-            writer_record.namespace,
+            writer_ns,
             &writer_record.aliases,
             reader_record.name,
-            reader_record.namespace,
+            reader_ns,
             &reader_record.aliases,
         )?;
-        let writer_ns =
-            named_type_namespace(writer_record.name, writer_record.namespace, namespace);
-        let reader_ns =
-            named_type_namespace(reader_record.name, reader_record.namespace, namespace);
         let mut reader_md = reader_record.attributes.field_metadata();
         reader_md.insert(
             AVRO_NAME_METADATA_KEY.to_string(),
@@ -2319,7 +2364,8 @@ impl<'a> Maker<'a> {
             if let Some(wi) = match_idx {
                 if writer_to_reader[wi].is_none() {
                     let w_schema = &writer_record.fields[wi].r#type;
-                    let dt = self.make_data_type(w_schema, Some(&r_field.r#type), reader_ns)?;
+                    let dt =
+                        self.make_data_type(w_schema, Some(&r_field.r#type), writer_ns, reader_ns)?;
                     writer_to_reader[wi] = Some(reader_idx);
                     reader_fields.push(AvroField {
                         name: r_field.name.to_owned(),
@@ -2423,7 +2469,7 @@ mod tests {
         let reader_schema = Schema::TypeName(TypeName::Primitive(reader));
         let mut maker = Maker::new(false, false, Tz::default());
         maker
-            .make_data_type(&writer_schema, Some(&reader_schema), None)
+            .make_data_type(&writer_schema, Some(&reader_schema), None, None)
             .expect("promotion should resolve")
     }
 
@@ -2434,12 +2480,160 @@ mod tests {
         Schema::Union(branches)
     }
 
+    fn mk_schema(s: &'static str) -> Schema<'static> {
+        serde_json::from_str(s).unwrap()
+    }
+
+    #[test]
+    fn test_resolve_nested_record_with_inherited_namespace() {
+        // The writer spells out the namespace that the nested record inherits from
+        // its enclosing record; the reader leaves it implicit. Both nested records
+        // have the full name "ns.Bw", so the schemas resolve against each other.
+        let writer = mk_schema(
+            r#"{
+                "type": "record", "name": "B", "namespace": "ns",
+                "fields": [{
+                    "name": "nested",
+                    "type": {"type": "record", "name": "Bw", "namespace": "ns",
+                             "fields": [{"name": "x", "type": "int"}]}
+                }]
+            }"#,
+        );
+        let reader = mk_schema(
+            r#"{
+                "type": "record", "name": "B", "namespace": "ns",
+                "fields": [{
+                    "name": "nested",
+                    "type": {"type": "record", "name": "Bw",
+                             "fields": [{"name": "x", "type": "int"}]}
+                }]
+            }"#,
+        );
+        let mut maker = Maker::new(false, false, Tz::default());
+        let result = maker.make_data_type(&writer, Some(&reader), None, None);
+        assert!(result.is_ok(), "unexpected error: {result:?}");
+    }
+
+    #[test]
+    fn test_resolve_nested_record_with_writer_namespace_through_alias() {
+        // The reader matches the writer's `writer_ns.B` through an alias, so its
+        // own namespace is `reader_ns`. The nested writer record inherits
+        // `writer_ns` while the reader spells that full name out, so both nested
+        // records are `writer_ns.Bw` and must resolve.
+        let writer = mk_schema(
+            r#"{
+                "type": "record", "name": "B", "namespace": "writer_ns",
+                "fields": [{
+                    "name": "nested",
+                    "type": {"type": "record", "name": "Bw",
+                             "fields": [{"name": "x", "type": "int"}]}
+                }]
+            }"#,
+        );
+        let reader = mk_schema(
+            r#"{
+                "type": "record", "name": "B", "namespace": "reader_ns",
+                "aliases": ["writer_ns.B"],
+                "fields": [{
+                    "name": "nested",
+                    "type": {"type": "record", "name": "Bw", "namespace": "writer_ns",
+                             "fields": [{"name": "x", "type": "int"}]}
+                }]
+            }"#,
+        );
+        let mut maker = Maker::new(false, false, Tz::default());
+        let result = maker.make_data_type(&writer, Some(&reader), None, None);
+        assert!(result.is_ok(), "unexpected error: {result:?}");
+    }
+
+    #[test]
+    fn test_resolve_multi_branch_union_with_writer_namespace_through_alias() {
+        // A union with more than two branches goes through `resolve_unions` and
+        // `find_best_union_match` rather than the nullable-union shortcut, so
+        // every writer branch has to be mapped to a reader branch, and the
+        // nested record still has to keep the writer namespace.
+        let writer = mk_schema(
+            r#"{
+                "type": "record", "name": "B", "namespace": "writer_ns",
+                "fields": [{
+                    "name": "nested",
+                    "type": ["null", "string",
+                             {"type": "record", "name": "Bw",
+                              "fields": [{"name": "x", "type": "int"}]}]
+                }]
+            }"#,
+        );
+        let reader = mk_schema(
+            r#"{
+                "type": "record", "name": "B", "namespace": "reader_ns",
+                "aliases": ["writer_ns.B"],
+                "fields": [{
+                    "name": "nested",
+                    "type": ["null", "string",
+                             {"type": "record", "name": "Bw", "namespace": "writer_ns",
+                              "fields": [{"name": "x", "type": "int"}]}]
+                }]
+            }"#,
+        );
+        let mut maker = Maker::new(false, false, Tz::default());
+        let dt = maker
+            .make_data_type(&writer, Some(&reader), None, None)
+            .expect("multi-branch union should resolve");
+
+        let Codec::Struct(fields) = &dt.codec else {
+            panic!("expected a struct, got {:?}", dt.codec);
+        };
+        let nested = fields
+            .iter()
+            .find(|field| field.name == "nested")
+            .expect("nested field");
+        let Some(ResolutionInfo::Union(union)) = &nested.data_type.resolution else {
+            panic!(
+                "expected a union resolution, got {:?}",
+                nested.data_type.resolution
+            );
+        };
+        assert_eq!(union.writer_to_reader.len(), 3);
+        assert!(
+            union.writer_to_reader.iter().all(Option::is_some),
+            "every writer branch must map to a reader branch: {:?}",
+            union.writer_to_reader
+        );
+    }
+
+    #[test]
+    fn test_resolve_union_branch_with_inherited_namespace() {
+        let writer = mk_schema(
+            r#"{
+                "type": "record", "name": "B", "namespace": "ns",
+                "fields": [{
+                    "name": "nested",
+                    "type": ["null", {"type": "record", "name": "Bw", "namespace": "ns",
+                                      "fields": [{"name": "x", "type": "int"}]}]
+                }]
+            }"#,
+        );
+        let reader = mk_schema(
+            r#"{
+                "type": "record", "name": "B", "namespace": "ns",
+                "fields": [{
+                    "name": "nested",
+                    "type": ["null", {"type": "record", "name": "Bw",
+                                      "fields": [{"name": "x", "type": "int"}]}]
+                }]
+            }"#,
+        );
+        let mut maker = Maker::new(false, false, Tz::default());
+        let result = maker.make_data_type(&writer, Some(&reader), None, None);
+        assert!(result.is_ok(), "unexpected error: {result:?}");
+    }
+
     #[test]
     fn test_date_logical_type() {
         let schema = create_schema_with_logical_type(PrimitiveType::Int, "date");
 
         let mut maker = Maker::new(false, false, Tz::default());
-        let result = maker.make_data_type(&schema, None, None).unwrap();
+        let result = maker.make_data_type(&schema, None, None, None).unwrap();
 
         assert!(matches!(result.codec, Codec::Date32));
     }
@@ -2449,7 +2643,7 @@ mod tests {
         let schema = create_schema_with_logical_type(PrimitiveType::Int, "time-millis");
 
         let mut maker = Maker::new(false, false, Tz::default());
-        let result = maker.make_data_type(&schema, None, None).unwrap();
+        let result = maker.make_data_type(&schema, None, None, None).unwrap();
 
         assert!(matches!(result.codec, Codec::TimeMillis));
     }
@@ -2459,7 +2653,7 @@ mod tests {
         let schema = create_schema_with_logical_type(PrimitiveType::Long, "time-micros");
 
         let mut maker = Maker::new(false, false, Tz::default());
-        let result = maker.make_data_type(&schema, None, None).unwrap();
+        let result = maker.make_data_type(&schema, None, None, None).unwrap();
 
         assert!(matches!(result.codec, Codec::TimeMicros));
     }
@@ -2470,7 +2664,7 @@ mod tests {
             let schema = create_schema_with_logical_type(PrimitiveType::Long, "timestamp-millis");
 
             let mut maker = Maker::new(false, false, tz);
-            let result = maker.make_data_type(&schema, None, None).unwrap();
+            let result = maker.make_data_type(&schema, None, None, None).unwrap();
 
             let Codec::TimestampMillis(Some(actual_tz)) = result.codec else {
                 panic!("Expected TimestampMillis codec");
@@ -2485,7 +2679,7 @@ mod tests {
             let schema = create_schema_with_logical_type(PrimitiveType::Long, "timestamp-micros");
 
             let mut maker = Maker::new(false, false, tz);
-            let result = maker.make_data_type(&schema, None, None).unwrap();
+            let result = maker.make_data_type(&schema, None, None, None).unwrap();
 
             let Codec::TimestampMicros(Some(actual_tz)) = result.codec else {
                 panic!("Expected TimestampMicros codec");
@@ -2500,7 +2694,7 @@ mod tests {
             let schema = create_schema_with_logical_type(PrimitiveType::Long, "timestamp-nanos");
 
             let mut maker = Maker::new(false, false, tz);
-            let result = maker.make_data_type(&schema, None, None).unwrap();
+            let result = maker.make_data_type(&schema, None, None, None).unwrap();
 
             let Codec::TimestampNanos(Some(actual_tz)) = result.codec else {
                 panic!("Expected TimestampNanos codec");
@@ -2514,7 +2708,7 @@ mod tests {
         let schema = create_schema_with_logical_type(PrimitiveType::Long, "local-timestamp-millis");
 
         let mut maker = Maker::new(false, false, Tz::default());
-        let result = maker.make_data_type(&schema, None, None).unwrap();
+        let result = maker.make_data_type(&schema, None, None, None).unwrap();
 
         assert!(matches!(result.codec, Codec::TimestampMillis(None)));
     }
@@ -2524,7 +2718,7 @@ mod tests {
         let schema = create_schema_with_logical_type(PrimitiveType::Long, "local-timestamp-micros");
 
         let mut maker = Maker::new(false, false, Tz::default());
-        let result = maker.make_data_type(&schema, None, None).unwrap();
+        let result = maker.make_data_type(&schema, None, None, None).unwrap();
 
         assert!(matches!(result.codec, Codec::TimestampMicros(None)));
     }
@@ -2534,7 +2728,7 @@ mod tests {
         let schema = create_schema_with_logical_type(PrimitiveType::Long, "local-timestamp-nanos");
 
         let mut maker = Maker::new(false, false, Tz::default());
-        let result = maker.make_data_type(&schema, None, None).unwrap();
+        let result = maker.make_data_type(&schema, None, None, None).unwrap();
 
         assert!(matches!(result.codec, Codec::TimestampNanos(None)));
     }
@@ -2565,7 +2759,7 @@ mod tests {
         }));
 
         let mut maker = Maker::new(false, false, Tz::default());
-        let result = maker.make_data_type(&schema, None, None).unwrap();
+        let result = maker.make_data_type(&schema, None, None, None).unwrap();
 
         assert!(
             matches!(result.codec, Codec::Fixed(16)),
@@ -2617,7 +2811,7 @@ mod tests {
         let schema = create_schema_with_logical_type(PrimitiveType::Int, "custom-type");
 
         let mut maker = Maker::new(false, false, Tz::default());
-        let result = maker.make_data_type(&schema, None, None).unwrap();
+        let result = maker.make_data_type(&schema, None, None, None).unwrap();
 
         assert_eq!(
             result.metadata.get("logicalType"),
@@ -2630,7 +2824,7 @@ mod tests {
         let schema = Schema::TypeName(TypeName::Primitive(PrimitiveType::String));
 
         let mut maker = Maker::new(true, false, Tz::default());
-        let result = maker.make_data_type(&schema, None, None).unwrap();
+        let result = maker.make_data_type(&schema, None, None, None).unwrap();
 
         assert!(matches!(result.codec, Codec::Utf8View));
     }
@@ -2640,7 +2834,7 @@ mod tests {
         let schema = Schema::TypeName(TypeName::Primitive(PrimitiveType::String));
 
         let mut maker = Maker::new(false, false, Tz::default());
-        let result = maker.make_data_type(&schema, None, None).unwrap();
+        let result = maker.make_data_type(&schema, None, None, None).unwrap();
 
         assert!(matches!(result.codec, Codec::Utf8));
     }
@@ -2669,7 +2863,7 @@ mod tests {
         let schema = Schema::Complex(ComplexType::Record(record));
 
         let mut maker = Maker::new(true, false, Tz::default());
-        let result = maker.make_data_type(&schema, None, None).unwrap();
+        let result = maker.make_data_type(&schema, None, None, None).unwrap();
 
         if let Codec::Struct(fields) = &result.codec {
             let first_field_codec = &fields[0].data_type().codec;
@@ -2687,7 +2881,7 @@ mod tests {
         ]);
 
         let mut maker = Maker::new(false, true, Tz::default());
-        let result = maker.make_data_type(&schema, None, None);
+        let result = maker.make_data_type(&schema, None, None, None);
 
         assert!(result.is_err());
         match result {
@@ -2775,7 +2969,7 @@ mod tests {
         let writer_schema = Schema::TypeName(TypeName::Primitive(PrimitiveType::Double));
         let reader_schema = Schema::TypeName(TypeName::Primitive(PrimitiveType::Float));
         let mut maker = Maker::new(false, false, Tz::default());
-        let result = maker.make_data_type(&writer_schema, Some(&reader_schema), None);
+        let result = maker.make_data_type(&writer_schema, Some(&reader_schema), None, None);
         assert!(result.is_err());
         match result {
             Err(ArrowError::ParseError(msg)) => {
@@ -2796,7 +2990,9 @@ mod tests {
             Schema::TypeName(TypeName::Primitive(PrimitiveType::Null)),
         ]);
         let mut maker = Maker::new(false, false, Tz::default());
-        let result = maker.make_data_type(&writer, Some(&reader), None).unwrap();
+        let result = maker
+            .make_data_type(&writer, Some(&reader), None, None)
+            .unwrap();
         assert!(matches!(result.codec, Codec::Float64));
         assert_eq!(
             result.resolution,
@@ -2821,7 +3017,9 @@ mod tests {
         ]);
         let reader = mk_primitive(PrimitiveType::Bytes);
         let mut maker = Maker::new(false, false, Tz::default());
-        let dt = maker.make_data_type(&writer, Some(&reader), None).unwrap();
+        let dt = maker
+            .make_data_type(&writer, Some(&reader), None, None)
+            .unwrap();
         assert!(matches!(dt.codec(), Codec::Binary));
         let resolved = match dt.resolution {
             Some(ResolutionInfo::Union(u)) => u,
@@ -2845,7 +3043,9 @@ mod tests {
             mk_primitive(PrimitiveType::Double),
         ]);
         let mut maker = Maker::new(false, false, Tz::default());
-        let dt = maker.make_data_type(&writer, Some(&reader), None).unwrap();
+        let dt = maker
+            .make_data_type(&writer, Some(&reader), None, None)
+            .unwrap();
         let resolved = match dt.resolution {
             Some(ResolutionInfo::Union(u)) => u,
             other => panic!("expected union resolution info, got {other:?}"),
@@ -2866,7 +3066,9 @@ mod tests {
             mk_primitive(PrimitiveType::String),
         ]);
         let mut maker = Maker::new(false, false, Tz::default());
-        let dt = maker.make_data_type(&writer, Some(&reader), None).unwrap();
+        let dt = maker
+            .make_data_type(&writer, Some(&reader), None, None)
+            .unwrap();
         let resolved = match dt.resolution {
             Some(ResolutionInfo::Union(u)) => u,
             other => panic!("expected union resolution info, got {other:?}"),
@@ -2924,7 +3126,7 @@ mod tests {
         ]);
         let mut maker = Maker::new(false, false, Default::default());
         let dt = maker
-            .make_data_type(&writer, Some(&reader), None)
+            .make_data_type(&writer, Some(&reader), None, None)
             .expect("resolution should succeed");
         // Verify the union resolution structure
         let resolved = match dt.resolution.as_ref() {
@@ -3021,7 +3223,7 @@ mod tests {
         ]);
         let mut maker = Maker::new(false, false, Default::default());
         let dt = maker
-            .make_data_type(&writer, Some(&reader), None)
+            .make_data_type(&writer, Some(&reader), None, None)
             .expect("resolution should succeed");
         // Verify the union resolution structure
         let resolved = match dt.resolution.as_ref() {
@@ -3075,7 +3277,9 @@ mod tests {
             mk_primitive(PrimitiveType::Null),
         ]);
         let mut maker = Maker::new(false, false, Tz::default());
-        let dt = maker.make_data_type(&writer, Some(&reader), None).unwrap();
+        let dt = maker
+            .make_data_type(&writer, Some(&reader), None, None)
+            .unwrap();
         assert!(matches!(dt.codec(), Codec::Utf8));
         assert_eq!(dt.nullability, Some(Nullability::NullFirst));
         assert_eq!(
@@ -3103,7 +3307,9 @@ mod tests {
             mk_primitive(PrimitiveType::Null),
         ]);
         let mut maker = Maker::new(false, false, Tz::default());
-        let dt = maker.make_data_type(&writer, Some(&reader), None).unwrap();
+        let dt = maker
+            .make_data_type(&writer, Some(&reader), None, None)
+            .unwrap();
         assert!(matches!(dt.codec(), Codec::Float64));
         assert_eq!(dt.nullability, Some(Nullability::NullFirst));
         assert_eq!(
@@ -3126,7 +3332,7 @@ mod tests {
         let reader_schema = Schema::TypeName(TypeName::Primitive(PrimitiveType::Long));
         let mut maker = Maker::new(false, false, Tz::default());
         let result = maker
-            .make_data_type(&writer_schema, Some(&reader_schema), None)
+            .make_data_type(&writer_schema, Some(&reader_schema), None, None)
             .unwrap();
         assert!(matches!(result.codec, Codec::Int64));
         assert_eq!(
@@ -3162,7 +3368,7 @@ mod tests {
         let schema: Schema = serde_json::from_str(schema_str).unwrap();
 
         let mut maker = Maker::new(false, false, Tz::default());
-        let avro_data_type = maker.make_data_type(&schema, None, None).unwrap();
+        let avro_data_type = maker.make_data_type(&schema, None, None, None).unwrap();
 
         if let Codec::Struct(fields) = avro_data_type.codec() {
             assert_eq!(fields.len(), 4);
@@ -3242,7 +3448,7 @@ mod tests {
         let schema: Schema = serde_json::from_str(schema_str).unwrap();
 
         let mut maker = Maker::new(false, false, Tz::default());
-        let avro_data_type = maker.make_data_type(&schema, None, None).unwrap();
+        let avro_data_type = maker.make_data_type(&schema, None, None, None).unwrap();
 
         if let Codec::Struct(fields) = avro_data_type.codec() {
             assert_eq!(fields.len(), 4);
@@ -3327,7 +3533,7 @@ mod tests {
         let schema: Schema = serde_json::from_str(schema_str).unwrap();
 
         let mut maker = Maker::new(false, false, Tz::default());
-        let avro_data_type = maker.make_data_type(&schema, None, None).unwrap();
+        let avro_data_type = maker.make_data_type(&schema, None, None, None).unwrap();
 
         let Codec::Struct(fields) = avro_data_type.codec() else {
             panic!("Top-level schema is not a struct");
@@ -3351,7 +3557,7 @@ mod tests {
         let reader_schema = Schema::TypeName(TypeName::Primitive(PrimitiveType::String));
         let mut maker = Maker::new(false, false, Tz::default());
         let data_type = maker
-            .make_data_type(&writer_schema, Some(&reader_schema), None)
+            .make_data_type(&writer_schema, Some(&reader_schema), None, None)
             .expect("resolution should succeed");
         let field = AvroField {
             name: AVRO_ROOT_RECORD_DEFAULT_NAME.to_string(),
@@ -3729,7 +3935,7 @@ mod tests {
         }));
         let mut maker = Maker::new(false, false, Tz::default());
         let dt = maker
-            .make_data_type(&writer_schema, Some(&reader_schema), None)
+            .make_data_type(&writer_schema, Some(&reader_schema), None, None)
             .unwrap();
         assert_eq!(dt.metadata.get("who"), Some(&"\"reader\"".to_string()));
         if let Codec::List(inner) = dt.codec() {
@@ -3758,7 +3964,7 @@ mod tests {
         }));
         let mut maker = Maker::new(false, false, Tz::default());
         let dt = maker
-            .make_data_type(&writer_schema, Some(&reader_schema), None)
+            .make_data_type(&writer_schema, Some(&reader_schema), None, None)
             .unwrap();
         if let Codec::List(inner) = dt.codec() {
             assert_eq!(inner.nullability(), Some(Nullability::NullFirst));
@@ -3790,7 +3996,7 @@ mod tests {
         }));
         let mut maker = Maker::new(false, false, Tz::default());
         let dt = maker
-            .make_data_type(&writer_schema, Some(&reader_schema), None)
+            .make_data_type(&writer_schema, Some(&reader_schema), None, None)
             .unwrap();
         assert!(matches!(dt.codec(), Codec::Fixed(16)));
     }
@@ -3809,7 +4015,7 @@ mod tests {
             },
         }));
         let mut maker = Maker::new(false, false, Default::default());
-        let dt = maker.make_data_type(&schema, None, None).unwrap();
+        let dt = maker.make_data_type(&schema, None, None, None).unwrap();
         assert!(matches!(dt.codec(), Codec::IntervalMonthDayNano));
         assert_eq!(
             dt.codec.data_type(),
@@ -3891,7 +4097,7 @@ mod tests {
         }));
         let mut maker = Maker::new(false, false, Tz::default());
         let dt = maker
-            .make_data_type(&writer, Some(&reader), None)
+            .make_data_type(&writer, Some(&reader), None, None)
             .expect("record resolution");
         let fields = match dt.codec() {
             Codec::Struct(f) => f,
@@ -3972,7 +4178,7 @@ mod tests {
         let reader_schema = Schema::Complex(ComplexType::Record(reader_record));
         let mut maker = Maker::new(false, false, Tz::default());
         let result = maker
-            .make_data_type(&writer_schema, Some(&reader_schema), None)
+            .make_data_type(&writer_schema, Some(&reader_schema), None, None)
             .expect("record alias resolution should succeed");
         match result.codec {
             Codec::Struct(ref fields) => assert_eq!(fields.len(), 2),
@@ -4004,7 +4210,7 @@ mod tests {
         let reader_schema = Schema::Complex(ComplexType::Enum(reader_enum));
         let mut maker = Maker::new(false, false, Tz::default());
         maker
-            .make_data_type(&writer_schema, Some(&reader_schema), None)
+            .make_data_type(&writer_schema, Some(&reader_schema), None, None)
             .expect("enum alias resolution should succeed");
     }
 
@@ -4028,7 +4234,7 @@ mod tests {
         let reader_schema = Schema::Complex(ComplexType::Fixed(reader_fixed));
         let mut maker = Maker::new(false, false, Tz::default());
         maker
-            .make_data_type(&writer_schema, Some(&reader_schema), None)
+            .make_data_type(&writer_schema, Some(&reader_schema), None, None)
             .expect("fixed alias resolution should succeed");
     }
 }
