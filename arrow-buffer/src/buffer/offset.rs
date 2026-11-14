@@ -76,9 +76,23 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     }
 
     /// Create a new [`OffsetBuffer`] containing a single 0 value
+    ///
+    /// # Panics
+    ///
+    /// Panics if the required buffer cannot be allocated.
+    /// Use [`Self::try_new_empty`] for a fallible version.
     pub fn new_empty() -> Self {
         let buffer = MutableBuffer::from_len_zeroed(std::mem::size_of::<O>());
         Self(buffer.into_buffer().into())
+    }
+
+    /// Create a new [`OffsetBuffer`] containing a single 0 value
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the required buffer cannot be allocated.
+    pub fn try_new_empty() -> Result<Self, OverflowError> {
+        Self::try_new_zeroed(0)
     }
 
     /// Create a new [`OffsetBuffer`] containing `len + 1` `0` values
@@ -190,10 +204,11 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     ///
     /// # Errors
     ///
-    /// Errors if `length * n` overflows `usize` or `O`.
+    /// Errors if `length * n` overflows `usize` or `O`, or if the required
+    /// buffer cannot be allocated.
     pub fn try_from_repeated_length(length: usize, n: usize) -> Result<Self, OverflowError> {
         if n == 0 {
-            return Ok(Self::new_empty());
+            return Self::try_new_empty();
         }
 
         if length == 0 {
@@ -693,6 +708,12 @@ mod tests {
     fn impl_default() {
         let default = OffsetBuffer::<i32>::default();
         assert_eq!(default.as_ref(), &[0]);
+    }
+
+    #[test]
+    fn try_new_empty() {
+        let buffer = OffsetBuffer::<i32>::try_new_empty().unwrap();
+        assert_eq!(buffer.as_ref(), &[0]);
     }
 
     #[test]

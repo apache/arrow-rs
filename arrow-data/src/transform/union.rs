@@ -31,7 +31,8 @@ pub(super) fn build_extend_sparse(array: &ArrayData) -> Extend<'_> {
             // extends type_ids
             mutable
                 .buffer1
-                .extend_from_slice(&type_ids[start..start + len]);
+                .try_extend_from_slice(&type_ids[start..start + len])
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
             let child_start = start.checked_add(offset).ok_or_else(|| {
                 ArrowError::InvalidArgumentError(format!(
@@ -63,7 +64,8 @@ pub(super) fn build_extend_dense(array: &ArrayData) -> Extend<'_> {
             // extends type_ids
             mutable
                 .buffer1
-                .extend_from_slice(&type_ids[start..start + len]);
+                .try_extend_from_slice(&type_ids[start..start + len])
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
             for i in start..start + len {
                 let type_id = type_ids[i];

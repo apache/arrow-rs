@@ -181,7 +181,8 @@ fn process_extends_batch<T: ArrowNativeType>(
     mutable.child_data[0]
         .data
         .buffer1
-        .extend_from_slice(&run_ends_bytes);
+        .try_extend_from_slice(&run_ends_bytes)
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
     mutable.child_data[0].data.len += run_ends_bytes.len() / std::mem::size_of::<T>();
 
     // Batch extend the values array using the range
