@@ -29,8 +29,10 @@ use arrow_buffer::{
 use arrow_data::{ArrayData, ArrayDataBuilder, UnsafeFlag};
 use arrow_schema::*;
 
+pub use crate::IpcSchema;
 use crate::compression::{CompressionCodec, DecompressionContext};
 use crate::r#gen::Message;
+use crate::ipc_schema::DictIdNode;
 use crate::{Block, CONTINUATION_MARKER, FieldNode, MetadataVersion};
 use DataType::*;
 
@@ -78,6 +80,7 @@ impl RecordBatchDecoder<'_> {
     fn create_array(
         &mut self,
         field: &Field,
+        dict_node: &DictIdNode,
         variadic_counts: &mut VecDeque<i64>,
     ) -> Result<ArrayRef, ArrowError> {
         let data_type = field.data_type();
@@ -107,7 +110,7 @@ impl RecordBatchDecoder<'_> {
             List(list_field) | LargeList(list_field) | Map(list_field, _) => {
                 let list_node = self.next_node(field)?;
                 let list_buffers = [self.next_buffer()?, self.next_buffer()?];
-                let values = self.create_array(list_field, variadic_counts)?;
+                let values = self.create_array(list_field, dict_node.child(0), variadic_counts)?;
                 self.create_list_array(list_node, data_type, &list_buffers, values)
             }
             ListView(list_field) | LargeListView(list_field) => {
@@ -117,13 +120,13 @@ impl RecordBatchDecoder<'_> {
                     self.next_buffer()?, // offsets
                     self.next_buffer()?, // sizes
                 ];
-                let values = self.create_array(list_field, variadic_counts)?;
+                let values = self.create_array(list_field, dict_node.child(0), variadic_counts)?;
                 self.create_list_view_array(list_node, data_type, &list_buffers, values)
             }
             FixedSizeList(list_field, _) => {
                 let list_node = self.next_node(field)?;
                 let list_buffers = [self.next_buffer()?];
-                let values = self.create_array(list_field, variadic_counts)?;
+                let values = self.create_array(list_field, dict_node.child(0), variadic_counts)?;
                 self.create_list_array(list_node, data_type, &list_buffers, values)
             }
             Struct(struct_fields) => {
@@ -134,16 +137,19 @@ impl RecordBatchDecoder<'_> {
                 let mut struct_arrays = Vec::with_capacity(struct_fields.len());
                 // TODO investigate whether just knowing the number of buffers could
                 // still work
-                for struct_field in struct_fields {
-                    let child = self.create_array(struct_field, variadic_counts)?;
+                for (i, struct_field) in struct_fields.iter().enumerate() {
+                    let child =
+                        self.create_array(struct_field, dict_node.child(i), variadic_counts)?;
                     struct_arrays.push(child);
                 }
                 self.create_struct_array(struct_node, null_buffer, struct_fields, struct_arrays)
             }
             RunEndEncoded(run_ends_field, values_field) => {
                 let run_node = self.next_node(field)?;
-                let run_ends = self.create_array(run_ends_field, variadic_counts)?;
-                let values = self.create_array(values_field, variadic_counts)?;
+                let run_ends =
+                    self.create_array(run_ends_field, dict_node.child(0), variadic_counts)?;
+                let values =
+                    self.create_array(values_field, dict_node.child(1), variadic_counts)?;
 
                 let run_array_length = run_node.length() as usize;
                 let builder = ArrayData::builder(data_type.clone())
@@ -160,8 +166,7 @@ impl RecordBatchDecoder<'_> {
                 let index_node = self.next_node(field)?;
                 let index_buffers = [self.next_buffer()?, self.next_buffer()?];
 
-                #[expect(deprecated)]
-                let dict_id = field.dict_id().ok_or_else(|| {
+                let dict_id = dict_node.dict_id.ok_or_else(|| {
                     ArrowError::ParseError(format!("Field {field} does not have dict id"))
                 })?;
 
@@ -211,8 +216,8 @@ impl RecordBatchDecoder<'_> {
 
                 let mut children = Vec::with_capacity(fields.len());
 
-                for (_id, field) in fields.iter() {
-                    let child = self.create_array(field, variadic_counts)?;
+                for (i, (_id, field)) in fields.iter().enumerate() {
+                    let child = self.create_array(field, dict_node.child(i), variadic_counts)?;
                     children.push(child);
                 }
 
@@ -450,6 +455,9 @@ pub struct RecordBatchDecoder<'a> {
     schema: SchemaRef,
     /// Decoded dictionaries indexed by dictionary id
     dictionaries_by_id: &'a HashMap<i64, ArrayRef>,
+    /// Dictionary ids of the schema fields, one tree per top-level field.
+    /// When `None`, they are taken from the deprecated `Field::dict_id`.
+    dict_ids: Option<Arc<[DictIdNode]>>,
     /// Optional compression codec
     compression: Option<CompressionCodec>,
     /// Decompression context for reusing zstd decompressor state
@@ -499,6 +507,7 @@ impl<'a> RecordBatchDecoder<'a> {
             batch,
             schema,
             dictionaries_by_id,
+            dict_ids: None,
             compression,
             decompression_context: DecompressionContext::new(),
             version: *metadata,
@@ -509,6 +518,14 @@ impl<'a> RecordBatchDecoder<'a> {
             require_alignment: false,
             skip_validation: UnsafeFlag::new(),
         })
+    }
+
+    /// Use the dictionary ids from `ipc_schema` instead of `Field::dict_id`.
+    ///
+    /// `ipc_schema` must describe the same schema the decoder was created with.
+    pub(crate) fn with_dict_ids(mut self, dict_ids: Arc<[DictIdNode]>) -> Self {
+        self.dict_ids = Some(dict_ids);
+        self
     }
 
     /// Set the projection (default: None)
@@ -564,6 +581,10 @@ impl<'a> RecordBatchDecoder<'a> {
         let options = RecordBatchOptions::new().with_row_count(Some(self.batch.length() as usize));
 
         let schema = Arc::clone(&self.schema);
+        let dict_ids = match &self.dict_ids {
+            Some(dict_ids) => Arc::clone(dict_ids),
+            None => Arc::clone(IpcSchema::from_schema_dict_ids(Arc::clone(&schema)).dict_ids()),
+        };
         if let Some(projection) = self.projection {
             let mut arrays = Vec::with_capacity(projection.len());
             // project fields
@@ -576,7 +597,11 @@ impl<'a> RecordBatchDecoder<'a> {
                         let child = match decoded.clone() {
                             Some(child) => child,
                             None => {
-                                let child = self.create_array(field, &mut variadic_counts)?;
+                                let child = self.create_array(
+                                    field,
+                                    DictIdNode::nth(&dict_ids, idx),
+                                    &mut variadic_counts,
+                                )?;
                                 decoded = Some(Arc::clone(&child));
                                 child
                             }
@@ -611,8 +636,12 @@ impl<'a> RecordBatchDecoder<'a> {
         } else {
             let mut children = Vec::with_capacity(schema.fields().len());
             // keep track of index as lists require more than one node
-            for field in schema.fields() {
-                let child = self.create_array(field, &mut variadic_counts)?;
+            for (idx, field) in schema.fields().iter().enumerate() {
+                let child = self.create_array(
+                    field,
+                    DictIdNode::nth(&dict_ids, idx),
+                    &mut variadic_counts,
+                )?;
                 children.push(child);
             }
 
@@ -818,6 +847,31 @@ pub fn read_record_batch(
         .read_record_batch()
 }
 
+/// Like [`read_record_batch`], but takes dictionary ids from `ipc_schema`
+/// instead of the deprecated `Field::dict_id`.
+///
+/// Get `ipc_schema` from the IPC schema message with [`IpcSchema::try_from_fb`].
+pub fn read_record_batch_with_ipc_schema(
+    buf: &Buffer,
+    batch: crate::RecordBatch,
+    ipc_schema: &IpcSchema,
+    dictionaries_by_id: &HashMap<i64, ArrayRef>,
+    projection: Option<&[usize]>,
+    metadata: &MetadataVersion,
+) -> Result<RecordBatch, ArrowError> {
+    RecordBatchDecoder::try_new(
+        buf,
+        batch,
+        Arc::clone(ipc_schema.schema()),
+        dictionaries_by_id,
+        metadata,
+    )?
+    .with_dict_ids(Arc::clone(ipc_schema.dict_ids()))
+    .with_projection(projection)
+    .with_require_alignment(false)
+    .read_record_batch()
+}
+
 /// Read the dictionary from the buffer and provided metadata,
 /// updating the `dictionaries_by_id` with the resulting dictionary
 pub fn read_dictionary(
@@ -848,12 +902,55 @@ pub fn read_dictionary_impl(
     require_alignment: bool,
     skip_validation: UnsafeFlag,
 ) -> Result<(), ArrowError> {
+    let ipc_schema = IpcSchema::from_schema_dict_ids(Arc::new(schema.clone()));
+    read_dictionary_with_ipc_schema_impl(
+        buf,
+        batch,
+        &ipc_schema,
+        dictionaries_by_id,
+        metadata,
+        require_alignment,
+        skip_validation,
+    )
+}
+
+/// Like [`read_dictionary`], but takes dictionary ids from `ipc_schema`
+/// instead of the deprecated `Field::dict_id`.
+///
+/// Get `ipc_schema` from the IPC schema message with [`IpcSchema::try_from_fb`].
+pub fn read_dictionary_with_ipc_schema(
+    buf: &Buffer,
+    batch: crate::DictionaryBatch,
+    ipc_schema: &IpcSchema,
+    dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
+    metadata: &MetadataVersion,
+) -> Result<(), ArrowError> {
+    read_dictionary_with_ipc_schema_impl(
+        buf,
+        batch,
+        ipc_schema,
+        dictionaries_by_id,
+        metadata,
+        false,
+        UnsafeFlag::new(),
+    )
+}
+
+pub(crate) fn read_dictionary_with_ipc_schema_impl(
+    buf: &Buffer,
+    batch: crate::DictionaryBatch,
+    ipc_schema: &IpcSchema,
+    dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
+    metadata: &MetadataVersion,
+    require_alignment: bool,
+    skip_validation: UnsafeFlag,
+) -> Result<(), ArrowError> {
     let id = batch.id();
 
     let dictionary_values = get_dictionary_values(
         buf,
         batch,
-        schema,
+        ipc_schema,
         dictionaries_by_id,
         metadata,
         require_alignment,
@@ -902,55 +999,20 @@ fn update_dictionaries(
     Ok(())
 }
 
-/// Returns the first field with dictionary `id`, in [`Schema::fields_with_dict_id`] order.
-///
-/// Unlike that method this stops at the first match without collecting every nested field,
-/// which is significant when a stream has many dictionary batches.
-fn first_field_with_dict_id(fields: &Fields, id: i64) -> Option<&Field> {
-    fields
-        .iter()
-        .find_map(|field| field_with_dict_id(field, id))
-}
-
-fn field_with_dict_id(field: &Field, id: i64) -> Option<&Field> {
-    #[expect(deprecated)]
-    let dict_id = field.dict_id();
-    if dict_id == Some(id) {
-        return Some(field);
-    }
-    child_field_with_dict_id(field.data_type(), id)
-}
-
-fn child_field_with_dict_id(data_type: &DataType, id: i64) -> Option<&Field> {
-    match data_type {
-        DataType::Struct(fields) => first_field_with_dict_id(fields, id),
-        DataType::Union(fields, _) => fields.iter().find_map(|(_, f)| field_with_dict_id(f, id)),
-        DataType::List(field)
-        | DataType::LargeList(field)
-        | DataType::ListView(field)
-        | DataType::LargeListView(field)
-        | DataType::FixedSizeList(field, _)
-        | DataType::Map(field, _)
-        | DataType::RunEndEncoded(_, field) => field_with_dict_id(field, id),
-        DataType::Dictionary(_, value_type) => child_field_with_dict_id(value_type, id),
-        _ => None,
-    }
-}
-
 /// Given a dictionary batch IPC message/body along with the full state of a
 /// stream including schema, dictionary cache, metadata, and other flags, this
 /// function will parse the buffer into an array of dictionary values.
 fn get_dictionary_values(
     buf: &Buffer,
     batch: crate::DictionaryBatch,
-    schema: &Schema,
+    ipc_schema: &IpcSchema,
     dictionaries_by_id: &HashMap<i64, ArrayRef>,
     metadata: &MetadataVersion,
     require_alignment: bool,
     skip_validation: UnsafeFlag,
 ) -> Result<ArrayRef, ArrowError> {
     let id = batch.id();
-    let first_field = first_field_with_dict_id(schema.fields(), id).ok_or_else(|| {
+    let (first_field, dict_node) = ipc_schema.field_with_dict_id(id).ok_or_else(|| {
         ArrowError::InvalidArgumentError(format!("dictionary id {id} not found in schema"))
     })?;
 
@@ -975,6 +1037,11 @@ fn get_dictionary_values(
                 dictionaries_by_id,
                 metadata,
             )?
+            // The value type's children carry the ids of nested dictionaries
+            .with_dict_ids(Arc::from([DictIdNode {
+                dict_id: None,
+                children: dict_node.children.clone(),
+            }]))
             .with_require_alignment(require_alignment)
             .with_skip_validation(skip_validation)
             .read_record_batch()?;
@@ -1114,7 +1181,7 @@ pub fn read_footer_length(buf: [u8; 10]) -> Result<usize, ArrowError> {
 /// ```
 #[derive(Debug)]
 pub struct FileDecoder {
-    schema: SchemaRef,
+    schema: IpcSchema,
     dictionaries: HashMap<i64, ArrayRef>,
     version: MetadataVersion,
     projection: Option<Vec<usize>>,
@@ -1124,7 +1191,17 @@ pub struct FileDecoder {
 
 impl FileDecoder {
     /// Create a new [`FileDecoder`] with the given schema and version
+    ///
+    /// Dictionary ids are taken from the deprecated `Field::dict_id`. Prefer
+    /// [`FileDecoder::new_with_ipc_schema`], which takes them from the file.
     pub fn new(schema: SchemaRef, version: MetadataVersion) -> Self {
+        Self::new_with_ipc_schema(IpcSchema::from_schema_dict_ids(schema), version)
+    }
+
+    /// Create a new [`FileDecoder`] with the given [`IpcSchema`] and version
+    ///
+    /// Get `schema` from the file footer with [`IpcSchema::try_from_fb`].
+    pub fn new_with_ipc_schema(schema: IpcSchema, version: MetadataVersion) -> Self {
         Self {
             schema,
             version,
@@ -1191,7 +1268,7 @@ impl FileDecoder {
         match message.header_type() {
             crate::MessageHeader::DictionaryBatch => {
                 let batch = message.header_as_dictionary_batch().unwrap();
-                read_dictionary_impl(
+                read_dictionary_with_ipc_schema_impl(
                     &buf.slice(block.metaDataLength() as _),
                     batch,
                     &self.schema,
@@ -1226,10 +1303,11 @@ impl FileDecoder {
                 RecordBatchDecoder::try_new(
                     &buf.slice(block.metaDataLength() as _),
                     batch,
-                    self.schema.clone(),
+                    Arc::clone(self.schema.schema()),
                     &self.dictionaries,
                     &message.version(),
                 )?
+                .with_dict_ids(Arc::clone(self.schema.dict_ids()))
                 .with_projection(self.projection.as_deref())
                 .with_require_alignment(self.require_alignment)
                 .with_skip_validation(self.skip_validation.clone())
@@ -1352,7 +1430,8 @@ impl FileReaderBuilder {
             ));
         }
 
-        let schema = Arc::new(crate::convert::try_fb_to_schema(ipc_schema)?);
+        let ipc_schema = IpcSchema::try_from_fb(ipc_schema)?;
+        let schema = Arc::clone(ipc_schema.schema());
 
         let projected_schema = match &self.projection {
             Some(projection) => Arc::new(schema.project(projection)?),
@@ -1371,7 +1450,7 @@ impl FileReaderBuilder {
             }
         }
 
-        let mut decoder = FileDecoder::new(schema, footer.version());
+        let mut decoder = FileDecoder::new_with_ipc_schema(ipc_schema, footer.version());
         if let Some(projection) = self.projection {
             decoder = decoder.with_projection(projection)
         }
@@ -1625,8 +1704,8 @@ pub struct StreamReader<R> {
     /// Stream reader
     reader: MessageReader<R>,
 
-    /// The schema that is read from the stream's first message
-    schema: SchemaRef,
+    /// The schema, with dictionary ids, that is read from the stream's first message
+    ipc_schema: IpcSchema,
 
     /// Optional dictionaries for each schema field.
     ///
@@ -1651,7 +1730,7 @@ impl<R> fmt::Debug for StreamReader<R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::result::Result<(), fmt::Error> {
         f.debug_struct("StreamReader<R>")
             .field("reader", &"R")
-            .field("schema", &self.schema)
+            .field("schema", self.ipc_schema.schema())
             .field("dictionaries_by_id", &self.dictionaries_by_id)
             .field("finished", &self.finished)
             .field("projection", &self.projection)
@@ -1702,7 +1781,8 @@ impl<R: Read> StreamReader<R> {
         let schema = message.header_as_schema().ok_or_else(|| {
             ArrowError::ParseError("Failed to parse schema from message header".to_string())
         })?;
-        let schema = crate::convert::try_fb_to_schema(schema)?;
+        let ipc_schema = IpcSchema::try_from_fb(schema)?;
+        let schema = ipc_schema.schema();
 
         // Create an array of optional dictionary value arrays, one per field.
         let dictionaries_by_id = HashMap::new();
@@ -1717,7 +1797,7 @@ impl<R: Read> StreamReader<R> {
 
         Ok(Self {
             reader: msg_reader,
-            schema: Arc::new(schema),
+            ipc_schema,
             finished: false,
             dictionaries_by_id,
             projection,
@@ -1729,7 +1809,7 @@ impl<R: Read> StreamReader<R> {
     pub fn schema(&self) -> SchemaRef {
         match &self.projection {
             Some((_, projected_schema)) => projected_schema.clone(),
-            None => self.schema.clone(),
+            None => Arc::clone(self.ipc_schema.schema()),
         }
     }
 
@@ -1794,7 +1874,7 @@ impl<R: Read> StreamReader<R> {
                 })?;
 
                 let version = message.version();
-                let schema = self.schema.clone();
+                let schema = Arc::clone(self.ipc_schema.schema());
                 let record_batch = RecordBatchDecoder::try_new(
                     &body.into(),
                     batch,
@@ -1802,6 +1882,7 @@ impl<R: Read> StreamReader<R> {
                     &self.dictionaries_by_id,
                     &version,
                 )?
+                .with_dict_ids(Arc::clone(self.ipc_schema.dict_ids()))
                 .with_projection(self.projection.as_ref().map(|x| x.0.as_ref()))
                 .with_require_alignment(false)
                 .with_skip_validation(self.skip_validation.clone())
@@ -1819,7 +1900,7 @@ impl<R: Read> StreamReader<R> {
                 let dict_values = get_dictionary_values(
                     &body.into(),
                     dict,
-                    &self.schema,
+                    &self.ipc_schema,
                     &self.dictionaries_by_id,
                     &version,
                     false,
@@ -3902,9 +3983,131 @@ mod tests {
         );
     }
 
+    /// Writes `batch` to an IPC file and returns the buffer and footer offsets
+    fn write_file_for_ipc_schema_test(batch: &RecordBatch) -> Buffer {
+        let mut out = vec![];
+        let mut writer = crate::writer::FileWriter::try_new(&mut out, &batch.schema()).unwrap();
+        writer.write(batch).unwrap();
+        writer.finish().unwrap();
+        drop(writer);
+        Buffer::from_vec(out)
+    }
+
+    fn nested_dict_batch() -> RecordBatch {
+        let dict = |values: &[&str]| -> ArrayRef {
+            Arc::new(
+                values
+                    .iter()
+                    .copied()
+                    .collect::<DictionaryArray<Int32Type>>(),
+            )
+        };
+        let struct_array = StructArray::from(vec![(
+            Arc::new(Field::new(
+                "s_dict",
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                true,
+            )),
+            dict(&["x", "y", "x"]),
+        )]);
+        let list_values = dict(&["p", "q", "q", "p"]);
+        let list_field = Arc::new(Field::new_list_field(list_values.data_type().clone(), true));
+        let list_array = ListArray::new(
+            list_field,
+            OffsetBuffer::from_lengths([1, 2, 1]),
+            list_values,
+            None,
+        );
+        RecordBatch::try_from_iter(vec![
+            ("top", dict(&["a", "b", "a"])),
+            ("st", Arc::new(struct_array) as ArrayRef),
+            ("lst", Arc::new(list_array) as ArrayRef),
+        ])
+        .unwrap()
+    }
+
+    /// Strips the deprecated `Field::dict_id`, so a decoder can only find the
+    /// dictionary ids through an [`IpcSchema`].
+    fn schema_without_dict_ids(schema: &Schema) -> Schema {
+        // Round trip through `Field::new`, which sets every dict_id to 0
+        fn strip(field: &Field) -> Field {
+            let data_type = match field.data_type() {
+                DataType::Struct(fields) => {
+                    DataType::Struct(fields.iter().map(|f| strip(f)).collect())
+                }
+                DataType::List(f) => DataType::List(Arc::new(strip(f))),
+                other => other.clone(),
+            };
+            Field::new(field.name(), data_type, field.is_nullable())
+        }
+        Schema::new(schema.fields().iter().map(|f| strip(f)).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn test_ipc_schema_reads_dict_ids_from_message() {
+        let batch = nested_dict_batch();
+        let buffer = write_file_for_ipc_schema_test(&batch);
+        let trailer_start = buffer.len() - 10;
+        let footer_len = read_footer_length(buffer[trailer_start..].try_into().unwrap()).unwrap();
+        let footer = root_as_footer(&buffer[trailer_start - footer_len..trailer_start]).unwrap();
+
+        let ipc_schema = IpcSchema::try_from_fb(footer.schema().unwrap()).unwrap();
+        assert_eq!(ipc_schema.schema().as_ref(), batch.schema().as_ref());
+
+        // The tree follows the schema shape: top, st.s_dict, lst.item
+        let ids = ipc_schema.dict_ids();
+        let top = ids[0].dict_id.unwrap();
+        let in_struct = ids[1].child(0).dict_id.unwrap();
+        let in_list = ids[2].child(0).dict_id.unwrap();
+        assert_eq!(ids[1].dict_id, None);
+        assert_eq!(ids[2].dict_id, None);
+        let mut all = vec![top, in_struct, in_list];
+        all.sort_unstable();
+        all.dedup();
+        assert_eq!(all.len(), 3, "each dictionary has its own id");
+
+        // An IpcSchema whose `Schema` has no `Field::dict_id` still decodes,
+        // because the ids come from the tree and not from the fields.
+        let stripped = Arc::new(schema_without_dict_ids(ipc_schema.schema()));
+        let ipc_schema = IpcSchema {
+            schema: stripped,
+            ..ipc_schema
+        };
+        let read = |decoder: &mut FileDecoder| {
+            for block in footer.dictionaries().iter().flatten() {
+                let len = block.bodyLength() as usize + block.metaDataLength() as usize;
+                let data = buffer.slice_with_length(block.offset() as _, len);
+                decoder.read_dictionary(block, &data)?;
+            }
+            let block = footer.recordBatches().unwrap().get(0);
+            let len = block.bodyLength() as usize + block.metaDataLength() as usize;
+            let data = buffer.slice_with_length(block.offset() as _, len);
+            decoder.read_record_batch(block, &data).map(Option::unwrap)
+        };
+
+        let mut decoder = FileDecoder::new_with_ipc_schema(ipc_schema.clone(), footer.version());
+        let back = read(&mut decoder).unwrap();
+        assert_eq!(back.columns(), batch.columns());
+
+        // The old constructor relies on `Field::dict_id`, and so cannot
+        // tell the dictionaries apart.
+        let mut decoder = FileDecoder::new(Arc::clone(ipc_schema.schema()), footer.version());
+        assert!(
+            read(&mut decoder)
+                .map(|b| b.columns() != batch.columns())
+                .unwrap_or(true)
+        );
+
+        // Projection only keeps the requested columns but uses the full tree
+        let mut decoder =
+            FileDecoder::new_with_ipc_schema(ipc_schema, footer.version()).with_projection(vec![2]);
+        let back = read(&mut decoder).unwrap();
+        assert_eq!(back.column(0), batch.column(2));
+    }
+
     #[test]
     #[expect(deprecated)]
-    fn test_first_field_with_dict_id_matches_fields_with_dict_id() {
+    fn test_ipc_schema_field_with_dict_id_matches_fields_with_dict_id() {
         let dict = |name: &str, id: i64| {
             let data_type =
                 DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
@@ -3954,9 +4157,10 @@ mod tests {
             dict_of_list_of_dict("same_outer_and_inner_id", 9, 9),
         ]);
 
+        let ipc_schema = IpcSchema::from_schema_dict_ids(Arc::new(schema.clone()));
         for id in -1..=10 {
             let expected = schema.fields_with_dict_id(id).first().map(|f| f.name());
-            let actual = first_field_with_dict_id(schema.fields(), id).map(|f| f.name());
+            let actual = ipc_schema.field_with_dict_id(id).map(|(f, _)| f.name());
             assert_eq!(actual, expected, "dictionary id {id}");
         }
     }
