@@ -764,16 +764,18 @@ impl<T: DataType> DeltaBitPackEncoderConversion<T> for DeltaBitPackEncoder<T> {
 // ----------------------------------------------------------------------
 // DELTA_LENGTH_BYTE_ARRAY encoding
 
+/// Number of lengths collected before each `put` into a length encoder, so that
+/// its per-call overhead is not paid for every value.
+const LENGTH_BATCH_SIZE: usize = 128;
+
 /// Encoding for byte arrays to separate the length values and the data.
 /// The lengths are encoded using DELTA_BINARY_PACKED encoding, data is
 /// stored as raw bytes.
 pub struct DeltaLengthByteArrayEncoder<T: DataType> {
     // length encoder
     len_encoder: DeltaBitPackEncoder<Int32Type>,
-    // byte array data
-    data: Vec<ByteArray>,
-    // data size in bytes of encoded values
-    encoded_size: usize,
+    // the values' bytes, concatenated
+    data: Vec<u8>,
     _phantom: PhantomData<T>,
 }
 
@@ -789,7 +791,6 @@ impl<T: DataType> DeltaLengthByteArrayEncoder<T> {
         Self {
             len_encoder: DeltaBitPackEncoder::new(),
             data: vec![],
-            encoded_size: 0,
             _phantom: PhantomData,
         }
     }
@@ -799,9 +800,19 @@ impl<T: DataType> DeltaLengthByteArrayEncoder<T> {
         Self {
             len_encoder: DeltaBitPackEncoder::new_with_options(options),
             data: vec![],
-            encoded_size: 0,
             _phantom: PhantomData,
         }
+    }
+
+    /// Encodes each of `values`, at most [`LENGTH_BATCH_SIZE`] of them.
+    fn put_slices(&mut self, values: &[&[u8]]) -> Result<()> {
+        debug_assert!(values.len() <= LENGTH_BATCH_SIZE);
+        let mut lengths = [0i32; LENGTH_BATCH_SIZE];
+        for (length, value) in lengths.iter_mut().zip(values) {
+            *length = value.len() as i32;
+            self.data.extend_from_slice(value);
+        }
+        self.len_encoder.put(&lengths[..values.len()])
     }
 }
 
@@ -812,19 +823,23 @@ impl<T: DataType> Encoder<T> for DeltaLengthByteArrayEncoder<T> {
             "DeltaLengthByteArrayEncoder only supports ByteArrayType"
         );
 
-        let val_it = || {
-            values
-                .iter()
-                .map(|x| x.as_any().downcast_ref::<ByteArray>().unwrap())
-        };
-
-        let lengths: Vec<i32> = val_it().map(|byte_array| byte_array.len() as i32).collect();
-        self.len_encoder.put(&lengths)?;
-        for byte_array in val_it() {
-            self.encoded_size += byte_array.len();
-            self.data.push(byte_array.clone());
+        fn byte_array<T: DataType>(value: &T::T) -> &ByteArray {
+            value.as_any().downcast_ref::<ByteArray>().unwrap()
         }
+        // Size the buffer once rather than growing it value by value.
+        let total_bytes: usize = values
+            .iter()
+            .map(|value| byte_array::<T>(value).len())
+            .sum();
+        self.data.reserve(total_bytes);
 
+        let mut slices: [&[u8]; LENGTH_BATCH_SIZE] = [&[]; LENGTH_BATCH_SIZE];
+        for chunk in values.chunks(LENGTH_BATCH_SIZE) {
+            for (slice, value) in slices.iter_mut().zip(chunk) {
+                *slice = byte_array::<T>(value).data();
+            }
+            self.put_slices(&slices[..chunk.len()])?;
+        }
         Ok(())
     }
 
@@ -837,7 +852,7 @@ impl<T: DataType> Encoder<T> for DeltaLengthByteArrayEncoder<T> {
     }
 
     fn estimated_data_encoded_size(&self) -> usize {
-        self.len_encoder.estimated_data_encoded_size() + self.encoded_size
+        self.len_encoder.estimated_data_encoded_size() + self.data.len()
     }
 
     fn flush_buffer(&mut self) -> Result<Bytes> {
@@ -846,21 +861,20 @@ impl<T: DataType> Encoder<T> for DeltaLengthByteArrayEncoder<T> {
             "DeltaLengthByteArrayEncoder only supports ByteArrayType"
         );
 
-        let mut total_bytes = vec![];
         let lengths = self.len_encoder.flush_buffer()?;
+        let mut total_bytes = Vec::with_capacity(lengths.len() + self.data.len());
         total_bytes.extend_from_slice(&lengths);
-        self.data.iter().for_each(|byte_array| {
-            total_bytes.extend_from_slice(byte_array.data());
-        });
+        total_bytes.extend_from_slice(&self.data);
         self.data.clear();
-        self.encoded_size = 0;
 
         Ok(total_bytes.into())
     }
 
     /// return the estimated memory size of this encoder.
     fn estimated_memory_size(&self) -> usize {
-        self.len_encoder.estimated_memory_size() + self.data.len() + std::mem::size_of::<Self>()
+        self.len_encoder.estimated_memory_size()
+            + self.data.capacity()
+            + std::mem::size_of::<Self>()
     }
 }
 
@@ -907,32 +921,46 @@ impl<T: DataType> DeltaByteArrayEncoder<T> {
 
 impl<T: DataType> Encoder<T> for DeltaByteArrayEncoder<T> {
     fn put(&mut self, values: &[T::T]) -> Result<()> {
-        let mut prefix_lengths: Vec<i32> = vec![];
-        let mut suffixes: Vec<ByteArray> = vec![];
-
-        let values = values
-            .iter()
-            .map(|x| x.as_any())
-            .map(|x| match T::get_physical_type() {
-                Type::BYTE_ARRAY => x.downcast_ref::<ByteArray>().unwrap(),
-                Type::FIXED_LEN_BYTE_ARRAY => x.downcast_ref::<FixedLenByteArray>().unwrap(),
+        fn bytes_of<T: DataType>(x: &T::T) -> &[u8] {
+            let x = x.as_any();
+            match T::get_physical_type() {
+                Type::BYTE_ARRAY => x.downcast_ref::<ByteArray>().unwrap().data(),
+                Type::FIXED_LEN_BYTE_ARRAY => x.downcast_ref::<FixedLenByteArray>().unwrap().data(),
                 _ => panic!(
                     "DeltaByteArrayEncoder only supports ByteArrayType and FixedLenByteArrayType"
                 ),
-            });
-
-        for byte_array in values {
-            let current = byte_array.data();
-            // Number of leading bytes shared with the previous value
-            let match_len = common_prefix_length(&self.previous, current);
-            prefix_lengths.push(match_len as i32);
-            suffixes.push(byte_array.slice(match_len, byte_array.len() - match_len));
-            // Update previous for the next prefix
-            self.previous.clear();
-            self.previous.extend_from_slice(current);
+            }
         }
-        self.prefix_len_encoder.put(&prefix_lengths)?;
-        self.suffix_writer.put(&suffixes)?;
+
+        let Self {
+            prefix_len_encoder,
+            suffix_writer,
+            previous: last_value,
+            ..
+        } = self;
+        let mut prefix_lengths = [0i32; LENGTH_BATCH_SIZE];
+        let mut suffixes: [&[u8]; LENGTH_BATCH_SIZE] = [&[]; LENGTH_BATCH_SIZE];
+        // Compare each value with its predecessor in `values`; `last_value` only
+        // carries the final value over to the next call.
+        let mut previous: &[u8] = last_value;
+        for chunk in values.chunks(LENGTH_BATCH_SIZE) {
+            let outputs = prefix_lengths.iter_mut().zip(suffixes.iter_mut());
+            for ((prefix_length, suffix), value) in outputs.zip(chunk) {
+                let current = bytes_of::<T>(value);
+                // Number of leading bytes shared with the previous value
+                let match_len = common_prefix_length(previous, current);
+                *prefix_length = match_len as i32;
+                *suffix = &current[match_len..];
+                previous = current;
+            }
+            prefix_len_encoder.put(&prefix_lengths[..chunk.len()])?;
+            suffix_writer.put_slices(&suffixes[..chunk.len()])?;
+        }
+        if let Some(last) = values.last() {
+            let last = bytes_of::<T>(last);
+            last_value.clear();
+            last_value.extend_from_slice(last);
+        }
 
         Ok(())
     }
