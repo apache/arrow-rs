@@ -2,8 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use crate::arrow::buffer::bit_util::iter_set_bits_rev;
-use crate::arrow::record_reader::buffer::ValuesBuffer;
+use crate::arrow::record_reader::buffer::{ValuesBuffer, count_set_bits, mask_bits};
 use crate::errors::{ParquetError, Result};
 use crate::util::utf8::check_valid_utf8;
 use arrow_array::{ArrayRef, OffsetSizeTrait, make_array};
@@ -157,46 +156,67 @@ impl<I: OffsetSizeTrait> ValuesBuffer for OffsetBuffer<I> {
                 self.offsets.len()
             ));
         }
-        self.offsets
-            .resize(read_offset + levels_read + 1, I::default());
-
-        let offsets = &mut self.offsets;
-
-        let mut last_pos = read_offset + levels_read + 1;
-        let mut last_start_offset = I::from_usize(self.values.len()).unwrap();
-
-        let values_range = read_offset..read_offset + values_read;
-        for (value_pos, level_pos) in values_range
-            .clone()
-            .rev()
-            .zip(iter_set_bits_rev(valid_mask))
-        {
-            if level_pos < value_pos || level_pos >= last_pos {
-                return Err(general_err!("found corrupt level data while padding nulls"));
-            }
-
-            let end_offset = offsets[value_pos + 1];
-            let start_offset = offsets[value_pos];
-
-            // Fill in any nulls
-            for x in &mut offsets[level_pos + 1..last_pos] {
-                *x = end_offset;
-            }
-
-            if level_pos == value_pos {
-                return Ok(());
-            }
-
-            offsets[level_pos] = start_offset;
-            last_pos = level_pos;
-            last_start_offset = start_offset;
+        let levels_end = read_offset + levels_read;
+        if count_set_bits(valid_mask, read_offset, levels_end) != values_read {
+            return Err(general_err!("found corrupt level data while padding nulls"));
         }
-
-        // Pad leading nulls up to `last_offset`
-        for x in &mut offsets[values_range.start + 1..last_pos] {
-            *x = last_start_offset
-        }
+        self.offsets.resize(levels_end + 1, I::default());
+        spread_offsets(
+            &mut self.offsets,
+            read_offset,
+            read_offset + values_read,
+            valid_mask,
+        );
         Ok(())
+    }
+}
+
+/// Spreads the offsets of the values `start..value_end` over the levels
+/// `start..offsets.len() - 1`, giving each null level an empty value, where
+/// `valid_mask` has exactly one set bit per value in that range of levels.
+///
+/// Level `l` ends where the last value at or before it ends, so working down from
+/// the last level, each level's end offset is that of the last value not yet
+/// placed, which valid levels then consume. Like `spread_values`, this goes a
+/// 64-bit mask word at a time: a word of valid levels is one block move, a word of
+/// nulls one fill, a word with few valid levels one fill per run of nulls, and
+/// otherwise a branchless write of every level.
+fn spread_offsets<I: Copy>(
+    offsets: &mut [I],
+    start: usize,
+    mut value_end: usize,
+    valid_mask: &[u8],
+) {
+    let mut level_end = offsets.len() - 1;
+    // Once as many values as levels remain, they are all in place.
+    while level_end > value_end {
+        let word_start = ((level_end - 1) & !63).max(start);
+        let len = level_end - word_start;
+        let word = mask_bits(valid_mask, word_start, len);
+        let valid = word.count_ones() as usize;
+        if valid == len {
+            offsets.copy_within(value_end + 1 - len..value_end + 1, word_start + 1);
+            value_end -= len;
+        } else if valid * 2 <= len {
+            let mut reversed = word.reverse_bits();
+            let mut fill_end = level_end;
+            while reversed != 0 {
+                let level = word_start + 63 - reversed.trailing_zeros() as usize;
+                let end = offsets[value_end];
+                offsets[level + 1..=fill_end].fill(end);
+                value_end -= 1;
+                fill_end = level;
+                reversed &= reversed - 1;
+            }
+            let end = offsets[value_end];
+            offsets[word_start + 1..=fill_end].fill(end);
+        } else {
+            for level in (word_start..level_end).rev() {
+                offsets[level + 1] = offsets[value_end];
+                value_end -= ((word >> (level - word_start)) & 1) as usize;
+            }
+        }
+        level_end = word_start;
     }
 }
 
@@ -363,6 +383,58 @@ mod tests {
             err.to_string().contains("corrupt level data"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn test_pad_nulls_random_masks() {
+        use rand::prelude::*;
+        let mut rng = StdRng::seed_from_u64(42);
+        for _ in 0..1000 {
+            let read_offset = rng.random_range(0..100);
+            let levels_read = rng.random_range(0..300);
+            let density = [0.0, 0.02, 0.5, 0.98, 1.0][rng.random_range(0..5)];
+            let valid: Vec<bool> = (0..levels_read).map(|_| rng.random_bool(density)).collect();
+            let values_read = valid.iter().filter(|v| **v).count();
+
+            let mut buffer = OffsetBuffer::<i64>::with_capacity(0);
+            let mut expected = vec![];
+            for i in 0..read_offset {
+                let v = format!("p{i}");
+                buffer.try_push(v.as_bytes(), false).unwrap();
+                expected.push(Some(v));
+            }
+            let mut next = 0;
+            for &is_valid in &valid {
+                if is_valid {
+                    let v = "x".repeat(next % 5) + &next.to_string();
+                    buffer.try_push(v.as_bytes(), false).unwrap();
+                    expected.push(Some(v));
+                    next += 1;
+                } else {
+                    expected.push(None);
+                }
+            }
+            let mask = Buffer::from_iter(
+                std::iter::repeat_n(true, read_offset).chain(valid.iter().copied()),
+            );
+            buffer
+                .pad_nulls(read_offset, values_read, levels_read, mask.as_slice())
+                .unwrap();
+
+            let array = buffer.into_array(Some(mask), ArrowType::LargeUtf8);
+            let strings = array.as_any().downcast_ref::<LargeStringArray>().unwrap();
+            let actual: Vec<Option<String>> =
+                strings.iter().map(|s| s.map(str::to_string)).collect();
+            assert_eq!(actual, expected);
+            // Nulls must be empty, not just masked
+            let offsets = strings.value_offsets();
+            for (i, is_valid) in valid.iter().enumerate() {
+                if !is_valid {
+                    let level = read_offset + i;
+                    assert_eq!(offsets[level], offsets[level + 1]);
+                }
+            }
+        }
     }
 
     #[test]
