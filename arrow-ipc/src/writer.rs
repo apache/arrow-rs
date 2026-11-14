@@ -2381,6 +2381,10 @@ fn get_list_view_array_buffers<O: OffsetSizeTrait>(
     (offsets_slice, sizes_slice, child_data)
 }
 
+/// Above this many children, [`get_dense_union_buffers`] finds the child
+/// ranges in one scalar pass instead of one vectorized pass per child.
+const MAX_UNION_FIELDS_PER_PASS: usize = 4;
+
 /// Returns the offsets buffer and the child data for a dense Union array.
 ///
 /// Each child is narrowed to the range of rows that the slice references, and
@@ -2400,10 +2404,29 @@ fn get_dense_union_buffers(data: &ArrayData, fields: &UnionFields) -> (Buffer, V
     // Indexed by type id. A child that no slot references keeps `start > end`.
     let mut starts = [i32::MAX; 128];
     let mut ends = [0i32; 128];
-    for (type_id, offset) in type_ids.iter().zip(offsets) {
-        let type_id = *type_id as usize;
-        starts[type_id] = starts[type_id].min(*offset);
-        ends[type_id] = ends[type_id].max(*offset + 1);
+    if fields.len() <= MAX_UNION_FIELDS_PER_PASS {
+        // One branchless pass per child vectorizes. A single pass that updates
+        // `starts[type_id]` does not, because consecutive rows of the same
+        // type form a load-store dependency chain.
+        for (type_id, _) in fields.iter() {
+            let (mut start, mut end) = (u32::MAX, 0u32);
+            for (&t, &offset) in type_ids.iter().zip(offsets) {
+                // All ones when the row belongs to this child. LLVM turns an
+                // `if` here into a branch, which blocks vectorization. The
+                // offsets are not negative, so they compare as `u32`.
+                let mask = 0u32.wrapping_sub(((t as i8) == type_id) as u32);
+                start = start.min(offset as u32 | !mask);
+                end = end.max((offset as u32).wrapping_add(1) & mask);
+            }
+            starts[type_id as usize] = start.min(i32::MAX as u32) as i32;
+            ends[type_id as usize] = end as i32;
+        }
+    } else {
+        for (type_id, offset) in type_ids.iter().zip(offsets) {
+            let type_id = *type_id as usize;
+            starts[type_id] = starts[type_id].min(*offset);
+            ends[type_id] = ends[type_id].max(*offset + 1);
+        }
     }
     let child_type_ids: Vec<usize> = fields.iter().map(|(type_id, _)| type_id as usize).collect();
 
