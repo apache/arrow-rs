@@ -1595,16 +1595,25 @@ fn dictionary_size<K: ArrowDictionaryKeyType>(
 ) -> Result<usize, ArrowError> {
     let len: usize = ranges.iter().map(|r| r.len()).sum();
     let keys = array.keys();
-    let mut used = BooleanBufferBuilder::new(array.values().len());
-    used.append_n(array.values().len(), false);
-    for r in ranges {
-        for i in r.clone() {
-            if keys.is_valid(i) {
-                used.set_bit(keys.values()[i].as_usize(), true);
-            }
+    let valid = || {
+        ranges
+            .iter()
+            .flat_map(|r| r.clone())
+            .filter(|i| keys.is_valid(*i))
+            .map(|i| keys.values()[i].as_usize())
+    };
+    // One mask over the span of the used keys, as in `garbage_collect_values`.
+    // A mask per range would cost O(ranges * span).
+    let value_ranges: Vec<_> = match (valid().min(), valid().max()) {
+        (Some(min), Some(max)) => {
+            let mut used = BooleanBufferBuilder::new(max - min + 1);
+            used.append_n(max - min + 1, false);
+            valid().for_each(|k| used.set_bit(k - min, true));
+            let used = used.finish();
+            used.set_slices().map(|(s, e)| s + min..e + min).collect()
         }
-    }
-    let value_ranges: Vec<_> = used.finish().set_slices().map(|(s, e)| s..e).collect();
+        _ => vec![],
+    };
     let values = gathered_size(array.values().as_ref(), &value_ranges)?;
     Ok(len * K::Native::get_byte_width() + values)
 }
@@ -1787,13 +1796,25 @@ fn add_row_sizes(array: &dyn Array, sizes: &mut [u64]) -> Result<(), ArrowError>
         }
         DataType::Union(fields, UnionMode::Dense) => {
             let array = array.as_union();
+            let offsets = array.offsets().expect("dense union has offsets");
+            // Only the child rows between the smallest and largest offset
+            let mut bounds = vec![(usize::MAX, 0); 128];
+            for (t, o) in array.type_ids().iter().zip(offsets) {
+                let (min, max) = &mut bounds[*t as usize];
+                *min = (*min).min(*o as usize);
+                *max = (*max).max(*o as usize);
+            }
             let mut children = vec![vec![]; 128];
             for (type_id, _) in fields.iter() {
-                children[type_id as usize] = child_row_sizes(array.child(type_id).as_ref())?;
+                let (min, max) = bounds[type_id as usize];
+                if min <= max {
+                    let child = array.child(type_id).slice(min, max - min + 1);
+                    children[type_id as usize] = child_row_sizes(child.as_ref())?;
+                }
             }
-            let offsets = array.offsets().expect("dense union has offsets");
-            for ((s, type_id), offset) in sizes.iter_mut().zip(array.type_ids()).zip(offsets) {
-                *s = s.saturating_add(1 + 4 + children[*type_id as usize][*offset as usize]);
+            for ((s, t), o) in sizes.iter_mut().zip(array.type_ids()).zip(offsets) {
+                let child = children[*t as usize][*o as usize - bounds[*t as usize].0];
+                *s = s.saturating_add(1 + 4 + child);
             }
         }
         DataType::Dictionary(key, _) => match key.as_ref() {
@@ -1920,13 +1941,16 @@ fn add_dictionary<K: ArrowDictionaryKeyType>(
     array: &DictionaryArray<K>,
     sizes: &mut [u64],
 ) -> Result<(), ArrowError> {
-    let values = child_row_sizes(array.values().as_ref())?;
-    let width = K::Native::get_byte_width() as u64;
     let keys = array.keys();
+    // Only the span of used keys, so a slice of a large dictionary costs
+    // O(slice + span) and not O(values)
+    let (min, used) = used_values(keys);
+    let values = child_row_sizes(&array.values().slice(min, used.len()))?;
+    let width = K::Native::get_byte_width() as u64;
     for (i, (s, k)) in sizes.iter_mut().zip(keys.values()).enumerate() {
         *s = s.saturating_add(width);
         if keys.is_valid(i) {
-            *s = s.saturating_add(values[k.as_usize()]);
+            *s = s.saturating_add(values[k.as_usize() - min]);
         }
     }
     Ok(())
@@ -3883,5 +3907,46 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn test_sizes_of_gathered_ranges_in_one_run() {
+        let runs = RunArray::<Int32Type>::try_new(
+            &Int32Array::from(vec![1000]),
+            &StringArray::from(vec!["x".repeat(1000)]),
+        )
+        .unwrap();
+        let list = ListArray::new(
+            Arc::new(Field::new_list_field(runs.data_type().clone(), true)),
+            OffsetBuffer::from_lengths(std::iter::repeat_n(1, 1000)),
+            Arc::new(runs.clone()),
+            Some(NullBuffer::from_iter((0..1000).map(|i| i % 2 == 0))),
+        );
+        // Offsets, bitmap, one run end, and one value of 1000 bytes
+        let expected = 1001 * 4 + 125 + 4 + 2 * 4 + 1000;
+        assert_eq!(compacted_size(&list).unwrap(), expected);
+        assert_eq!(buffer_bytes(&minify(&list).unwrap().to_data()), expected);
+
+        let offsets: Vec<i32> = (0..500).rev().map(|i| 2 * i).collect();
+        let union = dense_union_of(Arc::new(runs), &offsets);
+        // Type ids, offsets, one run end, and one value of 1000 bytes
+        let expected = 500 * 5 + 4 + 2 * 4 + 1000;
+        assert_eq!(compacted_size(&union).unwrap(), expected);
+        assert_eq!(buffer_bytes(&minify(&union).unwrap().to_data()), expected);
+    }
+
+    #[test]
+    fn test_sizes_of_slices_span_used_rows() {
+        let values = Int64Array::from_iter_values(0..1_000_000);
+        let keys = Int32Array::from_iter_values(0..1_000_000);
+        let dict = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap();
+        let slice = dict.slice(500_000, 2);
+        assert_eq!(sizes_of(&slice), [12, 12]);
+        assert_eq!(compacted_size(&slice).unwrap(), 24);
+
+        let child: ArrayRef = Arc::new(Int64Array::from_iter_values(0..1_000_000));
+        let offsets: Vec<i32> = (0..1_000_000).collect();
+        let union = dense_union_of(child, &offsets);
+        assert_eq!(sizes_of(&union.slice(500_000, 2)), [13, 13]);
     }
 }
