@@ -9,7 +9,7 @@ use criterion::Criterion;
 use arrow::array::*;
 use arrow::datatypes::*;
 use arrow::util::bench_util::*;
-use arrow_buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
+use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_schema::{Field, UnionFields};
 use arrow_select::minify::minify;
 use std::hint;
@@ -130,5 +130,110 @@ fn add_benchmark(c: &mut Criterion) {
     );
 }
 
-criterion_group!(benches, add_benchmark);
+/// Cases for review: already compact arrays, small slices of large parents,
+/// many view buffers, unsorted views and large dictionaries. `gc` and `take`
+/// are baselines that do comparable work.
+fn add_extra(c: &mut Criterion) {
+    let take_all = |a: &dyn Array| {
+        let idx = UInt32Array::from_iter_values(0..a.len() as u32);
+        arrow_select::take::take(a, &idx, None).unwrap()
+    };
+    let ints = Int32Array::from_iter_values(0..1_000_000);
+    bench(c, "minify i32 1M already minimal", &ints);
+
+    let big = create_string_array::<i32>(10_000_000, 0.1);
+    let small = big.slice(5_000_000, 100);
+    bench(c, "minify utf8 slice 100 of 10M", &small);
+    c.bench_function("take utf8 slice 100 of 10M", |b| {
+        b.iter(|| hint::black_box(take_all(&small)))
+    });
+
+    let views = create_string_view_array_with_max_len(1_000_000, 0.1, 64);
+    let slice = views.slice(500_000, 1000);
+    bench(c, "minify utf8view slice 1000 of 1M", &slice);
+    c.bench_function("gc utf8view slice 1000 of 1M", |b| {
+        b.iter(|| hint::black_box(slice.gc()))
+    });
+    c.bench_function("take utf8view slice 1000 of 1M", |b| {
+        b.iter(|| hint::black_box(take_all(&slice)))
+    });
+
+    let compact = minify(&views).unwrap();
+    bench(c, "minify utf8view 1M already minimal", compact.as_ref());
+    let compact = compact.as_string_view().clone();
+    c.bench_function("gc utf8view 1M already minimal", |b| {
+        b.iter(|| hint::black_box(compact.gc()))
+    });
+
+    // Reversed views: the range sort runs on every call
+    let rev = arrow_select::take::take(
+        &compact,
+        &UInt32Array::from_iter_values((0..1_000_000u32).rev()),
+        None,
+    )
+    .unwrap();
+    bench(c, "minify utf8view 1M reversed", rev.as_ref());
+    let revs = rev.as_string_view().clone();
+    c.bench_function("gc utf8view 1M reversed", |b| {
+        b.iter(|| hint::black_box(revs.gc()))
+    });
+
+    // One data buffer per row
+    let bufs: Vec<Buffer> = (0..10_000)
+        .map(|i| Buffer::from_vec(format!("{i:040}").into_bytes()))
+        .collect();
+    let v: Vec<u128> = (0..10_000u32)
+        .map(|i| builder::make_view(bufs[i as usize].as_slice(), i, 0))
+        .collect();
+    let many = StringViewArray::try_new(v.into(), bufs, None).unwrap();
+    bench(c, "minify utf8view 10k buffers", &many);
+    let many_slice = many.slice(5000, 100);
+    bench(c, "minify utf8view 10k buffers slice 100", &many_slice);
+    c.bench_function("gc utf8view 10k buffers slice 100", |b| {
+        b.iter(|| hint::black_box(many_slice.gc()))
+    });
+
+    let keys = Int32Array::from_iter_values(0..1_000_000);
+    let dict = DictionaryArray::<Int32Type>::try_new(
+        keys,
+        Arc::new(create_string_array::<i32>(1_000_000, 0.0)),
+    )
+    .unwrap();
+    let dslice = dict.slice(500_000, 100);
+    bench(c, "minify dictionary 1M values slice 100", &dslice);
+    c.bench_function("garbage_collect_dictionary 1M values slice 100", |b| {
+        b.iter(|| {
+            hint::black_box(arrow_select::dictionary::garbage_collect_dictionary(&dslice).unwrap())
+        })
+    });
+
+    let union_fields = UnionFields::try_new(
+        [0, 1],
+        [
+            Field::new("i", DataType::Int32, true),
+            Field::new("s", DataType::Utf8, true),
+        ],
+    )
+    .unwrap();
+    let n = 1_000_000;
+    let type_ids: ScalarBuffer<i8> = (0..n).map(|i| (i % 2) as i8).collect();
+    let offsets: ScalarBuffer<i32> = (0..n as i32).map(|i| i / 2).collect();
+    let union = UnionArray::try_new(
+        union_fields,
+        type_ids,
+        Some(offsets),
+        vec![
+            Arc::new(create_primitive_array::<Int32Type>(n / 2, 0.1)),
+            Arc::new(create_string_array::<i32>(n / 2, 0.1)),
+        ],
+    )
+    .unwrap();
+    bench(
+        c,
+        "minify dense union slice 100 of 1M",
+        &union.slice(n / 2, 100),
+    );
+}
+
+criterion_group!(benches, add_benchmark, add_extra);
 criterion_main!(benches);
