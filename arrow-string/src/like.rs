@@ -327,14 +327,6 @@ fn run_end_encoded_op(
         Ok(expand_runs(left, &like_op(op, &run_values(left), rhs)?))
     } else if left_is_scalar {
         Ok(expand_runs(right, &like_op(op, lhs, &run_values(right))?))
-    } else if left.is_empty() {
-        // The dictionary kernels panic on a dictionary without values, so match the
-        // run values instead. They are empty too, and like_op still checks their types.
-        let left_values = left_is_ree.then(|| run_values(left));
-        let right_values = right_is_ree.then(|| run_values(right));
-        let lhs: &dyn Datum = left_values.as_ref().map_or(lhs, |values| values);
-        let rhs: &dyn Datum = right_values.as_ref().map_or(rhs, |values| values);
-        like_op(op, lhs, rhs)
     } else {
         // Rows of two arrays need not share run boundaries, so look up each row
         // through a dictionary view, which does not copy the values.
@@ -424,6 +416,17 @@ fn string_apply<'a, T: StringArrayType<'a> + 'a>(
     r_v: Option<&'a dyn AnyDictionaryArray>,
 ) -> Result<BooleanArray, ArrowError> {
     let l_len = l_v.map_or_else(|| l.len(), |l| l.len());
+    // A valid dictionary without values can only contain null keys.
+    if l_v.is_some_and(|dict| dict.values().is_empty())
+        || r_v.is_some_and(|dict| dict.values().is_empty())
+    {
+        let len = if l_s {
+            r_v.map_or_else(|| r.len(), |r| r.len())
+        } else {
+            l_len
+        };
+        return Ok(BooleanArray::new_null(len));
+    }
     if r_s {
         let idx = match r_v {
             Some(dict) if dict.null_count() != 0 => return Ok(BooleanArray::new_null(l_len)),
@@ -1736,6 +1739,68 @@ mod tests {
             assert_eq!(r.null_count(), 1);
             assert!(r.is_null(0));
         }
+    }
+
+    #[test]
+    fn test_utf8_dictionary_empty_values() {
+        let dictionary = DictionaryArray::<Int8Type>::try_new(
+            Int8Array::from(vec![None, None]),
+            Arc::new(StringArray::from(Vec::<&str>::new())),
+        )
+        .unwrap();
+        let patterns = StringArray::from(vec!["a%", "b%"]);
+
+        assert_eq!(
+            like(&dictionary, &patterns).unwrap(),
+            BooleanArray::new_null(2)
+        );
+        assert_eq!(
+            like(&patterns, &dictionary).unwrap(),
+            BooleanArray::new_null(2)
+        );
+
+        let scalar_dictionary = DictionaryArray::<Int8Type>::try_new(
+            Int8Array::from(vec![None]),
+            Arc::new(StringArray::from(Vec::<&str>::new())),
+        )
+        .unwrap();
+        assert_eq!(
+            like(&Scalar::new(&scalar_dictionary), &patterns).unwrap(),
+            BooleanArray::new_null(2)
+        );
+        assert_eq!(
+            like(&patterns, &Scalar::new(&scalar_dictionary)).unwrap(),
+            BooleanArray::new_null(2)
+        );
+
+        let empty_dictionary = DictionaryArray::<Int8Type>::try_new(
+            Int8Array::from(Vec::<Option<i8>>::new()),
+            Arc::new(StringArray::from(Vec::<&str>::new())),
+        )
+        .unwrap();
+        assert_eq!(
+            like(&empty_dictionary, &StringArray::from(Vec::<&str>::new())).unwrap(),
+            BooleanArray::new_null(0)
+        );
+    }
+
+    #[test]
+    fn test_binary_dictionary_empty_values() {
+        let dictionary = DictionaryArray::<Int8Type>::try_new(
+            Int8Array::from(vec![None, None]),
+            Arc::new(BinaryArray::from(Vec::<&[u8]>::new())),
+        )
+        .unwrap();
+        let patterns = BinaryArray::from(vec![b"a".as_slice(), b"b".as_slice()]);
+
+        assert_eq!(
+            starts_with(&dictionary, &patterns).unwrap(),
+            BooleanArray::new_null(2)
+        );
+        assert_eq!(
+            starts_with(&patterns, &dictionary).unwrap(),
+            BooleanArray::new_null(2)
+        );
     }
 
     #[test]
