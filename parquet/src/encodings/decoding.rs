@@ -2175,6 +2175,70 @@ mod tests {
         test_byte_stream_split_decode::<Int64Type>(data, -1);
     }
 
+    #[test]
+    fn test_byte_stream_split_uses_encoded_value_count() {
+        let mut decoder = ByteStreamSplitDecoder::<DoubleType>::new();
+
+        for count in [8, 63, usize::MAX] {
+            decoder.set_data(Bytes::from(vec![0; 64]), count).unwrap();
+            assert_eq!(decoder.values_left(), 8);
+            let mut values = vec![0.; 63];
+            assert_eq!(decoder.get(&mut values[..3]).unwrap(), 3);
+            assert_eq!(decoder.skip(2).unwrap(), 2);
+            assert_eq!(decoder.get(&mut values).unwrap(), 3);
+            assert_eq!(decoder.values_left(), 0);
+            assert_eq!(decoder.get(&mut values).unwrap(), 0);
+        }
+    }
+
+    #[test]
+    fn test_byte_stream_split_rejects_invalid_data_length() {
+        let mut decoder = ByteStreamSplitDecoder::<DoubleType>::new();
+
+        let err = decoder.set_data(Bytes::from(vec![0; 63]), 8).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Invalid BYTE_STREAM_SPLIT data length 63 for values of size 8"
+        );
+    }
+
+    #[test]
+    fn test_byte_stream_split_rejects_more_values_than_expected() {
+        let mut decoder = ByteStreamSplitDecoder::<DoubleType>::new();
+        let err = decoder.set_data(Bytes::from(vec![0; 64]), 7).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Invalid BYTE_STREAM_SPLIT data: 8 encoded values exceeds the 7 values expected"
+        );
+
+        let mut decoder = VariableWidthByteStreamSplitDecoder::<FixedLenByteArrayType>::new(5);
+        let err = decoder.set_data(Bytes::from(vec![0; 40]), 7).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Invalid BYTE_STREAM_SPLIT data: 8 encoded values exceeds the 7 values expected"
+        );
+    }
+
+    #[test]
+    fn test_byte_stream_split_flba_uses_encoded_value_count() {
+        for width in [5, 16] {
+            let mut decoder =
+                VariableWidthByteStreamSplitDecoder::<FixedLenByteArrayType>::new(width);
+            for count in [8, 63, usize::MAX] {
+                decoder
+                    .set_data(Bytes::from(vec![0; 8 * width as usize]), count)
+                    .unwrap();
+                assert_eq!(decoder.values_left(), 8);
+                let mut values = vec![FixedLenByteArray::default(); 63];
+                assert_eq!(decoder.get(&mut values[..3]).unwrap(), 3);
+                assert_eq!(decoder.skip(2).unwrap(), 2);
+                assert_eq!(decoder.get(&mut values).unwrap(), 3);
+                assert_eq!(decoder.values_left(), 0);
+                assert_eq!(decoder.get(&mut values).unwrap(), 0);
+            }
+        }
+    }
+
     fn test_byte_stream_split_flba(type_width: usize) {
         let data = vec![
             vec![
