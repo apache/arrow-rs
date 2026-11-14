@@ -2,27 +2,31 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-//! Criterion benchmark measuring memory usage of ListArrayReader for sparse
-//! list columns.
+//! Criterion benchmarks measuring Arrow array-reader memory usage, including
+//! sparse list columns and dictionary-to-plain transitions.
 //!
 //! Uses a global allocator with thread-local memory tracking so that
 //! concurrent criterion threads don't interfere with measurements.
 
 use std::alloc::Layout;
 use std::cell::Cell;
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field};
 use criterion::measurement::{Measurement, ValueFormatter};
-use criterion::{BenchmarkGroup, Criterion, Throughput, criterion_group, criterion_main};
-use parquet::arrow::array_reader::make_byte_array_reader;
+use criterion::{
+    BatchSize, BenchmarkGroup, Criterion, Throughput, criterion_group, criterion_main,
+};
 use parquet::arrow::array_reader::{
     ArrayReader, ListArrayReader, PrimitiveArrayReader, make_fixed_len_byte_array_reader,
 };
+use parquet::arrow::array_reader::{make_byte_array_dictionary_reader, make_byte_array_reader};
 use parquet::arrow::arrow_reader::DEFAULT_BATCH_SIZE;
 use parquet::basic::Encoding;
 use parquet::column::page::PageIterator;
-use parquet::data_type::{ByteArrayType, DoubleType, FixedLenByteArrayType, Int32Type};
+use parquet::data_type::{ByteArray, ByteArrayType, DoubleType, FixedLenByteArrayType, Int32Type};
+use parquet::encoding::{DictEncoder, Encoder};
 use parquet::schema::parser::parse_message_type;
 use parquet::schema::types::{ColumnDescPtr, SchemaDescriptor};
 use parquet::util::{DataPageBuilder, DataPageBuilderImpl, InMemoryPageIterator};
@@ -253,6 +257,7 @@ const VALUES_PER_PAGE: usize = 10_000;
 const MAX_LIST_LEN: usize = 10;
 const BATCH_SIZE: usize = 8192;
 const EXPECTED_VALUE_COUNT: usize = NUM_ROW_GROUPS * PAGES_PER_GROUP * VALUES_PER_PAGE;
+const DICTIONARY_TRANSITION_VALUE_COUNT: usize = 16_384;
 
 fn seedable_rng() -> StdRng {
     StdRng::seed_from_u64(42)
@@ -290,6 +295,69 @@ fn build_string_list_schema() -> (SchemaDescriptor, ColumnDescPtr) {
         .unwrap();
     let col_desc = schema.column(0);
     (schema, col_desc)
+}
+
+fn build_string_schema() -> (SchemaDescriptor, ColumnDescPtr) {
+    let message_type = "
+        message schema {
+            REQUIRED BYTE_ARRAY value (UTF8);
+        }
+    ";
+    let schema = parse_message_type(message_type)
+        .map(|t| SchemaDescriptor::new(Arc::new(t)))
+        .unwrap();
+    let col_desc = schema.column(0);
+    (schema, col_desc)
+}
+
+fn build_dictionary_to_plain_string_pages(
+    column_desc: ColumnDescPtr,
+    cardinality: usize,
+    transition_offset: usize,
+) -> impl PageIterator + Clone {
+    assert!(transition_offset <= DICTIONARY_TRANSITION_VALUE_COUNT);
+    let values = (0..DICTIONARY_TRANSITION_VALUE_COUNT)
+        .map(|i| ByteArray::from(format!("{:032}", i % cardinality).as_str()))
+        .collect::<Vec<_>>();
+
+    let mut pages = VecDeque::new();
+    let mut dict_encoder = DictEncoder::<ByteArrayType>::new(column_desc.clone());
+
+    let dictionary_values = &values[..transition_offset];
+    let mut page_builder =
+        DataPageBuilderImpl::new(column_desc.clone(), dictionary_values.len() as u32, true);
+    page_builder.add_rep_levels(
+        column_desc.max_rep_level(),
+        &vec![0; dictionary_values.len()],
+    );
+    page_builder.add_def_levels(
+        column_desc.max_def_level(),
+        &vec![column_desc.max_def_level(); dictionary_values.len()],
+    );
+    dict_encoder.put(dictionary_values).unwrap();
+    page_builder.add_indices(dict_encoder.write_indices().unwrap());
+    let dictionary_data_page = page_builder.consume();
+
+    pages.push_back(parquet::column::page::Page::DictionaryPage {
+        buf: dict_encoder.write_dict().unwrap(),
+        num_values: dict_encoder.num_entries() as u32,
+        encoding: Encoding::RLE_DICTIONARY,
+        is_sorted: false,
+    });
+    pages.push_back(dictionary_data_page);
+
+    let plain_values = &values[transition_offset..];
+    let mut page_builder =
+        DataPageBuilderImpl::new(column_desc.clone(), plain_values.len() as u32, true);
+    page_builder.add_rep_levels(column_desc.max_rep_level(), &vec![0; plain_values.len()]);
+    page_builder.add_def_levels(
+        column_desc.max_def_level(),
+        &vec![column_desc.max_def_level(); plain_values.len()],
+    );
+    page_builder.add_values::<ByteArrayType>(Encoding::PLAIN, plain_values);
+    pages.push_back(page_builder.consume());
+
+    InMemoryPageIterator::new(vec![pages.into()])
 }
 
 const FIXED_BYTE_LEN: usize = 32;
@@ -494,6 +562,53 @@ fn string_list_wrapper(
     ))
 }
 
+fn string_dictionary_wrapper(
+    pages: Box<dyn PageIterator>,
+    column_desc: ColumnDescPtr,
+) -> Box<dyn ArrayReader> {
+    let data_type = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+    make_byte_array_dictionary_reader(
+        pages,
+        column_desc,
+        Some(data_type),
+        DEFAULT_BATCH_SIZE,
+        None,
+    )
+    .unwrap()
+}
+
+fn add_dictionary_transition_allocated_bytes_benches(c: &mut Criterion<AllocatedBytes>) {
+    let (_schema, column_desc) = build_string_schema();
+    let mut group =
+        c.benchmark_group("arrow_array_reader/StringDictionaryTransition_allocated_bytes");
+
+    for cardinality in [10, 1_000] {
+        for transition_offset in [8_192, 8_191] {
+            let pages = build_dictionary_to_plain_string_pages(
+                column_desc.clone(),
+                cardinality,
+                transition_offset,
+            );
+            group.bench_function(
+                format!("cardinality {cardinality}/offset {transition_offset}"),
+                |b| {
+                    b.iter_batched(
+                        || string_dictionary_wrapper(Box::new(pages.clone()), column_desc.clone()),
+                        |reader| {
+                            let count = drain_reader(reader);
+                            assert_eq!(count, DICTIONARY_TRANSITION_VALUE_COUNT);
+                            count
+                        },
+                        BatchSize::PerIteration,
+                    );
+                },
+            );
+        }
+    }
+
+    group.finish();
+}
+
 fn add_benches<M: Measurement>(c: &mut Criterion<M>, measurement_name: &str) {
     let (_schema, int32_desc) = build_int32_list_schema();
     let (_schema, double_desc) = build_double_list_schema();
@@ -578,6 +693,7 @@ fn add_peak_memory_benches(c: &mut Criterion<PeakMemory>) {
 
 fn add_allocated_bytes_benches(c: &mut Criterion<AllocatedBytes>) {
     add_benches(c, "allocated_bytes");
+    add_dictionary_transition_allocated_bytes_benches(c);
 }
 
 fn peak_memory_criterion() -> Criterion<PeakMemory> {
