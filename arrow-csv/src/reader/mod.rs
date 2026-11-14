@@ -3295,6 +3295,17 @@ mod tests {
             b"\xFFsdf,dsfg\ndksdk,jf\ndsdsfd,hghue\n,sds\nFalhghse,\xFF",
             "Csv error: Encountered invalid UTF-8 data for line 1 and field 1",
         );
+
+        // 0xCD 0x9C is valid UTF-8 when joined, but split across fields
+        err_test(
+            b"ab\xCD,\x9Ccd\n",
+            "Csv error: Encountered invalid UTF-8 data for line 1 and field 1",
+        );
+
+        err_test(
+            b"a,\xCD\n\x9C,b\n",
+            "Csv error: Encountered invalid UTF-8 data for line 1 and field 2",
+        );
     }
 
     struct InstrumentedRead<R> {
