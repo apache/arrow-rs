@@ -4,10 +4,8 @@
 
 use crate::builder::{ArrayBuilder, BooleanBufferBuilder};
 use crate::{Array, ArrayRef, BooleanArray};
-use arrow_buffer::Buffer;
 use arrow_buffer::NullBufferBuilder;
-use arrow_data::ArrayData;
-use arrow_schema::{ArrowError, DataType};
+use arrow_schema::ArrowError;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -147,31 +145,22 @@ impl BooleanBuilder {
 
     /// Builds the [BooleanArray] and reset this builder.
     pub fn finish(&mut self) -> BooleanArray {
-        let len = self.len();
-        let null_bit_buffer = self.null_buffer_builder.finish();
-        let builder = ArrayData::builder(DataType::Boolean)
-            .len(len)
-            .add_buffer(self.values_builder.finish().into_inner())
-            .nulls(null_bit_buffer);
-
-        // SAFETY: values buffer and nulls have matching lengths
-        let array_data = unsafe { builder.build_unchecked() };
-        BooleanArray::from(array_data)
+        let values = self.values_builder.finish();
+        let nulls = self
+            .null_buffer_builder
+            .finish()
+            .filter(|n| n.null_count() > 0);
+        BooleanArray::new(values, nulls)
     }
 
     /// Builds the [BooleanArray] without resetting the builder.
     pub fn finish_cloned(&self) -> BooleanArray {
-        let len = self.len();
-        let nulls = self.null_buffer_builder.finish_cloned();
-        let value_buffer = Buffer::from_slice_ref(self.values_builder.as_slice());
-        let builder = ArrayData::builder(DataType::Boolean)
-            .len(len)
-            .add_buffer(value_buffer)
-            .nulls(nulls);
-
-        // SAFETY: values buffer and nulls have matching lengths
-        let array_data = unsafe { builder.build_unchecked() };
-        BooleanArray::from(array_data)
+        let values = self.values_builder.finish_cloned();
+        let nulls = self
+            .null_buffer_builder
+            .finish_cloned()
+            .filter(|n| n.null_count() > 0);
+        BooleanArray::new(values, nulls)
     }
 
     /// Returns the current values buffer as a slice
@@ -236,7 +225,16 @@ impl Extend<Option<bool>> for BooleanBuilder {
 mod tests {
     use super::*;
     use crate::Array;
-    use arrow_buffer::{BooleanBuffer, NullBuffer};
+    use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer};
+
+    #[test]
+    fn test_finish_materialized_without_nulls() {
+        let mut builder = BooleanBuilder::new();
+        builder.append_nulls(0);
+        builder.append_value(true);
+        assert!(builder.finish_cloned().nulls().is_none());
+        assert!(builder.finish().nulls().is_none());
+    }
 
     #[test]
     fn test_boolean_array_builder() {

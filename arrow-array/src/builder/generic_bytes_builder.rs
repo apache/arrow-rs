@@ -5,8 +5,9 @@
 use crate::builder::ArrayBuilder;
 use crate::types::{ByteArrayType, GenericBinaryType, GenericStringType};
 use crate::{Array, ArrayRef, GenericByteArray, OffsetSizeTrait};
-use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer, NullBufferBuilder, ScalarBuffer};
-use arrow_data::ArrayDataBuilder;
+use arrow_buffer::{
+    ArrowNativeType, Buffer, MutableBuffer, NullBufferBuilder, OffsetBuffer, ScalarBuffer,
+};
 use arrow_schema::ArrowError;
 use std::any::Any;
 use std::sync::Arc;
@@ -201,33 +202,44 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
 
     /// Builds the [`GenericByteArray`] and reset this builder.
     pub fn finish(&mut self) -> GenericByteArray<T> {
-        let array_type = T::DATA_TYPE;
-        let array_builder = ArrayDataBuilder::new(array_type)
-            .len(self.len())
-            .add_buffer(std::mem::take(&mut self.offsets_builder).into())
-            .add_buffer(std::mem::take(&mut self.value_builder).into())
-            .nulls(self.null_buffer_builder.finish());
+        // SAFETY: offsets start at 0 and every append pushes the current end of
+        // `value_builder`, so they are non-empty and monotonically increasing.
+        let offsets = unsafe {
+            OffsetBuffer::new_unchecked(std::mem::take(&mut self.offsets_builder).into())
+        };
+        let values = std::mem::take(&mut self.value_builder).into();
+        let nulls = self
+            .null_buffer_builder
+            .finish()
+            .filter(|n| n.null_count() > 0);
 
-        self.offsets_builder.push(self.next_offset());
-        // SAFETY: builder is constructed from valid offset and value buffers maintained by the builder
-        let array_data = unsafe { array_builder.build_unchecked() };
-        GenericByteArray::from(array_data)
+        self.offsets_builder.push(T::Offset::usize_as(0));
+
+        // SAFETY: `try_new` would not error. The last offset is `values.len()`,
+        // `nulls` has one entry per value, and for strings every value was
+        // appended from a `&str`, so each offset pair bounds valid UTF-8.
+        unsafe { GenericByteArray::new_unchecked(offsets, values, nulls) }
     }
 
     /// Builds the [`GenericByteArray`] without resetting the builder.
     pub fn finish_cloned(&self) -> GenericByteArray<T> {
-        let array_type = T::DATA_TYPE;
-        let offset_buffer = Buffer::from_slice_ref(self.offsets_builder.as_slice());
-        let value_buffer = Buffer::from_slice_ref(self.value_builder.as_slice());
-        let array_builder = ArrayDataBuilder::new(array_type)
-            .len(self.len())
-            .add_buffer(offset_buffer)
-            .add_buffer(value_buffer)
-            .nulls(self.null_buffer_builder.finish_cloned());
+        // SAFETY: offsets start at 0 and every append pushes the current end of
+        // `value_builder`, so they are non-empty and monotonically increasing.
+        let offsets = unsafe {
+            OffsetBuffer::new_unchecked(
+                Buffer::from_slice_ref(self.offsets_builder.as_slice()).into(),
+            )
+        };
+        let values = Buffer::from_slice_ref(self.value_builder.as_slice());
+        let nulls = self
+            .null_buffer_builder
+            .finish_cloned()
+            .filter(|n| n.null_count() > 0);
 
-        // SAFETY: builder is constructed from valid offset and value buffers maintained by the builder
-        let array_data = unsafe { array_builder.build_unchecked() };
-        GenericByteArray::from(array_data)
+        // SAFETY: `try_new` would not error. The last offset is `values.len()`,
+        // `nulls` has one entry per value, and for strings every value was
+        // appended from a `&str`, so each offset pair bounds valid UTF-8.
+        unsafe { GenericByteArray::new_unchecked(offsets, values, nulls) }
     }
 
     /// Returns the current values buffer as a slice
@@ -536,6 +548,15 @@ mod tests {
     use arrow_buffer::NullBuffer;
     use std::fmt::Write as _;
     use std::io::Write as _;
+
+    #[test]
+    fn test_finish_materialized_without_nulls() {
+        let mut builder = GenericStringBuilder::<i32>::new();
+        builder.append_nulls(0);
+        builder.append_value("a");
+        assert!(builder.finish_cloned().nulls().is_none());
+        assert!(builder.finish().nulls().is_none());
+    }
 
     fn _test_generic_binary_builder<O: OffsetSizeTrait>() {
         let mut builder = GenericBinaryBuilder::<O>::new();

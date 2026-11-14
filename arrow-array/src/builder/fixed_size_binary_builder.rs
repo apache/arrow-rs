@@ -7,8 +7,7 @@ use crate::builder::ArrayBuilder;
 use crate::{ArrayRef, FixedSizeBinaryArray};
 use arrow_buffer::Buffer;
 use arrow_buffer::NullBufferBuilder;
-use arrow_data::ArrayData;
-use arrow_schema::{ArrowError, DataType};
+use arrow_schema::ArrowError;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -118,26 +117,33 @@ impl FixedSizeBinaryBuilder {
     /// Builds the [`FixedSizeBinaryArray`] and reset this builder.
     pub fn finish(&mut self) -> FixedSizeBinaryArray {
         let array_length = self.len();
-        let array_data_builder = ArrayData::builder(DataType::FixedSizeBinary(self.value_length))
-            .add_buffer(std::mem::take(&mut self.values_builder).into())
-            .nulls(self.null_buffer_builder.finish())
-            .len(array_length);
-        // SAFETY: value_length >= 0, values.len() == len * value_length, and nulls.len() == len — all guaranteed by the builder
-        let array_data = unsafe { array_data_builder.build_unchecked() };
-        FixedSizeBinaryArray::from(array_data)
+        let values = std::mem::take(&mut self.values_builder).into();
+        let nulls = self
+            .null_buffer_builder
+            .finish()
+            .filter(|n| n.null_count() > 0);
+
+        // SAFETY: value_length >= 0, values.len() == len * value_length,
+        // and nulls.len() == len are all guaranteed by the builder.
+        unsafe {
+            FixedSizeBinaryArray::new_unchecked(self.value_length, values, nulls, array_length)
+        }
     }
 
     /// Builds the [`FixedSizeBinaryArray`] without resetting the builder.
     pub fn finish_cloned(&self) -> FixedSizeBinaryArray {
         let array_length = self.len();
-        let values_buffer = Buffer::from_slice_ref(self.values_builder.as_slice());
-        let array_data_builder = ArrayData::builder(DataType::FixedSizeBinary(self.value_length))
-            .add_buffer(values_buffer)
-            .nulls(self.null_buffer_builder.finish_cloned())
-            .len(array_length);
-        // SAFETY: value_length >= 0, values.len() == len * value_length, and nulls.len() == len — all guaranteed by the builder
-        let array_data = unsafe { array_data_builder.build_unchecked() };
-        FixedSizeBinaryArray::from(array_data)
+        let values = Buffer::from_slice_ref(self.values_builder.as_slice());
+        let nulls = self
+            .null_buffer_builder
+            .finish_cloned()
+            .filter(|n| n.null_count() > 0);
+
+        // SAFETY: value_length >= 0, values.len() == len * value_length,
+        // and nulls.len() == len are all guaranteed by the builder.
+        unsafe {
+            FixedSizeBinaryArray::new_unchecked(self.value_length, values, nulls, array_length)
+        }
     }
 
     /// Returns the current null buffer as a slice
@@ -187,6 +193,16 @@ mod tests {
     use super::*;
 
     use crate::Array;
+    use arrow_schema::DataType;
+
+    #[test]
+    fn test_finish_materialized_without_nulls() {
+        let mut builder = FixedSizeBinaryBuilder::new(1);
+        builder.append_nulls(0);
+        builder.append_value(b"a").unwrap();
+        assert!(builder.finish_cloned().nulls().is_none());
+        assert!(builder.finish().nulls().is_none());
+    }
 
     #[test]
     fn test_fixed_size_binary_builder() {
