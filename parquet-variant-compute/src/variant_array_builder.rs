@@ -426,8 +426,10 @@ impl VariantBuilderExt for VariantValueArrayBuilderExt<'_> {
     where
         Self: 'b;
 
+    /// Appending NULL produces `Variant::Null`, because the `value` column of an unshredded variant
+    /// is non-nullable. Use [`VariantValueArrayBuilder::append_null`] for a shredded column.
     fn append_null(&mut self) {
-        self.value_builder.append_null()
+        self.append_value(Variant::Null);
     }
 
     fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>) {
