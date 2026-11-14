@@ -26,15 +26,6 @@ impl Display for DataType {
             format!("{name:?}: {maybe_nullable}{data_type}{metadata_str}")
         }
 
-        fn format_list_field_name(name: &str) -> String {
-            if name == "item" {
-                String::new()
-            } else {
-                let escaped: String = name.chars().flat_map(char::escape_debug).collect();
-                format!(", field: '{escaped}'")
-            }
-        }
-
         // A lot of these can still be improved a lot.
         // _Some_ of these can be parsed with `FromStr`, but not all (YET!).
         // The goal is that the formatting should always be
@@ -91,29 +82,10 @@ impl Display for DataType {
                     "LargeListView"
                 };
 
-                let name = field.name();
-                let maybe_nullable = format_nullability(field);
-                let data_type = field.data_type();
-                let field_name_str = format_list_field_name(name);
-                let metadata_str = format_metadata(field.metadata());
-
-                // e.g. `LargeList(non-null Uint32)
-                write!(
-                    f,
-                    "{type_name}({maybe_nullable}{data_type}{field_name_str}{metadata_str})"
-                )
+                write!(f, "{type_name}({})", format_field(field))
             }
             Self::FixedSizeList(field, size) => {
-                let name = field.name();
-                let maybe_nullable = format_nullability(field);
-                let data_type = field.data_type();
-                let field_name_str = format_list_field_name(name);
-                let metadata_str = format_metadata(field.metadata());
-
-                write!(
-                    f,
-                    "FixedSizeList({size} x {maybe_nullable}{data_type}{field_name_str}{metadata_str})",
-                )
+                write!(f, "FixedSizeList({size} x {})", format_field(field))
             }
             Self::Struct(fields) => {
                 write!(f, "Struct(")?;
@@ -217,17 +189,14 @@ mod tests {
     fn test_display_escaped_list_field_name() {
         let field = Arc::new(Field::new("a'b\\c\"d\n", DataType::Int32, true));
         let data_type = DataType::List(field);
-        assert_eq!(
-            data_type.to_string(),
-            r#"List(Int32, field: 'a\'b\\c\"d\n')"#
-        );
+        assert_eq!(data_type.to_string(), r#"List("a'b\\c\"d\n": Int32)"#);
     }
 
     #[test]
     fn test_display_list() {
         let list_data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
         let list_data_type_string = list_data_type.to_string();
-        let expected_string = "List(Int32)";
+        let expected_string = r#"List("item": Int32)"#;
         assert_eq!(list_data_type_string, expected_string);
     }
 
@@ -236,7 +205,7 @@ mod tests {
         let list_view_data_type =
             DataType::ListView(Arc::new(Field::new("item", DataType::Int32, true)));
         let list_view_data_type_string = list_view_data_type.to_string();
-        let expected_string = "ListView(Int32)";
+        let expected_string = r#"ListView("item": Int32)"#;
         assert_eq!(list_view_data_type_string, expected_string);
     }
 
@@ -244,7 +213,7 @@ mod tests {
     fn test_display_list_with_named_field() {
         let list_data_type = DataType::List(Arc::new(Field::new("foo", DataType::UInt64, false)));
         let list_data_type_string = list_data_type.to_string();
-        let expected_string = "List(non-null UInt64, field: 'foo')";
+        let expected_string = r#"List("foo": non-null UInt64)"#;
         assert_eq!(list_data_type_string, expected_string);
     }
 
@@ -253,7 +222,7 @@ mod tests {
         let list_view_data_type =
             DataType::ListView(Arc::new(Field::new("bar", DataType::UInt64, false)));
         let list_view_data_type_string = list_view_data_type.to_string();
-        let expected_string = "ListView(non-null UInt64, field: 'bar')";
+        let expected_string = r#"ListView("bar": non-null UInt64)"#;
         assert_eq!(list_view_data_type_string, expected_string);
     }
 
@@ -264,7 +233,7 @@ mod tests {
             false,
         )));
         let nested_data_type_string = nested_data_type.to_string();
-        let nested_expected_string = "List(non-null List(non-null UInt64))";
+        let nested_expected_string = r#"List("item": non-null List("item": non-null UInt64))"#;
         assert_eq!(nested_data_type_string, nested_expected_string);
     }
 
@@ -275,7 +244,8 @@ mod tests {
             false,
         )));
         let nested_view_data_type_string = nested_view_data_type.to_string();
-        let nested_view_expected_string = "ListView(non-null ListView(non-null UInt64))";
+        let nested_view_expected_string =
+            r#"ListView("item": non-null ListView("item": non-null UInt64))"#;
         assert_eq!(nested_view_data_type_string, nested_view_expected_string);
     }
 
@@ -286,7 +256,7 @@ mod tests {
         field.set_metadata(metadata);
         let list_data_type = DataType::List(Arc::new(field));
         let list_data_type_string = list_data_type.to_string();
-        let expected_string = "List(Int32, metadata: {\"foo1\": \"value1\"})";
+        let expected_string = r#"List("item": Int32, metadata: {"foo1": "value1"})"#;
 
         assert_eq!(list_data_type_string, expected_string);
     }
@@ -298,7 +268,7 @@ mod tests {
         field.set_metadata(metadata);
         let list_view_data_type = DataType::ListView(Arc::new(field));
         let list_view_data_type_string = list_view_data_type.to_string();
-        let expected_string = "ListView(Int32, metadata: {\"foo2\": \"value2\"})";
+        let expected_string = r#"ListView("item": Int32, metadata: {"foo2": "value2"})"#;
         assert_eq!(list_view_data_type_string, expected_string);
     }
 
@@ -307,14 +277,14 @@ mod tests {
         let large_list_data_type =
             DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int32, true)));
         let large_list_data_type_string = large_list_data_type.to_string();
-        let expected_string = "LargeList(Int32)";
+        let expected_string = r#"LargeList("item": Int32)"#;
         assert_eq!(large_list_data_type_string, expected_string);
 
         // Test with named field
         let large_list_named =
             DataType::LargeList(Arc::new(Field::new("bar", DataType::UInt64, false)));
         let large_list_named_string = large_list_named.to_string();
-        let expected_named_string = "LargeList(non-null UInt64, field: 'bar')";
+        let expected_named_string = r#"LargeList("bar": non-null UInt64)"#;
         assert_eq!(large_list_named_string, expected_named_string);
 
         // Test with metadata
@@ -323,7 +293,7 @@ mod tests {
         field.set_metadata(metadata);
         let large_list_metadata = DataType::LargeList(Arc::new(field));
         let large_list_metadata_string = large_list_metadata.to_string();
-        let expected_metadata_string = "LargeList(Int32, metadata: {\"key1\": \"value1\"})";
+        let expected_metadata_string = r#"LargeList("item": Int32, metadata: {"key1": "value1"})"#;
         assert_eq!(large_list_metadata_string, expected_metadata_string);
     }
 
@@ -332,14 +302,14 @@ mod tests {
         let large_list_view_data_type =
             DataType::LargeListView(Arc::new(Field::new("item", DataType::Int32, true)));
         let large_list_view_data_type_string = large_list_view_data_type.to_string();
-        let expected_string = "LargeListView(Int32)";
+        let expected_string = r#"LargeListView("item": Int32)"#;
         assert_eq!(large_list_view_data_type_string, expected_string);
 
         // Test with named field
         let large_list_view_named =
             DataType::LargeListView(Arc::new(Field::new("bar", DataType::UInt64, false)));
         let large_list_view_named_string = large_list_view_named.to_string();
-        let expected_named_string = "LargeListView(non-null UInt64, field: 'bar')";
+        let expected_named_string = r#"LargeListView("bar": non-null UInt64)"#;
         assert_eq!(large_list_view_named_string, expected_named_string);
 
         // Test with metadata
@@ -348,7 +318,8 @@ mod tests {
         field.set_metadata(metadata);
         let large_list_view_metadata = DataType::LargeListView(Arc::new(field));
         let large_list_view_metadata_string = large_list_view_metadata.to_string();
-        let expected_metadata_string = "LargeListView(Int32, metadata: {\"key1\": \"value1\"})";
+        let expected_metadata_string =
+            r#"LargeListView("item": Int32, metadata: {"key1": "value1"})"#;
         assert_eq!(large_list_view_metadata_string, expected_metadata_string);
     }
 
@@ -357,14 +328,14 @@ mod tests {
         let fixed_size_list =
             DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, true)), 5);
         let fixed_size_list_string = fixed_size_list.to_string();
-        let expected_string = "FixedSizeList(5 x Int32)";
+        let expected_string = r#"FixedSizeList(5 x "item": Int32)"#;
         assert_eq!(fixed_size_list_string, expected_string);
 
         // Test with named field
         let fixed_size_named =
             DataType::FixedSizeList(Arc::new(Field::new("baz", DataType::UInt64, false)), 3);
         let fixed_size_named_string = fixed_size_named.to_string();
-        let expected_named_string = "FixedSizeList(3 x non-null UInt64, field: 'baz')";
+        let expected_named_string = r#"FixedSizeList(3 x "baz": non-null UInt64)"#;
         assert_eq!(fixed_size_named_string, expected_named_string);
 
         // Test with metadata
@@ -373,7 +344,8 @@ mod tests {
         field.set_metadata(metadata);
         let fixed_size_metadata = DataType::FixedSizeList(Arc::new(field), 4);
         let fixed_size_metadata_string = fixed_size_metadata.to_string();
-        let expected_metadata_string = "FixedSizeList(4 x Int32, metadata: {\"key2\": \"value2\"})";
+        let expected_metadata_string =
+            r#"FixedSizeList(4 x "item": Int32, metadata: {"key2": "value2"})"#;
         assert_eq!(fixed_size_metadata_string, expected_metadata_string);
     }
 
