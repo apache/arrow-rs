@@ -3364,6 +3364,72 @@ mod tests {
     }
 
     #[test]
+    fn test_take_null_indices_masked_by_parent() {
+        // Neither child can store a null, but a struct or fixed-size list masks
+        // the rows of null indices with its own validity.
+        let ree: ArrayRef = Arc::new(unsafe {
+            RunArray::<Int32Type>::new_unchecked(
+                DataType::RunEndEncoded(
+                    Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                    Arc::new(Field::new("values", DataType::Int32, false)),
+                ),
+                RunEndBuffer::new(vec![1_i32, 2].into(), 0, 2),
+                Arc::new(Int32Array::from(vec![10, 20])),
+            )
+        });
+        let union_fields =
+            UnionFields::try_new(vec![0], vec![Field::new("a", DataType::Int32, false)]).unwrap();
+        let union: ArrayRef = Arc::new(
+            UnionArray::try_new(
+                union_fields,
+                ScalarBuffer::from(vec![0_i8, 0]),
+                None,
+                vec![Arc::new(Int32Array::from(vec![30, 40]))],
+            )
+            .unwrap(),
+        );
+        let parents = |child: &ArrayRef| -> [ArrayRef; 2] {
+            let field = Arc::new(Field::new("c", child.data_type().clone(), false));
+            [
+                Arc::new(StructArray::new(
+                    Fields::from(vec![field.clone()]),
+                    vec![child.clone()],
+                    None,
+                )),
+                Arc::new(FixedSizeListArray::new(field, 1, child.clone(), None)),
+            ]
+        };
+
+        let indices = Int32Array::from(vec![Some(1), None]);
+        for child in [&ree, &union] {
+            for parent in parents(child) {
+                let taken = take(&parent, &indices, None).unwrap();
+                taken.to_data().validate_full().unwrap();
+                assert_eq!(taken.nulls(), Some(&NullBuffer::from(vec![true, false])));
+                assert_eq!(&taken.slice(0, 1), &parent.slice(1, 1));
+            }
+        }
+
+        // An empty child has no value to take for the masked rows
+        let no_fields = UnionFields::try_new(vec![], Vec::<Field>::new()).unwrap();
+        let no_field_union: ArrayRef = Arc::new(
+            UnionArray::try_new(no_fields, ScalarBuffer::<i8>::from(vec![]), None, vec![]).unwrap(),
+        );
+        let ree_error = "Compute error: Cannot take null indices from a RunEndEncoded array with a non-nullable values field";
+        let union_error = "Compute error: Cannot take null indices from a union with no field that can represent nulls";
+        for (child, expected) in [
+            (ree.slice(0, 0), ree_error),
+            (union.slice(0, 0), union_error),
+            (no_field_union, union_error),
+        ] {
+            for parent in parents(&child) {
+                let error = take(&parent, &Int32Array::from(vec![None]), None).unwrap_err();
+                assert_eq!(error.to_string(), expected);
+            }
+        }
+    }
+
+    #[test]
     fn test_take_runs_sliced() {
         let logical_array: Vec<i32> = vec![1, 1, 2, 2, 3, 3, 3, 4, 4, 5, 5, 6, 6];
 
