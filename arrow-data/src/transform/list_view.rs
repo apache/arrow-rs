@@ -8,9 +8,6 @@ use arrow_buffer::ArrowNativeType;
 use arrow_schema::ArrowError;
 use num_integer::Integer;
 use num_traits::CheckedAdd;
-use std::mem::size_of;
-
-use super::utils::{try_extend_repeated, try_reserve};
 
 pub(super) fn build_extend<T: ArrowNativeType + Integer + CheckedAdd>(
     array: &ArrayData,
@@ -19,15 +16,12 @@ pub(super) fn build_extend<T: ArrowNativeType + Integer + CheckedAdd>(
     let sizes = array.buffer::<T>(1);
     Box::new(
         move |mutable: &mut _MutableArrayData, index: usize, start: usize, len: usize| {
-            let additional = len
-                .checked_mul(size_of::<T>())
-                .ok_or_else(|| ArrowError::MemoryError("list-view buffer size overflow".into()))?;
-            try_reserve(&mut mutable.buffer1, additional)?;
-            try_reserve(&mut mutable.buffer2, additional)?;
-
             let mut new_offset = T::usize_as(mutable.child_data[0].len());
+
             for i in start..start + len {
-                let next_offset = new_offset.checked_add(&sizes[i]).ok_or_else(|| {
+                mutable.buffer1.push(new_offset);
+                mutable.buffer2.push(sizes[i]);
+                new_offset = new_offset.checked_add(&sizes[i]).ok_or_else(|| {
                     ArrowError::InvalidArgumentError(
                         "offset overflow: data exceeds the capacity of the offset type. \
                          Try splitting into smaller batches or using a larger type \
@@ -35,12 +29,6 @@ pub(super) fn build_extend<T: ArrowNativeType + Integer + CheckedAdd>(
                             .to_string(),
                     )
                 })?;
-                // SAFETY: Both buffers were reserved for every value above.
-                unsafe {
-                    mutable.buffer1.push_unchecked(new_offset);
-                    mutable.buffer2.push_unchecked(sizes[i]);
-                }
-                new_offset = next_offset;
 
                 let size = sizes[i].as_usize();
                 if size > 0 {
@@ -59,14 +47,9 @@ pub(super) fn extend_nulls<T: ArrowNativeType>(
 ) -> Result<(), ArrowError> {
     let offset_buffer = &mut mutable.buffer1;
     let sizes_buffer = &mut mutable.buffer2;
-    let additional = len
-        .checked_mul(size_of::<T>())
-        .ok_or_else(|| ArrowError::MemoryError("list-view buffer size overflow".into()))?;
-    try_reserve(offset_buffer, additional)?;
-    try_reserve(sizes_buffer, additional)?;
 
     // We push 0 as a placeholder for NULL values in both the offsets and sizes
-    try_extend_repeated(offset_buffer, T::default(), len)?;
-    try_extend_repeated(sizes_buffer, T::default(), len)?;
+    (0..len).for_each(|_| offset_buffer.push(T::default()));
+    (0..len).for_each(|_| sizes_buffer.push(T::default()));
     Ok(())
 }

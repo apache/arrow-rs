@@ -2,67 +2,18 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use arrow_buffer::{ArrowNativeType, MutableBuffer, MutableBufferError, bit_util};
+use arrow_buffer::{ArrowNativeType, MutableBuffer, bit_util};
 use arrow_schema::ArrowError;
 use num_integer::Integer;
 use num_traits::CheckedAdd;
 
-#[cold]
-#[inline(never)]
-pub(super) fn memory_error(error: MutableBufferError) -> ArrowError {
-    ArrowError::MemoryError(error.to_string())
-}
-
-/// Fallibly reserves `additional` bytes when the buffer's existing capacity is insufficient.
-#[inline(always)]
-pub(super) fn try_reserve(buffer: &mut MutableBuffer, additional: usize) -> Result<(), ArrowError> {
-    if additional > buffer.capacity() - buffer.len() {
-        buffer.try_reserve(additional).map_err(memory_error)?;
-    }
-    Ok(())
-}
-
-/// Fallibly extends `buffer` with `len` values produced by `f`.
-#[inline(always)]
-pub(super) fn try_extend_with<T: ArrowNativeType>(
-    buffer: &mut MutableBuffer,
-    len: usize,
-    mut f: impl FnMut(usize) -> T,
-) -> Result<(), ArrowError> {
-    let additional = len
-        .checked_mul(std::mem::size_of::<T>())
-        .ok_or_else(|| ArrowError::MemoryError("buffer size overflow".into()))?;
-    try_reserve(buffer, additional)?;
-
-    for i in 0..len {
-        let value = f(i);
-        // SAFETY: `additional` bytes were reserved above and each loop writes one `T`.
-        unsafe { buffer.push_unchecked(value) };
-    }
-    Ok(())
-}
-
-/// Fallibly extends `buffer` with `value` repeated `len` times.
-#[inline(always)]
-pub(super) fn try_extend_repeated<T: ArrowNativeType>(
-    buffer: &mut MutableBuffer,
-    value: T,
-    len: usize,
-) -> Result<(), ArrowError> {
-    try_extend_with(buffer, len, |_| value)
-}
-
-/// Fallibly extends `buffer` to hold `len` bits, setting newly added bytes to zero.
+/// extends the `buffer` to be able to hold `len` bits, setting all bits of the new size to zero.
 #[inline]
-pub(super) fn try_resize_for_bits(
-    buffer: &mut MutableBuffer,
-    len: usize,
-) -> Result<(), ArrowError> {
+pub(super) fn resize_for_bits(buffer: &mut MutableBuffer, len: usize) {
     let needed_bytes = bit_util::ceil(len, 8);
     if buffer.len() < needed_bytes {
-        buffer.try_resize(needed_bytes, 0).map_err(memory_error)?;
+        buffer.resize(needed_bytes, 0);
     }
-    Ok(())
 }
 
 /// Extends `buffer` with the re-based offsets from `offsets`, returning an error on overflow.
@@ -81,13 +32,12 @@ pub(super) fn try_extend_offsets<T: ArrowNativeType + Integer + CheckedAdd>(
         match last_offset.checked_add(&length) {
             Some(new_offset) => {
                 last_offset = new_offset;
-                // SAFETY: The destination was reserved for every offset above.
-                unsafe { buffer.push_unchecked(last_offset) };
+                buffer.push(last_offset);
             }
             None => {
                 // Restore the buffer to its state before this call so the
                 // caller is not left with a partially-written offset sequence.
-                buffer.truncate(original_len);
+                buffer.resize(original_len, 0);
                 return Err(ArrowError::InvalidArgumentError(
                     "offset overflow: data exceeds the capacity of the offset type. \
                      Try splitting into smaller batches or using a larger type \
