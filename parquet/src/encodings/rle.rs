@@ -38,7 +38,7 @@ pub const MAX_RLE_DICTIONARY_BIT_WIDTH: u8 = 32;
 /// format always bit-packs values in multiples of this count (see the
 /// [format spec](https://github.com/apache/parquet-format/blob/master/Encodings.md#run-length-encoding--bit-packing-hybrid-rle--3):
 /// "we always bit-pack a multiple of 8 values at a time").
-const BIT_PACK_GROUP_SIZE: usize = 8;
+pub(crate) const BIT_PACK_GROUP_SIZE: usize = 8;
 
 /// Maximum groups of `BIT_PACK_GROUP_SIZE` values per bit-packed run. Current value is 64.
 const MAX_GROUPS_PER_BIT_PACKED_RUN: usize = 1 << 6;
@@ -65,6 +65,62 @@ pub(crate) fn run_len(indicator_value: u64) -> Result<u32> {
         ));
     }
     Ok(len as u32)
+}
+
+/// A value the [`RleEncoder`] can take in a batch: an unsigned integer, or a
+/// non-negative level.
+pub(crate) trait RleValue: Copy + PartialEq {
+    fn to_u64(self) -> u64;
+}
+
+impl RleValue for u64 {
+    #[inline]
+    fn to_u64(self) -> u64 {
+        self
+    }
+}
+
+impl RleValue for i16 {
+    #[inline]
+    fn to_u64(self) -> u64 {
+        self as u64
+    }
+}
+
+/// Told about the values [`RleEncoder::put_batch_observed`] encodes.
+pub(crate) trait RunObserver<T> {
+    /// `count` consecutive copies of `value`.
+    fn run(&mut self, value: T, count: usize);
+
+    /// A group of values, not all equal, that is bit packed.
+    fn packed_group(&mut self, group: &[T; BIT_PACK_GROUP_SIZE]);
+}
+
+impl<T> RunObserver<T> for () {
+    #[inline]
+    fn run(&mut self, _value: T, _count: usize) {}
+
+    #[inline]
+    fn packed_group(&mut self, _group: &[T; BIT_PACK_GROUP_SIZE]) {}
+}
+
+/// The number of leading values of `values`, which must not be empty, equal to its
+/// first. Compares a block at a time without exiting early inside a block, so long
+/// runs are scanned with vector compares.
+fn run_length<T: RleValue>(values: &[T]) -> usize {
+    const BLOCK: usize = 32;
+    let first = values[0];
+    let (blocks, _) = values.as_chunks::<BLOCK>();
+    let full_blocks = blocks
+        .iter()
+        .take_while(|block| block.iter().fold(true, |all, &v| all & (v == first)))
+        .count();
+    let scanned = full_blocks * BLOCK;
+    scanned
+        + values[scanned..]
+            .iter()
+            .take_while(|&&v| v == first)
+            .count()
 }
 
 /// A RLE/Bit-Packing hybrid encoder.
@@ -160,6 +216,11 @@ impl RleEncoder {
         self.repeat_count += count;
     }
 
+    /// The number of bits each value is encoded with.
+    pub(crate) fn bit_width(&self) -> u8 {
+        self.bit_width
+    }
+
     /// Encodes `value`, which must be representable with `bit_width` bits.
     #[inline]
     pub fn put(&mut self, value: u64) {
@@ -199,14 +260,25 @@ impl RleEncoder {
     /// the per-value run tracking wherever a whole group of values can be examined at
     /// once.
     pub fn put_batch(&mut self, values: &[u64]) {
+        self.put_batch_observed(values, &mut ())
+    }
+
+    /// [`Self::put_batch`] for values of any width, each representable with
+    /// `bit_width` bits, telling `observer` about every value as it goes: whole runs
+    /// and groups of one repeated value as single runs, and the groups that are bit
+    /// packed as such.
+    pub(crate) fn put_batch_observed<T: RleValue, O: RunObserver<T>>(
+        &mut self,
+        values: &[T],
+        observer: &mut O,
+    ) {
         let mut i = 0;
         while i < values.len() {
             // Extend an active RLE run with its whole continuation at once
-            if self.repeat_count >= BIT_PACK_GROUP_SIZE && values[i] == self.current_value {
-                let run_len = values[i..]
-                    .iter()
-                    .take_while(|&&v| v == self.current_value)
-                    .count();
+            if self.repeat_count >= BIT_PACK_GROUP_SIZE && values[i].to_u64() == self.current_value
+            {
+                let run_len = run_length(&values[i..]);
+                observer.run(values[i], run_len);
                 self.repeat_count += run_len;
                 i += run_len;
                 continue;
@@ -224,19 +296,23 @@ impl RleEncoder {
                 && values.len() - i >= BIT_PACK_GROUP_SIZE
             {
                 debug_assert_eq!(self.repeat_count, 0);
-                let group = &values[i..i + BIT_PACK_GROUP_SIZE];
+                let group: &[T; BIT_PACK_GROUP_SIZE] =
+                    values[i..i + BIT_PACK_GROUP_SIZE].try_into().unwrap();
                 i += BIT_PACK_GROUP_SIZE;
                 if group.iter().all(|&v| v == group[0]) {
+                    observer.run(group[0], BIT_PACK_GROUP_SIZE);
                     // The same decision `commit_group` makes for a group holding a
                     // single repeated value, without appending it first
                     if !self.pending_values.is_empty() {
                         self.close_bit_packed_run();
                     }
-                    self.current_value = group[0];
+                    self.current_value = group[0].to_u64();
                     self.repeat_count = BIT_PACK_GROUP_SIZE;
                 } else {
-                    self.pending_values.extend_from_slice(group);
-                    self.current_value = group[BIT_PACK_GROUP_SIZE - 1];
+                    observer.packed_group(group);
+                    self.pending_values
+                        .extend(group.iter().map(|&value| value.to_u64()));
+                    self.current_value = group[BIT_PACK_GROUP_SIZE - 1].to_u64();
                     let num_groups = self.pending_values.len() / BIT_PACK_GROUP_SIZE;
                     if num_groups + 1 >= MAX_GROUPS_PER_BIT_PACKED_RUN {
                         self.close_bit_packed_run();
@@ -247,7 +323,8 @@ impl RleEncoder {
 
             // Ending an RLE run, filling up a partial group, or a trailing partial
             // group: fall back to the per-value path
-            self.put(values[i]);
+            observer.run(values[i], 1);
+            self.put(values[i].to_u64());
             i += 1;
         }
     }

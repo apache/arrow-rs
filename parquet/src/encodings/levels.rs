@@ -4,7 +4,7 @@
 
 use std::mem;
 
-use super::rle::RleEncoder;
+use super::rle::{BIT_PACK_GROUP_SIZE, RleEncoder, RunObserver};
 
 use crate::data_type::AsBytes;
 use crate::util::bit_util::num_required_bits;
@@ -40,8 +40,9 @@ impl LevelEncoder {
     }
 
     /// Put/encode levels vector into this level encoder and call
-    /// `observer(value, count)` for each run of identical values encountered
-    /// during encoding.
+    /// `observer(value, count)` so that, over all calls, `count` adds up to the
+    /// number of times `value` occurs in `buffer`. Each value present is reported at
+    /// least once; how its occurrences are split between calls is unspecified.
     ///
     /// Returns number of encoded values that are less than or equal to length
     /// of the input buffer.
@@ -56,24 +57,9 @@ impl LevelEncoder {
     {
         match *self {
             LevelEncoder::Rle(ref mut encoder) | LevelEncoder::RleV2(ref mut encoder) => {
-                let mut remaining = buffer;
-                while let Some((&value, rest)) = remaining.split_first() {
-                    encoder.put(value as u64);
-                    // After put(), check if the encoder just entered RLE
-                    // accumulation mode. If so, scan ahead for the rest of
-                    // this run to batch the observer call and bulk-extend.
-                    if encoder.is_accumulating_rle(value as u64) {
-                        let run_len = rest.iter().take_while(|&&v| v == value).count();
-                        if run_len > 0 {
-                            encoder.extend_run(run_len);
-                        }
-                        observer(value, 1 + run_len);
-                        remaining = &rest[run_len..];
-                    } else {
-                        observer(value, 1);
-                        remaining = rest;
-                    }
-                }
+                let mut counter = LevelCounter::new(encoder.bit_width(), &mut observer);
+                encoder.put_batch_observed(buffer, &mut counter);
+                counter.finish();
                 buffer.len()
             }
         }
@@ -158,6 +144,77 @@ impl LevelEncoder {
     }
 }
 
+/// Widest levels [`LevelCounter`] counts in a histogram rather than one by one.
+const MAX_COUNTED_LEVEL_BITS: u8 = 4;
+
+/// Passes the runs of levels the encoder finds straight to the observer, and counts
+/// the levels of bit packed groups, which have no runs worth reporting, without
+/// calling it: per group for one-bit levels, and in a small histogram for levels up
+/// to [`MAX_COUNTED_LEVEL_BITS`] bits. Reports those counts on [`LevelCounter::finish`].
+struct LevelCounter<'a, F: FnMut(i16, usize)> {
+    bit_width: u8,
+    observer: &'a mut F,
+    /// One-bit levels in packed groups: how many there are, and how many are 1.
+    packed: usize,
+    packed_ones: usize,
+    counts: [usize; 1 << MAX_COUNTED_LEVEL_BITS],
+}
+
+impl<'a, F: FnMut(i16, usize)> LevelCounter<'a, F> {
+    fn new(bit_width: u8, observer: &'a mut F) -> Self {
+        Self {
+            bit_width,
+            observer,
+            packed: 0,
+            packed_ones: 0,
+            counts: [0; 1 << MAX_COUNTED_LEVEL_BITS],
+        }
+    }
+
+    fn finish(self) {
+        let Self {
+            observer,
+            packed,
+            packed_ones,
+            counts,
+            ..
+        } = self;
+        for (level, count) in [(0, packed - packed_ones), (1, packed_ones)] {
+            if count != 0 {
+                observer(level, count);
+            }
+        }
+        for (level, &count) in counts.iter().enumerate() {
+            if count != 0 {
+                observer(level as i16, count);
+            }
+        }
+    }
+}
+
+impl<F: FnMut(i16, usize)> RunObserver<i16> for LevelCounter<'_, F> {
+    #[inline]
+    fn run(&mut self, value: i16, count: usize) {
+        (self.observer)(value, count)
+    }
+
+    #[inline]
+    fn packed_group(&mut self, group: &[i16; BIT_PACK_GROUP_SIZE]) {
+        if self.bit_width <= 1 {
+            self.packed += BIT_PACK_GROUP_SIZE;
+            self.packed_ones += group.iter().map(|&level| level as usize).sum::<usize>();
+        } else if self.bit_width <= MAX_COUNTED_LEVEL_BITS {
+            for &level in group {
+                self.counts[level as usize] += 1;
+            }
+        } else {
+            for &level in group {
+                (self.observer)(level, 1);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,6 +225,56 @@ mod tests {
         let mut enc = LevelEncoder::v2_streaming(max_level);
         enc.put_with_observer(values, |_, _| {});
         enc.consume()
+    }
+
+    #[test]
+    fn test_put_with_observer_reports_level_counts() {
+        use rand::prelude::*;
+        let mut rng = StdRng::seed_from_u64(1);
+        for max_level in [0i16, 1, 2, 3, 7, 15, 16, 40] {
+            for _ in 0..50 {
+                let len = rng.random_range(0..3000);
+                let run_heavy = rng.random_bool(0.5);
+                let mut levels = Vec::with_capacity(len);
+                while levels.len() < len {
+                    let level = rng.random_range(0..=max_level);
+                    let run = if run_heavy {
+                        rng.random_range(1..40)
+                    } else {
+                        1
+                    };
+                    levels.extend(std::iter::repeat_n(level, run.min(len - levels.len())));
+                }
+                let mut expected = vec![0usize; max_level as usize + 1];
+                for &level in &levels {
+                    expected[level as usize] += 1;
+                }
+
+                let mut encoder = LevelEncoder::v2_streaming(max_level);
+                let mut observed = vec![0usize; max_level as usize + 1];
+                for chunk in levels.chunks(rng.random_range(1..700)) {
+                    encoder.put_with_observer(chunk, |level, count| {
+                        assert!(count > 0);
+                        observed[level as usize] += count;
+                    });
+                }
+                assert_eq!(observed, expected, "max level {max_level}");
+                assert_eq!(
+                    encoder.consume(),
+                    reference_encode_per_value(max_level, &levels)
+                );
+            }
+        }
+    }
+
+    /// Encodes `values` one at a time through the encoder's per-value path.
+    fn reference_encode_per_value(max_level: i16, values: &[i16]) -> Vec<u8> {
+        let bit_width = num_required_bits(max_level as u64);
+        let mut encoder = RleEncoder::new_from_buf(bit_width, Vec::new());
+        for &value in values {
+            encoder.put(value as u64);
+        }
+        encoder.consume()
     }
 
     #[test]
