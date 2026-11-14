@@ -5688,6 +5688,230 @@ mod tests {
         assert!(max <= LIST_VIEW_MAX_PAGE, "page of {max} bytes");
     }
 
+    /// Size and placement of the values of a nullable string column, for
+    /// [`assert_byte_array_page_layout`].
+    struct SparseStrings {
+        num_rows: usize,
+        /// Returns the length of the value at a row, or `None` for a null.
+        value_len: fn(usize) -> Option<usize>,
+    }
+
+    impl SparseStrings {
+        fn values(&self) -> Vec<Option<String>> {
+            (0..self.num_rows)
+                .map(|row| {
+                    let len = (self.value_len)(row)?;
+                    // Distinct values, so a dictionary does not shrink them.
+                    Some(format!("{row:08}").repeat(len.div_ceil(8))[..len].to_owned())
+                })
+                .collect()
+        }
+    }
+
+    /// Returns `true` for about one row in `one_in`, without a regular
+    /// stride.
+    fn scattered(row: usize, one_in: usize) -> bool {
+        (row.wrapping_mul(2654435761) >> 7).is_multiple_of(one_in)
+    }
+
+    /// `(num_values, body bytes)` of each page of the only column of `array`
+    /// written with `props`, dictionary pages included. Checks that the
+    /// file reads back as `array`.
+    fn page_layout(array: ArrayRef, props: WriterProperties) -> Vec<(u32, usize)> {
+        let batch = RecordBatch::try_from_iter([("col", array)]).unwrap();
+        let mut writer = ArrowWriter::try_new(Vec::new(), batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        let data = Bytes::from(writer.into_inner().unwrap());
+
+        let reader = ParquetRecordBatchReader::try_new(data.clone(), batch.num_rows()).unwrap();
+        let read = reader.collect::<ArrowResult<Vec<_>>>().unwrap();
+        assert_eq!(read, std::slice::from_ref(&batch));
+
+        let mut metadata = ParquetMetaDataReader::new();
+        metadata.try_parse(&data).unwrap();
+        let metadata = metadata.finish().unwrap();
+        let col_meta = metadata.row_group(0).column(0);
+        let mut pages =
+            SerializedPageReader::new(Arc::new(data.clone()), col_meta, batch.num_rows(), None)
+                .unwrap();
+        let mut layout = vec![];
+        while let Some(page) = pages.get_next_page().unwrap() {
+            layout.push((page.num_values(), page.buffer().len()));
+        }
+        layout
+    }
+
+    const LAYOUT_PAGE_LIMIT: usize = 4096;
+
+    /// Writes `strings` in every string representation and checks what the
+    /// byte-budget chunker must guarantee, whatever way it sizes the values
+    /// of each representation:
+    ///
+    /// * No page body exceeds `max_page_bytes`.
+    /// * The page layout does not depend on the representation. A sizing
+    ///   shortcut that exists for one representation may skip work, but it
+    ///   must reach the decision that the exact sizes give.
+    fn assert_byte_array_page_layout(strings: &SparseStrings, max_page_bytes: usize) {
+        let values = strings.values();
+        let data_bytes: usize = values.iter().flatten().map(String::len).sum();
+        let max_len = values.iter().flatten().map(String::len).max().unwrap();
+        let view_blocks = |block_size: usize| -> ArrayRef {
+            let mut builder =
+                StringViewBuilder::new().with_fixed_block_size(block_size.try_into().unwrap());
+            values
+                .iter()
+                .for_each(|v| builder.append_option(v.as_deref()));
+            Arc::new(builder.finish())
+        };
+        let arrays: [(&str, ArrayRef); 5] = [
+            ("Utf8", Arc::new(StringArray::from(values.clone()))),
+            (
+                "LargeUtf8",
+                Arc::new(LargeStringArray::from(values.clone())),
+            ),
+            // One data buffer holds every long value, so its length says
+            // little about the length of one value.
+            ("Utf8View, one buffer", view_blocks(data_bytes.max(1))),
+            ("Utf8View, small buffers", view_blocks(2048)),
+            // No data buffer is longer than the longest value, so the buffer
+            // lengths bound one value closely.
+            ("Utf8View, tight buffers", view_blocks(max_len)),
+        ];
+
+        for write_batch_size in [64, 1024] {
+            for dictionary in [false, true] {
+                let props = || {
+                    WriterProperties::builder()
+                        .set_dictionary_enabled(dictionary)
+                        .set_compression(crate::basic::Compression::UNCOMPRESSED)
+                        .set_data_page_size_limit(LAYOUT_PAGE_LIMIT)
+                        .set_dictionary_page_size_limit(LAYOUT_PAGE_LIMIT)
+                        .set_write_batch_size(write_batch_size)
+                        .build()
+                };
+                let case = format!("write_batch_size={write_batch_size} dictionary={dictionary}");
+                let expected = page_layout(arrays[0].1.clone(), props());
+                let max = expected.iter().map(|(_, bytes)| *bytes).max().unwrap();
+                assert!(max <= max_page_bytes, "{case}: page of {max} bytes");
+                for (name, array) in &arrays[1..] {
+                    let layout = page_layout(array.clone(), props());
+                    assert_eq!(layout, expected, "{case}: {name} differs from Utf8");
+                }
+            }
+        }
+    }
+
+    /// A mini-batch may run up to twice the values that fit the page limit
+    /// (`SubBatchStrategy::Levels::max_values`), and the page that it joins
+    /// may already be almost full. Without the byte budget, a mini-batch of
+    /// 1024 levels holds over 100 KiB of the 1 KiB values below.
+    const LAYOUT_MAX_PAGE: usize = 4 * LAYOUT_PAGE_LIMIT;
+
+    #[test]
+    fn test_arrow_writer_sparse_small_values_page_layout() {
+        // About ten values per mini-batch of 1024 levels. Nothing here
+        // comes near the page byte limit.
+        assert_byte_array_page_layout(
+            &SparseStrings {
+                num_rows: 64 * 1024,
+                value_len: |row| scattered(row, 100).then_some(8),
+            },
+            LAYOUT_PAGE_LIMIT + 1024,
+        );
+    }
+
+    #[test]
+    fn test_arrow_writer_sparse_large_values_page_layout() {
+        assert_byte_array_page_layout(
+            &SparseStrings {
+                num_rows: 8 * 1024,
+                value_len: |row| scattered(row, 8).then_some(1024),
+            },
+            LAYOUT_MAX_PAGE,
+        );
+    }
+
+    #[test]
+    fn test_arrow_writer_sparse_mixed_values_page_layout() {
+        // Mostly small values. A mini-batch stays in budget until it
+        // reaches one of the large values, which are far apart.
+        assert_byte_array_page_layout(
+            &SparseStrings {
+                num_rows: 16 * 1024,
+                value_len: |row| {
+                    scattered(row, 8).then_some(if scattered(row, 8 * 64) { 1024 } else { 8 })
+                },
+            },
+            LAYOUT_MAX_PAGE,
+        );
+    }
+
+    #[test]
+    fn test_arrow_writer_clustered_large_values_page_layout() {
+        // Runs of 200 large values between long runs of nulls. The level to
+        // value ratio of a chunk says nothing about where its values are.
+        assert_byte_array_page_layout(
+            &SparseStrings {
+                num_rows: 8 * 1024,
+                value_len: |row| (row % 2000 >= 1800).then_some(1024),
+            },
+            LAYOUT_MAX_PAGE,
+        );
+    }
+
+    #[test]
+    fn test_arrow_writer_large_values_after_small_chunks_page_layout() {
+        // Small values for the first chunks, then only large ones. The
+        // large values lie within `write_batch_size` values of the small
+        // chunks, although they belong to later chunks.
+        assert_byte_array_page_layout(
+            &SparseStrings {
+                num_rows: 8 * 1024,
+                value_len: |row| scattered(row, 16).then_some(if row < 2048 { 8 } else { 1024 }),
+            },
+            LAYOUT_MAX_PAGE,
+        );
+    }
+
+    #[test]
+    fn test_arrow_writer_dense_values_near_page_limit_page_layout() {
+        // The payload of a mini-batch of 64 values fits the page limit. With
+        // the 4-byte length prefixes, 63 values already exceed it.
+        assert_byte_array_page_layout(
+            &SparseStrings {
+                num_rows: 4 * 1024,
+                value_len: |_| Some(62),
+            },
+            LAYOUT_MAX_PAGE,
+        );
+    }
+
+    #[test]
+    fn test_arrow_writer_dense_values_over_page_limit_page_layout() {
+        // A mini-batch of 64 values holds between one and two page limits.
+        assert_byte_array_page_layout(
+            &SparseStrings {
+                num_rows: 4 * 1024,
+                value_len: |_| Some(100),
+            },
+            LAYOUT_MAX_PAGE,
+        );
+    }
+
+    #[test]
+    fn test_arrow_writer_dense_mixed_values_page_layout() {
+        // Short and long values alternate. With tight buffers, a view array
+        // holds each short value in a data buffer of its own, so the buffers
+        // differ in length.
+        assert_byte_array_page_layout(
+            &SparseStrings {
+                num_rows: 4 * 1024,
+                value_len: |row| Some(if row % 2 == 1 { 200 } else { 20 }),
+            },
+            LAYOUT_MAX_PAGE,
+        );
+    }
+
     struct WriteBatchesShape {
         num_batches: usize,
         rows_per_batch: usize,
