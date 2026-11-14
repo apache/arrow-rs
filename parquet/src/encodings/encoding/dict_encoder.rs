@@ -31,6 +31,11 @@ impl<T: DataType> Storage for KeyStorage<T> {
     type Key = u64;
     type Value = T::T;
 
+    const INLINE_VALUES: bool = matches!(
+        T::T::PHYSICAL_TYPE,
+        Type::BOOLEAN | Type::INT32 | Type::INT64 | Type::FLOAT | Type::DOUBLE
+    );
+
     fn get(&self, idx: Self::Key) -> &Self::Value {
         &self.uniques[idx as usize]
     }

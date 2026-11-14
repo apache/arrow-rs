@@ -22,6 +22,10 @@ pub trait Storage {
 
     /// Return an estimate of the memory used in this storage, in bytes
     fn estimated_memory_size(&self) -> usize;
+
+    /// Whether every value is the same width, at most 8 bytes, so that its bytes can
+    /// be kept in the interner's table in place of a hash and compared there.
+    const INLINE_VALUES: bool = false;
 }
 
 /// A generic value interner supporting various different [`Storage`]
@@ -29,8 +33,10 @@ pub trait Storage {
 pub struct Interner<S: Storage> {
     state: ahash::RandomState,
 
-    /// Used to provide a lookup from value to unique value
-    dedup: HashTable<S::Key>,
+    /// Used to provide a lookup from value to unique value. Next to each key it keeps
+    /// the value's bytes when [`Storage::INLINE_VALUES`], so lookups and growth never
+    /// read `storage`, and the value's hash otherwise, so growth does not re-hash.
+    dedup: HashTable<(u64, S::Key)>,
 
     storage: S,
 }
@@ -54,18 +60,39 @@ impl<S: Storage> Interner<S> {
     /// codegen units, so unrelated changes can turn it into a call per value.
     #[inline]
     pub fn intern(&mut self, value: &S::Value) -> S::Key {
-        let hash = self.state.hash_one(value.as_bytes());
+        let bytes = value.as_bytes();
+        if S::INLINE_VALUES {
+            let mut padded = [0; 8];
+            padded[..bytes.len()].copy_from_slice(bytes);
+            let inline = u64::from_le_bytes(padded);
+            let state = &self.state;
+            let hash = state.hash_one(inline);
+            return self
+                .dedup
+                .entry(
+                    hash,
+                    // Comparing bytes rather than values lets NaNs be interned
+                    |&(entry, _)| entry == inline,
+                    |&(entry, _)| state.hash_one(entry),
+                )
+                .or_insert_with(|| (inline, self.storage.push(value)))
+                .get()
+                .1;
+        }
 
-        *self
-            .dedup
+        let hash = self.state.hash_one(bytes);
+        self.dedup
             .entry(
                 hash,
                 // Compare bytes rather than directly comparing values so NaNs can be interned
-                |index| value.as_bytes() == self.storage.get(*index).as_bytes(),
-                |key| self.state.hash_one(self.storage.get(*key).as_bytes()),
+                |&(entry_hash, index)| {
+                    entry_hash == hash && bytes == self.storage.get(index).as_bytes()
+                },
+                |&(entry_hash, _)| entry_hash,
             )
-            .or_insert_with(|| self.storage.push(value))
+            .or_insert_with(|| (hash, self.storage.push(value)))
             .get()
+            .1
     }
 
     /// Return estimate of the memory used, in bytes
