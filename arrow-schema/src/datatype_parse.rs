@@ -103,10 +103,15 @@ impl<'a> Parser<'a> {
 
     /// Parses field inside a list. Use `Field::LIST_FIELD_DEFAULT_NAME`
     /// if no field name is specified.
-    /// E.g: `non-null Int64, field: 'foo'` or `non-null Int64`
-    ///
-    /// TODO: support metadata: `non-ull Int64, metadata: {"foo2": "value"}`
+    /// E.g: `"foo": non-null Int64`, `non-null Int64, field: 'foo'` or `non-null Int64`
     fn parse_list_field(&mut self, context: &str) -> ArrowResult<Field> {
+        if matches!(
+            self.tokenizer.peek(),
+            Some(Ok(Token::DoubleQuotedString(_)))
+        ) {
+            return self.parse_field();
+        }
+
         let nullable = self.parse_opt_nullable();
         let data_type = self.parse_next_type()?;
 
@@ -128,7 +133,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses the List type (called after `List` has been consumed)
-    /// E.g: List(non-null Int64, field: 'foo')
+    /// E.g: List("foo": non-null Int64)
     fn parse_list(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
         let field = self.parse_list_field("List")?;
@@ -137,7 +142,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses the ListView type (called after `ListView` has been consumed)
-    /// E.g: ListView(non-null Int64, field: 'foo')
+    /// E.g: ListView("foo": non-null Int64)
     fn parse_list_view(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
         let field = self.parse_list_field("ListView")?;
@@ -146,7 +151,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses the LargeList type (called after `LargeList` has been consumed)
-    /// E.g: LargeList(non-null Int64, field: 'foo')
+    /// E.g: LargeList("foo": non-null Int64)
     fn parse_large_list(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
         let field = self.parse_list_field("LargeList")?;
@@ -155,7 +160,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses the LargeListView type (called after `LargeListView` has been consumed)
-    /// E.g: LargeListView(non-null Int64, field: 'foo')
+    /// E.g: LargeListView("foo": non-null Int64)
     fn parse_large_list_view(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
         let field = self.parse_list_field("LargeListView")?;
@@ -166,6 +171,7 @@ impl<'a> Parser<'a> {
     /// Parses the FixedSizeList type (called after `FixedSizeList` has been consumed)
     ///
     /// Examples:
+    /// * `FixedSizeList(5 x "foo": non-null Int64)`
     /// * `FixedSizeList(5 x non-null Int64, field: 'foo')`
     /// * `FixedSizeList(4, Int64)`
     ///
@@ -1136,6 +1142,53 @@ mod test {
         // this ensures types can be parsed correctly from their string representations
         for dt in list_datatypes() {
             round_trip(dt)
+        }
+    }
+
+    #[test]
+    fn test_parse_list_fields_backwards_compatibility() {
+        for (name, nullable, input) in [
+            ("item", true, "Int32"),
+            ("item", false, "non-null Int32"),
+            ("value", true, "nullable Int32, field: 'value'"),
+            ("value", false, "non-null Int32, field: 'value'"),
+            ("a'b\\c\"d\n", true, r#"Int32, field: 'a\'b\\c\"d\n'"#),
+        ] {
+            let field = Arc::new(Field::new(name, DataType::Int32, nullable));
+            for (prefix, expected) in [
+                ("List(", DataType::List(field.clone())),
+                ("LargeList(", DataType::LargeList(field.clone())),
+                ("ListView(", DataType::ListView(field.clone())),
+                ("LargeListView(", DataType::LargeListView(field.clone())),
+                ("FixedSizeList(3 x ", DataType::FixedSizeList(field, 3)),
+            ] {
+                let input = format!("{prefix}{input})");
+                assert_eq!(parse_data_type(&input).unwrap(), expected, "{input}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_mixed_list_field_formats() {
+        let input = r#"Dictionary(Int32, List("outer": List(non-null Int32, field: 'inner')))"#;
+        let expected = r#"Dictionary(Int32, List("outer": List("inner": non-null Int32)))"#;
+        let parsed = parse_data_type(input).unwrap();
+        assert_eq!(parsed.to_string(), expected);
+        round_trip(parsed);
+    }
+
+    #[test]
+    fn test_invalid_list_field_formats() {
+        for input in [
+            r#"List("value" Int32)"#,
+            r#"List("value":)"#,
+            r#"List("value": Int32"#,
+            r#"List("value": Int32, field: 'other')"#,
+        ] {
+            assert!(
+                matches!(parse_data_type(input), Err(ArrowError::ParseError(_))),
+                "{input}"
+            );
         }
     }
 
