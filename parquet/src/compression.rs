@@ -294,8 +294,11 @@ mod gzip_codec {
             &mut self,
             input_buf: &[u8],
             output_buf: &mut Vec<u8>,
-            _uncompress_size: Option<usize>,
+            uncompress_size: Option<usize>,
         ) -> Result<usize> {
+            if let Some(len) = uncompress_size {
+                output_buf.reserve(len);
+            }
             let mut decoder = read::MultiGzDecoder::new(input_buf);
             decoder.read_to_end(output_buf).map_err(|e| e.into())
         }
@@ -402,8 +405,10 @@ mod brotli_codec {
             output_buf: &mut Vec<u8>,
             uncompress_size: Option<usize>,
         ) -> Result<usize> {
-            let buffer_size = uncompress_size.unwrap_or(BROTLI_DEFAULT_BUFFER_SIZE);
-            brotli::Decompressor::new(input_buf, buffer_size)
+            if let Some(len) = uncompress_size {
+                output_buf.reserve(len);
+            }
+            brotli::Decompressor::new(input_buf, BROTLI_DEFAULT_BUFFER_SIZE)
                 .read_to_end(output_buf)
                 .map_err(|e| e.into())
         }
@@ -459,8 +464,6 @@ mod lz4_codec {
     use crate::compression::Codec;
     use crate::errors::{ParquetError, Result};
 
-    const LZ4_BUFFER_SIZE: usize = 4096;
-
     /// Codec for LZ4 compression algorithm.
     pub struct LZ4Codec {}
 
@@ -476,33 +479,19 @@ mod lz4_codec {
             &mut self,
             input_buf: &[u8],
             output_buf: &mut Vec<u8>,
-            _uncompress_size: Option<usize>,
+            uncompress_size: Option<usize>,
         ) -> Result<usize> {
-            let mut decoder = lz4_flex::frame::FrameDecoder::new(input_buf);
-            let mut buffer: [u8; LZ4_BUFFER_SIZE] = [0; LZ4_BUFFER_SIZE];
-            let mut total_len = 0;
-            loop {
-                let len = decoder.read(&mut buffer)?;
-                if len == 0 {
-                    break;
-                }
-                total_len += len;
-                output_buf.write_all(&buffer[0..len])?;
+            if let Some(len) = uncompress_size {
+                output_buf.reserve(len);
             }
+            let mut decoder = lz4_flex::frame::FrameDecoder::new(input_buf);
+            let total_len = decoder.read_to_end(output_buf)?;
             Ok(total_len)
         }
 
         fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
             let mut encoder = lz4_flex::frame::FrameEncoder::new(output_buf);
-            let mut from = 0;
-            loop {
-                let to = std::cmp::min(from + LZ4_BUFFER_SIZE, input_buf.len());
-                encoder.write_all(&input_buf[from..to])?;
-                from += LZ4_BUFFER_SIZE;
-                if from >= input_buf.len() {
-                    break;
-                }
-            }
+            encoder.write_all(input_buf)?;
             match encoder.finish() {
                 Ok(_) => Ok(()),
                 Err(e) => Err(ParquetError::External(Box::new(e))),
@@ -516,6 +505,8 @@ pub use lz4_codec::*;
 
 #[cfg(any(feature = "zstd", test))]
 mod zstd_codec {
+    use zstd::zstd_safe;
+
     use crate::compression::{Codec, ZstdLevel};
     use crate::errors::Result;
     use std::io::Cursor;
@@ -526,8 +517,7 @@ mod zstd_codec {
     /// to avoid the overhead of reinitializing contexts for each operation.
     pub struct ZSTDCodec {
         level: ZstdLevel,
-        // Created on first use, because writers only compress and readers only
-        // decompress.
+        // Created on first use; writers only compress and readers only decompress.
         compressor: Option<zstd::bulk::Compressor<'static>>,
         decompressor: Option<zstd::bulk::Decompressor<'static>>,
     }
@@ -551,16 +541,16 @@ mod zstd_codec {
             uncompress_size: Option<usize>,
         ) -> Result<usize> {
             let offset = output_buf.len();
-            let len = uncompress_size
-                .or_else(|| {
-                    // Get the decompressed size from the zstd frame header
-                    zstd::zstd_safe::get_frame_content_size(input_buf)
-                        .ok()
-                        .flatten()
-                        .map(|size| size as usize)
-                })
-                .unwrap_or_else(|| input_buf.len().saturating_mul(4));
-            output_buf.reserve(len);
+            if let Some(len) = uncompress_size {
+                output_buf.reserve_exact(len);
+            } else {
+                // get_frame_content_size gets length of only one frame.
+                // zstd_safe::find_decompressed_size or zstd_safe::decompress_bound would be
+                // better but are gated behind experimental.
+                if let Ok(Some(len)) = zstd_safe::get_frame_content_size(input_buf) {
+                    output_buf.reserve(len as usize);
+                }
+            }
 
             let mut cursor = Cursor::new(output_buf);
             cursor.set_position(offset as u64);
