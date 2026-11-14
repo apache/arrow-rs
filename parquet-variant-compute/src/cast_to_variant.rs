@@ -45,7 +45,7 @@ pub fn cast_to_variant_with_options(
     input: &dyn Array,
     options: &CastOptions,
 ) -> Result<VariantArray, ArrowError> {
-    // Create row builder for the input array type
+    // Build before the all-null fast path so unsupported types fail regardless of contents.
     let mut row_builder = make_arrow_to_variant_row_builder(input.data_type(), input, options)?;
 
     // Fast path: any all-null input maps to an all-null VariantArray.
@@ -107,7 +107,7 @@ mod tests {
     use arrow_schema::{
         DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION, DECIMAL128_MAX_PRECISION,
     };
-    use arrow_schema::{DataType, Field, Fields, IntervalUnit, TimeUnit, UnionFields, UnionMode};
+    use arrow_schema::{DataType, Field, Fields, UnionFields, UnionMode};
     use chrono::{DateTime, NaiveDate, NaiveTime};
     use half::f16;
     use parquet_variant::{
@@ -1127,39 +1127,13 @@ mod tests {
         ];
 
         for array in arrays {
-            let result = cast_to_variant(array.as_ref());
-            assert!(result.is_err());
-            match result.unwrap_err() {
-                ArrowError::InvalidArgumentError(msg) => {
-                    assert!(
-                        msg.contains("Casting duration/interval types to Variant is not supported")
-                    );
-                    assert!(
-                        msg.contains("The Variant format does not define duration/interval types")
-                    );
-                }
-                _ => panic!("Expected InvalidArgumentError"),
-            }
-        }
-    }
-
-    #[test]
-    fn test_cast_to_variant_duration_or_interval_errors_empty_or_all_null() {
-        let unsupported = [
-            DataType::Duration(TimeUnit::Second),
-            DataType::Duration(TimeUnit::Millisecond),
-            DataType::Duration(TimeUnit::Microsecond),
-            DataType::Duration(TimeUnit::Nanosecond),
-            DataType::Interval(IntervalUnit::YearMonth),
-            DataType::Interval(IntervalUnit::DayTime),
-            DataType::Interval(IntervalUnit::MonthDayNano),
-        ];
-        for data_type in unsupported {
+            let data_type = array.data_type().clone();
             let field = Field::new("value", data_type.clone(), true);
             let union_fields = UnionFields::from_fields(vec![
                 Field::new("int", DataType::Int32, true),
                 field.clone(),
             ]);
+            let mut cases: Vec<ArrayRef> = vec![array.into()];
             for data_type in [
                 DataType::new_list(data_type.clone(), true),
                 DataType::Struct(Fields::from(vec![field])),
@@ -1167,16 +1141,28 @@ mod tests {
                 DataType::Union(union_fields, UnionMode::Sparse),
                 data_type,
             ] {
-                for array in [new_empty_array(&data_type), new_null_array(&data_type, 2)] {
-                    let result = cast_to_variant(array.as_ref());
-                    let Err(ArrowError::InvalidArgumentError(msg)) = &result else {
-                        panic!(
-                            "{data_type} with {} rows: {:?}",
-                            array.len(),
-                            result.map(|_| ())
-                        );
-                    };
-                    assert!(msg.contains("duration/interval"), "{msg}");
+                cases.push(new_empty_array(&data_type));
+                cases.push(new_null_array(&data_type, 2));
+            }
+
+            for array in cases {
+                let result = cast_to_variant(array.as_ref());
+                assert!(
+                    result.is_err(),
+                    "{} with {} rows",
+                    array.data_type(),
+                    array.len()
+                );
+                match result.unwrap_err() {
+                    ArrowError::InvalidArgumentError(msg) => {
+                        assert!(msg.contains(
+                            "Casting duration/interval types to Variant is not supported"
+                        ));
+                        assert!(msg.contains(
+                            "The Variant format does not define duration/interval types"
+                        ));
+                    }
+                    _ => panic!("Expected InvalidArgumentError"),
                 }
             }
         }
