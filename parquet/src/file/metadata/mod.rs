@@ -420,6 +420,18 @@ impl ParquetMetaDataBuilder {
         }
     }
 
+    /// Replaces the file-level key-value metadata.
+    ///
+    /// Pass `None` to remove all entries. This only updates the in-memory metadata;
+    /// it does not modify the Parquet file.
+    ///
+    /// Other metadata, including row groups, page indexes, and decryption state,
+    /// is preserved. Shared file metadata is cloned before modification.
+    pub fn set_key_value_metadata(mut self, key_value_metadata: Option<Vec<KeyValue>>) -> Self {
+        Arc::make_mut(&mut self.file_metadata).key_value_metadata = key_value_metadata;
+        self
+    }
+
     /// Adds a row group to the metadata
     ///
     /// If the row groups are shared with another `ParquetMetaData`, this clones
@@ -2410,6 +2422,54 @@ mod tests {
         // Both should be None since they were never populated
         assert!(!page_index.has_column_indexes());
         assert!(!page_index.has_offset_indexes());
+    }
+
+    #[test]
+    fn test_set_key_value_metadata_preserves_shared_metadata() {
+        let original = vec![KeyValue::new("original".to_string(), "value".to_string())];
+        let replacement = vec![KeyValue::new("replacement".to_string(), "new".to_string())];
+        for initial in [None, Some(original)] {
+            let file_metadata = FileMetaData::new(
+                2,
+                0,
+                Some("test writer".to_string()),
+                initial.clone(),
+                get_test_schema_descr(),
+                None,
+            );
+            #[cfg(feature = "encryption")]
+            let file_metadata = file_metadata
+                .with_encryption_algorithm(Some(EncryptionAlgorithm::AES_GCM_V1(
+                    crate::file::metadata::thrift::encryption::AesGcmV1 {
+                        aad_prefix: Some(vec![1; 8]),
+                        aad_file_unique: Some(vec![2; 8]),
+                        supply_aad_prefix: Some(true),
+                    },
+                )))
+                .with_footer_signing_key_metadata(Some(vec![3; 8]));
+            let cached = ParquetMetaDataBuilder::new(file_metadata)
+                .set_page_index(Some(Arc::new(PageIndexBuilder::new(0, 2).build())))
+                .build();
+            for values in [None, Some(vec![]), Some(replacement.clone())] {
+                let updated = cached
+                    .clone()
+                    .into_builder()
+                    .set_key_value_metadata(values.clone())
+                    .build();
+                let mut expected = cached.file_metadata().clone();
+                expected.key_value_metadata = values;
+                assert_eq!(updated.file_metadata(), &expected);
+                assert_eq!(
+                    cached.file_metadata().key_value_metadata(),
+                    initial.as_ref()
+                );
+                assert!(Arc::ptr_eq(&cached.row_groups, &updated.row_groups));
+                assert!(Arc::ptr_eq(
+                    cached.page_index().unwrap(),
+                    updated.page_index().unwrap()
+                ));
+            }
+        }
     }
 
     #[test]
