@@ -116,6 +116,7 @@ const VALUES_PER_PAGE: usize = 10_000;
 const BATCH_SIZE: usize = 8192;
 const MAX_LIST_LEN: usize = 10;
 const EXPECTED_VALUE_COUNT: usize = NUM_ROW_GROUPS * PAGES_PER_GROUP * VALUES_PER_PAGE;
+const DICTIONARY_TRANSITION_VALUE_COUNT: usize = 16_384;
 
 // Params for the large dictionary value benchmark. Binary columns holding large
 // payloads are commonly dictionary encoded in practice, because a writer's
@@ -667,6 +668,59 @@ fn build_dictionary_encoded_string_page_iterator(
     }
 
     InMemoryPageIterator::new(pages)
+}
+
+fn build_dictionary_to_plain_string_page_iterator(
+    column_desc: ColumnDescPtr,
+    cardinality: usize,
+    transition_offset: usize,
+) -> impl PageIterator + Clone {
+    use parquet::encoding::{DictEncoder, Encoder};
+
+    assert!(transition_offset <= DICTIONARY_TRANSITION_VALUE_COUNT);
+    let values = (0..DICTIONARY_TRANSITION_VALUE_COUNT)
+        .map(|i| ByteArray::from(format!("{:032}", i % cardinality).as_str()))
+        .collect::<Vec<_>>();
+
+    let mut pages = VecDeque::new();
+    let mut dict_encoder = DictEncoder::<ByteArrayType>::new(column_desc.clone());
+
+    let dictionary_values = &values[..transition_offset];
+    let mut page_builder =
+        DataPageBuilderImpl::new(column_desc.clone(), dictionary_values.len() as u32, true);
+    page_builder.add_rep_levels(
+        column_desc.max_rep_level(),
+        &vec![0; dictionary_values.len()],
+    );
+    page_builder.add_def_levels(
+        column_desc.max_def_level(),
+        &vec![column_desc.max_def_level(); dictionary_values.len()],
+    );
+    dict_encoder.put(dictionary_values).unwrap();
+    page_builder.add_indices(dict_encoder.write_indices().unwrap());
+    let dictionary_data_page = page_builder.consume();
+
+    let dict = dict_encoder.write_dict().unwrap();
+    pages.push_back(parquet::column::page::Page::DictionaryPage {
+        buf: dict,
+        num_values: dict_encoder.num_entries() as u32,
+        encoding: Encoding::RLE_DICTIONARY,
+        is_sorted: false,
+    });
+    pages.push_back(dictionary_data_page);
+
+    let plain_values = &values[transition_offset..];
+    let mut page_builder =
+        DataPageBuilderImpl::new(column_desc.clone(), plain_values.len() as u32, true);
+    page_builder.add_rep_levels(column_desc.max_rep_level(), &vec![0; plain_values.len()]);
+    page_builder.add_def_levels(
+        column_desc.max_def_level(),
+        &vec![column_desc.max_def_level(); plain_values.len()],
+    );
+    page_builder.add_values::<ByteArrayType>(Encoding::PLAIN, plain_values);
+    pages.push_back(page_builder.consume());
+
+    InMemoryPageIterator::new(vec![pages.into()])
 }
 
 /// Builds pages of dictionary encoded values that are individually large and all
@@ -2570,6 +2624,33 @@ fn add_benches(c: &mut Criterion) {
         });
         assert_eq!(count, EXPECTED_VALUE_COUNT);
     });
+
+    group.finish();
+
+    let mut group = c.benchmark_group("arrow_array_reader/StringDictionaryTransitions");
+
+    for cardinality in [10, 1_000] {
+        for transition_offset in [8_192, 8_191] {
+            let data = build_dictionary_to_plain_string_page_iterator(
+                mandatory_string_column_desc.clone(),
+                cardinality,
+                transition_offset,
+            );
+            group.bench_function(
+                format!("cardinality {cardinality}/offset {transition_offset}"),
+                |b| {
+                    b.iter(|| {
+                        let array_reader = create_string_byte_array_dictionary_reader(
+                            data.clone(),
+                            mandatory_string_column_desc.clone(),
+                        );
+                        count = bench_array_reader(array_reader);
+                    });
+                    assert_eq!(count, DICTIONARY_TRANSITION_VALUE_COUNT);
+                },
+            );
+        }
+    }
 
     group.finish();
 
