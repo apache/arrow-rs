@@ -992,8 +992,12 @@ mod tests {
                 .collect(),
             unencoded_byte_array_data_bytes: None,
         };
-        page_index.put_offset_index(column(&[0, 4, 8]), 0, 0);
-        page_index.put_offset_index(column(&[0, 6, 10]), 0, 1);
+        page_index
+            .try_put_offset_index(column(&[0, 4, 8]), 0, 0)
+            .unwrap();
+        page_index
+            .try_put_offset_index(column(&[0, 6, 10]), 0, 1)
+            .unwrap();
         let page_index: Option<Arc<dyn PageIndexProvider>> = Some(Arc::new(page_index.build()));
         let page_index = RowGroupPageIndex::new(0, page_index);
         let selection = RowSelection::from(vec![
@@ -1061,22 +1065,24 @@ mod tests {
     #[test]
     fn test_auto_keeps_mask_when_page_pruning_skips_pages() {
         let mut page_index = PageIndexBuilder::new(1, 1);
-        page_index.put_offset_index(
-            OffsetIndexMetaData {
-                page_locations: [0, 2, 4, 6, 8, 10]
-                    .into_iter()
-                    .enumerate()
-                    .map(|(idx, first_row_index)| PageLocation {
-                        offset: (idx * 10) as i64,
-                        compressed_page_size: 10,
-                        first_row_index,
-                    })
-                    .collect(),
-                unencoded_byte_array_data_bytes: None,
-            },
-            0,
-            0,
-        );
+        page_index
+            .try_put_offset_index(
+                OffsetIndexMetaData {
+                    page_locations: [0, 2, 4, 6, 8, 10]
+                        .into_iter()
+                        .enumerate()
+                        .map(|(idx, first_row_index)| PageLocation {
+                            offset: (idx * 10) as i64,
+                            compressed_page_size: 10,
+                            first_row_index,
+                        })
+                        .collect(),
+                    unencoded_byte_array_data_bytes: None,
+                },
+                0,
+                0,
+            )
+            .unwrap();
         let page_index: Option<Arc<dyn PageIndexProvider>> = Some(Arc::new(page_index.build()));
         let page_index = RowGroupPageIndex::new(0, page_index);
         let selection = RowSelection::from(vec![

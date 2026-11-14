@@ -12,7 +12,8 @@ use std::ops::Range;
 use bytes::Bytes;
 
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::page_index::{PageIndex, PageIndexBuilder, PageIndexProvider};
+use crate::file::metadata::column_chunk::{ColumnChunkEntries, ColumnChunkKey};
+use crate::file::metadata::page_index::{PageIndex, PageIndexProvider};
 use crate::file::metadata::thrift::parquet_metadata_from_bytes;
 use crate::file::metadata::{
     ColumnChunkMask, ColumnChunkMetaData, PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions,
@@ -245,34 +246,29 @@ pub(crate) fn parse_page_index(
     bytes: &Bytes,
     start_offset: u64,
 ) -> Result<Option<PageIndex>> {
-    let num_row_groups = metadata.num_row_groups();
-    let num_columns = metadata.file_metadata().schema_descr().num_columns();
-    let mut builder = PageIndexBuilder::default();
-
-    if column_index_policy != PageIndexPolicy::Skip {
-        builder.allocate_column_indexes(num_row_groups, num_columns);
-        parse_column_index(
+    let column_indexes = if column_index_policy == PageIndexPolicy::Skip {
+        None
+    } else {
+        Some(parse_column_index(
             metadata,
-            column_index_policy,
             column_index_mask,
-            &mut builder,
             bytes,
             start_offset,
-        )?;
-    }
-    if offset_index_policy != PageIndexPolicy::Skip {
-        builder.allocate_offset_indexes(num_row_groups, num_columns);
-        parse_offset_index(
+        )?)
+    };
+    let offset_indexes = if offset_index_policy == PageIndexPolicy::Skip {
+        None
+    } else {
+        Some(parse_offset_index(
             metadata,
             offset_index_policy,
             offset_index_mask,
-            &mut builder,
             bytes,
             start_offset,
-        )?;
-    }
+        )?)
+    };
 
-    let page_index = builder.build();
+    let page_index = PageIndex::from_entries(column_indexes, offset_indexes);
     if page_index.has_column_indexes() || page_index.has_offset_indexes() {
         Ok(Some(page_index))
     } else {
@@ -280,17 +276,45 @@ pub(crate) fn parse_page_index(
     }
 }
 
+/// Reserve only for selected chunks that actually have an index range. An extra
+/// metadata-only pass avoids both vector growth for dense reads and reserving a
+/// full rectangular grid for sparse reads or files with missing indexes.
+fn reserve_index_entries<T>(
+    metadata: &ParquetMetaData,
+    mask: &ColumnChunkMask,
+    index_range: impl Fn(&ColumnChunkMetaData) -> Option<Range<u64>>,
+) -> Result<Vec<(ColumnChunkKey, T)>> {
+    let num_entries =
+        mask.row_group_indices(metadata.num_row_groups())
+            .try_fold(0_usize, |count, rg_idx| {
+                let rg = metadata.row_group(rg_idx);
+                let present = mask
+                    .column_indices(rg.num_columns())
+                    .filter(|&col_idx| index_range(rg.column(col_idx)).is_some())
+                    .count();
+                count.checked_add(present).ok_or_else(|| {
+                    ParquetError::General("column chunk entry count exceeds usize::MAX".to_string())
+                })
+            })?;
+    let mut entries = Vec::new();
+    entries.try_reserve_exact(num_entries).map_err(|err| {
+        ParquetError::General(format!(
+            "failed to allocate storage for {num_entries} column chunk entries: {err}"
+        ))
+    })?;
+    Ok(entries)
+}
+
 fn parse_column_index(
     metadata: &ParquetMetaData,
-    column_index_policy: PageIndexPolicy,
     mask: &ColumnChunkMask,
-    page_index_builder: &mut PageIndexBuilder,
     bytes: &Bytes,
     start_offset: u64,
-) -> Result<()> {
-    if column_index_policy == PageIndexPolicy::Skip {
-        return Ok(());
-    }
+) -> Result<ColumnChunkEntries<ColumnIndexMetaData>> {
+    let mut entries =
+        reserve_index_entries(metadata, mask, ColumnChunkMetaData::column_index_range)?;
+    // Mask axes are sorted and unique, so present entries remain in row-major
+    // order even when selected chunks have no index.
     for rg_idx in mask.row_group_indices(metadata.num_row_groups()) {
         let rg = metadata.row_group(rg_idx);
         for col_idx in mask.column_indices(rg.num_columns()) {
@@ -299,25 +323,27 @@ fn parse_column_index(
                 let idx_bytes = get_index_bytes(bytes, start_offset, r)?;
                 let idx =
                     inner::parse_single_column_index(idx_bytes, metadata, col, rg_idx, col_idx)?;
-                page_index_builder.put_column_index(idx, rg_idx, col_idx);
+                entries.push((ColumnChunkKey::try_new(rg_idx, col_idx)?, idx));
             }
         }
     }
 
-    Ok(())
+    ColumnChunkEntries::try_from_sorted_entries(
+        metadata.num_row_groups(),
+        metadata.file_metadata().schema_descr().num_columns(),
+        entries,
+    )
 }
 
 fn parse_offset_index(
     metadata: &ParquetMetaData,
     offset_index_policy: PageIndexPolicy,
     mask: &ColumnChunkMask,
-    page_index_builder: &mut PageIndexBuilder,
     bytes: &Bytes,
     start_offset: u64,
-) -> Result<()> {
-    if offset_index_policy == PageIndexPolicy::Skip {
-        return Ok(());
-    }
+) -> Result<ColumnChunkEntries<OffsetIndexMetaData>> {
+    let mut entries =
+        reserve_index_entries(metadata, mask, ColumnChunkMetaData::offset_index_range)?;
     for rg_idx in mask.row_group_indices(metadata.num_row_groups()) {
         let rg = metadata.row_group(rg_idx);
         for col_idx in mask.column_indices(rg.num_columns()) {
@@ -326,14 +352,18 @@ fn parse_offset_index(
                 let idx_bytes = get_index_bytes(bytes, start_offset, r)?;
                 let idx =
                     inner::parse_single_offset_index(idx_bytes, metadata, col, rg_idx, col_idx)?;
-                page_index_builder.put_offset_index(idx, rg_idx, col_idx);
+                entries.push((ColumnChunkKey::try_new(rg_idx, col_idx)?, idx));
             } else if offset_index_policy == PageIndexPolicy::Required {
                 return Err(general_err!("missing offset index"));
             }
         }
     }
 
-    Ok(())
+    ColumnChunkEntries::try_from_sorted_entries(
+        metadata.num_row_groups(),
+        metadata.file_metadata().schema_descr().num_columns(),
+        entries,
+    )
 }
 
 fn get_index_bytes(bytes: &[u8], start_offset: u64, range: Range<u64>) -> Result<&[u8]> {

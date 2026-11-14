@@ -2094,6 +2094,21 @@ pub(crate) mod tests {
         );
     }
 
+    #[test]
+    fn metadata_schema_huge_child_count_is_rejected() {
+        // File version 1, one schema element named "r" with i32::MAX children.
+        let data = [
+            0x15, 0x02, 0x19, 0x1c, 0x48, 0x01, 0x72, 0x15, 0xfe, 0xff, 0xff, 0xff, 0x0f, 0x00,
+        ];
+        let err = super::parquet_metadata_from_bytes(&data, None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("Schema children count 2147483647 exceeds remaining schema elements 0"),
+            "{err}"
+        );
+    }
+
     /// Test row group on-wire size validation.
     #[test]
     fn row_group_count_exceeding_remaining_input_is_rejected() {
