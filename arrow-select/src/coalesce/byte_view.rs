@@ -443,6 +443,7 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
             }
             return;
         }
+        let max_buffer_size = max_buffer_size.min(u32::MAX as usize);
 
         let mut dst_buffer = match self.current.take() {
             Some(current)
@@ -502,10 +503,8 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
                         .get_unchecked(source_buffer_index)
                         .get_unchecked(source_buffer_offset..source_buffer_offset + length)
                 };
-                view.offset = dst_buffer
-                    .len()
-                    .try_into()
-                    .expect("byte view offset exceeds u32::MAX");
+                // The final buffer length is bounded by `max_buffer_size`.
+                view.offset = dst_buffer.len() as u32;
                 view.buffer_index = buffer_index;
                 debug_assert!(dst_buffer.capacity() - dst_buffer.len() >= length);
                 dst_buffer.extend_from_slice(src);
@@ -574,10 +573,7 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
                         .get_unchecked(buffer_index)
                         .get_unchecked(buffer_offset..buffer_offset + str_len)
                 };
-                view.offset = dst_buffer
-                    .len()
-                    .try_into()
-                    .expect("byte view offset exceeds u32::MAX");
+                view.offset = dst_buffer.len() as u32;
                 view.buffer_index = self.completed.len().try_into().expect("too many buffers");
                 debug_assert!(dst_buffer.capacity() - dst_buffer.len() >= str_len);
                 dst_buffer.extend_from_slice(src);
@@ -1289,7 +1285,7 @@ mod tests {
                 &indices,
                 typed.data_buffers(),
                 selected_bytes,
-                selected_bytes,
+                usize::MAX,
             );
         }
         let actual = in_progress.finish().unwrap();
