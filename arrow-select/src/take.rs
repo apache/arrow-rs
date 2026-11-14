@@ -293,7 +293,7 @@ fn take_impl<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
             let arrays  = array
                 .columns()
                 .iter()
-                .map(|a| take_impl::<_, VALIDATE_INDICES>(a.as_ref(), indices))
+                .map(|a| take_masked_child::<_, VALIDATE_INDICES>(a.as_ref(), indices))
                 .collect::<Result<Vec<ArrayRef>, _>>()?;
             let fields: Vec<(FieldRef, ArrayRef)> =
                 fields.iter().cloned().zip(arrays).collect();
@@ -470,10 +470,13 @@ fn union_null_type_id(fields: &UnionFields) -> Result<i8, ArrowError> {
 /// be represented by a descendant that is marked nullable. A field marked
 /// nullable is not sufficient if its nested type cannot store a null.
 fn field_can_represent_take_null(field: &FieldRef) -> bool {
-    if !field.is_nullable() {
-        return false;
-    }
-    match field.data_type() {
+    field.is_nullable() && data_type_can_represent_take_null(field.data_type())
+}
+
+/// Whether an array of `data_type` can physically store a newly introduced
+/// null, whatever the nullability of the field that holds it.
+fn data_type_can_represent_take_null(data_type: &DataType) -> bool {
+    match data_type {
         DataType::RunEndEncoded(_, values) => field_can_represent_take_null(values),
         DataType::Union(fields, _) => fields
             .iter()
@@ -508,6 +511,26 @@ fn take_sparse_union_child<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES
                 .nulls(None)
                 .build()?,
         ));
+    }
+
+    take_impl::<_, VALIDATE_INDICES>(values, &indices_without_nulls(indices))
+}
+
+/// Takes a child of a struct or fixed-size list for `indices`.
+///
+/// The parent marks the rows of null take indices null in its own validity, so
+/// the child's values at those rows are unspecified. A child that cannot store
+/// a null is taken with dummy indices there instead, unless it is empty and
+/// has no value to use as a dummy.
+fn take_masked_child<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
+    values: &dyn Array,
+    indices: &PrimitiveArray<IndexType>,
+) -> Result<ArrayRef, ArrowError> {
+    if indices.null_count() == 0
+        || data_type_can_represent_take_null(values.data_type())
+        || values.is_empty()
+    {
+        return take_impl::<_, VALIDATE_INDICES>(values, indices);
     }
 
     take_impl::<_, VALIDATE_INDICES>(values, &indices_without_nulls(indices))
@@ -1234,7 +1257,7 @@ fn take_fixed_size_list<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: b
         )?
     } else {
         let list_indices = take_value_indices_from_fixed_size_list(values, indices, length)?;
-        take_impl::<UInt32Type, VALIDATE_INDICES>(child.as_ref(), &list_indices)?
+        take_masked_child::<UInt32Type, VALIDATE_INDICES>(child.as_ref(), &list_indices)?
     };
 
     FixedSizeListArray::try_new_with_length(
