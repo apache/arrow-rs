@@ -60,13 +60,30 @@ fn test_cast_date32_to_date64() {
 
 #[test]
 fn test_cast_date64_to_date32() {
-    let a = Date64Array::from(vec![Some(864000000005), Some(1545696000001), None]);
+    let a = Date64Array::from(vec![
+        Some(864000000005),
+        Some(1545696000001),
+        None,
+        Some(-1),
+        Some(-86400000),
+        Some(-86400001),
+    ]);
     let array = Arc::new(a) as ArrayRef;
     let b = cast(&array, &DataType::Date32).unwrap();
     let c = b.as_primitive::<Date32Type>();
     assert_eq!(10000, c.value(0));
     assert_eq!(17890, c.value(1));
     assert!(c.is_null(2));
+    assert_eq!(-1, c.value(3));
+    assert_eq!(-1, c.value(4));
+    assert_eq!(-2, c.value(5));
+
+    let options = CastOptions {
+        safe: false,
+        ..Default::default()
+    };
+    let d = cast_with_options(&array, &DataType::Date32, &options).unwrap();
+    assert_eq!(c, d.as_primitive::<Date32Type>());
 }
 
 #[test]
