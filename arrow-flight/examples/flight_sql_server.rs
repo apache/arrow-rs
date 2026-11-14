@@ -12,11 +12,12 @@ use prost::Message;
 use std::collections::HashSet;
 use std::pin::Pin;
 use std::str::FromStr;
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, Mutex};
 use tonic::metadata::MetadataValue;
 use tonic::transport::Server;
 use tonic::transport::{Certificate, Identity, ServerTlsConfig};
 use tonic::{Request, Response, Status, Streaming};
+use uuid::Uuid;
 
 use arrow_array::builder::StringBuilder;
 use arrow_array::{ArrayRef, RecordBatch};
@@ -39,8 +40,9 @@ use arrow_flight::sql::{
 };
 use arrow_flight::utils::batches_to_flight_data;
 use arrow_flight::{
-    Action, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest,
-    HandshakeResponse, IpcMessage, SchemaAsIpc, Ticket, flight_service_server::FlightService,
+    Action, CloseSessionRequest, CloseSessionResult, FlightData, FlightDescriptor, FlightEndpoint,
+    FlightInfo, HandshakeRequest, HandshakeResponse, IpcMessage, SchemaAsIpc, Ticket,
+    close_session_result::Status as CloseSessionStatus, flight_service_server::FlightService,
     flight_service_server::FlightServiceServer,
 };
 use arrow_ipc::writer::IpcWriteOptions;
@@ -52,7 +54,6 @@ macro_rules! status {
     };
 }
 
-const FAKE_TOKEN: &str = "uuid_token";
 const FAKE_HANDLE: &str = "uuid_handle";
 const FAKE_UPDATE_RESULT: i64 = 1;
 
@@ -94,11 +95,13 @@ static INSTANCE_XBDC_DATA: LazyLock<XdbcTypeInfoData> = LazyLock::new(|| {
 
 static TABLES: LazyLock<Vec<&'static str>> = LazyLock::new(|| vec!["flight_sql.example.table"]);
 
-#[derive(Clone)]
-pub struct FlightSqlServiceImpl {}
+#[derive(Clone, Default)]
+pub struct FlightSqlServiceImpl {
+    sessions: Arc<Mutex<HashSet<String>>>,
+}
 
 impl FlightSqlServiceImpl {
-    fn check_token<T>(&self, req: &Request<T>) -> Result<(), Status> {
+    fn get_token<T>(&self, req: &Request<T>) -> Result<String, Status> {
         let metadata = req.metadata();
         let auth = metadata.get("authorization").ok_or_else(|| {
             Status::internal(format!("No authorization header! metadata = {metadata:?}"))
@@ -111,8 +114,12 @@ impl FlightSqlServiceImpl {
         if !authorization.starts_with(bearer) {
             Err(Status::internal("Invalid auth header!"))?;
         }
-        let token = authorization[bearer.len()..].to_string();
-        if token == FAKE_TOKEN {
+        Ok(authorization[bearer.len()..].to_string())
+    }
+
+    fn check_token<T>(&self, req: &Request<T>) -> Result<(), Status> {
+        let token = self.get_token(req)?;
+        if self.sessions.lock().unwrap().contains(&token) {
             Ok(())
         } else {
             Err(Status::unauthenticated("invalid token "))
@@ -167,14 +174,17 @@ impl FlightSqlService for FlightSqlServiceImpl {
             Err(Status::unauthenticated("Invalid credentials!"))?
         }
 
+        let session_id = Uuid::new_v4().to_string();
+        self.sessions.lock().unwrap().insert(session_id.clone());
+        println!("Created session: {session_id}");
         let result = HandshakeResponse {
             protocol_version: 0,
-            payload: FAKE_TOKEN.into(),
+            payload: session_id.clone().into(),
         };
         let result = Ok(result);
         let output = futures::stream::iter(vec![result]);
 
-        let token = format!("Bearer {FAKE_TOKEN}");
+        let token = format!("Bearer {session_id}");
         let mut response: Response<Pin<Box<dyn Stream<Item = _> + Send>>> =
             Response::new(Box::pin(output));
         response.metadata_mut().append(
@@ -661,6 +671,22 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Ok(res)
     }
 
+    async fn do_action_close_session(
+        &self,
+        _query: CloseSessionRequest,
+        request: Request<Action>,
+    ) -> Result<CloseSessionResult, Status> {
+        let token = self.get_token(&request)?;
+        if !self.sessions.lock().unwrap().remove(&token) {
+            println!("CloseSession: NotFound");
+            return Err(Status::not_found("Session not found"));
+        }
+        println!("CloseSession: Closed");
+        Ok(CloseSessionResult {
+            status: CloseSessionStatus::Closed as i32,
+        })
+    }
+
     async fn do_action_close_prepared_statement(
         &self,
         _query: ActionClosePreparedStatementRequest,
@@ -735,7 +761,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let key = std::fs::read_to_string("arrow-flight/examples/data/server.key")?;
         let client_ca = std::fs::read_to_string("arrow-flight/examples/data/ca_root.pem")?;
 
-        let svc = FlightServiceServer::new(FlightSqlServiceImpl {});
+        let svc = FlightServiceServer::new(FlightSqlServiceImpl::default());
         let tls_config = ServerTlsConfig::new()
             .identity(Identity::from_pem(&cert, &key))
             .client_ca_root(Certificate::from_pem(&client_ca));
@@ -746,7 +772,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .serve(addr)
             .await?;
     } else {
-        let svc = FlightServiceServer::new(FlightSqlServiceImpl {});
+        let svc = FlightServiceServer::new(FlightSqlServiceImpl::default());
 
         Server::builder().add_service(svc).serve(addr).await?;
     }
@@ -832,7 +858,7 @@ mod tests {
         let uds = UnixListener::bind(path.clone()).unwrap();
         let stream = UnixListenerStream::new(uds);
 
-        let service = FlightSqlServiceImpl {};
+        let service = FlightSqlServiceImpl::default();
         let serve_future = Server::builder()
             .add_service(FlightServiceServer::new(service))
             .serve_with_incoming(stream);
@@ -863,7 +889,7 @@ mod tests {
         let (incoming, addr) = bind_tcp().await;
         let uri = format!("http://{}:{}", addr.ip(), addr.port());
 
-        let service = FlightSqlServiceImpl {};
+        let service = FlightSqlServiceImpl::default();
         let serve_future = Server::builder()
             .add_service(FlightServiceServer::new(service))
             .serve_with_incoming(incoming);
@@ -899,7 +925,7 @@ mod tests {
         let (incoming, addr) = bind_tcp().await;
         let uri = format!("https://{}:{}", addr.ip(), addr.port());
 
-        let svc = FlightServiceServer::new(FlightSqlServiceImpl {});
+        let svc = FlightServiceServer::new(FlightSqlServiceImpl::default());
 
         let serve_future = Server::builder()
             .tls_config(tls_config)

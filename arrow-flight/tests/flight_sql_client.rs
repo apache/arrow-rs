@@ -5,9 +5,11 @@
 mod common;
 
 use crate::common::fixture::TestFixture;
+use crate::common::server::TestFlightServer;
 use crate::common::utils::make_primitive_batch;
 
 use arrow_array::RecordBatch;
+use arrow_flight::close_session_result::Status as CloseSessionStatus;
 use arrow_flight::decode::FlightRecordBatchStream;
 use arrow_flight::encode::FlightDataEncoderBuilder;
 use arrow_flight::error::FlightError;
@@ -19,7 +21,9 @@ use arrow_flight::sql::{
     CommandStatementIngest, EndTransaction, FallibleRequestStream, ProstMessageExt,
     TableDefinitionOptions, TableExistsOption, TableNotExistOption,
 };
-use arrow_flight::{Action, FlightData, FlightDescriptor};
+use arrow_flight::{
+    Action, CloseSessionRequest, CloseSessionResult, Empty, FlightData, FlightDescriptor,
+};
 use futures::{StreamExt, TryStreamExt};
 use prost::Message;
 use std::collections::{HashMap, HashSet};
@@ -27,6 +31,131 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tonic::{IntoStreamingRequest, Request, Status};
 use uuid::Uuid;
+
+#[tokio::test]
+async fn test_close_session_statuses() {
+    let test_server = TestFlightServer::new();
+    let fixture = TestFixture::new(test_server.service()).await;
+    let mut client = FlightSqlServiceClient::new(fixture.channel().await);
+
+    for status in [
+        CloseSessionStatus::Unspecified,
+        CloseSessionStatus::Closed,
+        CloseSessionStatus::Closing,
+        CloseSessionStatus::NotCloseable,
+    ] {
+        let response = CloseSessionResult {
+            status: status as i32,
+        };
+        test_server.set_do_action_response(vec![Ok(arrow_flight::Result::new(
+            response.encode_to_vec(),
+        ))]);
+        assert_eq!(client.close().await.unwrap(), response);
+    }
+
+    let unknown_status = 99;
+    let response = CloseSessionResult {
+        status: unknown_status,
+    };
+    test_server.set_do_action_response(vec![Ok(arrow_flight::Result::new(
+        response.encode_to_vec(),
+    ))]);
+    assert_eq!(client.close().await.unwrap().status, unknown_status);
+    fixture.shutdown_and_wait().await;
+}
+
+#[tokio::test]
+async fn test_close_session_errors() {
+    let test_server = TestFlightServer::new();
+    let fixture = TestFixture::new(test_server.service()).await;
+    let mut client = FlightSqlServiceClient::new(fixture.channel().await);
+
+    test_server.set_do_action_response(vec![]);
+    assert!(matches!(
+        client.close().await,
+        Err(FlightError::ProtocolError(_))
+    ));
+
+    test_server.set_do_action_response(vec![Ok(arrow_flight::Result::new(vec![0xff]))]);
+    assert!(matches!(
+        client.close().await,
+        Err(FlightError::DecodeError(_))
+    ));
+
+    let closed = CloseSessionResult {
+        status: CloseSessionStatus::Closed as i32,
+    };
+    test_server.set_do_action_response(vec![
+        Ok(arrow_flight::Result::new(closed.encode_to_vec())),
+        Err(Status::not_found("Session not found")),
+    ]);
+    let err = client.close().await.unwrap_err();
+    assert!(matches!(err, FlightError::Tonic(status) if status.code() == tonic::Code::NotFound));
+    fixture.shutdown_and_wait().await;
+}
+
+#[tokio::test]
+async fn test_close_session_sql_server() {
+    let test_server = FlightSqlServiceImpl::new();
+    let cookie = "arrow_flight_session_id=test-session";
+    test_server.sessions.lock().await.insert(cookie.into());
+    let fixture = TestFixture::new(test_server.service()).await;
+    let mut client = FlightSqlServiceClient::new(fixture.channel().await);
+    client.set_header("cookie", cookie);
+    client.set_token("test-token".into());
+
+    let actions: Vec<_> = client
+        .inner_mut()
+        .list_actions(Empty {})
+        .await
+        .unwrap()
+        .into_inner()
+        .try_collect()
+        .await
+        .unwrap();
+    assert!(actions.iter().any(|action| action.r#type == "CloseSession"));
+
+    let err = client
+        .do_action(Action::new("CloseSession", vec![0xff]))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, FlightError::Tonic(status) if status.code() == tonic::Code::InvalidArgument)
+    );
+    assert!(test_server.sessions.lock().await.contains(cookie));
+
+    assert_eq!(
+        client.close().await.unwrap().status(),
+        CloseSessionStatus::Closed
+    );
+    assert!(test_server.sessions.lock().await.is_empty());
+
+    let err = client.close().await.unwrap_err();
+    assert!(matches!(err, FlightError::Tonic(status) if status.code() == tonic::Code::NotFound));
+    fixture.shutdown_and_wait().await;
+}
+
+#[tokio::test]
+async fn test_close_session_unimplemented() {
+    struct DefaultService;
+
+    #[tonic::async_trait]
+    impl FlightSqlService for DefaultService {
+        type FlightService = Self;
+    }
+
+    let err = arrow_flight::flight_service_server::FlightService::do_action(
+        &DefaultService,
+        Request::new(Action::new(
+            "CloseSession",
+            CloseSessionRequest {}.encode_to_vec(),
+        )),
+    )
+    .await
+    .err()
+    .unwrap();
+    assert_eq!(err.code(), tonic::Code::Unimplemented);
+}
 
 #[tokio::test]
 pub async fn test_begin_end_transaction() {
@@ -210,6 +339,7 @@ fn make_ingest_command() -> CommandStatementIngest {
 
 #[derive(Clone)]
 pub struct FlightSqlServiceImpl {
+    sessions: Arc<Mutex<HashSet<String>>>,
     transactions: Arc<Mutex<HashSet<String>>>,
     ingested_batches: Arc<Mutex<Vec<RecordBatch>>>,
 }
@@ -217,6 +347,7 @@ pub struct FlightSqlServiceImpl {
 impl FlightSqlServiceImpl {
     pub fn new() -> Self {
         Self {
+            sessions: Arc::new(Mutex::new(HashSet::new())),
             transactions: Arc::new(Mutex::new(HashSet::new())),
             ingested_batches: Arc::new(Mutex::new(Vec::new())),
         }
@@ -239,6 +370,29 @@ impl Default for FlightSqlServiceImpl {
 #[tonic::async_trait]
 impl FlightSqlService for FlightSqlServiceImpl {
     type FlightService = FlightSqlServiceImpl;
+
+    async fn do_action_close_session(
+        &self,
+        _query: CloseSessionRequest,
+        request: Request<Action>,
+    ) -> Result<CloseSessionResult, Status> {
+        assert_eq!(
+            request.metadata().get("authorization").unwrap(),
+            "Bearer test-token"
+        );
+        let cookie = request
+            .metadata()
+            .get("cookie")
+            .ok_or_else(|| Status::invalid_argument("Missing session cookie"))?
+            .to_str()
+            .map_err(|_| Status::invalid_argument("Invalid session cookie"))?;
+        if !self.sessions.lock().await.remove(cookie) {
+            return Err(Status::not_found("Session not found"));
+        }
+        Ok(CloseSessionResult {
+            status: CloseSessionStatus::Closed as i32,
+        })
+    }
 
     async fn do_action_begin_transaction(
         &self,
