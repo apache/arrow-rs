@@ -21,6 +21,24 @@ fn criterion_benchmark(c: &mut Criterion) {
         ("all_true", vec![true; LEN]),
     ];
 
+    let mut group = c.benchmark_group("BooleanBufferBuilder append");
+    group.throughput(Throughput::Elements(LEN as u64));
+
+    let all_false = vec![false; LEN];
+    for (name, values) in inputs.iter().chain([&("all_false", all_false)]) {
+        group.bench_with_input(*name, values, |b, values: &Vec<bool>| {
+            b.iter(|| {
+                let mut builder = BooleanBufferBuilder::new(LEN);
+                for &v in hint::black_box(values) {
+                    builder.append(v);
+                }
+                hint::black_box(builder.finish())
+            })
+        });
+    }
+
+    group.finish();
+
     let mut group = c.benchmark_group("BooleanBufferBuilder append_slice");
     group.throughput(Throughput::Elements(LEN as u64));
 
