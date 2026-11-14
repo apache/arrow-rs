@@ -6,7 +6,8 @@ use arrow_array::builder::{
     Date32Builder, Decimal128Builder, Int32Builder, StringBuilder, StringDictionaryBuilder,
 };
 use arrow_array::types::UInt32Type;
-use arrow_array::{FixedSizeBinaryArray, RecordBatch};
+use arrow_array::{FixedSizeBinaryArray, Int32Array, ListViewArray, RecordBatch};
+use arrow_buffer::ScalarBuffer;
 use arrow_ipc::CompressionType;
 use arrow_ipc::writer::{
     DictionaryHandling, FileWriter, IpcWriteOptions, StreamEncoder, StreamWriter,
@@ -31,6 +32,25 @@ fn criterion_benchmark(c: &mut Criterion) {
             writer.finish().unwrap();
         })
     });
+
+    for (name, slice) in [("unsliced", false), ("sliced", true)] {
+        group.bench_function(format!("StreamWriter/list_view/{name}"), |b| {
+            let batch = create_list_view_batch(1_000_000);
+            let batch = if slice {
+                batch.slice(1000, batch.num_rows() / 2)
+            } else {
+                batch
+            };
+            let mut buffer = Vec::with_capacity(16 * 1024 * 1024);
+            b.iter(move || {
+                buffer.clear();
+                let mut writer =
+                    StreamWriter::try_new(&mut buffer, batch.schema().as_ref()).unwrap();
+                writer.write(&batch).unwrap();
+                writer.finish().unwrap();
+            })
+        });
+    }
 
     group.bench_function("StreamWriter/write_10/zstd", |b| {
         let batch = create_batch(8192, true);
@@ -331,3 +351,16 @@ criterion_group! {
     targets = criterion_benchmark
 }
 criterion_main!(benches);
+
+/// Creates a batch with one `ListView<Int32>` column of `rows` views of size 1.
+fn create_list_view_batch(rows: i32) -> RecordBatch {
+    let field = Arc::new(Field::new_list_field(DataType::Int32, false));
+    let list = ListViewArray::new(
+        field,
+        ScalarBuffer::from_iter(0..rows),
+        ScalarBuffer::from(vec![1; rows as usize]),
+        Arc::new(Int32Array::from_iter_values(0..rows)),
+        None,
+    );
+    RecordBatch::try_from_iter([("a", Arc::new(list) as _)]).unwrap()
+}
