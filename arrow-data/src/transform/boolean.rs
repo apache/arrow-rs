@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use super::{_MutableArrayData, Extend, utils::resize_for_bits};
+use super::{_MutableArrayData, Extend, utils::try_resize_for_bits};
 use crate::ArrayData;
 use crate::bit_mask::set_bits;
 
@@ -11,7 +11,8 @@ pub(super) fn build_extend(array: &ArrayData) -> Extend<'_> {
     Box::new(
         move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
             let buffer = &mut mutable.buffer1;
-            resize_for_bits(buffer, mutable.len + len);
+            let new_len = mutable.len + len;
+            try_resize_for_bits(buffer, new_len)?;
             set_bits(
                 buffer.as_slice_mut(),
                 values,
@@ -29,6 +30,7 @@ pub(super) fn extend_nulls(
     len: usize,
 ) -> Result<(), arrow_schema::ArrowError> {
     let buffer = &mut mutable.buffer1;
-    resize_for_bits(buffer, mutable.len + len);
+    let new_len = mutable.len + len;
+    try_resize_for_bits(buffer, new_len)?;
     Ok(())
 }

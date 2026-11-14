@@ -4,12 +4,13 @@
 
 use crate::ArrayData;
 use arrow_buffer::{ArrowNativeType, MutableBuffer};
+use arrow_schema::ArrowError;
 use num_integer::Integer;
 use num_traits::{AsPrimitive, CheckedAdd};
 
 use super::{
     _MutableArrayData, Extend,
-    utils::{get_last_offset, try_extend_offsets},
+    utils::{get_last_offset, memory_error, try_extend_offsets, try_extend_repeated},
 };
 
 #[inline]
@@ -19,11 +20,14 @@ fn extend_offset_values<T: ArrowNativeType + AsPrimitive<usize>>(
     values: &[u8],
     start: usize,
     len: usize,
-) {
+) -> Result<(), ArrowError> {
     let start_values = offsets[start].as_();
     let end_values: usize = offsets[start + len].as_();
     let new_values = &values[start_values..end_values];
-    buffer.extend_from_slice(new_values);
+    buffer
+        .try_extend_from_slice(new_values)
+        .map_err(memory_error)?;
+    Ok(())
 }
 
 pub(super) fn build_extend<T: ArrowNativeType + Integer + CheckedAdd + AsPrimitive<usize>>(
@@ -41,7 +45,7 @@ pub(super) fn build_extend<T: ArrowNativeType + Integer + CheckedAdd + AsPrimiti
 
             try_extend_offsets::<T>(offset_buffer, last_offset, &offsets[start..start + len + 1])?;
             // values
-            extend_offset_values::<T>(values_buffer, offsets, values, start, len);
+            extend_offset_values::<T>(values_buffer, offsets, values, start, len)?;
             Ok(())
         },
     )
@@ -56,6 +60,6 @@ pub(super) fn extend_nulls<T: ArrowNativeType>(
     // this is safe due to how offset is built. See details on `get_last_offset`
     let last_offset: T = unsafe { get_last_offset(offset_buffer) };
 
-    (0..len).for_each(|_| offset_buffer.push(last_offset));
+    try_extend_repeated(offset_buffer, last_offset, len)?;
     Ok(())
 }
