@@ -65,7 +65,10 @@ impl _MutableArrayData<'_> {
 }
 
 fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits<'_> {
-    if let Some(nulls) = array.nulls() {
+    if array.data_type() == &DataType::Null {
+        // `Null` arrays never have a validity bitmap
+        Box::new(|_, _, _| {})
+    } else if let Some(nulls) = array.nulls() {
         let bytes = nulls.validity();
         Box::new(move |mutable, start, len| {
             let mutable_len = mutable.len;
@@ -345,6 +348,41 @@ fn build_extend_nulls(data_type: &DataType) -> ExtendNulls {
     })
 }
 
+fn source_has_nulls(arrays: &[&ArrayData]) -> bool {
+    arrays.iter().any(|array| array.null_count() > 0)
+}
+
+/// Returns true if appending nulls to a parent can fill this type with valid
+/// placeholder values without needing a validity bitmap for the type itself.
+///
+/// `Dictionary`, `Union` and `RunEndEncoded` need their own null bookkeeping:
+/// dictionary keys must remain valid, unions have no top-level validity bitmap,
+/// and run-end encoded arrays represent nulls in their values child.
+fn can_extend_nulls_without_bitmap(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Dictionary(_, _) | DataType::Union(_, _) | DataType::RunEndEncoded(_, _) => false,
+        DataType::Struct(fields) => fields
+            .iter()
+            .all(|field| can_extend_nulls_without_bitmap(field.data_type())),
+        DataType::FixedSizeList(field, _) => can_extend_nulls_without_bitmap(field.data_type()),
+        _ => true,
+    }
+}
+
+fn child_use_nulls(
+    arrays: &[&ArrayData],
+    parent_use_nulls: bool,
+    propagate_parent_nulls: bool,
+) -> bool {
+    if source_has_nulls(arrays) {
+        return true;
+    }
+
+    parent_use_nulls
+        && propagate_parent_nulls
+        && !can_extend_nulls_without_bitmap(arrays[0].data_type())
+}
+
 fn preallocate_offset_and_binary_buffer<Offset: ArrowNativeType + Integer>(
     capacity: usize,
     binary_size: usize,
@@ -414,7 +452,9 @@ impl<'a> MutableArrayData<'a> {
     ///
     /// If `use_nulls` is `false` and no source array contains nulls, calling
     /// [MutableArrayData::extend_nulls] will panic and
-    /// [MutableArrayData::try_extend_nulls] will return an error.
+    /// [MutableArrayData::try_extend_nulls] will return an error. `Null` arrays
+    /// are the exception: every slot is null and no validity bitmap is needed,
+    /// so they can always be extended with nulls.
     ///
     /// # Panics
     ///
@@ -573,8 +613,11 @@ impl<'a> MutableArrayData<'a> {
                         Capacities::Array(array_capacity)
                     };
 
+                let use_child_nulls = child_use_nulls(&children, use_nulls, false);
                 vec![MutableArrayData::try_with_capacities(
-                    children, use_nulls, capacities,
+                    children,
+                    use_child_nulls,
+                    capacities,
                 )?]
             }
             // the dictionary type just appends keys and clones the values.
@@ -589,9 +632,10 @@ impl<'a> MutableArrayData<'a> {
                                 .iter()
                                 .map(|array| &array.child_data()[i])
                                 .collect::<Vec<_>>();
+                            let use_child_nulls = child_use_nulls(&child_arrays, use_nulls, true);
                             MutableArrayData::try_with_capacities(
                                 child_arrays,
-                                use_nulls,
+                                use_child_nulls,
                                 child_cap.clone(),
                             )
                         })
@@ -605,7 +649,8 @@ impl<'a> MutableArrayData<'a> {
                                 .iter()
                                 .map(|array| &array.child_data()[i])
                                 .collect::<Vec<_>>();
-                            MutableArrayData::try_new(child_arrays, use_nulls, capacity)
+                            let use_child_nulls = child_use_nulls(&child_arrays, use_nulls, true);
+                            MutableArrayData::try_new(child_arrays, use_child_nulls, capacity)
                         })
                         .collect::<Result<Vec<_>, _>>()?
                 }
@@ -615,7 +660,8 @@ impl<'a> MutableArrayData<'a> {
                             .iter()
                             .map(|array| &array.child_data()[i])
                             .collect::<Vec<_>>();
-                        MutableArrayData::try_new(child_arrays, use_nulls, array_capacity)
+                        let use_child_nulls = child_use_nulls(&child_arrays, use_nulls, true);
+                        MutableArrayData::try_new(child_arrays, use_child_nulls, array_capacity)
                     })
                     .collect::<Result<Vec<_>, _>>()?,
             },
@@ -654,8 +700,11 @@ impl<'a> MutableArrayData<'a> {
                         || ArrowError::MemoryError("fixed-size list capacity overflow".into()),
                     )?)
                 };
+                let use_child_nulls = child_use_nulls(&children, use_nulls, true);
                 vec![MutableArrayData::try_with_capacities(
-                    children, use_nulls, capacities,
+                    children,
+                    use_child_nulls,
+                    capacities,
                 )?]
             }
             DataType::Union(fields, _) => (0..fields.len())
@@ -724,7 +773,8 @@ impl<'a> MutableArrayData<'a> {
             .map(|array| build_extend_null_bits(array, use_nulls))
             .collect();
 
-        let null_buffer = use_nulls
+        // `Null` arrays never have a validity bitmap
+        let null_buffer = (use_nulls && data_type != &DataType::Null)
             .then(|| {
                 let null_bytes = bit_util::ceil(array_capacity, 8);
                 MutableBuffer::try_from_len_zeroed(null_bytes)
@@ -856,9 +906,35 @@ impl<'a> MutableArrayData<'a> {
     /// # Errors
     ///
     /// Returns an error if this [`MutableArrayData`] was not created with `use_nulls` and none
-    /// of the source arrays are nullable, or if the run-end counter overflows.
+    /// of the source arrays are nullable, or if the run-end counter overflows. `Null` arrays
+    /// are the exception because their slots are always null and need no validity bitmap.
     pub fn try_extend_nulls(&mut self, len: usize) -> Result<(), ArrowError> {
-        if self.data.null_buffer.is_none() {
+        self.try_extend_nulls_inner(len, true)
+    }
+
+    /// Extends this array with `len` nulls.
+    ///
+    /// When `mark_null` is false, the newly added values are placeholders that
+    /// are covered by a parent null mask. They are kept valid so that no child
+    /// validity bitmap is required.
+    fn try_extend_nulls_inner(&mut self, len: usize, mark_null: bool) -> Result<(), ArrowError> {
+        if self.data.data_type == DataType::Null {
+            // Every slot of a `Null` array is already null and it never has a
+            // validity bitmap.
+            self.data.len += len;
+            self.data.null_count += len;
+            return Ok(());
+        }
+
+        if len == 0 {
+            return Ok(());
+        }
+
+        // Dictionary keys cannot be arbitrary: keep them null so validation
+        // does not attempt to interpret placeholder keys.
+        let mark_null = mark_null || matches!(self.data.data_type, DataType::Dictionary(_, _));
+
+        if mark_null && self.data.null_buffer.is_none() {
             return Err(ArrowError::InvalidArgumentError(
                 "MutableArrayData cannot be extended with nulls: it was created with `use_nulls` \
                  set to false and no source array is nullable"
@@ -866,19 +942,23 @@ impl<'a> MutableArrayData<'a> {
             ));
         }
 
-        if len == 0 {
-            return Ok(());
+        let start = self.data.len;
+        (self.extend_nulls)(&mut self.data, len)?;
+        self.data.len += len;
+
+        if let Some(nulls) = self.data.null_buffer.as_mut() {
+            utils::resize_for_bits(nulls, self.data.len);
+            if mark_null {
+                // Newly appended bits are already zero-initialized.
+                self.data.null_count += len;
+            } else {
+                let bytes = nulls.as_slice_mut();
+                for i in start..self.data.len {
+                    bit_util::set_bit(bytes, i);
+                }
+            }
         }
 
-        (self.extend_nulls)(&mut self.data, len)?;
-
-        self.data.len += len;
-        let bit_len = bit_util::ceil(self.data.len, 8);
-        let nulls = self.data.null_buffer();
-        nulls
-            .try_resize(bit_len, 0)
-            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
-        self.data.null_count += len;
         Ok(())
     }
 
@@ -887,7 +967,8 @@ impl<'a> MutableArrayData<'a> {
     /// # Panics
     ///
     /// Panics if this [`MutableArrayData`] was not created with `use_nulls` and none of the
-    /// source arrays are nullable, or if the run-end counter overflows.
+    /// source arrays are nullable, or if the run-end counter overflows. `Null` arrays are
+    /// the exception because their slots are always null and need no validity bitmap.
     #[deprecated(
         since = "59.0.0",
         note = "Use `try_extend_nulls` which returns an error on overflow instead of panicking"
@@ -1061,6 +1142,107 @@ mod test {
         let mut mutable = MutableArrayData::new(vec![&array], true, 3);
         mutable.try_extend_nulls(1).unwrap();
         assert_eq!(mutable.len(), 1);
+    }
+
+    #[test]
+    fn test_null_type_does_not_allocate_null_bitmap() {
+        let array = ArrayData::new_null(&DataType::Null, 8);
+        let mut mutable = MutableArrayData::new(vec![&array], true, 8);
+        assert!(mutable.data.null_buffer.is_none());
+
+        mutable.try_extend(0, 2, 5).unwrap();
+        mutable.try_extend_nulls(2).unwrap();
+        assert!(mutable.data.null_buffer.is_none());
+
+        let result = mutable.freeze();
+        result.validate_full().unwrap();
+        assert_eq!(result.len(), 5);
+        assert!(result.nulls().is_none());
+
+        // A Null array can always be extended with nulls, even if the
+        // MutableArrayData was created without `use_nulls`.
+        let mut mutable = MutableArrayData::new(vec![&array], false, 0);
+        mutable.try_extend_nulls(1).unwrap();
+        assert_eq!(mutable.len(), 1);
+        assert!(mutable.data.null_buffer.is_none());
+    }
+
+    #[test]
+    fn test_struct_null_parent_does_not_allocate_child_null_bitmap() {
+        let child = ArrayData::try_new(
+            DataType::Int32,
+            1,
+            None,
+            0,
+            vec![Buffer::from_slice_ref([7_i32])],
+            vec![],
+        )
+        .unwrap();
+        let outer = ArrayData::builder(DataType::Struct(
+            vec![Field::new("a", DataType::Int32, true)].into(),
+        ))
+        .len(1)
+        .nulls(Some(NullBuffer::new_null(1)))
+        .add_child_data(child)
+        .build()
+        .unwrap();
+
+        let mut mutable = MutableArrayData::new(vec![&outer], false, 1);
+        assert!(mutable.data.child_data[0].data.null_buffer.is_none());
+
+        mutable.try_extend_nulls(1).unwrap();
+        let result = mutable.freeze();
+        result.validate_full().unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result.null_count(), 1);
+        assert_eq!(result.child_data()[0].len(), 1);
+        assert!(result.child_data()[0].nulls().is_none());
+    }
+
+    #[test]
+    fn test_nested_fixed_size_list_does_not_allocate_child_null_bitmaps() {
+        let values = ArrayData::new_null(&DataType::Null, 8);
+        let inner_type =
+            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Null, true)), 4);
+        let inner = ArrayData::builder(inner_type.clone())
+            .len(2)
+            .add_child_data(values)
+            .build()
+            .unwrap();
+        let outer = ArrayData::builder(DataType::FixedSizeList(
+            Arc::new(Field::new("item", inner_type, true)),
+            2,
+        ))
+        .len(1)
+        .nulls(Some(NullBuffer::new_null(1)))
+        .add_child_data(inner)
+        .build()
+        .unwrap();
+
+        let mut mutable =
+            MutableArrayData::try_with_capacities(vec![&outer], false, Capacities::Array(1))
+                .unwrap();
+
+        // Copying a null parent does not require null bitmaps for its children.
+        assert!(mutable.data.child_data[0].data.null_buffer.is_none());
+        // Null arrays never need a validity bitmap.
+        assert!(
+            mutable.data.child_data[0].data.child_data[0]
+                .data
+                .null_buffer
+                .is_none()
+        );
+
+        mutable.try_extend(0, 0, 1).unwrap();
+        mutable.try_extend_nulls(1).unwrap();
+        let result = mutable.freeze();
+        result.validate_full().unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result.null_count(), 2);
+        assert_eq!(result.child_data()[0].len(), 4);
+        assert_eq!(result.child_data()[0].child_data()[0].len(), 16);
+        assert!(result.child_data()[0].nulls().is_none());
+        assert!(result.child_data()[0].child_data()[0].nulls().is_none());
     }
 
     #[test]

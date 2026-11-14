@@ -33,7 +33,7 @@ pub(super) fn build_extend(array: &ArrayData) -> Extend<'_> {
 pub(super) fn extend_nulls(mutable: &mut _MutableArrayData, len: usize) -> Result<(), ArrowError> {
     for (col_idx, child) in mutable.child_data.iter_mut().enumerate() {
         child
-            .try_extend_nulls(len)
+            .try_extend_nulls_inner(len, false)
             .map_err(|e| wrap_column_error(e, col_idx, &mutable.data_type))?;
     }
     Ok(())
