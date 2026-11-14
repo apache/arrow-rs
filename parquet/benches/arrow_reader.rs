@@ -1476,6 +1476,29 @@ fn bench_primitive<T>(
         assert_eq!(count, EXPECTED_VALUE_COUNT);
     });
 
+    // plain encoded, mostly valid and mostly NULLs: decoding is a copy, so these
+    // isolate spreading values over the null slots
+    for (null_density, name) in [
+        (0.1, "plain encoded, optional, 10% NULLs"),
+        (0.9, "plain encoded, optional, 90% NULLs"),
+    ] {
+        let data = build_encoded_primitive_page_iterator::<T>(
+            optional_column_desc.clone(),
+            null_density,
+            Encoding::PLAIN,
+            min,
+            max,
+        );
+        group.bench_function(name, |b| {
+            b.iter(|| {
+                let array_reader =
+                    create_primitive_array_reader(data.clone(), optional_column_desc.clone());
+                count = bench_array_reader(array_reader);
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
+        });
+    }
+
     // binary packed, no NULLs
     let data = build_encoded_primitive_page_iterator::<T>(
         mandatory_column_desc.clone(),
