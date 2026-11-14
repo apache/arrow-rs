@@ -4,13 +4,22 @@
 
 mod common;
 
-use std::{pin::Pin, sync::Arc};
+use std::{
+    net::SocketAddr,
+    pin::Pin,
+    process::Output,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 
 use crate::common::fixture::TestFixture;
 use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray};
 use arrow_flight::{
     Action, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest,
-    HandshakeResponse, IpcMessage, SchemaAsIpc, Ticket,
+    HandshakeResponse, IpcMessage, Location, SchemaAsIpc, Ticket,
     decode::FlightRecordBatchStream,
     encode::FlightDataEncoderBuilder,
     flight_service_server::{FlightService, FlightServiceServer},
@@ -27,8 +36,9 @@ use arrow_ipc::writer::IpcWriteOptions;
 use arrow_schema::{ArrowError, DataType, Field, Schema, TimeUnit};
 use assert_cmd::Command;
 use bytes::Bytes;
-use futures::{Stream, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt};
 use prost::Message;
+use tokio::{io::AsyncReadExt, net::TcpListener};
 use tonic::{Request, Response, Status, Streaming};
 
 const QUERY: &str = "SELECT * FROM table;";
@@ -76,6 +86,161 @@ async fn test_simple() {
         \n| FlightSQL!   | 1337      | 2024-10-30T11:36:57       | 2024-10-30T12:36:57+01:00   |\
         \n+--------------+-----------+---------------------------+-----------------------------+",
     );
+}
+
+#[tokio::test]
+async fn test_endpoint_token() {
+    test_endpoint_location(&["--token", "endpoint-token"], |addr| {
+        vec![format!("grpc://{addr}")]
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_endpoint_handshake_token() {
+    test_endpoint_location(&["--username", "user", "--password", "password"], |addr| {
+        vec![format!("grpc+tcp://{addr}")]
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_endpoint_multiple_locations() {
+    test_endpoint_location(&["--token", "endpoint-token"], |addr| {
+        // Unreachable alternatives make choosing HTTP or the later gRPC location fail.
+        vec![
+            "http://127.0.0.1:0".into(),
+            format!("grpc+tcp://{addr}"),
+            "grpc+tcp://127.0.0.1:0".into(),
+        ]
+    })
+    .await;
+}
+
+async fn test_endpoint_location(args: &[&str], locations: impl FnOnce(SocketAddr) -> Vec<String>) {
+    let data_server = FlightSqlServiceImpl {
+        require_token: true,
+        ..Default::default()
+    };
+    let data = TestFixture::new(data_server.service()).await;
+    let query_server = FlightSqlServiceImpl {
+        locations: locations(data.addr)
+            .into_iter()
+            .map(|uri| Location { uri })
+            .collect(),
+        reject_do_get: true,
+        handshake_token: Some("endpoint-token"),
+        ..Default::default()
+    };
+    let query = TestFixture::new(query_server.service()).await;
+    let output = run_statement_query(query.addr, args).await;
+    query.shutdown_and_wait().await;
+    data.shutdown_and_wait().await;
+
+    assert_eq!(data_server.handshakes.load(Ordering::SeqCst), 0);
+    assert_query_result(output);
+}
+
+#[tokio::test]
+async fn test_endpoint_reuse_connection() {
+    let server = FlightSqlServiceImpl {
+        locations: vec![
+            Location {
+                uri: "grpc+tcp://127.0.0.1:0".into(),
+            },
+            Location {
+                uri: "arrow-flight-reuse-connection://?".into(),
+            },
+        ],
+        ..Default::default()
+    };
+    let fixture = TestFixture::new(server.service()).await;
+    let output = run_statement_query(fixture.addr, &[]).await;
+    fixture.shutdown_and_wait().await;
+    assert_query_result(output);
+}
+
+#[tokio::test]
+async fn test_endpoint_unsupported_location() {
+    let server = FlightSqlServiceImpl {
+        locations: vec![Location {
+            uri: "http://127.0.0.1:0".into(),
+        }],
+        ..Default::default()
+    };
+    let fixture = TestFixture::new(server.service()).await;
+    let output = run_statement_query(fixture.addr, &[]).await;
+    fixture.shutdown_and_wait().await;
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("No supported endpoint location"),
+        "{stderr}"
+    );
+}
+
+async fn run_statement_query(addr: SocketAddr, args: &[&str]) -> Output {
+    let mut cmd = flight_sql_client_cmd();
+    cmd.env_clear()
+        .timeout(Duration::from_secs(10))
+        .args([
+            "--host",
+            &addr.ip().to_string(),
+            "--port",
+            &addr.port().to_string(),
+        ])
+        .args(args)
+        .args(["statement-query", QUERY]);
+    tokio::task::spawn_blocking(move || cmd.output().unwrap())
+        .await
+        .unwrap()
+}
+
+fn assert_query_result(output: Output) {
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let expected =
+        arrow_cast::pretty::pretty_format_batches(&[FlightSqlServiceImpl::fake_result().unwrap()])
+            .unwrap()
+            .to_string();
+    assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), expected);
+}
+
+#[tokio::test]
+async fn test_endpoint_tls() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let query_server = FlightSqlServiceImpl {
+        locations: vec![Location {
+            uri: format!("grpc+tls://{}", listener.local_addr().unwrap()),
+        }],
+        reject_do_get: true,
+        ..Default::default()
+    };
+    let query = TestFixture::new(query_server.service()).await;
+    let client = tokio::spawn(run_statement_query(query.addr, &[]));
+    // A ClientHello proves grpc+tls enabled TLS without --tls or a test CA.
+    let hello = tokio::time::timeout(Duration::from_secs(5), async {
+        let (mut socket, _) = listener.accept().await?;
+        let mut prefix = [0; 6];
+        socket.read_exact(&mut prefix).await?;
+        Ok::<_, std::io::Error>(prefix)
+    })
+    .await;
+    let output = client.await.unwrap();
+    query.shutdown_and_wait().await;
+
+    // The listener closes after the prefix; it does not complete the TLS handshake.
+    assert!(!output.status.success());
+    let prefix = hello
+        .expect("CLI did not connect to the TLS endpoint")
+        .unwrap();
+    assert_eq!(prefix[0], 0x16, "expected a TLS handshake record");
+    assert_eq!(prefix[1], 0x03, "expected the TLS record version");
+    assert_eq!(prefix[5], 0x01, "expected a ClientHello");
 }
 
 #[tokio::test]
@@ -320,6 +485,7 @@ async fn test_do_put_prepared_statement(test_server: FlightSqlServiceImpl) {
 pub async fn test_do_put_prepared_statement_stateless() {
     test_do_put_prepared_statement(FlightSqlServiceImpl {
         stateless_prepared_statements: true,
+        ..Default::default()
     })
     .await
 }
@@ -328,6 +494,7 @@ pub async fn test_do_put_prepared_statement_stateless() {
 pub async fn test_do_put_prepared_statement_stateful() {
     test_do_put_prepared_statement(FlightSqlServiceImpl {
         stateless_prepared_statements: false,
+        ..Default::default()
     })
     .await
 }
@@ -338,12 +505,22 @@ pub struct FlightSqlServiceImpl {
     /// prepared statements. stateful servers will not return an updated
     /// handle after executing `DoPut(CommandPreparedStatementQuery)`
     stateless_prepared_statements: bool,
+    locations: Vec<Location>,
+    reject_do_get: bool,
+    require_token: bool,
+    handshake_token: Option<&'static str>,
+    handshakes: Arc<AtomicUsize>,
 }
 
 impl Default for FlightSqlServiceImpl {
     fn default() -> Self {
         Self {
             stateless_prepared_statements: true,
+            locations: Vec::new(),
+            reject_do_get: false,
+            require_token: false,
+            handshake_token: None,
+            handshakes: Arc::new(AtomicUsize::new(0)),
         }
     }
 }
@@ -412,7 +589,7 @@ impl FlightSqlServiceImpl {
     fn fake_flight_info(&self) -> Result<FlightInfo, ArrowError> {
         let batch = Self::fake_result()?;
 
-        Ok(FlightInfo::new()
+        let mut info = FlightInfo::new()
             .try_with_schema(batch.schema_ref())
             .expect("encoding schema")
             .with_endpoint(
@@ -435,7 +612,11 @@ impl FlightSqlServiceImpl {
             )
             .with_total_records(batch.num_rows() as i64)
             .with_total_bytes(batch.get_array_memory_size() as i64)
-            .with_ordered(false))
+            .with_ordered(false);
+        for endpoint in &mut info.endpoint {
+            endpoint.location.clone_from(&self.locations);
+        }
+        Ok(info)
     }
 }
 
@@ -454,14 +635,35 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Response<Pin<Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send>>>,
         Status,
     > {
-        Err(Status::unimplemented("do_handshake not implemented"))
+        self.handshakes.fetch_add(1, Ordering::SeqCst);
+        let Some(token) = self.handshake_token else {
+            return Err(Status::unimplemented("do_handshake not implemented"));
+        };
+        let stream = futures::stream::iter([Ok(HandshakeResponse::default())]);
+        let mut response = Response::new(stream.boxed());
+        response
+            .metadata_mut()
+            .insert("authorization", format!("Bearer {token}").parse().unwrap());
+        Ok(response)
     }
 
     async fn do_get_fallback(
         &self,
-        _request: Request<Ticket>,
+        request: Request<Ticket>,
         message: Any,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        if self.reject_do_get {
+            return Err(Status::unimplemented("DoGet belongs on the data server"));
+        }
+        if self.require_token
+            && request
+                .metadata()
+                .get("authorization")
+                .and_then(|v| v.to_str().ok())
+                != Some("Bearer endpoint-token")
+        {
+            return Err(Status::unauthenticated("Missing or incorrect bearer token"));
+        }
         let part = message.unpack::<FetchResults>().unwrap().unwrap().handle;
         let batch = Self::fake_result().unwrap();
         let batch = match part.as_str() {
