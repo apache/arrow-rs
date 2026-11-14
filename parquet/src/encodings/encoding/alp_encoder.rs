@@ -310,17 +310,7 @@ fn encode_vector<F: AlpFloat>(
     exc_mask.resize(n_values, 0);
     exception_values.clear();
 
-    // Comparing the *decoded* value to the input (not the input to itself) flags
-    // -0.0, which encodes to +0.0.
-    for ((&value, enc_slot), mask_slot) in values
-        .iter()
-        .zip(encoded.iter_mut())
-        .zip(exc_mask.iter_mut())
-    {
-        let encoded_value = value.encode_value(encode_scale);
-        *enc_slot = encoded_value;
-        *mask_slot = u8::from(F::decode_value(encoded_value, decode_scale) != value);
-    }
+    let small_magnitudes = F::encode_values(values, encode_scale, decode_scale, encoded, exc_mask);
 
     // Branchless compaction: always write the index, advance only when flagged.
     exception_positions.resize(n_values, 0);
@@ -347,8 +337,11 @@ fn encode_vector<F: AlpFloat>(
         encoded[position as usize] = placeholder;
     }
 
-    let min = encoded.iter().copied().min().unwrap_or(zero);
-    let max = encoded.iter().copied().max().unwrap_or(zero);
+    let (min, max) = if encoded.is_empty() {
+        (zero, zero)
+    } else {
+        F::min_max_encoded(encoded, small_magnitudes)
+    };
 
     let frame_of_reference = F::Exact::reinterpret_from_signed(min);
     let range = F::Exact::reinterpret_from_signed(max).wrapping_sub(frame_of_reference);

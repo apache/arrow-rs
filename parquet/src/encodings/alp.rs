@@ -461,6 +461,7 @@ pub trait AlpFloat: Copy + Default + PartialEq + std::ops::Mul<Output = Self> {
     /// Values ALP cannot represent map to [`AlpFloat::ENCODING_SENTINEL`], whose
     /// round trip is guaranteed to mismatch, so the caller's `decode == value`
     /// check records them as exceptions without a separate test.
+    #[inline]
     fn encode_value(self, scale: Self::Scale) -> <Self::Exact as AlpExact>::Signed {
         let scaled = self.apply_scale(scale);
         if scaled.is_impossible_to_encode() {
@@ -468,6 +469,89 @@ pub trait AlpFloat: Copy + Default + PartialEq + std::ops::Mul<Output = Self> {
         }
         scaled.fast_round()
     }
+
+    /// Encode each of `values` into `encoded` and set its `exceptions` byte to 1 when
+    /// decoding does not reproduce it, i.e. [`AlpFloat::encode_value`] and the
+    /// round-trip check for every value.
+    ///
+    /// Returns true when every encoded value is known to lie in `[-2^51, 2^51]`,
+    /// which [`AlpFloat::min_max_encoded`] may exploit.
+    #[inline]
+    fn encode_values(
+        values: &[Self],
+        encode_scale: Self::Scale,
+        decode_scale: Self::Scale,
+        encoded: &mut [<Self::Exact as AlpExact>::Signed],
+        exceptions: &mut [u8],
+    ) -> bool {
+        for ((&value, encoded), exception) in values.iter().zip(encoded).zip(exceptions) {
+            let encoded_value = value.encode_value(encode_scale);
+            *encoded = encoded_value;
+            // Comparing the *decoded* value to the input (not the input to itself)
+            // flags -0.0, which encodes to +0.0.
+            *exception = u8::from(Self::decode_value(encoded_value, decode_scale) != value);
+        }
+        false
+    }
+
+    /// Smallest and largest of `encoded`, which must not be empty. `small_magnitudes`
+    /// is the value returned by the [`AlpFloat::encode_values`] call that produced them.
+    #[inline]
+    fn min_max_encoded(
+        encoded: &[<Self::Exact as AlpExact>::Signed],
+        small_magnitudes: bool,
+    ) -> (
+        <Self::Exact as AlpExact>::Signed,
+        <Self::Exact as AlpExact>::Signed,
+    ) {
+        let _ = small_magnitudes;
+        let min = encoded.iter().copied().min().expect("encoded is not empty");
+        let max = encoded.iter().copied().max().expect("encoded is not empty");
+        (min, max)
+    }
+
+    /// Decode `out.len()` values from their frame-of-reference `deltas`, packed at
+    /// `bit_width` bits, i.e. [`AlpFloat::decode_value`] of `frame_of_reference + delta`.
+    #[inline]
+    fn decode_values(
+        deltas: &[Self::Exact],
+        frame_of_reference: Self::Exact,
+        bit_width: u8,
+        scale: Self::Scale,
+        out: &mut [Self],
+    ) {
+        let _ = bit_width;
+        for (slot, &delta) in out.iter_mut().zip(deltas) {
+            let signed = delta
+                .wrapping_add(frame_of_reference)
+                .reinterpret_as_signed();
+            *slot = Self::decode_value(signed, scale);
+        }
+    }
+}
+
+/// Bit pattern of `f64::MAGIC_NUMBER` (`2^51 + 2^52`). Floats in `[2^52, 2^53)` are
+/// spaced exactly 1.0 apart, so for an integer `i` with `|i| < 2^51` the bits of
+/// `MAGIC_NUMBER + i` are `MAGIC_BITS_F64 + i`: adding or subtracting these bits
+/// converts between such integers and floats without an `f64`/`i64` conversion
+/// instruction, which x86 only has in vector form from AVX-512.
+const MAGIC_BITS_F64: i64 = 0x4338_0000_0000_0000;
+
+/// `2^51`: rounding through [`MAGIC_BITS_F64`] matches `fast_round` for magnitudes
+/// strictly below this, and gives integers of magnitude at most `2^51`.
+const MAGIC_RANGE_F64: f64 = 2251799813685248.0;
+
+/// `i` as an `f64`, exact for `|i| <= 2^51`.
+#[inline]
+fn magic_i64_to_f64(i: i64) -> f64 {
+    f64::from_bits(i.wrapping_add(MAGIC_BITS_F64) as u64) - f64::MAGIC_NUMBER
+}
+
+/// Whether [`f64::encode_values`]'s fast path encodes `scaled` like
+/// [`AlpFloat::encode_value`]: finite, below `2^51` in magnitude, and not `-0.0`.
+#[inline]
+fn magic_round_applies(scaled: f64) -> bool {
+    scaled.abs() < MAGIC_RANGE_F64 && !(scaled == 0.0 && scaled.is_sign_negative())
 }
 
 impl AlpFloat for f32 {
@@ -489,6 +573,7 @@ impl AlpFloat for f32 {
         )
     }
 
+    #[inline]
     fn decode_value(signed_encoded: i32, scale: Self::Scale) -> Self {
         ((signed_encoded as f32) * scale.0) * scale.1
     }
@@ -510,10 +595,12 @@ impl AlpFloat for f32 {
         )
     }
 
+    #[inline]
     fn apply_scale(self, scale: Self::Scale) -> Self {
         (self * scale.0) * scale.1
     }
 
+    #[inline]
     fn is_impossible_to_encode(self) -> bool {
         // The infinities need no separate test: they fall outside the limits.
         self.is_nan()
@@ -521,6 +608,7 @@ impl AlpFloat for f32 {
             || (self == 0.0 && self.is_sign_negative())
     }
 
+    #[inline]
     fn fast_round(self) -> i32 {
         ((self + Self::MAGIC_NUMBER) - Self::MAGIC_NUMBER) as i32
     }
@@ -545,6 +633,7 @@ impl AlpFloat for f64 {
         )
     }
 
+    #[inline]
     fn decode_value(signed_encoded: i64, scale: Self::Scale) -> Self {
         ((signed_encoded as f64) * scale.0) * scale.1
     }
@@ -566,10 +655,12 @@ impl AlpFloat for f64 {
         )
     }
 
+    #[inline]
     fn apply_scale(self, scale: Self::Scale) -> Self {
         (self * scale.0) * scale.1
     }
 
+    #[inline]
     fn is_impossible_to_encode(self) -> bool {
         // The infinities need no separate test: they fall outside the limits.
         self.is_nan()
@@ -577,7 +668,112 @@ impl AlpFloat for f64 {
             || (self == 0.0 && self.is_sign_negative())
     }
 
+    #[inline]
     fn fast_round(self) -> i64 {
         ((self + Self::MAGIC_NUMBER) - Self::MAGIC_NUMBER) as i64
+    }
+
+    fn encode_values(
+        values: &[Self],
+        encode_scale: Self::Scale,
+        decode_scale: Self::Scale,
+        encoded: &mut [i64],
+        exceptions: &mut [u8],
+    ) -> bool {
+        /// Values per pass of the vectorized loop, so values it cannot handle are
+        /// redone while still in cache.
+        const CHUNK: usize = 64;
+
+        let exact = |values: &[f64], encoded: &mut [i64], exceptions: &mut [u8], all: bool| {
+            for ((&value, encoded), exception) in values.iter().zip(encoded).zip(exceptions) {
+                if all || !magic_round_applies(value.apply_scale(encode_scale)) {
+                    let encoded_value = value.encode_value(encode_scale);
+                    *encoded = encoded_value;
+                    *exception = u8::from(Self::decode_value(encoded_value, decode_scale) != value);
+                }
+            }
+        };
+
+        let mut all_applies = true;
+        let mut chunks = values
+            .chunks(CHUNK)
+            .zip(encoded.chunks_mut(CHUNK))
+            .zip(exceptions.chunks_mut(CHUNK));
+        while let Some(((values, encoded), exceptions)) = chunks.next() {
+            // Round and convert through the bits of `scaled + MAGIC_NUMBER`, which has
+            // no f64/i64 conversion and so vectorizes. That equals `fast_round` when
+            // `magic_round_applies`; other values are redone exactly.
+            let mut applied = 0;
+            for ((&value, encoded), exception) in
+                values.iter().zip(&mut *encoded).zip(&mut *exceptions)
+            {
+                let scaled = value.apply_scale(encode_scale);
+                applied += usize::from(magic_round_applies(scaled));
+                let encoded_value =
+                    ((scaled + Self::MAGIC_NUMBER).to_bits() as i64).wrapping_sub(MAGIC_BITS_F64);
+                let decoded = (magic_i64_to_f64(encoded_value) * decode_scale.0) * decode_scale.1;
+                *encoded = encoded_value;
+                *exception = u8::from(decoded != value);
+            }
+            if applied == values.len() {
+                continue;
+            }
+            all_applies = false;
+            exact(values, encoded, exceptions, false);
+            if applied == 0 {
+                // When nothing fits, as with high precision data, later values are
+                // unlikely to either: skip the vectorized loop for the rest.
+                for ((values, encoded), exceptions) in chunks {
+                    exact(values, encoded, exceptions, true);
+                }
+                break;
+            }
+        }
+        all_applies
+    }
+
+    fn min_max_encoded(encoded: &[i64], small_magnitudes: bool) -> (i64, i64) {
+        if !small_magnitudes {
+            let min = encoded.iter().copied().min().expect("encoded is not empty");
+            let max = encoded.iter().copied().max().expect("encoded is not empty");
+            return (min, max);
+        }
+        // Exact as floats, whose min/max are single instructions where 64-bit
+        // integer comparisons may have to be emulated. These are never NaN, so plain
+        // comparisons stand in for `f64::min`/`f64::max` and their NaN handling.
+        let (min, max) = encoded.iter().fold((f64::MAX, f64::MIN), |(min, max), &e| {
+            let e = magic_i64_to_f64(e);
+            (if e < min { e } else { min }, if e > max { e } else { max })
+        });
+        (min as i64, max as i64)
+    }
+
+    fn decode_values(
+        deltas: &[u64],
+        frame_of_reference: u64,
+        bit_width: u8,
+        scale: Self::Scale,
+        out: &mut [Self],
+    ) {
+        // Every value of the vector lies in `[frame, frame + 2^bit_width)`; when that
+        // range is inside `(-2^51, 2^51)` the integers convert exactly through
+        // `magic_i64_to_f64`, which vectorizes where an `as f64` conversion does not.
+        let frame = frame_of_reference as i64;
+        let in_range = bit_width < 51
+            && frame > -(1 << 51)
+            && frame
+                .checked_add((1 << bit_width) - 1)
+                .is_some_and(|max| max < (1 << 51));
+        if !in_range {
+            for (slot, &delta) in out.iter_mut().zip(deltas) {
+                let signed = delta.wrapping_add(frame_of_reference) as i64;
+                *slot = Self::decode_value(signed, scale);
+            }
+            return;
+        }
+        for (slot, &delta) in out.iter_mut().zip(deltas) {
+            let signed = delta.wrapping_add(frame_of_reference) as i64;
+            *slot = (magic_i64_to_f64(signed) * scale.0) * scale.1;
+        }
     }
 }

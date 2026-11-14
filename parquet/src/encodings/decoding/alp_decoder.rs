@@ -300,12 +300,7 @@ fn decode_range<Value: AlpFloat>(
                     "Invalid ALP page: not enough packed bits to decode vector"
                 ));
             }
-            for (slot, &delta) in chunk.iter_mut().zip(deltas.iter()) {
-                let signed = delta
-                    .wrapping_add(frame_of_reference)
-                    .reinterpret_as_signed();
-                *slot = Value::decode_value(signed, scale);
-            }
+            Value::decode_values(deltas, frame_of_reference, cur.bit_width, scale, chunk);
         }
     }
 
