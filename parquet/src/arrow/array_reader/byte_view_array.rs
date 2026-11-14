@@ -44,12 +44,16 @@ pub fn make_byte_view_array_reader(
         },
     };
 
+    // A supplied schema can read an unannotated `BYTE_ARRAY` column as a string.
+    let validate_utf8 = matches!(data_type, ArrowType::Utf8View);
+
     match data_type {
         ArrowType::BinaryView | ArrowType::Utf8View => {
             let mut reader = GenericRecordReader::new(column_desc, batch_size);
             if let Some(threshold) = padding_threshold {
                 reader.set_padding_threshold(threshold);
             }
+            reader.set_validate_utf8(validate_utf8);
             Ok(Box::new(ByteViewArrayReader::new(pages, data_type, reader)))
         }
 
@@ -144,6 +148,10 @@ impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
             decoder: None,
             validate_utf8,
         }
+    }
+
+    fn set_validate_utf8(&mut self, validate_utf8: bool) {
+        self.validate_utf8 |= validate_utf8;
     }
 
     fn set_dict(

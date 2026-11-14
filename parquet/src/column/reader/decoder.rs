@@ -74,6 +74,11 @@ pub trait ColumnValueDecoder {
     /// Create a new [`ColumnValueDecoder`]
     fn new(col: &ColumnDescPtr) -> Self;
 
+    /// Validate decoded values as UTF-8 even if the column is not annotated as a string.
+    ///
+    /// Only turns validation on: a column annotated as a string is validated regardless.
+    fn set_validate_utf8(&mut self, _validate_utf8: bool) {}
+
     /// Set the current dictionary page
     fn set_dict(
         &mut self,
