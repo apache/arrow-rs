@@ -21,12 +21,266 @@ use arrow_buffer::{
 };
 use arrow_schema::DataType as ArrowType;
 use hashbrown::HashMap as HbHashMap;
+use hashbrown::HashTable;
 use hashbrown::hash_map::Entry;
 use std::hash::{BuildHasher, Hasher};
 use std::mem::size_of;
 use std::ptr::write_unaligned;
 use std::slice::{from_raw_parts, from_raw_parts_mut};
 use std::sync::Arc;
+
+struct DictionaryRemap {
+    values: ArrayRef,
+    indices: Vec<usize>,
+}
+
+pub(in crate::arrow) struct MergedDictionary<V: OffsetSizeTrait> {
+    keys: Vec<usize>,
+    values: OffsetBuffer<V>,
+    state: RandomState,
+    dedup: HashTable<usize>,
+    pending: OffsetBuffer<V>,
+    dictionary: Option<DictionaryRemap>,
+}
+
+impl<V: OffsetSizeTrait> MergedDictionary<V> {
+    fn new(key_capacity: usize, value_capacity: usize, data_capacity: usize) -> Self {
+        let mut values = OffsetBuffer::with_capacity(value_capacity);
+        values.values.reserve(data_capacity);
+        Self {
+            keys: Vec::with_capacity(key_capacity),
+            values,
+            state: RandomState::new(),
+            dedup: HashTable::with_capacity(value_capacity),
+            pending: OffsetBuffer::with_capacity(0),
+            dictionary: None,
+        }
+    }
+
+    fn value(&self, index: usize) -> &[u8] {
+        let start = self.values.offsets[index].as_usize();
+        let end = self.values.offsets[index + 1].as_usize();
+        &self.values.values[start..end]
+    }
+
+    fn dictionary_storage(dictionary: &ArrayRef) -> Result<(Buffer, Buffer, usize, usize)> {
+        let data = dictionary.to_data();
+        if data.buffers().len() != 2 {
+            return Err(general_err!(
+                "unsupported dictionary value type: {}",
+                dictionary.data_type()
+            ));
+        }
+
+        let offsets = data.buffers()[0].clone();
+        let values = data.buffers()[1].clone();
+        let typed_offsets = offsets.typed_data::<V>();
+        let offset = data.offset();
+        let end = offset
+            .checked_add(dictionary.len())
+            .and_then(|x| x.checked_add(1))
+            .ok_or_else(|| general_err!("dictionary offset overflow"))?;
+        if end > typed_offsets.len() {
+            return Err(general_err!("dictionary offsets are out of bounds"));
+        }
+
+        let byte_start = typed_offsets[offset].as_usize();
+        let byte_end = typed_offsets[end - 1].as_usize();
+        if byte_start > byte_end || byte_end > values.len() {
+            return Err(general_err!("dictionary offsets are out of bounds"));
+        }
+        Ok((offsets, values, offset, end))
+    }
+
+    fn intern(&mut self, value: &[u8]) -> Result<usize> {
+        let hash = self.state.hash_one(value);
+        if let Some(&index) = self.dedup.find(hash, |&index| self.value(index) == value) {
+            return Ok(index);
+        }
+
+        let end = self
+            .values
+            .values
+            .len()
+            .checked_add(value.len())
+            .and_then(V::from_usize)
+            .ok_or_else(|| general_err!("index overflow decoding byte array"))?;
+        let index = self.values.len();
+        self.values.values.extend_from_slice(value);
+        self.values.offsets.push(end);
+
+        let state = &self.state;
+        let values = &self.values;
+        self.dedup.insert_unique(hash, index, |&index| {
+            let start = values.offsets[index].as_usize();
+            let end = values.offsets[index + 1].as_usize();
+            state.hash_one(&values.values[start..end])
+        });
+        Ok(index)
+    }
+
+    fn prepare_dictionary(&mut self, dictionary: &ArrayRef) -> Result<()> {
+        if self
+            .dictionary
+            .as_ref()
+            .is_some_and(|cached| Arc::ptr_eq(&cached.values, dictionary))
+        {
+            return Ok(());
+        }
+
+        let (offsets, values, offset, end) = Self::dictionary_storage(dictionary)?;
+        let offsets = offsets.typed_data::<V>();
+        let values = values.as_slice();
+        let byte_start = offsets[offset].as_usize();
+        let byte_end = offsets[end - 1].as_usize();
+
+        self.values.offsets.reserve(dictionary.len());
+        self.values.values.reserve(byte_end - byte_start);
+        let state = &self.state;
+        let merged_values = &self.values;
+        self.dedup.reserve(dictionary.len(), |&index| {
+            let start = merged_values.offsets[index].as_usize();
+            let end = merged_values.offsets[index + 1].as_usize();
+            state.hash_one(&merged_values.values[start..end])
+        });
+
+        let mut indices = Vec::with_capacity(dictionary.len());
+        for index in offset..end - 1 {
+            let start = offsets[index].as_usize();
+            let end = offsets[index + 1].as_usize();
+            let value = values
+                .get(start..end)
+                .ok_or_else(|| general_err!("dictionary offsets are out of bounds"))?;
+            indices.push(self.intern(value)?);
+        }
+
+        self.dictionary = Some(DictionaryRemap {
+            values: Arc::clone(dictionary),
+            indices,
+        });
+        Ok(())
+    }
+
+    fn from_dictionary<K: ArrowNativeType>(keys: &[K], values: &ArrayRef) -> Result<Self> {
+        let value_capacity = keys.len().min(values.len());
+        let mut merged = Self::new(keys.len(), value_capacity, 0);
+        let (offsets, data, offset, _) = Self::dictionary_storage(values)?;
+        let offsets = offsets.typed_data::<V>();
+        let data = data.as_slice();
+        let mut remap = vec![usize::MAX; values.len()];
+
+        for &key in keys {
+            let index = key
+                .to_usize()
+                .filter(|&index| index < values.len())
+                .ok_or_else(|| {
+                    general_err!(
+                        "dictionary key beyond bounds of dictionary: 0..{}",
+                        values.len()
+                    )
+                })?;
+            let mapped = match remap[index] {
+                usize::MAX => {
+                    let source = offset + index;
+                    let start = offsets[source].as_usize();
+                    let end = offsets[source + 1].as_usize();
+                    let value = data
+                        .get(start..end)
+                        .ok_or_else(|| general_err!("dictionary offsets are out of bounds"))?;
+                    let mapped = merged.intern(value)?;
+                    remap[index] = mapped;
+                    mapped
+                }
+                mapped => mapped,
+            };
+            merged.keys.push(mapped);
+        }
+        Ok(merged)
+    }
+
+    fn from_values(values: &OffsetBuffer<V>) -> Result<Self> {
+        let mut merged = Self::new(values.len(), values.len(), values.values.len());
+        for index in 0..values.len() {
+            let start = values.offsets[index].as_usize();
+            let end = values.offsets[index + 1].as_usize();
+            let key = merged.intern(&values.values[start..end])?;
+            merged.keys.push(key);
+        }
+        Ok(merged)
+    }
+
+    fn reset_pending(&mut self, capacity: usize) {
+        self.pending.offsets.clear();
+        self.pending.offsets.reserve(capacity + 1);
+        self.pending.offsets.push(V::default());
+        self.pending.values.clear();
+    }
+
+    fn intern_pending(&mut self) -> Result<()> {
+        let mut pending = std::mem::replace(&mut self.pending, OffsetBuffer::with_capacity(0));
+        let result = (|| {
+            self.keys.reserve(pending.len());
+            for index in 0..pending.len() {
+                let start = pending.offsets[index].as_usize();
+                let end = pending.offsets[index + 1].as_usize();
+                let key = self.intern(&pending.values[start..end])?;
+                self.keys.push(key);
+            }
+            Ok(())
+        })();
+
+        pending.offsets.clear();
+        pending.offsets.push(V::default());
+        pending.values.clear();
+        self.pending = pending;
+        result
+    }
+
+    fn into_parts<K: ArrowNativeType>(
+        self,
+        valid_mask: Option<&[u8]>,
+    ) -> Result<(Vec<K>, OffsetBuffer<V>)> {
+        let mut keys = Vec::with_capacity(self.keys.len());
+        let all_keys_fit = self
+            .keys
+            .iter()
+            .all(|&index| K::from_usize(index).is_some());
+
+        if all_keys_fit && valid_mask.is_none() {
+            keys.extend(
+                self.keys
+                    .into_iter()
+                    .map(|index| K::from_usize(index).unwrap()),
+            );
+            return Ok((keys, self.values));
+        }
+
+        let mut remap = vec![None; self.values.len()];
+        let mut values = OffsetBuffer::with_capacity(0);
+        for (row, index) in self.keys.into_iter().enumerate() {
+            if valid_mask.is_some_and(|mask| !arrow_buffer::bit_util::get_bit(mask, row)) {
+                keys.push(K::default());
+                continue;
+            }
+
+            let key = match remap[index] {
+                Some(key) => key,
+                None => {
+                    let output_index = values.len();
+                    let key = K::from_usize(output_index)
+                        .ok_or_else(|| general_err!("dictionary key overflow"))?;
+                    let start = self.values.offsets[index].as_usize();
+                    let end = self.values.offsets[index + 1].as_usize();
+                    values.try_push(&self.values.values[start..end], false)?;
+                    remap[index] = Some(key);
+                    key
+                }
+            };
+            keys.push(key);
+        }
+        Ok((keys, values))
+    }
+}
 
 /// An array of variable length byte arrays that are potentially dictionary encoded
 /// and can be converted into a corresponding [`ArrayRef`]
@@ -40,6 +294,7 @@ pub enum DictionaryBuffer<K: ArrowNativeType, V: OffsetSizeTrait> {
     Values {
         values: OffsetBuffer<V>,
     },
+    Merged(MergedDictionary<V>),
 }
 
 fn widen_key_bound(existing: &mut Option<u64>, incoming: Option<u64>) {
@@ -55,6 +310,7 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
         match self {
             Self::Dict { keys, .. } => keys.len(),
             Self::Values { values } => values.len(),
+            Self::Merged(merged) => merged.keys.len(),
         }
     }
 
@@ -106,17 +362,92 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                 };
                 match self {
                     Self::Dict { keys, .. } => Some(keys),
-                    Self::Values { .. } => unreachable!(),
+                    Self::Values { .. } | Self::Merged(_) => unreachable!(),
                 }
             }
             Self::Values { .. } => None,
+            Self::Merged(_) => None,
         }
+    }
+
+    fn merged(&mut self) -> Result<&mut MergedDictionary<V>> {
+        if !matches!(self, Self::Merged(_)) {
+            let merged = match self {
+                Self::Dict { keys, values, .. } => MergedDictionary::from_dictionary(keys, values)?,
+                Self::Values { values } => MergedDictionary::from_values(values)?,
+                Self::Merged(_) => unreachable!(),
+            };
+            *self = Self::Merged(merged);
+        }
+
+        match self {
+            Self::Merged(merged) => Ok(merged),
+            _ => unreachable!(),
+        }
+    }
+
+    pub(crate) fn read_dictionary<F>(
+        &mut self,
+        dictionary: &ArrayRef,
+        len: usize,
+        read: F,
+    ) -> Result<usize>
+    where
+        F: FnOnce(&[usize], &mut [usize]) -> Result<usize>,
+    {
+        let merged = self.merged()?;
+        merged.prepare_dictionary(dictionary)?;
+
+        let start = merged.keys.len();
+        merged.keys.resize(start + len, 0);
+        let MergedDictionary {
+            keys, dictionary, ..
+        } = merged;
+        let remap = &dictionary.as_ref().unwrap().indices;
+        match read(remap, &mut keys[start..]) {
+            Ok(read) if read <= len => {
+                keys.truncate(start + read);
+                Ok(read)
+            }
+            Ok(read) => {
+                keys.truncate(start);
+                Err(general_err!(
+                    "dictionary decoder returned {read} values for a {len}-value buffer"
+                ))
+            }
+            Err(error) => {
+                keys.truncate(start);
+                Err(error)
+            }
+        }
+    }
+
+    pub(crate) fn read_plain<F>(&mut self, len: usize, read: F) -> Result<usize>
+    where
+        F: FnOnce(&mut OffsetBuffer<V>) -> Result<usize>,
+    {
+        if let Self::Values { values } = self {
+            return read(values);
+        }
+
+        let merged = self.merged()?;
+        merged.reset_pending(len);
+        let read = read(&mut merged.pending)?;
+        if read != merged.pending.len() {
+            return Err(general_err!(
+                "byte array decoder returned {read} values but wrote {}",
+                merged.pending.len()
+            ));
+        }
+        merged.intern_pending()?;
+        Ok(read)
     }
 
     /// Returns a mutable reference to a values array
     ///
     /// If this is currently dictionary encoded, this will convert from the
     /// dictionary encoded representation
+    #[cfg_attr(not(test), expect(dead_code))]
     pub fn spill_values(&mut self) -> Result<&mut OffsetBuffer<V>> {
         match self {
             Self::Values { values } => Ok(values),
@@ -142,7 +473,18 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                 *self = Self::Values { values: spilled };
                 match self {
                     Self::Values { values } => Ok(values),
-                    Self::Dict { .. } => unreachable!(),
+                    Self::Dict { .. } | Self::Merged(_) => unreachable!(),
+                }
+            }
+            Self::Merged(merged) => {
+                let mut spilled = OffsetBuffer::with_capacity(merged.keys.len());
+                for &key in &merged.keys {
+                    spilled.try_push(merged.value(key), false)?;
+                }
+                *self = Self::Values { values: spilled };
+                match self {
+                    Self::Values { values } => Ok(values),
+                    Self::Dict { .. } | Self::Merged(_) => unreachable!(),
                 }
             }
         }
@@ -229,6 +571,37 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
 
                 pack_values_from_offsets(key_type, &value_type, &values, hashes, null_buffer)
             }
+            Self::Merged(merged) => {
+                let (key_type, value_type) = match data_type {
+                    ArrowType::Dictionary(k, v) => (k.as_ref(), v.as_ref()),
+                    _ => unreachable!(),
+                };
+                // Null padding in an offset buffer is represented by empty values. For
+                // fixed-size binary, omit dictionary entries only referenced by null
+                // rows before validating the remaining value widths.
+                let valid_mask = if matches!(value_type, ArrowType::FixedSizeBinary(_)) {
+                    null_buffer.as_ref().map(Buffer::as_slice)
+                } else {
+                    None
+                };
+                let (keys, values) = merged.into_parts::<K>(valid_mask)?;
+                let values: ArrayRef = if let ArrowType::FixedSizeBinary(size) = value_type {
+                    let binary = values.into_array(None, GenericBinaryArray::<V>::DATA_TYPE);
+                    let binary = binary.as_binary::<V>();
+                    Arc::new(FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+                        binary.iter(),
+                        *size,
+                    )?)
+                } else {
+                    values.into_array(None, value_type.clone())
+                };
+
+                let num_keys = keys.len();
+                let keys_buffer = Buffer::from_vec(keys);
+                let null_buffer =
+                    null_buffer.map(|b| NullBuffer::new(BooleanBuffer::new(b, 0, num_keys)));
+                build_dictionary_array(key_type, keys_buffer, num_keys, null_buffer, values)
+            }
         }
     }
 }
@@ -244,6 +617,7 @@ impl<K: ArrowNativeType, V: OffsetSizeTrait> ValuesBuffer for DictionaryBuffer<K
         match self {
             Self::Dict { keys, .. } => keys.reserve_exact(additional),
             Self::Values { values, .. } => values.reserve_exact(additional),
+            Self::Merged(merged) => merged.keys.reserve_exact(additional),
         }
     }
 
@@ -261,6 +635,11 @@ impl<K: ArrowNativeType, V: OffsetSizeTrait> ValuesBuffer for DictionaryBuffer<K
             }
             Self::Values { values, .. } => {
                 values.pad_nulls(read_offset, values_read, levels_read, valid_mask)
+            }
+            Self::Merged(merged) => {
+                merged
+                    .keys
+                    .pad_nulls(read_offset, values_read, levels_read, valid_mask)
             }
         }
     }
@@ -530,7 +909,7 @@ fn hashes_as_u64(scratch: &[u8]) -> &[u64] {
 mod tests {
     use super::*;
     use arrow::compute::cast;
-    use arrow_array::StringArray;
+    use arrow_array::{BinaryArray, StringArray};
 
     #[test]
     fn test_dictionary_buffer() {
@@ -629,6 +1008,324 @@ mod tests {
         // Cannot change dictionary as keys not empty
         let d4 = Arc::new(StringArray::from(vec!["bananas"])) as ArrayRef;
         assert!(buffer.as_keys_with_bit_width(&d4, None).is_none());
+    }
+
+    #[test]
+    fn test_merge_dictionary_and_plain_values() {
+        let dict_type =
+            ArrowType::Dictionary(Box::new(ArrowType::Int32), Box::new(ArrowType::Utf8));
+        let first: ArrayRef = Arc::new(StringArray::from(vec!["repeated-value", "first"]));
+        let all_second: ArrayRef = Arc::new(StringArray::from(vec![
+            "unused",
+            "repeated-value",
+            "second",
+            "unused",
+        ]));
+        let second = all_second.slice(1, 2);
+
+        let mut buffer = DictionaryBuffer::<i32, i32>::with_capacity(0);
+        buffer
+            .as_keys_with_bit_width(&first, None)
+            .unwrap()
+            .extend_from_slice(&[0, 0, 1]);
+
+        let source_keys = [0, 1, 1];
+        buffer
+            .read_dictionary(&second, source_keys.len(), |remap, output| {
+                for (output, source) in output.iter_mut().zip(source_keys) {
+                    *output = remap[source];
+                }
+                Ok(source_keys.len())
+            })
+            .unwrap();
+
+        buffer
+            .read_plain(3, |values| {
+                for value in ["second", "plain", "repeated-value"] {
+                    values.try_push(value.as_bytes(), false)?;
+                }
+                Ok(3)
+            })
+            .unwrap();
+
+        let DictionaryBuffer::Merged(merged) = &buffer else {
+            panic!("expected merged dictionary")
+        };
+        assert_eq!(merged.keys.len(), 9);
+        assert_eq!(merged.values.len(), 4);
+        assert_eq!(
+            merged.values.values.len(),
+            "repeated-value".len() + "first".len() + "second".len() + "plain".len()
+        );
+
+        let array = buffer
+            .into_array(None, &dict_type, &mut MutableBuffer::new(0))
+            .unwrap();
+        assert_eq!(array.as_any_dictionary().values().len(), 4);
+
+        let strings = cast(&array, &ArrowType::Utf8).unwrap();
+        let strings = strings.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(
+            strings.iter().collect::<Vec<_>>(),
+            vec![
+                Some("repeated-value"),
+                Some("repeated-value"),
+                Some("first"),
+                Some("repeated-value"),
+                Some("second"),
+                Some("second"),
+                Some("second"),
+                Some("plain"),
+                Some("repeated-value")
+            ]
+        );
+    }
+
+    #[test]
+    fn test_merge_only_interns_referenced_existing_dictionary_values() {
+        let dict_type =
+            ArrowType::Dictionary(Box::new(ArrowType::Int32), Box::new(ArrowType::Utf8));
+        let dictionary: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..100).map(|index| format!("value-{index}")),
+        ));
+        let mut buffer = DictionaryBuffer::<i32, i32>::with_capacity(0);
+        buffer
+            .as_keys_with_bit_width(&dictionary, None)
+            .unwrap()
+            .extend_from_slice(&[99, 1, 99]);
+
+        buffer
+            .read_plain(1, |values| {
+                values.try_push(b"plain", false)?;
+                Ok(1)
+            })
+            .unwrap();
+
+        let DictionaryBuffer::Merged(merged) = &buffer else {
+            panic!("expected merged dictionary")
+        };
+        assert_eq!(merged.values.len(), 3);
+        assert!(merged.dictionary.is_none());
+
+        buffer
+            .read_dictionary(&dictionary, 1, |remap, output| {
+                output[0] = remap[1];
+                Ok(1)
+            })
+            .unwrap();
+
+        let array = buffer
+            .into_array(None, &dict_type, &mut MutableBuffer::new(0))
+            .unwrap();
+        let strings = cast(&array, &ArrowType::Utf8).unwrap();
+        let strings = strings.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(
+            strings.iter().collect::<Vec<_>>(),
+            vec![
+                Some("value-99"),
+                Some("value-1"),
+                Some("value-99"),
+                Some("plain"),
+                Some("value-1")
+            ]
+        );
+    }
+
+    #[test]
+    fn test_merge_validates_existing_keys() {
+        let first: ArrayRef = Arc::new(StringArray::from(vec!["first"]));
+        let second: ArrayRef = Arc::new(StringArray::from(vec!["second"]));
+        let mut buffer = DictionaryBuffer::<i32, i32>::with_capacity(0);
+        buffer.as_keys_with_bit_width(&first, None).unwrap().push(1);
+
+        let err = buffer
+            .read_dictionary(&second, 1, |remap, output| {
+                output[0] = remap[0];
+                Ok(1)
+            })
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("dictionary key beyond bounds"), "{err}");
+        assert!(matches!(buffer, DictionaryBuffer::Dict { .. }));
+    }
+
+    #[test]
+    fn test_merge_pads_nulls() {
+        let dict_type =
+            ArrowType::Dictionary(Box::new(ArrowType::Int32), Box::new(ArrowType::Utf8));
+        let first: ArrayRef = Arc::new(StringArray::from(vec!["first"]));
+        let second: ArrayRef = Arc::new(StringArray::from(vec!["second"]));
+        let mut buffer = DictionaryBuffer::<i32, i32>::with_capacity(0);
+        buffer
+            .as_keys_with_bit_width(&first, None)
+            .unwrap()
+            .extend_from_slice(&[0, 0]);
+        buffer
+            .read_dictionary(&second, 2, |remap, output| {
+                output.fill(remap[0]);
+                Ok(2)
+            })
+            .unwrap();
+
+        let valid = [false, true, true, false, true, true];
+        let null_buffer = Buffer::from_iter(valid);
+        buffer
+            .pad_nulls(0, 4, valid.len(), null_buffer.as_slice())
+            .unwrap();
+
+        let array = buffer
+            .into_array(Some(null_buffer), &dict_type, &mut MutableBuffer::new(0))
+            .unwrap();
+        let strings = cast(&array, &ArrowType::Utf8).unwrap();
+        let strings = strings.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(
+            strings.iter().collect::<Vec<_>>(),
+            vec![
+                None,
+                Some("first"),
+                Some("first"),
+                None,
+                Some("second"),
+                Some("second")
+            ]
+        );
+    }
+
+    #[test]
+    fn test_merge_fixed_size_binary_values() {
+        let dict_type = ArrowType::Dictionary(
+            Box::new(ArrowType::Int32),
+            Box::new(ArrowType::FixedSizeBinary(5)),
+        );
+        let first: ArrayRef = Arc::new(BinaryArray::from_vec(vec![b"alpha"]));
+        let second: ArrayRef = Arc::new(BinaryArray::from_vec(vec![b"bravo"]));
+        let mut buffer = DictionaryBuffer::<i32, i32>::with_capacity(0);
+        buffer.as_keys_with_bit_width(&first, None).unwrap().push(0);
+        buffer
+            .read_dictionary(&second, 1, |remap, output| {
+                output[0] = remap[0];
+                Ok(1)
+            })
+            .unwrap();
+
+        let array = buffer
+            .into_array(None, &dict_type, &mut MutableBuffer::new(0))
+            .unwrap();
+        assert_eq!(array.data_type(), &dict_type);
+        let values = array.as_any_dictionary().values();
+        let values = values.as_fixed_size_binary();
+        assert_eq!(values.value(0), b"alpha");
+        assert_eq!(values.value(1), b"bravo");
+    }
+
+    #[test]
+    fn test_merge_fixed_size_binary_after_null_padded_plain_values() {
+        let dict_type = ArrowType::Dictionary(
+            Box::new(ArrowType::Int32),
+            Box::new(ArrowType::FixedSizeBinary(4)),
+        );
+        let dictionary: ArrayRef = Arc::new(BinaryArray::from_vec(vec![b"EFGH"]));
+        let mut buffer = DictionaryBuffer::<i32, i32>::with_capacity(0);
+
+        buffer
+            .read_plain(1, |values| {
+                values.try_push(b"abcd", false)?;
+                Ok(1)
+            })
+            .unwrap();
+
+        let plain_validity = Buffer::from_iter([false, true]);
+        buffer
+            .pad_nulls(0, 1, 2, plain_validity.as_slice())
+            .unwrap();
+
+        buffer
+            .read_dictionary(&dictionary, 1, |remap, output| {
+                output[0] = remap[0];
+                Ok(1)
+            })
+            .unwrap();
+
+        let null_buffer = Buffer::from_iter([false, true, true]);
+        let array = buffer
+            .into_array(Some(null_buffer), &dict_type, &mut MutableBuffer::new(0))
+            .unwrap();
+        let dictionary = array.as_dictionary::<Int32Type>();
+        assert_eq!(
+            dictionary.keys().iter().collect::<Vec<_>>(),
+            vec![None, Some(0), Some(1)]
+        );
+        let values = dictionary.values().as_fixed_size_binary();
+        assert_eq!(values.len(), 2);
+        assert_eq!(values.value(0), b"abcd");
+        assert_eq!(values.value(1), b"EFGH");
+    }
+
+    #[test]
+    fn test_merge_compacts_keys_after_large_dictionary_union() {
+        let dict_type = ArrowType::Dictionary(Box::new(ArrowType::Int8), Box::new(ArrowType::Utf8));
+        let first: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..127).map(|index| format!("first-{index}")),
+        ));
+        let second: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..127).map(|index| format!("second-{index}")),
+        ));
+
+        let mut buffer = DictionaryBuffer::<i8, i32>::with_capacity(0);
+        buffer
+            .as_keys_with_bit_width(&first, None)
+            .unwrap()
+            .push(126);
+        buffer
+            .read_dictionary(&second, 1, |remap, output| {
+                output[0] = remap[126];
+                Ok(1)
+            })
+            .unwrap();
+        buffer
+            .read_plain(1, |values| {
+                values.try_push(b"plain", false)?;
+                Ok(1)
+            })
+            .unwrap();
+
+        let array = buffer
+            .into_array(None, &dict_type, &mut MutableBuffer::new(0))
+            .unwrap();
+        assert_eq!(array.as_any_dictionary().values().len(), 3);
+        let strings = cast(&array, &ArrowType::Utf8).unwrap();
+        let strings = strings.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(
+            strings.iter().collect::<Vec<_>>(),
+            vec![Some("first-126"), Some("second-126"), Some("plain")]
+        );
+    }
+
+    #[test]
+    fn test_merge_reports_key_overflow_for_referenced_values() {
+        let dict_type = ArrowType::Dictionary(Box::new(ArrowType::Int8), Box::new(ArrowType::Utf8));
+        let first: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..127).map(|index| format!("first-{index}")),
+        ));
+        let second: ArrayRef = Arc::new(StringArray::from(vec!["second-0", "second-1"]));
+
+        let mut buffer = DictionaryBuffer::<i8, i32>::with_capacity(0);
+        buffer
+            .as_keys_with_bit_width(&first, None)
+            .unwrap()
+            .extend(0_i8..=126);
+        buffer
+            .read_dictionary(&second, 2, |remap, output| {
+                output.copy_from_slice(remap);
+                Ok(2)
+            })
+            .unwrap();
+
+        let err = buffer
+            .into_array(None, &dict_type, &mut MutableBuffer::new(0))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("dictionary key overflow"), "{err}");
     }
 
     #[test]

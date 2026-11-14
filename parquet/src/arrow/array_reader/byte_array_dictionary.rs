@@ -59,15 +59,8 @@ macro_rules! make_reader {
 
 /// Returns an [`ArrayReader`] that decodes the provided byte array column
 ///
-/// This will attempt to preserve any dictionary encoding present in the parquet data
-///
-/// It will be unable to preserve the dictionary encoding if:
-///
-/// * A single read spans across multiple column chunks
-/// * A column chunk contains non-dictionary encoded pages
-///
-/// It is therefore recommended that if `pages` contains data from multiple column chunks,
-/// that the read batch size used is a divisor of the row group size
+/// This preserves dictionary encoding when a read spans multiple dictionaries or includes
+/// non-dictionary encoded pages by merging their unique values into a batch-local dictionary.
 pub fn make_byte_array_dictionary_reader(
     pages: Box<dyn PageIterator>,
     column_desc: ColumnDescPtr,
@@ -454,11 +447,11 @@ where
     fn read(&mut self, out: &mut Self::Buffer, num_values: usize) -> Result<usize> {
         match self.decoder.as_mut().expect("decoder set") {
             MaybeDictionaryDecoder::Fallback(decoder) => {
-                decoder.read(out.spill_values()?, num_values, None)
+                out.read_plain(num_values, |values| decoder.read(values, num_values, None))
             }
-            MaybeDictionaryDecoder::Fixed(decoder) => {
-                decoder.read_offsets(out.spill_values()?, num_values)
-            }
+            MaybeDictionaryDecoder::Fixed(decoder) => out.read_plain(num_values, |values| {
+                decoder.read_offsets(values, num_values)
+            }),
             MaybeDictionaryDecoder::Dict {
                 decoder,
                 max_remaining_values,
@@ -489,22 +482,9 @@ where
                         Ok(len)
                     }
                     None => {
-                        // Sad path - need to recompute dictionary
-                        //
-                        // This either means we crossed into a new column chunk whilst
-                        // reading this batch, or encountered non-dictionary encoded data
-                        let values = out.spill_values()?;
-                        let mut keys = vec![K::default(); len];
-                        let len = decoder.get_batch(&mut keys)?;
-
-                        assert_eq!(dict.data_type(), &self.value_type);
-
-                        let data = dict.to_data();
-                        let dict_buffers = data.buffers();
-                        let dict_offsets = dict_buffers[0].typed_data::<V>();
-                        let dict_values = dict_buffers[1].as_slice();
-
-                        values.extend_from_dictionary(&keys[..len], dict_offsets, dict_values)?;
+                        let len = out.read_dictionary(dict, len, |remap, keys| {
+                            decoder.get_batch_with_dict(remap, keys, len)
+                        })?;
                         *max_remaining_values -= len;
                         Ok(len)
                     }
@@ -537,7 +517,7 @@ mod tests {
     use arrow_buffer::Buffer;
 
     use crate::arrow::array_reader::test_util::{
-        byte_array_all_encodings, encode_dictionary, utf8_column,
+        byte_array_all_encodings, encode_byte_array, encode_dictionary, utf8_column,
     };
     use crate::arrow::record_reader::buffer::ValuesBuffer;
     use crate::data_type::ByteArray;
@@ -802,6 +782,92 @@ mod tests {
     }
 
     #[test]
+    fn test_merge_dictionary_pages() {
+        let data_type = utf8_dictionary();
+        let first: Vec<_> = ["shared", "first", "shared"]
+            .into_iter()
+            .map(ByteArray::from)
+            .collect();
+        let second: Vec<_> = ["shared", "second", "second"]
+            .into_iter()
+            .map(ByteArray::from)
+            .collect();
+        let plain: Vec<_> = ["second", "plain", "shared"]
+            .into_iter()
+            .map(ByteArray::from)
+            .collect();
+        let (first_dict, first_data) = encode_dictionary(&first);
+        let (second_dict, second_data) = encode_dictionary(&second);
+
+        let column_desc = utf8_column();
+        let mut decoder = DictionaryDecoder::<i32, i32>::new(&column_desc);
+        let mut output = DictionaryBuffer::<i32, i32>::with_capacity(0);
+
+        decoder
+            .set_dict(first_dict, 2, Encoding::RLE_DICTIONARY, false)
+            .unwrap();
+        decoder
+            .set_data(
+                Encoding::RLE_DICTIONARY,
+                first_data,
+                first.len(),
+                Some(first.len()),
+            )
+            .unwrap();
+        assert_eq!(decoder.read(&mut output, first.len()).unwrap(), first.len());
+        assert!(matches!(output, DictionaryBuffer::Dict { .. }));
+
+        decoder
+            .set_dict(second_dict, 2, Encoding::RLE_DICTIONARY, false)
+            .unwrap();
+        decoder
+            .set_data(
+                Encoding::RLE_DICTIONARY,
+                second_data,
+                second.len(),
+                Some(second.len()),
+            )
+            .unwrap();
+        assert_eq!(
+            decoder.read(&mut output, second.len()).unwrap(),
+            second.len()
+        );
+        assert!(matches!(output, DictionaryBuffer::Merged(_)));
+
+        decoder
+            .set_data(
+                Encoding::PLAIN,
+                encode_byte_array(Encoding::PLAIN, &plain),
+                plain.len(),
+                Some(plain.len()),
+            )
+            .unwrap();
+        assert_eq!(decoder.read(&mut output, plain.len()).unwrap(), plain.len());
+
+        let array = output
+            .into_array(None, &data_type, &mut MutableBuffer::new(0))
+            .unwrap();
+        assert_eq!(array.as_any_dictionary().values().len(), 4);
+
+        let array = cast(&array, &ArrowType::Utf8).unwrap();
+        let strings = array.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(
+            strings.iter().collect::<Vec<_>>(),
+            vec![
+                Some("shared"),
+                Some("first"),
+                Some("shared"),
+                Some("shared"),
+                Some("second"),
+                Some("second"),
+                Some("second"),
+                Some("plain"),
+                Some("shared")
+            ]
+        );
+    }
+
+    #[test]
     fn test_dictionary_fallback() {
         let data_type = utf8_dictionary();
         let data = vec!["hello", "world", "a", "b"];
@@ -823,6 +889,7 @@ mod tests {
             decoder.set_data(encoding, page, 4, Some(4)).unwrap();
             assert_eq!(decoder.read(&mut output, 1024).unwrap(), 4);
         }
+        assert!(matches!(output, DictionaryBuffer::Merged(_)));
         let array = output
             .into_array(None, &data_type, &mut MutableBuffer::new(0))
             .unwrap();
