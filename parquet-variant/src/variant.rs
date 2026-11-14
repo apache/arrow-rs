@@ -1538,9 +1538,9 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// // given a variant like `{"foo": ["bar", "baz"]}`
     /// let variant = Variant::new(&metadata, &value);
     /// // Accessing a non existent path returns None
-    /// assert_eq!(variant.get_path(&VariantPath::try_from("non_existent").unwrap()), None);
+    /// assert_eq!(variant.get_path(&VariantPath::try_from("$.non_existent").unwrap()), None);
     /// // Access obj["foo"]
-    /// let path = VariantPath::try_from("foo").unwrap();
+    /// let path = VariantPath::try_from("$.foo").unwrap();
     /// let foo = variant.get_path(&path).expect("field `foo` should exist");
     /// assert!(foo.as_list().is_some(), "field `foo` should be a list");
     /// // Access foo[0]
@@ -1549,7 +1549,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// // bar is a string
     /// assert_eq!(bar.as_string(), Some("bar"));
     /// // You can also access nested paths
-    /// let path = VariantPath::try_from("foo").unwrap().join(0);
+    /// let path = VariantPath::try_from("$.foo").unwrap().join(0);
     /// assert_eq!(variant.get_path(&path).unwrap(), bar);
     /// ```
     pub fn get_path(&self, path: &VariantPath) -> Option<Variant<'_, '_>> {

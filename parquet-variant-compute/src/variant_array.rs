@@ -1445,7 +1445,7 @@ mod test {
             assert_eq!(variant.value(2), baseline.value(3));
 
             let input: ArrayRef = Arc::new(input);
-            let options = GetOptions::new_with_path("b".try_into().unwrap())
+            let options = GetOptions::new_with_path("$.b".try_into().unwrap())
                 .with_as_type(Some(Arc::new(Field::new("b", DataType::Int8, true))));
             let result = variant_get(&input, options).unwrap();
             assert_eq!(
