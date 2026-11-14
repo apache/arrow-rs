@@ -2366,15 +2366,18 @@ struct ViewRange {
 /// Computes the [`ViewRange`] of views without nulls. The loop has no
 /// branches and works on `O`, so that it vectorizes and the pass-through case
 /// stays cheap.
+///
+/// The end includes the offsets of empty views. This can keep a few more child
+/// values, but it saves an accumulator in a loop that touches every view, and
+/// it lets the buffers pass through when an empty view lies past the last
+/// referenced value.
 fn view_range_no_nulls<O: OffsetSizeTrait>(offsets: &[O], sizes: &[O]) -> ViewRange {
     let zero = O::usize_as(0);
     let max = O::usize_as(O::MAX_OFFSET);
-    let (mut start, mut end, mut other_end) = (max, zero, zero);
+    let (mut start, mut end) = (max, zero);
     for (&offset, &size) in offsets.iter().zip(sizes) {
-        let referenced = size > zero;
-        start = start.min(if referenced { offset } else { max });
-        end = end.max(if referenced { offset + size } else { zero });
-        other_end = other_end.max(if referenced { zero } else { offset });
+        start = start.min(if size > zero { offset } else { max });
+        end = end.max(offset + size);
     }
     // Every referencing view ends above zero, so `end == zero` means that no
     // view references values.
@@ -2385,7 +2388,7 @@ fn view_range_no_nulls<O: OffsetSizeTrait>(offsets: &[O], sizes: &[O]) -> ViewRa
             start.as_usize()
         },
         end: end.as_usize(),
-        other_end: other_end.as_usize(),
+        other_end: end.as_usize(),
         null_with_size: false,
     }
 }
@@ -2439,8 +2442,6 @@ fn get_list_view_array_buffers<O: OffsetSizeTrait>(
     let offsets_slice = offsets.typed_data::<O>();
     let sizes_slice = sizes.typed_data::<O>();
     let nulls = data.nulls();
-    let referenced =
-        |i: usize| sizes_slice[i].as_usize() > 0 && nulls.is_none_or(|n| n.is_valid(i));
 
     let ViewRange {
         start,
@@ -2455,47 +2456,45 @@ fn get_list_view_array_buffers<O: OffsetSizeTrait>(
         let zeros: Buffer = MutableBuffer::from_len_zeroed(byte_len).into();
         return (zeros.clone(), zeros, data.child_data()[0].slice(0, 0));
     }
+    // An empty view can have an offset past the child in an unchecked array.
+    let end = end.min(data.child_data()[0].len());
     let child_data = data.child_data()[0].slice(start, end - start);
     if start == 0 && other_end <= end {
         return (offsets, sizes, child_data);
     }
 
+    // The closures are `move`. With captures by reference, LLVM reloads them
+    // on every row because the output writes may alias them, and the loop
+    // does not vectorize.
     let start_offset = O::usize_as(start);
     let zero = O::usize_as(0);
-    let new_offsets = match nulls {
+    let rebase = move |offset: O, referenced: bool| {
+        if referenced {
+            offset - start_offset
+        } else {
+            zero
+        }
+    };
+    let new_offsets: Buffer = match nulls {
         None => offsets_slice
             .iter()
             .zip(sizes_slice)
-            .map(|(&offset, &size)| {
-                if size > zero {
-                    offset - start_offset
-                } else {
-                    zero
-                }
-            })
+            .map(move |(&offset, &size)| rebase(offset, size > zero))
             .collect(),
-        Some(_) => (0..data.len())
-            .map(|i| {
-                if referenced(i) {
-                    offsets_slice[i] - start_offset
-                } else {
-                    zero
-                }
-            })
+        Some(n) => offsets_slice
+            .iter()
+            .zip(sizes_slice)
+            .zip(n.iter())
+            .map(move |((&offset, &size), valid)| rebase(offset, valid & (size > zero)))
             .collect(),
     };
-    let new_sizes = if null_with_size {
-        (0..data.len())
-            .map(|i| {
-                if referenced(i) {
-                    sizes_slice[i]
-                } else {
-                    O::usize_as(0)
-                }
-            })
-            .collect()
-    } else {
-        sizes.clone()
+    let new_sizes = match nulls {
+        Some(n) if null_with_size => sizes_slice
+            .iter()
+            .zip(n.iter())
+            .map(move |(&size, valid)| if valid { size } else { zero })
+            .collect(),
+        _ => sizes.clone(),
     };
     (new_offsets, new_sizes, child_data)
 }
@@ -5608,6 +5607,29 @@ mod tests {
         assert_eq!(sizes.as_ptr(), data.buffers()[1].as_ptr());
         assert_eq!(offsets.typed_data::<i32>(), &[2, 0, 3, 1]);
         assert_eq!(child.len(), 4);
+    }
+
+    /// Without nulls, the child range covers the offsets of empty views, so
+    /// the buffers pass through.
+    #[test]
+    fn list_view_keeps_values_up_to_empty_view_offsets() {
+        let list = ListViewArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            ScalarBuffer::from(vec![0, 3]),
+            ScalarBuffer::from(vec![1, 0]),
+            Arc::new(Int32Array::from_iter_values(0..4)),
+            None,
+        );
+        let data = list.to_data();
+        let (offsets, sizes, child) = get_list_view_array_buffers::<i32>(&data);
+        assert_eq!(offsets.as_ptr(), data.buffers()[0].as_ptr());
+        assert_eq!(sizes.as_ptr(), data.buffers()[1].as_ptr());
+        assert_eq!(child.len(), 3);
+
+        let batch =
+            RecordBatch::try_from_iter([("a", Arc::new(list.clone()) as ArrayRef)]).unwrap();
+        let read = deserialize_stream(serialize_stream(&batch));
+        assert_eq!(read.column(0).as_list_view::<i32>(), &list);
     }
 
     /// Pins a known limit: values between far-apart views are still written.
