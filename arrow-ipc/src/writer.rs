@@ -5413,7 +5413,10 @@ mod tests {
         let sliced_bytes = serialize_stream(&sliced);
         let sizes = (whole_bytes.len(), sliced_bytes.len());
         assert_eq!(deserialize_stream(whole_bytes), whole);
-        assert_eq!(deserialize_stream(sliced_bytes), sliced);
+        let read = deserialize_stream(sliced_bytes.clone());
+        assert_eq!(read, sliced);
+        // Writing the read batch again gives the same bytes.
+        assert_eq!(serialize_stream(&read), sliced_bytes);
         sizes
     }
 
@@ -5690,5 +5693,77 @@ mod tests {
         assert_eq!(offsets.typed_data::<i32>(), &[99, 0]);
         let child_ranges: Vec<_> = children.iter().map(|c| (c.offset(), c.len())).collect();
         assert_eq!(child_ranges, vec![(0, 0), (0, 100)]);
+    }
+
+    /// A slice with a non-zero row offset whose child ranges all start at 0
+    /// takes the zero-copy path, which slices the offsets at the row offset.
+    #[test]
+    fn sliced_dense_union_zero_copy_offsets_respect_row_offset() {
+        let fields = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Int32, false),
+            ],
+        )
+        .unwrap();
+        let union = UnionArray::try_new(
+            fields,
+            vec![0, 0, 0, 0, 0, 0, 1, 1].into(),
+            Some(vec![0, 1, 2, 3, 4, 5, 0, 1].into()),
+            vec![
+                Arc::new(Int32Array::from_iter_values(0..6)),
+                Arc::new(Int32Array::from_iter_values(100..102)),
+            ],
+        )
+        .unwrap();
+        // `UnionArray::slice` slices the buffers and leaves a zero offset.
+        // `ArrayData::slice` keeps the row offset, as a sliced parent does.
+        let data = union.to_data().slice(6, 2);
+        let DataType::Union(fields, _) = data.data_type() else {
+            unreachable!()
+        };
+        let (offsets, children) = get_dense_union_buffers(&data, fields);
+        assert_eq!(offsets.typed_data::<i32>(), &[0, 1]);
+        assert_eq!(
+            offsets.as_ptr(),
+            data.buffers()[1].as_ptr().wrapping_add(6 * 4)
+        );
+        let ranges: Vec<_> = children.iter().map(|c| (c.offset(), c.len())).collect();
+        assert_eq!(ranges, vec![(0, 0), (0, 2)]);
+    }
+
+    /// A union with more than `MAX_UNION_FIELDS_PER_PASS` children uses the
+    /// single scalar pass.
+    #[test]
+    fn sliced_dense_union_with_many_children_rebases_offsets() {
+        let n = MAX_UNION_FIELDS_PER_PASS + 1;
+        let ids: Vec<i8> = (0..n as i8).collect();
+        let fields = UnionFields::try_new(
+            ids.clone(),
+            (0..n).map(|i| Field::new(format!("f{i}"), DataType::Int32, false)),
+        )
+        .unwrap();
+        let children: Vec<ArrayRef> = (0..n)
+            .map(|i| {
+                Arc::new(Int32Array::from_iter_values(
+                    (0..10).map(|v| v + 100 * i as i32),
+                )) as _
+            })
+            .collect();
+        // Every child is referenced at offsets 3 and 5.
+        let type_ids: Vec<i8> = ids.iter().flat_map(|&t| [t, t]).collect();
+        let offsets: Vec<i32> = ids.iter().flat_map(|_| [3, 5]).collect();
+        let union =
+            UnionArray::try_new(fields, type_ids.into(), Some(offsets.into()), children).unwrap();
+        let data = union.to_data();
+        let DataType::Union(fields, _) = data.data_type() else {
+            unreachable!()
+        };
+        let (offsets, children) = get_dense_union_buffers(&data, fields);
+        assert_eq!(offsets.typed_data::<i32>(), [0, 2].repeat(n).as_slice());
+        for c in &children {
+            assert_eq!((c.offset(), c.len()), (3, 3));
+        }
     }
 }
