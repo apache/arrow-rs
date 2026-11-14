@@ -1726,6 +1726,7 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
     /// will be casted to Null
     pub fn null_if_overflow_precision(&self, precision: u8) -> Self {
         self.unary_opt::<_, T>(|v| T::is_valid_decimal_precision(v, precision).then_some(v))
+            .with_data_type(self.data_type().clone())
     }
 
     /// Returns [`Self::value`] formatted as a string
@@ -2795,6 +2796,29 @@ mod tests {
         let result = array.null_if_overflow_precision(5);
         let expected = Decimal128Array::from(vec![None, Some(123), None, None]);
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_null_if_overflow_precision_keeps_data_type() {
+        let array = Decimal32Array::from(vec![99])
+            .with_precision_and_scale(2, 1)
+            .unwrap();
+        assert_eq!(array.null_if_overflow_precision(2), array);
+
+        let array = Decimal64Array::from(vec![99])
+            .with_precision_and_scale(2, 1)
+            .unwrap();
+        assert_eq!(array.null_if_overflow_precision(2), array);
+
+        let array = Decimal128Array::from(vec![99])
+            .with_precision_and_scale(2, 1)
+            .unwrap();
+        assert_eq!(array.null_if_overflow_precision(2), array);
+
+        let array = Decimal256Array::from(vec![i256::from(99)])
+            .with_precision_and_scale(2, 1)
+            .unwrap();
+        assert_eq!(array.null_if_overflow_precision(2), array);
     }
 
     #[test]
