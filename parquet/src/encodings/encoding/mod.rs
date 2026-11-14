@@ -4,7 +4,7 @@
 
 //! Contains all supported encoders for Parquet.
 
-use std::{cmp, marker::PhantomData};
+use std::marker::PhantomData;
 
 use crate::basic::*;
 use crate::data_type::private::ParquetValueType;
@@ -13,7 +13,7 @@ use crate::encodings::rle::RleEncoder;
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::ResolvedColumnProperties;
 use crate::schema::types::ColumnDescPtr;
-use crate::util::bit_util::{BitWriter, num_required_bits};
+use crate::util::bit_util::{BitPacking, BitWriter, num_required_bits};
 use crate::util::prefix::common_prefix_length;
 
 pub use alp_encoder::AlpEncoder;
@@ -493,7 +493,11 @@ pub struct DeltaBitPackEncoder<T: DataType> {
     mini_block_size: usize,
     num_mini_blocks: usize,
     values_in_block: usize,
-    deltas: Vec<i64>,
+    /// Deltas of the current block in the column's native width, so that INT32
+    /// blocks are reduced and packed as 32-bit lanes. Only the buffer for the
+    /// encoder's physical type is allocated.
+    deltas_i32: Vec<i32>,
+    deltas_i64: Vec<i64>,
     _phantom: PhantomData<T>,
 }
 
@@ -523,6 +527,10 @@ impl<T: DataType> DeltaBitPackEncoder<T> {
     }
 
     fn new_with_layout(block_size: usize, num_mini_blocks: usize) -> Self {
+        let (deltas_i32, deltas_i64) = match T::get_physical_type() {
+            Type::INT32 => (vec![0; block_size], vec![]),
+            _ => (vec![], vec![0; block_size]),
+        };
         DeltaBitPackEncoder {
             page_header_writer: BitWriter::new(MAX_PAGE_HEADER_WRITER_SIZE),
             // Don't pre-allocate: encoders are often created eagerly (e.g. as a
@@ -536,7 +544,8 @@ impl<T: DataType> DeltaBitPackEncoder<T> {
             mini_block_size: block_size / num_mini_blocks,
             num_mini_blocks,
             values_in_block: 0, // will be at most block_size
-            deltas: vec![0; block_size],
+            deltas_i32,
+            deltas_i64,
             _phantom: PhantomData,
         }
     }
@@ -570,104 +579,214 @@ impl<T: DataType> DeltaBitPackEncoder<T> {
     }
 
     // Write current delta buffer (<= 'block size' values) into bit writer
-    #[inline(never)]
     fn flush_block_values(&mut self) -> Result<()> {
         if self.values_in_block == 0 {
             return Ok(());
         }
-
-        let mut min_delta = i64::MAX;
-        for i in 0..self.values_in_block {
-            min_delta = cmp::min(min_delta, self.deltas[i]);
+        let layout = BlockLayout {
+            values_in_block: self.values_in_block,
+            mini_block_size: self.mini_block_size,
+            num_mini_blocks: self.num_mini_blocks,
+        };
+        match T::get_physical_type() {
+            Type::INT32 => flush_delta_block(&mut self.deltas_i32, layout, &mut self.bit_writer),
+            Type::INT64 => flush_delta_block(&mut self.deltas_i64, layout, &mut self.bit_writer),
+            _ => unreachable!("{}", DELTA_BIT_PACK_TYPE_ERROR),
         }
-
-        // Write min delta
-        self.bit_writer.put_zigzag_vlq_int(min_delta);
-
-        // Slice to store bit width for each mini block
-        let offset = self.bit_writer.skip(self.num_mini_blocks);
-
-        for i in 0..self.num_mini_blocks {
-            // Find how many values we need to encode - either block size or whatever
-            // values left
-            let n = cmp::min(self.mini_block_size, self.values_in_block);
-            if n == 0 {
-                // Decoders should be agnostic to the padding value, we therefore use 0xFF
-                // when running tests. However, not all implementations may handle this correctly
-                // so pad with 0 when not running tests
-                let pad_value = cfg!(test).then(|| 0xFF).unwrap_or(0);
-                for j in i..self.num_mini_blocks {
-                    self.bit_writer.write_at(offset + j, pad_value);
-                }
-                break;
-            }
-
-            // Compute the max delta in current mini block
-            let mut max_delta = i64::MIN;
-            for j in 0..n {
-                max_delta = cmp::max(max_delta, self.deltas[i * self.mini_block_size + j]);
-            }
-
-            // Compute bit width to store (max_delta - min_delta)
-            let bit_width = num_required_bits(self.subtract_u64(max_delta, min_delta)) as usize;
-            self.bit_writer.write_at(offset + i, bit_width as u8);
-
-            // Encode values in current mini block using min_delta and bit_width. This
-            // mini block's deltas are not read again, so they can be rewritten in place
-            // with the values to pack
-            let start = i * self.mini_block_size;
-            for j in start..start + n {
-                self.deltas[j] = self.subtract_u64(self.deltas[j], min_delta) as i64;
-            }
-            self.bit_writer
-                .put_batch(&self.deltas[start..start + n], bit_width);
-
-            // Pad the last block (n < mini_block_size)
-            for _ in n..self.mini_block_size {
-                self.bit_writer.put_value(0, bit_width);
-            }
-
-            self.values_in_block -= n;
-        }
-
-        assert_eq!(
-            self.values_in_block, 0,
-            "Expected 0 values in block, found {}",
-            self.values_in_block
-        );
+        self.values_in_block = 0;
         Ok(())
+    }
+}
+
+/// How the values of the block being flushed are split into mini blocks.
+#[derive(Clone, Copy)]
+struct BlockLayout {
+    values_in_block: usize,
+    mini_block_size: usize,
+    num_mini_blocks: usize,
+}
+
+/// Native-width integer arithmetic for the deltas of one physical type.
+trait DeltaWord: Copy + Ord + Default + BitPacking {
+    type Unsigned: Copy + Default + std::ops::BitOr<Output = Self::Unsigned> + Into<u64>;
+
+    /// Truncates to the column width, the conversion the delta encoding is defined on.
+    fn from_i64(value: i64) -> Self;
+    fn to_i64(self) -> i64;
+    fn wrapping_sub(self, rhs: Self) -> Self;
+    fn to_unsigned(self) -> Self::Unsigned;
+}
+
+impl DeltaWord for i32 {
+    type Unsigned = u32;
+
+    #[inline]
+    fn from_i64(value: i64) -> Self {
+        value as i32
+    }
+
+    #[inline]
+    fn to_i64(self) -> i64 {
+        self as i64
+    }
+
+    #[inline]
+    fn wrapping_sub(self, rhs: Self) -> Self {
+        i32::wrapping_sub(self, rhs)
+    }
+
+    #[inline]
+    fn to_unsigned(self) -> u32 {
+        self as u32
+    }
+}
+
+impl DeltaWord for i64 {
+    type Unsigned = u64;
+
+    #[inline]
+    fn from_i64(value: i64) -> Self {
+        value
+    }
+
+    #[inline]
+    fn to_i64(self) -> i64 {
+        self
+    }
+
+    #[inline]
+    fn wrapping_sub(self, rhs: Self) -> Self {
+        i64::wrapping_sub(self, rhs)
+    }
+
+    #[inline]
+    fn to_unsigned(self) -> u64 {
+        self as u64
+    }
+}
+
+/// Writes the deltas between consecutive `values` into `deltas`, the first one relative
+/// to `previous`, and returns the last value. Deltas wrap at the column width, as the
+/// encoding requires.
+#[inline]
+fn compute_deltas<D: DeltaWord, V: ParquetValueType>(
+    values: &[V],
+    deltas: &mut [D],
+    previous: D,
+) -> D {
+    let to_word = |value: &V| D::from_i64(value.as_i64().expect(DELTA_BIT_PACK_TYPE_ERROR));
+    let Some((first, rest)) = deltas.split_first_mut() else {
+        return previous;
+    };
+    *first = to_word(&values[0]).wrapping_sub(previous);
+    // Pairing each value with its predecessor, rather than carrying the previous
+    // value through the loop, keeps the iterations independent so they vectorize.
+    for ((delta, value), prev) in rest.iter_mut().zip(&values[1..]).zip(values) {
+        *delta = to_word(value).wrapping_sub(to_word(prev));
+    }
+    to_word(&values[deltas.len() - 1])
+}
+
+/// Writes one block: the minimum delta, the bit width of each mini block, then the
+/// mini blocks of `delta - min_delta`, bit packed. `deltas` holds a full block, of
+/// which the first `layout.values_in_block` are filled.
+#[inline(never)]
+fn flush_delta_block<D: DeltaWord>(
+    deltas: &mut [D],
+    layout: BlockLayout,
+    bit_writer: &mut BitWriter,
+) {
+    let min_delta = deltas[..layout.values_in_block]
+        .iter()
+        .copied()
+        .min()
+        .unwrap_or_default();
+    bit_writer.put_zigzag_vlq_int(min_delta.to_i64());
+
+    // Slice to store bit width for each mini block
+    let offset = bit_writer.skip(layout.num_mini_blocks);
+
+    let mut remaining = layout.values_in_block;
+    for (i, mini_block) in deltas
+        .chunks_exact_mut(layout.mini_block_size)
+        .take(layout.num_mini_blocks)
+        .enumerate()
+    {
+        if remaining == 0 {
+            // Decoders should be agnostic to the padding value, we therefore use 0xFF
+            // when running tests. However, not all implementations may handle this correctly
+            // so pad with 0 when not running tests
+            let pad_value = cfg!(test).then(|| 0xFF).unwrap_or(0);
+            for j in i..layout.num_mini_blocks {
+                bit_writer.write_at(offset + j, pad_value);
+            }
+            break;
+        }
+        let n = remaining.min(layout.mini_block_size);
+
+        // Rewrite the deltas in place as the values to pack. Every one is
+        // non-negative, so the highest bit set in any of them is the highest bit
+        // of their maximum: OR-ing them gives the bit width without a max reduction.
+        let mut set_bits = D::Unsigned::default();
+        for delta in &mut mini_block[..n] {
+            *delta = delta.wrapping_sub(min_delta);
+            set_bits = set_bits | delta.to_unsigned();
+        }
+        let bit_width = num_required_bits(set_bits.into()) as usize;
+        bit_writer.write_at(offset + i, bit_width as u8);
+
+        // Pad the last mini block with zeros
+        mini_block[n..].fill(D::default());
+        bit_writer.put_batch(mini_block, bit_width);
+
+        remaining -= n;
     }
 }
 
 // Implementation is shared between Int32Type and Int64Type,
 // see `DeltaBitPackEncoderConversion` below for specifics.
 impl<T: DataType> Encoder<T> for DeltaBitPackEncoder<T> {
+    // Inlined so callers putting one value at a time, such as the Arrow writer's
+    // DELTA_BYTE_ARRAY lengths, keep this in their loop
+    #[inline]
     fn put(&mut self, values: &[T::T]) -> Result<()> {
         if values.is_empty() {
             return Ok(());
         }
 
         // Define values to encode, initialize state
-        let mut idx = if self.total_values == 0 {
+        let mut remaining = if self.total_values == 0 {
             self.first_value = self.as_i64(values, 0);
             self.current_value = self.first_value;
-            1
+            &values[1..]
         } else {
-            0
+            values
         };
         // Add all values (including first value)
         self.total_values += values.len();
 
-        // Write block
-        while idx < values.len() {
-            let value = self.as_i64(values, idx);
-            self.deltas[self.values_in_block] = self.subtract(value, self.current_value);
-            self.current_value = value;
-            idx += 1;
-            self.values_in_block += 1;
+        // Fill the block a slice at a time, so the delta loop does no per-value
+        // block bookkeeping
+        while !remaining.is_empty() {
+            let n = (self.block_size - self.values_in_block).min(remaining.len());
+            let (chunk, rest) = remaining.split_at(n);
+            let block = self.values_in_block..self.values_in_block + n;
+            self.current_value = match T::get_physical_type() {
+                Type::INT32 => compute_deltas(
+                    chunk,
+                    &mut self.deltas_i32[block],
+                    self.current_value as i32,
+                ) as i64,
+                Type::INT64 => {
+                    compute_deltas(chunk, &mut self.deltas_i64[block], self.current_value)
+                }
+                _ => unreachable!("{}", DELTA_BIT_PACK_TYPE_ERROR),
+            };
+            self.values_in_block += n;
             if self.values_in_block == self.block_size {
                 self.flush_block_values()?;
             }
+            remaining = rest;
         }
         Ok(())
     }
@@ -709,21 +828,18 @@ impl<T: DataType> Encoder<T> for DeltaBitPackEncoder<T> {
     fn estimated_memory_size(&self) -> usize {
         self.page_header_writer.estimated_memory_size()
             + self.bit_writer.estimated_memory_size()
-            + self.deltas.capacity() * std::mem::size_of::<i64>()
+            + self.deltas_i32.capacity() * std::mem::size_of::<i32>()
+            + self.deltas_i64.capacity() * std::mem::size_of::<i64>()
             + std::mem::size_of::<Self>()
     }
 }
 
-/// Helper trait to define specific conversions and subtractions when computing deltas
+/// Helper trait to define specific conversions when computing deltas
 trait DeltaBitPackEncoderConversion<T: DataType> {
     // Method should panic if type is not supported, otherwise no-op
     fn assert_supported_type();
 
     fn as_i64(&self, values: &[T::T], index: usize) -> i64;
-
-    fn subtract(&self, left: i64, right: i64) -> i64;
-
-    fn subtract_u64(&self, left: i64, right: i64) -> u64;
 }
 
 const DELTA_BIT_PACK_TYPE_ERROR: &str =
@@ -738,26 +854,6 @@ impl<T: DataType> DeltaBitPackEncoderConversion<T> for DeltaBitPackEncoder<T> {
     #[inline]
     fn as_i64(&self, values: &[T::T], index: usize) -> i64 {
         values[index].as_i64().expect(DELTA_BIT_PACK_TYPE_ERROR)
-    }
-
-    #[inline]
-    fn subtract(&self, left: i64, right: i64) -> i64 {
-        // It is okay for values to overflow, wrapping_sub wrapping around at the boundary
-        match T::get_physical_type() {
-            Type::INT32 => (left as i32).wrapping_sub(right as i32) as i64,
-            Type::INT64 => left.wrapping_sub(right),
-            _ => panic!("{}", DELTA_BIT_PACK_TYPE_ERROR),
-        }
-    }
-
-    #[inline]
-    fn subtract_u64(&self, left: i64, right: i64) -> u64 {
-        match T::get_physical_type() {
-            // Conversion of i32 -> u32 -> u64 is to avoid non-zero left most bytes in int repr
-            Type::INT32 => (left as i32).wrapping_sub(right as i32) as u32 as u64,
-            Type::INT64 => left.wrapping_sub(right) as u64,
-            _ => panic!("{}", DELTA_BIT_PACK_TYPE_ERROR),
-        }
     }
 }
 
