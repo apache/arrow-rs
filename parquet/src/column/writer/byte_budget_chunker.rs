@@ -88,6 +88,10 @@ pub(crate) struct ByteBudgetChunker {
     /// when one `base_batch_size` mini-batch of this fixed-width type cannot
     /// overshoot `dict_page_byte_limit` by more than one mini-batch's worth.
     static_dict_always_fits: bool,
+    /// Upper bound on the page bytes of any one value of this write call,
+    /// from [`ColumnValueEncoder::max_value_bytes`]. `None` if the encoder
+    /// has no bound, or if the call does not gather values by index.
+    max_value_bytes: Option<usize>,
 }
 
 impl ByteBudgetChunker {
@@ -96,6 +100,7 @@ impl ByteBudgetChunker {
         descr: &ColumnDescriptor,
         column_props: &ResolvedColumnProperties,
         base_batch_size: usize,
+        max_value_bytes: Option<usize>,
     ) -> Self {
         let page_byte_limit = column_props.data_page_size_limit;
         let dict_page_byte_limit = column_props.dictionary_page_size_limit;
@@ -118,6 +123,7 @@ impl ByteBudgetChunker {
             static_always_fits: static_fits(page_byte_limit),
             dict_page_byte_limit,
             static_dict_always_fits: static_fits(dict_page_byte_limit),
+            max_value_bytes,
         }
     }
 
@@ -213,10 +219,16 @@ impl ByteBudgetChunker {
         let (fit, vals_in_chunk) = match value_indices {
             Some(idx) => {
                 // Counting the chunk's values scans its def levels on a
-                // nullable column, and most chunks fit outright. So the
-                // encoder first sizes the next `chunk_size` values. The
-                // chunk's values are a prefix of this window. If the whole
-                // window fits, the chunk fits too.
+                // nullable column, and most chunks fit outright. So first
+                // try to prove the fit without the count. The next
+                // `chunk_size` values contain the chunk's values, so if
+                // that window fits, the chunk fits too.
+                //
+                // The window overlaps the windows of the following chunks,
+                // almost entirely so on a sparse column. The proof must
+                // therefore not read the window, or a sparse column pays
+                // for `chunk_size` values on every chunk of a few values.
+                // It uses the length of the window and a bound on one value.
                 //
                 // Only gather indices allow this lookahead, because each one
                 // names a real value of a later chunk. A contiguous `values`
@@ -226,13 +238,18 @@ impl ByteBudgetChunker {
                 let end = values_offset.saturating_add(chunk_size).min(idx.len());
                 let start = values_offset.min(end);
                 let window = &idx[start..end];
-                let fit = E::count_values_within_byte_budget_gather(values, window, budget)?;
-                if fit >= window.len() {
+                let window_fits =
+                    |max_value_bytes: usize| window.len().saturating_mul(max_value_bytes) <= budget;
+                if window.is_empty() || self.max_value_bytes.is_some_and(window_fits) {
                     return None;
                 }
-                // A value in the window overflows. Only now count the
-                // window's values that belong to this chunk.
-                (fit, chunk_def.value_count(chunk_size, self.max_def_level))
+                let vals_in_chunk = chunk_def.value_count(chunk_size, self.max_def_level);
+                let chunk_idx = &window[..vals_in_chunk.min(window.len())];
+                if chunk_idx.is_empty() {
+                    return None;
+                }
+                let fit = E::count_values_within_byte_budget_gather(values, chunk_idx, budget)?;
+                (fit, vals_in_chunk)
             }
             None => {
                 // For a non-nullable, unrepeated column `value_count` is O(1)
@@ -251,10 +268,6 @@ impl ByteBudgetChunker {
                 (fit, vals_in_chunk)
             }
         };
-        // The chunk's values are the first `vals_in_chunk` values that the
-        // encoder sized. By the prefix rule of
-        // `count_values_within_byte_budget`, the chunk fits when `fit`
-        // reaches `vals_in_chunk`. This also covers an all-null chunk.
         if fit >= vals_in_chunk {
             return None;
         }
@@ -331,7 +344,10 @@ mod tests {
         let encoder =
             ColumnValueEncoderImpl::<ByteArrayType>::try_new(&descr, &props, &column_props)
                 .unwrap();
-        let chunker = ByteBudgetChunker::new(&descr, &column_props, def.len());
+        let max_value_bytes = value_indices.and_then(|_| {
+            <ColumnValueEncoderImpl<ByteArrayType> as ColumnValueEncoder>::max_value_bytes(values)
+        });
+        let chunker = ByteBudgetChunker::new(&descr, &column_props, def.len(), max_value_bytes);
         let chunk_def = LevelDataRef::Materialized(def);
         chunker.pick_sub_batch(&encoder, values, value_indices, chunk_def, 0, def.len())
     }
@@ -343,9 +359,9 @@ mod tests {
 
     #[test]
     fn overflow_past_the_chunk_does_not_split_it() {
-        // The chunk holds two small values, but the chunker sizes its window
-        // over the next `chunk_size` values, which reach an oversized value
-        // belonging to a later chunk. That overflow must not split this one.
+        // The chunk holds two small values. The next `chunk_size` values
+        // reach an oversized value that belongs to a later chunk. That
+        // overflow must not split this chunk.
         assert_eq!(pick(&[10, 10, 1000, 10], &[1, 0, 1, 0]), None);
     }
 

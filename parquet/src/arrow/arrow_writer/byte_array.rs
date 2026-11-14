@@ -831,6 +831,24 @@ impl ColumnValueEncoder for ByteArrayEncoder {
         downcast_op!(values.data_type(), values, encode, indices, self)
     }
 
+    fn max_value_bytes(values: &Self::Values) -> Option<usize> {
+        // An offset array has no bound tighter than its whole payload unless
+        // the code reads every offset.
+        let buffers = match values.data_type() {
+            DataType::Utf8View => {
+                let array = values.as_any().downcast_ref::<StringViewArray>().unwrap();
+                array.data_buffers()
+            }
+            DataType::BinaryView => {
+                let array = values.as_any().downcast_ref::<BinaryViewArray>().unwrap();
+                array.data_buffers()
+            }
+            _ => return None,
+        };
+        // Each plain-encoded value carries a 4-byte length prefix.
+        Some(max_view_value_len(buffers) + std::mem::size_of::<u32>())
+    }
+
     fn count_values_within_byte_budget_gather(
         values: &Self::Values,
         indices: &[usize],

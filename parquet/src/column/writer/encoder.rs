@@ -109,12 +109,6 @@ pub trait ColumnValueEncoder {
     /// budget. This matches the parquet rule of at least one value per data
     /// page.
     ///
-    /// The result for a prefix must follow from the result for the whole
-    /// range: if the result is `r`, the result for the first `m` values is
-    /// `min(r, m)`. The byte-budget chunker relies on
-    /// this to size a window longer than the chunk and apply the answer to
-    /// the chunk.
-    ///
     /// `None` means "no cheap estimate available"; the caller stays on
     /// the batched fast path and lets the post-write
     /// `should_add_data_page` check handle bounding.
@@ -140,6 +134,17 @@ pub trait ColumnValueEncoder {
         _indices: &[usize],
         _byte_budget: usize,
     ) -> Option<usize> {
+        None
+    }
+
+    /// Returns an upper bound on the bytes that any one value of `values`
+    /// adds to a plain-encoded page, if the encoder knows one without
+    /// reading the values.
+    ///
+    /// The byte-budget chunker asks once per write call. The bound lets it
+    /// prove that a run of values fits a page from the length of the run
+    /// alone.
+    fn max_value_bytes(_values: &Self::Values) -> Option<usize> {
         None
     }
 
