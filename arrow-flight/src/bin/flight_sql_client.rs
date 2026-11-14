@@ -10,7 +10,7 @@ use anyhow::{Context, Result, bail};
 use arrow_array::{ArrayRef, Datum, RecordBatch, StringArray};
 use arrow_cast::{CastOptions, cast_with_options, pretty::pretty_format_batches};
 use arrow_flight::{
-    FlightInfo,
+    FlightInfo, Location,
     flight_service_client::FlightServiceClient,
     sql::{CommandGetDbSchemas, CommandGetTables, client::FlightSqlServiceClient},
 };
@@ -19,6 +19,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use core::str;
 use futures::TryStreamExt;
 use tonic::{
+    codegen::http::Uri,
     metadata::MetadataMap,
     transport::{Channel, ClientTlsConfig, Endpoint},
 };
@@ -238,7 +239,7 @@ enum Command {
 async fn main() -> Result<()> {
     let args = Args::parse();
     setup_logging(args.logging_args)?;
-    let mut client = setup_client(args.client_args)
+    let mut client = setup_client(&args.client_args)
         .await
         .context("setup client")?;
 
@@ -304,7 +305,7 @@ async fn main() -> Result<()> {
         }
     };
 
-    let batches = execute_flight(&mut client, flight_info)
+    let batches = execute_flight(&mut client, flight_info, &args.client_args)
         .await
         .context("read flight data")?;
 
@@ -317,6 +318,7 @@ async fn main() -> Result<()> {
 async fn execute_flight(
     client: &mut FlightSqlServiceClient<Channel>,
     info: FlightInfo,
+    args: &ClientArgs,
 ) -> Result<Vec<RecordBatch>> {
     let schema = Arc::new(Schema::try_from(info.clone()).context("valid schema")?);
     let mut batches = Vec::with_capacity(info.endpoint.len() + 1);
@@ -324,6 +326,18 @@ async fn execute_flight(
     info!("decoded schema");
 
     for endpoint in info.endpoint {
+        let mut endpoint_client;
+        let client = match select_endpoint(&endpoint.location, args.tls)? {
+            None => &mut *client,
+            Some(endpoint) => {
+                endpoint_client = connect_client(endpoint, args).await?;
+                // Advertised Flight servers are assumed to share the original server's auth domain.
+                if let Some(token) = client.token() {
+                    endpoint_client.set_token(token.clone());
+                }
+                &mut endpoint_client
+            }
+        };
         let Some(ticket) = &endpoint.ticket else {
             bail!("did not get ticket");
         };
@@ -385,13 +399,61 @@ fn setup_logging(args: LoggingArgs) -> Result<()> {
     Ok(())
 }
 
-async fn setup_client(args: ClientArgs) -> Result<FlightSqlServiceClient<Channel>> {
-    let port = args.port.unwrap_or(if args.tls { 443 } else { 80 });
+/// Selects a gRPC endpoint, preferring reuse of the original connection (`None`).
+///
+/// An empty list or explicit reuse location permits reuse. Otherwise, select the first
+/// valid, supported location in server order that satisfies `require_tls`.
+/// Skip unsupported or malformed locations, and return an error if none qualify.
+fn select_endpoint(locations: &[Location], require_tls: bool) -> Result<Option<Endpoint>> {
+    if locations.is_empty()
+        || locations
+            .iter()
+            .any(|location| location.uri == "arrow-flight-reuse-connection://?")
+    {
+        return Ok(None);
+    }
 
-    let protocol = if args.tls { "https" } else { "http" };
+    for location in locations {
+        let Ok(uri) = location.uri.parse::<Uri>() else {
+            continue;
+        };
+        // Flight's HTTP/HTTPS locations are direct downloads, not gRPC servers.
+        // Only translate gRPC schemes to tonic's HTTP/HTTPS transport URIs.
+        let scheme = match uri.scheme_str() {
+            Some("grpc" | "grpc+tcp") if !require_tls => "http",
+            Some("grpc+tls") => "https",
+            _ => continue,
+        };
+        let Some(authority) = uri.authority() else {
+            continue;
+        };
+        // Avoid silently dropping URI components or replacing an invalid port with a default.
+        if uri.host().is_none_or(str::is_empty)
+            || authority.as_str().contains('@')
+            || (authority.as_str() != authority.host() && authority.port_u16().is_none())
+            || uri.query().is_some()
+            || !matches!(uri.path(), "" | "/")
+        {
+            continue;
+        }
+        let uri = Uri::builder()
+            .scheme(scheme)
+            .authority(authority.clone())
+            .path_and_query("/")
+            .build()
+            .context("create endpoint URI")?;
+        return Ok(Some(Endpoint::from(uri)));
+    }
+    bail!(
+        "No supported endpoint location satisfies the TLS requirement; only grpc/grpc+tcp and grpc+tls are supported"
+    )
+}
 
-    let mut endpoint = Endpoint::new(format!("{}://{}:{}", protocol, args.host, port))
-        .context("create endpoint")?
+async fn connect_client(
+    endpoint: Endpoint,
+    args: &ClientArgs,
+) -> Result<FlightSqlServiceClient<Channel>> {
+    let mut endpoint = endpoint
         .connect_timeout(Duration::from_secs(20))
         .timeout(Duration::from_secs(20))
         .tcp_nodelay(true) // Disable Nagle's Algorithm since we don't want packets to wait
@@ -400,22 +462,20 @@ async fn setup_client(args: ClientArgs) -> Result<FlightSqlServiceClient<Channel
         .keep_alive_timeout(Duration::from_secs(20))
         .keep_alive_while_idle(true);
 
-    if args.tls {
+    if endpoint.uri().scheme_str() == Some("https") {
         let mut tls_config = ClientTlsConfig::new().with_enabled_roots();
         if args.key_log {
             tls_config = tls_config.use_key_log();
         }
-
         endpoint = endpoint
             .tls_config(tls_config)
             .context("create TLS endpoint")?;
     }
-
     let channel = endpoint.connect().await.context("connect to endpoint")?;
 
     let mut client = FlightServiceClient::new(channel);
-    for encoding in args.accept_compression {
-        client = client.accept_compressed(encoding.into());
+    for encoding in &args.accept_compression {
+        client = client.accept_compressed((*encoding).into());
     }
     if let Some(encoding) = args.send_compression {
         client = client.send_compressed(encoding.into());
@@ -423,20 +483,28 @@ async fn setup_client(args: ClientArgs) -> Result<FlightSqlServiceClient<Channel
     let mut client = FlightSqlServiceClient::new_from_inner(client);
     info!("connected");
 
-    for (k, v) in args.headers {
+    for (k, v) in &args.headers {
         client.set_header(k, v);
     }
+    Ok(client)
+}
 
-    if let Some(token) = args.token {
-        client.set_token(token);
+async fn setup_client(args: &ClientArgs) -> Result<FlightSqlServiceClient<Channel>> {
+    let port = args.port.unwrap_or(if args.tls { 443 } else { 80 });
+    let protocol = if args.tls { "https" } else { "http" };
+    let endpoint = Endpoint::new(format!("{}://{}:{}", protocol, args.host, port))
+        .context("create endpoint")?;
+    let mut client = connect_client(endpoint, args).await?;
+    if let Some(token) = &args.token {
+        client.set_token(token.clone());
         info!("token set");
     }
 
-    match (args.username, args.password) {
+    match (&args.username, &args.password) {
         (None, None) => {}
         (Some(username), Some(password)) => {
             client
-                .handshake(&username, &password)
+                .handshake(username, password)
                 .await
                 .context("handshake")?;
             info!("performed handshake");
@@ -448,7 +516,6 @@ async fn setup_client(args: ClientArgs) -> Result<FlightSqlServiceClient<Channel
             bail!("when password is set, you also need to set a username")
         }
     }
-
     Ok(client)
 }
 
