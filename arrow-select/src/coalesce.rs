@@ -13,7 +13,8 @@ use crate::take::{
     TakeOptions, check_bounds, take, take_arrays_unchecked, take_bits, take_record_batch,
 };
 use arrow_array::types::{
-    BinaryViewType, GenericBinaryType, GenericStringType, StringViewType, UInt32Type,
+    BinaryViewType, GenericBinaryType, GenericStringType, Int16Type, Int32Type, Int64Type,
+    StringViewType, UInt32Type,
 };
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, UInt32Array, downcast_primitive};
 use arrow_buffer::{NullBuffer, NullBufferBuilder};
@@ -31,6 +32,7 @@ mod fixed_size_binary;
 mod generic;
 mod list;
 mod primitive;
+mod run_end;
 
 use boolean::InProgressBooleanArray;
 use byte::InProgressByteArray;
@@ -40,6 +42,7 @@ use fixed_size_binary::InProgressFixedSizeBinaryArray;
 use generic::GenericInProgressArray;
 use list::InProgressListArray;
 use primitive::InProgressPrimitiveArray;
+use run_end::InProgressRunArray;
 
 /// Appends the validity bits selected by `indices` to `nulls`.
 ///
@@ -980,6 +983,12 @@ fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn 
         DataType::List(_) | DataType::LargeList(_) => {
             Box::new(InProgressListArray::new(data_type.clone()))
         }
+        DataType::RunEndEncoded(run_ends, _) => match run_ends.data_type() {
+            DataType::Int16 => Box::new(InProgressRunArray::<Int16Type>::new(data_type.clone())),
+            DataType::Int32 => Box::new(InProgressRunArray::<Int32Type>::new(data_type.clone())),
+            DataType::Int64 => Box::new(InProgressRunArray::<Int64Type>::new(data_type.clone())),
+            _ => unreachable!(),
+        },
         _ => Box::new(GenericInProgressArray::new()),
     }
 }
@@ -2058,6 +2067,17 @@ mod tests {
         let coalescer = BatchCoalescer::new(supported, 100);
         assert!(!coalescer.has_non_specialized_filter_columns);
         assert!(!coalescer.has_byte_array_columns);
+
+        let run_end = Arc::new(Schema::new(vec![Field::new(
+            "run_end",
+            DataType::RunEndEncoded(
+                Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                Arc::new(Field::new("values", DataType::Int32, true)),
+            ),
+            true,
+        )]));
+        let coalescer = BatchCoalescer::new(run_end, 100);
+        assert!(coalescer.has_non_specialized_filter_columns);
 
         let utf8 = Arc::new(Schema::new(vec![Field::new("utf8", DataType::Utf8, true)]));
         let coalescer = BatchCoalescer::new(utf8, 100);
