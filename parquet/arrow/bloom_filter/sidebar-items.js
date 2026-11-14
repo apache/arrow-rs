@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["check_byte_array","check_bytes","decimal_scale","describe","is_stored_as","time_unit","type_length","type_mismatch","validate","value_type"],"struct":["ArrowSbbf","CheckFixedLenByteArray","CheckPrimitive"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["MAX_BLOCK_SIZE","STARTING_BLOCK_SIZE"],"fn":["selected_non_inline_bytes"],"struct":["BufferSource","InProgressByteViewArray","Source"]};

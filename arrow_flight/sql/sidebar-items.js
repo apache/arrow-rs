@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Command"],"macro":[["prost_message_ext",1]],"mod":["client","gen","metadata","server"],"struct":["Any"],"trait":["ProstMessageExt"]};

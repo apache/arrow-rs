@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["StructMode"],"macro":[["json_serializable",1]],"mod":["reader","writer"],"trait":["JsonSerializable"]};

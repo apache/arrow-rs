@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["assert_token","parse_bool","parse_i32","parse_message_type","parse_timeunit"],"struct":["Parser","Tokenizer"]};

@@ -1,0 +1,32 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Returns the offset to use when interpreting `local` as a wall clock reading in `tz`, or `None` if it cannot be resolved."><title>resolve_local_offset in arrow_cast::local_time - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-1f5a765c.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="arrow_cast" data-themes="" data-resource-suffix="" data-rustdoc-version="1.102.0-nightly (5f4effd57 2026-11-13)" data-channel="nightly" data-search-js="search-69faa2c4.js" data-stringdex-js="stringdex-b5109af9.js" data-settings-js="settings-9b351432.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="sidebar-items.js"></script><script defer src="../../static.files/main-419f3a3f.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-101b5a15.css"></noscript><link rel="icon" href="https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"></head><body class="rustdoc fn"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">resolve_local_offset</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><a class="logo-container" href="../../arrow_cast/index.html"><img src="https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg" alt="logo"></a><h2><a href="../../arrow_cast/index.html">arrow_<wbr>cast</a><span class="version">60.1.0</span></h2></div><div class="sidebar-elems"><div id="rustdoc-modnav"><h2><a href="index.html">In arrow_<wbr>cast::<wbr>local_<wbr>time</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">arrow_cast</a>::<wbr><a href="index.html">local_time</a></div><h1>Function <span class="fn">resolve_<wbr>local_<wbr>offset</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/arrow_cast/local_time.rs.html#47-79">Source</a> </span></div><pre class="rust item-decl"><code>pub(crate) fn resolve_local_offset&lt;T: <a class="trait" href="https://docs.rs/chrono/latest/chrono/offset/trait.TimeZone.html" title="trait chrono::offset::TimeZone">TimeZone</a>&gt;(
+    tz: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.reference.html">&amp;T</a>,
+    local: &amp;<a class="struct" href="https://docs.rs/chrono/latest/chrono/naive/datetime/struct.NaiveDateTime.html" title="struct chrono::naive::datetime::NaiveDateTime">NaiveDateTime</a>,
+) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;T::<a class="associatedtype" href="https://docs.rs/chrono/latest/chrono/offset/trait.TimeZone.html#associatedtype.Offset" title="type chrono::offset::TimeZone::Offset">Offset</a>&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Returns the offset to use when interpreting <code>local</code> as a wall clock reading
+in <code>tz</code>, or <code>None</code> if it cannot be resolved.</p>
+<p>In an IANA timezone a wall clock reading does not always identify a unique
+instant, and this function picks one following the same rules as PostgreSQL
+and DuckDB:</p>
+<ul>
+<li><strong>Ambiguous</strong> – when the clocks go back (“fall back”) the same reading
+occurs twice. The <em>later</em> instant is chosen, i.e. the offset in effect
+after the transition. For example <code>2024-11-03T01:30:00</code> in
+<code>America/New_York</code> is read as <code>-05:00</code> (EST), not <code>-04:00</code> (EDT).</li>
+<li><strong>Nonexistent</strong> – when the clocks go forward (“spring forward”) the
+reading never occurs. It is shifted forward by the length of the gap,
+which is the same as reading it with the offset in effect <em>before</em> the
+transition. For example <code>2024-03-10T02:30:00</code> in <code>America/New_York</code> is
+read as <code>-05:00</code> (EST) and therefore denotes <code>2024-03-10T03:30:00-04:00</code>.</li>
+</ul>
+<p>Timezones with a fixed offset are never ambiguous and have no gaps.</p>
+<p>The gap rule probes the offset 24 hours earlier. This is correct for the
+IANA timezone database, but this function accepts any <a href="https://docs.rs/chrono/latest/chrono/offset/trait.TimeZone.html" title="trait chrono::offset::TimeZone"><code>TimeZone</code></a>. For a
+timezone whose transitions do not obey the assumptions given in the body
+(no gap longer than 24 hours, no two transitions closer than 24 hours), the
+result can be <code>None</code> or an incorrect offset.</p>
+<p><code>None</code> is therefore not expected in practice: with the current timezone
+database every ambiguous or nonexistent reading resolves as described
+above, and the <code>None</code> path is only a safeguard. Callers then apply their
+usual error or null handling.</p>
+<p>See <a href="https://github.com/apache/arrow-rs/issues/11037">https://github.com/apache/arrow-rs/issues/11037</a> for the PostgreSQL and
+ICU (DuckDB) sources these rules are taken from.</p>
+</div></details></section></div></main></body></html>

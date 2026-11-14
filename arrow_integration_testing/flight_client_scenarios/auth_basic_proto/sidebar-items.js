@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["authenticate","run_scenario"],"type":["Client","Error","Result"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Op"],"fn":["binary_predicate","contains","ends_with","eq_ignore_ascii_case","expand_runs","ilike","like","like_op","nilike","nlike","op_binary","op_scalar","run_array_as_dictionary","run_end_encoded_as_dictionary","run_end_encoded_op","run_values","starts_with","str_contains","string_apply","vectored_iter"],"trait":["StringArrayType"]};
