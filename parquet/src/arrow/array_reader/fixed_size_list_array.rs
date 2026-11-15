@@ -196,6 +196,8 @@ impl ArrayReader for FixedSizeListArrayReader {
             list_builder = list_builder.null_bit_buffer(Some(validity.into()));
         }
 
+        // SAFETY: the child holds `fixed_size` values for every list, including null lists,
+        // and the null bitmap has one bit per list
         let list_data = unsafe { list_builder.build_unchecked() };
         Ok(Arc::new(FixedSizeListArray::from(list_data)))
     }

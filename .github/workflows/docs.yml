@@ -16,15 +16,16 @@ jobs:
     permissions:
       contents: read
     container:
-      image: amd64/rust
+      image: amd64/rust@sha256:5b5938cbb2951fc2869eaf891a6616f722ef5bf28c90dc6a074c35c141e31537 # v1.99.1
       env:
         RUSTDOCFLAGS: "-Dwarnings --enable-index-page -Zunstable-options"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
+          persist-credentials: false
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
       - name: Install Nightly Rust
         run: rustup install nightly
       - name: Run cargo doc
@@ -57,6 +58,8 @@ jobs:
       queue: max
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - name: Download crate docs
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:

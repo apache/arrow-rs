@@ -17,7 +17,7 @@
 //! assert_eq!(arr.len(), 3);
 //! ```
 
-use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values};
+use crate::dictionary::{KeyMapping, merge_dictionary_values, should_merge_dictionary_values};
 use arrow_array::builder::{
     BooleanBuilder, GenericByteBuilder, GenericByteViewBuilder, PrimitiveBuilder,
 };
@@ -108,7 +108,7 @@ fn concat_dictionaries<K: ArrowDictionaryKeyType>(
         return concat_fallback(arrays, Capacities::Array(output_len));
     }
 
-    let merged = merge_dictionary_values(&dictionaries, None)?;
+    let merged = merge_dictionary_values(&dictionaries, None, None)?;
 
     // Recompute keys
     let mut key_values = Vec::with_capacity(output_len);
@@ -116,9 +116,19 @@ fn concat_dictionaries<K: ArrowDictionaryKeyType>(
     let mut has_nulls = false;
     for (d, mapping) in dictionaries.iter().zip(merged.key_mappings) {
         has_nulls |= d.null_count() != 0;
-        for key in d.keys().values() {
-            // Use get to safely handle nulls
-            key_values.push(mapping.get(key.as_usize()).copied().unwrap_or_default())
+        match mapping {
+            KeyMapping::Dense(mapping) => key_values.extend(
+                d.keys()
+                    .values()
+                    .iter()
+                    .map(|key| mapping.get(key.as_usize()).copied().unwrap_or_default()),
+            ),
+            KeyMapping::Sparse(mapping) => key_values.extend(
+                d.keys()
+                    .values()
+                    .iter()
+                    .map(|key| mapping.get(&key.as_usize()).copied().unwrap_or_default()),
+            ),
         }
     }
 
@@ -1565,6 +1575,44 @@ mod tests {
         // Not 30 as this is done on a best-effort basis
         let values_len = dictionary.values().len();
         assert!((30..40).contains(&values_len), "{values_len}")
+    }
+
+    #[test]
+    fn test_concat_sparse_primitive_dictionaries_with_nulls() {
+        let values_len = 3 * crate::dictionary::MAX_DENSE_MAPPING_VALUES_PER_ROW + 1;
+        let last = values_len as i32 - 1;
+        let make_dictionary = |offset, null_value, keys| {
+            let values = Int32Array::from_iter(
+                (0..values_len).map(|idx| (idx != null_value).then_some(offset + idx as i32)),
+            );
+            DictionaryArray::<Int32Type>::new(Int32Array::from(keys), Arc::new(values))
+        };
+        // Slicing moves the keys and their nulls to a non-zero offset; the unsliced
+        // arrays have 4 keys each and would take the dense path.
+        let a = make_dictionary(0, 1, vec![Some(0), Some(last), None, Some(1)]).slice(1, 3);
+        let b =
+            make_dictionary(10_000, 2, vec![Some(0), Some(2), Some(last - 1), None]).slice(1, 3);
+
+        let merged = merge_dictionary_values(&[&a, &b], None, None).unwrap();
+        assert!(
+            merged
+                .key_mappings
+                .iter()
+                .all(|mapping| matches!(mapping, KeyMapping::Sparse(_)))
+        );
+
+        let result = concat(&[&a, &b]).unwrap();
+        let actual = result
+            .as_dictionary::<Int32Type>()
+            .downcast_dict::<Int32Array>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            actual,
+            [Some(last), None, None, None, Some(10_000 + last - 1), None]
+        );
     }
 
     #[test]
