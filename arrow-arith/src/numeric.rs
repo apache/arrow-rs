@@ -2099,6 +2099,35 @@ mod tests {
     }
 
     #[test]
+    fn test_checked_null_slot_overflow_sliced() {
+        // Sliced at 3, the validity bits start mid-byte and the 200 rows span
+        // three full 64-row chunks plus a remainder. Row 5 is null and always
+        // overflows, so every case checks the valid rows.
+        const LEN: usize = 203;
+        let nulls = NullBuffer::from_iter((0..LEN).map(|j| j % 5 != 0));
+        let one = Int32Array::new_scalar(1);
+        for i in 3..LEN {
+            let mut values = vec![1; LEN];
+            values[5] = i32::MAX;
+            values[i] = i32::MAX;
+            let array = Int32Array::new(values.into(), Some(nulls.clone())).slice(3, LEN - 3);
+            let result = add(&array, &one);
+            match nulls.is_valid(i) {
+                true => assert!(result.is_err(), "row {i}"),
+                false => {
+                    let expected: Int32Array =
+                        (3..LEN).map(|j| nulls.is_valid(j).then_some(2)).collect();
+                    assert_eq!(
+                        result.unwrap().as_primitive::<Int32Type>(),
+                        &expected,
+                        "row {i}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     #[cfg_attr(miri, ignore)] // Checks the lanes of vectorized loops, which Miri doesn't run
     fn test_checked_integer_overflow_positions() {
         test_checked_integer_overflow_position::<Int8Type>();
