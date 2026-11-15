@@ -15,7 +15,8 @@ pub(super) fn build_extend<T: ArrowNativeType>(array: &ArrayData) -> Extend<'_> 
         move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
             mutable
                 .buffer1
-                .extend_from_slice(&values[start..start + len]);
+                .try_extend_from_slice(&values[start..start + len])
+                .map_err(|e| arrow_schema::ArrowError::MemoryError(e.to_string()))?;
             Ok(())
         },
     )

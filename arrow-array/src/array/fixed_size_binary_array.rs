@@ -562,7 +562,7 @@ impl FixedSizeBinaryArray {
             // extend null bitmask by one byte per each 8 items
             if byte == 0 {
                 null_buf
-                    .try_extend_from_slice(&[0u8])
+                    .try_push(0u8)
                     .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
                 byte = 8;
             }

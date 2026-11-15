@@ -98,7 +98,7 @@ pub(super) fn extend_nulls_dense(
     // Extend type_ids buffer
     mutable
         .buffer1
-        .try_extend_from_slice(&vec![null_type_id; len])
+        .try_repeat_slice_n_times(&[null_type_id], len)
         .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
     // Dense: point into a nullable child and extend its values with nulls.
@@ -121,7 +121,7 @@ pub(super) fn extend_nulls_sparse(
     // Extend type_ids buffer
     mutable
         .buffer1
-        .try_extend_from_slice(&vec![null_type_id; len])
+        .try_repeat_slice_n_times(&[null_type_id], len)
         .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
     // Sparse: extend nulls in ALL children

@@ -650,6 +650,32 @@ impl MutableBuffer {
             .unwrap_or_else(|e| panic!("{e}"))
     }
 
+    /// Fallible version of [`MutableBuffer::push`].
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_buffer::buffer::MutableBuffer;
+    /// let mut buffer = MutableBuffer::new(0);
+    /// buffer.try_push(256u32).unwrap();
+    /// assert_eq!(buffer.len(), 4);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the buffer cannot reserve enough capacity for `item`.
+    #[inline]
+    pub fn try_push<T: ToByteSlice>(&mut self, item: T) -> Result<(), MutableBufferError> {
+        let additional = std::mem::size_of::<T>();
+        self.try_reserve(additional)?;
+        unsafe {
+            let src = item.to_byte_slice().as_ptr();
+            let dst = self.data.as_ptr().add(self.len);
+            std::ptr::copy_nonoverlapping(src, dst, additional);
+        }
+        self.len += additional;
+        Ok(())
+    }
+
     /// Extends the buffer with a new item, increasing its capacity if needed.
     /// # Example
     /// ```
@@ -665,14 +691,7 @@ impl MutableBuffer {
     /// reasons as [`MutableBuffer::reserve`].
     #[inline]
     pub fn push<T: ToByteSlice>(&mut self, item: T) {
-        let additional = std::mem::size_of::<T>();
-        self.reserve(additional);
-        unsafe {
-            let src = item.to_byte_slice().as_ptr();
-            let dst = self.data.as_ptr().add(self.len);
-            std::ptr::copy_nonoverlapping(src, dst, additional);
-        }
-        self.len += additional;
+        self.try_push(item).unwrap_or_else(|e| panic!("{e}"))
     }
 
     /// Extends the buffer with a new item, without checking for sufficient capacity
@@ -1369,6 +1388,21 @@ mod tests {
         buf.push(1_u64);
         assert_eq!(9, buf.len());
         assert_eq!(&[1u8, 1u8, 0, 0, 0, 0, 0, 0, 0], buf.as_slice());
+    }
+
+    #[test]
+    fn mutable_try_push_matches_push() {
+        let mut fallible = MutableBuffer::new(0);
+        fallible.try_push(1_u8).unwrap();
+        fallible.try_push(1_u64).unwrap();
+
+        let mut infallible = MutableBuffer::new(0);
+        infallible.push(1_u8);
+        infallible.push(1_u64);
+
+        assert_eq!(fallible.as_slice(), infallible.as_slice());
+        assert_eq!(fallible.len(), infallible.len());
+        assert_eq!(fallible.capacity(), infallible.capacity());
     }
 
     #[test]

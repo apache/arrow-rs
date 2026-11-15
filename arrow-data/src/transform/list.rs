@@ -44,6 +44,8 @@ pub(super) fn extend_nulls<T: ArrowNativeType>(
     // this is safe due to how offset is built. See details on `get_last_offset`
     let last_offset: T = unsafe { get_last_offset(offset_buffer) };
 
-    (0..len).for_each(|_| offset_buffer.push(last_offset));
+    offset_buffer
+        .try_repeat_slice_n_times(&[last_offset], len)
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
     Ok(())
 }
