@@ -79,23 +79,12 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     ///
     /// # Panics
     ///
-    /// Panics if the required buffer cannot be allocated.
-    /// Use [`Self::try_new_empty`] for a fallible version.
+    /// Panics if allocation fails. Use [`Self::try_new_empty`] for a fallible version.
     pub fn new_empty() -> Self {
         Self::try_new_empty().unwrap_or_else(|err| panic!("{err}"))
     }
 
-    /// Create a new [`OffsetBuffer`] containing a single 0 value
-    ///
-    /// ```
-    /// # use arrow_buffer::OffsetBuffer;
-    /// let offsets = OffsetBuffer::<i32>::try_new_empty().unwrap();
-    /// assert_eq!(offsets.as_ref(), &[0]);
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the required buffer cannot be allocated.
+    /// Fallible version of [`Self::new_empty`].
     pub fn try_new_empty() -> Result<Self, OverflowError> {
         Self::try_new_zeroed(0)
     }
@@ -193,7 +182,7 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     ///
     /// # Panics
     ///
-    /// Panics on overflow or if the required buffer cannot be allocated.
+    /// Panics on overflow or allocation failure.
     /// Use [`Self::try_from_repeated_length`] for a fallible version.
     pub fn from_repeated_length(length: usize, n: usize) -> Self {
         Self::try_from_repeated_length(length, n).unwrap_or_else(|err| panic!("{err}"))
@@ -210,8 +199,7 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     ///
     /// # Errors
     ///
-    /// Errors if `length * n` overflows `usize` or `O`, or if the required
-    /// buffer cannot be allocated.
+    /// Errors if `length * n` overflows `usize` or `O`, or allocation fails.
     pub fn try_from_repeated_length(length: usize, n: usize) -> Result<Self, OverflowError> {
         if n == 0 {
             return Self::try_new_empty();

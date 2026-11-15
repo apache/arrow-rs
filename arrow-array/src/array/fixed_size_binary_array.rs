@@ -406,11 +406,7 @@ impl FixedSizeBinaryArray {
     ///
     /// # Errors
     ///
-    /// - The iterator is empty
-    /// - The byte slices have different lengths
-    /// - The value length exceeds `i32`
-    /// - Size arithmetic overflows
-    /// - Buffer allocation fails
+    /// Returns an error for empty input, mismatched lengths, overflow, or allocation failure.
     #[deprecated(
         since = "28.0.0",
         note = "This function will fail if the iterator produces only None values; prefer `try_from_sparse_iter_with_size`"

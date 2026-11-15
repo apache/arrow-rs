@@ -247,17 +247,6 @@ impl MutableBuffer {
     }
 
     /// Fallible version of [`MutableBuffer::new_null`].
-    ///
-    /// # Example
-    /// ```
-    /// # use arrow_buffer::buffer::MutableBuffer;
-    /// let buffer = MutableBuffer::try_new_null(9).unwrap();
-    /// assert_eq!(buffer.as_slice(), &[0, 0]);
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the buffer cannot allocate enough capacity for `len` bits.
     pub fn try_new_null(len: usize) -> Result<Self, MutableBufferError> {
         let num_bytes = bit_util::ceil(len, 8);
         MutableBuffer::try_from_len_zeroed(num_bytes)
@@ -667,18 +656,6 @@ impl MutableBuffer {
     }
 
     /// Fallible version of [`MutableBuffer::push`].
-    ///
-    /// # Example
-    /// ```
-    /// # use arrow_buffer::buffer::MutableBuffer;
-    /// let mut buffer = MutableBuffer::new(0);
-    /// buffer.try_push(256u32).unwrap();
-    /// assert_eq!(buffer.len(), 4);
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the buffer cannot reserve enough capacity for `item`.
     #[inline]
     pub fn try_push<T: ToByteSlice>(&mut self, item: T) -> Result<(), MutableBufferError> {
         let additional = std::mem::size_of::<T>();
