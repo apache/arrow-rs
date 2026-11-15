@@ -31,8 +31,7 @@ pub(super) fn build_extend_sparse(array: &ArrayData) -> Extend<'_> {
             // extends type_ids
             mutable
                 .buffer1
-                .try_extend_from_slice(&type_ids[start..start + len])
-                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+                .extend_from_slice(&type_ids[start..start + len]);
 
             let child_start = start.checked_add(offset).ok_or_else(|| {
                 ArrowError::InvalidArgumentError(format!(
@@ -64,8 +63,7 @@ pub(super) fn build_extend_dense(array: &ArrayData) -> Extend<'_> {
             // extends type_ids
             mutable
                 .buffer1
-                .try_extend_from_slice(&type_ids[start..start + len])
-                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+                .extend_from_slice(&type_ids[start..start + len]);
 
             for i in start..start + len {
                 let type_id = type_ids[i];
@@ -98,7 +96,7 @@ pub(super) fn extend_nulls_dense(
     // Extend type_ids buffer
     mutable
         .buffer1
-        .try_repeat_slice_n_times(&[null_type_id], len)
+        .try_extend_from_slice(&vec![null_type_id; len])
         .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
     // Dense: point into a nullable child and extend its values with nulls.
@@ -121,7 +119,7 @@ pub(super) fn extend_nulls_sparse(
     // Extend type_ids buffer
     mutable
         .buffer1
-        .try_repeat_slice_n_times(&[null_type_id], len)
+        .try_extend_from_slice(&vec![null_type_id; len])
         .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
     // Sparse: extend nulls in ALL children
