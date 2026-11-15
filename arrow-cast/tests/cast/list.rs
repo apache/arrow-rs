@@ -18,7 +18,7 @@ use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_cast::display::{ArrayFormatter, FormatOptions};
 use arrow_cast::{CastOptions, can_cast_types, cast, cast_with_options};
 use arrow_data::ArrayData;
-use arrow_schema::{DataType, Field, TimeUnit};
+use arrow_schema::{DataType, Field, FieldRef, TimeUnit};
 use half::f16;
 #[test]
 fn test_cast_i32_to_list_i32() {
@@ -1763,4 +1763,41 @@ fn test_cast_large_list_view_to_list_view() {
 
     let expected = ListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
     assert_eq!(got, &expected);
+}
+
+#[test]
+fn test_first_none() {
+    let array = Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+        None,
+        Some(vec![Some(1), Some(2)]),
+    ])) as ArrayRef;
+    let data_type =
+        DataType::FixedSizeList(FieldRef::new(Field::new("item", DataType::Int64, true)), 2);
+    let opt = CastOptions::default();
+    let r = cast_with_options(&array, &data_type, &opt).unwrap();
+
+    let fixed_array = Arc::new(FixedSizeListArray::from_iter_primitive::<Int64Type, _, _>(
+        vec![None, Some(vec![Some(1), Some(2)])],
+        2,
+    )) as ArrayRef;
+    assert_eq!(*fixed_array, *r);
+}
+
+#[test]
+fn test_first_last_none() {
+    let array = Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+        None,
+        Some(vec![Some(1), Some(2)]),
+        None,
+    ])) as ArrayRef;
+    let data_type =
+        DataType::FixedSizeList(FieldRef::new(Field::new("item", DataType::Int64, true)), 2);
+    let opt = CastOptions::default();
+    let r = cast_with_options(&array, &data_type, &opt).unwrap();
+
+    let fixed_array = Arc::new(FixedSizeListArray::from_iter_primitive::<Int64Type, _, _>(
+        vec![None, Some(vec![Some(1), Some(2)]), None],
+        2,
+    )) as ArrayRef;
+    assert_eq!(*fixed_array, *r);
 }
