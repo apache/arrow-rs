@@ -3,6 +3,7 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::bit_iterator::{BitIndexIterator, BitIterator, BitSliceIterator};
+use crate::bit_util;
 use crate::buffer::BooleanBuffer;
 use crate::{Buffer, MutableBuffer, OverflowError};
 
@@ -129,7 +130,7 @@ impl NullBuffer {
             .len()
             .checked_mul(count)
             .ok_or_else(|| OverflowError::new::<usize>("buffer length"))?;
-        let mut buffer = MutableBuffer::try_new_null(capacity)
+        let mut buffer = MutableBuffer::try_from_len_zeroed(bit_util::ceil(capacity, 8))
             .map_err(|_| OverflowError::new::<usize>("buffer length"))?;
 
         if count.is_multiple_of(8) {

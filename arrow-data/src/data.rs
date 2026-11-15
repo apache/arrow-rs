@@ -103,7 +103,7 @@ pub(crate) fn new_buffers(
             let mut buffer = new_buffer(offset_capacity)?;
             // safety: `unsafe` code assumes that this buffer is initialized with one element
             buffer
-                .try_push(0i32)
+                .try_extend_from_slice(&[0i32])
                 .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
             [buffer, sized_buffer(mem::size_of::<u8>())?]
         }
@@ -115,7 +115,7 @@ pub(crate) fn new_buffers(
             let mut buffer = new_buffer(offset_capacity)?;
             // safety: `unsafe` code assumes that this buffer is initialized with one element
             buffer
-                .try_push(0i64)
+                .try_extend_from_slice(&[0i64])
                 .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
             [buffer, sized_buffer(mem::size_of::<u8>())?]
         }
@@ -131,7 +131,7 @@ pub(crate) fn new_buffers(
                 .ok_or_else(|| ArrowError::MemoryError("offset buffer size overflow".into()))?;
             let mut buffer = new_buffer(offset_capacity)?;
             buffer
-                .try_push(0i32)
+                .try_extend_from_slice(&[0i32])
                 .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
             [buffer, MutableBuffer::default()]
         }
@@ -147,7 +147,7 @@ pub(crate) fn new_buffers(
                 .ok_or_else(|| ArrowError::MemoryError("offset buffer size overflow".into()))?;
             let mut buffer = new_buffer(offset_capacity)?;
             buffer
-                .try_push(0i64)
+                .try_extend_from_slice(&[0i64])
                 .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
             [buffer, MutableBuffer::default()]
         }
