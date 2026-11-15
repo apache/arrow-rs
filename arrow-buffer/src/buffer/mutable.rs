@@ -243,8 +243,24 @@ impl MutableBuffer {
     ///
     /// See [`MutableBuffer::from_len_zeroed`].
     pub fn new_null(len: usize) -> Self {
+        Self::try_new_null(len).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// Fallible version of [`MutableBuffer::new_null`].
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_buffer::buffer::MutableBuffer;
+    /// let buffer = MutableBuffer::try_new_null(9).unwrap();
+    /// assert_eq!(buffer.as_slice(), &[0, 0]);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the buffer cannot allocate enough capacity for `len` bits.
+    pub fn try_new_null(len: usize) -> Result<Self, MutableBufferError> {
         let num_bytes = bit_util::ceil(len, 8);
-        MutableBuffer::from_len_zeroed(num_bytes)
+        MutableBuffer::try_from_len_zeroed(num_bytes)
     }
 
     /// Set the bits in the range of `[0, end)` to 0 (if `val` is false), or 1 (if `val`
@@ -1403,6 +1419,13 @@ mod tests {
         assert_eq!(fallible.as_slice(), infallible.as_slice());
         assert_eq!(fallible.len(), infallible.len());
         assert_eq!(fallible.capacity(), infallible.capacity());
+    }
+
+    #[test]
+    fn mutable_try_new_null() {
+        let buffer = MutableBuffer::try_new_null(9).unwrap();
+        assert_eq!(buffer.len(), 2);
+        assert_eq!(buffer.as_slice(), &[0, 0]);
     }
 
     #[test]
