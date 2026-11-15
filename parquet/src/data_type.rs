@@ -105,6 +105,18 @@ impl Int96 {
             .wrapping_add(nanos)
     }
 
+    /// Creates an INT96 from nanoseconds since EPOCH, or `None` if the Julian day exceeds `i32`
+    #[cfg(feature = "arrow")]
+    pub(crate) fn from_epoch_nanos(nanos: i128) -> Option<Self> {
+        let nanos_in_day = NANOSECONDS_IN_DAY as i128;
+        let day =
+            i32::try_from(nanos.div_euclid(nanos_in_day) + JULIAN_DAY_OF_EPOCH as i128).ok()?;
+        let nanos_of_day = nanos.rem_euclid(nanos_in_day) as u64;
+        let mut result = Self::new();
+        result.set_data(nanos_of_day as u32, (nanos_of_day >> 32) as u32, day as u32);
+        Some(result)
+    }
+
     #[inline]
     fn get_days(&self) -> i32 {
         self.data()[2] as i32
@@ -1398,6 +1410,30 @@ mod tests {
             Int96::from(vec![1, 12345, 1234567890]).data(),
             &[1, 12345, 1234567890]
         );
+    }
+
+    #[test]
+    #[cfg(feature = "arrow")]
+    fn test_int96_from_epoch_nanos() {
+        for nanos in [
+            0,
+            1,
+            -1,
+            86_400_000_000_000,
+            -86_400_000_000_001,
+            1_700_000_000_123_456_789,
+        ] {
+            assert_eq!(
+                Int96::from_epoch_nanos(nanos).unwrap().to_nanos() as i128,
+                nanos
+            );
+        }
+        let nanos_of_day: u64 = 86_399_999_999_000;
+        assert_eq!(
+            Int96::from_epoch_nanos(-1_000).unwrap().data(),
+            &[nanos_of_day as u32, (nanos_of_day >> 32) as u32, 2_440_587]
+        );
+        assert!(Int96::from_epoch_nanos(i64::MAX as i128 * 1_000_000_000).is_none());
     }
 
     #[test]
