@@ -48,15 +48,28 @@ fn join_streams_const<const TYPE_SIZE: usize>(
     stride: usize,
     values_decoded: usize,
 ) {
-    let sub_src = &src[values_decoded..];
-    for i in 0..dst.len() / TYPE_SIZE {
-        for j in 0..TYPE_SIZE {
-            dst[i * TYPE_SIZE + j] = sub_src[i + j * stride];
+    if TYPE_SIZE < 8 {
+        // This form already vectorizes for narrow types
+        let sub_src = &src[values_decoded..];
+        for i in 0..dst.len() / TYPE_SIZE {
+            for j in 0..TYPE_SIZE {
+                dst[i * TYPE_SIZE + j] = sub_src[i + j * stride];
+            }
+        }
+        return;
+    }
+    let (values, _) = dst.as_chunks_mut::<TYPE_SIZE>();
+    // One slice per stream, each as long as the output, so the loop below indexes
+    // within bounds the compiler can see, which lets it vectorize for wide types too.
+    let streams: [&[u8]; TYPE_SIZE] =
+        std::array::from_fn(|j| &src[values_decoded + j * stride..][..values.len()]);
+    for (i, value) in values.iter_mut().enumerate() {
+        for (byte, stream) in value.iter_mut().zip(&streams) {
+            *byte = stream[i];
         }
     }
 }
 
-// Like the above, but type_size is not known at compile time.
 fn join_streams_variable(
     src: &[u8],
     dst: &mut [u8],
