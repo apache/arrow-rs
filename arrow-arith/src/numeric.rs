@@ -590,9 +590,10 @@ fn rescale_left<N: OverflowingOp>(l: N, mul: N, r: N, op: impl Fn(N, N) -> (N, b
 /// Multiplies the value of the decimal scalar `array` by `mul`, so that the
 /// kernel doesn't rescale it on every row.
 ///
-/// Returns `None` if `array` isn't a valid scalar, `mul` is one, or the product
-/// overflows. The kernel then rescales the scalar on every row, so that an
-/// overflow is an error only if a valid row needs the value.
+/// Returns `None` if `array` isn't a valid scalar, `mul` is one, the product
+/// overflows, or its allocation fails. The kernel then rescales the scalar on
+/// every row, so that an overflow is an error only if a valid row needs the
+/// value, and an allocation failure reaches the kernel's fallible reservation.
 fn rescale_scalar<T: ArrowPrimitiveType>(
     array: &PrimitiveArray<T>,
     is_scalar: bool,
@@ -605,7 +606,13 @@ where
         return None;
     }
     let (value, overflow) = array.value(0).mul_overflowing(mul);
-    (!overflow).then(|| PrimitiveArray::new(vec![value].into(), None))
+    if overflow {
+        return None;
+    }
+    let mut values = Vec::new();
+    values.try_reserve_exact(1).ok()?;
+    values.push(value);
+    Some(PrimitiveArray::new(values.into(), None))
 }
 
 /// Like [`rescale_left`], but multiplies `r` by `mul`.
@@ -2392,6 +2399,37 @@ mod tests {
     }
 
     #[test]
+    fn test_checked_decimal_null_slot_overflow_sliced() {
+        // Sliced at 3, the validity bits start mid-byte and the 200 rows span
+        // three full 64-row chunks plus a remainder. Row 5 is null and always
+        // overflows, so every case checks the valid rows.
+        const LEN: usize = 203;
+        let nulls = NullBuffer::from_iter((0..LEN).map(|j| j % 5 != 0));
+        let decimal = |array: Decimal64Array| array.with_precision_and_scale(18, 2).unwrap();
+        let one = Scalar::new(decimal(Decimal64Array::from_iter_values([1])));
+        for i in 3..LEN {
+            let mut values = vec![1; LEN];
+            values[5] = i64::MAX;
+            values[i] = i64::MAX;
+            let array = decimal(Decimal64Array::new(values.into(), Some(nulls.clone())));
+            let result = add(&array.slice(3, LEN - 3), &one);
+            match nulls.is_valid(i) {
+                true => assert!(result.is_err(), "row {i}"),
+                false => {
+                    let actual: Vec<_> = result
+                        .unwrap()
+                        .as_primitive::<Decimal64Type>()
+                        .iter()
+                        .collect();
+                    let expected: Vec<_> =
+                        (3..LEN).map(|j| nulls.is_valid(j).then_some(2)).collect();
+                    assert_eq!(actual, expected, "row {i}");
+                }
+            }
+        }
+    }
+
+    #[test]
     #[cfg_attr(miri, ignore)] // Checks the lanes of vectorized loops, which Miri doesn't run
     fn test_checked_decimal_overflow_positions() {
         test_checked_decimal_overflow_position::<Decimal32Type>();
@@ -2435,6 +2473,17 @@ mod tests {
 
         let null = Scalar::new(decimal(vec![None], 2));
         assert_eq!(values(add(&col, &null).unwrap()), [None, None, None]);
+
+        // `1.50 + 1.0000` and `1.0000 - 1.50`, with both operands scalars.
+        let ten_thousandths = Scalar::new(decimal(vec![Some(10_000)], 4));
+        assert_eq!(
+            values(add(&scalar, &ten_thousandths).unwrap()),
+            [Some(25_000)]
+        );
+        assert_eq!(
+            values(sub(&ten_thousandths, &scalar).unwrap()),
+            [Some(-5_000)]
+        );
     }
 
     #[test]

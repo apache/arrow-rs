@@ -6,7 +6,7 @@ use criterion::*;
 
 use arrow::compute::kernels::numeric::*;
 use arrow::datatypes::{
-    ArrowPrimitiveType, Decimal64Type, Decimal128Type, Decimal256Type, Float32Type,
+    ArrowPrimitiveType, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, Float32Type,
 };
 use arrow::util::bench_util::*;
 use arrow_array::{Array, Decimal128Array, PrimitiveArray, Scalar};
@@ -118,6 +118,13 @@ fn decimal_benchmark(c: &mut Criterion) {
         let b64 = seeded_array::<Decimal64Type>(BATCH_SIZE, null_density, -999_999..1_000_000, 2)
             .with_precision_and_scale(18, 2)
             .unwrap();
+        // Four digits, so that products fit in `i32`.
+        let decimal32 = |seed| {
+            seeded_array::<Decimal32Type>(BATCH_SIZE, null_density, -9_999..10_000, seed)
+                .with_precision_and_scale(9, 2)
+                .unwrap()
+        };
+        let (a32, b32) = (decimal32(1), decimal32(2));
         let a256 = decimal256(&a);
         let b256 = decimal256(&b);
         // Each value fits in `i64` or not at random, which mispredicts the branch
@@ -162,6 +169,18 @@ fn decimal_benchmark(c: &mut Criterion) {
         });
         c.bench_function(&format!("decimal64_add({null_density})"), |bench| {
             bench.iter(|| hint::black_box(add(&a64, &b64).unwrap()))
+        });
+        c.bench_function(&format!("decimal64_subtract({null_density})"), |bench| {
+            bench.iter(|| hint::black_box(sub(&a64, &b64).unwrap()))
+        });
+        c.bench_function(&format!("decimal32_add({null_density})"), |bench| {
+            bench.iter(|| hint::black_box(add(&a32, &b32).unwrap()))
+        });
+        c.bench_function(&format!("decimal32_subtract({null_density})"), |bench| {
+            bench.iter(|| hint::black_box(sub(&a32, &b32).unwrap()))
+        });
+        c.bench_function(&format!("decimal32_multiply({null_density})"), |bench| {
+            bench.iter(|| hint::black_box(mul(&a32, &b32).unwrap()))
         });
         c.bench_function(&format!("decimal64_multiply({null_density})"), |bench| {
             bench.iter(|| hint::black_box(mul(&a64, &b64).unwrap()))
