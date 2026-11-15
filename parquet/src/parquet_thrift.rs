@@ -311,6 +311,11 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
         }
     }
 
+    /// Read a binary length, bounded to the signed 32-bit range used by Java and C++ Thrift.
+    fn read_binary_len(&mut self) -> ThriftProtocolResult<usize> {
+        Ok(i32::try_from(self.read_vlq()?)? as usize)
+    }
+
     /// Read a zig-zag encoded signed varint from the input.
     fn read_zig_zag(&mut self) -> ThriftProtocolResult<i64> {
         let val = self.read_vlq()?;
@@ -461,7 +466,7 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
     ///
     /// [binary]: https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#binary-encoding
     fn skip_binary(&mut self) -> ThriftProtocolResult<()> {
-        let len = usize::try_from(self.read_vlq()?)?;
+        let len = self.read_binary_len()?;
         self.skip_bytes(len)
     }
 
@@ -600,7 +605,7 @@ impl<'b, 'a: 'b> ThriftCompactInputProtocol<'b> for ThriftSliceInputProtocol<'a>
     }
 
     fn read_bytes(&mut self) -> ThriftProtocolResult<&'b [u8]> {
-        let len = self.read_vlq()? as usize;
+        let len = self.read_binary_len()?;
         let ret = self.buf.get(..len).ok_or(ThriftProtocolError::Eof)?;
         self.buf = &self.buf[len..];
         Ok(ret)
@@ -658,9 +663,12 @@ impl<'a, R: Read> ThriftCompactInputProtocol<'a> for ThriftReadInputProtocol<R> 
     }
 
     fn read_bytes_owned(&mut self) -> ThriftProtocolResult<Vec<u8>> {
-        let len = self.read_vlq()? as usize;
-        let mut v = Vec::with_capacity(len);
-        std::io::copy(&mut self.reader.by_ref().take(len as u64), &mut v)?;
+        let len = self.read_binary_len()?;
+        let mut v = Vec::with_capacity(len.min(8 * 1024));
+        let copied = std::io::copy(&mut self.reader.by_ref().take(len as u64), &mut v)?;
+        if copied != len as u64 {
+            return Err(ThriftProtocolError::Eof);
+        }
         Ok(v)
     }
 
@@ -1194,6 +1202,7 @@ pub(crate) mod tests {
 
     use super::*;
     use std::fmt::Debug;
+    use std::io::{ErrorKind, Result as IoResult};
 
     pub(crate) fn test_roundtrip<T>(val: T)
     where
@@ -1208,6 +1217,99 @@ pub(crate) mod tests {
         let mut prot = ThriftSliceInputProtocol::new(&buf);
         let read_val = T::read_thrift(&mut prot).unwrap();
         assert_eq!(val, read_val);
+    }
+
+    #[test]
+    fn test_binary_length_bound() {
+        let oversized = [0x80, 0x80, 0x80, 0x80, 8]; // i32::MAX + 1
+        let maximum = [0xff, 0xff, 0xff, 0xff, 7]; // i32::MAX, no payload
+        for bytes in [&oversized, &maximum] {
+            let check = |result: ThriftProtocolResult<()>| {
+                if bytes == &oversized {
+                    assert!(matches!(result, Err(ThriftProtocolError::IntegerOverflow)));
+                } else {
+                    assert!(matches!(result, Err(ThriftProtocolError::Eof)));
+                }
+            };
+            check(
+                ThriftSliceInputProtocol::new(bytes)
+                    .read_bytes()
+                    .map(|_| ()),
+            );
+            check(
+                ThriftSliceInputProtocol::new(bytes)
+                    .read_bytes_owned()
+                    .map(|_| ()),
+            );
+            check(ThriftSliceInputProtocol::new(bytes).skip_binary());
+            check(
+                ThriftReadInputProtocol::new(bytes.as_slice())
+                    .read_bytes_owned()
+                    .map(|_| ()),
+            );
+            check(ThriftReadInputProtocol::new(bytes.as_slice()).skip_binary());
+        }
+    }
+
+    struct FragmentedReader<'a>(&'a [u8]);
+
+    impl Read for FragmentedReader<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
+            let len = buf.len().min(2);
+            self.0.read(&mut buf[..len])
+        }
+    }
+
+    #[test]
+    fn test_read_bytes_owned_complete_and_fragmented() {
+        let large_payload = vec![7; 16 * 1024];
+        for payload in [b"".as_slice(), b"abcde".as_slice(), &large_payload] {
+            let mut data = Vec::new();
+            ThriftCompactOutputProtocol::new(&mut data)
+                .write_bytes(payload)
+                .unwrap();
+            data.push(42);
+            let mut slice = ThriftSliceInputProtocol::new(&data);
+            let mut stream = ThriftReadInputProtocol::new(data.as_slice());
+            let mut fragmented = ThriftReadInputProtocol::new(FragmentedReader(&data));
+            assert_eq!(slice.read_bytes_owned().unwrap(), payload);
+            assert_eq!(stream.read_bytes_owned().unwrap(), payload);
+            assert_eq!(fragmented.read_bytes_owned().unwrap(), payload);
+            assert_eq!(slice.read_byte().unwrap(), 42);
+            assert_eq!(stream.read_byte().unwrap(), 42);
+            assert_eq!(fragmented.read_byte().unwrap(), 42);
+        }
+    }
+
+    #[test]
+    fn test_read_bytes_owned_truncated_payload() {
+        for len in [5, 1024 * 1024, i32::MAX as u64] {
+            let mut data = Vec::new();
+            ThriftCompactOutputProtocol::new(&mut data)
+                .write_vlq(len)
+                .unwrap();
+            data.extend_from_slice(b"abc");
+            let mut stream = ThriftReadInputProtocol::new(FragmentedReader(&data));
+            assert!(matches!(
+                stream.read_bytes_owned(),
+                Err(ThriftProtocolError::Eof)
+            ));
+        }
+    }
+
+    #[test]
+    fn test_read_bytes_owned_preserves_io_error() {
+        struct FailingReader;
+        impl Read for FailingReader {
+            fn read(&mut self, _: &mut [u8]) -> IoResult<usize> {
+                Err(Error::new(ErrorKind::PermissionDenied, "payload error"))
+            }
+        }
+        let reader = b"\x05ab".as_slice().chain(FailingReader);
+        let mut stream = ThriftReadInputProtocol::new(reader);
+        assert!(
+            matches!(stream.read_bytes_owned(), Err(ThriftProtocolError::IO(e)) if e.kind() == ErrorKind::PermissionDenied)
+        );
     }
 
     #[test]

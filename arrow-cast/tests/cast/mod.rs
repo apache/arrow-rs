@@ -3,6 +3,7 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 mod binary;
+mod date_time;
 mod decimal;
 mod dictionary;
 mod dispatch;

@@ -10,10 +10,14 @@
 
 use crate::predicate::Predicate;
 
+use arrow_array::builder::BooleanBuilder;
 use arrow_array::cast::AsArray;
+use arrow_array::types::{ArrowDictionaryKeyType, RunEndIndexType};
 use arrow_array::*;
+use arrow_buffer::ArrowNativeType;
 use arrow_schema::*;
 use arrow_select::take::take;
+use std::sync::Arc;
 
 use crate::binary_like::binary_apply;
 pub use arrow_array::StringArrayType;
@@ -51,6 +55,9 @@ impl std::fmt::Display for Op {
 /// - Utf8
 /// - LargeUtf8
 /// - Utf8View
+///
+/// Either operand may be dictionary or run-end encoded, including dictionary-encoded
+/// run values, as long as the underlying value types match.
 ///
 /// There are two wildcards supported with the LIKE operator:
 ///
@@ -112,6 +119,9 @@ pub fn nilike(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, Arrow
 /// - LargeBinary
 /// - BinaryView
 ///
+/// Either operand may be dictionary or run-end encoded, including dictionary-encoded
+/// run values, as long as the underlying value types match.
+///
 /// # Example
 /// ```
 /// # use arrow_array::{StringArray, BooleanArray};
@@ -137,6 +147,9 @@ pub fn starts_with(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, 
 /// - Binary
 /// - LargeBinary
 /// - BinaryView
+///
+/// Either operand may be dictionary or run-end encoded, including dictionary-encoded
+/// run values, as long as the underlying value types match.
 ///
 /// # Example
 /// ```
@@ -164,6 +177,9 @@ pub fn ends_with(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, Ar
 /// - LargeBinary
 /// - BinaryView
 ///
+/// Either operand may be dictionary or run-end encoded, including dictionary-encoded
+/// run values, as long as the underlying value types match.
+///
 /// # Example
 /// ```
 /// # use arrow_array::{StringArray, BooleanArray};
@@ -184,6 +200,9 @@ pub fn contains(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, Arr
 /// - Utf8
 /// - LargeUtf8
 /// - Utf8View
+///
+/// Either operand may be dictionary or run-end encoded, including dictionary-encoded
+/// run values, as long as the underlying value types match.
 ///
 /// # Example
 /// ```
@@ -213,6 +232,10 @@ fn like_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, Arr
             l.len(),
             r.len()
         )));
+    }
+
+    if l.as_any_ree_opt().is_some() || r.as_any_ree_opt().is_some() {
+        return run_end_encoded_op(op, lhs, rhs);
     }
 
     let l_v = l.as_any_dictionary_opt();
@@ -279,6 +302,115 @@ fn like_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, Arr
         (l_t, r_t) => Err(ArrowError::InvalidArgumentError(format!(
             "Invalid string/binary operation: {l_t} {op} {r_t}"
         ))),
+    }
+}
+
+/// Rewrites run-end encoded operands into encodings that [`like_op`] already supports,
+/// so value types, nulls and errors behave as they do without run-end encoding.
+fn run_end_encoded_op(
+    op: Op,
+    lhs: &dyn Datum,
+    rhs: &dyn Datum,
+) -> Result<BooleanArray, ArrowError> {
+    let (left, left_is_scalar) = lhs.get();
+    let (right, right_is_scalar) = rhs.get();
+    let left_is_ree = left.as_any_ree_opt().is_some();
+    let right_is_ree = right.as_any_ree_opt().is_some();
+    if left_is_ree && left_is_scalar {
+        // A scalar's only logical value is its only physical value.
+        like_op(op, &Scalar::new(run_values(left)), rhs)
+    } else if right_is_ree && right_is_scalar {
+        like_op(op, lhs, &Scalar::new(run_values(right)))
+    } else if right_is_scalar {
+        // Against a scalar every row of a run has the same result, so match each
+        // run once and repeat its result.
+        Ok(expand_runs(left, &like_op(op, &run_values(left), rhs)?))
+    } else if left_is_scalar {
+        Ok(expand_runs(right, &like_op(op, lhs, &run_values(right))?))
+    } else if left.is_empty() {
+        // The dictionary kernels panic on a dictionary without values, so match the
+        // run values instead. They are empty too, and like_op still checks their types.
+        let left_values = left_is_ree.then(|| run_values(left));
+        let right_values = right_is_ree.then(|| run_values(right));
+        let lhs: &dyn Datum = left_values.as_ref().map_or(lhs, |values| values);
+        let rhs: &dyn Datum = right_values.as_ref().map_or(rhs, |values| values);
+        like_op(op, lhs, rhs)
+    } else {
+        // Rows of two arrays need not share run boundaries, so look up each row
+        // through a dictionary view, which does not copy the values.
+        let left_dictionary = left_is_ree
+            .then(|| run_end_encoded_as_dictionary(left))
+            .transpose()?;
+        let right_dictionary = right_is_ree
+            .then(|| run_end_encoded_as_dictionary(right))
+            .transpose()?;
+        let lhs: &dyn Datum = left_dictionary
+            .as_ref()
+            .map_or(lhs, |dictionary| dictionary);
+        let rhs: &dyn Datum = right_dictionary
+            .as_ref()
+            .map_or(rhs, |dictionary| dictionary);
+        like_op(op, lhs, rhs)
+    }
+}
+
+/// Returns the physical values of the runs that a run-end encoded array's slice covers.
+fn run_values(array: &dyn Array) -> ArrayRef {
+    downcast_run_array!(
+        array => array.values_slice(),
+        _ => unreachable!("expected a run-end encoded array")
+    )
+}
+
+/// Repeats each run's result, as computed over [`run_values`], for every row of the run.
+fn expand_runs(array: &dyn Array, run_results: &BooleanArray) -> BooleanArray {
+    downcast_run_array!(
+        array => {
+            let mut builder = BooleanBuilder::with_capacity(array.len());
+            let mut run_start = 0;
+            for (run_result, run_end) in run_results.iter().zip(array.run_ends().sliced_values()) {
+                let run_end = run_end.as_usize();
+                match run_result {
+                    Some(run_result) => builder.append_n(run_end - run_start, run_result),
+                    None => builder.append_nulls(run_end - run_start),
+                }
+                run_start = run_end;
+            }
+            builder.finish()
+        },
+        _ => unreachable!("expected a run-end encoded array")
+    )
+}
+
+fn run_end_encoded_as_dictionary(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
+    downcast_run_array!(
+        array => run_array_as_dictionary(array),
+        _ => unreachable!("expected a run-end encoded array")
+    )
+}
+
+/// Views a run array as a dictionary whose keys are each row's index into [`run_values`].
+fn run_array_as_dictionary<R: RunEndIndexType + ArrowDictionaryKeyType>(
+    array: &RunArray<R>,
+) -> Result<ArrayRef, ArrowError> {
+    let mut keys = Vec::with_capacity(array.len());
+    let mut run_start = 0;
+    for (run_index, run_end) in array.run_ends().sliced_values().enumerate() {
+        let run_end = run_end.as_usize();
+        keys.extend(std::iter::repeat_n(
+            R::Native::usize_as(run_index),
+            run_end - run_start,
+        ));
+        run_start = run_end;
+    }
+    let keys = PrimitiveArray::<R>::new(keys.into(), None);
+    let values = array.values_slice();
+    if values.as_any_dictionary_opt().is_some() {
+        // Taking from a dictionary composes the keys, leaving a single dictionary
+        // layer for like_op to unwrap.
+        take(&values, &keys, None)
+    } else {
+        Ok(Arc::new(DictionaryArray::try_new(keys, values)?))
     }
 }
 
@@ -422,7 +554,7 @@ fn binary_predicate<'a>(
 mod tests {
     use super::*;
     use arrow_array::builder::BinaryDictionaryBuilder;
-    use arrow_array::types::{ArrowDictionaryKeyType, Int8Type};
+    use arrow_array::types::{ArrowDictionaryKeyType, Int8Type, Int32Type, Int64Type};
     use std::iter::zip;
 
     fn convert_binary_iterator_to_binary_dictionary<
@@ -445,11 +577,12 @@ mod tests {
     }
 
     /// Applying `op(left, right)`, both sides are arrays
-    /// The macro tests four types of array implementations:
+    /// The macro tests five types of array implementations:
     /// - `StringArray`
     /// - `LargeStringArray`
     /// - `StringViewArray`
     /// - `DictionaryArray`
+    /// - `RunArray`
     macro_rules! test_utf8 {
         ($(#[$attr:meta])* $test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
             $(#[$attr])*
@@ -476,16 +609,22 @@ mod tests {
                 let right: DictionaryArray<Int8Type> = $right.into_iter().collect();
                 let res = $op(&left, &right).unwrap();
                 assert_eq!(res, expected);
+
+                let left: RunArray<Int32Type> = $left.into_iter().collect();
+                let right: RunArray<Int32Type> = $right.into_iter().collect();
+                let res = $op(&left, &right).unwrap();
+                assert_eq!(res, expected);
             }
         };
     }
 
     /// Applying `op(left, right)`, both sides are arrays
-    /// The macro tests four types of array implementations:
+    /// The macro tests five types of array implementations:
     /// - `StringArray`
     /// - `LargeStringArray`
     /// - `StringViewArray`
     /// - `DictionaryArray`
+    /// - `RunArray`
     macro_rules! test_utf8_and_binary {
         ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
             #[test]
@@ -509,6 +648,11 @@ mod tests {
 
                 let left: DictionaryArray<Int8Type> = $left.into_iter().collect();
                 let right: DictionaryArray<Int8Type> = $right.into_iter().collect();
+                let res = $op(&left, &right).unwrap();
+                assert_eq!(res, expected);
+
+                let left: RunArray<Int32Type> = $left.into_iter().collect();
+                let right: RunArray<Int32Type> = $right.into_iter().collect();
                 let res = $op(&left, &right).unwrap();
                 assert_eq!(res, expected);
 
@@ -536,11 +680,12 @@ mod tests {
     }
 
     /// Applying `op(left, right)`, left side is array, right side is scalar
-    /// The macro tests four types of array implementations:
+    /// The macro tests five types of array implementations:
     /// - `StringArray`
     /// - `LargeStringArray`
     /// - `StringViewArray`
     /// - `DictionaryArray`
+    /// - `RunArray`
     macro_rules! test_utf8_scalar {
         ($(#[$attr:meta])* $test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
             $(#[$attr])*
@@ -571,16 +716,22 @@ mod tests {
                 let right: DictionaryArray<Int8Type> = [$right].into_iter().collect();
                 let res = $op(&left, &Scalar::new(&right)).unwrap();
                 assert_eq!(res, expected);
+
+                let left: RunArray<Int32Type> = $left.into_iter().collect();
+                let right: RunArray<Int32Type> = [$right].into_iter().collect();
+                let res = $op(&left, &Scalar::new(&right)).unwrap();
+                assert_eq!(res, expected);
             }
         };
     }
 
     /// Applying `op(left, right)`, left side is array, right side is scalar
-    /// The macro tests four types of array implementations:
+    /// The macro tests five types of array implementations:
     /// - `StringArray`
     /// - `LargeStringArray`
     /// - `StringViewArray`
     /// - `DictionaryArray`
+    /// - `RunArray`
     macro_rules! test_utf8_and_binary_scalar {
         ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
             #[test]
@@ -604,6 +755,11 @@ mod tests {
 
                 let left: DictionaryArray<Int8Type> = $left.into_iter().collect();
                 let right: DictionaryArray<Int8Type> = [$right].into_iter().collect();
+                let res = $op(&left, &Scalar::new(&right)).unwrap();
+                assert_eq!(res, expected);
+
+                let left: RunArray<Int32Type> = $left.into_iter().collect();
+                let right: RunArray<Int32Type> = [$right].into_iter().collect();
                 let res = $op(&left, &Scalar::new(&right)).unwrap();
                 assert_eq!(res, expected);
 
@@ -1580,6 +1736,113 @@ mod tests {
             assert_eq!(r.null_count(), 1);
             assert!(r.is_null(0));
         }
+    }
+
+    #[test]
+    fn test_run_end_encoded_sliced() {
+        // Logical rows after the slice: ["arrow", null, null, "Parquet", "Parquet"].
+        // The slice starts and ends mid-run and skips the first run entirely.
+        let run_ends = Int32Array::from(vec![2, 4, 6, 9]);
+        let values = vec![Some("skipped"), Some("arrow"), None, Some("Parquet")];
+        let dictionary: DictionaryArray<Int8Type> = values.clone().into_iter().collect();
+        let patterns =
+            StringArray::from(vec![Some("%row"), Some("%"), None, Some("P%"), Some("p%")]);
+
+        for run_values in [&StringArray::from(values) as &dyn Array, &dictionary] {
+            let run = RunArray::<Int32Type>::try_new(&run_ends, run_values)
+                .unwrap()
+                .slice(3, 5);
+
+            let res = ilike(&run, &StringArray::new_scalar("a%")).unwrap();
+            assert_eq!(
+                res,
+                BooleanArray::from(vec![Some(true), None, None, Some(false), Some(false)])
+            );
+
+            let res = eq_ignore_ascii_case(&run, &StringArray::new_scalar("ARROW")).unwrap();
+            assert_eq!(
+                res,
+                BooleanArray::from(vec![Some(true), None, None, Some(false), Some(false)])
+            );
+
+            let res = like(&run, &patterns).unwrap();
+            assert_eq!(
+                res,
+                BooleanArray::from(vec![Some(true), None, None, Some(true), Some(false)])
+            );
+
+            let res = like(&Scalar::new(run.slice(0, 1)), &patterns).unwrap();
+            assert_eq!(
+                res,
+                BooleanArray::from(vec![Some(true), Some(true), None, Some(false), Some(false)])
+            );
+
+            let res = like(&run, &Scalar::new(StringArray::new_null(1))).unwrap();
+            assert_eq!(res, BooleanArray::new_null(5));
+
+            let empty = run.slice(0, 0);
+            let res = like(&empty, &StringArray::new_scalar("a%")).unwrap();
+            assert_eq!(res, BooleanArray::from(Vec::<bool>::new()));
+            let res = like(&empty, &patterns.slice(0, 0)).unwrap();
+            assert_eq!(res, BooleanArray::from(Vec::<bool>::new()));
+        }
+    }
+
+    #[test]
+    fn test_run_end_encoded_patterns() {
+        // Logical patterns: ["arr%", "arr%", null, "%row", "x%"].
+        let patterns = RunArray::<Int64Type>::try_new(
+            &Int64Array::from(vec![2, 3, 4, 5]),
+            &StringArray::from(vec![Some("arr%"), None, Some("%row"), Some("x%")]),
+        )
+        .unwrap();
+
+        let res = like(&StringArray::new_scalar("arrow"), &patterns).unwrap();
+        assert_eq!(
+            res,
+            BooleanArray::from(vec![Some(true), Some(true), None, Some(true), Some(false)])
+        );
+
+        let values = StringArray::from(vec!["arrow", "parquet", "arrow", "narrow", "xyz"]);
+        let res = like(&values, &patterns).unwrap();
+        assert_eq!(
+            res,
+            BooleanArray::from(vec![Some(true), Some(false), None, Some(true), Some(true)])
+        );
+    }
+
+    #[test]
+    fn test_run_end_encoded_type_mismatch() {
+        let run: RunArray<Int32Type> = std::iter::once("arrow").collect();
+        let err = like(&run, &LargeStringArray::new_scalar("a%")).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Invalid string/binary operation: Utf8 LIKE LargeUtf8"
+        );
+
+        let empty: RunArray<Int32Type> = std::iter::empty::<&str>().collect();
+        let err = like(&empty, &Int32Array::from(Vec::<i32>::new())).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Invalid string/binary operation: Utf8 LIKE Int32"
+        );
+        let err = like(&Int32Array::from(Vec::<i32>::new()), &empty).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Invalid string/binary operation: Int32 LIKE Utf8"
+        );
+    }
+
+    #[test]
+    fn test_run_end_encoded_binary() {
+        let values = BinaryArray::from(vec![b"arrow".as_slice(), b"parquet"]);
+        let run = RunArray::<Int32Type>::try_new(&Int32Array::from(vec![2, 3]), &values).unwrap();
+        let res = starts_with(&run, &BinaryArray::new_scalar(b"arr")).unwrap();
+        assert_eq!(res, BooleanArray::from(vec![true, true, false]));
+
+        let patterns = BinaryArray::from(vec![b"arrow".as_slice(), b"x", b"et"]);
+        let res = ends_with(&run, &patterns).unwrap();
+        assert_eq!(res, BooleanArray::from(vec![true, false, true]));
     }
 
     #[test]
