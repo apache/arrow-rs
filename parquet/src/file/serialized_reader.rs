@@ -2237,7 +2237,7 @@ mod tests {
         let pos = out
             .windows(4)
             .position(|w| w == [0x16, 0x00, 0x19, 0x0C])
-            .unwrap();
+            .expect("empty row_groups list header not found in footer");
         out[pos + 3] = 0x00;
 
         let reader = SerializedFileReader::new(Bytes::from(out)).unwrap();
