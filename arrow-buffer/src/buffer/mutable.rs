@@ -243,7 +243,8 @@ impl MutableBuffer {
     ///
     /// See [`MutableBuffer::from_len_zeroed`].
     pub fn new_null(len: usize) -> Self {
-        Self::try_new_null(len).unwrap_or_else(|e| panic!("{e}"))
+        let num_bytes = bit_util::ceil(len, 8);
+        MutableBuffer::from_len_zeroed(num_bytes)
     }
 
     /// Fallible version of [`MutableBuffer::new_null`].
@@ -655,20 +656,6 @@ impl MutableBuffer {
             .unwrap_or_else(|e| panic!("{e}"))
     }
 
-    /// Fallible version of [`MutableBuffer::push`].
-    #[inline]
-    pub fn try_push<T: ToByteSlice>(&mut self, item: T) -> Result<(), MutableBufferError> {
-        let additional = std::mem::size_of::<T>();
-        self.try_reserve(additional)?;
-        unsafe {
-            let src = item.to_byte_slice().as_ptr();
-            let dst = self.data.as_ptr().add(self.len);
-            std::ptr::copy_nonoverlapping(src, dst, additional);
-        }
-        self.len += additional;
-        Ok(())
-    }
-
     /// Extends the buffer with a new item, increasing its capacity if needed.
     /// # Example
     /// ```
@@ -684,7 +671,28 @@ impl MutableBuffer {
     /// reasons as [`MutableBuffer::reserve`].
     #[inline]
     pub fn push<T: ToByteSlice>(&mut self, item: T) {
-        self.try_push(item).unwrap_or_else(|e| panic!("{e}"))
+        let additional = std::mem::size_of::<T>();
+        self.reserve(additional);
+        unsafe {
+            let src = item.to_byte_slice().as_ptr();
+            let dst = self.data.as_ptr().add(self.len);
+            std::ptr::copy_nonoverlapping(src, dst, additional);
+        }
+        self.len += additional;
+    }
+
+    /// Fallible version of [`MutableBuffer::push`].
+    #[inline]
+    pub fn try_push<T: ToByteSlice>(&mut self, item: T) -> Result<(), MutableBufferError> {
+        let additional = std::mem::size_of::<T>();
+        self.try_reserve(additional)?;
+        unsafe {
+            let src = item.to_byte_slice().as_ptr();
+            let dst = self.data.as_ptr().add(self.len);
+            std::ptr::copy_nonoverlapping(src, dst, additional);
+        }
+        self.len += additional;
+        Ok(())
     }
 
     /// Extends the buffer with a new item, without checking for sufficient capacity

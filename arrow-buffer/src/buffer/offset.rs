@@ -81,7 +81,8 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     ///
     /// Panics if allocation fails. Use [`Self::try_new_empty`] for a fallible version.
     pub fn new_empty() -> Self {
-        Self::try_new_empty().unwrap_or_else(|err| panic!("{err}"))
+        let buffer = MutableBuffer::from_len_zeroed(std::mem::size_of::<O>());
+        Self(buffer.into_buffer().into())
     }
 
     /// Fallible version of [`Self::new_empty`].
