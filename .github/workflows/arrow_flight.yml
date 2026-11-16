@@ -18,13 +18,14 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     container:
-      image: amd64/rust
+      image: amd64/rust@sha256:5b5938cbb2951fc2869eaf891a6616f722ef5bf28c90dc6a074c35c141e31537 # v1.99.1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
+          persist-credentials: false
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
       - name: Test
         run: |
           cargo test -p arrow-flight
@@ -39,11 +40,13 @@ jobs:
     name: Verify Vendored Code
     runs-on: ubuntu-latest
     container:
-      image: amd64/rust
+      image: amd64/rust@sha256:5b5938cbb2951fc2869eaf891a6616f722ef5bf28c90dc6a074c35c141e31537 # v1.99.1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
       - name: Run gen
         run: ./arrow-flight/regen.sh
       - name: Verify workspace clean (if this fails, run ./arrow-flight/regen.sh and check in results)
@@ -53,11 +56,13 @@ jobs:
     name: Clippy
     runs-on: ubuntu-latest
     container:
-      image: amd64/rust
+      image: amd64/rust@sha256:5b5938cbb2951fc2869eaf891a6616f722ef5bf28c90dc6a074c35c141e31537 # v1.99.1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
       - name: Setup Clippy
         run: rustup component add clippy
       - name: Run clippy
