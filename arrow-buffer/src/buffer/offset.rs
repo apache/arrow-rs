@@ -190,7 +190,7 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     ///
     /// # Errors
     ///
-    /// Errors if `length * n` overflows `usize` or `O`.
+    /// Errors if `length * n` overflows `usize` or `O`, or if the buffer cannot be allocated.
     pub fn try_from_repeated_length(length: usize, n: usize) -> Result<Self, OverflowError> {
         if n == 0 {
             return Ok(Self::new_empty());
@@ -208,11 +208,22 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
         O::from_usize(total_length)
             .ok_or_else(|| OverflowError::new::<O>("offset").with_value(total_length))?;
 
-        let offsets = (0..=n)
-            .map(|index| O::usize_as(index * length))
-            .collect::<Vec<O>>();
+        let len_bytes = n
+            .checked_add(1)
+            .and_then(|o| o.checked_mul(std::mem::size_of::<O>()))
+            .ok_or_else(|| OverflowError::new::<usize>("buffer length"))?;
 
-        Ok(Self(ScalarBuffer::from(offsets)))
+        let mut buffer = MutableBuffer::try_with_capacity(len_bytes)
+            .map_err(|_| OverflowError::new::<usize>("buffer length"))?;
+
+        for index in 0..=n {
+            // SAFETY: buffer capacity was allocated for `(n + 1) * size_of::<O>()` bytes.
+            unsafe {
+                buffer.push_unchecked(O::usize_as(index * length));
+            }
+        }
+
+        Ok(Self(buffer.into_buffer().into()))
     }
 
     /// The first offset, i.e. the start of the first range.
