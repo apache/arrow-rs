@@ -255,7 +255,7 @@ fn test_cast_string_to_time32second() {
         let b = cast(array, &to_type).unwrap();
         let c = b.as_primitive::<Time32SecondType>();
         assert_eq!(29315, c.value(0));
-        assert_eq!(29340, c.value(1));
+        assert!(c.is_null(1));
         assert!(c.is_null(2));
         assert!(c.is_null(3));
         assert!(c.is_null(4));
@@ -267,7 +267,7 @@ fn test_cast_string_to_time32second() {
         let err = cast_with_options(array, &to_type, &options).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Cast error: Cannot cast string '08:08:61.091323414' to value of Time32(s) type"
+            "Cast error: Cannot cast string '08:08:60.091323414' to value of Time32(s) type"
         );
     }
 }
@@ -300,7 +300,7 @@ fn test_cast_string_to_time32millisecond() {
         let b = cast(array, &to_type).unwrap();
         let c = b.as_primitive::<Time32MillisecondType>();
         assert_eq!(29315091, c.value(0));
-        assert_eq!(29340091, c.value(1));
+        assert!(c.is_null(1));
         assert!(c.is_null(2));
         assert!(c.is_null(3));
         assert!(c.is_null(4));
@@ -312,7 +312,7 @@ fn test_cast_string_to_time32millisecond() {
         let err = cast_with_options(array, &to_type, &options).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Cast error: Cannot cast string '08:08:61.091323414' to value of Time32(ms) type"
+            "Cast error: Cannot cast string '08:08:60.091323414' to value of Time32(ms) type"
         );
     }
 }
@@ -321,16 +321,19 @@ fn test_cast_string_to_time32millisecond() {
 fn test_cast_string_to_time64microsecond() {
     let a0 = Arc::new(StringViewArray::from(vec![
         Some("08:08:35.091323414"),
+        Some("23:59:60"), // leap second
         Some("Not a valid time"),
         None,
     ])) as ArrayRef;
     let a1 = Arc::new(StringArray::from(vec![
         Some("08:08:35.091323414"),
+        Some("23:59:60"), // leap second
         Some("Not a valid time"),
         None,
     ])) as ArrayRef;
     let a2 = Arc::new(LargeStringArray::from(vec![
         Some("08:08:35.091323414"),
+        Some("23:59:60"), // leap second
         Some("Not a valid time"),
         None,
     ])) as ArrayRef;
@@ -341,6 +344,7 @@ fn test_cast_string_to_time64microsecond() {
         assert_eq!(29315091323, c.value(0));
         assert!(c.is_null(1));
         assert!(c.is_null(2));
+        assert!(c.is_null(3));
 
         let options = CastOptions {
             safe: false,
@@ -349,7 +353,7 @@ fn test_cast_string_to_time64microsecond() {
         let err = cast_with_options(array, &to_type, &options).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Cast error: Cannot cast string 'Not a valid time' to value of Time64(µs) type"
+            "Cast error: Cannot cast string '23:59:60' to value of Time64(µs) type"
         );
     }
 }
@@ -358,16 +362,19 @@ fn test_cast_string_to_time64microsecond() {
 fn test_cast_string_to_time64nanosecond() {
     let a0 = Arc::new(StringViewArray::from(vec![
         Some("08:08:35.091323414"),
+        Some("23:59:60"), // leap second
         Some("Not a valid time"),
         None,
     ])) as ArrayRef;
     let a1 = Arc::new(StringArray::from(vec![
         Some("08:08:35.091323414"),
+        Some("23:59:60"), // leap second
         Some("Not a valid time"),
         None,
     ])) as ArrayRef;
     let a2 = Arc::new(LargeStringArray::from(vec![
         Some("08:08:35.091323414"),
+        Some("23:59:60"), // leap second
         Some("Not a valid time"),
         None,
     ])) as ArrayRef;
@@ -378,6 +385,7 @@ fn test_cast_string_to_time64nanosecond() {
         assert_eq!(29315091323414, c.value(0));
         assert!(c.is_null(1));
         assert!(c.is_null(2));
+        assert!(c.is_null(3));
 
         let options = CastOptions {
             safe: false,
@@ -386,7 +394,7 @@ fn test_cast_string_to_time64nanosecond() {
         let err = cast_with_options(array, &to_type, &options).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Cast error: Cannot cast string 'Not a valid time' to value of Time64(ns) type"
+            "Cast error: Cannot cast string '23:59:60' to value of Time64(ns) type"
         );
     }
 }
