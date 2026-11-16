@@ -619,7 +619,7 @@ pub type StringViewBuilder = GenericByteViewBuilder<StringViewType>;
 
 impl StringLikeArrayBuilder for StringViewBuilder {
     fn type_name() -> &'static str {
-        std::any::type_name::<StringViewBuilder>()
+        "Utf8View"
     }
     fn with_capacity(capacity: usize) -> Self {
         Self::with_capacity(capacity)
@@ -656,7 +656,7 @@ pub type BinaryViewBuilder = GenericByteViewBuilder<BinaryViewType>;
 
 impl BinaryLikeArrayBuilder for BinaryViewBuilder {
     fn type_name() -> &'static str {
-        std::any::type_name::<BinaryViewBuilder>()
+        "BinaryView"
     }
     fn with_capacity(capacity: usize) -> Self {
         Self::with_capacity(capacity)
@@ -1014,5 +1014,11 @@ mod tests {
         assert_eq!(array.len(), 2);
         assert_eq!(array.value(0), "first");
         assert_eq!(array.value(1), "second");
+    }
+
+    #[test]
+    fn test_view_builder_type_names() {
+        assert_eq!(StringViewBuilder::type_name(), "Utf8View");
+        assert_eq!(BinaryViewBuilder::type_name(), "BinaryView");
     }
 }

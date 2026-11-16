@@ -413,7 +413,7 @@ pub trait StringLikeArrayBuilder: ArrayBuilder {
 
 impl<O: OffsetSizeTrait> StringLikeArrayBuilder for GenericStringBuilder<O> {
     fn type_name() -> &'static str {
-        std::any::type_name::<Self>()
+        if O::IS_LARGE { "LargeUtf8" } else { "Utf8" }
     }
     fn with_capacity(capacity: usize) -> Self {
         Self::with_capacity(capacity, capacity * AVERAGE_STRING_LENGTH)
@@ -457,7 +457,7 @@ pub trait BinaryLikeArrayBuilder: ArrayBuilder {
 
 impl<O: OffsetSizeTrait> BinaryLikeArrayBuilder for GenericBinaryBuilder<O> {
     fn type_name() -> &'static str {
-        std::any::type_name::<Self>()
+        if O::IS_LARGE { "LargeBinary" } else { "Binary" }
     }
     fn with_capacity(capacity: usize) -> Self {
         Self::with_capacity(capacity, capacity * AVERAGE_BINARY_LENGTH)
@@ -989,5 +989,13 @@ mod tests {
         assert_eq!("world", array.value(2));
         assert_eq!("world", array.value(3));
         assert!(array.is_null(4));
+    }
+
+    #[test]
+    fn test_string_and_binary_like_builder_type_names() {
+        assert_eq!(GenericStringBuilder::<i32>::type_name(), "Utf8");
+        assert_eq!(GenericStringBuilder::<i64>::type_name(), "LargeUtf8");
+        assert_eq!(GenericBinaryBuilder::<i32>::type_name(), "Binary");
+        assert_eq!(GenericBinaryBuilder::<i64>::type_name(), "LargeBinary");
     }
 }

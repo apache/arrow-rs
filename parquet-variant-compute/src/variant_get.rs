@@ -3112,6 +3112,124 @@ mod test {
     }
 
     #[test]
+    fn test_error_message_string_type_display() {
+        let variant_array: ArrayRef = ArrayRef::from(VariantArray::from_iter([Some(200)]));
+
+        for (dt, expected_name) in [
+            (DataType::Utf8, "Utf8"),
+            (DataType::LargeUtf8, "LargeUtf8"),
+            (DataType::Utf8View, "Utf8View"),
+        ] {
+            let options = GetOptions {
+                path: VariantPath::default(),
+                as_type: Some(Arc::new(Field::new("result", dt, true))),
+                cast_options: CastOptions {
+                    safe: false,
+                    ..Default::default()
+                },
+            };
+
+            let err = variant_get(&variant_array, options).unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains(&format!(
+                    "Failed to extract primitive of type {expected_name}"
+                )),
+                "Expected error message to contain '{expected_name}', got '{msg}'"
+            );
+            assert!(
+                !msg.contains("GenericByteBuilder") && !msg.contains("GenericByteViewBuilder"),
+                "Error message should not leak Rust builder type names: '{msg}'"
+            );
+        }
+    }
+
+    #[test]
+    fn test_error_message_binary_type_display() {
+        let variant_array: ArrayRef = ArrayRef::from(VariantArray::from_iter([Some(200)]));
+
+        for (dt, expected_name) in [
+            (DataType::Binary, "Binary"),
+            (DataType::LargeBinary, "LargeBinary"),
+            (DataType::BinaryView, "BinaryView"),
+        ] {
+            let options = GetOptions {
+                path: VariantPath::default(),
+                as_type: Some(Arc::new(Field::new("result", dt, true))),
+                cast_options: CastOptions {
+                    safe: false,
+                    ..Default::default()
+                },
+            };
+
+            let err = variant_get(&variant_array, options).unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains(&format!(
+                    "Failed to extract primitive of type {expected_name}"
+                )),
+                "Expected error message to contain '{expected_name}', got '{msg}'"
+            );
+            assert!(
+                !msg.contains("GenericByteBuilder") && !msg.contains("GenericByteViewBuilder"),
+                "Error message should not leak Rust builder type names: '{msg}'"
+            );
+        }
+    }
+
+    #[test]
+    fn test_error_message_json_variant_string_and_binary_display() {
+        // Control: extracting Int32 from string "n/a" triggers a cast error
+        let control_input: ArrayRef =
+            Arc::new(arrow::array::StringArray::from(vec![r#"{"status":"n/a"}"#]));
+        let control_variant = ArrayRef::from(json_to_variant(&control_input).unwrap());
+        let control_options = GetOptions::new_with_path(VariantPath::try_from("status").unwrap())
+            .with_as_type(Some(Arc::new(Field::new("result", DataType::Int32, true))))
+            .with_cast_options(CastOptions {
+                safe: false,
+                ..Default::default()
+            });
+        let err = variant_get(&control_variant, control_options).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Failed to extract primitive of type Int32")
+        );
+
+        // Tested defect: extracting string and binary types from integer 200 triggers cast errors
+        let input: ArrayRef = Arc::new(arrow::array::StringArray::from(vec![r#"{"status":200}"#]));
+        let variant = ArrayRef::from(json_to_variant(&input).unwrap());
+
+        for (dt, expected_name) in [
+            (DataType::Utf8, "Utf8"),
+            (DataType::LargeUtf8, "LargeUtf8"),
+            (DataType::Utf8View, "Utf8View"),
+            (DataType::Binary, "Binary"),
+            (DataType::LargeBinary, "LargeBinary"),
+            (DataType::BinaryView, "BinaryView"),
+        ] {
+            let options = GetOptions::new_with_path(VariantPath::try_from("status").unwrap())
+                .with_as_type(Some(Arc::new(Field::new("result", dt, true))))
+                .with_cast_options(CastOptions {
+                    safe: false,
+                    ..Default::default()
+                });
+
+            let err = variant_get(&variant, options).unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains(&format!(
+                    "Failed to extract primitive of type {expected_name}"
+                )),
+                "Expected error message to contain '{expected_name}', got '{msg}'"
+            );
+            assert!(
+                !msg.contains("GenericByteBuilder") && !msg.contains("GenericByteViewBuilder"),
+                "Error message should not leak Rust builder type names: '{msg}'"
+            );
+        }
+    }
+
+    #[test]
     fn test_null_buffer_union_for_shredded_paths() {
         // Test that null buffers are properly unioned when traversing shredded paths
         // This test verifies scovich's null buffer union requirement
