@@ -47,6 +47,8 @@ excludes = [
   # format/FlightSql.proto; the generated files have no ASF header.
   "arrow-flight/src/arrow.flight.protocol.rs",
   "arrow-flight/src/sql/arrow.flight.protocol.sql.rs",
+  # Generated protobuf descriptors are binary and cannot contain source headers.
+  "arrow-flight/src/flight_descriptor.bin",
   # We don't want license showing up on templates
   ".github/pull_request_template.md",
   ".github/ISSUE_TEMPLATE/bug_report.yml",

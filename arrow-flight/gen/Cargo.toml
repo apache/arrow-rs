@@ -18,6 +18,7 @@ publish = false
 [dependencies]
 # Pin specific version of the tonic-build dependencies to avoid auto-generated
 # (and checked in) arrow.flight.protocol.rs from changing
+prost = { version = "0.14.1", default-features = false }
 prost-build = { version = "0.14.1", default-features = false }
 tonic-prost-build = { version = "=0.14.9", default-features = false }
 
