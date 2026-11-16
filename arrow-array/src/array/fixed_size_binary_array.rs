@@ -406,7 +406,11 @@ impl FixedSizeBinaryArray {
     ///
     /// # Errors
     ///
-    /// Returns an error for empty input, mismatched lengths, overflow, or allocation failure.
+    /// Returns an error for:
+    /// - Empty input
+    /// - Mismatched lengths
+    /// - Overflow
+    /// - Allocation failure
     #[deprecated(
         since = "28.0.0",
         note = "This function will fail if the iterator produces only None values; prefer `try_from_sparse_iter_with_size`"
