@@ -1197,6 +1197,16 @@ impl IpcDataGenerator {
                 ipc_write_context,
                 write_options,
             )?;
+            // For RunEndEncoded columns the writer writes the children of
+            // the unsliced run array, so the variadic counts must be
+            // computed from the same unsliced array: the original array
+            // can still hold data buffers (e.g. a Utf8View values array
+            // with a non-inlined string) that the empty unsliced array
+            // does not write.
+            let array_data = match array_data.data_type() {
+                DataType::RunEndEncoded(_, _) => unslice_run_array(array_data)?,
+                _ => array_data,
+            };
             append_variadic_buffer_counts(&mut variadic_buffer_counts, &array_data);
         }
 
