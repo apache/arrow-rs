@@ -246,6 +246,15 @@ impl InferredDataType {
 
     /// Updates the [`InferredDataType`] with the given string
     fn update(&mut self, string: &str) {
+        if string.is_ascii() {
+            self.update_lexical(string);
+        } else {
+            self.packed |= 1 << 8; // Utf8
+        }
+    }
+
+    // Header detection retains lexical hints even when the decoder needs Utf8.
+    fn update_lexical(&mut self, string: &str) {
         self.packed |= if string.starts_with('"') {
             1 << 8 // Utf8
         } else if let Some(m) = REGEX_SET.matches(string).into_iter().next() {
@@ -404,7 +413,7 @@ impl Format {
         let mut first_types = vec![InferredDataType::default(); first_record.len()];
         for (value, inferred) in first_record.iter().zip(&mut first_types) {
             if !self.null_regex.is_null(value) {
-                inferred.update(value);
+                inferred.update_lexical(value);
             }
         }
 
@@ -418,7 +427,7 @@ impl Format {
             records_count += 1;
             for (value, inferred) in record.iter().zip(&mut column_types) {
                 if !self.null_regex.is_null(value) {
-                    inferred.update(value);
+                    inferred.update_lexical(value);
                 }
             }
         }
@@ -1464,6 +1473,133 @@ mod tests {
             let rows: usize = reader.map(|batch| batch.unwrap().num_rows()).sum();
             assert_eq!(rows, records_read, "CSV: {csv:?}");
         }
+    }
+
+    fn read_inferred_csv(schema: Schema, format: Format, csv: &str) -> RecordBatch {
+        let mut batches = ReaderBuilder::new(Arc::new(schema))
+            .with_format(format)
+            .build(Cursor::new(csv))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(batches.len(), 1);
+        batches.pop().unwrap()
+    }
+
+    #[test]
+    fn test_infer_schema_unicode_values() {
+        for csv in [
+            "١\n٢\n",
+            "１\n２\n",
+            "١.٥\n٢.٥\n",
+            "1e٣\n2e٣\n",
+            "1\n٢\n",
+            "٢٠٢٦-١١-٠٩\n٢٠٢٦-١١-١٠\n",
+            "٢٠٢٦-١١-٠٩T١٢:٣٠:٠٠\n٢٠٢٦-١١-١٠T١٢:٣٠:٠٠\n",
+            "٢٠٢٦-١١-٠٩T١٢:٣٠:٠٠.١٢٣\n٢٠٢٦-١١-١٠T١٢:٣٠:٠٠.١٢٣\n",
+            "2026-11-09T12:30:00.١٢٣٤٥٦\n2026-11-10T12:30:00.١٢٣٤٥٦\n",
+            "2026-11-09T12:30:00.١٢٣٤٥٦٧٨٩\n2026-11-10T12:30:00.١٢٣٤٥٦٧٨٩\n",
+            "2026-11-09T12:30:00+٠١:٠٠\n2026-11-10T12:30:00+٠١:٠٠\n",
+            "falſe\nfalſe\n",
+            "α\nβ\n",
+        ] {
+            let (schema, records) = Format::default()
+                .infer_schema(Cursor::new(csv), None)
+                .unwrap();
+            assert_eq!(schema.field(0).data_type(), &DataType::Utf8, "{csv:?}");
+            assert_eq!(records, 2);
+            let batch = read_inferred_csv(schema, Format::default(), csv);
+            assert_eq!(
+                batch.column(0).as_string::<i32>(),
+                &StringArray::from_iter_values(csv.lines())
+            );
+        }
+    }
+
+    #[test]
+    fn test_infer_format_unicode_values() {
+        for (csv, max_records, name, expected) in [
+            ("١\n2\n3\n", None, "column_1", vec!["١", "2", "3"]),
+            ("count\n١\n٢\n", None, "count", vec!["١", "٢"]),
+            (
+                "count\n1\n٢\n",
+                Some(0),
+                "column_1",
+                vec!["count", "1", "٢"],
+            ),
+            ("count\n1\n٢\n", Some(1), "count", vec!["1", "٢"]),
+        ] {
+            let (format, format_records) = Format::default()
+                .infer_format(Cursor::new(csv), max_records)
+                .unwrap();
+            assert_eq!(format_records, max_records.map_or(3, |n| n + 1));
+            let (schema, records) = format.infer_schema(Cursor::new(csv), None).unwrap();
+            assert_eq!(schema.fields().len(), 1);
+            assert_eq!(schema.field(0), &Field::new(name, DataType::Utf8, true));
+            assert_eq!(records, expected.len());
+            let batch = read_inferred_csv(schema, format, csv);
+            assert_eq!(
+                batch.column(0).as_string::<i32>(),
+                &StringArray::from(expected)
+            );
+        }
+
+        let csv = "name,count,rank\nalice,١,1\nbob,٢,2\n";
+        let (format, _) = Format::default()
+            .infer_format(Cursor::new(csv), None)
+            .unwrap();
+        let (schema, records) = format.infer_schema(Cursor::new(csv), None).unwrap();
+        assert_eq!(records, 2);
+        assert_eq!(
+            schema,
+            Schema::new(vec![
+                Field::new("name", DataType::Utf8, true),
+                Field::new("count", DataType::Utf8, true),
+                Field::new("rank", DataType::Int64, true),
+            ])
+        );
+        let batch = read_inferred_csv(schema, format, csv);
+        assert_eq!(
+            batch.column(0).as_string::<i32>(),
+            &StringArray::from(vec!["alice", "bob"])
+        );
+        assert_eq!(
+            batch.column(1).as_string::<i32>(),
+            &StringArray::from(vec!["١", "٢"])
+        );
+        assert_eq!(
+            batch.column(2).as_primitive::<Int64Type>(),
+            &Int64Array::from(vec![1, 2])
+        );
+    }
+
+    #[test]
+    fn test_infer_schema_unicode_nulls_and_sample() {
+        let csv = "count\n١\n2\n";
+        let (format, _) = Format::default()
+            .with_null_regex(Regex::new("^١$").unwrap())
+            .infer_format(Cursor::new(csv), None)
+            .unwrap();
+        let (schema, records) = format.infer_schema(Cursor::new(csv), None).unwrap();
+        assert_eq!(records, 2);
+        assert_eq!(schema.field(0), &Field::new("count", DataType::Int64, true));
+        let batch = read_inferred_csv(schema, format, csv);
+        assert_eq!(
+            batch.column(0).as_primitive::<Int64Type>(),
+            &Int64Array::from(vec![None, Some(2)])
+        );
+
+        // A value beyond the schema sample cannot change the inferred type.
+        let csv = "1\n٢\n";
+        let (schema, records) = Format::default()
+            .infer_schema(Cursor::new(csv), Some(1))
+            .unwrap();
+        assert_eq!(records, 1);
+        assert_eq!(schema.field(0).data_type(), &DataType::Int64);
+        let mut reader = ReaderBuilder::new(Arc::new(schema))
+            .build(Cursor::new(csv))
+            .unwrap();
+        assert!(reader.next().unwrap().is_err());
     }
 
     #[test]

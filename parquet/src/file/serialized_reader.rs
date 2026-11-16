@@ -2223,6 +2223,29 @@ mod tests {
     }
 
     #[test]
+    fn test_file_reader_empty_row_groups_with_zero_list_header() {
+        let schema = parse_message_type("message test_schema { OPTIONAL INT32 k; }").unwrap();
+        let mut out = Vec::new();
+        SerializedFileWriter::new(&mut out, Arc::new(schema), Default::default())
+            .unwrap()
+            .close()
+            .unwrap();
+
+        // fastparquet writes the empty row_groups list header as 0x00 instead
+        // of 0x0C (size 0, struct). Patch the footer to match: num_rows = 0
+        // (field 3, i64) followed by the row_groups field header and list header.
+        let pos = out
+            .windows(4)
+            .position(|w| w == [0x16, 0x00, 0x19, 0x0C])
+            .expect("empty row_groups list header not found in footer");
+        out[pos + 3] = 0x00;
+
+        let reader = SerializedFileReader::new(Bytes::from(out)).unwrap();
+        assert_eq!(reader.metadata().num_row_groups(), 0);
+        assert_eq!(reader.metadata().file_metadata().num_rows(), 0);
+    }
+
+    #[test]
     // Use java parquet-tools get below pageIndex info
     // !```
     // parquet-tools column-index ./data_index_bloom_encoding_stats.parquet
