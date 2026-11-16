@@ -478,11 +478,18 @@ fn unless_valid_overflow<T: ArrowPrimitiveType>(
     overflowed: impl Fn(usize) -> bool,
 ) -> Option<PrimitiveArray<T>> {
     let valid_overflow = overflow
-        && nulls.as_ref().is_none_or(|n| {
-            let overflowed = BooleanBuffer::collect_bool(n.len(), overflowed);
-            (n.inner() & &overflowed).count_set_bits() != 0
-        });
+        && nulls
+            .as_ref()
+            .is_none_or(|n| any_valid(n, &BooleanBuffer::collect_bool(n.len(), overflowed)));
     (!valid_overflow).then(|| PrimitiveArray::new(values.into(), nulls))
+}
+
+/// Whether any valid row of `nulls` is set in `overflowed`
+fn any_valid(nulls: &NullBuffer, overflowed: &BooleanBuffer) -> bool {
+    let valid = nulls.inner().bit_chunks().iter_padded();
+    valid
+        .zip(overflowed.bit_chunks().iter_padded())
+        .any(|(v, o)| v & o != 0)
 }
 
 /// Converts an allocation failure in [`collect_overflowing`].
