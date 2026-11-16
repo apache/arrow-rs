@@ -14,6 +14,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // protoc in Ubuntu builder needs this option
         .protoc_arg("--experimental_allow_proto3_optional")
         .out_dir("src")
+        .file_descriptor_set_path("src/flight_descriptor.bin")
         .compile_with_config(prost_config(), &[proto_path], &[proto_dir])?;
 
     let buffer = std::fs::read_to_string("src/arrow.flight.protocol.rs")?;
