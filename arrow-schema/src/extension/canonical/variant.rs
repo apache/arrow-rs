@@ -59,30 +59,42 @@ impl ExtensionType for VariantType {
                 DataType::Binary | DataType::LargeBinary | DataType::BinaryView
             )
         };
-        let ok = match data_type {
-            DataType::Struct(fields) => {
-                let metadata_ok =
-                    fields
-                        .find("metadata")
-                        .is_some_and(|(_, field)| match field.data_type() {
-                            DataType::Dictionary(_, values) => is_binary(values),
-                            DataType::RunEndEncoded(_, values) => is_binary(values.data_type()),
-                            other => is_binary(other),
-                        });
-                let value_ok = match fields.find("value") {
-                    Some((_, field)) => is_binary(field.data_type()),
-                    None => fields.find("typed_value").is_some(),
-                };
-                metadata_ok && value_ok
-            }
-            _ => false,
+        let err = |message: String| Err(ArrowError::InvalidArgumentError(message));
+
+        let DataType::Struct(fields) = data_type else {
+            return err(format!(
+                "VariantType only supports StructArray, got {data_type}"
+            ));
         };
 
-        ok.then_some(()).ok_or_else(|| {
-            ArrowError::InvalidArgumentError(format!(
-                "VariantType data type mismatch, expected Struct with binary \"metadata\" and binary \"value\" and/or \"typed_value\" fields, found {data_type}"
-            ))
-        })
+        let Some((_, metadata)) = fields.find("metadata") else {
+            return err(
+                "Invalid VariantType: StructArray must contain a 'metadata' field".to_string(),
+            );
+        };
+        let metadata_ok = match metadata.data_type() {
+            DataType::Dictionary(_, values) => is_binary(values),
+            DataType::RunEndEncoded(_, values) => is_binary(values.data_type()),
+            other => is_binary(other),
+        };
+        if !metadata_ok {
+            return err(format!(
+                "VariantType 'metadata' field must be Binary, LargeBinary, BinaryView, or a Dictionary or RunEndEncoded array of one of those types, got {}",
+                metadata.data_type()
+            ));
+        }
+
+        match fields.find("value") {
+            Some((_, value)) if !is_binary(value.data_type()) => err(format!(
+                "VariantType 'value' field must be Binary, LargeBinary, or BinaryView, got {}",
+                value.data_type()
+            )),
+            None if fields.find("typed_value").is_none() => err(
+                "Invalid VariantType: StructArray must contain a 'value' or 'typed_value' field"
+                    .to_string(),
+            ),
+            _ => Ok(()),
+        }
     }
 
     fn try_new(data_type: &DataType, _metadata: Self::Metadata) -> Result<Self, ArrowError> {
@@ -170,29 +182,45 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Invalid argument error: VariantType data type mismatch, expected Struct with binary \"metadata\" and binary \"value\" and/or \"typed_value\" fields, found Binary"
+            "Invalid argument error: VariantType only supports StructArray, got Binary"
         );
 
         let invalid = [
-            storage(vec![Field::new("unrelated", DataType::Int32, false)]),
-            storage(vec![
-                metadata(DataType::FixedSizeBinary(16)),
-                value(DataType::BinaryView),
-            ]),
-            storage(vec![
-                metadata(DataType::Dictionary(
-                    Box::new(DataType::Int8),
-                    Box::new(DataType::Utf8),
-                )),
-                value(DataType::BinaryView),
-            ]),
-            storage(vec![metadata(DataType::BinaryView), value(DataType::Utf8)]),
-            storage(vec![metadata(DataType::BinaryView)]),
+            (
+                storage(vec![Field::new("unrelated", DataType::Int32, false)]),
+                "Invalid VariantType: StructArray must contain a 'metadata' field",
+            ),
+            (
+                storage(vec![
+                    metadata(DataType::FixedSizeBinary(16)),
+                    value(DataType::BinaryView),
+                ]),
+                "VariantType 'metadata' field must be Binary, LargeBinary, BinaryView, or a Dictionary or RunEndEncoded array of one of those types, got FixedSizeBinary(16)",
+            ),
+            (
+                storage(vec![
+                    metadata(DataType::Dictionary(
+                        Box::new(DataType::Int8),
+                        Box::new(DataType::Utf8),
+                    )),
+                    value(DataType::BinaryView),
+                ]),
+                "VariantType 'metadata' field must be Binary, LargeBinary, BinaryView, or a Dictionary or RunEndEncoded array of one of those types, got Dictionary(Int8, Utf8)",
+            ),
+            (
+                storage(vec![metadata(DataType::BinaryView), value(DataType::Utf8)]),
+                "VariantType 'value' field must be Binary, LargeBinary, or BinaryView, got Utf8",
+            ),
+            (
+                storage(vec![metadata(DataType::BinaryView)]),
+                "Invalid VariantType: StructArray must contain a 'value' or 'typed_value' field",
+            ),
         ];
-        for data_type in invalid {
-            assert!(
-                VariantType::validate(&data_type, "").is_err(),
-                "{data_type}"
+        for (data_type, expected) in invalid {
+            let err = VariantType::validate(&data_type, "").unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                format!("Invalid argument error: {expected}")
             );
         }
     }

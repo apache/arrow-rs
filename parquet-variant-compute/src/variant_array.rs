@@ -1299,7 +1299,7 @@ mod test {
         let err = VariantArray::try_new(&array).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Invalid argument error: VariantType data type mismatch, expected Struct with binary \"metadata\" and binary \"value\" and/or \"typed_value\" fields, found Struct(\"metadata\": non-null BinaryView, \"value\": UInt8)"
+            "Invalid argument error: VariantType 'value' field must be Binary, LargeBinary, or BinaryView, got UInt8"
         );
     }
 
