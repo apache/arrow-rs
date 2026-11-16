@@ -71,6 +71,12 @@ pub(crate) fn run_len(indicator_value: u64) -> Result<u32> {
 /// non-negative level.
 pub(crate) trait RleValue: Copy + PartialEq {
     fn to_u64(self) -> u64;
+
+    /// Whether every value of `group` is the same.
+    #[inline]
+    fn all_equal(group: &[Self; BIT_PACK_GROUP_SIZE]) -> bool {
+        group.iter().all(|&v| v == group[0])
+    }
 }
 
 impl RleValue for u64 {
@@ -84,6 +90,13 @@ impl RleValue for i16 {
     #[inline]
     fn to_u64(self) -> u64 {
         self as u64
+    }
+
+    // Compares the whole group without exiting early: levels take few distinct
+    // values, so where an early exit would happen is hard to predict
+    #[inline]
+    fn all_equal(group: &[Self; BIT_PACK_GROUP_SIZE]) -> bool {
+        group.iter().fold(true, |equal, &v| equal & (v == group[0]))
     }
 }
 
@@ -132,11 +145,23 @@ pub struct RleEncoder {
     // Underlying writer which holds an internal buffer.
     bit_writer: BitWriter,
 
-    // Values of the current in-progress bit-packed run, including the partially
-    // filled trailing group. Only materialized into `bit_writer` when the run
-    // closes, so the whole run can be packed in one vectorised `put_batch` call.
-    // Bounded by `MAX_GROUPS_PER_BIT_PACKED_RUN * BIT_PACK_GROUP_SIZE` values.
-    pending_values: Vec<u64>,
+    // The complete groups of the current bit-packed run. Values of up to 8 bits are
+    // packed into `packed_run`, `bit_width` bytes per group, as each group completes.
+    // Wider values, such as the indices of a large dictionary, go to `wide_run`, and
+    // are packed together when the run closes: one `put_batch` call is faster for them
+    // than packing each group. Written to `bit_writer` after the run's indicator byte,
+    // at most `MAX_GROUPS_PER_BIT_PACKED_RUN` groups later.
+    packed_run: Vec<u8>,
+    wide_run: Vec<u64>,
+
+    // The number of complete groups in the current bit-packed run.
+    packed_groups: usize,
+
+    // The values of the current run's trailing group, until it is complete.
+    partial_group: [u64; BIT_PACK_GROUP_SIZE],
+
+    // The number of values in `partial_group`.
+    partial_len: usize,
 
     // The current (also last) value that was written and the count of how many
     // times in a row that value has been seen.
@@ -161,7 +186,11 @@ impl RleEncoder {
         RleEncoder {
             bit_width,
             bit_writer,
-            pending_values: Vec::new(),
+            packed_run: Vec::new(),
+            wide_run: Vec::new(),
+            packed_groups: 0,
+            partial_group: [0; BIT_PACK_GROUP_SIZE],
+            partial_len: 0,
             current_value: 0,
             repeat_count: 0,
         }
@@ -236,19 +265,16 @@ impl RleEncoder {
         } else {
             if self.repeat_count >= BIT_PACK_GROUP_SIZE {
                 // The current RLE run has ended and we've gathered enough. Flush first.
-                debug_assert!(self.pending_values.is_empty());
+                debug_assert_eq!(self.pending_len(), 0);
                 self.flush_rle_run();
             }
             self.repeat_count = 1;
             self.current_value = value;
         }
 
-        self.pending_values.push(value);
-        if self
-            .pending_values
-            .len()
-            .is_multiple_of(BIT_PACK_GROUP_SIZE)
-        {
+        self.partial_group[self.partial_len] = value;
+        self.partial_len += 1;
+        if self.partial_len == BIT_PACK_GROUP_SIZE {
             // A group of values is complete. Decide its encoding.
             self.commit_group();
         }
@@ -274,47 +300,44 @@ impl RleEncoder {
     ) {
         let mut i = 0;
         while i < values.len() {
-            // Extend an active RLE run with its whole continuation at once
-            if self.repeat_count >= BIT_PACK_GROUP_SIZE && values[i].to_u64() == self.current_value
-            {
-                let run_len = run_length(&values[i..]);
-                observer.run(values[i], run_len);
-                self.repeat_count += run_len;
-                i += run_len;
-                continue;
+            if self.repeat_count >= BIT_PACK_GROUP_SIZE {
+                // Extend an active RLE run with its whole continuation at once
+                if values[i].to_u64() == self.current_value {
+                    let run_len = run_length(&values[i..]);
+                    observer.run(values[i], run_len);
+                    self.repeat_count += run_len;
+                    i += run_len;
+                    continue;
+                }
+                // The run ends here. Writing it out now, as `put` would on this value,
+                // leaves the encoder at a group boundary, so the values after the run
+                // take the group path below instead of the per-value path
+                self.flush_rle_run();
             }
 
             // Whole groups bypass the per-value state machine while the pending run is
-            // group-aligned and no RLE run is being accumulated. `repeat_count` is
-            // always 0 here: `commit_group` resets it whenever a group completes, and
-            // that is the only way to reach a group-aligned state
-            if self.repeat_count < BIT_PACK_GROUP_SIZE
-                && self
-                    .pending_values
-                    .len()
-                    .is_multiple_of(BIT_PACK_GROUP_SIZE)
-                && values.len() - i >= BIT_PACK_GROUP_SIZE
-            {
+            // group-aligned. `repeat_count` is always 0 here: `commit_group` resets it
+            // whenever a group completes, and that is the only way to reach a
+            // group-aligned state outside an RLE run
+            if self.partial_len == 0 && values.len() - i >= BIT_PACK_GROUP_SIZE {
                 debug_assert_eq!(self.repeat_count, 0);
                 let group: &[T; BIT_PACK_GROUP_SIZE] =
                     values[i..i + BIT_PACK_GROUP_SIZE].try_into().unwrap();
                 i += BIT_PACK_GROUP_SIZE;
-                if group.iter().all(|&v| v == group[0]) {
+                if T::all_equal(group) {
                     observer.run(group[0], BIT_PACK_GROUP_SIZE);
                     // The same decision `commit_group` makes for a group holding a
                     // single repeated value, without appending it first
-                    if !self.pending_values.is_empty() {
+                    if self.packed_groups > 0 {
                         self.close_bit_packed_run();
                     }
                     self.current_value = group[0].to_u64();
                     self.repeat_count = BIT_PACK_GROUP_SIZE;
                 } else {
                     observer.packed_group(group);
-                    self.pending_values
-                        .extend(group.iter().map(|&value| value.to_u64()));
+                    self.pack_group(group);
                     self.current_value = group[BIT_PACK_GROUP_SIZE - 1].to_u64();
-                    let num_groups = self.pending_values.len() / BIT_PACK_GROUP_SIZE;
-                    if num_groups + 1 >= MAX_GROUPS_PER_BIT_PACKED_RUN {
+                    if self.packed_groups + 1 >= MAX_GROUPS_PER_BIT_PACKED_RUN {
                         self.close_bit_packed_run();
                     }
                 }
@@ -339,7 +362,7 @@ impl RleEncoder {
     pub fn len(&self) -> usize {
         // Include the eventual size of the pending bit-packed run, so size estimates
         // do not lag behind by up to a full run
-        let pending_bytes = match self.pending_values.len() {
+        let pending_bytes = match self.pending_len() {
             0 => 0,
             n => 1 + bit_util::ceil(n * self.bit_width as usize, u8::BITS as usize),
         };
@@ -378,7 +401,10 @@ impl RleEncoder {
     #[inline]
     pub fn clear(&mut self) {
         self.bit_writer.clear();
-        self.pending_values.clear();
+        self.packed_run.clear();
+        self.wide_run.clear();
+        self.packed_groups = 0;
+        self.partial_len = 0;
         self.current_value = 0;
         self.repeat_count = 0;
     }
@@ -394,19 +420,20 @@ impl RleEncoder {
     /// internal writer.
     #[inline]
     pub fn flush(&mut self) {
-        if !self.pending_values.is_empty() || self.repeat_count > 0 {
-            let tail = self.pending_values.len() % BIT_PACK_GROUP_SIZE;
-            let all_repeat =
-                self.pending_values.len() == tail && (self.repeat_count == tail || tail == 0);
+        if self.pending_len() > 0 || self.repeat_count > 0 {
+            let tail = self.partial_len;
+            let all_repeat = self.packed_groups == 0 && (self.repeat_count == tail || tail == 0);
             if self.repeat_count > 0 && all_repeat {
                 self.flush_rle_run();
             } else {
                 // Pad the last group of bit-packed values to BIT_PACK_GROUP_SIZE with 0s.
                 if tail > 0 {
-                    self.pending_values
-                        .resize(self.pending_values.len() + BIT_PACK_GROUP_SIZE - tail, 0);
+                    self.partial_group[tail..].fill(0);
+                    self.partial_len = 0;
+                    let group = self.partial_group;
+                    self.pack_group(&group);
                 }
-                if !self.pending_values.is_empty() {
+                if self.packed_groups > 0 {
                     self.close_bit_packed_run();
                 }
                 self.repeat_count = 0;
@@ -422,7 +449,8 @@ impl RleEncoder {
             self.current_value,
             bit_util::ceil(self.bit_width as usize, u8::BITS as usize),
         );
-        self.pending_values.clear();
+        debug_assert_eq!(self.packed_groups, 0);
+        self.partial_len = 0;
         self.repeat_count = 0;
     }
 
@@ -430,12 +458,11 @@ impl RleEncoder {
     // the pending bit-packed run, or drops it and switches to RLE when it repeats a
     // single value.
     fn commit_group(&mut self) {
+        self.partial_len = 0;
         if self.repeat_count >= BIT_PACK_GROUP_SIZE {
             // The group repeats a single value, drop it and let `repeat_count` track
             // the run in RLE mode instead
-            self.pending_values
-                .truncate(self.pending_values.len() - BIT_PACK_GROUP_SIZE);
-            if !self.pending_values.is_empty() {
+            if self.packed_groups > 0 {
                 // In this case we have chosen to switch to RLE encoding. Close out the
                 // previous bit-packed run.
                 self.close_bit_packed_run();
@@ -443,8 +470,9 @@ impl RleEncoder {
             return;
         }
 
-        let num_groups = self.pending_values.len() / BIT_PACK_GROUP_SIZE;
-        if num_groups + 1 >= MAX_GROUPS_PER_BIT_PACKED_RUN {
+        let group = self.partial_group;
+        self.pack_group(&group);
+        if self.packed_groups + 1 >= MAX_GROUPS_PER_BIT_PACKED_RUN {
             // We've reached the maximum value that can be hold in a single bit-packed
             // run.
             self.close_bit_packed_run();
@@ -452,23 +480,68 @@ impl RleEncoder {
         self.repeat_count = 0;
     }
 
-    // Called when ending a bit-packed run. Writes the indicator byte followed by all
-    // pending values in packed form. Deferring the packing until here allows the whole
-    // run to go through the vectorised `put_batch` in one call.
+    // Called when ending a bit-packed run. Writes the indicator byte followed by the
+    // run's packed groups.
     fn close_bit_packed_run(&mut self) {
-        debug_assert_eq!(self.pending_values.len() % BIT_PACK_GROUP_SIZE, 0);
-        let num_groups = self.pending_values.len() / BIT_PACK_GROUP_SIZE;
-        let indicator_byte = ((num_groups << 1) | 1) as u8;
+        debug_assert_eq!(self.partial_len, 0);
+        let indicator_byte = ((self.packed_groups << 1) | 1) as u8;
         self.bit_writer.put_aligned(indicator_byte, 1);
-        self.bit_writer
-            .put_batch(&self.pending_values, self.bit_width as usize);
-        self.pending_values.clear();
+        if self.bit_width > 8 {
+            self.bit_writer
+                .put_batch(&self.wide_run, self.bit_width as usize);
+            self.wide_run.clear();
+        } else {
+            self.bit_writer
+                .get_next_byte_ptr(self.packed_run.len())
+                .copy_from_slice(&self.packed_run);
+            self.packed_run.clear();
+        }
+        self.packed_groups = 0;
+    }
+
+    // Appends `group` to the current bit-packed run. Values are packed least
+    // significant bit first, which for a group of 8 always ends on a byte boundary.
+    // Called once per group, so a call would cost as much as the packing
+    #[inline(always)]
+    fn pack_group<T: RleValue>(&mut self, group: &[T; BIT_PACK_GROUP_SIZE]) {
+        let bit_width = self.bit_width as usize;
+        if bit_width == 1 {
+            // As for the definition levels of flat nullable columns: constant shifts
+            let packed = group
+                .iter()
+                .enumerate()
+                .fold(0u8, |packed, (k, v)| packed | ((v.to_u64() as u8) << k));
+            self.packed_run.push(packed);
+        } else if bit_width <= 8 {
+            let packed = group.iter().enumerate().fold(0u64, |packed, (k, v)| {
+                packed | (v.to_u64() << (k * bit_width))
+            });
+            self.push_low_bytes(packed, bit_width);
+        } else {
+            self.wide_run.extend(group.iter().map(|v| v.to_u64()));
+        }
+        self.packed_groups += 1;
+    }
+
+    // Appends the `len` low bytes of `bytes`. Writing all 8 and truncating is a fixed
+    // size store, where copying `len` bytes would be a call to `memcpy`.
+    #[inline]
+    fn push_low_bytes(&mut self, bytes: u64, len: usize) {
+        let end = self.packed_run.len() + len;
+        self.packed_run.extend_from_slice(&bytes.to_le_bytes());
+        self.packed_run.truncate(end);
+    }
+
+    // The number of values in the current bit-packed run.
+    fn pending_len(&self) -> usize {
+        self.packed_groups * BIT_PACK_GROUP_SIZE + self.partial_len
     }
 
     /// return the estimated memory size of this encoder.
     pub(crate) fn estimated_memory_size(&self) -> usize {
         self.bit_writer.estimated_memory_size()
-            + self.pending_values.capacity() * std::mem::size_of::<u64>()
+            + self.packed_run.capacity()
+            + self.wide_run.capacity() * std::mem::size_of::<u64>()
             + std::mem::size_of::<Self>()
     }
 }
