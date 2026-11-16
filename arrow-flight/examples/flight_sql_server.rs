@@ -1024,6 +1024,11 @@ mod tests {
                 );
             }
             for file in &files {
+                assert!(
+                    file.source_code_info.is_none(),
+                    "{} contains source metadata",
+                    file.name()
+                );
                 for dependency in &file.dependency {
                     assert!(
                         files.iter().any(|f| f.name() == dependency),

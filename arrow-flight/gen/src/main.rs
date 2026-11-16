@@ -6,16 +6,29 @@
 
 use std::{fs::OpenOptions, io::Write, path::Path};
 
+use prost::Message;
+use tonic_prost_build::FileDescriptorSet;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proto_dir = Path::new("../format");
     let proto_path = Path::new("../format/Flight.proto");
+    let descriptor_path = Path::new("src/flight_descriptor.bin");
 
     tonic_prost_build::configure()
         // protoc in Ubuntu builder needs this option
         .protoc_arg("--experimental_allow_proto3_optional")
         .out_dir("src")
-        .file_descriptor_set_path("src/flight_descriptor.bin")
+        .file_descriptor_set_path(descriptor_path)
         .compile_with_config(prost_config(), &[proto_path], &[proto_dir])?;
+
+    let mut descriptors = FileDescriptorSet::decode(std::fs::read(descriptor_path)?.as_slice())?;
+    // Comments and source locations can differ between protobuf installations,
+    // causing the vendored-code CI check to fail. Strip them after code generation
+    // to preserve the generated Rust documentation.
+    for file in &mut descriptors.file {
+        file.source_code_info = None;
+    }
+    std::fs::write(descriptor_path, descriptors.encode_to_vec())?;
 
     let buffer = std::fs::read_to_string("src/arrow.flight.protocol.rs")?;
     // append warning that file was auto-generated
