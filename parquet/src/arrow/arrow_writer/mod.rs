@@ -5042,6 +5042,50 @@ mod tests {
     }
 
     #[test]
+    fn test_dictionary_array_writes_same_file_as_its_values() {
+        // Small dictionaries get their statistics from the values the rows reference, the
+        // largest from the rows. Either way they must be the plain values' statistics
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = move |n: u64| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state % n
+        };
+        for dict_len in [1, 3, 50, 2000, 100_000] {
+            let values: StringArray = (0..dict_len)
+                .map(|i| (i % 11 != 3).then(|| format!("{:03x}", next(4096))))
+                .collect();
+            let keys: Int32Array = (0..5000)
+                .map(|_| (next(10) != 0).then(|| next(dict_len) as i32))
+                .collect();
+            let dictionary = DictionaryArray::new(keys, Arc::new(values));
+            let plain = cast(&dictionary, &DataType::Utf8).unwrap();
+            let write = |array: ArrayRef| {
+                let batch = RecordBatch::try_from_iter_with_nullable([("c", array, true)]).unwrap();
+                let props = WriterProperties::builder()
+                    .set_write_batch_size(64)
+                    .set_data_page_size_limit(1024)
+                    .build();
+                let options = ArrowWriterOptions::new()
+                    .with_properties(props)
+                    .with_skip_arrow_metadata(true);
+                let mut buf = Vec::new();
+                let mut writer =
+                    ArrowWriter::try_new_with_options(&mut buf, batch.schema(), options).unwrap();
+                writer.write(&batch).unwrap();
+                writer.close().unwrap();
+                buf
+            };
+            assert_eq!(
+                write(Arc::new(dictionary)),
+                write(plain),
+                "dictionary of {dict_len} values"
+            );
+        }
+    }
+
+    #[test]
     fn test_disabled_statistics_with_page() {
         let file_schema = Schema::new(vec![
             Field::new("a", DataType::Utf8, true),

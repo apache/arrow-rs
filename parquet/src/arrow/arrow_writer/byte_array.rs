@@ -1042,7 +1042,7 @@ where
     &'a V: ArrayAccessor,
     <&'a V as ArrayAccessor>::Item: Copy + Ord + Default + AsRef<[u8]>,
 {
-    update_statistics(values, indices, encoder);
+    update_dictionary_statistics(values, indices, encoder);
     encoder
         .dict_encoder
         .as_mut()
@@ -1060,28 +1060,89 @@ where
         if let Some(accumulator) = encoder.geo_stats_accumulator.as_mut() {
             update_geo_stats_accumulator(accumulator.as_mut(), values, indices);
         } else if let Some((min, max)) = compute_min_max(values, indices, encoder.is_decimal) {
-            // Compare before copying: `write_gather` runs once per
-            // mini-batch, and a byte-budgeted mini-batch of large values can
-            // hold a single value, so an unconditional copy here would
-            // duplicate every value once for `min` and once for `max`.
-            let min = min.as_ref();
-            if encoder
-                .min_value
-                .as_ref()
-                .is_none_or(|m| is_greater(encoder.is_decimal, m.data(), min))
-            {
-                encoder.min_value = Some(min.to_vec().into());
-            }
-
-            let max = max.as_ref();
-            if encoder
-                .max_value
-                .as_ref()
-                .is_none_or(|m| is_greater(encoder.is_decimal, max, m.data()))
-            {
-                encoder.max_value = Some(max.to_vec().into());
-            }
+            update_min_max(encoder, min.as_ref(), max.as_ref());
         }
+    }
+}
+
+/// [`update_statistics`] for the rows of an arrow dictionary at `indices`, comparing each
+/// dictionary value they reference once rather than once per row
+fn update_dictionary_statistics<'a, K, V>(
+    values: TypedDictionaryArray<'a, K, V>,
+    indices: &[usize],
+    encoder: &mut ByteArrayEncoder,
+) where
+    K: ArrowDictionaryKeyType,
+    V: Sync + Send,
+    &'a V: ArrayAccessor,
+    <&'a V as ArrayAccessor>::Item: Copy + Ord + Default + AsRef<[u8]>,
+{
+    let dictionary_values = values.values();
+    // Rows only repeat values for certain when the dictionary is no larger than the batch,
+    // which also bounds the pass over the dictionary by the number of rows. Decimals
+    // compare numerically, so values with different bytes can tie, and which one becomes
+    // the statistic depends on the order of the rows
+    if encoder.statistics_enabled == EnabledStatistics::None
+        || encoder.geo_stats_accumulator.is_some()
+        || encoder.is_decimal
+        || dictionary_values.len() > indices.len()
+    {
+        return update_statistics(values, indices, encoder);
+    }
+
+    let keys = values.keys().values();
+    let mut referenced = vec![false; dictionary_values.len()];
+    for &idx in indices {
+        match referenced.get_mut(keys[idx].as_usize()) {
+            Some(referenced) => *referenced = true,
+            // A key outside the dictionary reads as an empty value
+            None => return update_statistics(values, indices, encoder),
+        }
+    }
+
+    let mut referenced_values = referenced
+        .iter()
+        .enumerate()
+        .filter(|(_, referenced)| **referenced)
+        .map(|(key, _)| dictionary_values.value(key));
+    if let Some(first) = referenced_values.next() {
+        let (min, max) = referenced_values.fold((first, first), |(min, max), value| {
+            (
+                if min.as_ref() > value.as_ref() {
+                    value
+                } else {
+                    min
+                },
+                if value.as_ref() > max.as_ref() {
+                    value
+                } else {
+                    max
+                },
+            )
+        });
+        update_min_max(encoder, min.as_ref(), max.as_ref());
+    }
+}
+
+/// Folds the `min` and `max` of a batch into the encoder's statistics
+fn update_min_max(encoder: &mut ByteArrayEncoder, min: &[u8], max: &[u8]) {
+    // Compare before copying: `write_gather` runs once per mini-batch, and a byte-budgeted
+    // mini-batch of large values can hold a single value, so an unconditional copy here
+    // would duplicate every value once for `min` and once for `max`.
+    if encoder
+        .min_value
+        .as_ref()
+        .is_none_or(|m| is_greater(encoder.is_decimal, m.data(), min))
+    {
+        encoder.min_value = Some(min.to_vec().into());
+    }
+
+    if encoder
+        .max_value
+        .as_ref()
+        .is_none_or(|m| is_greater(encoder.is_decimal, max, m.data()))
+    {
+        encoder.max_value = Some(max.to_vec().into());
     }
 }
 
