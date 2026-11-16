@@ -27,7 +27,7 @@ use parquet::data_type::{ByteArray, ByteArrayType};
 use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::errors::ParquetError;
-use parquet::file::metadata::{ColumnChunkMetaData, PageIndexPolicy, ParquetMetaData};
+use parquet::file::metadata::{ColumnChunkMetaData, KeyValue, PageIndexPolicy, ParquetMetaData};
 use parquet::file::properties::WriterProperties;
 use parquet::file::writer::SerializedFileWriter;
 use parquet::schema::parser::parse_message_type;
@@ -118,6 +118,59 @@ fn test_non_uniform_encryption_plaintext_footer() {
 
     // AES-256
     non_uniform_encryption_plaintext_footer(AES_256_FOOTER_KEY, AES_256_COLUMN_NAME_KEYS);
+}
+
+#[test]
+fn test_set_key_value_metadata_preserves_encrypted_reads() {
+    for filename in [
+        "encrypt_columns_and_footer.parquet.encrypted",
+        "encrypt_columns_plaintext_footer.parquet.encrypted",
+    ] {
+        let path = encryption_util::encrypted_data_path(AES_128_FOOTER_KEY, filename);
+        let file = File::open(path).unwrap();
+        let mut decryption = FileDecryptionProperties::builder(AES_128_FOOTER_KEY.to_vec());
+        for (name, key) in AES_128_COLUMN_NAME_KEYS {
+            decryption = decryption.with_column_key(name, key.to_vec());
+        }
+        let options = ArrowReaderOptions::new()
+            .with_file_decryption_properties(decryption.build().unwrap())
+            .with_page_index_policy(PageIndexPolicy::Required);
+        let loaded = ArrowReaderMetadata::load(&file, options).unwrap();
+        let cached = loaded.metadata();
+        let original_values = cached.file_metadata().key_value_metadata().cloned();
+        let values = vec![KeyValue::new(
+            "application.note".to_string(),
+            "updated".to_string(),
+        )];
+        let updated = Arc::new(
+            cached
+                .as_ref()
+                .clone()
+                .into_builder()
+                .set_key_value_metadata(Some(values.clone()))
+                .build(),
+        );
+        assert_eq!(updated.file_metadata().key_value_metadata(), Some(&values));
+        assert_eq!(
+            cached.file_metadata().key_value_metadata(),
+            original_values.as_ref()
+        );
+        assert!(Arc::ptr_eq(
+            cached.page_index().unwrap(),
+            updated.page_index().unwrap()
+        ));
+        verify_column_indexes(&updated);
+
+        // The rebuilt metadata must retain the decryptor without supplying the keys again.
+        let metadata =
+            ArrowReaderMetadata::try_new(updated.clone(), ArrowReaderOptions::new()).unwrap();
+        let batches = ParquetRecordBatchReaderBuilder::new_with_metadata(file, metadata)
+            .build()
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        encryption_util::verify_encryption_test_data(batches, &updated);
+    }
 }
 
 #[test]
