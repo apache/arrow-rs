@@ -256,18 +256,13 @@ impl VariantArray {
     ///
     /// # Errors:
     /// - If the data type is not valid [`VariantType`] storage
+    /// - If `typed_value` contains a type that cannot be shredded
     ///
     /// # Requirements of the `StructArray`
     ///
-    /// 1. A required field named `metadata` which is binary, large_binary, or
-    ///    binary_view, optionally dictionary or run-end-encoded
-    ///
-    /// 2. A field named `value` that is binary, large_binary, or binary_view,
-    ///    required unless `typed_value` is present
-    ///
-    /// 3. An optional field named `typed_value` which can be any primitive type
-    ///    or be a list, large_list, fixed_size_list, list_view or struct. Fixed-size lists are
-    ///    normalized to variable-length lists on read.
+    /// See [`VariantType`] for the required fields. `typed_value` can be any
+    /// primitive type or be a list, large_list, fixed_size_list, list_view or
+    /// struct. Fixed-size lists are normalized to variable-length lists on read.
     ///
     pub fn try_new(inner: &dyn Array) -> Result<Self> {
         // Before canonicalizing, which would report a non-Variant struct's fields as illegal

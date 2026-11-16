@@ -13,11 +13,20 @@ use crate::{ArrowError, DataType};
 /// See [`VariantArray`] in the `parquet-variant-compute` crate for more examples
 /// of using this extension type.
 ///
-/// The storage type must be a struct with a binary `metadata` field and at
-/// least one of a binary `value` field or a `typed_value` field. Nullability
-/// is not checked, matching `VariantArray`, so files written with a nullable
-/// unshredded `value` still read. Validating `typed_value` types and the
-/// encoded bytes is left to `VariantArray`.
+/// # Storage
+///
+/// The storage type must be a struct with the following fields, in any order:
+///
+/// 1. `metadata`: binary, large_binary, or binary_view, optionally dictionary
+///    or run-end encoded
+///
+/// 2. `value`: binary, large_binary, or binary_view, required unless
+///    `typed_value` is present
+///
+/// 3. `typed_value`: optional shredded values
+///
+/// The `typed_value` types and the encoded bytes are not checked here, see
+/// [`VariantArray`].
 ///
 /// [`VariantArray`]: https://docs.rs/parquet-variant-compute/latest/parquet_variant_compute/struct.VariantArray.html
 #[derive(Debug, Clone, PartialEq)]
