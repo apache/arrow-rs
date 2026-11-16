@@ -767,7 +767,7 @@ fn create_string_bench_batch_non_null(
 
 fn create_empty_string_bench_batch(size: usize) -> Result<RecordBatch> {
     let schema = Schema::new(vec![Field::new("_1", DataType::Utf8, false)]);
-    //  gives an all-empty array a values buffer
+    //  Gives an all-empty array a values buffer
     //  without an allocation.
     let array = StringArray::from_iter_values(std::iter::repeat_n("", size));
     Ok(RecordBatch::try_new(
