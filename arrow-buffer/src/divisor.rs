@@ -678,9 +678,7 @@ impl DivisorI256 {
 /// `i256` operations that a `const fn` can call, on the parts of the values. `shr` is `SRA` from
 /// table 3.1 of Granlund and Montgomery for `0..=255` bits
 ///
-/// It branches on the shift, so the `i256` variants branch on the divisor, unlike the other
-/// divisor types. The shift is the same for every value, so the branch is predicted. A
-/// branch-free form that shifts both halves and selects was slower
+/// It branches on the shift, see [`DivisorI256`]
 const fn shr(x: i256, shift: u32) -> i256 {
     let (low, high) = x.to_parts();
     if shift == 0 {
@@ -708,17 +706,6 @@ const fn xor(a: i256, b: i256) -> i256 {
 const fn not(a: i256) -> i256 {
     let (low, high) = a.to_parts();
     i256::from_parts(!low, !high)
-}
-
-const fn eq(a: i256, b: i256) -> bool {
-    let ((al, ah), (bl, bh)) = (a.to_parts(), b.to_parts());
-    al == bl && ah == bh
-}
-
-/// The sign of `x` spread to every bit, -1 if `x` is negative, otherwise 0
-const fn sign(x: i256) -> i256 {
-    let s = x.to_parts().1 >> 127;
-    i256::from_parts(s as u128, s)
 }
 
 /// The high 256 bits of the unsigned product of the bits of `a` and `b`
@@ -761,13 +748,13 @@ impl PowerOfTwoDivisorI256 {
         // `wrapping_abs` leaves `MIN` as it is, whose bits are those of its magnitude, 2^255
         let magnitude = divisor.wrapping_abs();
         let mask = magnitude.wrapping_sub(i256::ONE);
-        if !eq(and(magnitude, mask), i256::ZERO) {
+        if magnitude & mask != i256::ZERO {
             return None;
         }
         Some(Self {
             shift: magnitude.trailing_zeros(),
             mask,
-            sign: sign(divisor),
+            sign: divisor.sign_mask(),
         })
     }
 
@@ -787,7 +774,7 @@ impl PowerOfTwoDivisorI256 {
     #[inline]
     pub const fn wrapping_div_rem(self, n: i256) -> (i256, i256) {
         // Adding `|divisor| - 1` to a negative `n` makes the shift round toward zero
-        let t = n.wrapping_add(and(sign(n), self.mask));
+        let t = n.wrapping_add(and(n.sign_mask(), self.mask));
         let q = shr(t, self.shift);
         // `(x ^ sign) - sign` negates `x` when `sign` is -1, and wraps only for `MIN / -1`
         // `t & !mask` is `n` rounded toward zero to a multiple of `|divisor|`
@@ -812,7 +799,7 @@ impl PowerOfTwoDivisorI256 {
     #[inline]
     pub const fn checked_div_rem(self, n: i256) -> Option<(i256, i256)> {
         // -1 is the only divisor with a negative sign and a zero mask
-        if eq(n, i256::MIN) && eq(self.sign, i256::MINUS_ONE) && eq(self.mask, i256::ZERO) {
+        if n.is_eq(i256::MIN) && self.sign.is_eq(i256::MINUS_ONE) && self.mask.is_eq(i256::ZERO) {
             None
         } else {
             Some(self.wrapping_div_rem(n))
@@ -845,19 +832,9 @@ impl AddIndicatorDivisorI256 {
         let bit = 255 + l as usize;
         let mut pow = [0u64; 8];
         pow[bit / 64] = 1 << (bit % 64);
-        let (low, high) = magnitude.to_parts();
-        let high = high as u128;
-        let d = [
-            low as u64,
-            (low >> 64) as u64,
-            high as u64,
-            (high >> 64) as u64,
-        ];
-        let (q, _) = div_rem(&pow, &[d[0], d[1], d[2], d[3], 0, 0, 0, 0]);
-        let q = i256::from_parts(
-            q[0] as u128 | ((q[1] as u128) << 64),
-            (q[2] as u128 | ((q[3] as u128) << 64)) as i128,
-        );
+        let [d0, d1, d2, d3] = magnitude.as_digits();
+        let ([q0, q1, q2, q3, ..], _) = div_rem(&pow, &[d0, d1, d2, d3, 0, 0, 0, 0]);
+        let q = i256::from_digits([q0, q1, q2, q3]);
         Self {
             divisor,
             multiplier: q.wrapping_add(i256::ONE),
@@ -880,10 +857,11 @@ impl AddIndicatorDivisorI256 {
     pub const fn wrapping_div_rem(self, n: i256) -> (i256, i256) {
         // `n + MULSH(m', n)` from figure 5.1, computed as `MULUH(m', n) - AND(m', XSIGN(n))`,
         // because `m'` is negative. See the identity in section 3 and `DivisorI128`
-        let high = mul_high_u256(self.multiplier, n).wrapping_sub(and(sign(n), self.multiplier));
+        let high =
+            mul_high_u256(self.multiplier, n).wrapping_sub(and(n.sign_mask(), self.multiplier));
         // The shift rounds down, and subtracting the sign of `n` rounds toward zero instead
-        let q = shr(high, self.shift).wrapping_sub(sign(n));
-        let divisor_sign = sign(self.divisor);
+        let q = shr(high, self.shift).wrapping_sub(n.sign_mask());
+        let divisor_sign = self.divisor.sign_mask();
         // Figure 5.1 gives only the quotient. The remainder doesn't depend on the sign of the
         // divisor, as section 3.1 of Lemire, Kaser and Kurz, "Faster Remainder by Direct
         // Computation", https://arxiv.org/abs/1902.01961, states, so it uses `q` before the sign
