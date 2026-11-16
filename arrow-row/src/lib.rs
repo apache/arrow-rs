@@ -160,14 +160,17 @@ use std::slice::Windows;
 use std::sync::Arc;
 
 use arrow_array::cast::*;
-use arrow_array::types::{ArrowDictionaryKeyType, ByteArrayType, ByteViewType};
+use arrow_array::types::{
+    ArrowDictionaryKeyType, BinaryType, ByteArrayType, ByteViewType, LargeBinaryType,
+    LargeUtf8Type, Utf8Type,
+};
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, Buffer, OffsetBuffer, ScalarBuffer};
+use arrow_buffer::{ArrowNativeType, Buffer, NullBufferBuilder, OffsetBuffer, ScalarBuffer};
 use arrow_data::transform::MutableArrayData;
 use arrow_schema::*;
 use variable::{decode_binary_view, decode_string_view};
 
-use crate::fixed::{decode_bool, decode_fixed_size_binary, decode_primitive};
+use crate::fixed::{try_decode_bool, try_decode_fixed_size_binary, try_decode_primitive};
 use crate::list::{compute_lengths_fixed_size_list, encode_fixed_size_list};
 use crate::variable::{decode_binary, decode_string};
 use arrow_array::types::{Int16Type, Int32Type, Int64Type};
@@ -2294,6 +2297,74 @@ pub fn encode_dictionary_values<K: ArrowDictionaryKeyType>(
 fn gather_dictionary_values<K: ArrowDictionaryKeyType>(
     array: &DictionaryArray<K>,
 ) -> Result<ArrayRef, ArrowError> {
+    let values = array.values();
+    match values.data_type() {
+        DataType::Utf8 => gather_dictionary_byte_values::<K, Utf8Type>(
+            array,
+            values.as_any().downcast_ref::<StringArray>().unwrap(),
+        ),
+        DataType::LargeUtf8 => gather_dictionary_byte_values::<K, LargeUtf8Type>(
+            array,
+            values.as_any().downcast_ref::<LargeStringArray>().unwrap(),
+        ),
+        DataType::Binary => gather_dictionary_byte_values::<K, BinaryType>(
+            array,
+            values.as_any().downcast_ref::<BinaryArray>().unwrap(),
+        ),
+        DataType::LargeBinary => gather_dictionary_byte_values::<K, LargeBinaryType>(
+            array,
+            values.as_any().downcast_ref::<LargeBinaryArray>().unwrap(),
+        ),
+        _ => gather_dictionary_values_generic(array),
+    }
+}
+
+/// Gathers byte values in dictionary-key order, preserving null keys and values.
+/// Returns an error if the accumulated byte offsets overflow.
+fn gather_dictionary_byte_values<K: ArrowDictionaryKeyType, T: ByteArrayType>(
+    array: &DictionaryArray<K>,
+    values: &GenericByteArray<T>,
+) -> Result<ArrayRef, ArrowError> {
+    let mut offsets = Vec::with_capacity(array.len() + 1);
+    offsets.push(T::Offset::from_usize(0).unwrap());
+    let mut bytes = Vec::new();
+    let mut nulls = NullBufferBuilder::new(array.len());
+
+    for key in array.keys() {
+        match key {
+            Some(key) if values.is_valid(key.as_usize()) => {
+                let index = key.as_usize();
+                let start = values.value_offsets()[index].as_usize();
+                let end = values.value_offsets()[index + 1].as_usize();
+                let value = &values.value_data()[start..end];
+                let end = bytes
+                    .len()
+                    .checked_add(value.len())
+                    .ok_or(ArrowError::OffsetOverflowError(usize::MAX))?;
+                let offset =
+                    T::Offset::from_usize(end).ok_or(ArrowError::OffsetOverflowError(end))?;
+                bytes.extend_from_slice(value);
+                offsets.push(offset);
+                nulls.append(true);
+            }
+            _ => {
+                offsets.push(*offsets.last().unwrap());
+                nulls.append(false);
+            }
+        }
+    }
+
+    let offsets = OffsetBuffer::new(ScalarBuffer::from(offsets));
+    Ok(Arc::new(GenericByteArray::<T>::try_new(
+        offsets,
+        Buffer::from_vec(bytes),
+        nulls.finish(),
+    )?))
+}
+
+fn gather_dictionary_values_generic<K: ArrowDictionaryKeyType>(
+    array: &DictionaryArray<K>,
+) -> Result<ArrayRef, ArrowError> {
     let data = array.values().to_data();
     let mut mutable = MutableArrayData::new(vec![&data], false, array.len());
     for key in array.keys() {
@@ -2323,7 +2394,7 @@ fn encode_dictionary_rows<K: ArrowDictionaryKeyType>(
 
 macro_rules! decode_primitive_helper {
     ($t:ty, $rows:ident, $data_type:ident, $options:ident) => {
-        Arc::new(decode_primitive::<$t>($rows, $data_type, $options))
+        Arc::new(try_decode_primitive::<$t>($rows, $data_type, $options)?)
     };
 }
 
@@ -2349,13 +2420,13 @@ unsafe fn decode_column(
                     variable::decode_null_value(rows, options);
                     Arc::new(NullArray::new(rows.len()))
                 }
-                DataType::Boolean => Arc::new(decode_bool(rows, options)),
-                DataType::Binary => Arc::new(decode_binary::<i32>(rows, options)),
-                DataType::LargeBinary => Arc::new(decode_binary::<i64>(rows, options)),
+                DataType::Boolean => Arc::new(try_decode_bool(rows, options)?),
+                DataType::Binary => Arc::new(decode_binary::<i32>(rows, options)?),
+                DataType::LargeBinary => Arc::new(decode_binary::<i64>(rows, options)?),
                 DataType::BinaryView => Arc::new(decode_binary_view(rows, options)?),
-                DataType::FixedSizeBinary(size) => Arc::new(decode_fixed_size_binary(rows, size, options)),
-                DataType::Utf8 => Arc::new(unsafe{ decode_string::<i32>(rows, options, validate_utf8) }),
-                DataType::LargeUtf8 => Arc::new(unsafe { decode_string::<i64>(rows, options, validate_utf8) }),
+                DataType::FixedSizeBinary(size) => Arc::new(try_decode_fixed_size_binary(rows, size, options)?),
+                DataType::Utf8 => Arc::new(unsafe{ decode_string::<i32>(rows, options, validate_utf8) }?),
+                DataType::LargeUtf8 => Arc::new(unsafe { decode_string::<i64>(rows, options, validate_utf8) }?),
                 DataType::Utf8View => Arc::new(unsafe { decode_string_view(rows, options, validate_utf8) }?),
                 _ => return Err(ArrowError::NotYetImplemented(format!("unsupported data type: {data_type}" )))
             }
@@ -2365,7 +2436,7 @@ unsafe fn decode_column(
             cols.into_iter().next().unwrap()
         }
         Codec::Struct(converter, _) => {
-            let nulls = fixed::decode_nulls(rows);
+            let nulls = fixed::try_decode_nulls(rows)?;
             rows.iter_mut().for_each(|row| *row = &row[1..]);
             let children = unsafe { converter.convert_raw(rows, validate_utf8) }?;
 
@@ -3385,6 +3456,60 @@ mod tests {
         }
         let decoded = converter.convert_rows(&actual_rows).unwrap();
         dictionary_eq(&decoded[0], &expected);
+    }
+
+    #[test]
+    fn test_gather_dictionary_byte_values() {
+        let keys = Int8Array::from(vec![Some(0), Some(3), None, Some(1), Some(3), Some(2)]);
+        let values = Arc::new(StringArray::from(vec![
+            Some("unused"),
+            None,
+            Some("é"),
+            Some("selected"),
+        ]));
+        let dictionary = DictionaryArray::<Int8Type>::try_new(keys, values).unwrap();
+        let sliced = dictionary.slice(1, 4);
+        let gathered = gather_dictionary_values(&sliced).unwrap();
+        let expected = StringArray::from(vec![Some("selected"), None, None, Some("selected")]);
+        assert_eq!(gathered.as_ref(), &expected as &dyn Array);
+    }
+
+    #[test]
+    fn test_gather_dictionary_generic_values() {
+        let keys = UInt8Array::from(vec![Some(2), None, Some(0), Some(1), Some(2)]);
+        let values = Arc::new(Int32Array::from(vec![Some(1), None, Some(3)]));
+        let dictionary = DictionaryArray::<UInt8Type>::try_new(keys, values).unwrap();
+        let sliced = dictionary.slice(1, 4);
+        let gathered = gather_dictionary_values(&sliced).unwrap();
+        let expected = Int32Array::from(vec![Some(1), Some(1), None, Some(3)]);
+        assert_eq!(gathered.as_ref(), &expected as &dyn Array);
+    }
+
+    #[test]
+    fn test_sparse_binary_dictionary_with_null_values() {
+        let values = BinaryArray::from_iter((0..DICTIONARY_GATHER_MIN_VALUES).map(|index| {
+            if index == 0 {
+                None
+            } else {
+                Some(&b"value"[..])
+            }
+        }));
+        let keys = UInt64Array::from(vec![Some(0), Some(32_767), None]);
+        let dictionary = DictionaryArray::<UInt64Type>::try_new(keys, Arc::new(values)).unwrap();
+        let input = Arc::new(dictionary) as ArrayRef;
+        let expected =
+            Arc::new(BinaryArray::from(vec![None, Some(&b"value"[..]), None])) as ArrayRef;
+        let converter = RowConverter::new(vec![SortField::new(input.data_type().clone())]).unwrap();
+        let actual_rows = converter.convert_columns(&[input]).unwrap();
+        let expected_converter = RowConverter::new(vec![SortField::new(DataType::Binary)]).unwrap();
+        let expected_rows = expected_converter
+            .convert_columns(&[Arc::clone(&expected)])
+            .unwrap();
+        for (actual, expected) in actual_rows.iter().zip(&expected_rows) {
+            assert_eq!(actual, expected);
+        }
+        let decoded = converter.convert_rows(&actual_rows).unwrap();
+        assert_eq!(decoded[0].as_ref(), expected.as_ref());
     }
 
     #[test]

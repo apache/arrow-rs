@@ -4,6 +4,7 @@
 
 #[cfg(feature = "arrow")]
 use crate::arrow::ProjectionMask;
+use crate::bloom_filter::Sbbf;
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
@@ -49,7 +50,9 @@ use crate::arrow::async_reader::{MetadataFetch, MetadataSuffixFetch};
 /// Parquet metadata.
 ///
 /// This reader handles reading the footer as well as the non contiguous parts
-/// of the metadata (`PageIndex` and `ColumnIndex`). It does not handle reading Bloom Filters.
+/// of the metadata (`PageIndex` and `ColumnIndex`). Bloom filters are read separately
+/// using [`Self::read_column_bloom_filter`]; footer and page index reads do not load them.
+/// For caller-managed I/O and prefetched bytes, use [`crate::bloom_filter::SbbfPushDecoder`].
 ///
 /// # Example
 /// ```no_run
@@ -253,6 +256,23 @@ impl ColumnChunkMask {
         Self::axis_indices(self.columns.as_deref(), num_columns)
     }
 
+    /// Returns an iterator over the `(row_group_index, column_index)` coordinates selected by
+    /// this mask.
+    ///
+    /// Coordinates are returned in row-major order and are bounded by `num_row_groups` and
+    /// `num_columns`.
+    pub fn column_chunk_indices(
+        &self,
+        num_row_groups: usize,
+        num_columns: usize,
+    ) -> impl Iterator<Item = (usize, usize)> + '_ {
+        self.row_group_indices(num_row_groups)
+            .flat_map(move |row_group_idx| {
+                self.column_indices(num_columns)
+                    .map(move |column_idx| (row_group_idx, column_idx))
+            })
+    }
+
     fn axis_indices(axis: Option<&[u32]>, len: usize) -> AxisIndices<'_> {
         match axis {
             None => AxisIndices::All(0..len),
@@ -355,6 +375,8 @@ impl ParquetMetaDataReader {
     ///
     /// The mask applies only when the column index policy is not [`PageIndexPolicy::Skip`].
     /// [`PageIndexPolicy::Required`] validates only selected column chunks.
+    ///
+    /// See [`PageIndexProvider`] for more details on customizing page index loading.
     pub fn with_column_index_mask(mut self, mask: ColumnChunkMask) -> Self {
         self.column_index_mask = mask;
         self
@@ -364,6 +386,8 @@ impl ParquetMetaDataReader {
     ///
     /// The mask applies only when the offset index policy is not [`PageIndexPolicy::Skip`].
     /// [`PageIndexPolicy::Required`] validates only selected column chunks.
+    ///
+    /// See [`PageIndexProvider`] for more details on customizing page index loading.
     pub fn with_offset_index_mask(mut self, mask: ColumnChunkMask) -> Self {
         self.offset_index_mask = mask;
         self
@@ -799,6 +823,69 @@ impl ParquetMetaDataReader {
         fetch: F,
     ) -> Result<(ParquetMetaData, Option<PageIndex>)> {
         self.load_page_index_with_remainder_impl(fetch, None).await
+    }
+
+    /// Reads the Bloom filter for one physical leaf column in a row group.
+    ///
+    /// The metadata and reader must refer to the same file. `column_idx` is a
+    /// physical Parquet leaf index, not a top-level Arrow field index.
+    ///
+    /// Returns `Ok(None)` without I/O if the column chunk has no Bloom filter.
+    /// The filter is returned separately without modifying or reloading metadata.
+    ///
+    /// Bloom filters are stored outside the footer and require additional I/O when
+    /// present. Prefer reading them after other pruning has narrowed the row groups
+    /// and columns of interest. Footer and page-index reads do not load them.
+    ///
+    /// # Example
+    ///
+    /// Read footer metadata first, then request a filter only when needed:
+    ///
+    /// ```rust
+    /// use bytes::Bytes;
+    /// use parquet::errors::Result;
+    /// use parquet::file::metadata::ParquetMetaDataReader;
+    /// # use std::sync::Arc;
+    /// # use parquet::data_type::Int32Type;
+    /// # use parquet::file::properties::WriterProperties;
+    /// # use parquet::file::writer::SerializedFileWriter;
+    /// # use parquet::schema::parser::parse_message_type;
+    /// # fn main() -> Result<()> {
+    /// # let schema = Arc::new(parse_message_type("message schema { REQUIRED INT32 value; }")?);
+    /// # let properties = Arc::new(WriterProperties::builder().set_bloom_filter_enabled(true).build());
+    /// # let mut writer = SerializedFileWriter::new(Vec::new(), schema, properties)?;
+    /// # let mut row_group = writer.next_row_group()?;
+    /// # let mut column = row_group.next_column()?.unwrap();
+    /// # column.typed::<Int32Type>().write_batch(&[42], None, None)?;
+    /// # column.close()?;
+    /// # row_group.close()?;
+    /// # let data = Bytes::from(writer.into_inner()?);
+    /// let metadata = ParquetMetaDataReader::new().parse_and_finish(&data)?;
+    /// let filter = ParquetMetaDataReader::read_column_bloom_filter(&data, &metadata, 0, 0)?;
+    /// assert!(filter.unwrap().check(&42_i32));
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn read_column_bloom_filter<R: ChunkReader>(
+        reader: &R,
+        metadata: &ParquetMetaData,
+        row_group_idx: usize,
+        column_idx: usize,
+    ) -> Result<Option<Sbbf>> {
+        let column = metadata.column_chunk(row_group_idx, column_idx)?;
+        Sbbf::read_from_column_chunk(column, reader)
+    }
+
+    /// Asynchronous version of [`Self::read_column_bloom_filter`].
+    #[cfg(all(feature = "async", feature = "arrow"))]
+    pub async fn read_column_bloom_filter_async<F: MetadataFetch>(
+        fetch: F,
+        metadata: &ParquetMetaData,
+        row_group_idx: usize,
+        column_idx: usize,
+    ) -> Result<Option<Sbbf>> {
+        let column = metadata.column_chunk(row_group_idx, column_idx)?;
+        Sbbf::read_from_column_chunk_with_fetch(column, fetch).await
     }
 
     /// Reads and decodes the dictionary page of a column chunk into an Arrow array.
@@ -1479,6 +1566,17 @@ mod tests {
         let sparse = ColumnChunkMask::row_groups_and_columns([0, 2, 4], [1, 3, 5]);
         assert_eq!(sparse.row_group_indices(3).collect::<Vec<_>>(), [0, 2]);
         assert_eq!(sparse.column_indices(4).collect::<Vec<_>>(), [1, 3]);
+        assert_eq!(
+            sparse.column_chunk_indices(3, 4).collect::<Vec<_>>(),
+            [(0, 1), (0, 3), (2, 1), (2, 3)]
+        );
+        assert_eq!(
+            all.column_chunk_indices(2, 3).collect::<Vec<_>>(),
+            [(0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (1, 2)]
+        );
+        assert_eq!(none.column_chunk_indices(3, 3).count(), 0);
+        assert_eq!(sparse.column_chunk_indices(0, 4).count(), 0);
+        assert_eq!(sparse.column_chunk_indices(3, 0).count(), 0);
     }
 }
 

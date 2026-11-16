@@ -239,6 +239,8 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
             data_builder = data_builder.null_bit_buffer(Some(builder.into()));
         }
 
+        // SAFETY: offsets are non-decreasing and end at `child_array.len()`, and the null
+        // bitmap has one bit per list
         let list_data = unsafe { data_builder.build_unchecked() };
         Ok(Arc::new(GenericListArray::<OffsetSize>::from(list_data)))
     }

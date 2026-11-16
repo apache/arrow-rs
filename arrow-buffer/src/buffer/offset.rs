@@ -85,7 +85,8 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     ///
     /// # Panics
     ///
-    /// Panics if `(len + 1) * size_of::<O>()` overflows `usize`.
+    /// Panics if `(len + 1) * size_of::<O>()` overflows `usize` or if the
+    /// required buffer cannot be allocated.
     /// Use [`Self::try_new_zeroed`] for a fallible version.
     pub fn new_zeroed(len: usize) -> Self {
         Self::try_new_zeroed(len).unwrap_or_else(|err| panic!("{err}"))
@@ -95,13 +96,15 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     ///
     /// # Errors
     ///
-    /// Errors if `(len + 1) * size_of::<O>()` overflows `usize`
+    /// Errors if `(len + 1) * size_of::<O>()` overflows `usize` or if the
+    /// required buffer cannot be allocated.
     pub fn try_new_zeroed(len: usize) -> Result<Self, OverflowError> {
         let len_bytes = len
             .checked_add(1)
             .and_then(|o| o.checked_mul(std::mem::size_of::<O>()))
             .ok_or_else(|| OverflowError::new::<usize>("buffer length"))?;
-        let buffer = MutableBuffer::from_len_zeroed(len_bytes);
+        let buffer = MutableBuffer::try_from_len_zeroed(len_bytes)
+            .map_err(|_| OverflowError::new::<usize>("buffer length"))?;
         Ok(Self(buffer.into_buffer().into()))
     }
 
@@ -187,7 +190,7 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     ///
     /// # Errors
     ///
-    /// Errors if `length * n` overflows `usize` or `O`.
+    /// Errors if `length * n` overflows `usize` or `O`, or if the buffer cannot be allocated.
     pub fn try_from_repeated_length(length: usize, n: usize) -> Result<Self, OverflowError> {
         if n == 0 {
             return Ok(Self::new_empty());
@@ -205,11 +208,22 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
         O::from_usize(total_length)
             .ok_or_else(|| OverflowError::new::<O>("offset").with_value(total_length))?;
 
-        let offsets = (0..=n)
-            .map(|index| O::usize_as(index * length))
-            .collect::<Vec<O>>();
+        let len_bytes = n
+            .checked_add(1)
+            .and_then(|o| o.checked_mul(std::mem::size_of::<O>()))
+            .ok_or_else(|| OverflowError::new::<usize>("buffer length"))?;
 
-        Ok(Self(ScalarBuffer::from(offsets)))
+        let mut buffer = MutableBuffer::try_with_capacity(len_bytes)
+            .map_err(|_| OverflowError::new::<usize>("buffer length"))?;
+
+        for index in 0..=n {
+            // SAFETY: buffer capacity was allocated for `(n + 1) * size_of::<O>()` bytes.
+            unsafe {
+                buffer.push_unchecked(O::usize_as(index * length));
+            }
+        }
+
+        Ok(Self(buffer.into_buffer().into()))
     }
 
     /// The first offset, i.e. the start of the first range.
@@ -568,6 +582,8 @@ mod tests {
                 .to_string(),
             "buffer length overflow: does not fit in usize"
         );
+        let max_layout_len = isize::MAX as usize / std::mem::size_of::<i64>();
+        assert!(OffsetBuffer::<i64>::try_new_zeroed(max_layout_len).is_err());
         assert_eq!(
             OffsetBuffer::<i32>::try_new_zeroed(3).unwrap().as_ref(),
             &[0; 4]

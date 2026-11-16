@@ -33,6 +33,8 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    cooldown:
+      default-days: 7
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -43,9 +45,23 @@ updates:
       codeql-actions:
         patterns:
           - "github/codeql-action/*"
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels: [auto-dependencies, development-process]
+    groups:
+      all:
+        patterns:
+          - "*"
+    cooldown:
+      default-days: 7
   - package-ecosystem: "rust-toolchain"
     directory: "/"
     schedule:
       interval: "weekly"
       day: "friday"
     labels: [auto-dependencies, development-process]
+    cooldown:
+      default-days: 7

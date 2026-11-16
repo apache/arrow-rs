@@ -9,7 +9,7 @@ use arrow_array::types::Int32Type;
 use arrow_array::{ArrayRef, FixedSizeBinaryArray, RecordBatch, builder::StringBuilder};
 use arrow_buffer::Buffer;
 use arrow_ipc::convert::try_fb_to_schema;
-use arrow_ipc::reader::{FileDecoder, FileReader, StreamReader, read_footer_length};
+use arrow_ipc::reader::{FileDecoder, FileReader, StreamDecoder, StreamReader, read_footer_length};
 use arrow_ipc::writer::{FileWriter, IpcWriteOptions, StreamWriter};
 use arrow_ipc::{Block, CompressionType, root_as_footer};
 use arrow_schema::{DataType, Field, Schema};
@@ -46,6 +46,33 @@ fn criterion_benchmark(c: &mut Criterion) {
                 reader.next().unwrap().unwrap();
             }
             assert!(reader.next().is_none());
+        })
+    });
+
+    group.bench_function("StreamDecoder/read_10", |b| {
+        let buffer = Buffer::from_vec(ipc_stream(IpcWriteOptions::default()));
+        b.iter(move || {
+            let mut decoder = StreamDecoder::new();
+            let mut buffer = buffer.clone();
+            for _ in 0..10 {
+                decoder.decode(&mut buffer).unwrap().unwrap();
+            }
+            assert!(decoder.decode(&mut buffer).unwrap().is_none());
+            decoder.finish().unwrap();
+        })
+    });
+
+    group.bench_function("StreamDecoder/no_validation/read_10", |b| {
+        let buffer = Buffer::from_vec(ipc_stream(IpcWriteOptions::default()));
+        b.iter(move || {
+            // safety: we created a valid IPC stream
+            let mut decoder = unsafe { StreamDecoder::new().with_skip_validation(true) };
+            let mut buffer = buffer.clone();
+            for _ in 0..10 {
+                decoder.decode(&mut buffer).unwrap().unwrap();
+            }
+            assert!(decoder.decode(&mut buffer).unwrap().is_none());
+            decoder.finish().unwrap();
         })
     });
 

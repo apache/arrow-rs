@@ -18,13 +18,14 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     container:
-      image: amd64/rust
+      image: amd64/rust@sha256:5b5938cbb2951fc2869eaf891a6616f722ef5bf28c90dc6a074c35c141e31537 # v1.99.1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
+          persist-credentials: false
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
       - name: Test arrow-buffer
         run: cargo test -p arrow-buffer --all-features
       - name: Test arrow-data
@@ -80,13 +81,14 @@ jobs:
     name: Test Release Mode
     runs-on: ubuntu-latest
     container:
-      image: amd64/rust
+      image: amd64/rust@sha256:5b5938cbb2951fc2869eaf891a6616f722ef5bf28c90dc6a074c35c141e31537 # v1.99.1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
+          persist-credentials: false
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
       - name: Enable all instruction set extensions of the runner CPU
         # Compile for the CPU of the runner so that code gated on
         # `cfg(target_feature = ...)`  is built and tested rather than the
@@ -126,13 +128,14 @@ jobs:
     name: Check Compilation
     runs-on: ubuntu-latest
     container:
-      image: amd64/rust
+      image: amd64/rust@sha256:5b5938cbb2951fc2869eaf891a6616f722ef5bf28c90dc6a074c35c141e31537 # v1.99.1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
+          persist-credentials: false
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
       - name: Check compilation
         run: cargo check -p arrow
       - name: Check compilation --no-default-features
@@ -154,13 +157,14 @@ jobs:
     name: Build wasm32
     runs-on: ubuntu-latest
     container:
-      image: amd64/rust
+      image: amd64/rust@sha256:5b5938cbb2951fc2869eaf891a6616f722ef5bf28c90dc6a074c35c141e31537 # v1.99.1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
+          persist-credentials: false
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
       - name: Install wasm32 targets
         run: |
           rustup target add wasm32-unknown-unknown
@@ -174,11 +178,13 @@ jobs:
     name: Clippy
     runs-on: ubuntu-latest
     container:
-      image: amd64/rust
+      image: amd64/rust@sha256:5b5938cbb2951fc2869eaf891a6616f722ef5bf28c90dc6a074c35c141e31537 # v1.99.1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
       - name: Setup Clippy
         run: rustup component add clippy
       - name: Clippy arrow-buffer

@@ -153,15 +153,17 @@ impl StructArray {
                 )));
             }
 
-            if !f.is_nullable()
-                && let Some(a) = a.logical_nulls()
-                && nulls.as_ref().is_none_or(|n| !n.contains(&a))
-                && a.null_count() > 0
-            {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Found unmasked nulls for non-nullable StructArray field {:?}",
-                    f.name()
-                )));
+            if !f.is_nullable() {
+                let unmasked = match nulls.as_ref() {
+                    None => a.logical_null_count() > 0,
+                    Some(n) => a.logical_nulls().is_some_and(|ln| !n.contains(&ln)),
+                };
+                if unmasked {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "Found unmasked nulls for non-nullable StructArray field {:?}",
+                        f.name()
+                    )));
+                }
             }
         }
 
@@ -618,7 +620,7 @@ mod tests {
     use super::*;
 
     use crate::{
-        BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array, StringArray,
+        BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array, NullArray, StringArray,
         cast::AsArray, types::Int32Type,
     };
     use arrow_buffer::ToByteSlice;
@@ -1143,6 +1145,22 @@ mod tests {
             Arc::new(Field::new("c", DataType::Int32, false)),
             Arc::new(Int32Array::from(vec![Some(42), None, Some(19)])) as ArrayRef,
         )]));
+    }
+
+    #[test]
+    fn test_struct_array_non_nullable_null_array_with_max_length() {
+        // A non-nullable field backed by a NullArray of `usize::MAX` length
+        // should be rejected with an error, not panic trying to materialize
+        // a null buffer of ~2.3 EB
+        let fields = Fields::from(vec![Field::new("a", DataType::Null, false)]);
+        let array = Arc::new(NullArray::new(usize::MAX)) as ArrayRef;
+
+        let err =
+            StructArray::try_new_with_length(fields, vec![array], None, usize::MAX).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Found unmasked nulls for non-nullable StructArray field \"a\"",
+        );
     }
 
     #[test]
