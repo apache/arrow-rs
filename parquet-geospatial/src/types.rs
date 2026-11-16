@@ -118,6 +118,15 @@ impl WkbType {
     pub fn new(metadata: Option<Metadata>) -> Self {
         Self(metadata.unwrap_or_default())
     }
+
+    fn validate_impl(data_type: &DataType) -> ArrowResult<()> {
+        match data_type {
+            DataType::Binary | DataType::LargeBinary | DataType::BinaryView => Ok(()),
+            dt => Err(ArrowError::InvalidArgumentError(format!(
+                "Geometry data type mismatch, expected one of Binary, LargeBinary, BinaryView. Found {dt}"
+            ))),
+        }
+    }
 }
 
 type ArrowResult<T> = Result<T, ArrowError>;
@@ -143,18 +152,16 @@ impl ExtensionType for WkbType {
     }
 
     fn supports_data_type(&self, data_type: &arrow_schema::DataType) -> ArrowResult<()> {
-        match data_type {
-            DataType::Binary | DataType::LargeBinary | DataType::BinaryView => Ok(()),
-            dt => Err(ArrowError::InvalidArgumentError(format!(
-                "Geometry data type mismatch, expected one of Binary, LargeBinary, BinaryView. Found {dt}"
-            ))),
-        }
+        Self::validate_impl(data_type)
     }
 
     fn try_new(data_type: &arrow_schema::DataType, metadata: Self::Metadata) -> ArrowResult<Self> {
-        let wkb = Self(metadata);
-        wkb.supports_data_type(data_type)?;
-        Ok(wkb)
+        Self::validate_impl(data_type)?;
+        Ok(Self(metadata))
+    }
+
+    fn validate(data_type: &DataType, _metadata: Self::Metadata) -> ArrowResult<()> {
+        Self::validate_impl(data_type)
     }
 }
 
@@ -304,6 +311,7 @@ mod tests {
 
         let mut field = Field::new("geometry", DataType::Binary, false);
         field.try_with_extension_type(wkb_type)?;
+        assert!(field.has_valid_extension_type::<WkbType>());
 
         // Verify we can extract the extension type back
         let extracted = field.try_extension_type::<WkbType>()?;

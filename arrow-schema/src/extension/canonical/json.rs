@@ -31,6 +31,17 @@ use crate::{ArrowError, DataType, extension::ExtensionType};
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Json(JsonMetadata);
 
+impl Json {
+    fn validate_impl(data_type: &DataType) -> Result<(), ArrowError> {
+        match data_type {
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Ok(()),
+            data_type => Err(ArrowError::InvalidArgumentError(format!(
+                "Json data type mismatch, expected one of Utf8, LargeUtf8, Utf8View, found {data_type}"
+            ))),
+        }
+    }
+}
+
 /// Empty object
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Empty {}
@@ -147,22 +158,16 @@ impl ExtensionType for Json {
     }
 
     fn supports_data_type(&self, data_type: &DataType) -> Result<(), ArrowError> {
-        match data_type {
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Ok(()),
-            data_type => Err(ArrowError::InvalidArgumentError(format!(
-                "Json data type mismatch, expected one of Utf8, LargeUtf8, Utf8View, found {data_type}"
-            ))),
-        }
+        Self::validate_impl(data_type)
     }
 
     fn try_new(data_type: &DataType, metadata: Self::Metadata) -> Result<Self, ArrowError> {
-        let json = Self(metadata);
-        json.supports_data_type(data_type)?;
-        Ok(json)
+        Self::validate_impl(data_type)?;
+        Ok(Self(metadata))
     }
 
     fn validate(data_type: &DataType, _metadata: Self::Metadata) -> Result<(), ArrowError> {
-        Self::default().supports_data_type(data_type)
+        Self::validate_impl(data_type)
     }
 }
 
@@ -181,6 +186,7 @@ mod tests {
     fn valid() -> Result<(), ArrowError> {
         let mut field = Field::new("", DataType::Utf8, false);
         field.try_with_extension_type(Json::default())?;
+        assert!(field.has_valid_extension_type::<Json>());
         assert_eq!(
             field.metadata().get(EXTENSION_TYPE_METADATA_KEY),
             Some(&String::new())
@@ -192,6 +198,7 @@ mod tests {
 
         let mut field = Field::new("", DataType::LargeUtf8, false);
         field.try_with_extension_type(Json(JsonMetadata(Some(Empty {}))))?;
+        assert!(field.has_valid_extension_type::<Json>());
         assert_eq!(
             field.metadata().get(EXTENSION_TYPE_METADATA_KEY),
             Some(&"{}".to_owned())
@@ -203,6 +210,7 @@ mod tests {
 
         let mut field = Field::new("", DataType::Utf8View, false);
         field.try_with_extension_type(Json::default())?;
+        assert!(field.has_valid_extension_type::<Json>());
         field.try_extension_type::<Json>()?;
         #[cfg(feature = "canonical_extension_types")]
         assert_eq!(
