@@ -55,6 +55,14 @@ jobs:
 
       - name: Remove unnecessary preinstalled software
         run: |
+          # Recent Archery builds use about 8 GiB. Keep ample headroom, but
+          # avoid deleting gigabytes of tools when the runner already has space.
+          available_kib=$(df -Pk / | awk 'NR == 2 {print $4}')
+          if (( available_kib >= 32 * 1024 * 1024 )); then
+            echo "At least 32 GiB free; no disk cleanup needed."
+            exit 0
+          fi
+
           echo "=== Cleaning up host disk space ==="
           echo "Disk space before cleanup:"
           df -h /
