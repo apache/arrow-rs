@@ -3,13 +3,13 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::null_sentinel;
-use arrow_array::types::ByteArrayType;
+use arrow_array::types::{ByteArrayType, ByteViewType};
 use arrow_array::*;
 use arrow_buffer::bit_util::ceil;
 use arrow_buffer::{
     ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer, OffsetBuffer, ScalarBuffer,
 };
-use arrow_data::MAX_INLINE_VIEW_LEN;
+use arrow_data::{ByteView, MAX_INLINE_VIEW_LEN};
 use arrow_schema::{ArrowError, SortOptions};
 use builder::make_view;
 
@@ -135,6 +135,49 @@ pub(crate) fn encode_generic_byte_array<T: ByteArrayType>(
     }
 }
 
+/// Calls [`encode`] with the values of a [`GenericByteViewArray`], read from
+/// the views directly
+pub(crate) fn encode_byte_view_array<T: ByteViewType>(
+    data: &mut [u8],
+    offsets: &mut [usize],
+    array: &GenericByteViewArray<T>,
+    opts: SortOptions,
+) {
+    let buffers = array.data_buffers();
+    let encode_view = |out: &mut [u8], view: u128, bytes: &[u8; 16]| {
+        let len = view as u32 as usize;
+        if len <= MAX_INLINE_VIEW_LEN as usize {
+            // A short value is stored in its view, after the 4-byte length.
+            // `bytes` is the view in the views buffer, which `inline_value`
+            // reads too, so the view isn't copied out first.
+            encode_one(out, Some(&bytes[4..4 + len]), opts)
+        } else {
+            let view = ByteView::from(view);
+            let buffer = &buffers[view.buffer_index as usize];
+            encode_one(out, Some(&buffer[view.offset as usize..][..len]), opts)
+        }
+    };
+    let views = array.views();
+    let (view_bytes, _) = views.inner().as_slice().as_chunks::<16>();
+    let rows = offsets.iter_mut().skip(1).zip(views.iter().zip(view_bytes));
+    match array.nulls().filter(|n| n.null_count() > 0) {
+        Some(nulls) => {
+            for ((offset, (&view, bytes)), is_valid) in rows.zip(nulls.iter()) {
+                let out = &mut data[*offset..];
+                *offset += match is_valid {
+                    true => encode_view(out, view, bytes),
+                    false => encode_null(out, opts),
+                };
+            }
+        }
+        None => {
+            for (offset, (&view, bytes)) in rows {
+                *offset += encode_view(&mut data[*offset..], view, bytes);
+            }
+        }
+    }
+}
+
 pub fn encode_null(out: &mut [u8], opts: SortOptions) -> usize {
     out[0] = null_sentinel(opts);
     1
@@ -208,13 +251,39 @@ fn encode_blocks<const SIZE: usize>(out: &mut [u8], val: &[u8]) -> usize {
 
     if !remainder.is_empty() {
         let start_offset = (block_count - 1) * (SIZE + 1);
-        to_write[start_offset..start_offset + remainder.len()].copy_from_slice(remainder);
+        copy_short(&mut to_write[start_offset..start_offset + SIZE], remainder);
         *to_write.last_mut().unwrap() = remainder.len() as u8;
     } else {
         // We must overwrite the continuation marker written by the loop above
         *to_write.last_mut().unwrap() = SIZE as u8;
     }
     end_offset
+}
+
+/// Copies `src` to the start of `dst`, which must be at least as long.
+///
+/// A value's last block is usually partial, and its length varies from row
+/// to row. `copy_from_slice` calls `memcpy` for a length the compiler can't
+/// see, and the call costs more than these few fixed-size copies. Each branch
+/// copies the first and the last bytes of `src`, which may overlap.
+#[inline]
+fn copy_short(dst: &mut [u8], src: &[u8]) {
+    let n = src.len();
+    if n >= 16 {
+        dst[..16].copy_from_slice(&src[..16]);
+        dst[n - 16..n].copy_from_slice(&src[n - 16..]);
+    } else if n >= 8 {
+        dst[..8].copy_from_slice(&src[..8]);
+        dst[n - 8..n].copy_from_slice(&src[n - 8..]);
+    } else if n >= 4 {
+        dst[..4].copy_from_slice(&src[..4]);
+        dst[n - 4..n].copy_from_slice(&src[n - 4..]);
+    } else if n >= 2 {
+        dst[..2].copy_from_slice(&src[..2]);
+        dst[n - 2..n].copy_from_slice(&src[n - 2..]);
+    } else if n == 1 {
+        dst[0] = src[0];
+    }
 }
 
 /// Decodes a single block of data

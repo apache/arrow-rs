@@ -228,6 +228,55 @@ pub fn encode<T: FixedLengthEncoding>(
     }
 }
 
+/// Encodes `values` into `rows`, a run of rows of `stride` bytes each, at
+/// byte `at` of each row, and returns the bytes each row of it takes.
+///
+/// When every column of a row is fixed width, every row has the same length,
+/// so a row's position is computed instead of read from and written back to
+/// the offsets.
+pub fn encode_strided<T: FixedLengthEncoding>(
+    rows: &mut [u8],
+    stride: usize,
+    at: usize,
+    values: impl Iterator<Item = T>,
+    nulls: Option<&BooleanBuffer>,
+    opts: SortOptions,
+) -> usize {
+    let encode = |row: &mut [u8], value: T| {
+        let out = &mut row[at..at + T::ENCODED_LEN];
+        out[0] = 1;
+        let mut encoded = value.encode();
+        if opts.descending {
+            encoded.as_mut().iter_mut().for_each(|v| *v = !*v)
+        }
+        out[1..].copy_from_slice(encoded.as_ref());
+    };
+    rows.chunks_exact_mut(stride)
+        .zip(values)
+        .for_each(|(row, value)| encode(row, value));
+    // Rows are encoded as valid without a branch per row, which mispredicts
+    // when nulls are scattered, and the nulls are then overwritten
+    if let Some(nulls) = nulls {
+        let null_sentinel = null_sentinel(opts);
+        let mut write_null = |row: usize| {
+            let out = &mut rows[row * stride + at..row * stride + at + T::ENCODED_LEN];
+            out[0] = null_sentinel;
+            out[1..].fill(0);
+        };
+        let chunks = nulls.bit_chunks();
+        let remainder = (chunks.remainder_len() > 0)
+            .then(|| chunks.remainder_bits() | (u64::MAX << chunks.remainder_len()));
+        for (word, valid) in chunks.iter().chain(remainder).enumerate() {
+            let mut missing = !valid;
+            while missing != 0 {
+                write_null(word * 64 + missing.trailing_zeros() as usize);
+                missing &= missing - 1;
+            }
+        }
+    }
+    T::ENCODED_LEN
+}
+
 /// Encoding for non-nullable primitive arrays.
 /// Iterates directly over the `values`, and skips NULLs-checking.
 pub fn encode_not_null<T: FixedLengthEncoding>(
