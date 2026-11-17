@@ -422,7 +422,7 @@ impl<R: AsyncFileReader + Unpin + 'static> AsyncAvroFileReader<R> {
                                 (self.range.end + MAX_VLQ_HEADER_SIZE).min(self.file_size);
 
                             if fetch_end == self.range.end {
-                                if matches!(self.block_decoder.state(), BlockDecoderState::Size) {
+                                if !self.block_decoder.is_between_blocks() {
                                     return self.finish_with_error(AvroError::EOF(
                                         "Unexpected EOF while reading Avro block header".into(),
                                     ));
@@ -2328,5 +2328,34 @@ mod tests {
             total_rows, ROWS_PER_BLOCK as usize,
             "expected block 1 only; got {total_rows} rows (file_size={file_size})"
         );
+    }
+
+    #[tokio::test]
+    async fn test_truncated_block_count_errors() {
+        use crate::writer::AvroWriter;
+
+        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(Int32Array::from(vec![1]))],
+        )
+        .unwrap();
+        let mut bytes = Vec::new();
+        let mut writer = AvroWriter::new(&mut bytes, schema).unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+
+        // Start the next block's count varint without its terminating byte.
+        bytes.push(0x80);
+        let file_size = bytes.len() as u64;
+        let reader = AsyncAvroFileReader::builder(std::io::Cursor::new(bytes), file_size, 1024)
+            .try_build()
+            .await
+            .unwrap();
+        let err = reader
+            .try_collect::<Vec<_>>()
+            .await
+            .expect_err("truncated block count should fail the read");
+        assert!(err.to_string().contains("Unexpected EOF"), "{err}");
     }
 }
