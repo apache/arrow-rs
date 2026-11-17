@@ -37,6 +37,9 @@ runs:
             printf '%s=%s\n' "$variable" "${!variable-}"
           done
         } > "$RUNNER_TEMP/archery-java-inputs"
+        echo "::group::Java cache key inputs"
+        cat "$RUNNER_TEMP/archery-java-inputs"
+        echo "::endgroup::"
         echo "key=archery-java-v1-$(sha256sum "$RUNNER_TEMP/archery-java-inputs" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
         BASH
 
