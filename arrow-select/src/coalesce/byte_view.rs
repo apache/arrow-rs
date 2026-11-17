@@ -107,11 +107,19 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
 
     /// Finishes in progress buffer, if any
     fn finish_current(&mut self) {
-        let Some(next_buffer) = self.current.take() else {
-            return;
-        };
-        let buffer: Buffer = next_buffer.into();
+        if let Some(current) = self.current.take() {
+            self.push_completed(current);
+        }
+    }
 
+    /// Appends `buffer` to the completed buffers, shrinking it first if less
+    /// than half of it is used: blocks are often closed early, and the output
+    /// array would otherwise keep (and report) capacity it never uses.
+    fn push_completed(&mut self, mut buffer: Vec<u8>) {
+        if buffer.len() < buffer.capacity() / 2 {
+            buffer.shrink_to_fit();
+        }
+        let buffer: Buffer = buffer.into();
         self.completed_buffers_size += buffer.capacity();
         self.completed.push(buffer);
     }
@@ -189,11 +197,7 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
         buffers: &[Buffer],
         is_reused: bool,
     ) {
-        if let Some(buffer) = self.current.take() {
-            let buffer: Buffer = buffer.into();
-            self.completed_buffers_size += buffer.capacity();
-            self.completed.push(buffer);
-        }
+        self.finish_current();
 
         let buffers_size = buffers.iter().map(|b| b.capacity()).sum::<usize>();
         if !is_reused {
@@ -300,9 +304,7 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
 
         // SAFETY: `first_views` is a subset of the caller-validated views.
         unsafe { self.append_views_and_copy_strings_inner(first_views, current, buffers) };
-        let completed: Buffer = self.current.take().expect("completed").into();
-        self.completed_buffers_size += completed.capacity();
-        self.completed.push(completed);
+        self.finish_current();
 
         // Copy any remaining views into a new buffer
         let remaining_views = &views[num_view_to_current..];
@@ -455,9 +457,7 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
                 current
             }
             Some(current) => {
-                let completed_buffer: Buffer = current.into();
-                self.completed_buffers_size += completed_buffer.capacity();
-                self.completed.push(completed_buffer);
+                self.push_completed(current);
                 self.buffer_source
                     .next_buffer(selected_bytes.min(max_buffer_size))
             }
@@ -556,9 +556,7 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
                     .checked_add(str_len)
                     .expect("byte view buffer size overflow");
                 if dst_end > max_buffer_size {
-                    let completed_buffer: Buffer = dst_buffer.into();
-                    self.completed_buffers_size += completed_buffer.capacity();
-                    self.completed.push(completed_buffer);
+                    self.push_completed(dst_buffer);
 
                     let remaining = selected_bytes
                         .checked_sub(copied_bytes)
@@ -869,11 +867,7 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
         let starting_buffer: u32 = if same_source {
             self.last_indexed_starting_buffer
         } else {
-            if let Some(buffer) = self.current.take() {
-                let buffer: Buffer = buffer.into();
-                self.completed_buffers_size += buffer.capacity();
-                self.completed.push(buffer);
-            }
+            self.finish_current();
             let start: u32 = self.completed.len().try_into().expect("too many buffers");
             let buffers_size = src_buffers.iter().map(|b| b.capacity()).sum::<usize>();
             self.completed_buffers_size += buffers_size;
@@ -932,6 +926,9 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
         self.completed_buffers_size = 0;
         self.last_indexed_source = None;
         self.last_indexed_starting_buffer = 0;
+        // Start the next batch with small blocks again, so its block sizes
+        // depend only on its own contents
+        self.buffer_source = BufferSource::new();
 
         // Safety: we created valid views and buffers above and the
         // input arrays had value data and nulls
@@ -953,43 +950,30 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
     }
 }
 
-const STARTING_BLOCK_SIZE: usize = 4 * 1024; // (note the first size used is actually 8KiB)
+const MIN_BLOCK_SIZE: usize = 64 * 1024; // 64KiB
 const MAX_BLOCK_SIZE: usize = 1024 * 1024; // 1MiB
 
 /// Manages allocating new buffers for `StringViewArray` in increasing sizes
+///
+/// Sizes double from [`MIN_BLOCK_SIZE`] up to [`MAX_BLOCK_SIZE`], or are larger
+/// if a single request needs more. Each output batch uses a new source.
 #[derive(Debug)]
 struct BufferSource {
-    current_size: usize,
+    next_size: usize,
 }
 
 impl BufferSource {
     fn new() -> Self {
         Self {
-            current_size: STARTING_BLOCK_SIZE,
+            next_size: MIN_BLOCK_SIZE,
         }
     }
 
     /// Return a new buffer, with a capacity of at least `min_size`
     fn next_buffer(&mut self, min_size: usize) -> Vec<u8> {
-        let size = self.next_size(min_size);
+        let size = self.next_size.max(min_size);
+        self.next_size = self.next_size.saturating_mul(2).min(MAX_BLOCK_SIZE);
         Vec::with_capacity(size)
-    }
-
-    fn next_size(&mut self, min_size: usize) -> usize {
-        if self.current_size < MAX_BLOCK_SIZE {
-            // If the current size is less than the max size, we can double it
-            // we have fixed start/end block sizes, so we can't overflow
-            self.current_size = self.current_size.saturating_mul(2);
-        }
-        if self.current_size >= min_size {
-            self.current_size
-        } else {
-            // increase next size until we hit min_size or max  size
-            while self.current_size <= min_size && self.current_size < MAX_BLOCK_SIZE {
-                self.current_size = self.current_size.saturating_mul(2);
-            }
-            self.current_size.max(min_size)
-        }
     }
 }
 
@@ -1005,13 +989,10 @@ mod tests {
     #[test]
     fn test_buffer_source() {
         let mut source = BufferSource::new();
-        assert_eq!(source.next_buffer(1000).capacity(), 8192);
-        assert_eq!(source.next_buffer(1000).capacity(), 16384);
-        assert_eq!(source.next_buffer(1000).capacity(), 32768);
-        assert_eq!(source.next_buffer(1000).capacity(), 65536);
-        assert_eq!(source.next_buffer(1000).capacity(), 131072);
-        assert_eq!(source.next_buffer(1000).capacity(), 262144);
-        assert_eq!(source.next_buffer(1000).capacity(), 524288);
+        assert_eq!(source.next_buffer(1000).capacity(), 64 * 1024);
+        assert_eq!(source.next_buffer(1000).capacity(), 128 * 1024);
+        assert_eq!(source.next_buffer(1000).capacity(), 256 * 1024);
+        assert_eq!(source.next_buffer(1000).capacity(), 512 * 1024);
         assert_eq!(source.next_buffer(1000).capacity(), 1024 * 1024);
         // clamped to max size
         assert_eq!(source.next_buffer(1000).capacity(), 1024 * 1024);
@@ -1020,25 +1001,12 @@ mod tests {
     }
 
     #[test]
-    fn test_buffer_source_with_min_small() {
-        let mut source = BufferSource::new();
-        // First buffer should be 8kb
-        assert_eq!(source.next_buffer(5_600).capacity(), 8 * 1024);
-        // then 16kb
-        assert_eq!(source.next_buffer(5_600).capacity(), 16 * 1024);
-        // then 32kb
-        assert_eq!(source.next_buffer(5_600).capacity(), 32 * 1024);
-    }
-
-    #[test]
     fn test_buffer_source_with_min_large() {
         let mut source = BufferSource::new();
-        assert_eq!(source.next_buffer(500_000).capacity(), 512 * 1024);
-        assert_eq!(source.next_buffer(500_000).capacity(), 1024 * 1024);
-        // clamped to max size
-        assert_eq!(source.next_buffer(500_000).capacity(), 1024 * 1024);
-        // Can override with larger size request
-        assert_eq!(source.next_buffer(2_000_000).capacity(), 2_000_000);
+        assert_eq!(source.next_buffer(500_000).capacity(), 500_000);
+        assert_eq!(source.next_buffer(500_000).capacity(), 500_000);
+        assert_eq!(source.next_buffer(500_000).capacity(), 500_000);
+        assert_eq!(source.next_buffer(1000).capacity(), 512 * 1024);
     }
 
     #[test]

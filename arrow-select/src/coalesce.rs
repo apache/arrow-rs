@@ -1561,7 +1561,7 @@ mod tests {
             gc_array,
             vec![ExpectedLayout {
                 len: 770,
-                capacity: 8192,
+                capacity: 770,
             }],
         );
     }
@@ -1652,23 +1652,13 @@ mod tests {
             .with_expected_output_sizes(vec![2000]) // only 1000 rows total
             .run();
 
-        // expect a nice even distribution of buffers
+        // one block, shrunk to the strings it holds
         expect_buffer_layout(
             col_as_string_view("c0", output_batches.first().unwrap()),
-            vec![
-                ExpectedLayout {
-                    len: 8176,
-                    capacity: 8192,
-                },
-                ExpectedLayout {
-                    len: 16380,
-                    capacity: 16384,
-                },
-                ExpectedLayout {
-                    len: 3444,
-                    capacity: 32768,
-                },
-            ],
+            vec![ExpectedLayout {
+                len: 28000,
+                capacity: 28000,
+            }],
         );
     }
 
@@ -1683,23 +1673,13 @@ mod tests {
             .with_expected_output_sizes(vec![900, 900, 200])
             .run();
 
-        // expect each buffer to be entirely full except the last one
+        // one block, shrunk to the strings it holds
         expect_buffer_layout(
             col_as_string_view("c0", output_batches.first().unwrap()),
-            vec![
-                ExpectedLayout {
-                    len: 8192,
-                    capacity: 8192,
-                },
-                ExpectedLayout {
-                    len: 16384,
-                    capacity: 16384,
-                },
-                ExpectedLayout {
-                    len: 4224,
-                    capacity: 32768,
-                },
-            ],
+            vec![ExpectedLayout {
+                len: 28800,
+                capacity: 28800,
+            }],
         );
     }
 
@@ -1738,20 +1718,10 @@ mod tests {
 
         expect_buffer_layout(
             col_as_string_view("c0", output_batches.first().unwrap()),
-            vec![
-                ExpectedLayout {
-                    len: 8190,
-                    capacity: 8192,
-                },
-                ExpectedLayout {
-                    len: 16366,
-                    capacity: 16384,
-                },
-                ExpectedLayout {
-                    len: 6244,
-                    capacity: 32768,
-                },
-            ],
+            vec![ExpectedLayout {
+                len: 30800,
+                capacity: 30800,
+            }],
         );
     }
 
@@ -1819,6 +1789,43 @@ mod tests {
             .with_batch_size(300)
             .with_expected_output_sizes(vec![250])
             .run();
+    }
+
+    /// Copied strings must not be put in blocks sized by earlier batches
+    /// (<https://github.com/apache/arrow-rs/issues/12305>)
+    #[test]
+    fn test_string_view_copied_blocks_track_each_batch() {
+        let source = StringViewArray::from_iter_values(
+            (0..100_000).map(|i| format!("this string is longer than 12 bytes {i}")),
+        );
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "c0",
+            DataType::Utf8View,
+            false,
+        )]));
+        let mut coalescer = BatchCoalescer::new(Arc::clone(&schema), 1000);
+        let mut output = vec![];
+        // small takes of a large array point into buffers they barely use, so
+        // the coalescer copies their strings
+        for start in (0..100_000).step_by(10) {
+            let indices = UInt32Array::from_iter_values(start..start + 10);
+            let column = take(&source, &indices, None).unwrap();
+            let batch = RecordBatch::try_new(Arc::clone(&schema), vec![column]).unwrap();
+            coalescer.push_batch(batch).unwrap();
+            while let Some(batch) = coalescer.next_completed_batch() {
+                output.push(batch);
+            }
+        }
+        assert_eq!(output.len(), 100);
+        for batch in &output {
+            let array = col_as_string_view("c0", batch);
+            let len: usize = array.data_buffers().iter().map(|b| b.len()).sum();
+            let capacity: usize = array.data_buffers().iter().map(|b| b.capacity()).sum();
+            assert!(
+                capacity <= 2 * len,
+                "{capacity} bytes of capacity for {len}"
+            );
+        }
     }
 
     #[test]
