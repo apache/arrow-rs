@@ -719,6 +719,24 @@ fn add_all_gather_benchmarks(c: &mut Criterion, operation: GatherOperation) {
                 )
                 .build();
             }
+
+            if matches!(operation, GatherOperation::Take) {
+                GatherBenchmarkBuilder::from_scenario(
+                    c,
+                    operation,
+                    batch_size,
+                    null_density,
+                    selectivity,
+                    GatherBenchmarkScenario {
+                        name: "single_dict (shared values)",
+                        num_output_batches: 25,
+                        max_string_len: 30,
+                        schema: &single_dictionary_schema,
+                    },
+                )
+                .with_num_input_batches(1)
+                .build();
+            }
         }
     }
 
@@ -834,6 +852,7 @@ struct GatherBenchmarkBuilder<'a> {
     biggest_coalesce_batch_size: Option<usize>,
     index_output_len: Option<usize>,
     drain_all_completed_batches: bool,
+    num_input_batches: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -873,7 +892,13 @@ impl<'a> GatherBenchmarkBuilder<'a> {
             biggest_coalesce_batch_size: None,
             index_output_len: None,
             drain_all_completed_batches: false,
+            num_input_batches: 10,
         }
+    }
+
+    fn with_num_input_batches(mut self, num_input_batches: usize) -> Self {
+        self.num_input_batches = num_input_batches;
+        self
     }
 
     fn with_biggest_coalesce_batch_size(mut self, limit: usize) -> Self {
@@ -905,6 +930,7 @@ impl<'a> GatherBenchmarkBuilder<'a> {
             biggest_coalesce_batch_size,
             index_output_len,
             drain_all_completed_batches,
+            num_input_batches,
         } = self;
 
         let output_len = index_output_len
@@ -914,6 +940,7 @@ impl<'a> GatherBenchmarkBuilder<'a> {
             .with_batch_size(batch_size)
             .with_null_density(null_density)
             .with_max_string_len(max_string_len)
+            .with_num_batches(num_input_batches)
             .build();
 
         let operation_name = operation.name();
@@ -1384,6 +1411,11 @@ impl DataStreamBuilder {
 
     fn with_max_string_len(mut self, max_string_len: usize) -> Self {
         self.max_string_len = max_string_len;
+        self
+    }
+
+    fn with_num_batches(mut self, num_batches: usize) -> Self {
+        self.num_batches = num_batches;
         self
     }
 
