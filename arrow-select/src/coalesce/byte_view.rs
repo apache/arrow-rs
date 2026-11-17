@@ -443,7 +443,7 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
             }
             return;
         }
-        let max_buffer_size = max_buffer_size.min(u32::MAX as usize);
+        let max_buffer_size = max_buffer_size.min(i32::MAX as usize);
 
         let mut dst_buffer = match self.current.take() {
             Some(current)
