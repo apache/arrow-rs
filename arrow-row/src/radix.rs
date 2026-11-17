@@ -12,23 +12,26 @@
 //! # When to use this
 //!
 //! Radix sort is usually faster than [`lexsort_to_indices`] when sorting by
-//! two or more columns, unless one of them is expensive to encode (see below).
-//! [`lexsort_to_indices`] compares rows through a dynamically dispatched
-//! comparator per column, calling them in turn on every comparison until one
-//! column differs. Radix sort reads each row's 12-byte key once per pass. It
-//! also does well when every row shares long leading bytes, such as small
-//! `Decimal128` values, because it skips them. On a single non-null primitive
-//! column the two are about even. Its cost includes encoding the columns into
-//! [`Rows`], so a caller that already has [`Rows`] saves more.
+//! two or more columns, unless a column that is expensive to encode follows
+//! columns that leave few ties (see below). [`lexsort_to_indices`] compares
+//! rows through a dynamically dispatched comparator per column, calling them
+//! in turn on every comparison until one column differs. Radix sort reads each
+//! row's 12-byte key once per pass. It also does well when every row shares
+//! long leading bytes, such as small `Decimal128` values, because it skips
+//! them. Its cost includes encoding the columns into [`Rows`], so a caller
+//! that already has [`Rows`] saves more.
 //!
 //! # When to prefer `lexsort_to_indices`
 //!
-//! - **A single nullable or string column, or one with few distinct values.**
-//!   [`lexsort_to_indices`] sorts one column without encoding it, sets nulls
-//!   aside before sorting, and sorts duplicates cheaply.
-//! - **A key with an expensive column to encode, such as a list.** The row
-//!   format encodes every column of every row, while [`lexsort_to_indices`]
-//!   reads a later column only for rows that the earlier columns leave tied.
+//! - **A single column.** [`lexsort_to_indices`] sorts one column without
+//!   encoding it, sets nulls aside before sorting, and sorts duplicates
+//!   cheaply. On a non-null primitive column, radix sort ranges from somewhat
+//!   faster to half as fast, depending on the number of rows. It is slower on
+//!   a nullable or string column or one with few distinct values.
+//! - **An expensive column to encode, such as a list, after columns that leave
+//!   few ties.** The row format encodes every column of every row, while
+//!   [`lexsort_to_indices`] reads a later column only for rows that the
+//!   earlier columns leave tied.
 //! - **Large groups of rows that are equal in their first 12 bytes after the
 //!   shared prefix.** Radix sort orders each such group by keying its rows
 //!   again on the bytes after the key, which reads the rows in random order.
@@ -37,8 +40,8 @@
 //! - **A sort with a small limit.** [`lexsort_to_indices`] orders only the
 //!   first `limit` rows. [`radix_sort_to_indices`] stops early too, but it
 //!   still encodes every row and makes one pass over all of them, so
-//!   [`lexsort_to_indices`] is faster for a `limit` below about 1% to 3% of the
-//!   rows. Radix sort is faster above that.
+//!   [`lexsort_to_indices`] is faster when `limit` is a small fraction of the
+//!   rows.
 //!
 //! [`lexsort_to_indices`]: https://docs.rs/arrow-ord/latest/arrow_ord/sort/fn.lexsort_to_indices.html
 
@@ -361,8 +364,8 @@ fn entry(buffer: &[u8], start: usize, lead: usize, key: u128, index: usize) -> u
 }
 
 /// The 16 bytes of the rows buffer from `lead` bytes before `start`, with
-/// zeros for those outside it. Only the first row can start fewer than `lead`
-/// bytes in, and only the last rows can end fewer than 16 bytes from the end.
+/// zeros for those outside it. Only keys that start in the first `lead` bytes
+/// of the buffer, which can be several short rows, or near its end need it.
 #[cold]
 fn load_padded(buffer: &[u8], start: usize, lead: usize) -> [u8; 16] {
     let mut bytes = [0u8; 16];
@@ -1331,6 +1334,40 @@ mod tests {
         let indices = sort(&rows);
         assert_sorted(&rows, &indices);
         assert_permutation(&indices, 2000);
+    }
+
+    /// `Rows` from a sliced `BinaryArray` keep the bytes before the first row
+    /// and after the last one in their buffer, and the sort reads past row
+    /// ends into them.
+    #[test]
+    fn test_radix_sort_rows_from_sliced_binary() {
+        let mut rng = StdRng::seed_from_u64(0x511C);
+        let ints: ArrayRef = Arc::new(Int8Array::from_iter_values(
+            (0..300).map(|_| rng.random_range(-3..3)),
+        ));
+        let strings: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..300).map(|_| format!("{:x}", rng.random_range(0..1000))),
+        ));
+        for column in [ints, strings] {
+            let converter =
+                RowConverter::new(vec![SortField::new(column.data_type().clone())]).unwrap();
+            let binary = converter
+                .convert_columns(&[column])
+                .unwrap()
+                .try_into_binary()
+                .unwrap();
+            for (offset, len) in [(100, 100), (1, 298), (0, 299), (1, 299)] {
+                let rows = converter.from_binary(binary.slice(offset, len));
+                assert_eq!(rows.offsets[0] > 0, offset > 0);
+                assert_eq!(rows.offsets[len] < rows.buffer.len(), offset + len < 300);
+                let indices = sort(&rows);
+                assert_sorted(&rows, &indices);
+                assert_permutation(&indices, len);
+                for limit in limits(len) {
+                    assert_limit_matches(&rows, &indices, limit);
+                }
+            }
+        }
     }
 
     #[test]
