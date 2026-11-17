@@ -42,7 +42,7 @@ use crate::file::properties::{WriterProperties, WriterVersion};
 pub struct DictionaryEncodingOptions {
     /// The first top-level row at which page size and row limits are checked.
     ///
-    /// Defaults to parquet-java's minimum page-size-check interval, 100. Must be positive.
+    /// Defaults to parquet-java's `parquet.page.size.row.check.min`, 100. Must be positive.
     pub min_row_count_for_page_size_check: usize,
 }
 
@@ -54,41 +54,40 @@ impl Default for DictionaryEncodingOptions {
     }
 }
 
-/// Disables dictionary encoding for columns whose sampled first page does not benefit from it.
+/// Disables dictionaries whose sampled first-page encoded size is not smaller than plain size.
 ///
-/// This opt-in helper approximates parquet-java's first-page dictionary decision; it is not
-/// a general encoding optimizer and does not change the writer's default behavior. Only
-/// per-column dictionary flags may change, and disabled dictionaries are never enabled.
+/// A dictionary is kept only when `index bytes + dictionary bytes < plain bytes`, counting
+/// sizes as parquet-java does. Index bytes include the one-byte bit width. This opt-in helper
+/// only disables per-column dictionaries; writer defaults and other properties are unchanged.
 ///
-/// Each leaf consumes the start of `sample`, across batch boundaries, until its dictionary
-/// exceeds its limit, its first page ends, or the sample ends. Page limits count top-level
-/// rows, including null and empty lists, and a page never ends partway through a row.
-/// Starting at the configured first check, a page ends when its row limit is reached or
-/// its raw value bytes reach the page-size limit less parquet-java's 10% tolerance.
-/// Supplying more rows after this point does not improve the estimate. An incomplete
-/// sample is judged as if the column chunk ended there. A small sample can reject a
-/// dictionary that would help over the complete row group, especially at medium cardinality.
-/// The caller owns sample buffering and decides whether to apply the result to later row groups.
-/// Lazy traversal can inspect validity bits and nested offsets beyond the selected page while
-/// finding the next non-null value, but those later values do not enter the size comparison.
+/// Exceeding the dictionary-size limit also disables the dictionary. Each leaf samples from
+/// the start of `sample` across batch boundaries until that limit is exceeded, the first page
+/// ends, the row-group row limit is reached, or input ends.
+/// Page limits count top-level rows, including null and empty lists; pages end between rows.
+/// Starting at the first check, the page ends at its row limit or when raw value bytes reach
+/// the page-size limit less parquet-java's 10% tolerance. Each leaf inspects at most
+/// `max(column page-row limit, first check)` top-level rows, capped by the row-group row limit.
+///
+/// Supply the beginning of the row group to evaluate. Row-group byte limits are not simulated;
+/// the caller must exclude rows belonging to later row groups. An incomplete sample is judged
+/// as if the chunk ended there, which can reject a dictionary useful over the full row group.
+/// The caller owns buffering and decides whether to reuse the properties for later row groups.
 ///
 /// # Compatibility
 ///
-/// This reproduces the size comparison, not parquet-java's complete writer. Unlike Java,
-/// it checks every row after the first check and excludes repetition/definition-level bytes;
-/// page boundaries and decisions can therefore differ in either direction. Floating-point
-/// dictionary keys use raw bits: signed zeroes and distinct NaN payloads are distinct. Java's
-/// treatment of mixed NaN payloads can differ with its map implementation and layout.
+/// This approximates parquet-java's first-page size comparison. It checks every row after the
+/// first check and excludes repetition/definition-level bytes, so page boundaries can differ
+/// in either direction. Floating-point keys use raw bits: signed zeroes and distinct NaN
+/// payloads are distinct; parquet-java may merge NaNs with different payloads into one entry.
 ///
-/// In Parquet v1, fixed-length byte-array dictionaries are disabled, matching Java's type
-/// support, even though the Rust writer can encode them. This Arrow-schema interface does
-/// not cover INT96, which [`super::ArrowWriter`] cannot write. Boolean columns are unchanged.
-/// The physical types and column paths are inferred using [`ArrowSchemaConverter`] and
-/// `props.coerce_types()`. The result is intended for that inferred Parquet schema, not a
+/// For nonempty Parquet v1 samples, fixed-length byte-array dictionaries are disabled to match
+/// parquet-java, even though the Rust writer supports them. Boolean columns are unchanged.
+/// INT96 is outside this Arrow-schema interface because [`super::ArrowWriter`] cannot write it.
+/// Physical types and paths use [`ArrowSchemaConverter`] and `props.coerce_types()`, not a
 /// custom schema supplied through [`super::ArrowWriterOptions::with_parquet_schema`].
 ///
-/// Options and all batch schemas are validated before making any changes. Empty samples,
-/// including lists of empty batches, return the original properties unchanged.
+/// Options and all batch fields are validated first. Empty samples, including lists of empty
+/// batches, return the original properties unchanged.
 ///
 /// # Example
 ///
@@ -171,7 +170,8 @@ pub fn choose_dictionary_encoding(
         }
         let page_rows = props
             .column_data_page_row_count_limit(path)
-            .max(first_check);
+            .max(first_check)
+            .min(props.max_row_group_row_count().unwrap_or(usize::MAX));
         let page_size = props.column_data_page_size_limit(path);
         let tolerance = (page_size as f32 * 0.1) as usize;
         let mut page = FirstPage::new(
@@ -425,7 +425,7 @@ impl FirstPage {
         type_length: usize,
     ) -> Result<()> {
         if array.data_type() == &DataType::Null {
-            self.consume(Box::new(std::iter::empty()), rows, |_, _| unreachable!());
+            self.consume(entries, rows, |_, _| unreachable!());
             return Ok(());
         }
         let sampler = SampleValues {
@@ -880,8 +880,7 @@ mod tests {
             .build()
     }
 
-    /// The leaf columns that keep dictionary encoding under the properties chosen for `sample`,
-    /// leaving out the types parquet-rs never dictionary-encodes.
+    /// The leaf columns that keep dictionaries, excluding BOOLEAN leaves the helper never changes.
     fn dictionary_columns(properties: WriterProperties, sample: &[RecordBatch]) -> Vec<String> {
         let schema = sample[0].schema();
         let chosen = choose_dictionary_encoding(
@@ -897,10 +896,8 @@ mod tests {
             .columns()
             .iter()
             .filter(|descr| {
-                !matches!(
-                    descr.physical_type(),
-                    PhysicalType::BOOLEAN | PhysicalType::FIXED_LEN_BYTE_ARRAY
-                ) && chosen.dictionary_enabled(descr.path())
+                descr.physical_type() != PhysicalType::BOOLEAN
+                    && chosen.dictionary_enabled(descr.path())
             })
             .map(|descr| descr.path().string())
             .collect()
@@ -1298,7 +1295,6 @@ mod tests {
             props.max_row_group_row_count()
         );
         assert_eq!(chosen.column_dictionary_page_size_limit(&small), 8);
-        assert!(enabled(&props, "small"));
     }
 
     #[test]
@@ -1342,9 +1338,24 @@ mod tests {
         let page = WriterProperties::builder()
             .set_data_page_row_count_limit(100)
             .build();
-        let short = choose(&first, page.clone());
         let extra = choose(&batch, page);
-        assert_eq!(enabled(&short, "long"), enabled(&extra, "long"));
+        assert!(!enabled(&extra, "long"));
+    }
+
+    #[test]
+    fn row_group_row_limit_ends_the_sampled_chunk() {
+        let batch = RecordBatch::try_from_iter([(
+            "v",
+            Arc::new(Int64Array::from_iter_values(
+                (0..100).chain(std::iter::repeat_n(7, 1000)),
+            )) as ArrayRef,
+        )])
+        .unwrap();
+        let limited = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(100))
+            .build();
+        assert!(!enabled(&choose(&batch, limited), "v"));
+        assert!(enabled(&choose(&batch, WriterProperties::default()), "v"));
     }
 
     #[test]
@@ -1398,11 +1409,10 @@ mod tests {
                 .with_precision_and_scale(20, 0)
                 .unwrap(),
         );
-        let interval: ArrayRef = Arc::new(IntervalYearMonthArray::from(vec![1, 1, 1, 1]));
-        let half: ArrayRef = Arc::new(Float16Array::from_iter_values(std::iter::repeat_n(
-            half::f16::ONE,
-            4,
-        )));
+        let interval: ArrayRef = Arc::new(IntervalYearMonthArray::from(vec![1, 2, 3, 4]));
+        let half: ArrayRef = Arc::new(Float16Array::from_iter_values(
+            (1..=4).map(|value| half::f16::from_f32(value as f32)),
+        ));
         let batch = RecordBatch::try_from_iter([
             ("fixed", fixed),
             ("decimal", decimal),
@@ -1492,7 +1502,7 @@ mod tests {
     }
 
     #[test]
-    fn dictionary_inputs_follow_keys_and_value_nulls_lazily() {
+    fn dictionary_inputs_follow_keys_and_value_nulls() {
         use arrow_array::types::Int8Type;
         use arrow_array::{DictionaryArray, Int8Array};
         let values: ArrayRef = Arc::new(StringArray::from(vec![
@@ -1564,10 +1574,7 @@ mod tests {
         assert!(enabled(&chosen, "list.list.item"));
         let pieces = vec![batch.slice(0, 1), batch.slice(1, 1), batch.slice(2, 2)];
         let split = choose_dictionary_encoding(&batch.schema(), props, &pieces, &options).unwrap();
-        assert_eq!(
-            enabled(&chosen, "list.list.item"),
-            enabled(&split, "list.list.item")
-        );
+        assert!(enabled(&split, "list.list.item"));
         let byte_limited = WriterProperties::builder()
             .set_data_page_size_limit(1)
             .set_dictionary_page_size_limit(16)
@@ -1723,9 +1730,7 @@ mod tests {
             ("nulls", Arc::new(Int32Array::new_null(512)) as ArrayRef),
         ])
         .unwrap();
-        let original = WriterProperties::default();
-        let chosen = choose(&batch, original.clone());
-        assert!(enabled(&original, "unique"));
+        let chosen = choose(&batch, WriterProperties::default());
         let mut output = Vec::new();
         let mut writer = ArrowWriter::try_new(&mut output, batch.schema(), Some(chosen)).unwrap();
         writer.write(&batch).unwrap();
