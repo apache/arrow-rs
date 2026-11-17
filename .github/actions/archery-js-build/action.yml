@@ -3,7 +3,7 @@
 # SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 name: Prepare Archery JavaScript build
-description: Build every JS distribution or restore an identical successful build
+description: Prepare JavaScript sources and dependencies for Archery
 inputs:
   lookup-only:
     description: Seed missing caches without downloading existing builds
@@ -33,7 +33,7 @@ runs:
         echo "key=archery-js-v1-$(sha256sum "$RUNNER_TEMP/archery-js-inputs" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
         BASH
 
-    - name: Cache complete JavaScript build
+    - name: Cache JavaScript integration dependencies
       id: cache
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
       with:
@@ -49,11 +49,15 @@ runs:
         mkdir -p /build/js
         tar -xf "$RUNNER_TEMP/archery-js.tar" -C /build/js
 
-    - name: Build every JavaScript distribution
+    - name: Install JavaScript integration dependencies
       if: steps.cache.outputs.cache-hit != 'true'
       shell: bash
       run: |
-        conda run --no-capture-output js/ci/scripts/build.sh "$PWD/js"
+        conda run --no-capture-output bash -e <<'BASH'
+        cd js
+        # Archery runs bin/*.ts against src through SWC, without package distributions.
+        npm ci
+        BASH
         mkdir -p /build
         cp -a js /build/js
         tar --exclude=.git -cf "$RUNNER_TEMP/archery-js.tar" -C /build/js .
