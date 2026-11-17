@@ -1,0 +1,68 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+name: Prepare Archery Go build
+description: Build every Go package or restore identical binaries and C Data libraries
+inputs:
+  lookup-only:
+    description: Seed missing caches without downloading existing builds
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - name: Identify Go build inputs
+      id: inputs
+      shell: bash
+      run: |
+        conda run --no-capture-output bash -euo pipefail <<'BASH'
+        {
+          git -C go rev-parse HEAD
+          sha256sum rust/.github/workflows/integration.yml \
+            rust/.github/actions/archery-go-build/action.yml \
+            ci/scripts/integration_arrow_build.sh \
+            ci/docker/conda-integration.dockerfile
+          # GOGCCFLAGS contains a random temporary path, so select stable inputs.
+          (
+            cd go
+            go version
+            go env -json GOVERSION GOOS GOARCH GOAMD64 GOARM GOARM64 \
+              GOEXPERIMENT GOFLAGS GOTOOLCHAIN GOFIPS140 GOPATH GOBIN GOROOT \
+              CGO_ENABLED CC CXX CGO_CFLAGS CGO_CPPFLAGS CGO_CXXFLAGS CGO_LDFLAGS
+          )
+          ldd --version
+          conda list --explicit
+          dpkg-query -W
+          for variable in ARROW_GO_TESTCGO ARROW_INTEGRATION_GO \
+            CGO_CFLAGS CGO_CPPFLAGS CGO_CXXFLAGS CGO_LDFLAGS; do
+            printf '%s=%s\n' "$variable" "${!variable-}"
+          done
+        } > "$RUNNER_TEMP/archery-go-inputs"
+        echo "key=archery-go-v1-$(sha256sum "$RUNNER_TEMP/archery-go-inputs" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+        BASH
+
+    - name: Cache Go build outputs
+      id: cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+      with:
+        path: ${{ runner.temp }}/archery-go.tar.zst
+        # Exact matches only: never accept an older source or build environment.
+        key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.inputs.outputs.key }}
+        lookup-only: ${{ inputs.lookup-only }}
+
+    - name: Restore Go build
+      if: steps.cache.outputs.cache-hit == 'true' && inputs.lookup-only != 'true'
+      shell: bash
+      run: |
+        mkdir -p /build/go
+        tar -I 'zstd -d --long=27' -xf "$RUNNER_TEMP/archery-go.tar.zst" -C /build/go
+        cp /build/go/native/* go/arrow/internal/cdata_integration/
+
+    - name: Build every Go package
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        conda run --no-capture-output go/ci/scripts/build.sh "$PWD/go"
+        mkdir -p /build/go/native
+        cp go/arrow/internal/cdata_integration/arrow_go_integration.{so,h} /build/go/native/
+        tar -I 'zstd -T1 -3 --long=27' -cf "$RUNNER_TEMP/archery-go.tar.zst" -C /build/go .

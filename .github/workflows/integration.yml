@@ -29,6 +29,8 @@ jobs:
       ARROW_NANOARROW_PATH: /build/nanoarrow
       ARROW_RUST_EXE_PATH: /build/rust/debug
       BUILD_DOCS_CPP: OFF
+      BUILD_DOCS_JS: OFF
+      GOBIN: /build/go/bin
       ARROW_INTEGRATION_CPP: ON
       ARROW_INTEGRATION_CSHARP: ON
       ARCHERY_INTEGRATION_TARGET_IMPLEMENTATIONS: "rust"
@@ -148,11 +150,19 @@ jobs:
           df -h /
           echo ""
 
+      - name: Prepare Go build
+        uses: ./rust/.github/actions/archery-go-build
+      - name: Prepare Java build
+        uses: ./rust/.github/actions/archery-java-build
+      - name: Prepare JavaScript build
+        uses: ./rust/.github/actions/archery-js-build
+
       - name: Build
         env:
-          # Archery uses the Tools, Flight integration, and C Data JARs.
-          # Keep their dependencies and test JARs, but avoid unrelated Java modules.
-          MAVEN_ARGS: -pl bom,tools,flight/flight-integration-tests,c -am
+          # Override build preparation only. The Run step still enables all three.
+          ARCHERY_INTEGRATION_WITH_GO: "0"
+          ARCHERY_INTEGRATION_WITH_JAVA: "0"
+          ARCHERY_INTEGRATION_WITH_JS: "0"
         run: conda run --no-capture-output ci/scripts/integration_arrow_build.sh $PWD /build
 
       - name: Monitor disk usage - After build
@@ -171,6 +181,62 @@ jobs:
           echo "=== After Tests ==="
           df -h /
           echo ""
+
+  # PR and merge-queue caches cannot warm another branch's cache. Seed main
+  # with the same peer builds, without repeating cross-language tests.
+  archery-peer-cache:
+    if: ${{ inputs.cache-refresh-only }}
+    name: Populate Archery peer caches
+    runs-on: ubuntu-latest
+    container:
+      image: apache/arrow-dev:amd64-conda-integration
+    env:
+      ARROW_USE_CCACHE: OFF
+      BUILD_DOCS_JS: OFF
+      GOBIN: /build/go/bin
+    steps:
+      - name: Export conda path
+        run: echo "/opt/conda/envs/arrow/bin" >> $GITHUB_PATH
+      - name: Checkout Arrow
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: apache/arrow
+          persist-credentials: false
+      - name: Checkout Arrow Rust
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          path: rust
+          persist-credentials: false
+      - name: Checkout Arrow Java
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: apache/arrow-java
+          path: java
+          persist-credentials: false
+      - name: Checkout Arrow JavaScript
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: apache/arrow-js
+          path: js
+          persist-credentials: false
+      - name: Checkout Arrow Go
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: apache/arrow-go
+          path: go
+          persist-credentials: false
+      - name: Prepare Go build
+        uses: ./rust/.github/actions/archery-go-build
+        with:
+          lookup-only: 'true'
+      - name: Prepare Java build
+        uses: ./rust/.github/actions/archery-java-build
+        with:
+          lookup-only: 'true'
+      - name: Prepare JavaScript build
+        uses: ./rust/.github/actions/archery-js-build
+        with:
+          lookup-only: 'true'
 
   # test FFI against the C-Data interface exposed by pyarrow
   pyarrow-integration-test:

@@ -78,6 +78,17 @@ def validate_cache_refresh(ci, suite, workflow):
     cache_jobs = CACHE_REFRESH_STEPS[suite]
     assert cache_jobs.keys() <= workflow["jobs"].keys(), f"{suite}: missing cache writer"
     for name, job in workflow["jobs"].items():
+        if suite == "integration" and name == "archery-peer-cache":
+            assert job.get("if") == "${{ inputs.cache-refresh-only }}", (
+                "Archery cache seeding must only run on main's cache refresh"
+            )
+            prepare = {step.get("uses") for step in job["steps"]}
+            assert {
+                "./rust/.github/actions/archery-go-build",
+                "./rust/.github/actions/archery-java-build",
+                "./rust/.github/actions/archery-js-build",
+            } <= prepare, "Cache seeding must use the same peer builds as integration"
+            continue
         if name not in cache_jobs:
             assert job.get("if") == FULL_RUN, f"{suite}/{name}: runs during cache refresh"
             continue
