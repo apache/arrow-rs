@@ -2358,4 +2358,33 @@ mod tests {
             .expect_err("truncated block count should fail the read");
         assert!(err.to_string().contains("Unexpected EOF"), "{err}");
     }
+
+    #[tokio::test]
+    async fn test_truncated_block_size_errors() {
+        use crate::writer::AvroWriter;
+
+        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(Int32Array::from(vec![1]))],
+        )
+        .unwrap();
+        let mut bytes = Vec::new();
+        let mut writer = AvroWriter::new(&mut bytes, schema).unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+
+        // A complete count of 1, then the size varint without its terminating byte.
+        bytes.extend_from_slice(&[0x02, 0x80]);
+        let file_size = bytes.len() as u64;
+        let reader = AsyncAvroFileReader::builder(std::io::Cursor::new(bytes), file_size, 1024)
+            .try_build()
+            .await
+            .unwrap();
+        let err = reader
+            .try_collect::<Vec<_>>()
+            .await
+            .expect_err("truncated block size should fail the read");
+        assert!(err.to_string().contains("Unexpected EOF"), "{err}");
+    }
 }
