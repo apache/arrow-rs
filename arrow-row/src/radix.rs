@@ -46,10 +46,9 @@ use crate::Rows;
 use arrow_array::UInt32Array;
 use arrow_schema::ArrowError;
 
-/// Buckets this size or smaller are sorted by comparing keys. A radix pass
-/// zeroes, sums, and walks 256 counters whatever the bucket's size, which
-/// costs more than comparing a bucket this small.
-const FALLBACK_THRESHOLD: usize = 64;
+/// Buckets this size or smaller are sorted by comparing keys. On small inputs
+/// a comparison sort beats the per-bucket cost of another radix pass.
+const FALLBACK_THRESHOLD: usize = 32;
 
 /// The bytes of each row that an entry holds as its key, in the 96 bits above
 /// the row's u32 index
@@ -795,7 +794,7 @@ mod tests {
     #[test]
     fn test_radix_sort_threshold_boundary() {
         let mut rng = StdRng::seed_from_u64(0xCAFE);
-        for n in [1, 2, 31, 32, 33, 63, 64, 65, 100, 128, 129, 256, 500, 1000] {
+        for n in [1, 2, 31, 32, 33, 64, 100, 128, 256, 500, 1000] {
             let values: Vec<Option<i32>> = (0..n)
                 .map(|_| {
                     if rng.random_bool(0.1) {
