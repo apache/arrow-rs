@@ -22,7 +22,9 @@ runs:
             rust/.github/actions/archery-java-build/action.yml \
             ci/scripts/integration_arrow_build.sh \
             ci/docker/conda-integration.dockerfile
-          mvn --version
+          # Maven also prints the runner's kernel version, which differs between
+          # GitHub runner VMs and would make the key change on every run.
+          mvn --version | grep -v '^OS name:'
           cmake --version
           java -version 2>&1
           ldd --version
