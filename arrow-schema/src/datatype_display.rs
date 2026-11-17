@@ -26,6 +26,17 @@ impl Display for DataType {
             format!("{name:?}: {maybe_nullable}{data_type}{metadata_str}")
         }
 
+        fn format_list_field(field: &crate::Field) -> String {
+            if field.name() == Field::LIST_FIELD_DEFAULT_NAME {
+                let maybe_nullable = format_nullability(field);
+                let data_type = field.data_type();
+                let metadata_str = format_metadata(field.metadata());
+                format!("{maybe_nullable}{data_type}{metadata_str}")
+            } else {
+                format_field(field)
+            }
+        }
+
         // A lot of these can still be improved a lot.
         // _Some_ of these can be parsed with `FromStr`, but not all (YET!).
         // The goal is that the formatting should always be
@@ -82,10 +93,10 @@ impl Display for DataType {
                     "LargeListView"
                 };
 
-                write!(f, "{type_name}({})", format_field(field))
+                write!(f, "{type_name}({})", format_list_field(field))
             }
             Self::FixedSizeList(field, size) => {
-                write!(f, "FixedSizeList({size} x {})", format_field(field))
+                write!(f, "FixedSizeList({size} x {})", format_list_field(field))
             }
             Self::Struct(fields) => {
                 write!(f, "Struct(")?;
@@ -196,7 +207,7 @@ mod tests {
     fn test_display_list() {
         let list_data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
         let list_data_type_string = list_data_type.to_string();
-        let expected_string = r#"List("item": Int32)"#;
+        let expected_string = "List(Int32)";
         assert_eq!(list_data_type_string, expected_string);
     }
 
@@ -205,7 +216,7 @@ mod tests {
         let list_view_data_type =
             DataType::ListView(Arc::new(Field::new("item", DataType::Int32, true)));
         let list_view_data_type_string = list_view_data_type.to_string();
-        let expected_string = r#"ListView("item": Int32)"#;
+        let expected_string = "ListView(Int32)";
         assert_eq!(list_view_data_type_string, expected_string);
     }
 
@@ -233,7 +244,7 @@ mod tests {
             false,
         )));
         let nested_data_type_string = nested_data_type.to_string();
-        let nested_expected_string = r#"List("item": non-null List("item": non-null UInt64))"#;
+        let nested_expected_string = "List(non-null List(non-null UInt64))";
         assert_eq!(nested_data_type_string, nested_expected_string);
     }
 
@@ -244,21 +255,25 @@ mod tests {
             false,
         )));
         let nested_view_data_type_string = nested_view_data_type.to_string();
-        let nested_view_expected_string =
-            r#"ListView("item": non-null ListView("item": non-null UInt64))"#;
+        let nested_view_expected_string = "ListView(non-null ListView(non-null UInt64))";
         assert_eq!(nested_view_data_type_string, nested_view_expected_string);
     }
 
     #[test]
     fn test_display_list_with_metadata() {
-        let mut field = Field::new_list_field(DataType::Int32, true);
-        let metadata = HashMap::from([("foo1".to_string(), "value1".to_string())]);
-        field.set_metadata(metadata);
-        let list_data_type = DataType::List(Arc::new(field));
-        let list_data_type_string = list_data_type.to_string();
-        let expected_string = r#"List("item": Int32, metadata: {"foo1": "value1"})"#;
-
-        assert_eq!(list_data_type_string, expected_string);
+        for (name, expected) in [
+            ("item", r#"List(Int32, metadata: {"foo1": "value1"})"#),
+            (
+                "value",
+                r#"List("value": Int32, metadata: {"foo1": "value1"})"#,
+            ),
+        ] {
+            let mut field = Field::new(name, DataType::Int32, true);
+            let metadata = HashMap::from([("foo1".to_string(), "value1".to_string())]);
+            field.set_metadata(metadata);
+            let list_data_type = DataType::List(Arc::new(field));
+            assert_eq!(list_data_type.to_string(), expected);
+        }
     }
 
     #[test]
@@ -268,7 +283,7 @@ mod tests {
         field.set_metadata(metadata);
         let list_view_data_type = DataType::ListView(Arc::new(field));
         let list_view_data_type_string = list_view_data_type.to_string();
-        let expected_string = r#"ListView("item": Int32, metadata: {"foo2": "value2"})"#;
+        let expected_string = r#"ListView(Int32, metadata: {"foo2": "value2"})"#;
         assert_eq!(list_view_data_type_string, expected_string);
     }
 
@@ -277,7 +292,7 @@ mod tests {
         let large_list_data_type =
             DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int32, true)));
         let large_list_data_type_string = large_list_data_type.to_string();
-        let expected_string = r#"LargeList("item": Int32)"#;
+        let expected_string = "LargeList(Int32)";
         assert_eq!(large_list_data_type_string, expected_string);
 
         // Test with named field
@@ -293,7 +308,7 @@ mod tests {
         field.set_metadata(metadata);
         let large_list_metadata = DataType::LargeList(Arc::new(field));
         let large_list_metadata_string = large_list_metadata.to_string();
-        let expected_metadata_string = r#"LargeList("item": Int32, metadata: {"key1": "value1"})"#;
+        let expected_metadata_string = r#"LargeList(Int32, metadata: {"key1": "value1"})"#;
         assert_eq!(large_list_metadata_string, expected_metadata_string);
     }
 
@@ -302,7 +317,7 @@ mod tests {
         let large_list_view_data_type =
             DataType::LargeListView(Arc::new(Field::new("item", DataType::Int32, true)));
         let large_list_view_data_type_string = large_list_view_data_type.to_string();
-        let expected_string = r#"LargeListView("item": Int32)"#;
+        let expected_string = "LargeListView(Int32)";
         assert_eq!(large_list_view_data_type_string, expected_string);
 
         // Test with named field
@@ -318,8 +333,7 @@ mod tests {
         field.set_metadata(metadata);
         let large_list_view_metadata = DataType::LargeListView(Arc::new(field));
         let large_list_view_metadata_string = large_list_view_metadata.to_string();
-        let expected_metadata_string =
-            r#"LargeListView("item": Int32, metadata: {"key1": "value1"})"#;
+        let expected_metadata_string = r#"LargeListView(Int32, metadata: {"key1": "value1"})"#;
         assert_eq!(large_list_view_metadata_string, expected_metadata_string);
     }
 
@@ -328,7 +342,7 @@ mod tests {
         let fixed_size_list =
             DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, true)), 5);
         let fixed_size_list_string = fixed_size_list.to_string();
-        let expected_string = r#"FixedSizeList(5 x "item": Int32)"#;
+        let expected_string = "FixedSizeList(5 x Int32)";
         assert_eq!(fixed_size_list_string, expected_string);
 
         // Test with named field
@@ -344,8 +358,7 @@ mod tests {
         field.set_metadata(metadata);
         let fixed_size_metadata = DataType::FixedSizeList(Arc::new(field), 4);
         let fixed_size_metadata_string = fixed_size_metadata.to_string();
-        let expected_metadata_string =
-            r#"FixedSizeList(4 x "item": Int32, metadata: {"key2": "value2"})"#;
+        let expected_metadata_string = r#"FixedSizeList(4 x Int32, metadata: {"key2": "value2"})"#;
         assert_eq!(fixed_size_metadata_string, expected_metadata_string);
     }
 

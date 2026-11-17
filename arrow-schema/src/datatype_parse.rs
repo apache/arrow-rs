@@ -1170,11 +1170,20 @@ mod test {
 
     #[test]
     fn test_parse_mixed_list_field_formats() {
-        let input = r#"Dictionary(Int32, List("outer": List(non-null Int32, field: 'inner')))"#;
-        let expected = r#"Dictionary(Int32, List("outer": List("inner": non-null Int32)))"#;
-        let parsed = parse_data_type(input).unwrap();
-        assert_eq!(parsed.to_string(), expected);
-        round_trip(parsed);
+        for (input, expected) in [
+            (
+                r#"Dictionary(Int32, List("outer": List(non-null Int32, field: 'inner')))"#,
+                r#"Dictionary(Int32, List("outer": List("inner": non-null Int32)))"#,
+            ),
+            (
+                r#"List("scores": List("item": non-null Int32))"#,
+                r#"List("scores": List(non-null Int32))"#,
+            ),
+        ] {
+            let parsed = parse_data_type(input).unwrap();
+            assert_eq!(parsed.to_string(), expected);
+            round_trip(parsed);
+        }
     }
 
     #[test]
