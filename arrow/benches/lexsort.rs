@@ -343,6 +343,23 @@ fn add_benchmark(c: &mut Criterion) {
             do_bench(c, case, len);
         }
     }
+
+    // A single column with few distinct values, whose groups of equal rows
+    // are shorter than the radix key
+    for len in [4096, 4096 * 8, 1 << 20] {
+        do_bench(c, &[Column::TenValueI32(1)], len);
+    }
+
+    // Row counts where the buckets of a radix pass hold a few dozen rows
+    let bucket_sizes: &[&[Column]] = &[
+        &[Column::RequiredI32],
+        &[Column::RequiredI32, Column::OptionalI32],
+    ];
+    for case in bucket_sizes {
+        for len in [4096 * 2, 1 << 21] {
+            do_bench(c, case, len);
+        }
+    }
 }
 
 fn add_limit_benchmark(c: &mut Criterion) {
