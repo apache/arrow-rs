@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Canonical extension types.
 //!
@@ -39,6 +26,8 @@ mod uuid;
 pub use uuid::Uuid;
 mod variable_shape_tensor;
 pub use variable_shape_tensor::{VariableShapeTensor, VariableShapeTensorMetadata};
+mod variant;
+pub use variant::VariantType;
 
 use crate::{ArrowError, Field};
 
@@ -84,6 +73,11 @@ pub enum CanonicalExtensionType {
     ///
     /// <https://arrow.apache.org/docs/format/CanonicalExtensions.html#timestamp-with-offset>
     TimestampWithOffset(TimestampWithOffset),
+
+    /// The extension type for Parquet Variant.
+    ///
+    /// <https://arrow.apache.org/docs/format/CanonicalExtensions.html#parquet-variant>
+    Variant(VariantType),
 }
 
 impl TryFrom<&Field> for CanonicalExtensionType {
@@ -107,6 +101,7 @@ impl TryFrom<&Field> for CanonicalExtensionType {
                 TimestampWithOffset::NAME => value
                     .try_extension_type::<TimestampWithOffset>()
                     .map(Into::into),
+                VariantType::NAME => value.try_extension_type::<VariantType>().map(Into::into),
                 _ => Err(ArrowError::InvalidArgumentError(format!(
                     "Unsupported canonical extension type: {name}"
                 ))),
@@ -162,5 +157,11 @@ impl From<Bool8> for CanonicalExtensionType {
 impl From<TimestampWithOffset> for CanonicalExtensionType {
     fn from(value: TimestampWithOffset) -> Self {
         CanonicalExtensionType::TimestampWithOffset(value)
+    }
+}
+
+impl From<VariantType> for CanonicalExtensionType {
+    fn from(value: VariantType) -> Self {
+        CanonicalExtensionType::Variant(value)
     }
 }

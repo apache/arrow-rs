@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::array::print_long_array;
 use crate::iterator::FixedSizeBinaryIter;
@@ -540,7 +527,10 @@ impl FixedSizeBinaryArray {
     ///
     /// # Errors
     ///
-    /// Returns error if argument has length zero, or sizes of nested slices don't match.
+    /// - `value_length` is negative
+    /// - A byte slice has a different length
+    /// - Size arithmetic overflows
+    /// - Buffer allocation fails
     pub fn try_from_sparse_iter_with_size<T, U>(
         mut iter: T,
         value_length: i32,
@@ -558,18 +548,22 @@ impl FixedSizeBinaryArray {
         let mut byte = 0;
 
         let iter_size_hint = iter.size_hint().0;
-        let mut null_buf = MutableBuffer::new(bit_util::ceil(iter_size_hint, 8));
+        let mut null_buf = MutableBuffer::try_with_capacity(bit_util::ceil(iter_size_hint, 8))
+            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
         let capacity = iter_size_hint.checked_mul(value_size).ok_or_else(|| {
             ArrowError::InvalidArgumentError(format!(
                 "FixedSizeBinaryArray error: value size {value_size} * len hint {iter_size_hint} exceeds usize"
             ))
         })?;
-        let mut buffer = MutableBuffer::new(capacity);
+        let mut buffer = MutableBuffer::try_with_capacity(capacity)
+            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
         iter.try_for_each(|item| -> Result<(), ArrowError> {
             // extend null bitmask by one byte per each 8 items
             if byte == 0 {
-                null_buf.push(0u8);
+                null_buf
+                    .try_extend_from_slice(&[0u8])
+                    .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
                 byte = 8;
             }
             byte -= 1;
@@ -585,9 +579,13 @@ impl FixedSizeBinaryArray {
                 }
 
                 bit_util::set_bit(null_buf.as_slice_mut(), len);
-                buffer.extend_from_slice(slice);
+                buffer
+                    .try_extend_from_slice(slice)
+                    .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
             } else {
-                buffer.extend_zeros(value_size);
+                buffer
+                    .try_extend_zeros(value_size)
+                    .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
             }
 
             len += 1;
@@ -622,7 +620,10 @@ impl FixedSizeBinaryArray {
     ///
     /// # Errors
     ///
-    /// Returns error if argument has length zero, or sizes of nested slices don't match.
+    /// - The iterator is empty
+    /// - The byte slices have different lengths
+    /// - The value length exceeds `i32`
+    /// - Buffer allocation fails
     pub fn try_from_iter<T, U>(mut iter: T) -> Result<Self, ArrowError>
     where
         T: Iterator<Item = U>,
@@ -631,7 +632,7 @@ impl FixedSizeBinaryArray {
         let mut len = 0;
         let mut value_size = None;
         let iter_size_hint = iter.size_hint().0;
-        let mut buffer = MutableBuffer::new(0);
+        let mut buffer = MutableBuffer::default();
 
         iter.try_for_each(|item| -> Result<(), ArrowError> {
             let slice = item.as_ref();

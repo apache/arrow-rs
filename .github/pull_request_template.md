@@ -1,3 +1,9 @@
+> [!IMPORTANT]
+>
+> Before opening this PR, [enable CI in your fork](https://github.com/apache/arrow-rs/blob/main/CONTRIBUTING.md#pull-requests-from-forks).
+>
+> **Delete this notice after enabling CI.**
+
 # Which issue does this PR close?
 
 <!--
@@ -59,4 +65,12 @@ required and to ensure we follow proper semantic versioning.
 
 DO NOT restate the changes of this PR; if a bug was fixed and already explained
 above, we don't need this to be restated as a user-facing change.
+-->
+
+# AI usage disclosure
+
+<!--
+If you used AI tools, briefly describe what they helped generate.
+See https://github.com/apache/arrow-rs/blob/main/CONTRIBUTING.md#ai-generated-submissions.
+Delete this section if you did not use AI tools.
 -->

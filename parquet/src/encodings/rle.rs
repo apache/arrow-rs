@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Rle/Bit-Packing Hybrid Encoding
 //! The grammar for this encoding looks like the following (copied verbatim
@@ -742,10 +729,16 @@ impl RleDecoder {
             } else {
                 self.rle_left = num_values;
                 let value_width = bit_util::ceil(self.bit_width as usize, u8::BITS as usize);
-                self.current_value = bit_reader.get_aligned::<u64>(value_width);
-                self.current_value.ok_or_else(|| {
+                let value = bit_reader.get_aligned::<u64>(value_width).ok_or_else(|| {
                     general_err!("parquet_data_error: not enough data for RLE decoding")
                 })?;
+                if self.bit_width < u64::BITS as u8 && value >= (1_u64 << self.bit_width) {
+                    return Err(general_err!(
+                        "Invalid or corrupted RLE value {value} exceeds bit width {}",
+                        self.bit_width
+                    ));
+                }
+                self.current_value = Some(value);
             }
             Ok(true)
         } else {

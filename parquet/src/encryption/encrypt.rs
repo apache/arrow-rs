@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Configuration and utilities for Parquet Modular Encryption
 
@@ -139,6 +126,15 @@ impl FileEncryptionProperties {
             }
         }
         (column_names, keys, meta)
+    }
+
+    /// Returns the retrieval metadata for the named column's encryption key.
+    ///
+    /// Returns `None` if the column has no explicitly configured encryption key
+    /// or its key has no metadata. Metadata is not inherited from the footer key.
+    /// Explicitly configured empty metadata is returned as `Some(&[])`.
+    pub fn column_key_metadata(&self, column_name: &str) -> Option<&[u8]> {
+        self.column_keys.get(column_name)?.key_metadata.as_deref()
     }
 
     /// AAD prefix string uniquely identifies the file and prevents file swapping
@@ -440,5 +436,64 @@ pub(crate) fn get_column_crypto_metadata(
                     key_metadata: encryption_key.key_metadata.clone(),
                 })
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FileEncryptionProperties;
+
+    #[test]
+    fn test_column_key_metadata_preserves_associations() {
+        let columns = [
+            ("first", Some(b"first-key-id".as_slice())),
+            ("second", None),
+            ("third", Some(b"third-key-id".as_slice())),
+        ];
+        for indices in [[0, 1, 2], [2, 1, 0]] {
+            let mut builder = FileEncryptionProperties::builder(b"0123456789012345".to_vec());
+            for index in indices {
+                let (name, metadata) = columns[index];
+                let key = vec![index as u8; 16];
+                builder = match metadata {
+                    Some(metadata) => {
+                        builder.with_column_key_and_metadata(name, key, metadata.to_vec())
+                    }
+                    None => builder.with_column_key(name, key),
+                };
+            }
+            let properties = builder.build().unwrap();
+
+            for (name, metadata) in columns {
+                assert_eq!(properties.column_key_metadata(name), metadata);
+            }
+            assert_eq!(properties.column_key_metadata("missing"), None);
+        }
+    }
+
+    #[test]
+    fn test_column_key_metadata_preserves_empty_metadata() {
+        let properties = FileEncryptionProperties::builder(b"0123456789012345".to_vec())
+            .with_footer_key_metadata(b"footer-key-id".to_vec())
+            .with_column_key_and_metadata("empty", b"1234567890123450".to_vec(), Vec::new())
+            .with_column_key("absent", b"1234567890123451".to_vec())
+            .build()
+            .unwrap();
+
+        assert_eq!(properties.column_key_metadata("empty"), Some([].as_slice()));
+        assert_eq!(properties.column_key_metadata("absent"), None);
+        assert_eq!(properties.column_key_metadata("missing"), None);
+        assert_eq!(properties.footer_key_metadata().unwrap(), b"footer-key-id");
+    }
+
+    #[test]
+    fn test_column_key_metadata_does_not_inherit_footer_metadata() {
+        let properties = FileEncryptionProperties::builder(b"0123456789012345".to_vec())
+            .with_footer_key_metadata(b"footer-key-id".to_vec())
+            .build()
+            .unwrap();
+
+        assert_eq!(properties.column_key_metadata("column"), None);
+        assert_eq!(properties.footer_key_metadata().unwrap(), b"footer-key-id");
     }
 }

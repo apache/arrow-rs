@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::{LengthTracker, RowConverter, Rows, SortField, fixed, null_sentinel};
 use arrow_array::{
@@ -220,7 +207,7 @@ pub(crate) unsafe fn decode<ListLikeImpl: GenericListArrayOrMap>(
     }
     ListLikeImpl::Offset::from_usize(offset).expect("overflow");
 
-    let nulls = crate::variable::decode_nulls_sentinel(rows, opts);
+    let nulls = crate::variable::decode_nulls_sentinel(rows, opts)?;
 
     let mut values_offsets = Vec::with_capacity(offset);
     let mut values_bytes = Vec::with_capacity(values_bytes);
@@ -389,7 +376,7 @@ pub unsafe fn decode_fixed_size_list(
     };
 
     let num_rows = rows.len();
-    let nulls = fixed::decode_nulls(rows);
+    let nulls = fixed::try_decode_nulls(rows)?;
 
     let null_element_encoded =
         converter.convert_columns(&[new_null_array(element_field.data_type(), 1)])?;
@@ -557,11 +544,12 @@ pub unsafe fn decode_list_view<O: OffsetSizeTrait>(
 
     let null_sentinel = null_sentinel(opts);
     let mut null_count = 0;
-    let nulls = MutableBuffer::collect_bool(rows.len(), |x| {
+    let nulls = MutableBuffer::try_collect_bool(rows.len(), |x| {
         let valid = rows[x][0] != null_sentinel;
         null_count += !valid as usize;
         valid
-    });
+    })
+    .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
     let mut values_offsets_vec = Vec::with_capacity(child_count);
     let mut values_bytes = Vec::with_capacity(values_bytes);

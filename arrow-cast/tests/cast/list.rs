@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 
@@ -31,7 +18,7 @@ use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_cast::display::{ArrayFormatter, FormatOptions};
 use arrow_cast::{CastOptions, can_cast_types, cast, cast_with_options};
 use arrow_data::ArrayData;
-use arrow_schema::{DataType, Field, TimeUnit};
+use arrow_schema::{DataType, Field, FieldRef, TimeUnit};
 use half::f16;
 #[test]
 fn test_cast_i32_to_list_i32() {
@@ -1776,4 +1763,41 @@ fn test_cast_large_list_view_to_list_view() {
 
     let expected = ListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
     assert_eq!(got, &expected);
+}
+
+#[test]
+fn test_first_none() {
+    let array = Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+        None,
+        Some(vec![Some(1), Some(2)]),
+    ])) as ArrayRef;
+    let data_type =
+        DataType::FixedSizeList(FieldRef::new(Field::new("item", DataType::Int64, true)), 2);
+    let opt = CastOptions::default();
+    let r = cast_with_options(&array, &data_type, &opt).unwrap();
+
+    let fixed_array = Arc::new(FixedSizeListArray::from_iter_primitive::<Int64Type, _, _>(
+        vec![None, Some(vec![Some(1), Some(2)])],
+        2,
+    )) as ArrayRef;
+    assert_eq!(*fixed_array, *r);
+}
+
+#[test]
+fn test_first_last_none() {
+    let array = Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+        None,
+        Some(vec![Some(1), Some(2)]),
+        None,
+    ])) as ArrayRef;
+    let data_type =
+        DataType::FixedSizeList(FieldRef::new(Field::new("item", DataType::Int64, true)), 2);
+    let opt = CastOptions::default();
+    let r = cast_with_options(&array, &data_type, &opt).unwrap();
+
+    let fixed_array = Arc::new(FixedSizeListArray::from_iter_primitive::<Int64Type, _, _>(
+        vec![None, Some(vec![Some(1), Some(2)]), None],
+        2,
+    )) as ArrayRef;
+    assert_eq!(*fixed_array, *r);
 }
