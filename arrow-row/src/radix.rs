@@ -46,13 +46,17 @@ use crate::Rows;
 use arrow_array::UInt32Array;
 use arrow_schema::ArrowError;
 
-/// Buckets this size or smaller are sorted by comparing keys. On small inputs
-/// a comparison sort beats the per-bucket cost of another radix pass.
-const FALLBACK_THRESHOLD: usize = 32;
+/// Buckets this size or smaller are sorted by comparing keys. A radix pass
+/// zeroes, sums, and walks 256 counters whatever the bucket's size, which
+/// costs more than comparing a bucket this small.
+const FALLBACK_THRESHOLD: usize = 64;
 
 /// The bytes of each row that an entry holds as its key, in the 96 bits above
 /// the row's u32 index
 const KEY_BYTES: u32 = 12;
+
+/// The bits of an entry that hold its key
+const KEY_MASK: u128 = !(u32::MAX as u128);
 
 /// Sort row indices using MSD radix sort on row-encoded keys.
 ///
@@ -131,21 +135,28 @@ pub fn radix_sort_to_indices(rows: &Rows, limit: Option<usize>) -> Result<UInt32
     // high 96 bits and the row's index in its low 32 bits, so entries compare
     // by key and move as one value. 12 bytes cover an Int32 and an Int64 after
     // their shared null and high bytes, the shape of a BIGINT join key.
+    // When every row ends within 12 bytes after the prefix, the key is the
+    // `KEY_BYTES - lead` bytes left, after `lead` zero bytes, and the sort
+    // starts after the zeros. The sort then ends at the longest row's last
+    // byte instead of splitting equal rows on the bytes of the rows after
+    // them.
+    let lead = KEY_BYTES as usize - (max_len - prefix).min(KEY_BYTES as usize);
+    let key_mask = (KEY_MASK >> (8 * lead)) & KEY_MASK;
     let buffer = rows.buffer.as_slice();
     let mut entries: Vec<u128> = rows
         .offsets
         .windows(2)
         .enumerate()
-        .map(|(i, w)| entry(buffer, w[0] + prefix, i))
+        .map(move |(i, w)| entry(buffer, w[0] + prefix, lead, key_mask, i))
         .collect();
     let mut temp = vec![0u128; n];
     // Only the first `keep` entries are final. The sort returns how many
     // entries it left in key order, which is at least `keep`, and the rest of
     // `entries` is not valid.
     let sorted = if keep < n {
-        msd_radix_sort::<true, _>(&mut entries, &mut temp, 0, true, First(keep))
+        msd_radix_sort::<true, _>(&mut entries, &mut temp, lead as u32, true, First(keep))
     } else {
-        msd_radix_sort::<true, _>(&mut entries, &mut temp, 0, true, Unlimited)
+        msd_radix_sort::<true, _>(&mut entries, &mut temp, lead as u32, true, Unlimited)
     };
     let entries = &mut entries[..sorted];
 
@@ -324,8 +335,8 @@ fn msd_radix_sort<const HIGH: bool, L: Limit>(
     start
 }
 
-/// The entry for row `index`, keyed by the 12 bytes of the rows buffer that
-/// start at `start`.
+/// The entry for row `index`, keyed by `lead` zero bytes and then the
+/// `KEY_BYTES - lead` bytes of the rows buffer that start at `start`.
 ///
 /// A row that ends within the key takes its last key bytes from the next row,
 /// because a fixed-size load is one instruction and a variable-length copy
@@ -334,19 +345,34 @@ fn msd_radix_sort<const HIGH: bool, L: Limit>(
 /// proper prefix of another, because every field encoding is self-delimiting,
 /// so two different rows differ within the shorter one. The load reads the
 /// buffer directly, because `Row::data` ends at the row.
-fn entry(buffer: &[u8], start: usize, index: usize) -> u128 {
-    let bytes = match buffer.get(start..).and_then(<[u8]>::first_chunk::<16>) {
-        Some(bytes) => *bytes,
-        // The last rows of the buffer are padded with zeros instead
-        None => {
-            let tail = buffer.get(start..).unwrap_or_default();
-            let mut bytes = [0u8; 16];
-            bytes[..tail.len()].copy_from_slice(tail);
-            bytes
-        }
+///
+/// `key` masks the key bytes: `KEY_MASK` without its first `lead` bytes. The
+/// load starts `lead` bytes early so that the key bytes land after them.
+fn entry(buffer: &[u8], start: usize, lead: usize, key: u128, index: usize) -> u128 {
+    // Converting in each arm keeps the fast path's bytes in registers
+    let bytes = match start
+        .checked_sub(lead)
+        .and_then(|at| buffer.get(at..)?.first_chunk::<16>())
+    {
+        Some(bytes) => u128::from_be_bytes(*bytes),
+        None => u128::from_be_bytes(load_padded(buffer, start, lead)),
     };
     // The last 4 bytes loaded lie past the key, and the index replaces them
-    (u128::from_be_bytes(bytes) & !u128::from(u32::MAX)) | index as u128
+    (bytes & key) | index as u128
+}
+
+/// The 16 bytes of the rows buffer from `lead` bytes before `start`, with
+/// zeros for those outside it. Only the first row can start fewer than `lead`
+/// bytes in, and only the last rows can end fewer than 16 bytes from the end.
+#[cold]
+fn load_padded(buffer: &[u8], start: usize, lead: usize) -> [u8; 16] {
+    let mut bytes = [0u8; 16];
+    for (i, b) in bytes.iter_mut().enumerate() {
+        if let Some(&v) = (start + i).checked_sub(lead).and_then(|at| buffer.get(at)) {
+            *b = v;
+        }
+    }
+    bytes
 }
 
 /// Orders `run`, whose rows agree on every byte before `offset`, by the rest
@@ -426,7 +452,7 @@ fn sort_round(rows: &Rows, run: &mut [u128], offset: usize) -> Option<usize> {
         let index = *e as u32 as usize;
         let (start, end) = (rows.offsets[index], rows.offsets[index + 1]);
         longest = longest.max(end - start);
-        *e = entry(buffer, start + offset, index);
+        *e = entry(buffer, start + offset, 0, KEY_MASK, index);
     }
     run.sort_unstable();
     let mut next = offset + KEY_BYTES as usize;
@@ -769,7 +795,7 @@ mod tests {
     #[test]
     fn test_radix_sort_threshold_boundary() {
         let mut rng = StdRng::seed_from_u64(0xCAFE);
-        for n in [1, 2, 31, 32, 33, 64, 100, 128, 256, 500, 1000] {
+        for n in [1, 2, 31, 32, 33, 63, 64, 65, 100, 128, 129, 256, 500, 1000] {
             let values: Vec<Option<i32>> = (0..n)
                 .map(|_| {
                     if rng.random_bool(0.1) {
@@ -1026,6 +1052,39 @@ mod tests {
 
         let indices = sort(&rows);
         assert_sorted(&rows, &indices);
+    }
+
+    /// Rows shorter than the key with many duplicates, so buckets larger than
+    /// FALLBACK_THRESHOLD hold equal rows
+    #[test]
+    fn test_radix_sort_duplicate_rows_shorter_than_key() {
+        let mut rng = StdRng::seed_from_u64(0xD0);
+        let len = 3000;
+        let bools: ArrayRef = Arc::new(BooleanArray::from_iter(
+            (0..len).map(|_| rng.random_bool(0.9).then(|| rng.random_bool(0.5))),
+        ));
+        let ints: ArrayRef = Arc::new(Int32Array::from_iter(
+            (0..len).map(|_| rng.random_bool(0.5).then(|| rng.random_range(0..3))),
+        ));
+        let small: ArrayRef = Arc::new(Int8Array::from_iter_values(
+            (0..len).map(|_| rng.random_range(0..4)),
+        ));
+        for columns in [vec![bools], vec![Arc::clone(&ints)], vec![small, ints]] {
+            let fields = columns
+                .iter()
+                .map(|c| SortField::new(c.data_type().clone()))
+                .collect();
+            let rows = RowConverter::new(fields)
+                .unwrap()
+                .convert_columns(&columns)
+                .unwrap();
+            let indices = sort(&rows);
+            assert_sorted(&rows, &indices);
+            assert_permutation(&indices, len);
+            for limit in limits(len) {
+                assert_limit_matches(&rows, &indices, limit);
+            }
+        }
     }
 
     /// Null rows of a leading column share their first five bytes, and the
