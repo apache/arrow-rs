@@ -149,6 +149,10 @@ jobs:
           echo ""
 
       - name: Build
+        env:
+          # Archery uses the Tools, Flight integration, and C Data JARs.
+          # Keep their dependencies and test JARs, but avoid unrelated Java modules.
+          MAVEN_ARGS: -pl bom,tools,flight/flight-integration-tests,c -am
         run: conda run --no-capture-output ci/scripts/integration_arrow_build.sh $PWD /build
 
       - name: Monitor disk usage - After build
