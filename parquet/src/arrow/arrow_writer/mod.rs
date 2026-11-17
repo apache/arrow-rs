@@ -47,7 +47,10 @@ use crate::schema::types::{ColumnDescPtr, SchemaDescriptor};
 use levels::{ArrayLevels, calculate_array_levels};
 
 mod byte_array;
+mod dictionary;
 mod levels;
+
+pub use dictionary::{DictionaryEncodingOptions, choose_dictionary_encoding};
 
 #[doc(inline)]
 pub use crate::column::page_store::{
