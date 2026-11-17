@@ -367,12 +367,68 @@ fn run_entries<'a>(array: &'a dyn Array, entries: Entries<'a>) -> (&'a dyn Array
     }, _ => unreachable!("run-end schema has a run array"))
 }
 
+enum DictionaryKeys {
+    Four(HashMap<[u8; 4], u32, ahash::RandomState>),
+    Eight(HashMap<[u8; 8], u32, ahash::RandomState>),
+    Bytes(HashMap<Box<[u8]>, u32, ahash::RandomState>),
+}
+
+impl DictionaryKeys {
+    fn new(kind: PhysicalType) -> Self {
+        match kind {
+            PhysicalType::INT32 | PhysicalType::FLOAT => Self::Four(HashMap::default()),
+            PhysicalType::INT64 | PhysicalType::DOUBLE => Self::Eight(HashMap::default()),
+            _ => Self::Bytes(HashMap::default()),
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Self::Four(keys) => keys.len(),
+            Self::Eight(keys) => keys.len(),
+            Self::Bytes(keys) => keys.len(),
+        }
+    }
+
+    fn get(&self, value: &[u8]) -> Option<&u32> {
+        match self {
+            Self::Four(keys) => {
+                keys.get::<[u8; 4]>(value.try_into().expect("INT32 and FLOAT have four bytes"))
+            }
+            Self::Eight(keys) => {
+                keys.get::<[u8; 8]>(value.try_into().expect("INT64 and DOUBLE have eight bytes"))
+            }
+            Self::Bytes(keys) => keys.get(value),
+        }
+    }
+
+    fn insert(&mut self, value: &[u8], id: u32) {
+        match self {
+            Self::Four(keys) => {
+                keys.insert(
+                    value.try_into().expect("INT32 and FLOAT have four bytes"),
+                    id,
+                );
+            }
+            Self::Eight(keys) => {
+                keys.insert(
+                    value.try_into().expect("INT64 and DOUBLE have eight bytes"),
+                    id,
+                );
+            }
+            Self::Bytes(keys) => {
+                keys.insert(value.into(), id);
+            }
+        }
+    }
+}
+
 struct FirstPage {
     kind: PhysicalType,
     dictionary_limit: u64,
     page_bytes: u64,
     first_check: usize,
-    dictionary: HashMap<Box<[u8]>, u32, ahash::RandomState>,
+    dictionary: DictionaryKeys,
     previous: Option<u32>,
     ids: HybridRuns,
     plain_bytes: u64,
@@ -389,7 +445,7 @@ impl FirstPage {
             dictionary_limit,
             page_bytes,
             first_check,
-            dictionary: HashMap::default(),
+            dictionary: DictionaryKeys::new(kind),
             previous: None,
             ids: HybridRuns::default(),
             plain_bytes: 0,
@@ -484,7 +540,7 @@ impl FirstPage {
                     return;
                 }
                 let id = self.dictionary.len() as u32;
-                self.dictionary.insert(value.into(), id);
+                self.dictionary.insert(value, id);
                 self.dictionary_bytes += dictionary_size;
                 id
             }
@@ -1598,7 +1654,41 @@ mod tests {
         let mut page = FirstPage::new(PhysicalType::BYTE_ARRAY, 32, 1024, 100);
         page.add(&[b'x'; 4096]);
         assert!(!page.keeps_dictionary());
-        assert!(page.dictionary.is_empty());
+        assert_eq!(page.dictionary.len(), 0);
+    }
+
+    #[test]
+    fn fixed_width_keys_keep_every_byte_and_first_observation_ids() {
+        for (kind, width) in [
+            (PhysicalType::INT32, 4),
+            (PhysicalType::FLOAT, 4),
+            (PhysicalType::INT64, 8),
+            (PhysicalType::DOUBLE, 8),
+        ] {
+            let mut page = FirstPage::new(kind, 2 * width as u64, 1024, 100);
+            let first = vec![0; width];
+            let mut last_byte = first.clone();
+            last_byte[width - 1] = 1;
+            page.add(&last_byte);
+            page.add(&first);
+            assert_eq!(page.dictionary.len(), 2, "{kind:?}");
+            assert_eq!(page.dictionary.get(&last_byte), Some(&0), "{kind:?}");
+            assert_eq!(page.dictionary.get(&first), Some(&1), "{kind:?}");
+            page.add(&last_byte);
+            assert_eq!(page.previous, Some(0), "{kind:?}");
+            assert_eq!(page.dictionary_bytes, 2 * width as u64, "{kind:?}");
+            assert_eq!(page.plain_bytes, 3 * width as u64, "{kind:?}");
+            assert!(!page.overflowed, "{kind:?}");
+            let mut new_value = first.clone();
+            new_value[0] = 1;
+            page.add(&new_value);
+            assert!(page.overflowed, "{kind:?}");
+            assert!(!page.keeps_dictionary(), "{kind:?}");
+            assert_eq!(page.dictionary.len(), 2, "{kind:?}");
+            assert_eq!(page.dictionary_bytes, 2 * width as u64, "{kind:?}");
+            assert_eq!(page.previous, Some(0), "{kind:?}");
+            assert_eq!(page.dictionary.get(&new_value), None, "{kind:?}");
+        }
     }
 
     #[test]
