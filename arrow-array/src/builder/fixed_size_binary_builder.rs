@@ -65,7 +65,7 @@ impl FixedSizeBinaryBuilder {
     /// distinct value element.
     #[inline]
     pub fn append_value(&mut self, value: impl AsRef<[u8]>) -> Result<(), ArrowError> {
-        if self.value_length != value.as_ref().len() as i32 {
+        if value.as_ref().len() != self.value_length as usize {
             Err(ArrowError::InvalidArgumentError(
                 "Byte slice does not have the same length as FixedSizeBinaryBuilder value lengths"
                     .to_string(),
@@ -146,7 +146,7 @@ impl FixedSizeBinaryBuilder {
     }
     ///  Returns the total memory capacity in bytes currently
     pub fn capacity(&self) -> usize {
-        self.values_builder.capacity() + self.null_buffer_builder.allocated_size() + 4 // i32 
+        self.values_builder.capacity() + self.null_buffer_builder.allocated_size() + 4 // i32
     }
 }
 
@@ -208,6 +208,13 @@ mod tests {
         assert!(array.is_null(3));
         assert!(array.is_null(4));
         assert_eq!(b"world", array.value(5));
+    }
+
+    #[test]
+    fn test_fixed_size_binary_builder_rejects_wrapped_length() {
+        let mut b = FixedSizeBinaryBuilder::new(1);
+        let big = vec![0u8; (1usize << 32) + 1];
+        assert!(b.append_value(&big).is_err());
     }
 
     #[test]
