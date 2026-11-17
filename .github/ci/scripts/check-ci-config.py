@@ -84,6 +84,7 @@ def validate_cache_refresh(ci, suite, workflow):
             )
             prepare = {step.get("uses") for step in job["steps"]}
             assert {
+                "./rust/.github/actions/archery-cpp-build",
                 "./rust/.github/actions/archery-go-build",
                 "./rust/.github/actions/archery-java-build",
                 "./rust/.github/actions/archery-js-build",

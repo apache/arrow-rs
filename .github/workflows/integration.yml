@@ -150,6 +150,8 @@ jobs:
           df -h /
           echo ""
 
+      - name: Prepare C++ build
+        uses: ./rust/.github/actions/archery-cpp-build
       - name: Prepare Go build
         uses: ./rust/.github/actions/archery-go-build
       - name: Prepare Java build
@@ -159,7 +161,8 @@ jobs:
 
       - name: Build
         env:
-          # Override build preparation only. The Run step still enables all three.
+          # Override build preparation only. The Run step still enables every language.
+          ARCHERY_INTEGRATION_WITH_CPP: "0"
           ARCHERY_INTEGRATION_WITH_GO: "0"
           ARCHERY_INTEGRATION_WITH_JAVA: "0"
           ARCHERY_INTEGRATION_WITH_JS: "0"
@@ -192,6 +195,7 @@ jobs:
       image: apache/arrow-dev:amd64-conda-integration
     env:
       ARROW_USE_CCACHE: OFF
+      BUILD_DOCS_CPP: OFF
       BUILD_DOCS_JS: OFF
       GOBIN: /build/go/bin
     steps:
@@ -225,6 +229,10 @@ jobs:
           repository: apache/arrow-go
           path: go
           persist-credentials: false
+      - name: Prepare C++ build
+        uses: ./rust/.github/actions/archery-cpp-build
+        with:
+          lookup-only: 'true'
       - name: Prepare Go build
         uses: ./rust/.github/actions/archery-go-build
         with:
