@@ -32,13 +32,13 @@ pub use private::{Tz, TzOffset};
 /// `"2026c"`.
 ///
 /// Returns `None` when neither the `chrono-tz` nor the `jiff` feature is enabled, as only fixed
-/// offsets are then supported, or if the bundled database does not record its release.
+/// offsets are then supported.
 ///
 /// [IANA time zone database]: https://www.iana.org/time-zones
 pub fn tzdb_version() -> Option<&'static str> {
     #[cfg(feature = "jiff")]
     {
-        jiff_tzdb::VERSION
+        Some(jiff_tzdb::VERSION)
     }
     #[cfg(all(feature = "chrono-tz", not(feature = "jiff")))]
     {
@@ -553,21 +553,44 @@ mod private {
             const KNOWN_DIFFERENCES: &[&str] = &[
                 "Africa/Casablanca",
                 "Africa/El_Aaiun",
+                "America/Araguaina",
+                "America/Bahia",
+                "America/Belem",
+                "America/Boa_Vista",
                 "America/Bogota",
+                "America/Campo_Grande",
+                "America/Cuiaba",
                 "America/Edmonton",
+                "America/Eirunepe",
                 "America/Ensenada",
+                "America/Fortaleza",
+                "America/Havana",
                 "America/Inuvik",
+                "America/Maceio",
+                "America/Manaus",
+                "America/Noronha",
+                "America/Porto_Acre",
+                "America/Porto_Velho",
                 "America/Rainy_River",
+                "America/Recife",
+                "America/Rio_Branco",
                 "America/Santa_Isabel",
+                "America/Santarem",
+                "America/Sao_Paulo",
                 "America/Tijuana",
                 "America/Vancouver",
                 "America/Winnipeg",
                 "America/Yellowknife",
                 "Asia/Tehran",
+                "Brazil/Acre",
+                "Brazil/DeNoronha",
+                "Brazil/East",
+                "Brazil/West",
                 "CST6CDT",
                 "Canada/Central",
                 "Canada/Mountain",
                 "Canada/Pacific",
+                "Cuba",
                 "EST5EDT",
                 "Eire",
                 "Europe/Chisinau",
@@ -583,7 +606,7 @@ mod private {
                 format!(
                     "chrono-tz has tzdb {}, jiff-tzdb has tzdb {}",
                     chrono_tz::IANA_TZDB_VERSION,
-                    jiff_tzdb::VERSION.unwrap_or("unknown")
+                    jiff_tzdb::VERSION
                 )
             }
 
