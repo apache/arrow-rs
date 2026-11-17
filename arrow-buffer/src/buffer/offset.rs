@@ -72,6 +72,9 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     /// `buffer` must be a non-empty buffer containing monotonically increasing
     /// values greater than or equal to zero
     pub unsafe fn new_unchecked(buffer: ScalarBuffer<O>) -> Self {
+        if cfg!(feature = "force_validate") {
+            return Self::new(buffer);
+        }
         Self(buffer)
     }
 
@@ -611,6 +614,13 @@ mod tests {
     #[should_panic(expected = "offsets must be monotonically increasing")]
     fn non_monotonic_offsets() {
         OffsetBuffer::new(vec![1, 2, 0].into());
+    }
+
+    #[test]
+    #[should_panic(expected = "offsets must be monotonically increasing")]
+    #[cfg(feature = "force_validate")]
+    fn non_monotonic_offsets_unchecked_force_validate() {
+        unsafe { OffsetBuffer::<i32>::new_unchecked(vec![0, 2, 1, 3].into()) };
     }
 
     #[test]
