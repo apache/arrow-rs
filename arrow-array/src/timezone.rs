@@ -293,6 +293,29 @@ mod private {
         }
     }
 
+    pub(super) fn new_gap_info(local: &NaiveDateTime, tz: &Tz) -> Option<GapInfo> {
+        let TzInner::Timezone(named) = tz.0 else {
+            return None;
+        };
+        // A local datetime outside jiff's range resolves to a single offset, so it is not in a gap
+        let civil = jiff_civil(local)?;
+        let AmbiguousOffset::Gap { before, after } =
+            named.tz.to_ambiguous_timestamp(civil).offset()
+        else {
+            return None;
+        };
+        // Reading a local datetime in the gap with the later offset gives an instant before the
+        // transition, so the next transition is the one that opened the gap
+        let from = after.to_timestamp(civil).ok()?;
+        let transition = named.tz.following(from).next()?;
+        let end = DateTime::from_timestamp(transition.timestamp().as_second(), 0)?;
+        let begin = end.naive_utc() + chrono::TimeDelta::seconds(before.seconds().into());
+        Some(GapInfo {
+            begin: Some((begin, tz.offset(fixed_offset(before)))),
+            end: Some(end.with_timezone(tz)),
+        })
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -694,95 +717,6 @@ mod private {
             );
         }
 
-        fn naive(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> NaiveDateTime {
-            NaiveDate::from_ymd_opt(y, mo, d)
-                .unwrap()
-                .and_hms_opt(h, mi, 0)
-                .unwrap()
-        }
-
-        fn utc(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> chrono::DateTime<Utc> {
-            Utc.with_ymd_and_hms(y, mo, d, h, mi, 0).unwrap()
-        }
-
-        #[test]
-        fn test_gap_info_not_in_gap() {
-            let tz: Tz = "America/New_York".parse().unwrap();
-            // Just before and at the end of the 2021 spring forward gap
-            assert!(GapInfo::new(&naive(2021, 3, 14, 1, 59), &tz).is_none());
-            assert!(GapInfo::new(&naive(2021, 3, 14, 3, 0), &tz).is_none());
-            // Ambiguous time during the 2021 fall back overlap is not a gap
-            assert!(GapInfo::new(&naive(2021, 11, 7, 1, 30), &tz).is_none());
-        }
-
-        #[test]
-        fn test_gap_info_america_new_york() {
-            // Clocks went forward from 2021-03-14T02:00:00-05:00 to 2021-03-14T03:00:00-04:00
-            let tz: Tz = "America/New_York".parse().unwrap();
-            for local in [
-                naive(2021, 3, 14, 2, 0),
-                naive(2021, 3, 14, 2, 30),
-                naive(2021, 3, 14, 2, 59),
-            ] {
-                assert!(tz.from_local_datetime(&local).single().is_none());
-
-                let gap = GapInfo::new(&local, &tz).unwrap();
-                let (begin, begin_offset) = gap.begin.unwrap();
-                assert_eq!(begin, naive(2021, 3, 14, 2, 0));
-                assert_eq!(
-                    begin_offset.fix(),
-                    FixedOffset::west_opt(5 * 60 * 60).unwrap()
-                );
-
-                let end = gap.end.unwrap();
-                assert_eq!(end.naive_local(), naive(2021, 3, 14, 3, 0));
-                assert_eq!(
-                    end.offset().fix(),
-                    FixedOffset::west_opt(4 * 60 * 60).unwrap()
-                );
-                assert_eq!(end, utc(2021, 3, 14, 7, 0));
-                assert_eq!(end.timezone().to_string(), "America/New_York");
-            }
-        }
-
-        #[test]
-        fn test_gap_info_europe_london() {
-            // Clocks went forward from 2021-03-28T01:00:00+00:00 to 2021-03-28T02:00:00+01:00
-            let tz: Tz = "Europe/London".parse().unwrap();
-            let gap = GapInfo::new(&naive(2021, 3, 28, 1, 30), &tz).unwrap();
-
-            let (begin, begin_offset) = gap.begin.unwrap();
-            assert_eq!(begin, naive(2021, 3, 28, 1, 0));
-            assert_eq!(begin_offset.fix(), FixedOffset::east_opt(0).unwrap());
-
-            let end = gap.end.unwrap();
-            assert_eq!(end.naive_local(), naive(2021, 3, 28, 2, 0));
-            assert_eq!(end.offset().fix(), FixedOffset::east_opt(60 * 60).unwrap());
-            assert_eq!(end, utc(2021, 3, 28, 1, 0));
-        }
-
-        #[test]
-        fn test_gap_info_australia_sydney() {
-            // Clocks went forward from 2021-10-03T02:00:00+10:00 to 2021-10-03T03:00:00+11:00
-            let tz: Tz = "Australia/Sydney".parse().unwrap();
-            let gap = GapInfo::new(&naive(2021, 10, 3, 2, 30), &tz).unwrap();
-
-            let (begin, begin_offset) = gap.begin.unwrap();
-            assert_eq!(begin, naive(2021, 10, 3, 2, 0));
-            assert_eq!(
-                begin_offset.fix(),
-                FixedOffset::east_opt(10 * 60 * 60).unwrap()
-            );
-
-            let end = gap.end.unwrap();
-            assert_eq!(end.naive_local(), naive(2021, 10, 3, 3, 0));
-            assert_eq!(
-                end.offset().fix(),
-                FixedOffset::east_opt(11 * 60 * 60).unwrap()
-            );
-            assert_eq!(end, utc(2021, 10, 2, 16, 0));
-        }
-
         #[test]
         fn test_timezone_display() {
             let test_cases = ["UTC", "America/Los_Angeles", "-08:00", "+05:30"];
@@ -878,7 +812,7 @@ mod private {
 /// does not.
 ///
 /// ```
-/// # #[cfg(feature = "chrono-tz")]
+/// # #[cfg(any(feature = "chrono-tz", feature = "jiff"))]
 /// # {
 /// use arrow_array::timezone::{GapInfo, Tz};
 /// use chrono::{DateTime, FixedOffset, LocalResult, NaiveDateTime, Offset, TimeZone};
@@ -982,6 +916,23 @@ mod tests {
     }
 
     #[test]
+    fn test_tzdb_version() {
+        let version = tzdb_version();
+        if cfg!(any(feature = "chrono-tz", feature = "jiff")) {
+            // Such as "2026c"
+            let version = version.unwrap();
+            assert_eq!(version.len(), 5, "{version}");
+            assert!(
+                version[..4].bytes().all(|b| b.is_ascii_digit()),
+                "{version}"
+            );
+            assert!(version.as_bytes()[4].is_ascii_lowercase(), "{version}");
+        } else {
+            assert_eq!(version, None);
+        }
+    }
+
+    #[test]
     fn test_gap_info_fixed_offset() {
         let times = [
             NaiveDate::from_ymd_opt(2000, 1, 1)
@@ -1007,20 +958,98 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_tzdb_version() {
-        let version = tzdb_version();
-        if cfg!(any(feature = "chrono-tz", feature = "jiff")) {
-            // Such as "2026c"
-            let version = version.unwrap();
-            assert_eq!(version.len(), 5, "{version}");
-            assert!(
-                version[..4].bytes().all(|b| b.is_ascii_digit()),
-                "{version}"
+    #[cfg(any(feature = "chrono-tz", feature = "jiff"))]
+    mod gap_info {
+        use super::*;
+        use chrono::Utc;
+
+        fn naive(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> NaiveDateTime {
+            NaiveDate::from_ymd_opt(y, mo, d)
+                .unwrap()
+                .and_hms_opt(h, mi, 0)
+                .unwrap()
+        }
+
+        fn utc(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> chrono::DateTime<Utc> {
+            Utc.with_ymd_and_hms(y, mo, d, h, mi, 0).unwrap()
+        }
+
+        #[test]
+        fn test_gap_info_not_in_gap() {
+            let tz: Tz = "America/New_York".parse().unwrap();
+            // Just before and at the end of the 2021 spring forward gap
+            assert!(GapInfo::new(&naive(2021, 3, 14, 1, 59), &tz).is_none());
+            assert!(GapInfo::new(&naive(2021, 3, 14, 3, 0), &tz).is_none());
+            // Ambiguous time during the 2021 fall back overlap is not a gap
+            assert!(GapInfo::new(&naive(2021, 11, 7, 1, 30), &tz).is_none());
+        }
+
+        #[test]
+        fn test_gap_info_america_new_york() {
+            // Clocks went forward from 2021-03-14T02:00:00-05:00 to 2021-03-14T03:00:00-04:00
+            let tz: Tz = "America/New_York".parse().unwrap();
+            for local in [
+                naive(2021, 3, 14, 2, 0),
+                naive(2021, 3, 14, 2, 30),
+                naive(2021, 3, 14, 2, 59),
+            ] {
+                assert!(tz.from_local_datetime(&local).single().is_none());
+
+                let gap = GapInfo::new(&local, &tz).unwrap();
+                let (begin, begin_offset) = gap.begin.unwrap();
+                assert_eq!(begin, naive(2021, 3, 14, 2, 0));
+                assert_eq!(
+                    begin_offset.fix(),
+                    FixedOffset::west_opt(5 * 60 * 60).unwrap()
+                );
+
+                let end = gap.end.unwrap();
+                assert_eq!(end.naive_local(), naive(2021, 3, 14, 3, 0));
+                assert_eq!(
+                    end.offset().fix(),
+                    FixedOffset::west_opt(4 * 60 * 60).unwrap()
+                );
+                assert_eq!(end, utc(2021, 3, 14, 7, 0));
+                assert_eq!(end.timezone().to_string(), "America/New_York");
+            }
+        }
+
+        #[test]
+        fn test_gap_info_europe_london() {
+            // Clocks went forward from 2021-03-28T01:00:00+00:00 to 2021-03-28T02:00:00+01:00
+            let tz: Tz = "Europe/London".parse().unwrap();
+            let gap = GapInfo::new(&naive(2021, 3, 28, 1, 30), &tz).unwrap();
+
+            let (begin, begin_offset) = gap.begin.unwrap();
+            assert_eq!(begin, naive(2021, 3, 28, 1, 0));
+            assert_eq!(begin_offset.fix(), FixedOffset::east_opt(0).unwrap());
+
+            let end = gap.end.unwrap();
+            assert_eq!(end.naive_local(), naive(2021, 3, 28, 2, 0));
+            assert_eq!(end.offset().fix(), FixedOffset::east_opt(60 * 60).unwrap());
+            assert_eq!(end, utc(2021, 3, 28, 1, 0));
+        }
+
+        #[test]
+        fn test_gap_info_australia_sydney() {
+            // Clocks went forward from 2021-10-03T02:00:00+10:00 to 2021-10-03T03:00:00+11:00
+            let tz: Tz = "Australia/Sydney".parse().unwrap();
+            let gap = GapInfo::new(&naive(2021, 10, 3, 2, 30), &tz).unwrap();
+
+            let (begin, begin_offset) = gap.begin.unwrap();
+            assert_eq!(begin, naive(2021, 10, 3, 2, 0));
+            assert_eq!(
+                begin_offset.fix(),
+                FixedOffset::east_opt(10 * 60 * 60).unwrap()
             );
-            assert!(version.as_bytes()[4].is_ascii_lowercase(), "{version}");
-        } else {
-            assert_eq!(version, None);
+
+            let end = gap.end.unwrap();
+            assert_eq!(end.naive_local(), naive(2021, 10, 3, 3, 0));
+            assert_eq!(
+                end.offset().fix(),
+                FixedOffset::east_opt(11 * 60 * 60).unwrap()
+            );
+            assert_eq!(end, utc(2021, 10, 2, 16, 0));
         }
     }
 }
