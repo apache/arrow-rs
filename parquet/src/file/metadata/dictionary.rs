@@ -123,10 +123,10 @@ pub(crate) fn decode_dictionary_page(
     };
     let num_values = num_values as usize;
 
-    // The dictionary page is always PLAIN-encoded, regardless of what the
-    // data pages' encoding is (RLE_DICTIONARY/PLAIN_DICTIONARY only describe
-    // how *data* pages reference the dictionary by index).
-    if encoding != Encoding::PLAIN {
+    // Dictionary values are always PLAIN-encoded. Older writers, such as
+    // parquet-cpp 1.x, label the page with the deprecated PLAIN_DICTIONARY
+    // instead, which the column reader also accepts.
+    if !matches!(encoding, Encoding::PLAIN | Encoding::PLAIN_DICTIONARY) {
         return Err(ParquetError::General(format!(
             "Dictionary page encoding must be PLAIN, got {encoding:?}"
         )));
@@ -301,6 +301,18 @@ mod tests {
         });
         let err = decode_dictionary_page(buffer, &metadata, 0, 0).unwrap_err();
         assert!(err.to_string().contains("PLAIN"), "{err}");
+    }
+
+    #[test]
+    fn decode_dictionary_page_accepts_plain_dictionary_encoding() {
+        let data = write_dictionary_encoded_strings(&["alpha", "beta", "alpha"]);
+        let (buffer, metadata) = dictionary_page_with_header_change(&data, |header| {
+            header.dictionary_page_header.as_mut().unwrap().encoding = Encoding::PLAIN_DICTIONARY;
+        });
+        let array = decode_dictionary_page(buffer, &metadata, 0, 0).unwrap();
+        let array = array.as_any().downcast_ref::<BinaryArray>().unwrap();
+        let decoded: Vec<&[u8]> = array.iter().map(|v| v.unwrap()).collect();
+        assert_eq!(decoded, [b"alpha".as_slice(), b"beta".as_slice()]);
     }
 
     #[test]
