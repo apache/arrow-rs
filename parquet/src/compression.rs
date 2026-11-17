@@ -518,29 +518,44 @@ pub use lz4_codec::*;
 mod zstd_codec {
     use crate::compression::{Codec, ZstdLevel};
     use crate::errors::Result;
+    use std::cell::RefCell;
     use std::io::Cursor;
+
+    thread_local! {
+        // One compressor per level and one decompressor per thread, created on first use.
+        //
+        // `create_codec` builds a codec per column chunk, so a context owned by the codec is
+        // created (and its workspace allocated and freed) once per column chunk read or written.
+        // A zstd context serves one call at a time and every bulk call resets its session, so a
+        // context reused across codecs on one thread produces the same bytes as a fresh one.
+        static COMPRESSORS: RefCell<Vec<(i32, zstd::bulk::Compressor<'static>)>> =
+            const { RefCell::new(Vec::new()) };
+        static DECOMPRESSOR: RefCell<Option<zstd::bulk::Decompressor<'static>>> =
+            const { RefCell::new(None) };
+    }
 
     /// Codec for Zstandard compression algorithm.
     ///
-    /// Uses `zstd::bulk` API with reusable compressor/decompressor contexts
-    /// to avoid the overhead of reinitializing contexts for each operation.
+    /// Uses `zstd::bulk` API with compressor/decompressor contexts kept per thread (and per
+    /// level for compression), so that creating a codec per column chunk does not create
+    /// zstd contexts per column chunk.
     pub struct ZSTDCodec {
         level: ZstdLevel,
-        // Created on first use, because writers only compress and readers only
-        // decompress.
-        compressor: Option<zstd::bulk::Compressor<'static>>,
-        decompressor: Option<zstd::bulk::Decompressor<'static>>,
     }
 
     impl ZSTDCodec {
         /// Creates new Zstandard compression codec.
         pub(crate) fn new(level: ZstdLevel) -> Self {
-            Self {
-                level,
-                compressor: None,
-                decompressor: None,
-            }
+            Self { level }
         }
+    }
+
+    fn decompress_with(
+        decompressor: &mut zstd::bulk::Decompressor<'static>,
+        input_buf: &[u8],
+        cursor: &mut Cursor<&mut Vec<u8>>,
+    ) -> std::io::Result<usize> {
+        decompressor.decompress_to_buffer(input_buf, cursor)
     }
 
     impl Codec for ZSTDCodec {
@@ -564,12 +579,22 @@ mod zstd_codec {
 
             let mut cursor = Cursor::new(output_buf);
             cursor.set_position(offset as u64);
-            let len = self
-                .decompressor
-                .get_or_insert_with(|| {
-                    zstd::bulk::Decompressor::new().expect("can create zstd decompressor")
-                })
-                .decompress_to_buffer(input_buf, &mut cursor)?;
+            let len = DECOMPRESSOR.with(|cell| match cell.try_borrow_mut() {
+                Ok(mut slot) => {
+                    let decompressor = match slot.as_mut() {
+                        Some(d) => d,
+                        None => slot.insert(zstd::bulk::Decompressor::new()?),
+                    };
+                    decompress_with(decompressor, input_buf, &mut cursor)
+                }
+                // Unreachable today (nothing re-enters a codec from inside a call), but a
+                // nested call must not panic: it gets a context of its own.
+                Err(_) => decompress_with(
+                    &mut zstd::bulk::Decompressor::new()?,
+                    input_buf,
+                    &mut cursor,
+                ),
+            })?;
             Ok(len)
         }
 
@@ -580,13 +605,22 @@ mod zstd_codec {
 
             let mut cursor = Cursor::new(output_buf);
             cursor.set_position(offset as u64);
-            let _written = self
-                .compressor
-                .get_or_insert_with(|| {
-                    zstd::bulk::Compressor::new(self.level.compression_level())
-                        .expect("valid zstd compression level")
-                })
-                .compress_to_buffer(input_buf, &mut cursor)?;
+            let level = self.level.compression_level();
+            COMPRESSORS.with(|cell| match cell.try_borrow_mut() {
+                Ok(mut compressors) => {
+                    let i = match compressors.iter().position(|(l, _)| *l == level) {
+                        Some(i) => i,
+                        None => {
+                            compressors.push((level, zstd::bulk::Compressor::new(level)?));
+                            compressors.len() - 1
+                        }
+                    };
+                    compressors[i].1.compress_to_buffer(input_buf, &mut cursor)
+                }
+                Err(_) => {
+                    zstd::bulk::Compressor::new(level)?.compress_to_buffer(input_buf, &mut cursor)
+                }
+            })?;
             Ok(())
         }
     }
@@ -951,6 +985,52 @@ mod tests {
     #[cfg_attr(miri, ignore)] // Takes too long
     fn test_codec_lz4() {
         test_codec_with_size(CodecType::LZ4);
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Zstd calls native C functions unsupported by Miri
+    fn test_codec_zstd_shared_contexts_match_fresh_contexts() {
+        // Codecs share a thread's contexts: interleaving codecs of different levels, and
+        // running them on several threads at once, must give the bytes a fresh context gives.
+        let inputs: Vec<Vec<u8>> = [0usize, 1, 1000, 64 * 1024, 3 * 1024 * 1024]
+            .iter()
+            .map(|&n| random_bytes(n))
+            .collect();
+        let levels = [1, 3, 9, 19];
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                scope.spawn(|| {
+                    let mut codecs: Vec<_> = levels
+                        .iter()
+                        .map(|&l| {
+                            let level = ZstdLevel::try_new(l).unwrap();
+                            create_codec(
+                                CodecType::ZSTD(level),
+                                &CodecOptionsBuilder::default().build(),
+                            )
+                            .unwrap()
+                            .unwrap()
+                        })
+                        .collect();
+                    for input in &inputs {
+                        for (codec, &l) in codecs.iter_mut().zip(&levels) {
+                            let mut compressed = Vec::new();
+                            codec.compress(input, &mut compressed).unwrap();
+                            let fresh = zstd::bulk::Compressor::new(l)
+                                .unwrap()
+                                .compress(input)
+                                .unwrap();
+                            assert_eq!(compressed, fresh, "level {l}, {} bytes", input.len());
+                            let mut out = Vec::new();
+                            codec
+                                .decompress(&compressed, &mut out, Some(input.len()))
+                                .unwrap();
+                            assert_eq!(&out, input);
+                        }
+                    }
+                });
+            }
+        });
     }
 
     #[test]
