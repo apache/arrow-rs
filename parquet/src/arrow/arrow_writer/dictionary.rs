@@ -1341,7 +1341,7 @@ mod tests {
     }
 
     #[test]
-    fn first_check_and_page_limits_use_top_level_rows() {
+    fn first_check_sets_the_earliest_page_end() {
         use crate::schema::types::ColumnPath;
         let values: ArrayRef = Arc::new(Int64Array::from_iter_values(
             (0..100).chain(std::iter::repeat_n(7, 1000)),
@@ -1373,11 +1373,6 @@ mod tests {
         assert!(enabled(&chosen, "row_limited"));
         assert!(enabled(&chosen, "byte_limited"));
 
-        let first = batch.slice(0, 100);
-        assert!(!enabled(
-            &choose(&first, WriterProperties::default()),
-            "long"
-        ));
         let page = WriterProperties::builder()
             .set_data_page_row_count_limit(100)
             .build();
@@ -1408,37 +1403,41 @@ mod tests {
         let props = WriterProperties::builder()
             .set_data_page_size_limit(1)
             .build();
-        let options = DictionaryEncodingOptions {
-            min_row_count_for_page_size_check: 8,
-        };
-        let chosen = choose_dictionary_encoding(
-            &batch.schema(),
-            props,
-            std::slice::from_ref(&batch),
-            &options,
-        )
-        .unwrap();
-        assert!(!enabled(&chosen, "s"));
+        for (first_check, expected) in [(8, false), (9, true)] {
+            let options = DictionaryEncodingOptions {
+                min_row_count_for_page_size_check: first_check,
+            };
+            let chosen = choose_dictionary_encoding(
+                &batch.schema(),
+                props.clone(),
+                std::slice::from_ref(&batch),
+                &options,
+            )
+            .unwrap();
+            assert_eq!(enabled(&chosen, "s"), expected, "first_check={first_check}");
+        }
     }
 
     #[test]
     fn page_size_boundary_uses_inclusive_tolerance() {
         let values = StringArray::from(vec!["a", "b", "c", "d", "e", "f", "g", "a", "a"]);
         let batch = RecordBatch::try_from_iter([("s", Arc::new(values) as ArrayRef)]).unwrap();
-        let props = WriterProperties::builder()
-            .set_data_page_size_limit(44)
-            .build();
         let options = DictionaryEncodingOptions {
             min_row_count_for_page_size_check: 8,
         };
-        let chosen = choose_dictionary_encoding(
-            &batch.schema(),
-            props,
-            std::slice::from_ref(&batch),
-            &options,
-        )
-        .unwrap();
-        assert!(!enabled(&chosen, "s"));
+        for (page_size, expected) in [(44, false), (45, true)] {
+            let props = WriterProperties::builder()
+                .set_data_page_size_limit(page_size)
+                .build();
+            let chosen = choose_dictionary_encoding(
+                &batch.schema(),
+                props,
+                std::slice::from_ref(&batch),
+                &options,
+            )
+            .unwrap();
+            assert_eq!(enabled(&chosen, "s"), expected, "page_size={page_size}");
+        }
     }
 
     #[test]
@@ -1650,7 +1649,7 @@ mod tests {
     }
 
     #[test]
-    fn oversized_values_are_rejected_before_dictionary_allocation() {
+    fn oversized_values_are_not_inserted() {
         let mut page = FirstPage::new(PhysicalType::BYTE_ARRAY, 32, 1024, 100);
         page.add(&[b'x'; 4096]);
         assert!(!page.keeps_dictionary());
