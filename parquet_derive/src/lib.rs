@@ -262,6 +262,7 @@ pub fn parquet_record_reader(input: proc_macro::TokenStream) -> proc_macro::Toke
             .enumerate()
             .map(|(idx,col)| (col.name().to_string(),idx))
             .collect();
+        self.reserve_exact(num_records);
         for _ in 0..num_records {
           self.push(#derived_for {
             #(
