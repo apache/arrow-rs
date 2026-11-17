@@ -12,8 +12,9 @@ use arrow::util::bench_util::{
     create_boolean_array, create_boolean_array_with_seed, create_dict_from_values,
     create_f64_array_with_seed, create_primitive_array, create_primitive_array_with_seed,
     create_primitive_run_array, create_string_array_with_len,
-    create_string_array_with_len_range_and_prefix_and_seed, create_string_dict_array,
-    create_string_view_array_with_len, create_string_view_array_with_max_len,
+    create_string_array_with_len_range_and_prefix_and_seed, create_string_array_with_max_len,
+    create_string_dict_array, create_string_view_array_with_len,
+    create_string_view_array_with_max_len,
 };
 
 use arrow::util::data_gen::create_random_array;
@@ -206,6 +207,20 @@ fn row_bench(c: &mut Criterion) {
     let cols = vec![Arc::new(create_primitive_array::<Int64Type>(4096, 0.3)) as ArrayRef];
     do_bench(c, "4096 i64(0.3)", cols);
 
+    // Keys of several fixed-width columns, so every row has the same length
+    for (len, nulls) in [(4096, 0.), (4096, 0.1), (8192, 0.), (8192, 0.1)] {
+        let cols = vec![
+            Arc::new(create_primitive_array_with_seed::<Int32Type>(len, nulls, 1)) as ArrayRef,
+            Arc::new(create_primitive_array_with_seed::<Int64Type>(len, nulls, 2)) as ArrayRef,
+            Arc::new(create_primitive_array_with_seed::<Int32Type>(len, 0., 3)) as ArrayRef,
+        ];
+        do_bench(
+            c,
+            &format!("{len} i32({nulls}), i64({nulls}), i32(0)"),
+            cols,
+        );
+    }
+
     let cols = vec![Arc::new(create_boolean_array(4096, 0., 0.5)) as ArrayRef];
     do_bench(c, "4096 bool(0, 0.5)", cols);
 
@@ -241,6 +256,23 @@ fn row_bench(c: &mut Criterion) {
 
     let cols = vec![Arc::new(create_string_view_array_with_max_len(4096, 0.5, 100)) as ArrayRef];
     do_bench(c, "4096 string view(1..100, 0.5)", cols);
+
+    let cols = vec![Arc::new(create_string_array_with_max_len::<i32>(4096, 0., 100)) as ArrayRef];
+    do_bench(c, "4096 string(1..100, 0)", cols);
+
+    let cols = vec![Arc::new(create_string_array_with_max_len::<i32>(4096, 0.5, 100)) as ArrayRef];
+    do_bench(c, "4096 string(1..100, 0.5)", cols);
+
+    // Sort keys at DataFusion's default batch size, with lengths that vary
+    // from row to row. The last case's values all fit in their views.
+    let cols = vec![Arc::new(create_string_array_with_max_len::<i32>(8192, 0., 40)) as ArrayRef];
+    do_bench(c, "8192 string(1..40, 0)", cols);
+
+    let cols = vec![Arc::new(create_string_view_array_with_max_len(8192, 0., 40)) as ArrayRef];
+    do_bench(c, "8192 string view(1..40, 0)", cols);
+
+    let cols = vec![Arc::new(create_string_view_array_with_max_len(8192, 0., 13)) as ArrayRef];
+    do_bench(c, "8192 string view(1..12, 0)", cols);
 
     let cols = vec![Arc::new(create_string_dict_array::<Int32Type>(4096, 0., 10)) as ArrayRef];
     do_bench(c, "4096 string_dictionary(10, 0)", cols);
