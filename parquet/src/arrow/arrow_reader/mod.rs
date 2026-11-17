@@ -29,7 +29,7 @@ use crate::column::page::{PageIterator, PageReader};
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{
-    ColumnChunkMask, PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions,
+    BloomFilters, ColumnChunkMask, PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions,
     ParquetMetaDataReader, ParquetStatisticsPolicy, RowGroupMetaData,
 };
 use crate::file::reader::{ChunkReader, SerializedPageReader};
@@ -1344,6 +1344,14 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
         let column_metadata = metadata.column(column_idx);
 
         Sbbf::read_from_column_chunk(column_metadata, &self.input.0)
+    }
+
+    /// Reads Bloom filters for the physical column chunks selected by `mask`.
+    ///
+    /// The mask is independent of this builder's projection and row-group selection.
+    /// See [`ParquetMetaDataReader::read_bloom_filters`] for details.
+    pub fn get_bloom_filters(&self, mask: &ColumnChunkMask) -> Result<BloomFilters> {
+        ParquetMetaDataReader::read_bloom_filters(&self.input.0, &self.metadata, mask)
     }
 
     /// Build a [`ParquetRecordBatchReader`]

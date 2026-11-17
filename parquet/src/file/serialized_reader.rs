@@ -313,13 +313,16 @@ impl<R: 'static + ChunkReader> FileReader for SerializedFileReader<R> {
     }
 }
 
+// Standalone row groups store filters at local row group coordinate 0.
+type RowGroupBloomFilters = BloomFilters;
+
 /// A serialized implementation for Parquet [`RowGroupReader`].
 pub struct SerializedRowGroupReader<'a, R: ChunkReader> {
     chunk_reader: Arc<R>,
     metadata: &'a RowGroupMetaData,
     page_index: RowGroupPageIndex,
     props: ReaderPropertiesPtr,
-    bloom_filters: Vec<Option<Sbbf>>,
+    bloom_filters: RowGroupBloomFilters,
 }
 
 impl<'a, R: ChunkReader> SerializedRowGroupReader<'a, R> {
@@ -330,15 +333,11 @@ impl<'a, R: ChunkReader> SerializedRowGroupReader<'a, R> {
         page_index: RowGroupPageIndex,
         props: ReaderPropertiesPtr,
     ) -> Result<Self> {
-        let bloom_filters = if props.read_bloom_filter() {
-            metadata
-                .columns()
-                .iter()
-                .map(|col| Sbbf::read_from_column_chunk(col, &*chunk_reader))
-                .collect::<Result<Vec<_>>>()?
-        } else {
-            std::iter::repeat_n(None, metadata.columns().len()).collect()
-        };
+        let bloom_filters = RowGroupBloomFilters::read_row_group(
+            &*chunk_reader,
+            metadata,
+            props.bloom_filter_mask(),
+        )?;
         Ok(Self {
             chunk_reader,
             metadata,
@@ -377,7 +376,9 @@ impl<R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'_, R
 
     /// get bloom filter for the `i`th column
     fn get_column_bloom_filter(&self, i: usize) -> Option<&Sbbf> {
-        self.bloom_filters[i].as_ref()
+        self.bloom_filters
+            .get(0, i)
+            .expect("column index out of bounds")
     }
 
     fn get_row_iter(&self, projection: Option<SchemaType>) -> Result<RowIter<'_>> {

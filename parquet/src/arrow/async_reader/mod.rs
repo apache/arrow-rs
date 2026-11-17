@@ -29,7 +29,9 @@ use crate::arrow::arrow_reader::{
 
 use crate::bloom_filter::Sbbf;
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
+use crate::file::metadata::{
+    BloomFilters, ColumnChunkMask, ParquetMetaData, ParquetMetaDataReader,
+};
 
 mod metadata;
 pub use metadata::*;
@@ -578,6 +580,16 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         let column_metadata = metadata.column(column_idx);
 
         Sbbf::read_from_column_chunk_async(column_metadata, &mut self.input.0).await
+    }
+
+    /// Reads Bloom filters for the physical column chunks selected by `mask`.
+    ///
+    /// The mask is independent of this builder's projection and row-group selection.
+    /// Uses [`AsyncFileReader::get_byte_ranges`], whose default fetches sequentially.
+    /// See [`ParquetMetaDataReader::read_bloom_filters_async`] for details.
+    pub async fn get_bloom_filters(&mut self, mask: &ColumnChunkMask) -> Result<BloomFilters> {
+        ParquetMetaDataReader::read_bloom_filters_async(&mut self.input.0, &self.metadata, mask)
+            .await
     }
 
     /// Select row groups and rows using row-group-local coordinates.
