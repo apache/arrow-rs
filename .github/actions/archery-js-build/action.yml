@@ -17,7 +17,7 @@ runs:
       run: |
         conda run --no-capture-output bash -euo pipefail <<'BASH'
         {
-          git -C js rev-parse HEAD
+          git -c safe.directory="$PWD/js" -C js rev-parse HEAD
           sha256sum rust/.github/workflows/integration.yml \
             rust/.github/actions/archery-js-build/action.yml \
             ci/scripts/integration_arrow_build.sh \

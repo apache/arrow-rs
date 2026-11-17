@@ -17,7 +17,7 @@ runs:
       run: |
         conda run --no-capture-output bash -euo pipefail <<'BASH'
         {
-          git rev-parse HEAD
+          git -c safe.directory="$PWD" rev-parse HEAD
           sha256sum rust/.github/workflows/integration.yml \
             rust/.github/actions/archery-cpp-build/action.yml
           cmake --version
