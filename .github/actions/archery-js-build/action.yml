@@ -37,7 +37,7 @@ runs:
       id: cache
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
       with:
-        path: ${{ runner.temp }}/archery-js.tar.zst
+        path: ${{ runner.temp }}/archery-js.tar
         # Exact matches only: never accept an older source or build environment.
         key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.inputs.outputs.key }}
         lookup-only: ${{ inputs.lookup-only }}
@@ -47,7 +47,7 @@ runs:
       shell: bash
       run: |
         mkdir -p /build/js
-        tar -I 'zstd -d --long=27' -xf "$RUNNER_TEMP/archery-js.tar.zst" -C /build/js
+        tar -xf "$RUNNER_TEMP/archery-js.tar" -C /build/js
 
     - name: Build every JavaScript distribution
       if: steps.cache.outputs.cache-hit != 'true'
@@ -56,4 +56,4 @@ runs:
         conda run --no-capture-output js/ci/scripts/build.sh "$PWD/js"
         mkdir -p /build
         cp -a js /build/js
-        tar --exclude=.git -I 'zstd -T1 -3 --long=27' -cf "$RUNNER_TEMP/archery-js.tar.zst" -C /build/js .
+        tar --exclude=.git -cf "$RUNNER_TEMP/archery-js.tar" -C /build/js .

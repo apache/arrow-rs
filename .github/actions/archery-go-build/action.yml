@@ -45,7 +45,7 @@ runs:
       id: cache
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
       with:
-        path: ${{ runner.temp }}/archery-go.tar.zst
+        path: ${{ runner.temp }}/archery-go.tar
         # Exact matches only: never accept an older source or build environment.
         key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.inputs.outputs.key }}
         lookup-only: ${{ inputs.lookup-only }}
@@ -55,7 +55,7 @@ runs:
       shell: bash
       run: |
         mkdir -p /build/go
-        tar -I 'zstd -d --long=27' -xf "$RUNNER_TEMP/archery-go.tar.zst" -C /build/go
+        tar -xf "$RUNNER_TEMP/archery-go.tar" -C /build/go
         cp /build/go/native/* go/arrow/internal/cdata_integration/
 
     - name: Build every Go package
@@ -65,4 +65,4 @@ runs:
         conda run --no-capture-output go/ci/scripts/build.sh "$PWD/go"
         mkdir -p /build/go/native
         cp go/arrow/internal/cdata_integration/arrow_go_integration.{so,h} /build/go/native/
-        tar -I 'zstd -T1 -3 --long=27' -cf "$RUNNER_TEMP/archery-go.tar.zst" -C /build/go .
+        tar -cf "$RUNNER_TEMP/archery-go.tar" -C /build/go .

@@ -44,7 +44,7 @@ runs:
       id: cache
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
       with:
-        path: ${{ runner.temp }}/archery-java.tar.zst
+        path: ${{ runner.temp }}/archery-java.tar
         # Exact matches only: never accept an older source or build environment.
         key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.inputs.outputs.key }}
         lookup-only: ${{ inputs.lookup-only }}
@@ -54,7 +54,7 @@ runs:
       shell: bash
       run: |
         mkdir -p /build/java
-        tar -I 'zstd -d --long=27' -xf "$RUNNER_TEMP/archery-java.tar.zst" -C /build/java
+        tar -xf "$RUNNER_TEMP/archery-java.tar" -C /build/java
 
     - name: Build required Java modules
       if: steps.cache.outputs.cache-hit != 'true'
@@ -69,4 +69,4 @@ runs:
         java/ci/scripts/jni_build.sh "$PWD/java" "$ARROW_HOME" /build/java /tmp/dist/java
         java/ci/scripts/build.sh "$PWD/java" /build/java /tmp/dist/java
         BASH
-        tar --exclude=.git -I 'zstd -T1 -3 --long=27' -cf "$RUNNER_TEMP/archery-java.tar.zst" -C /build/java .
+        tar --exclude=.git -cf "$RUNNER_TEMP/archery-java.tar" -C /build/java .
