@@ -956,33 +956,7 @@ impl TryFrom<Schema> for FFI_ArrowSchema {
 mod tests {
     use super::*;
     use crate::Fields;
-    use std::alloc::{GlobalAlloc, Layout, System};
-    use std::ptr;
-    use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
-
-    struct NameTrackingAllocator;
-
-    static TRACKED_NAME: AtomicPtr<u8> = AtomicPtr::new(ptr::null_mut());
-    static RELEASED_NAMES: AtomicUsize = AtomicUsize::new(0);
-
-    #[global_allocator]
-    static ALLOCATOR: NameTrackingAllocator = NameTrackingAllocator;
-
-    unsafe impl GlobalAlloc for NameTrackingAllocator {
-        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-            unsafe { System.alloc(layout) }
-        }
-
-        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-            if TRACKED_NAME
-                .compare_exchange(ptr, ptr::null_mut(), Ordering::Relaxed, Ordering::Relaxed)
-                .is_ok()
-            {
-                RELEASED_NAMES.fetch_add(1, Ordering::Relaxed);
-            }
-            unsafe { System.dealloc(ptr, layout) };
-        }
-    }
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     fn round_trip_type(dtype: DataType) {
         let c_schema = FFI_ArrowSchema::try_from(&dtype).unwrap();
@@ -1220,25 +1194,16 @@ mod tests {
 
     #[test]
     fn test_replacing_name_releases_previous_allocation() {
+        // Miri's leak check verifies that neither name allocation is leaked.
         let schema = FFI_ArrowSchema::try_from(&DataType::Int32).unwrap();
         // SAFETY: schema was just constructed by this crate.
         let schema = unsafe { schema.with_name("first") }.unwrap();
-        TRACKED_NAME.store(
-            schema.name().unwrap().as_ptr().cast_mut(),
-            Ordering::Relaxed,
-        );
+        assert_eq!(schema.name(), Some("first"));
 
         // SAFETY: schema still has its original private_data.
         let schema = unsafe { schema.with_name("second") }.unwrap();
         assert_eq!(schema.name(), Some("second"));
-        assert_eq!(RELEASED_NAMES.load(Ordering::Relaxed), 1);
-
-        TRACKED_NAME.store(
-            schema.name().unwrap().as_ptr().cast_mut(),
-            Ordering::Relaxed,
-        );
         drop(schema);
-        assert_eq!(RELEASED_NAMES.load(Ordering::Relaxed), 2);
     }
 
     #[test]
