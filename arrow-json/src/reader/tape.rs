@@ -813,7 +813,7 @@ fn err(b: u8, ctx: &str) -> ArrowError {
 fn char_from_surrogate_pair(low: u16, high: u16) -> Result<char, ArrowError> {
     match (low, high) {
         (0xDC00..=0xDFFF, 0xD800..=0xDBFF) => {
-            let n = (((high - 0xD800) as u32) << 10) | ((low - 0xDC00) as u32 + 0x1_0000);
+            let n = (((high - 0xD800) as u32) << 10) + ((low - 0xDC00) as u32 + 0x1_0000);
             char::from_u32(n)
                 .ok_or_else(|| ArrowError::JsonError(format!("Invalid UTF-16 surrogate pair {n}")))
         }

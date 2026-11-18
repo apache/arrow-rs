@@ -1371,6 +1371,33 @@ mod tests {
     }
 
     #[test]
+    fn test_string_surrogate_pairs() {
+        let buf = r#"
+        {"a": "\ud800\udc00"}
+        {"a": "\ud83d\ude00"}
+        {"a": "\ud840\udc00"}
+        {"a": "\udb40\udc01"}
+        {"a": "\udbff\udfff"}
+        "#;
+        let expected = [
+            '\u{10000}',
+            '\u{1F600}',
+            '\u{20000}',
+            '\u{E0001}',
+            '\u{10FFFF}',
+        ];
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+
+        let batches = do_read(buf, 1024, false, false, schema);
+        assert_eq!(batches.len(), 1);
+
+        let col = batches[0].column(0).as_string::<i32>();
+        for (i, c) in expected.iter().enumerate() {
+            assert_eq!(col.value(i), c.to_string());
+        }
+    }
+
+    #[test]
     fn test_long_string_view_allocation() {
         // The JSON input contains field "a" with different string lengths.
         // According to the implementation in the decoder:
