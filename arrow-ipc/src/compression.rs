@@ -6,6 +6,8 @@ use crate::CompressionType;
 use arrow_buffer::Buffer;
 use arrow_schema::ArrowError;
 use flatbuffers::FlatBufferBuilder;
+#[cfg(feature = "lz4")]
+use std::io::Read;
 
 const LENGTH_NO_COMPRESSED_DATA: i64 = -1;
 const LENGTH_OF_PREFIX_DATA: i64 = 8;
@@ -415,7 +417,6 @@ impl Lz4Decompressor {
         input: &Buffer,
         decompressed_size: usize,
     ) -> Result<Vec<u8>, ArrowError> {
-        use std::io::Read;
         let decoder = self.decoder.get_or_insert_with(|| {
             lz4_flex::frame::FrameDecoder::new(std::io::Cursor::new(Buffer::default()))
         });
@@ -553,6 +554,7 @@ fn read_uncompressed_size(buffer: &[u8]) -> Result<i64, ArrowError> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(any(feature = "lz4", feature = "zstd"))]
     use arrow_buffer::Buffer;
 
     #[test]
