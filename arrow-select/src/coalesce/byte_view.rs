@@ -416,6 +416,8 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
         }
     }
 
+    /// Copies indexed views, capping `max_buffer_size` at `i32::MAX`.
+    ///
     /// # Safety
     ///
     /// Every value in `indices` must be less than `src_views.len()`, and every
@@ -503,7 +505,9 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
                         .get_unchecked(source_buffer_index)
                         .get_unchecked(source_buffer_offset..source_buffer_offset + length)
                 };
-                // The final buffer length is bounded by `max_buffer_size`.
+                // `selected_bytes` keeps the buffer within `max_buffer_size`, which
+                // is at most `i32::MAX`, so the offset fits in `u32`.
+                debug_assert!(dst_buffer.len() + length <= max_buffer_size);
                 view.offset = dst_buffer.len() as u32;
                 view.buffer_index = buffer_index;
                 debug_assert!(dst_buffer.capacity() - dst_buffer.len() >= length);
@@ -523,8 +527,9 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
     ///
     /// Every value in `indices` must be less than `src_views.len()`, every
     /// selected non-inline view must reference a valid range in `src_buffers`,
-    /// every selected value must fit within `max_buffer_size`, and
-    /// `selected_bytes` must equal their total length.
+    /// every selected value must fit within `max_buffer_size`,
+    /// `max_buffer_size` must be at most `i32::MAX`, and `selected_bytes` must
+    /// equal their total length.
     #[cold]
     #[inline(never)]
     unsafe fn append_indexed_views_and_copy_strings_split(
@@ -573,6 +578,9 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
                         .get_unchecked(buffer_index)
                         .get_unchecked(buffer_offset..buffer_offset + str_len)
                 };
+                // The buffer stays within `max_buffer_size`, which is at most
+                // `i32::MAX`, so the offset fits in `u32`.
+                debug_assert!(dst_buffer.len() + str_len <= max_buffer_size);
                 view.offset = dst_buffer.len() as u32;
                 view.buffer_index = self.completed.len().try_into().expect("too many buffers");
                 debug_assert!(dst_buffer.capacity() - dst_buffer.len() >= str_len);
