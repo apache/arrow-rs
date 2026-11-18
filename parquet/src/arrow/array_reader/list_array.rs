@@ -153,7 +153,9 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
                         validity.append(d + 1 >= def_level);
                     }
 
-                    cur_offset += (d >= def_level && r <= rep_level) as usize;
+                    if d >= def_level && r <= rep_level {
+                        cur_offset += 1;
+                    }
                 }
             }
             (None, None) => {
@@ -162,7 +164,9 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
                         list_offsets.push(OffsetSize::from_usize(cur_offset).unwrap());
                     }
 
-                    cur_offset += (d >= def_level && r <= rep_level) as usize;
+                    if d >= def_level && r <= rep_level {
+                        cur_offset += 1;
+                    }
                 }
             }
             (Some(threshold), Some(validity)) => {
@@ -178,7 +182,9 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
                         validity.append(d + 1 >= def_level);
                     }
 
-                    cur_offset += (d >= def_level && r <= rep_level) as usize;
+                    if d >= def_level && r <= rep_level {
+                        cur_offset += 1;
+                    }
                 }
             }
             (Some(threshold), None) => {
@@ -193,7 +199,9 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
                         list_offsets.push(OffsetSize::from_usize(cur_offset).unwrap());
                     }
 
-                    cur_offset += (d >= def_level && r <= rep_level) as usize;
+                    if d >= def_level && r <= rep_level {
+                        cur_offset += 1;
+                    }
                 }
             }
         }
