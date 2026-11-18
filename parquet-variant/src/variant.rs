@@ -1522,7 +1522,9 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Return a new Variant with the path followed.
     ///
-    /// If the path is not found, `None` is returned.
+    /// If the path is not found, `None` is returned. Field names are case-sensitive.
+    /// A field step on a value that is not an object, an index step on a value that
+    /// is not a list, and an index past the end of a list all return `None`.
     ///
     /// # Example
     /// ```

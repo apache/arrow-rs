@@ -19,18 +19,26 @@ use std::{borrow::Cow, ops::Deref};
 ///
 /// # Path strings
 ///
-/// [`VariantPath::try_from`] parses the paths that Spark's `variant_get`
-/// accepts: `$` followed by any number of
+/// [`VariantPath::try_from`] parses the [JSONPath]-based syntax of Spark's
+/// [`variant_get`] function: `$` followed by any number of
 ///
 /// - `.name`: the field `name`, which runs to the next `.` or `[`
 /// - `['name']` or `["name"]`: the field `name`, which may contain `.`, `[` and `]`
-/// - `[N]`: the list element at index `N`, at most `i32::MAX`
+/// - `[N]`: the list element at zero-based index `N`, at most `i32::MAX`
+///
+/// A path must start with `$`, so `a.b` and the empty string are errors. Other
+/// JSONPath syntax, such as `..`, negative indexes and filters, is rejected, and
+/// `$.*` selects a field named `*`.
+///
+/// [JSONPath]: https://www.rfc-editor.org/rfc/rfc9535.html
+/// [`variant_get`]: https://spark.apache.org/docs/latest/api/sql/variant-functions/#variant_get
 ///
 /// `$` alone is the empty path. A backslash in a quoted field name starts an
 /// escape (`\\`, `\'`, `\"`, `\/`, `\b`, `\f`, `\n`, `\r`, `\t`, `\uXXXX`), as in
 /// Spark 4.4. Other escapes and unpaired surrogates stay literal. To keep every
 /// backslash literal, as in Spark 4.2 and 4.3, parse with
-/// [`QuotedKeyEscapes::Literal`].
+/// [`QuotedKeyEscapes::Literal`]. In that mode a quoted field name cannot contain
+/// the quote around it, so use the other kind of quote.
 ///
 /// `[*]` is not part of Spark's syntax. It parses to
 /// [`VariantPathElement::ListElement`], which only shredding schemas accept.
@@ -64,6 +72,13 @@ use std::{borrow::Cow, ops::Deref};
 /// # Example: Path strings
 /// ```
 /// # use parquet_variant::{QuotedKeyEscapes, VariantPath, VariantPathElement};
+/// /// You can also convert strings directly into paths using dot notation
+/// let path = VariantPath::try_from("$.a.b").unwrap();
+/// let expected = VariantPath::from_iter([VariantPathElement::field("a"),
+///     VariantPathElement::field("b")]);
+/// assert_eq!(path, expected);
+///
+/// // use brackets for list indexes and for field names that contain `.`
 /// let path = VariantPath::try_from("$.a['b.c'].d[2]['3']").unwrap();
 /// let expected = VariantPath::from_iter([VariantPathElement::field("a"),
 ///     VariantPathElement::field("b.c"),
