@@ -211,10 +211,13 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_pointer_width = "64")]
+    #[ignore = "allocates >4GB to test 32-bit length truncation"]
     fn test_fixed_size_binary_builder_rejects_wrapped_length() {
         let mut b = FixedSizeBinaryBuilder::new(1);
         let big = vec![0u8; (1usize << 32) + 1];
-        assert!(b.append_value(&big).is_err());
+        let err = b.append_value(&big).unwrap_err();
+        assert!(matches!(err, ArrowError::InvalidArgumentError(_)));
     }
 
     #[test]
