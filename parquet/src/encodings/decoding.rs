@@ -976,7 +976,24 @@ impl<T: DataType> Decoder<T> for DeltaLengthByteArrayDecoder<T> {
                 self.lengths.resize(num_lengths, 0);
                 len_decoder.get(&mut self.lengths[..])?;
 
-                self.data = Some(data.slice(len_decoder.get_offset()..));
+                let data = data.slice(len_decoder.get_offset()..);
+                let mut total_bytes = 0usize;
+                for l in &self.lengths {
+                    let len = usize::try_from(*l)
+                        .map_err(|_| general_err!("Invalid DELTA_LENGTH_BYTE_ARRAY length {l}"))?;
+                    total_bytes = total_bytes
+                        .checked_add(len)
+                        .ok_or_else(|| general_err!("DELTA_LENGTH_BYTE_ARRAY length overflow"))?;
+                }
+                if total_bytes > data.len() {
+                    return Err(general_err!(
+                        "Insufficient DELTA_LENGTH_BYTE_ARRAY data: lengths need {} bytes, page has {}",
+                        total_bytes,
+                        data.len()
+                    ));
+                }
+
+                self.data = Some(data);
                 self.offset = 0;
                 self.current_idx = 0;
                 self.num_values = num_lengths;
@@ -1276,6 +1293,62 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("Invalid DELTA_BYTE_ARRAY prefix length"),
+            "{}",
+            err
+        );
+    }
+
+    fn encode_delta_binary_packed(values: &[i32]) -> Vec<u8> {
+        let mut encoder = get_encoder::<Int32Type>(
+            Encoding::DELTA_BINARY_PACKED,
+            &create_test_col_desc_ptr(-1, Type::INT32),
+        )
+        .unwrap();
+        encoder.put(values).unwrap();
+        encoder.flush_buffer().unwrap().as_ref().to_vec()
+    }
+
+    #[test]
+    fn test_delta_length_byte_array_negative_length() {
+        let mut page = encode_delta_binary_packed(&[1, -1]);
+        page.extend_from_slice(b"ab");
+
+        let mut decoder = DeltaLengthByteArrayDecoder::<ByteArrayType>::new();
+        let err = decoder.set_data(Bytes::from(page), 2).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Invalid DELTA_LENGTH_BYTE_ARRAY length"),
+            "{}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_delta_length_byte_array_length_past_end() {
+        let mut page = encode_delta_binary_packed(&[1, 5]);
+        page.extend_from_slice(b"ab");
+
+        let mut decoder = DeltaLengthByteArrayDecoder::<ByteArrayType>::new();
+        let err = decoder.set_data(Bytes::from(page), 2).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Insufficient DELTA_LENGTH_BYTE_ARRAY"),
+            "{}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_delta_byte_array_negative_suffix_length() {
+        let mut page = encode_delta_binary_packed(&[0, 0]);
+        page.extend_from_slice(&encode_delta_binary_packed(&[1, -1]));
+        page.extend_from_slice(b"ab");
+
+        let mut decoder = DeltaByteArrayDecoder::<ByteArrayType>::new();
+        let err = decoder.set_data(Bytes::from(page), 2).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Invalid DELTA_LENGTH_BYTE_ARRAY length"),
             "{}",
             err
         );
