@@ -2851,7 +2851,11 @@ fn add_benches(c: &mut Criterion) {
     for (label, null_density) in [
         ("no NULLs", 0.0),
         ("half NULLs", 0.5),
+        ("63pct NULLs", 0.63),
+        ("83pct NULLs", 0.83),
         ("90pct NULLs", 0.9),
+        ("91pct NULLs", 0.91),
+        ("95pct NULLs", 0.95),
         ("99pct NULLs", 0.99),
     ] {
         let list_data = build_int32_list_page_iterator(int32_list_desc.clone(), null_density, 0);
