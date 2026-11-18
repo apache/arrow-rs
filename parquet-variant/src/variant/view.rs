@@ -7,6 +7,7 @@
 use arrow_schema::ArrowError;
 
 use crate::decoder::{VariantBasicType, get_basic_type};
+use crate::path::VariantPathElement;
 use crate::utils::{
     first_byte_from_slice, overflow_error, slice_from_slice, slice_from_slice_at_offset,
     str_from_bytes, try_binary_search_range_by,
@@ -160,7 +161,7 @@ impl<'m> VariantMetadataView<'m> {
 /// # Example
 ///
 /// ```
-/// # use parquet_variant::{Variant, VariantBuilder, VariantMetadataView, VariantView};
+/// # use parquet_variant::{Variant, VariantBuilder, VariantMetadataView, VariantPath, VariantView};
 /// # use arrow_schema::ArrowError;
 /// # fn main() -> Result<(), ArrowError> {
 /// let mut builder = VariantBuilder::new();
@@ -171,8 +172,8 @@ impl<'m> VariantMetadataView<'m> {
 /// let (metadata, value) = builder.finish();
 ///
 /// let view = VariantView::try_new(VariantMetadataView::try_new(&metadata)?, &value)?;
-/// let scores = view.get_field(b"scores")?.expect("the field exists");
-/// let found = scores.get_index(1)?.expect("the element exists");
+/// let path = VariantPath::try_from("scores[1]")?;
+/// let found = view.get_path(&path)?.expect("the path exists");
 /// assert_eq!(found.try_to_variant()?, Variant::Int8(9));
 /// assert!(view.get_field(b"missing")?.is_none());
 /// # Ok(())
@@ -245,6 +246,26 @@ impl<'m, 'v> VariantView<'m, 'v> {
             Some(list) => list.get(index),
             None => Ok(None),
         }
+    }
+
+    /// Follows `path` from this value, or returns `None` if a step does not exist.
+    ///
+    /// A [`VariantPathElement::ListElement`] step does not exist, as in [`Variant::get_path`].
+    #[inline]
+    pub fn get_path(&self, path: &[VariantPathElement<'_>]) -> Result<Option<Self>, ArrowError> {
+        let mut current = *self;
+        for element in path {
+            let next = match element {
+                VariantPathElement::Field { name } => current.get_field(name.as_bytes())?,
+                VariantPathElement::Index { index } => current.get_index(*index)?,
+                VariantPathElement::ListElement => None,
+            };
+            match next {
+                Some(next) => current = next,
+                None => return Ok(None),
+            }
+        }
+        Ok(Some(current))
     }
 
     /// Decodes this value as an unvalidated [`Variant`].
@@ -531,7 +552,7 @@ impl<'m, 'v> VariantListView<'m, 'v> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::VariantBuilder;
+    use crate::{VariantBuilder, VariantPath};
 
     const LONG_STRING: &str =
         "a string that is longer than the sixty-three bytes that a short string can hold";
@@ -700,6 +721,32 @@ mod tests {
 
         let short_string = root.get_field(b"b").unwrap().unwrap();
         assert_eq!(short_string.basic_type(), VariantBasicType::ShortString);
+    }
+
+    #[test]
+    fn test_get_path_matches_variant() {
+        let (metadata, value) = sample();
+        let variant = Variant::try_new(&metadata, &value).unwrap();
+        let root = view(&metadata, &value);
+
+        for path in ["", "a", "list[1]", "list[2].x", "nested.k", "nested"] {
+            let path = VariantPath::try_from(path).unwrap();
+            let found = root.get_path(&path).unwrap().unwrap();
+            assert_eq!(
+                found.try_to_variant().unwrap(),
+                variant.get_path(&path).unwrap()
+            );
+        }
+        for path in ["missing", "a.b", "a[0]", "list[3]", "list.x", "nested.k.z"] {
+            let path = VariantPath::try_from(path).unwrap();
+            assert!(root.get_path(&path).unwrap().is_none(), "{path:?}");
+            assert!(variant.get_path(&path).is_none(), "{path:?}");
+        }
+        assert!(
+            root.get_path(&[VariantPathElement::ListElement])
+                .unwrap()
+                .is_none()
+        );
     }
 
     /// Reads everything reachable from `value` through the views, ignoring errors.
