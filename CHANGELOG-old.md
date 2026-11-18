@@ -8,6 +8,30 @@
 
 # Changelog
 
+## [59.3.3](https://github.com/apache/arrow-rs/tree/59.3.3) - (2026-11-17)
+
+[Full Changelog](https://github.com/apache/arrow-rs/compare/59.3.2...59.3.3)
+
+### Bug fixes
+- [59_maintenance] fix(parquet): error when writing bloom filters for encrypted columns by @Jefffrey in [#12191](https://github.com/apache/arrow-rs/pull/12191)
+
+## [58.4.2](https://github.com/apache/arrow-rs/tree/58.4.2) - (2026-11-17)
+
+[Full Changelog](https://github.com/apache/arrow-rs/compare/58.4.1...58.4.2)
+
+### Bug fixes
+- [58_maintenance] fix(parquet): error when writing bloom filters for encrypted columns by @Jefffrey in [#12192](https://github.com/apache/arrow-rs/pull/12192)
+
+## [57.3.3](https://github.com/apache/arrow-rs/tree/57.3.3) - (2026-11-17)
+
+[Full Changelog](https://github.com/apache/arrow-rs/compare/57.3.2...57.3.3)
+
+### Bug fixes
+- [57_maintenance] fix(parquet): error when writing bloom filters for encrypted columns by @Jefffrey in [#12193](https://github.com/apache/arrow-rs/pull/12193)
+
+### Miscellaneous
+- [57_maintenance] Upgrade thrift dependency by @Jefffrey in [#12204](https://github.com/apache/arrow-rs/pull/12204)
+
 ## [59.3.2](https://github.com/apache/arrow-rs/tree/59.3.2) - (2026-10-26)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/59.3.1...59.3.2)
