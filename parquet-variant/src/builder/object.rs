@@ -251,9 +251,7 @@ impl<'a, S: BuilderSpecificState> ObjectBuilder<'a, S> {
         let metadata_builder = self.parent_state.metadata_builder();
 
         self.fields.sort_by(|&field_a_id, _, &field_b_id, _| {
-            let field_a_name = metadata_builder.field_name(field_a_id as usize);
-            let field_b_name = metadata_builder.field_name(field_b_id as usize);
-            field_a_name.cmp(field_b_name)
+            metadata_builder.cmp_field_names(field_a_id, field_b_id)
         });
 
         let max_id = self.fields.iter().map(|(i, _)| *i).max().unwrap_or(0);
