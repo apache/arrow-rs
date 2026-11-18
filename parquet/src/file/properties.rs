@@ -229,6 +229,30 @@ enum OffsetIndexSetting {
 ///     Some(Encoding::PLAIN)
 /// );
 /// ```
+///
+/// # Page limits and batch size
+///
+/// [`set_data_page_size_limit`](WriterPropertiesBuilder::set_data_page_size_limit),
+/// [`set_data_page_row_count_limit`](WriterPropertiesBuilder::set_data_page_row_count_limit)
+/// and [`set_dictionary_page_size_limit`](WriterPropertiesBuilder::set_dictionary_page_size_limit)
+/// are best effort, so a page can end up larger than the limit set for it. Limits
+/// are only checked between batches, and [`set_write_batch_size`](WriterPropertiesBuilder::set_write_batch_size)
+/// sets how large those batches are. A page can therefore pass its limit by up to
+/// one batch worth of data, and lowering the write batch size keeps pages closer
+/// to their limits.
+///
+/// There is one exception. When the definition and repetition levels of a batch
+/// are all the same value, for example a nullable column whose batch happens to
+/// contain no nulls, there is no level array to split and a larger batch costs
+/// no extra work. Those batches are written
+/// [`set_data_page_row_count_limit`](WriterPropertiesBuilder::set_data_page_row_count_limit)
+/// rows at a time instead, so for them that limit is the enforcement granularity
+/// and the write batch size does not move page boundaries.
+///
+/// Which of the two applies depends on the data being written and not only on
+/// the schema, so the same column can be batched at either size. A column with
+/// no level data at all, such as a non-nullable flat column, is always batched
+/// at the write batch size.
 #[derive(Debug, Clone)]
 pub struct WriterProperties {
     write_batch_size: usize,
@@ -755,6 +779,8 @@ impl WriterPropertiesBuilder {
     ///
     /// Note: this is a best effort limit based on value of
     /// [`set_write_batch_size`](Self::set_write_batch_size).
+    /// Batches with uniform level data are written at this limit instead of the
+    /// write batch size. See [page limits and batch size](WriterProperties#page-limits-and-batch-size).
     ///
     /// # Panics
     /// If the value is `0`.
@@ -770,10 +796,13 @@ impl WriterPropertiesBuilder {
     /// For performance reasons, data for each column is written in
     /// batches of this size.
     ///
-    /// Additional limits such as such as
+    /// Additional limits such as
     /// [`set_data_page_row_count_limit`](Self::set_data_page_row_count_limit)
     /// are checked between batches, and thus the write batch size value acts as an
     /// upper-bound on the enforcement granularity of other limits.
+    ///
+    /// Batches with uniform level data are written at the row count limit
+    /// instead. See [page limits and batch size](WriterProperties#page-limits-and-batch-size).
     ///
     /// # Panics
     /// If the value is `0`.
@@ -1157,6 +1186,7 @@ impl WriterPropertiesBuilder {
     ///
     /// Note: this is a best effort limit based on value of
     /// [`set_write_batch_size`](Self::set_write_batch_size).
+    /// See [page limits and batch size](WriterProperties#page-limits-and-batch-size).
     pub fn set_dictionary_page_size_limit(mut self, value: usize) -> Self {
         self.default_column_properties
             .set_dictionary_page_size_limit(value);
@@ -1173,6 +1203,7 @@ impl WriterPropertiesBuilder {
     ///
     /// Note: this is a best effort limit based on value of
     /// [`set_write_batch_size`](Self::set_write_batch_size).
+    /// See [page limits and batch size](WriterProperties#page-limits-and-batch-size).
     pub fn set_data_page_size_limit(mut self, value: usize) -> Self {
         self.default_column_properties
             .set_data_page_size_limit(value);
