@@ -398,6 +398,48 @@ mod tests {
     }
 
     #[test]
+    fn indexed_copy_remaps_sparse_values_across_sources() {
+        let first_values = Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef;
+        let second_values = Arc::new(StringArray::from(vec!["c", "a", "d"])) as ArrayRef;
+        let keys = (0..64)
+            .map(|idx| (idx != 3).then_some(idx % 3))
+            .collect::<Vec<_>>();
+        let first = batch(&first_values, keys.clone());
+        let second = batch(&second_values, keys);
+        let mut coalescer = BatchCoalescer::new(first.schema(), 8);
+
+        // Four out of 64 rows is the maximum selection that uses the direct sparse path.
+        coalescer
+            .push_batch_with_indices(first, &UInt32Array::from(vec![3, 1, 0, 1]))
+            .unwrap();
+        coalescer
+            .push_batch_with_indices(second, &UInt32Array::from(vec![2, 0, 3, 0]))
+            .unwrap();
+
+        let output = coalescer.next_completed_batch().unwrap();
+        let output = output.column(0).as_dictionary::<Int32Type>();
+        let values = output.values().as_string::<i32>();
+        let decoded = output
+            .keys_iter()
+            .map(|key| key.map(|key| values.value(key)))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            decoded,
+            vec![
+                None,
+                Some("b"),
+                Some("a"),
+                Some("b"),
+                Some("d"),
+                Some("c"),
+                None,
+                Some("c"),
+            ]
+        );
+        assert_eq!(values.len(), 4);
+    }
+
+    #[test]
     fn indexed_copy_dense_fallback_preserves_null_keys() {
         let values = Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef;
         let source = Arc::new(DictionaryArray::<Int32Type>::new(
