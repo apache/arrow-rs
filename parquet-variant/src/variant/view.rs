@@ -6,11 +6,11 @@
 
 use arrow_schema::ArrowError;
 
-use crate::decoder::{VariantBasicType, get_basic_type};
+use crate::decoder::{VariantBasicType, VariantPrimitiveType, get_basic_type};
 use crate::path::VariantPathElement;
 use crate::utils::{
-    first_byte_from_slice, overflow_error, slice_from_slice, slice_from_slice_at_offset,
-    str_from_bytes, try_binary_search_range_by,
+    array_from_slice, first_byte_from_slice, overflow_error, slice_from_slice,
+    slice_from_slice_at_offset, str_from_bytes, try_binary_search_range_by,
 };
 use crate::variant::list::VariantListHeader;
 use crate::variant::metadata::VariantMetadataHeader;
@@ -158,6 +158,12 @@ impl<'m> VariantMetadataView<'m> {
 /// offer `with_full_validation` methods for additional checks. [`Self::try_to_variant`] and the
 /// `try_into_*` methods of the other views convert a view to these types.
 ///
+/// # Value bytes
+///
+/// A child value starts at its offset and extends to the end of its parent, because object field
+/// values need not be stored in field order. [`VariantView::bytes`] finds the exact encoding of a
+/// value when a caller needs it.
+///
 /// # Example
 ///
 /// ```
@@ -281,6 +287,40 @@ impl<'m, 'v> VariantView<'m, 'v> {
         };
         Variant::try_new_with_metadata_and_shallow_validation(metadata, self.value)
     }
+
+    /// The exact encoding of this value, without any bytes that follow it.
+    pub fn bytes(&self) -> Result<&'v [u8], ArrowError> {
+        let len = match self.basic_type() {
+            VariantBasicType::Primitive => primitive_len(self.header, self.value)?,
+            VariantBasicType::ShortString => 1 + (self.header >> 2) as usize,
+            VariantBasicType::Object => {
+                VariantObjectView::try_new(self.metadata, self.value)?.byte_len()?
+            }
+            VariantBasicType::Array => {
+                VariantListView::try_new(self.metadata, self.value)?.byte_len()?
+            }
+        };
+        slice_from_slice(self.value, ..len)
+    }
+}
+
+/// The encoded size of the primitive value with header byte `header` at the start of `value`.
+fn primitive_len(header: u8, value: &[u8]) -> Result<usize, ArrowError> {
+    use VariantPrimitiveType::*;
+    let payload = match VariantPrimitiveType::try_from(header >> 2)? {
+        Null | BooleanTrue | BooleanFalse => 0,
+        Int8 => 1,
+        Int16 => 2,
+        Int32 | Date | Float => 4,
+        Decimal4 => 5,
+        Int64 | Double | TimestampMicros | TimestampNtzMicros | TimestampNanos
+        | TimestampNtzNanos | Time => 8,
+        Decimal8 => 9,
+        Uuid => 16,
+        Decimal16 => 17,
+        Binary | String => 4 + u32::from_le_bytes(array_from_slice(value, 1)?) as usize,
+    };
+    Ok(1 + payload)
 }
 
 /// A variant object of which only the header has been read. See [`VariantView`].
@@ -552,7 +592,9 @@ impl<'m, 'v> VariantListView<'m, 'v> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{VariantBuilder, VariantPath};
+    use crate::{VariantBuilder, VariantDecimal4, VariantDecimal8, VariantDecimal16, VariantPath};
+    use chrono::{NaiveDate, NaiveTime};
+    use uuid::Uuid;
 
     const LONG_STRING: &str =
         "a string that is longer than the sixty-three bytes that a short string can hold";
@@ -695,6 +737,10 @@ mod tests {
         }
         assert!(list_view.get(list.len()).unwrap().is_none());
 
+        assert_eq!(
+            list_view.byte_len().unwrap(),
+            element.bytes().unwrap().len()
+        );
         let metadata = element.metadata().try_into_metadata().unwrap();
         assert_eq!(&list_view.try_into_list(metadata).unwrap(), list);
     }
@@ -749,12 +795,84 @@ mod tests {
         );
     }
 
+    /// The exact encodings of the children of a container must tile its value region.
+    #[test]
+    fn test_bytes_of_every_type() {
+        let date = NaiveDate::from_ymd_opt(2026, 11, 18).unwrap();
+        let timestamp = date.and_hms_micro_opt(1, 2, 3, 456).unwrap();
+        let values = [
+            Variant::Null,
+            Variant::BooleanTrue,
+            Variant::BooleanFalse,
+            Variant::Int8(1),
+            Variant::Int16(2),
+            Variant::Int32(3),
+            Variant::Int64(4),
+            Variant::Float(5.0),
+            Variant::Double(6.0),
+            Variant::Decimal4(VariantDecimal4::try_new(7, 1).unwrap()),
+            Variant::Decimal8(VariantDecimal8::try_new(8, 1).unwrap()),
+            Variant::Decimal16(VariantDecimal16::try_new(9, 1).unwrap()),
+            Variant::Date(date),
+            Variant::TimestampMicros(timestamp.and_utc()),
+            Variant::TimestampNtzMicros(timestamp),
+            Variant::TimestampNanos(timestamp.and_utc()),
+            Variant::TimestampNtzNanos(timestamp),
+            Variant::Time(NaiveTime::from_hms_opt(1, 2, 3).unwrap()),
+            Variant::Uuid(Uuid::from_u128(10)),
+            Variant::Binary(&[1, 2, 3]),
+            Variant::from("short"),
+            Variant::from(LONG_STRING),
+        ];
+
+        let mut builder = VariantBuilder::new();
+        let mut list = builder.new_list();
+        for value in &values {
+            list.append_value(value.clone());
+        }
+        list.new_object().with_field("x", 1i8).finish();
+        list.new_list().with_value(1i8).finish();
+        list.finish();
+        let (metadata, value) = builder.finish();
+
+        let root = view(&metadata, &value);
+        assert_eq!(root.bytes().unwrap(), value.as_slice());
+        let list = root.as_list().unwrap().unwrap();
+        assert_eq!(list.len(), values.len() + 2);
+
+        let mut total = 0;
+        for i in 0..list.len() {
+            let element = list.get(i).unwrap().unwrap();
+            let bytes = element.bytes().unwrap();
+            assert_eq!(
+                Variant::try_new(&metadata, bytes).unwrap(),
+                element.try_to_variant().unwrap()
+            );
+            if let Some(expected) = values.get(i) {
+                assert_eq!(&element.try_to_variant().unwrap(), expected);
+            }
+            total += bytes.len();
+        }
+        assert_eq!(total, value.len() - list.first_value_byte as usize);
+    }
+
+    #[test]
+    fn test_bytes_of_object_fields() {
+        let (metadata, value) = sample();
+        let object = view(&metadata, &value).as_object().unwrap().unwrap();
+        let total: usize = (0..object.len())
+            .map(|i| object.field(i).unwrap().bytes().unwrap().len())
+            .sum();
+        assert_eq!(total, value.len() - object.first_value_byte as usize);
+    }
+
     /// Reads everything reachable from `value` through the views, ignoring errors.
     fn walk(value: VariantView<'_, '_>) {
         // Malformed input may declare more children than its bytes can hold.
         const MAX_CHILDREN: usize = 64;
 
         let _ = value.try_to_variant();
+        let _ = value.bytes();
         let metadata = value.metadata();
         for id in 0..metadata.len().min(MAX_CHILDREN) {
             let _ = metadata.entry(id);

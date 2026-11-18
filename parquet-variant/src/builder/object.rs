@@ -151,6 +151,25 @@ impl<'a, S: BuilderSpecificState> ObjectBuilder<'a, S> {
         Ok(())
     }
 
+    /// Adds the field named by entry `field_id` of the metadata dictionary, copying the encoded
+    /// `value` as is.
+    ///
+    /// The caller must ensure that `field_id`, and every field id inside `value`, belong to the
+    /// metadata dictionary that this builder writes against. Copying a field out of an object that
+    /// uses that same dictionary, as shredding does, satisfies this.
+    pub fn insert_encoded(&mut self, field_id: u32, value: &[u8]) -> Result<(), ArrowError> {
+        let state = &mut self.parent_state;
+        let field_start = state.value_builder.offset() - state.saved_value_builder_offset;
+        if self.fields.insert(field_id, field_start).is_some() && self.validate_unique_fields {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Duplicate field name: {}",
+                state.metadata_builder.field_name(field_id as _)
+            )));
+        }
+        state.value_builder.append_slice(value);
+        Ok(())
+    }
+
     /// Builder style API for adding a field with key and value to the object
     ///
     /// Same as [`ObjectBuilder::insert`], but returns `self` for chaining.
