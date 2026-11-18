@@ -1747,6 +1747,12 @@ pub fn cast_with_options(
             cast_with_options(&array, to_type, cast_options)
         }
 
+        // reinterpret Int64 without going through ArrayData
+        (Int64, Timestamp(unit, tz)) => Ok(make_timestamp_array(
+            array.as_primitive(),
+            *unit,
+            tz.clone(),
+        )),
         (_, Timestamp(unit, tz)) if from_type.is_numeric() => {
             let array = cast_with_options(array, &Int64, cast_options)?;
             Ok(make_timestamp_array(
@@ -1937,6 +1943,8 @@ pub fn cast_with_options(
             cast_with_options(&converted, to_type, cast_options)
         }
 
+        // reinterpret Int64 without going through ArrayData
+        (Int64, Duration(unit)) => Ok(make_duration_array(array.as_primitive(), *unit)),
         (_, Duration(unit)) if from_type.is_numeric() => {
             let array = cast_with_options(array, &Int64, cast_options)?;
             Ok(make_duration_array(array.as_primitive(), *unit))

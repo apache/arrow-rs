@@ -338,6 +338,13 @@ fn test_cast_between_durations_and_numerics() {
     assert_eq!(802034103, c.value(1));
     assert_eq!(10241096, c.value(2));
     assert!(c.is_null(3));
+
+    let array = Int64Array::from(vec![Some(i64::MAX), Some(802034103), None]);
+    let b = cast(&array, &DataType::Duration(TimeUnit::Second)).unwrap();
+    let c = b.as_any().downcast_ref::<DurationSecondArray>().unwrap();
+    assert_eq!(i64::MAX, c.value(0));
+    assert_eq!(802034103, c.value(1));
+    assert!(c.is_null(2));
 }
 
 /// helper function to test casting from duration to interval
