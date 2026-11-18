@@ -84,10 +84,11 @@ def validate_cache_refresh(ci, suite, workflow):
             )
             prepare = {step.get("uses") for step in job["steps"]}
             assert {
-                "./rust/.github/actions/archery-cpp-build",
-                "./rust/.github/actions/archery-go-build",
-                "./rust/.github/actions/archery-java-build",
-                "./rust/.github/actions/archery-js-build",
+                "$/.github/actions/archery-cpp-build",
+                "$/.github/actions/archery-go-build",
+                "$/.github/actions/archery-java-build",
+                "$/.github/actions/archery-js-build",
+                "$/.github/actions/archery-nanoarrow-build",
             } <= prepare, "Cache seeding must use the same peer builds as integration"
             continue
         if name not in cache_jobs:

@@ -151,13 +151,15 @@ jobs:
           echo ""
 
       - name: Prepare C++ build
-        uses: ./rust/.github/actions/archery-cpp-build
+        uses: $/.github/actions/archery-cpp-build
       - name: Prepare Go build
-        uses: ./rust/.github/actions/archery-go-build
+        uses: $/.github/actions/archery-go-build
       - name: Prepare Java build
-        uses: ./rust/.github/actions/archery-java-build
+        uses: $/.github/actions/archery-java-build
       - name: Prepare JavaScript build
-        uses: ./rust/.github/actions/archery-js-build
+        uses: $/.github/actions/archery-js-build
+      - name: Prepare nanoarrow build
+        uses: $/.github/actions/archery-nanoarrow-build
 
       - name: Build
         env:
@@ -166,6 +168,7 @@ jobs:
           ARCHERY_INTEGRATION_WITH_GO: "0"
           ARCHERY_INTEGRATION_WITH_JAVA: "0"
           ARCHERY_INTEGRATION_WITH_JS: "0"
+          ARCHERY_INTEGRATION_WITH_NANOARROW: "0"
         run: conda run --no-capture-output ci/scripts/integration_arrow_build.sh $PWD /build
 
       - name: Monitor disk usage - After build
@@ -229,20 +232,31 @@ jobs:
           repository: apache/arrow-go
           path: go
           persist-credentials: false
+      - name: Checkout Arrow nanoarrow
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: apache/arrow-nanoarrow
+          path: nanoarrow
+          fetch-depth: 1
+          persist-credentials: false
       - name: Prepare C++ build
-        uses: ./rust/.github/actions/archery-cpp-build
+        uses: $/.github/actions/archery-cpp-build
         with:
           lookup-only: 'true'
       - name: Prepare Go build
-        uses: ./rust/.github/actions/archery-go-build
+        uses: $/.github/actions/archery-go-build
         with:
           lookup-only: 'true'
       - name: Prepare Java build
-        uses: ./rust/.github/actions/archery-java-build
+        uses: $/.github/actions/archery-java-build
         with:
           lookup-only: 'true'
       - name: Prepare JavaScript build
-        uses: ./rust/.github/actions/archery-js-build
+        uses: $/.github/actions/archery-js-build
+        with:
+          lookup-only: 'true'
+      - name: Prepare nanoarrow build
+        uses: $/.github/actions/archery-nanoarrow-build
         with:
           lookup-only: 'true'
 
