@@ -201,6 +201,8 @@ jobs:
       BUILD_DOCS_CPP: OFF
       BUILD_DOCS_JS: OFF
       GOBIN: /build/go/bin
+      # Must match the integration job: the nanoarrow cache key includes it.
+      ARCHERY_INTEGRATION_WITH_NANOARROW: "1"
     steps:
       - name: Export conda path
         run: echo "/opt/conda/envs/arrow/bin" >> $GITHUB_PATH

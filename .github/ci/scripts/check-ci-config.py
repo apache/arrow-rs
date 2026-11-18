@@ -42,6 +42,11 @@ CACHE_REFRESH_STEPS = {
     },
     "parquet": {"pyspark-integration-test": {"Install Python dependencies"}},
 }
+# Integration job variables that the Archery peer builds or their cache keys read.
+ARCHERY_CACHE_ENV = (
+    "ARROW_USE_CCACHE", "BUILD_DOCS_CPP", "BUILD_DOCS_JS", "GOBIN",
+    "ARCHERY_INTEGRATION_WITH_NANOARROW",
+)
 FULL_RUN = "${{ !inputs.cache-refresh-only }}"
 CI_EVENT = "github.event_name != 'push' || github.repository != 'apache/arrow-rs' || github.ref == 'refs/heads/main'"
 LINT_ONLY = "${{ needs.changes.outputs.fork-pr == 'true' }}"
@@ -90,6 +95,18 @@ def validate_cache_refresh(ci, suite, workflow):
                 "$/.github/actions/archery-js-build",
                 "$/.github/actions/archery-nanoarrow-build",
             } <= prepare, "Cache seeding must use the same peer builds as integration"
+            # Peer builds and cache keys read these variables, so a mismatch would
+            # seed caches that the integration job never restores.
+            integration_env = workflow["jobs"]["integration"]["env"]
+            for variable in ARCHERY_CACHE_ENV:
+                assert job.get("env", {}).get(variable) == integration_env.get(variable), (
+                    f"archery-peer-cache: {variable} differs from the integration job"
+                )
+            for step in job["steps"]:
+                if step.get("uses", "").startswith("$/.github/actions/archery-"):
+                    assert (step.get("with") or {}).get("lookup-only") == "true", (
+                        f"{step['uses']}: cache seeding must not download existing builds"
+                    )
             continue
         if name not in cache_jobs:
             assert job.get("if") == FULL_RUN, f"{suite}/{name}: runs during cache refresh"
