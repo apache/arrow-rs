@@ -15,3 +15,7 @@ This product includes software from the compact-thrift project (Apache 2.0)
 This product includes software from the parquet2 project (Apache 2.0)
  * Copyright [2021] [Jorge C Leitao]
  * https://github.com/jorgecarleitao/parquet2
+
+This product includes software from the prost project (Apache 2.0)
+ * Copyright 2022 Dan Burkert & Tokio Contributors
+ * https://github.com/tokio-rs/prost
