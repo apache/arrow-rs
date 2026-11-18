@@ -221,7 +221,9 @@ impl<K: ArrowDictionaryKeyType> InProgressArray for InProgressDictionaryArray<K>
             let taken = take(
                 source.as_ref(),
                 indices,
-                Some(TakeOptions { check_bounds: true }),
+                Some(TakeOptions {
+                    check_bounds: false,
+                }),
             )?;
             self.set_source(Some(taken));
             let result = self.copy_rows(0, indices.len());
@@ -392,6 +394,30 @@ mod tests {
         assert_eq!(
             output.keys(),
             &Int32Array::from(vec![Some(1), Some(2), None, Some(2)])
+        );
+    }
+
+    #[test]
+    fn indexed_copy_dense_fallback_preserves_null_keys() {
+        let values = Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef;
+        let source = Arc::new(DictionaryArray::<Int32Type>::new(
+            Int32Array::from(vec![Some(0), None, Some(2), Some(1)]),
+            Arc::clone(&values),
+        )) as ArrayRef;
+        let mut in_progress = InProgressDictionaryArray::<Int32Type>::new(&DataType::Utf8);
+        // SAFETY: all indices are non-null and in bounds.
+        unsafe {
+            in_progress
+                .copy_rows_by_indices(&source, &UInt32Array::from(vec![3, 1, 0]))
+                .unwrap()
+        };
+
+        let output = in_progress.finish().unwrap();
+        let output = output.as_dictionary::<Int32Type>();
+        assert!(Arc::ptr_eq(output.values(), &values));
+        assert_eq!(
+            output.keys(),
+            &Int32Array::from(vec![Some(1), None, Some(0)])
         );
     }
 
