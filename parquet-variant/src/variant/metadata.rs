@@ -4,7 +4,7 @@
 
 use crate::decoder::{OffsetSizeBytes, map_bytes_to_offsets};
 use crate::utils::{overflow_error, slice_from_slice, str_from_bytes, string_from_slice};
-use crate::variant::view::MetadataView;
+use crate::variant::view::VariantMetadataView;
 
 use arrow_schema::ArrowError;
 
@@ -198,13 +198,13 @@ impl<'m> VariantMetadata<'m> {
 
     // The actual constructor, which performs only basic (constant-const) validation.
     pub(crate) fn try_new_with_shallow_validation(bytes: &'m [u8]) -> Result<Self, ArrowError> {
-        MetadataView::try_new(bytes)?.into_metadata()
+        VariantMetadataView::try_new(bytes)?.into_metadata()
     }
 
     // Promotes a view by validating just the first and last offset, ignoring the other offsets
     // and all value bytes.
     #[inline]
-    pub(crate) fn try_from_view(view: MetadataView<'m>) -> Result<Self, ArrowError> {
+    pub(crate) fn try_from_view(view: VariantMetadataView<'m>) -> Result<Self, ArrowError> {
         let first_offset = view.offset(0)?;
         if first_offset != 0 {
             return Err(ArrowError::InvalidArgumentError(format!(
@@ -227,10 +227,9 @@ impl<'m> VariantMetadata<'m> {
     }
 
     /// A view of this dictionary, which reads only the entries it is asked for.
-    #[doc(hidden)]
     #[inline]
-    pub fn view(&self) -> MetadataView<'m> {
-        MetadataView {
+    pub fn view(&self) -> VariantMetadataView<'m> {
+        VariantMetadataView {
             bytes: self.bytes,
             header: self.header,
             dictionary_size: self.dictionary_size,

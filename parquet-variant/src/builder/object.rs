@@ -157,7 +157,6 @@ impl<'a, S: BuilderSpecificState> ObjectBuilder<'a, S> {
     /// The caller must ensure that `field_id`, and every field id inside `value`, belong to the
     /// metadata dictionary that this builder writes against. Copying a field out of an object that
     /// uses that same dictionary, as shredding does, satisfies this.
-    #[doc(hidden)]
     pub fn insert_encoded(&mut self, field_id: u32, value: &[u8]) -> Result<(), ArrowError> {
         let state = &mut self.parent_state;
         let field_start = state.value_builder.offset() - state.saved_value_builder_offset;

@@ -4,7 +4,7 @@
 
 use crate::decoder::{OffsetSizeBytes, map_bytes_to_offsets};
 use crate::utils::slice_from_slice;
-use crate::variant::view::ObjectView;
+use crate::variant::view::VariantObjectView;
 use crate::variant::{MAX_NESTING_DEPTH, Variant, VariantMetadata};
 
 use arrow_schema::ArrowError;
@@ -153,13 +153,13 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         metadata: VariantMetadata<'m>,
         value: &'v [u8],
     ) -> Result<Self, ArrowError> {
-        ObjectView::try_new(metadata.view(), value)?.into_object(metadata)
+        VariantObjectView::try_new(metadata.view(), value)?.into_object(metadata)
     }
 
     // Promotes a view by validating just the last field offset.
     #[inline]
     pub(crate) fn try_from_view(
-        view: ObjectView<'m, 'v>,
+        view: VariantObjectView<'m, 'v>,
         metadata: VariantMetadata<'m>,
     ) -> Result<Self, ArrowError> {
         // Spec says: "The last field_offset points to the byte after the end of the last value"
@@ -179,10 +179,9 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     }
 
     /// A view of this object, which reads only the fields it is asked for.
-    #[doc(hidden)]
     #[inline]
-    pub fn view(&self) -> ObjectView<'m, 'v> {
-        ObjectView {
+    pub fn view(&self) -> VariantObjectView<'m, 'v> {
+        VariantObjectView {
             metadata: self.metadata.view(),
             value: self.value,
             header: self.header,

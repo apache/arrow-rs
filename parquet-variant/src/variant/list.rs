@@ -4,7 +4,7 @@
 
 use crate::decoder::{OffsetSizeBytes, map_bytes_to_offsets};
 use crate::utils::{slice_from_slice, slice_from_slice_at_offset};
-use crate::variant::view::ListView;
+use crate::variant::view::VariantListView;
 use crate::variant::{MAX_NESTING_DEPTH, Variant, VariantMetadata};
 
 use arrow_schema::ArrowError;
@@ -153,14 +153,14 @@ impl<'m, 'v> VariantList<'m, 'v> {
         metadata: VariantMetadata<'m>,
         value: &'v [u8],
     ) -> Result<Self, ArrowError> {
-        ListView::try_new(metadata.view(), value)?.into_list(metadata)
+        VariantListView::try_new(metadata.view(), value)?.into_list(metadata)
     }
 
     // Promotes a view by validating just the first and last offset, ignoring the other offsets
     // and all value bytes.
     #[inline]
     pub(crate) fn try_from_view(
-        view: ListView<'m, 'v>,
+        view: VariantListView<'m, 'v>,
         metadata: VariantMetadata<'m>,
     ) -> Result<Self, ArrowError> {
         let first_offset = view.read_offset(0)?;
@@ -183,10 +183,9 @@ impl<'m, 'v> VariantList<'m, 'v> {
     }
 
     /// A view of this list, which reads only the elements it is asked for.
-    #[doc(hidden)]
     #[inline]
-    pub fn view(&self) -> ListView<'m, 'v> {
-        ListView {
+    pub fn view(&self) -> VariantListView<'m, 'v> {
+        VariantListView {
             metadata: self.metadata.view(),
             value: self.value,
             header: self.header,
@@ -300,7 +299,7 @@ impl<'m, 'v> VariantList<'m, 'v> {
     // Reads element `index`, which the caller has bounded by `self.len()`, through `view`.
     fn element(
         &self,
-        view: &ListView<'m, 'v>,
+        view: &VariantListView<'m, 'v>,
         index: usize,
     ) -> Result<Variant<'m, 'v>, ArrowError> {
         // Fetch the value bytes between the two offsets for this index, from the value array region

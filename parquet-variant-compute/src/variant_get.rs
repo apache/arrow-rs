@@ -13,8 +13,7 @@ use arrow::{
     error::Result,
 };
 use arrow_schema::{ArrowError, DataType, FieldRef};
-use parquet_variant::view::{MetadataView, ValueView};
-use parquet_variant::{Variant, VariantPath, VariantPathElement};
+use parquet_variant::{Variant, VariantMetadataView, VariantPath, VariantPathElement, VariantView};
 
 use crate::ShreddingState;
 use crate::variant_array::{BinaryColumn, all_null_value_column};
@@ -239,11 +238,11 @@ fn get_path_from_bytes(
 }
 
 /// Views a row of an unshredded variant column.
-fn row_value<'a>(metadata: Option<&'a [u8]>, value: &'a [u8]) -> Result<ValueView<'a, 'a>> {
+fn row_value<'a>(metadata: Option<&'a [u8]>, value: &'a [u8]) -> Result<VariantView<'a, 'a>> {
     let metadata = metadata.ok_or_else(|| {
         ArrowError::InvalidArgumentError("Variant metadata is null in a non-null row".to_string())
     })?;
-    ValueView::try_new(MetadataView::try_new(metadata)?, value)
+    VariantView::try_new(VariantMetadataView::try_new(metadata)?, value)
 }
 
 /// Follows the given path as far as possible through shredded variant fields. If the path ends on a
