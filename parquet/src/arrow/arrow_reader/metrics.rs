@@ -65,6 +65,10 @@ impl ArrowReaderMetrics {
     /// It returns the number of records read across all columns, so if you read
     /// 2 columns each with 100 records from the cache, this will return 200.
     ///
+    /// Only records served from the shared (global) predicate cache are
+    /// counted. A reader's temporary local buffer of batches it has already
+    /// decoded is left out of this metric.
+    ///
     /// Returns None if metrics are disabled.
     pub fn records_read_from_cache(&self) -> Option<usize> {
         match self {
