@@ -398,6 +398,12 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("cast timestamp_ms to i64 512", |b| {
         b.iter(|| cast_array(&time_ms_array, DataType::Int64))
     });
+    c.bench_function("cast i64 to timestamp_ns 512", |b| {
+        b.iter(|| cast_array(&i64_array, DataType::Timestamp(TimeUnit::Nanosecond, None)))
+    });
+    c.bench_function("cast i64 to duration_ns 512", |b| {
+        b.iter(|| cast_array(&i64_array, DataType::Duration(TimeUnit::Nanosecond)))
+    });
     c.bench_function("cast utf8 to date32 512", |b| {
         b.iter(|| cast_array(&utf8_date_array, DataType::Date32))
     });
