@@ -630,7 +630,7 @@ pub fn cast_with_options(
     let from_type = array.data_type();
     // clone array if types are the same
     if from_type == to_type {
-        return Ok(make_array(array.to_data()));
+        return Ok(array.slice(0, array.len()));
     }
     match (from_type, to_type) {
         (Null, _) => Ok(new_null_array(to_type, array.len())),
