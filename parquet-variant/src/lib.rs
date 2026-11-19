@@ -33,5 +33,5 @@ mod variant;
 
 pub use arrow_schema::extension::VariantType;
 pub use builder::*;
-pub use path::{VariantPath, VariantPathElement};
+pub use path::{QuotedKeyEscapes, VariantPath, VariantPathElement};
 pub use variant::*;

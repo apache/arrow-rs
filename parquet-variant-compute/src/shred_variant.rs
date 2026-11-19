@@ -533,8 +533,8 @@ impl IntoShreddingField for (DataType, bool) {
 /// should be shredded and with what types. Fields are nullable by default; pass
 /// a `(data_type, nullable)` pair or a `FieldRef` to control nullability.
 ///
-/// `[*]` represents the shared element schema of a list, so `items[*].id` and
-/// `items[*].name` describe fields on the same list element struct. Numeric
+/// `[*]` represents the shared element schema of a list, so `$.items[*].id` and
+/// `$.items[*].name` describe fields on the same list element struct. Numeric
 /// indexes refer to concrete list elements and are rejected by this builder.
 ///
 /// # Example
@@ -549,12 +549,12 @@ impl IntoShreddingField for (DataType, bool) {
 ///     // Define the shredding schema using the builder
 ///     let shredding_type = ShreddedSchemaBuilder::default()
 ///     // store the "time" field as a separate UTC timestamp
-///     .with_path("time", (&DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())), true))?
+///     .with_path("$.time", (&DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())), true))?
 ///     // store hostname as non-nullable Utf8
-///     .with_path("hostname", (&DataType::Utf8, false))?
+///     .with_path("$.hostname", (&DataType::Utf8, false))?
 ///     // pass a FieldRef directly
 ///     .with_path(
-///         "metadata.trace_id",
+///         "$.metadata.trace_id",
 ///         Arc::new(Field::new("trace_id", DataType::FixedSizeBinary(16), false)),
 ///     )?
 ///     // field name with a dot: use VariantPath to avoid splitting
@@ -563,7 +563,7 @@ impl IntoShreddingField for (DataType, bool) {
 ///         &DataType::Float64,
 ///     )?
 ///     // [*] describes the shared schema for every element of a list
-///     .with_path("items[*].id", &DataType::Int64)?
+///     .with_path("$.items[*].id", &DataType::Int64)?
 ///     .build();
 ///    Ok(())
 /// }
@@ -581,11 +581,10 @@ impl ShreddedSchemaBuilder {
         Self::default()
     }
 
-    /// Insert a typed path into the schema using dot notation (or any
-    /// [`VariantPath`] convertible).
+    /// Insert a typed path into the schema.
     ///
-    /// The path uses dot notation to specify nested fields.
-    /// For example, "a.b.c" will create a nested structure.
+    /// String paths use the [`VariantPath`] syntax, so `"$.a.b.c"` creates a
+    /// nested structure.
     ///
     /// # Arguments
     ///
@@ -1262,7 +1261,7 @@ mod tests {
             VariantValue::from(mock_uuid),
         )])]);
         let target = ShreddedSchemaBuilder::default()
-            .with_path("id", DataType::FixedSizeBinary(16))
+            .with_path("$.id", DataType::FixedSizeBinary(16))
             .unwrap()
             .build();
 
@@ -1806,9 +1805,9 @@ mod tests {
 
         // Target schema is List<Struct<id:int64,name:utf8>>
         let list_schema = ShreddedSchemaBuilder::default()
-            .with_path("[*].id", &DataType::Int64)
+            .with_path("$[*].id", &DataType::Int64)
             .unwrap()
-            .with_path("[*].name", &DataType::Utf8)
+            .with_path("$[*].name", &DataType::Utf8)
             .unwrap()
             .build();
         let result = shred_variant(&input, &list_schema).unwrap();
@@ -1920,8 +1919,8 @@ mod tests {
         // Create target schema: struct<score: float64, age: int64>
         // Both types are supported for shredding
         let target_schema = ShreddedSchemaBuilder::default()
-            .with_path("score", &DataType::Float64)?
-            .with_path("age", &DataType::Int64)?
+            .with_path("$.score", &DataType::Float64)?
+            .with_path("$.age", &DataType::Int64)?
             .build();
 
         let result = shred_variant(&input, &target_schema).unwrap();
@@ -2318,7 +2317,7 @@ mod tests {
 
         // Test with schema containing only id field
         let schema1 = ShreddedSchemaBuilder::default()
-            .with_path("id", &DataType::Int32)?
+            .with_path("$.id", &DataType::Int32)?
             .build();
         let result1 = shred_variant(&input, &schema1).unwrap();
         let value_field1 = result1.value_column();
@@ -2326,8 +2325,8 @@ mod tests {
 
         // Test with schema containing id and age fields
         let schema2 = ShreddedSchemaBuilder::default()
-            .with_path("id", &DataType::Int32)?
-            .with_path("age", &DataType::Int64)?
+            .with_path("$.id", &DataType::Int32)?
+            .with_path("$.age", &DataType::Int64)?
             .build();
         let result2 = shred_variant(&input, &schema2).unwrap();
         let value_field2 = result2.value_column();
@@ -2335,9 +2334,9 @@ mod tests {
 
         // Test with schema containing all fields
         let schema3 = ShreddedSchemaBuilder::default()
-            .with_path("id", &DataType::Int32)?
-            .with_path("age", &DataType::Int64)?
-            .with_path("score", &DataType::Float64)?
+            .with_path("$.id", &DataType::Int32)?
+            .with_path("$.age", &DataType::Int64)?
+            .with_path("$.score", &DataType::Float64)?
             .build();
         let result3 = shred_variant(&input, &schema3).unwrap();
         let value_field3 = result3.value_column();
@@ -2365,7 +2364,7 @@ mod tests {
                 None,
             );
             // The duplicate is either shredded ("a") or left unshredded ("b")
-            for path in ["a", "b"] {
+            for path in ["$.a", "$.b"] {
                 let as_type = ShreddedSchemaBuilder::default()
                     .with_path(path, &DataType::Int8)?
                     .build();
@@ -2414,8 +2413,8 @@ mod tests {
         ]);
 
         let target_schema = ShreddedSchemaBuilder::default()
-            .with_path("id", DataType::FixedSizeBinary(16))?
-            .with_path("session_id", DataType::FixedSizeBinary(16))?
+            .with_path("$.id", DataType::FixedSizeBinary(16))?
+            .with_path("$.session_id", DataType::FixedSizeBinary(16))?
             .build();
 
         let result = shred_variant(&input, &target_schema).unwrap();
@@ -2844,8 +2843,8 @@ mod tests {
     #[test]
     fn test_variant_schema_builder_simple() -> Result<()> {
         let shredding_type = ShreddedSchemaBuilder::default()
-            .with_path("a", &DataType::Int64)?
-            .with_path("b", &DataType::Float64)?
+            .with_path("$.a", &DataType::Int64)?
+            .with_path("$.b", &DataType::Float64)?
             .build();
 
         assert_eq!(
@@ -2862,9 +2861,9 @@ mod tests {
     #[test]
     fn test_variant_schema_builder_nested() -> Result<()> {
         let shredding_type = ShreddedSchemaBuilder::default()
-            .with_path("a", &DataType::Int64)?
-            .with_path("b.c", &DataType::Utf8)?
-            .with_path("b.d", &DataType::Float64)?
+            .with_path("$.a", &DataType::Int64)?
+            .with_path("$.b.c", &DataType::Utf8)?
+            .with_path("$.b.d", &DataType::Float64)?
             .build();
 
         assert_eq!(
@@ -2888,8 +2887,8 @@ mod tests {
     #[test]
     fn test_variant_schema_builder_list() -> Result<()> {
         let shredding_type = ShreddedSchemaBuilder::default()
-            .with_path("items[*].id", &DataType::Int64)?
-            .with_path("items[*].name", &DataType::Utf8)?
+            .with_path("$.items[*].id", &DataType::Int64)?
+            .with_path("$.items[*].name", &DataType::Utf8)?
             .build();
 
         assert_eq!(
@@ -2913,7 +2912,7 @@ mod tests {
     #[test]
     fn test_variant_schema_builder_nested_lists() -> Result<()> {
         let shredding_type = ShreddedSchemaBuilder::default()
-            .with_path("matrix[*][*]", (&DataType::Float64, false))?
+            .with_path("$.matrix[*][*]", (&DataType::Float64, false))?
             .build();
 
         assert_eq!(
@@ -2930,7 +2929,7 @@ mod tests {
 
     #[test]
     fn test_variant_schema_builder_rejects_list_indexes() {
-        for (path, index) in [("items[0].id", 0), ("items[42].name", 42)] {
+        for (path, index) in [("$.items[0].id", 0), ("$.items[42].name", 42)] {
             let error = ShreddedSchemaBuilder::default()
                 .with_path(path, &DataType::Int64)
                 .err()
@@ -2969,10 +2968,10 @@ mod tests {
     fn test_variant_schema_builder_custom_nullability() -> Result<()> {
         let shredding_type = ShreddedSchemaBuilder::default()
             .with_path(
-                "foo",
+                "$.foo",
                 Arc::new(Field::new("should_be_renamed", DataType::Utf8, false)),
             )?
-            .with_path("bar", (&DataType::Int64, false))?
+            .with_path("$.bar", (&DataType::Int64, false))?
             .build();
 
         let DataType::Struct(fields) = shredding_type else {
@@ -3006,8 +3005,8 @@ mod tests {
         ]);
 
         let shredding_type = ShreddedSchemaBuilder::default()
-            .with_path("time", &DataType::Int64)?
-            .with_path("hostname", &DataType::Utf8)?
+            .with_path("$.time", &DataType::Int64)?
+            .with_path("$.hostname", &DataType::Utf8)?
             .build();
 
         let result = shred_variant(&input, &shredding_type).unwrap();
@@ -3091,8 +3090,8 @@ mod tests {
     #[test]
     fn test_variant_schema_builder_conflicting_path() -> Result<()> {
         let shredding_type = ShreddedSchemaBuilder::default()
-            .with_path("a", &DataType::Int64)?
-            .with_path("a", &DataType::Float64)?
+            .with_path("$.a", &DataType::Int64)?
+            .with_path("$.a", &DataType::Float64)?
             .build();
 
         assert_eq!(
@@ -3120,7 +3119,7 @@ mod tests {
     #[test]
     fn test_variant_schema_builder_empty_path() -> Result<()> {
         let shredding_type = ShreddedSchemaBuilder::default()
-            .with_path("", &DataType::Int64)?
+            .with_path("$", &DataType::Int64)?
             .build();
 
         assert_eq!(shredding_type, DataType::Int64);

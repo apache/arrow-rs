@@ -3238,6 +3238,38 @@ mod tests {
 
         let expected = unslice_run_array(batch.column(0).into_data()).unwrap();
         assert_eq!(expected, output.column(0).into_data());
+
+    // Regression test for https://github.com/apache/arrow-rs/issues/12248:
+    // a RunEndEncoded array written with MetadataVersion::V4 did not read
+    // back, because the writer emitted a validity buffer for it while the
+    // reader never consumes one, shifting every later buffer by one.
+    #[test]
+    fn test_roundtrip_stream_run_array_v4() {
+        use crate::MetadataVersion;
+        use crate::writer::{IpcWriteOptions, StreamWriter};
+
+        let run_ends = Int32Array::from(vec![2, 5]);
+        let values = Int32Array::from(vec![10, 20]);
+        let array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            array.data_type().clone(),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(array)]).unwrap();
+
+        let mut buf = Vec::new();
+        {
+            let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V4).unwrap();
+            let mut writer =
+                StreamWriter::try_new_with_options(&mut buf, &schema, options).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+
+        let mut reader = StreamReader::try_new(buf.as_slice(), None).unwrap();
+        let read = reader.next().unwrap().unwrap();
+        assert_eq!(read, batch);
     }
 
     #[test]

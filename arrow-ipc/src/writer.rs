@@ -2265,12 +2265,11 @@ pub fn write_message<W: Write>(
     writer.write_encoded_data(encoded, write_options)
 }
 
-/// In V4, null types have no validity bitmap
-/// In V5 and later, null and union types have no validity bitmap
-/// Run end encoded type has no validity bitmap.
+/// In V4, null and run end encoded types have no validity bitmap
+/// In V5 and later, null, union and run end encoded types have no validity bitmap
 fn has_validity_bitmap(data_type: &DataType, write_options: &IpcWriteOptions) -> bool {
     if write_options.metadata_version < crate::MetadataVersion::V5 {
-        !matches!(data_type, DataType::Null)
+        !matches!(data_type, DataType::Null | DataType::RunEndEncoded(_, _))
     } else {
         !matches!(
             data_type,

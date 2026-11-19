@@ -774,7 +774,9 @@ where
 }
 
 pub(crate) fn validate_list_type(expected: ElementType, got: &ListIdentifier) -> Result<()> {
-    if got.element_type != expected {
+    // An empty list decodes no elements, and some writers (e.g. fastparquet)
+    // encode it as a bare 0x00 header with no meaningful element type.
+    if got.element_type != expected && got.size != 0 {
         return Err(general_err!(
             "Expected list element type of {:?} but got {:?}",
             expected,
@@ -1338,6 +1340,14 @@ pub(crate) mod tests {
         let header = prot.read_list_begin().expect("error reading list header");
         assert_eq!(header.size, 0);
         assert_eq!(header.element_type, ElementType::Byte);
+    }
+
+    #[test]
+    fn test_read_empty_list_with_zero_header() {
+        let data = [0u8];
+        let mut prot = ThriftSliceInputProtocol::new(&data);
+        let result = read_thrift_vec::<i32, ThriftSliceInputProtocol>(&mut prot).unwrap();
+        assert!(result.is_empty());
     }
 
     /// A Thrift list header whose `size` varint decodes above `i32::MAX`
