@@ -95,13 +95,10 @@ pub type CompressionContext = IpcWriteContext;
 ///
 /// In the case of zstd, this will contain the zstd decompression context, which can be reused
 /// between subsequent decompression calls to avoid the performance overhead of initialising a new
-/// context for every decompression. In the case of lz4, this will contain the lz4 frame decoder,
-/// whose block buffers are likewise reused.
+/// context for every decompression.
 pub struct DecompressionContext {
     #[cfg(feature = "zstd")]
     decompressor: Option<zstd::bulk::Decompressor<'static>>,
-    #[cfg(feature = "lz4")]
-    lz4_decompressor: Option<Lz4Decompressor>,
 }
 
 impl DecompressionContext {
@@ -115,12 +112,6 @@ impl DecompressionContext {
             zstd::bulk::Decompressor::new().expect("can create zstd decompressor")
         })
     }
-
-    #[cfg(feature = "lz4")]
-    fn lz4_decompressor(&mut self) -> &mut Lz4Decompressor {
-        self.lz4_decompressor
-            .get_or_insert_with(Lz4Decompressor::default)
-    }
 }
 
 #[expect(clippy::derivable_impls)]
@@ -129,8 +120,6 @@ impl Default for DecompressionContext {
         DecompressionContext {
             #[cfg(feature = "zstd")]
             decompressor: None,
-            #[cfg(feature = "lz4")]
-            lz4_decompressor: None,
         }
     }
 }
@@ -146,12 +135,6 @@ impl std::fmt::Debug for DecompressionContext {
                 .decompressor
                 .as_ref()
                 .map(|_| "zstd::bulk::Decompressor"),
-        );
-
-        #[cfg(feature = "lz4")]
-        ds.field(
-            "lz4_decompressor",
-            &self.lz4_decompressor.as_ref().map(|_| "Lz4Decompressor"),
         );
 
         ds.finish()
@@ -262,8 +245,8 @@ impl CompressionCodec {
             input.slice(LENGTH_OF_PREFIX_DATA as usize)
         } else if let Ok(decompressed_length) = usize::try_from(decompressed_length) {
             // decompress data using the codec
-            let input_data = input.slice(LENGTH_OF_PREFIX_DATA as usize);
-            let v = self.decompress(&input_data, decompressed_length, context)?;
+            let input_data = &input[(LENGTH_OF_PREFIX_DATA as usize)..];
+            let v = self.decompress(input_data, decompressed_length, context)?;
             Buffer::from_vec(v)
         } else {
             return Err(ArrowError::IpcError(format!(
@@ -291,12 +274,12 @@ impl CompressionCodec {
     /// using the specified compression
     fn decompress(
         &self,
-        input: &Buffer,
+        input: &[u8],
         decompressed_size: usize,
         context: &mut DecompressionContext,
     ) -> Result<Vec<u8>, ArrowError> {
         let ret = match self {
-            CompressionCodec::Lz4Frame => decompress_lz4(input, decompressed_size, context)?,
+            CompressionCodec::Lz4Frame => decompress_lz4(input, decompressed_size)?,
             CompressionCodec::Zstd(_) => decompress_zstd(input, decompressed_size, context)?,
         };
         if ret.len() != decompressed_size {
@@ -376,87 +359,115 @@ fn compress_lz4(
     ))
 }
 
-/// Reusable lz4 frame decompressor, the lz4 counterpart of `zstd::bulk::Decompressor`.
-///
-/// Wraps a [`lz4_flex::frame::FrameDecoder`] whose block buffers are retained across calls to
-/// [`Self::decompress`]. The decoder only owns its reader, so the input is lent as a [`Buffer`].
 #[cfg(feature = "lz4")]
-#[derive(Default)]
-struct Lz4Decompressor {
-    decoder: Option<lz4_flex::frame::FrameDecoder<std::io::Cursor<Buffer>>>,
+fn decompress_lz4(input: &[u8], decompressed_size: usize) -> Result<Vec<u8>, ArrowError> {
+    if let Some(output) = decompress_lz4_frame(input, decompressed_size)? {
+        return Ok(output);
+    }
+    let mut output = Vec::with_capacity(decompressed_size.min(crate::reader::MAX_PREALLOC_BYTES));
+    let mut decoder = lz4_flex::frame::FrameDecoder::new(input);
+    decoder
+        .by_ref()
+        .take(decompressed_size as u64)
+        .read_to_end(&mut output)?;
+
+    // Probe without growing `output` to reject data exceeding the advertised size.
+    if decoder.read(&mut [0])? != 0 {
+        return Err(ArrowError::IpcError(format!(
+            "LZ4 decompressed buffer exceeds advertised size of {decompressed_size}"
+        )));
+    }
+    Ok(output)
 }
 
+/// EXPERIMENT: decodes a single lz4 frame with independent blocks and no checksums straight into
+/// an output of the advertised size, skipping `FrameDecoder`'s block buffers and copies.
+/// Returns `None` for anything else, which then goes through `FrameDecoder`.
+/// Does not verify the header checksum.
 #[cfg(feature = "lz4")]
-impl Lz4Decompressor {
-    /// Decompresses the lz4 frames in `input`, which must hold exactly `decompressed_size` bytes.
-    fn decompress(
-        &mut self,
-        input: &Buffer,
-        decompressed_size: usize,
-    ) -> Result<Vec<u8>, ArrowError> {
-        let reused = self.decoder.is_some();
-        let result = self.decompress_once(input, decompressed_size);
-        if result.is_ok() {
-            return result;
-        }
-        // A frame missing its end mark leaves the decoder mid-frame, which surfaces as an error on
-        // the next frame it reads, so retry with a fresh decoder before blaming this input.
-        self.decoder = None;
-        if !reused {
-            return result;
-        }
-        let result = self.decompress_once(input, decompressed_size);
-        if result.is_err() {
-            self.decoder = None;
-        }
-        result
-    }
-
-    fn decompress_once(
-        &mut self,
-        input: &Buffer,
-        decompressed_size: usize,
-    ) -> Result<Vec<u8>, ArrowError> {
-        let decoder = self.decoder.get_or_insert_with(|| {
-            lz4_flex::frame::FrameDecoder::new(std::io::Cursor::new(Buffer::default()))
-        });
-        *decoder.get_mut() = std::io::Cursor::new(input.clone());
-        let mut output =
-            Vec::with_capacity(decompressed_size.min(crate::reader::MAX_PREALLOC_BYTES));
-        let result = decoder
-            .by_ref()
-            .take(decompressed_size as u64)
-            .read_to_end(&mut output)
-            // Probe without growing `output` to reject data exceeding the advertised size.
-            .and_then(|_| decoder.read(&mut [0]));
-        // Release the input so the decoder doesn't keep the IPC body alive.
-        *decoder.get_mut() = std::io::Cursor::new(Buffer::default());
-        if result? != 0 {
-            return Err(ArrowError::IpcError(format!(
-                "LZ4 decompressed buffer exceeds advertised size of {decompressed_size}"
-            )));
-        }
-        Ok(output)
-    }
-}
-
-#[cfg(feature = "lz4")]
-fn decompress_lz4(
-    input: &Buffer,
+fn decompress_lz4_frame(
+    input: &[u8],
     decompressed_size: usize,
-    context: &mut DecompressionContext,
-) -> Result<Vec<u8>, ArrowError> {
-    context
-        .lz4_decompressor()
-        .decompress(input, decompressed_size)
+) -> Result<Option<Vec<u8>>, ArrowError> {
+    const MAGIC: u32 = 0x184D2204;
+    const FLG_INDEPENDENT_BLOCKS: u8 = 0x20;
+    const FLG_BLOCK_CHECKSUMS: u8 = 0x10;
+    const FLG_CONTENT_SIZE: u8 = 0x08;
+    const FLG_CONTENT_CHECKSUM: u8 = 0x04;
+    const FLG_DICT_ID: u8 = 0x01;
+    const BLOCK_UNCOMPRESSED: u32 = 0x8000_0000;
+
+    if decompressed_size > crate::reader::MAX_PREALLOC_BYTES {
+        return Ok(None);
+    }
+    let Some(&[m0, m1, m2, m3, flg, bd]) = input.first_chunk::<6>() else {
+        return Ok(None);
+    };
+    if u32::from_le_bytes([m0, m1, m2, m3]) != MAGIC
+        || flg >> 6 != 0b01
+        || flg & FLG_INDEPENDENT_BLOCKS == 0
+        || flg & (FLG_BLOCK_CHECKSUMS | FLG_CONTENT_CHECKSUM | FLG_DICT_ID) != 0
+    {
+        return Ok(None);
+    }
+    let max_block_size: usize = match (bd >> 4) & 0x7 {
+        4 => 64 << 10,
+        5 => 256 << 10,
+        6 => 1 << 20,
+        7 => 4 << 20,
+        _ => return Ok(None),
+    };
+    let invalid = |msg: &str| ArrowError::IpcError(format!("Invalid LZ4 frame: {msg}"));
+    let exceeds = || {
+        ArrowError::IpcError(format!(
+            "LZ4 decompressed buffer exceeds advertised size of {decompressed_size}"
+        ))
+    };
+    // Descriptor (FLG, BD, optional content size) followed by the 1 byte header checksum.
+    let mut pos = 4 + 2 + if flg & FLG_CONTENT_SIZE != 0 { 8 } else { 0 } + 1;
+
+    let mut output = vec![0u8; decompressed_size];
+    let mut written = 0;
+    loop {
+        let block_info = input
+            .get(pos..pos + 4)
+            .ok_or_else(|| invalid("truncated block header"))?;
+        let block_info = u32::from_le_bytes(block_info.try_into().unwrap());
+        pos += 4;
+        if block_info == 0 {
+            break;
+        }
+        let len = (block_info & !BLOCK_UNCOMPRESSED) as usize;
+        if len > max_block_size {
+            return Err(invalid("block too big"));
+        }
+        let block = input
+            .get(pos..pos + len)
+            .ok_or_else(|| invalid("truncated block"))?;
+        pos += len;
+        let out = &mut output[written..];
+        written += if block_info & BLOCK_UNCOMPRESSED != 0 {
+            out.get_mut(..len)
+                .ok_or_else(exceeds)?
+                .copy_from_slice(block);
+            len
+        } else {
+            lz4_flex::block::decompress_into(block, out).map_err(|e| match e {
+                lz4_flex::block::DecompressError::OutputTooSmall { .. } => exceeds(),
+                e => ArrowError::ExternalError(Box::new(e)),
+            })?
+        };
+    }
+    if pos != input.len() {
+        // Trailing data, such as concatenated frames.
+        return Ok(None);
+    }
+    output.truncate(written);
+    Ok(Some(output))
 }
 
 #[cfg(not(feature = "lz4"))]
-fn decompress_lz4(
-    _input: &Buffer,
-    _decompressed_size: usize,
-    _context: &mut DecompressionContext,
-) -> Result<Vec<u8>, ArrowError> {
+fn decompress_lz4(_input: &[u8], _decompressed_size: usize) -> Result<Vec<u8>, ArrowError> {
     Err(ArrowError::InvalidArgumentError(
         "lz4 IPC decompression requires the lz4 feature".to_string(),
     ))
@@ -554,9 +565,6 @@ fn read_uncompressed_size(buffer: &[u8]) -> Result<i64, ArrowError> {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(any(feature = "lz4", feature = "zstd"))]
-    use arrow_buffer::Buffer;
-
     #[test]
     #[cfg(feature = "lz4")]
     fn test_lz4_compression() {
@@ -568,7 +576,7 @@ mod tests {
             .unwrap();
         let result = codec
             .decompress(
-                &Buffer::from(output_bytes),
+                output_bytes.as_slice(),
                 input_bytes.len(),
                 &mut Default::default(),
             )
@@ -587,11 +595,7 @@ mod tests {
             .unwrap();
 
         let err = codec
-            .decompress(
-                &Buffer::from(compressed),
-                input_bytes.len() - 1,
-                &mut Default::default(),
-            )
+            .decompress(&compressed, input_bytes.len() - 1, &mut Default::default())
             .expect_err("output larger than the advertised size should fail");
 
         assert!(
@@ -605,7 +609,6 @@ mod tests {
     fn test_lz4_compression_multiple_frames() {
         let codec = super::CompressionCodec::Lz4Frame;
         let mut context = super::IpcWriteContext::default();
-        let mut decompression_context = super::DecompressionContext::default();
         // Spans several 256KB blocks, followed by a smaller frame.
         let large: Vec<u8> = (0..200_000u32)
             .flat_map(|i| (i % 1000).to_le_bytes())
@@ -616,32 +619,9 @@ mod tests {
             codec.compress(input, &mut output, &mut context).unwrap();
             assert_eq!(&output[..6], b"prefix");
             let result = codec
-                .decompress(
-                    &Buffer::from(output).slice(6),
-                    input.len(),
-                    &mut decompression_context,
-                )
+                .decompress(&output[6..], input.len(), &mut Default::default())
                 .unwrap();
             assert_eq!(input, &result);
-        }
-    }
-
-    #[test]
-    #[cfg(feature = "lz4")]
-    fn test_lz4_decompression_recovers_after_missing_end_mark() {
-        let codec = super::CompressionCodec::Lz4Frame;
-        let mut context = super::DecompressionContext::default();
-        let input = b"hello lz4".to_vec();
-        let mut compressed = Vec::new();
-        codec
-            .compress(&input, &mut compressed, &mut Default::default())
-            .unwrap();
-        let compressed = Buffer::from(compressed);
-        // Without its 4 byte end mark the frame still yields all of its data.
-        let truncated = compressed.slice_with_length(0, compressed.len() - 4);
-        for frame in [&truncated, &compressed, &compressed] {
-            let result = codec.decompress(frame, input.len(), &mut context).unwrap();
-            assert_eq!(input, result);
         }
     }
 
@@ -656,7 +636,7 @@ mod tests {
             .unwrap();
         let result = codec
             .decompress(
-                &Buffer::from(output_bytes),
+                output_bytes.as_slice(),
                 input_bytes.len(),
                 &mut Default::default(),
             )
@@ -679,7 +659,6 @@ mod tests {
             codec
                 .compress(&input, &mut compressed, &mut Default::default())
                 .unwrap();
-            let compressed = Buffer::from(compressed);
             let decompress = |len| codec.decompress(&compressed, len, &mut Default::default());
             assert_eq!(decompress(input.len()).unwrap(), input, "{codec:?}");
             assert!(decompress(input.len() - 1).is_err(), "{codec:?}");
