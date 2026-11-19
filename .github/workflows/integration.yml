@@ -151,15 +151,37 @@ jobs:
           echo ""
 
       - name: Prepare C++ build
-        uses: $/.github/actions/archery-cpp-build
+        uses: $/.github/actions/archery-peer-build
+        with:
+          language: CPP
+          source: .
+          paths: /build/cpp
+          # Upstream's C++ build also installs into ARROW_HOME.
+          after-restore: cmake --install /build/cpp && ldconfig
       - name: Prepare Go build
-        uses: $/.github/actions/archery-go-build
+        uses: $/.github/actions/archery-peer-build
+        with:
+          language: GO
+          source: go
+          paths: /build/go go/arrow/internal/cdata_integration
       - name: Prepare Java build
-        uses: $/.github/actions/archery-java-build
+        uses: $/.github/actions/archery-peer-build
+        with:
+          language: JAVA
+          source: java
+          paths: /build/java
       - name: Prepare JavaScript build
-        uses: $/.github/actions/archery-js-build
+        uses: $/.github/actions/archery-peer-build
+        with:
+          language: JS
+          source: js
+          paths: /build/js
       - name: Prepare nanoarrow build
-        uses: $/.github/actions/archery-nanoarrow-build
+        uses: $/.github/actions/archery-peer-build
+        with:
+          language: NANOARROW
+          source: nanoarrow
+          paths: /build/nanoarrow
 
       - name: Build
         env:
@@ -196,13 +218,29 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: apache/arrow-dev:amd64-conda-integration
+    # Must match the integration job: the cache keys include it.
     env:
       ARROW_USE_CCACHE: OFF
+      ARROW_CPP_EXE_PATH: /build/cpp/debug
+      ARROW_NANOARROW_PATH: /build/nanoarrow
+      ARROW_RUST_EXE_PATH: /build/rust/debug
       BUILD_DOCS_CPP: OFF
       BUILD_DOCS_JS: OFF
       GOBIN: /build/go/bin
-      # Must match the integration job: the nanoarrow cache key includes it.
+      ARROW_INTEGRATION_CPP: ON
+      ARROW_INTEGRATION_CSHARP: ON
+      ARCHERY_INTEGRATION_TARGET_IMPLEMENTATIONS: "rust"
+      ARCHERY_INTEGRATION_WITH_DOTNET: "1"
+      ARCHERY_INTEGRATION_WITH_GO: "1"
+      ARCHERY_INTEGRATION_WITH_JAVA: "1"
+      ARCHERY_INTEGRATION_WITH_JS: "1"
       ARCHERY_INTEGRATION_WITH_NANOARROW: "1"
+      # https://github.com/apache/arrow/pull/38403/files#r1371281630
+      ARCHERY_INTEGRATION_WITH_RUST: "1"
+      # These are necessary because the github runner overrides $HOME
+      # https://github.com/actions/runner/issues/863
+      RUSTUP_HOME: /root/.rustup
+      CARGO_HOME: /root/.cargo
     steps:
       - name: Export conda path
         run: echo "/opt/conda/envs/arrow/bin" >> $GITHUB_PATH
@@ -242,24 +280,39 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
       - name: Prepare C++ build
-        uses: $/.github/actions/archery-cpp-build
+        uses: $/.github/actions/archery-peer-build
         with:
+          language: CPP
+          source: .
+          paths: /build/cpp
           lookup-only: 'true'
       - name: Prepare Go build
-        uses: $/.github/actions/archery-go-build
+        uses: $/.github/actions/archery-peer-build
         with:
+          language: GO
+          source: go
+          paths: /build/go go/arrow/internal/cdata_integration
           lookup-only: 'true'
       - name: Prepare Java build
-        uses: $/.github/actions/archery-java-build
+        uses: $/.github/actions/archery-peer-build
         with:
+          language: JAVA
+          source: java
+          paths: /build/java
           lookup-only: 'true'
       - name: Prepare JavaScript build
-        uses: $/.github/actions/archery-js-build
+        uses: $/.github/actions/archery-peer-build
         with:
+          language: JS
+          source: js
+          paths: /build/js
           lookup-only: 'true'
       - name: Prepare nanoarrow build
-        uses: $/.github/actions/archery-nanoarrow-build
+        uses: $/.github/actions/archery-peer-build
         with:
+          language: NANOARROW
+          source: nanoarrow
+          paths: /build/nanoarrow
           lookup-only: 'true'
 
   # test FFI against the C-Data interface exposed by pyarrow

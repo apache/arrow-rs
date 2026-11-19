@@ -43,10 +43,6 @@ CACHE_REFRESH_STEPS = {
     "parquet": {"pyspark-integration-test": {"Install Python dependencies"}},
 }
 # Integration job variables that the Archery peer builds or their cache keys read.
-ARCHERY_CACHE_ENV = (
-    "ARROW_USE_CCACHE", "BUILD_DOCS_CPP", "BUILD_DOCS_JS", "GOBIN",
-    "ARCHERY_INTEGRATION_WITH_NANOARROW",
-)
 FULL_RUN = "${{ !inputs.cache-refresh-only }}"
 CI_EVENT = "github.event_name != 'push' || github.repository != 'apache/arrow-rs' || github.ref == 'refs/heads/main'"
 LINT_ONLY = "${{ needs.changes.outputs.fork-pr == 'true' }}"
@@ -87,21 +83,18 @@ def validate_cache_refresh(ci, suite, workflow):
             assert job.get("if") == "${{ inputs.cache-refresh-only }}", (
                 "Archery cache seeding must only run on main's cache refresh"
             )
-            prepare = {step.get("uses") for step in job["steps"]}
-            assert {
-                "$/.github/actions/archery-cpp-build",
-                "$/.github/actions/archery-go-build",
-                "$/.github/actions/archery-java-build",
-                "$/.github/actions/archery-js-build",
-                "$/.github/actions/archery-nanoarrow-build",
-            } <= prepare, "Cache seeding must use the same peer builds as integration"
-            # Peer builds and cache keys read these variables, so a mismatch would
+            def peer_builds(steps):
+                return [step["with"]["language"] for step in steps
+                        if step.get("uses") == "$/.github/actions/archery-peer-build"]
+            integration = workflow["jobs"]["integration"]
+            assert peer_builds(job["steps"]) == peer_builds(integration["steps"]), (
+                "Cache seeding must use the same peer builds as integration"
+            )
+            # Cache keys include the job's environment, so a mismatch would
             # seed caches that the integration job never restores.
-            integration_env = workflow["jobs"]["integration"]["env"]
-            for variable in ARCHERY_CACHE_ENV:
-                assert job.get("env", {}).get(variable) == integration_env.get(variable), (
-                    f"archery-peer-cache: {variable} differs from the integration job"
-                )
+            assert job.get("env") == integration["env"], (
+                "archery-peer-cache: environment differs from the integration job"
+            )
             for step in job["steps"]:
                 if step.get("uses", "").startswith("$/.github/actions/archery-"):
                     assert (step.get("with") or {}).get("lookup-only") == "true", (
