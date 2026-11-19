@@ -84,8 +84,11 @@ impl RecordDecoder {
         }
 
         // Reserve sufficient capacity in offsets
-        self.offsets
-            .resize(self.offsets_len + to_read * self.num_columns, 0);
+        let offsets_capacity = to_read
+            .checked_mul(self.num_columns)
+            .and_then(|capacity| self.offsets_len.checked_add(capacity))
+            .ok_or_else(|| ArrowError::CsvError("CSV decoder capacity overflow".to_string()))?;
+        self.offsets.resize(offsets_capacity, 0);
 
         // The current offset into `input`
         let mut input_offset = 0;
@@ -96,9 +99,16 @@ impl RecordDecoder {
         loop {
             // Reserve necessary space in output data based on best estimate
             let remaining_rows = to_read - read;
-            let capacity = remaining_rows * self.num_columns * AVERAGE_FIELD_SIZE;
+            let capacity = remaining_rows
+                .checked_mul(self.num_columns)
+                .and_then(|capacity| capacity.checked_mul(AVERAGE_FIELD_SIZE))
+                .ok_or_else(|| ArrowError::CsvError("CSV decoder capacity overflow".to_string()))?;
             let estimated_data = capacity.max(MIN_CAPACITY);
-            self.data.resize(self.data_len + estimated_data, 0);
+            let data_capacity = self
+                .data_len
+                .checked_add(estimated_data)
+                .ok_or_else(|| ArrowError::CsvError("CSV decoder capacity overflow".to_string()))?;
+            self.data.resize(data_capacity, 0);
 
             // Try to read a record
             loop {

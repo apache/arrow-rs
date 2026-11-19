@@ -60,6 +60,16 @@ struct IntegrationDataset {
     chunks: Vec<RecordBatch>,
 }
 
+fn total_record_count(chunks: &[RecordBatch]) -> Result<i64, Status> {
+    chunks.iter().try_fold(0_i64, |total, chunk| {
+        let rows = i64::try_from(chunk.num_rows())
+            .map_err(|_| Status::out_of_range("Flight record count exceeds i64::MAX"))?;
+        total
+            .checked_add(rows)
+            .ok_or_else(|| Status::out_of_range("Flight record count exceeds i64::MAX"))
+    })
+}
+
 /// Flight service implementation for integration testing
 #[derive(Clone, Default)]
 pub struct FlightServiceImpl {
@@ -190,7 +200,7 @@ impl FlightService for FlightServiceImpl {
 
                 let endpoint = self.endpoint_from_path(&path[0]);
 
-                let total_records: usize = flight.chunks.iter().map(|chunk| chunk.num_rows()).sum();
+                let total_records = total_record_count(&flight.chunks)?;
 
                 let options = arrow::ipc::writer::IpcWriteOptions::default();
                 let message = SchemaAsIpc::new(&flight.schema, &options)
@@ -205,7 +215,7 @@ impl FlightService for FlightServiceImpl {
                     schema,
                     flight_descriptor: Some(descriptor.clone()),
                     endpoint: vec![endpoint],
-                    total_records: total_records as i64,
+                    total_records,
                     total_bytes: -1,
                     ordered: false,
                     app_metadata: vec![].into(),
