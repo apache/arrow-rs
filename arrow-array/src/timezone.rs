@@ -448,6 +448,44 @@ mod private {
             }
         }
 
+        /// chrono-tz has no transitions after 2099, so the comparison with it cannot check gaps
+        /// and folds there
+        #[test]
+        fn test_gaps_and_folds_after_2099() {
+            let tz: Tz = "America/Los_Angeles".parse().unwrap();
+            let pacific_standard = FixedOffset::west_opt(8 * 60 * 60).unwrap();
+            let pacific_daylight = FixedOffset::west_opt(7 * 60 * 60).unwrap();
+            let at = |y, m, d, h, min| {
+                NaiveDate::from_ymd_opt(y, m, d)
+                    .unwrap()
+                    .and_hms_opt(h, min, 0)
+                    .unwrap()
+            };
+            // The second Sunday in March and the first Sunday in November of each year
+            for (year, spring, fall) in [(2100, 14, 7), (2300, 11, 4), (9998, 8, 1)] {
+                let skipped = at(year, 3, spring, 2, 30);
+                assert!(matches!(
+                    tz.offset_from_local_datetime(&skipped),
+                    LocalResult::None
+                ));
+                let gap = GapInfo::new(&skipped, &tz).unwrap();
+                let (begin, begin_offset) = gap.begin.unwrap();
+                assert_eq!(begin, at(year, 3, spring, 2, 0));
+                assert_eq!(begin_offset.fix(), pacific_standard);
+                let end = gap.end.unwrap();
+                assert_eq!(end.naive_local(), at(year, 3, spring, 3, 0));
+                assert_eq!(end.offset().fix(), pacific_daylight);
+
+                match tz.offset_from_local_datetime(&at(year, 11, fall, 1, 30)) {
+                    LocalResult::Ambiguous(first, second) => {
+                        assert_eq!(first.fix(), pacific_daylight);
+                        assert_eq!(second.fix(), pacific_standard);
+                    }
+                    other => panic!("expected an ambiguous offset in {year}, got {other:?}"),
+                }
+            }
+        }
+
         #[test]
         fn test_beyond_jiff_range() {
             let tz: Tz = "America/Los_Angeles".parse().unwrap();
