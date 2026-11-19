@@ -1232,8 +1232,10 @@ fn test_dictionary_fallback_with_nulls() {
             strings.as_string::<i32>(),
             &StringArray::from(expected.clone())
         );
-        // Null rows must not hold copies of `large`
+        // Null rows must not hold copies of `large`, nor add an entry to the
+        // rebuilt dictionary
         let memory = read.get_array_memory_size();
         assert!(memory < 2 * large.len(), "batch uses {memory} bytes");
+        assert_eq!(read.column(0).as_any_dictionary().values().len(), 3);
     }
 }

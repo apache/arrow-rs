@@ -26,7 +26,6 @@ use hashbrown::HashMap as HbHashMap;
 use hashbrown::hash_map::Entry;
 use std::hash::{BuildHasher, Hasher};
 use std::mem::size_of;
-use std::ptr::write_unaligned;
 use std::slice::{from_raw_parts, from_raw_parts_mut};
 use std::sync::Arc;
 
@@ -249,10 +248,37 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                     return pack_fixed_values(key_type, &array);
                 }
 
-                hash_byte_slices(&values.offsets, &values.values, hash_scratch);
-                let hashes = hashes_as_u64(hash_scratch);
-
-                pack_values_from_offsets(key_type, &value_type, &values, hashes, null_buffer)
+                // Null slots can take any key, so only the valid ones are hashed and deduplicated
+                let nulls = null_buffer
+                    .as_ref()
+                    .map(|nulls| {
+                        NullBuffer::new(BooleanBuffer::new(nulls.clone(), 0, values.len()))
+                    })
+                    .filter(|nulls| nulls.null_count() > 0);
+                match nulls {
+                    Some(nulls) => {
+                        let valid_slots = || nulls.valid_indices();
+                        pack_values_from_offsets(
+                            key_type,
+                            &value_type,
+                            &values,
+                            valid_slots,
+                            null_buffer,
+                            hash_scratch,
+                        )
+                    }
+                    None => {
+                        let valid_slots = || 0..values.len();
+                        pack_values_from_offsets(
+                            key_type,
+                            &value_type,
+                            &values,
+                            valid_slots,
+                            null_buffer,
+                            hash_scratch,
+                        )
+                    }
+                }
             }
         }
     }
@@ -357,10 +383,11 @@ fn pack_fixed_values_impl<K: ArrowDictionaryKeyType>(
 }
 
 macro_rules! offsets_dict_helper {
-    ($k:ty, $key_type:ident, $value_type:ident, $values:ident, $hashes:ident, $null_buffer:ident) => {
+    ($k:ty, $key_type:ident, $value_type:ident, $values:ident, $hashes:ident, $valid_slots:ident, $null_buffer:ident) => {
         pack_values_from_offsets_impl::<$k, _>(
             $values,
             $hashes,
+            $valid_slots,
             $null_buffer,
             $key_type,
             $value_type,
@@ -368,15 +395,19 @@ macro_rules! offsets_dict_helper {
     };
 }
 
-fn pack_values_from_offsets<V: OffsetSizeTrait>(
+fn pack_values_from_offsets<V: OffsetSizeTrait, I: Iterator<Item = usize>>(
     key_type: &ArrowType,
     value_type: &ArrowType,
     values: &OffsetBuffer<V>,
-    hashes: &[u64],
+    valid_slots: impl Fn() -> I,
     null_buffer: Option<Buffer>,
+    hash_scratch: &mut MutableBuffer,
 ) -> Result<ArrayRef> {
+    hash_byte_slices(&values.offsets, &values.values, valid_slots(), hash_scratch);
+    let hashes = hashes_as_u64(hash_scratch);
+    let valid_slots = valid_slots();
     downcast_integer! {
-        key_type => (offsets_dict_helper, key_type, value_type, values, hashes, null_buffer),
+        key_type => (offsets_dict_helper, key_type, value_type, values, hashes, valid_slots, null_buffer),
         _ => unreachable!(),
     }
 }
@@ -406,10 +437,11 @@ impl std::hash::BuildHasher for BuildPassthroughHasher {
 
 /// Builds a [`DictionaryArray`] directly from a flat [`OffsetBuffer`] using pre-computed
 /// hashes to deduplicate values in a single pass, avoiding the intermediate StringArray
-/// materialization
+/// materialization. Only `valid_slots` are deduplicated; the other slots get key 0.
 fn pack_values_from_offsets_impl<K: ArrowDictionaryKeyType, V: OffsetSizeTrait>(
     offset_buffer: &OffsetBuffer<V>,
     hashes: &[u64],
+    valid_slots: impl Iterator<Item = usize>,
     null_buffer: Option<Buffer>,
     key_type: &ArrowType,
     value_type: &ArrowType,
@@ -417,7 +449,7 @@ fn pack_values_from_offsets_impl<K: ArrowDictionaryKeyType, V: OffsetSizeTrait>(
     let dict_type = ArrowType::Dictionary(Box::new(key_type.clone()), Box::new(value_type.clone()));
     let num_values = offset_buffer.len();
 
-    let mut keys: Vec<K::Native> = Vec::with_capacity(num_values);
+    let mut keys = vec![K::Native::default(); num_values];
     let mut unique_offsets: Vec<V> = Vec::with_capacity(num_values + 1);
     unique_offsets.push(V::default());
     let mut unique_bytes: Vec<u8> = Vec::with_capacity(offset_buffer.values.len());
@@ -429,7 +461,9 @@ fn pack_values_from_offsets_impl<K: ArrowDictionaryKeyType, V: OffsetSizeTrait>(
     // are deduplicated rather than inserted as new entries. Empty in the common case.
     let mut collision_overflow: Vec<(u64, usize, usize)> = Vec::new();
 
-    for (input_idx, &hash) in hashes.iter().enumerate() {
+    let hashes = &hashes[..num_values];
+    for input_idx in valid_slots {
+        let hash = hashes[input_idx];
         let byte_start = offset_buffer.offsets[input_idx].as_usize();
         let byte_end = offset_buffer.offsets[input_idx + 1].as_usize();
         let bytes = &offset_buffer.values[byte_start..byte_end];
@@ -483,11 +517,14 @@ fn pack_values_from_offsets_impl<K: ArrowDictionaryKeyType, V: OffsetSizeTrait>(
             }
         };
 
-        let key = K::Native::from_usize(output_idx)
+        keys[input_idx] = K::Native::from_usize(output_idx)
             .ok_or_else(|| general_err!("dictionary key overflow"))?;
-        keys.push(key);
     }
 
+    // Key 0 of a slot that isn't deduplicated needs at least one value
+    if unique_offsets.len() == 1 && num_values > 0 {
+        unique_offsets.push(V::default());
+    }
     let num_unique = unique_offsets.len() - 1;
 
     // SAFETY: buffers are constructed directly from typed Vecs above; offsets are
@@ -515,7 +552,12 @@ fn pack_values_from_offsets_impl<K: ArrowDictionaryKeyType, V: OffsetSizeTrait>(
     Ok(Arc::new(dict_array))
 }
 
-fn hash_byte_slices<I: ArrowNativeType>(offsets: &[I], values: &[u8], scratch: &mut MutableBuffer) {
+fn hash_byte_slices<I: ArrowNativeType>(
+    offsets: &[I],
+    values: &[u8],
+    valid_slots: impl Iterator<Item = usize>,
+    scratch: &mut MutableBuffer,
+) {
     let count = offsets.len().saturating_sub(1);
     scratch.clear();
     scratch.resize(count * size_of::<u64>(), 0u8);
@@ -529,13 +571,12 @@ fn hash_byte_slices<I: ArrowNativeType>(offsets: &[I], values: &[u8], scratch: &
     )]
     let hash_slots = unsafe { from_raw_parts_mut(scratch.as_mut_ptr().cast::<u64>(), count) };
 
-    for idx in 0..count {
+    for idx in valid_slots {
         let start = offsets[idx].as_usize();
         let end = offsets[idx + 1].as_usize();
         let mut hasher = state.build_hasher();
         hasher.write(&values[start..end]);
-        // SAFETY: idx is within 0..count
-        unsafe { write_unaligned(hash_slots.as_mut_ptr().add(idx), hasher.finish()) };
+        hash_slots[idx] = hasher.finish();
     }
 }
 
@@ -814,6 +855,7 @@ mod tests {
         let array = pack_values_from_offsets_impl::<Int32Type, i32>(
             &ob,
             &hashes,
+            0..3,
             None,
             &key_type,
             &value_type,
