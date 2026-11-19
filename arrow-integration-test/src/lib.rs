@@ -711,7 +711,10 @@ pub fn array_from_json(
             let byte_width = usize::try_from(*len).map_err(|_| {
                 ArrowError::JsonError("FixedSizeBinary byte width must be non-negative".to_string())
             })?;
-            json_col.count.checked_mul(byte_width).ok_or_else(|| {
+            let capacity = json_col.count.checked_mul(byte_width).ok_or_else(|| {
+                ArrowError::JsonError("FixedSizeBinary capacity overflow".to_string())
+            })?;
+            std::alloc::Layout::array::<u8>(capacity).map_err(|_| {
                 ArrowError::JsonError("FixedSizeBinary capacity overflow".to_string())
             })?;
             let mut b = FixedSizeBinaryBuilder::with_capacity(json_col.count, *len);

@@ -88,6 +88,21 @@ impl RecordDecoder {
             .checked_mul(self.num_columns)
             .and_then(|capacity| self.offsets_len.checked_add(capacity))
             .ok_or_else(|| ArrowError::CsvError("CSV decoder capacity overflow".to_string()))?;
+
+        // Validate both allocation layouts before modifying either buffer
+        let data_capacity = to_read
+            .checked_mul(self.num_columns)
+            .and_then(|capacity| capacity.checked_mul(AVERAGE_FIELD_SIZE))
+            .map(|capacity| capacity.max(MIN_CAPACITY))
+            .and_then(|capacity| self.data_len.checked_add(capacity))
+            .ok_or_else(|| ArrowError::CsvError("CSV decoder capacity overflow".to_string()))?;
+        if std::alloc::Layout::array::<usize>(offsets_capacity).is_err()
+            || std::alloc::Layout::array::<u8>(data_capacity).is_err()
+        {
+            return Err(ArrowError::CsvError(
+                "CSV decoder capacity overflow".to_string(),
+            ));
+        }
         self.offsets.resize(offsets_capacity, 0);
 
         // The current offset into `input`
@@ -108,6 +123,8 @@ impl RecordDecoder {
                 .data_len
                 .checked_add(estimated_data)
                 .ok_or_else(|| ArrowError::CsvError("CSV decoder capacity overflow".to_string()))?;
+            std::alloc::Layout::array::<u8>(data_capacity)
+                .map_err(|_| ArrowError::CsvError("CSV decoder capacity overflow".to_string()))?;
             self.data.resize(data_capacity, 0);
 
             // Try to read a record
