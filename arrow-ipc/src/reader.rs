@@ -3168,11 +3168,7 @@ mod tests {
         assert_eq!(run_array_1_unsliced, output_batch.column(0).into_data());
     }
 
-    // Regression test for https://github.com/apache/arrow-rs/issues/12249:
-    // a zero-row slice of a RunEndEncoded array with Utf8View values did not
-    // read back, because the variadic buffer counts were computed from the
-    // original array while the writer wrote the buffers of the unsliced
-    // (empty) run array.
+    // Zero-row slice of a RunEndEncoded array with Utf8View values (see #12249).
     #[test]
     fn test_roundtrip_stream_run_array_zero_rows_utf8_view() {
         let values = StringViewArray::from(vec!["a long string that is not inlined", "b"]);
@@ -3188,8 +3184,7 @@ mod tests {
         assert_eq!(expected, output.column(0).into_data());
     }
 
-    // Same as above, with the Utf8View values nested inside a ListView
-    // (see https://github.com/apache/arrow-rs/issues/12249).
+    // Same, with the Utf8View values nested inside a ListView.
     #[test]
     fn test_roundtrip_stream_run_array_zero_rows_list_view_utf8_view() {
         let mut list_builder = ListViewBuilder::new(StringViewBuilder::new());
@@ -3214,8 +3209,7 @@ mod tests {
         assert_eq!(expected, output.column(0).into_data());
     }
 
-    // Same as above, with the Utf8View values nested inside a List
-    // (see https://github.com/apache/arrow-rs/issues/12249).
+    // Same, with the Utf8View values nested inside a List.
     #[test]
     fn test_roundtrip_stream_run_array_zero_rows_list_utf8_view() {
         let mut list_builder = ListBuilder::new(StringViewBuilder::new());
@@ -3240,10 +3234,7 @@ mod tests {
         assert_eq!(expected, output.column(0).into_data());
     }
 
-    // Regression test for https://github.com/apache/arrow-rs/issues/12249:
-    // same zero-row slice, with the RunEndEncoded array nested inside a
-    // List. The variadic counts must be computed from the unsliced nested
-    // run array, not from the original one.
+    // Same, with the RunEndEncoded array nested inside a List.
     #[test]
     fn test_roundtrip_stream_zero_rows_list_of_run_array_utf8_view() {
         let values = StringViewArray::from(vec!["a long string that is not inlined", "b"]);
