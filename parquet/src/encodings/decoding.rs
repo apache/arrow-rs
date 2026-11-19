@@ -1043,6 +1043,7 @@ impl<T: DataType> Decoder<T> for DeltaLengthByteArrayDecoder<T> {
             Type::BYTE_ARRAY => {
                 let num_values = cmp::min(num_values, self.num_values);
 
+                // set_data checked the lengths are nonnegative and fit in the page, so no overflow.
                 let next_offset: i32 = self.lengths
                     [self.current_idx..self.current_idx + num_values]
                     .iter()
