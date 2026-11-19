@@ -1632,10 +1632,12 @@ pub fn cast_with_options(
         (Date64, Date32) => {
             let array = array.as_primitive::<Date64Type>();
             let result = if cast_options.safe {
-                array.unary_opt::<_, Date32Type>(|x| i32::try_from(x / MILLISECONDS_IN_DAY).ok())
+                array.unary_opt::<_, Date32Type>(|x| {
+                    i32::try_from(x.div_euclid(MILLISECONDS_IN_DAY)).ok()
+                })
             } else {
                 array.try_unary::<_, Date32Type, _>(|x| {
-                    i32::try_from(x / MILLISECONDS_IN_DAY).map_err(|_| {
+                    i32::try_from(x.div_euclid(MILLISECONDS_IN_DAY)).map_err(|_| {
                         ArrowError::CastError(format!(
                             "Cannot cast Date64 value {x} to Date32 without overflow"
                         ))

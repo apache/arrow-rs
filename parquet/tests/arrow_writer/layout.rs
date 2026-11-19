@@ -70,8 +70,7 @@ fn do_test(test: LayoutTest) {
 fn assert_layout(file_reader: &Bytes, meta: &ParquetMetaData, layout: &Layout) {
     assert_eq!(meta.row_groups().len(), layout.row_groups.len());
 
-    for rg_idx in 0..meta.num_row_groups() {
-        let row_group = meta.row_group(rg_idx);
+    for (rg_idx, row_group) in meta.row_groups().iter().enumerate() {
         let row_group_layout = &layout.row_groups[rg_idx];
         let rg_page_index = meta.page_index_for_row_group(rg_idx);
 
