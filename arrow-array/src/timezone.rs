@@ -663,9 +663,7 @@ mod private {
                     };
 
                     // Weekly samples find transitions that only one engine knows about
-                    let mut same = (START..END)
-                        .step_by(WEEK)
-                        .all(|s| agree(variant, jiff, &at(s)));
+                    let mut samples: Vec<_> = (START..END).step_by(WEEK).map(at).collect();
 
                     // Probing each side of every transition covers gaps and folds
                     let start = Timestamp::from_second(START).unwrap();
@@ -679,19 +677,38 @@ mod private {
                                 .to_offset(Timestamp::from_second(instant - 1).unwrap())
                                 .seconds(),
                         );
-                        same &= [
-                            instant - 1,
-                            instant,
-                            instant + before - 1,
-                            instant + before,
-                            instant + after - 1,
-                            instant + after,
-                        ]
-                        .into_iter()
-                        .all(|s| agree(variant, jiff, &at(s)));
+                        samples.extend(
+                            [
+                                instant - 1,
+                                instant,
+                                instant + before - 1,
+                                instant + before,
+                                instant + after - 1,
+                                instant + after,
+                            ]
+                            .map(at),
+                        );
                     }
-                    if !same {
+
+                    // Years in which the two releases give different UTC offsets
+                    let changed: BTreeSet<_> = samples
+                        .iter()
+                        .filter(|dt| {
+                            variant.offset_from_utc_datetime(dt).fix()
+                                != jiff.offset_from_utc_datetime(dt).fix()
+                        })
+                        .map(|dt| dt.year())
+                        .collect();
+                    if !changed.is_empty() {
                         different.insert(name);
+                    }
+
+                    // Every other year must also agree on local times and gaps. Neighbouring
+                    // years are skipped too, as a local reading can fall in them.
+                    for dt in &samples {
+                        if !(dt.year() - 1..=dt.year() + 1).any(|y| changed.contains(&y)) {
+                            assert!(agree(variant, jiff, dt), "{name} at {dt}, {}", releases());
+                        }
                     }
                 }
                 let known = KNOWN_DIFFERENCES.iter().copied().collect();
