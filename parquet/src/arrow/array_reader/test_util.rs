@@ -12,6 +12,7 @@ use crate::data_type::{ByteArray, ByteArrayType, Int32Type};
 use crate::encodings::encoding::{DictEncoder, Encoder, get_encoder};
 use crate::errors::Result;
 use crate::schema::types::{ColumnDescPtr, ColumnDescriptor, ColumnPath, Type};
+use crate::util::bit_util::BitWriter;
 
 /// Returns a descriptor for a UTF-8 column
 pub fn utf8_column() -> ColumnDescPtr {
@@ -35,6 +36,51 @@ pub fn encode_byte_array(encoding: Encoding, data: &[ByteArray]) -> Bytes {
 
     encoder.put(data).unwrap();
     encoder.flush_buffer().unwrap()
+}
+
+/// Returns `DELTA_LENGTH_BYTE_ARRAY` and `DELTA_BYTE_ARRAY` data holding `num_values`
+/// empty values, except that one length stream's header declares `count` values
+///
+/// The `DELTA_BYTE_ARRAY` data is returned twice, once with the prefix length stream
+/// declaring `count` and once with the suffix length stream declaring it
+pub fn delta_pages_declaring(count: u64, num_values: usize) -> Vec<(Encoding, Bytes)> {
+    let declaring = delta_binary_packed_header(count);
+
+    let mut lengths =
+        get_encoder::<Int32Type>(Encoding::DELTA_BINARY_PACKED, &int32_column()).unwrap();
+    lengths.put(&vec![0; num_values]).unwrap();
+    let lengths = lengths.flush_buffer().unwrap();
+
+    vec![
+        (Encoding::DELTA_LENGTH_BYTE_ARRAY, declaring.clone()),
+        (Encoding::DELTA_BYTE_ARRAY, declaring.clone()),
+        (
+            Encoding::DELTA_BYTE_ARRAY,
+            [lengths, declaring].concat().into(),
+        ),
+    ]
+}
+
+/// Returns a `DELTA_BINARY_PACKED` header declaring `count` values, with no blocks
+fn delta_binary_packed_header(count: u64) -> Bytes {
+    let mut writer = BitWriter::new(32);
+    writer.put_vlq_int(128); // block size
+    writer.put_vlq_int(4); // mini blocks per block
+    writer.put_vlq_int(count);
+    writer.put_zigzag_vlq_int(0); // first value
+    writer.consume().into()
+}
+
+fn int32_column() -> ColumnDescPtr {
+    let t = Type::primitive_type_builder("col", PhysicalType::INT32)
+        .build()
+        .unwrap();
+    Arc::new(ColumnDescriptor::new(
+        Arc::new(t),
+        0,
+        0,
+        ColumnPath::new(vec![]),
+    ))
 }
 
 /// Returns the encoded dictionary and value data

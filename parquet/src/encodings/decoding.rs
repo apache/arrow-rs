@@ -589,6 +589,43 @@ where
         }
     }
 
+    /// Returns the number of values declared by the header of this stream, after checking
+    /// that it is at most `max_values` and at most the number of values the remaining
+    /// bytes could encode.
+    ///
+    /// The count is read from the page and is otherwise unchecked, so callers that size
+    /// an allocation from it should use this rather than [`Decoder::values_left`].
+    pub(crate) fn checked_values_left(&self, max_values: usize) -> Result<usize> {
+        assert!(self.initialized, "Bit reader is not initialized");
+        let values = self.values_left;
+        if values > max_values {
+            return Err(general_err!(
+                "DELTA_BINARY_PACKED header declares {} values, but the page has at most {}",
+                values,
+                max_values
+            ));
+        }
+
+        // Each block after the first value carries its min delta (at least one byte)
+        // and one bit width byte per mini block
+        let blocks = match (values.saturating_sub(1), self.block_size) {
+            (0, _) => 0,
+            (_, 0) => return Err(general_err!("'block_size' must not be zero")),
+            (rest, block_size) => rest.div_ceil(block_size),
+        };
+        let min_bytes = blocks.saturating_mul(self.mini_blocks_per_block.saturating_add(1));
+        let bytes_left = self.bit_reader.bytes_left();
+        if min_bytes > bytes_left {
+            return Err(eof_err!(
+                "DELTA_BINARY_PACKED header declares {} values, which need at least {} bytes, but {} remain",
+                values,
+                min_bytes,
+                bytes_left
+            ));
+        }
+        Ok(values)
+    }
+
     /// Initializes the next block and the first mini block within it
     #[inline]
     fn next_block(&mut self) -> Result<()> {
@@ -972,7 +1009,7 @@ impl<T: DataType> Decoder<T> for DeltaLengthByteArrayDecoder<T> {
             Type::BYTE_ARRAY => {
                 let mut len_decoder = DeltaBitPackDecoder::<Int32Type>::new();
                 len_decoder.set_data(data.clone(), num_values)?;
-                let num_lengths = len_decoder.values_left();
+                let num_lengths = len_decoder.checked_values_left(num_values)?;
                 self.lengths.resize(num_lengths, 0);
                 len_decoder.get(&mut self.lengths[..])?;
 
@@ -1103,7 +1140,7 @@ impl<T: DataType> Decoder<T> for DeltaByteArrayDecoder<T> {
             Type::BYTE_ARRAY | Type::FIXED_LEN_BYTE_ARRAY => {
                 let mut prefix_len_decoder = DeltaBitPackDecoder::<Int32Type>::new();
                 prefix_len_decoder.set_data(data.clone(), num_values)?;
-                let num_prefixes = prefix_len_decoder.values_left();
+                let num_prefixes = prefix_len_decoder.checked_values_left(num_values)?;
                 self.prefix_lengths.resize(num_prefixes, 0);
                 prefix_len_decoder.get(&mut self.prefix_lengths[..])?;
 
@@ -1198,6 +1235,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::schema::types::{ColumnDescPtr, ColumnDescriptor, ColumnPath, Type as SchemaType};
+    use crate::util::bit_util::BitWriter;
     use crate::util::test_common::rand_gen::RandGen;
 
     #[test]
@@ -1253,6 +1291,81 @@ mod tests {
             "{}",
             err
         );
+    }
+
+    /// Returns a DELTA_BINARY_PACKED header declaring `count` values, with no blocks
+    fn delta_binary_packed_header(count: u64) -> Bytes {
+        let mut writer = BitWriter::new(32);
+        writer.put_vlq_int(128); // block size
+        writer.put_vlq_int(4); // mini blocks per block
+        writer.put_vlq_int(count);
+        writer.put_zigzag_vlq_int(0); // first value
+        writer.consume().into()
+    }
+
+    /// Returns the error from setting `data` holding at most `num_values` values on the
+    /// DELTA_LENGTH_BYTE_ARRAY and DELTA_BYTE_ARRAY decoders that accept it
+    fn delta_set_data_errors(data: Bytes, num_values: usize, length_only: bool) -> Vec<String> {
+        let mut errors = vec![];
+        if length_only {
+            let mut decoder = DeltaLengthByteArrayDecoder::<ByteArrayType>::new();
+            errors.push(decoder.set_data(data.clone(), num_values).unwrap_err());
+        }
+        let mut decoder = DeltaByteArrayDecoder::<ByteArrayType>::new();
+        errors.push(decoder.set_data(data.clone(), num_values).unwrap_err());
+        let mut decoder = DeltaByteArrayDecoder::<FixedLenByteArrayType>::new();
+        errors.push(decoder.set_data(data, num_values).unwrap_err());
+        errors.into_iter().map(|e| e.to_string()).collect()
+    }
+
+    #[test]
+    fn test_delta_length_count_exceeds_num_values() {
+        let mut zeros = get_encoder::<Int32Type>(
+            Encoding::DELTA_BINARY_PACKED,
+            &create_test_col_desc_ptr(-1, Type::INT32),
+        )
+        .unwrap();
+        zeros.put(&[0; 4]).unwrap();
+        let zeros = zeros.flush_buffer().unwrap();
+
+        for count in [1 << 31, 1 << 60, 5] {
+            let declaring = delta_binary_packed_header(count);
+            // Lengths for DELTA_LENGTH_BYTE_ARRAY, prefix lengths for DELTA_BYTE_ARRAY
+            for err in delta_set_data_errors(declaring.clone(), 4, true) {
+                assert!(err.contains("but the page has at most 4"), "{err}");
+            }
+            // Suffix lengths for DELTA_BYTE_ARRAY
+            let suffix: Bytes = [zeros.clone(), declaring].concat().into();
+            for err in delta_set_data_errors(suffix, 4, false) {
+                assert!(err.contains("but the page has at most 4"), "{err}");
+            }
+        }
+
+        // A count the bytes could not encode
+        for err in delta_set_data_errors(delta_binary_packed_header(1000), 1000, true) {
+            assert!(err.contains("need at least"), "{err}");
+        }
+
+        // Conforming pages holding more values than the page's value count
+        let input = vec![
+            ByteArray::from("a"),
+            ByteArray::from("ab"),
+            ByteArray::from("b"),
+        ];
+        for encoding in [
+            Encoding::DELTA_LENGTH_BYTE_ARRAY,
+            Encoding::DELTA_BYTE_ARRAY,
+        ] {
+            let col_descr = create_test_col_desc_ptr(-1, Type::BYTE_ARRAY);
+            let mut encoder = get_encoder::<ByteArrayType>(encoding, &col_descr).unwrap();
+            encoder.put(&input).unwrap();
+            let encoded = encoder.flush_buffer().unwrap();
+            for err in
+                delta_set_data_errors(encoded, 2, encoding == Encoding::DELTA_LENGTH_BYTE_ARRAY)
+            {
+                assert!(err.contains("but the page has at most 2"), "{err}");
+            }
+        }
     }
 
     #[test]

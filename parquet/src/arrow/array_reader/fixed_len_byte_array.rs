@@ -545,7 +545,7 @@ impl ColumnValueDecoder for ValueDecoder {
                 decoder: DictIndexDecoder::new(data, num_levels, num_values)?,
             },
             Encoding::DELTA_BYTE_ARRAY => Decoder::Delta {
-                decoder: DeltaByteArrayDecoder::new(data)?,
+                decoder: DeltaByteArrayDecoder::new(data, num_values.unwrap_or(num_levels))?,
             },
             Encoding::BYTE_STREAM_SPLIT => Decoder::ByteStreamSplit {
                 buf: data,
@@ -638,14 +638,19 @@ enum Decoder {
 mod tests {
     use super::*;
     use crate::arrow::ArrowWriter;
+    use crate::arrow::array_reader::test_util::delta_pages_declaring;
     use crate::arrow::arrow_reader::{
         ArrowReaderOptions, ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder,
     };
+    use crate::basic::Type as PhysicalType;
     use crate::data_type::{FixedLenByteArray, FixedLenByteArrayType};
+    use crate::file::properties::{WriterProperties, WriterVersion};
     use crate::file::writer::SerializedFileWriter;
+    use crate::schema::types::Type as SchemaType;
     use crate::schema::types::{ColumnDescriptor, ColumnPath};
     use arrow::datatypes::{Field, Schema};
     use arrow::error::Result as ArrowResult;
+    use arrow_array::FixedSizeBinaryArray;
     use arrow_array::{Array, ListArray};
     use arrow_array::{Decimal256Array, RecordBatch};
     use bytes::Bytes;
@@ -700,6 +705,76 @@ mod tests {
             err.to_string(),
             "Parquet error: dictionary index out of bounds: the len is 2 but the index is 2"
         );
+    }
+
+    #[test]
+    fn test_delta_byte_array_counts() {
+        let t = SchemaType::primitive_type_builder("col", PhysicalType::FIXED_LEN_BYTE_ARRAY)
+            .with_length(2)
+            .build()
+            .unwrap();
+        let column_desc: ColumnDescPtr = Arc::new(ColumnDescriptor::new(
+            Arc::new(t),
+            1,
+            0,
+            ColumnPath::new(vec![]),
+        ));
+
+        // Length streams declaring more values than the page holds
+        for count in [1 << 31, 1 << 60, 5] {
+            for (encoding, page) in delta_pages_declaring(count, 4) {
+                if encoding != Encoding::DELTA_BYTE_ARRAY {
+                    continue;
+                }
+                let mut decoder = ValueDecoder::new(&column_desc);
+                let err = decoder.set_data(encoding, page, 4, Some(4)).unwrap_err();
+                assert!(
+                    err.to_string().contains("but the page has at most 4"),
+                    "{err}"
+                );
+            }
+        }
+
+        // A length stream declaring more values than its bytes could encode
+        for (encoding, page) in delta_pages_declaring(1000, 1000) {
+            if encoding != Encoding::DELTA_BYTE_ARRAY {
+                continue;
+            }
+            let mut decoder = ValueDecoder::new(&column_desc);
+            let err = decoder.set_data(encoding, page, 1000, None).unwrap_err();
+            assert!(err.to_string().contains("need at least"), "{err}");
+        }
+    }
+
+    #[test]
+    fn test_delta_byte_array_round_trip() {
+        let values = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+            (0..1000_u16).map(|i| (i % 7 != 0).then(|| (i / 3).to_be_bytes())),
+            2,
+        )
+        .unwrap();
+        let written = RecordBatch::try_from_iter([("col", Arc::new(values) as ArrayRef)]).unwrap();
+
+        for version in [WriterVersion::PARQUET_1_0, WriterVersion::PARQUET_2_0] {
+            let props = WriterProperties::builder()
+                .set_writer_version(version)
+                .set_dictionary_enabled(false)
+                .set_encoding(Encoding::DELTA_BYTE_ARRAY)
+                .set_data_page_row_count_limit(100)
+                .set_write_batch_size(10)
+                .build();
+            let mut buffer = Vec::with_capacity(1024);
+            let mut writer =
+                ArrowWriter::try_new(&mut buffer, written.schema(), Some(props)).unwrap();
+            writer.write(&written).unwrap();
+            writer.close().unwrap();
+
+            let read = ParquetRecordBatchReader::try_new(Bytes::from(buffer), 1000)
+                .unwrap()
+                .collect::<ArrowResult<Vec<_>>>()
+                .unwrap();
+            assert_eq!(read, vec![written.clone()]);
+        }
     }
 
     #[test]

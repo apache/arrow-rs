@@ -276,11 +276,11 @@ impl ByteArrayDecoder {
                 ByteArrayDecoderDictionary::new(data, num_levels, num_values)?,
             ),
             Encoding::DELTA_LENGTH_BYTE_ARRAY => ByteArrayDecoder::DeltaLength(
-                ByteArrayDecoderDeltaLength::new(data, validate_utf8)?,
+                ByteArrayDecoderDeltaLength::new(data, num_levels, num_values, validate_utf8)?,
             ),
-            Encoding::DELTA_BYTE_ARRAY => {
-                ByteArrayDecoder::DeltaByteArray(ByteArrayDecoderDelta::new(data, validate_utf8)?)
-            }
+            Encoding::DELTA_BYTE_ARRAY => ByteArrayDecoder::DeltaByteArray(
+                ByteArrayDecoderDelta::new(data, num_levels, num_values, validate_utf8)?,
+            ),
             _ => {
                 return Err(general_err!(
                     "unsupported encoding for byte array: {}",
@@ -440,10 +440,16 @@ pub struct ByteArrayDecoderDeltaLength {
 }
 
 impl ByteArrayDecoderDeltaLength {
-    fn new(data: Bytes, validate_utf8: bool) -> Result<Self> {
+    fn new(
+        data: Bytes,
+        num_levels: usize,
+        num_values: Option<usize>,
+        validate_utf8: bool,
+    ) -> Result<Self> {
+        let num_values = num_values.unwrap_or(num_levels);
         let mut len_decoder = DeltaBitPackDecoder::<Int32Type>::new();
-        len_decoder.set_data(data.clone(), 0)?;
-        let values = len_decoder.values_left();
+        len_decoder.set_data(data.clone(), num_values)?;
+        let values = len_decoder.checked_values_left(num_values)?;
 
         let mut lengths = vec![0; values];
         len_decoder.get(&mut lengths)?;
@@ -544,9 +550,14 @@ pub struct ByteArrayDecoderDelta {
 }
 
 impl ByteArrayDecoderDelta {
-    fn new(data: Bytes, validate_utf8: bool) -> Result<Self> {
+    fn new(
+        data: Bytes,
+        num_levels: usize,
+        num_values: Option<usize>,
+        validate_utf8: bool,
+    ) -> Result<Self> {
         Ok(Self {
-            decoder: DeltaByteArrayDecoder::new(data)?,
+            decoder: DeltaByteArrayDecoder::new(data, num_values.unwrap_or(num_levels))?,
             validate_utf8,
         })
     }
@@ -622,8 +633,11 @@ impl ByteArrayDecoderDictionary {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arrow::array_reader::test_util::{byte_array_all_encodings, utf8_column};
+    use crate::arrow::array_reader::test_util::{
+        byte_array_all_encodings, delta_pages_declaring, encode_byte_array, utf8_column,
+    };
     use crate::arrow::record_reader::buffer::ValuesBuffer;
+    use crate::data_type::ByteArray;
     use arrow_array::{Array, StringArray};
     use arrow_buffer::Buffer;
 
@@ -681,6 +695,55 @@ mod tests {
                     None,
                 ]
             );
+        }
+    }
+
+    #[test]
+    fn test_byte_array_decoder_delta_length_counts() {
+        let column_desc = utf8_column();
+
+        // Length streams declaring more values than the page holds
+        for count in [1 << 31, 1 << 60, 5] {
+            for (encoding, page) in delta_pages_declaring(count, 4) {
+                let mut decoder = ByteArrayColumnValueDecoder::<i32>::new(&column_desc);
+                let err = decoder.set_data(encoding, page, 4, Some(4)).unwrap_err();
+                assert!(
+                    err.to_string().contains("but the page has at most 4"),
+                    "{err}"
+                );
+            }
+        }
+
+        // A length stream declaring more values than its bytes could encode
+        for (encoding, page) in delta_pages_declaring(1000, 1000) {
+            let mut decoder = ByteArrayColumnValueDecoder::<i32>::new(&column_desc);
+            let err = decoder.set_data(encoding, page, 1000, None).unwrap_err();
+            assert!(err.to_string().contains("need at least"), "{err}");
+        }
+
+        let data: Vec<ByteArray> = vec!["hello".into(), "world".into(), "a".into(), "b".into()];
+        for encoding in [
+            Encoding::DELTA_LENGTH_BYTE_ARRAY,
+            Encoding::DELTA_BYTE_ARRAY,
+        ] {
+            let page = encode_byte_array(encoding, &data);
+
+            // A page holding more values than its header declares
+            let mut decoder = ByteArrayColumnValueDecoder::<i32>::new(&column_desc);
+            let err = decoder
+                .set_data(encoding, page.clone(), 3, Some(3))
+                .unwrap_err();
+            assert!(
+                err.to_string().contains("but the page has at most 3"),
+                "{err}"
+            );
+
+            // A page whose levels count nulls the length streams do not
+            let mut output = OffsetBuffer::<i32>::with_capacity(0);
+            decoder.set_data(encoding, page, 6, None).unwrap();
+            assert_eq!(decoder.read(&mut output, 6).unwrap(), 4);
+            assert_eq!(output.values.as_slice(), b"helloworldab");
+            assert_eq!(output.offsets.as_slice(), &[0, 5, 10, 11, 12]);
         }
     }
 
@@ -867,7 +930,7 @@ mod tests {
             .into_iter()
             .find(|(encoding, _)| *encoding == Encoding::DELTA_LENGTH_BYTE_ARRAY)
             .unwrap();
-        let mut decoder = ByteArrayDecoderDeltaLength::new(page, true).unwrap();
+        let mut decoder = ByteArrayDecoderDeltaLength::new(page, 4, Some(4), true).unwrap();
         let mut output = OffsetBuffer::<i32>::with_capacity(0);
         output.try_push(b"prefix", true).unwrap();
 
@@ -893,7 +956,7 @@ mod tests {
             .into_iter()
             .find(|(encoding, _)| *encoding == Encoding::DELTA_LENGTH_BYTE_ARRAY)
             .unwrap();
-        let mut decoder = ByteArrayDecoderDeltaLength::new(page, false).unwrap();
+        let mut decoder = ByteArrayDecoderDeltaLength::new(page, 2, Some(2), false).unwrap();
         let data_offset = decoder.data_offset;
         let mut output = OffsetBuffer::<i32> {
             offsets: vec![0, i32::MAX],
