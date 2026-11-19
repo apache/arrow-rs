@@ -562,3 +562,34 @@ message FlightData {
 message PutResult {
   bytes app_metadata = 1;
 }
+
+/*
+ * Request message for the "Close Session" action.
+ *
+ * The existing session is referenced via a cookie header.
+ */
+message CloseSessionRequest {
+}
+
+/*
+ * The result of closing a session.
+ */
+message CloseSessionResult {
+  enum Status {
+    // Protobuf deserialization fallback value: The session close status is unknown or
+    // not recognized. Servers should avoid using this value (send a NOT_FOUND error if
+    // the requested session is not known or expired). Clients can retry the request.
+    UNSPECIFIED = 0;
+    // The session close request is complete. Subsequent requests with
+    // the same session produce a NOT_FOUND error.
+    CLOSED = 1;
+    // The session close request is in progress. The client may retry
+    // the close request.
+    CLOSING = 2;
+    // The session is not closeable. The client should not retry the
+    // close request.
+    NOT_CLOSEABLE = 3;
+  }
+
+  Status status = 1;
+}
