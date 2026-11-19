@@ -206,14 +206,16 @@ fn create_union_array(
     field_count: usize,
     null_probability: f64,
     inactive_null_probability: f64,
+    forced_null_index: Option<usize>,
 ) -> UnionArray {
     let mut rng = StdRng::seed_from_u64(42 + field_count as u64);
     // Generate selected values first so dense and sparse inputs have the same logical rows.
     let values: Vec<_> = (0..row_count)
-        .map(|_| {
+        .map(|index| {
             let field = rng.random_range(0..field_count);
             let value = rng.random::<i32>();
-            let is_null = rng.random::<f64>() < null_probability;
+            let is_null =
+                rng.random::<f64>() < null_probability || Some(index) == forced_null_index;
             (field, (!is_null).then_some(value))
         })
         .collect();
@@ -266,6 +268,7 @@ fn bench_unions(c: &mut Criterion) {
                     field_count,
                     f64::from(null_percent) / 100.0,
                     f64::from(null_percent) / 100.0,
+                    None,
                 );
                 let name =
                     format!("4096 union_{mode:?}_{field_count}_fields_{null_percent}_pct_nulls");
@@ -274,15 +277,39 @@ fn bench_unions(c: &mut Criterion) {
         }
     }
 
-    let array = create_union_array(UnionMode::Sparse, 4096, 4, 0.0, 1.0);
+    let array = create_union_array(UnionMode::Sparse, 4096, 4, 0.0, 1.0, None);
     do_bench(
         c,
         "4096 union_Sparse_4_fields_inactive_nulls_only",
         vec![Arc::new(array)],
     );
 
+    for row_count in [4096, 65_536] {
+        let array = create_union_array(
+            UnionMode::Sparse,
+            row_count,
+            4,
+            0.0,
+            0.0,
+            Some(row_count / 2),
+        );
+        assert_eq!(array.logical_null_count(), 1);
+        do_bench(
+            c,
+            &format!("{row_count} union_Sparse_4_fields_one_selected_null"),
+            vec![Arc::new(array)],
+        );
+    }
+
     for (inactive_null_probability, name) in [(1.0, "all_nulls"), (0.0, "selected_nulls_only")] {
-        let array = create_union_array(UnionMode::Sparse, 4096, 4, 1.0, inactive_null_probability);
+        let array = create_union_array(
+            UnionMode::Sparse,
+            4096,
+            4,
+            1.0,
+            inactive_null_probability,
+            None,
+        );
         do_bench(
             c,
             &format!("4096 union_Sparse_4_fields_{name}"),
@@ -303,6 +330,7 @@ fn bench_unions(c: &mut Criterion) {
             4,
             null_probability,
             inactive_null_probability,
+            None,
         );
         let before = Arc::new(StringArray::from_iter_values(
             (0..row_count).map(|i| ["", "a", "longer"][i % 3]),
@@ -317,7 +345,7 @@ fn bench_unions(c: &mut Criterion) {
         );
     }
 
-    let array = create_union_array(UnionMode::Sparse, 4096, 4, 0.2, 0.2);
+    let array = create_union_array(UnionMode::Sparse, 4096, 4, 0.2, 0.2, None);
     for second_type in [DataType::Int64, DataType::Utf8] {
         let children: Vec<_> = (0..4)
             .map(|field| {
