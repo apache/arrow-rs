@@ -14,7 +14,7 @@ use crate::data_type::Int32Type;
 use crate::encodings::decoding::{Decoder, DeltaBitPackDecoder};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
-use crate::util::utf8::check_valid_utf8;
+use crate::util::utf8::{check_utf8_value_start, check_valid_utf8};
 use arrow_array::{ArrayRef, builder::make_view};
 use arrow_buffer::Buffer;
 use arrow_data::ByteView;
@@ -634,8 +634,15 @@ impl ByteViewArrayDecoderDeltaLength {
             )
         }));
 
-        // Delta length encoding has continuous strings, we can validate utf8 in one go
+        // Delta length encoding has continuous strings, so validate utf8 in one go
+        // once each string is known to start on a character boundary
         if self.validate_utf8 {
+            let mut start = initial_offset;
+            for length in src_lengths {
+                let end = start + *length as usize;
+                check_utf8_value_start(&self.data[start..end])?;
+                start = end;
+            }
             check_valid_utf8(&self.data[initial_offset..current_offset])?;
         }
 
@@ -719,6 +726,9 @@ impl ByteViewArrayDecoderDelta {
             let mut utf8_validation_buffer = Vec::with_capacity(4096);
 
             let v = self.decoder.read(len, |bytes| {
+                // Both buffers are validated whole, so each string must also start
+                // on a character boundary
+                check_utf8_value_start(bytes)?;
                 let offset = array_buffer.len();
                 let view = make_view(bytes, buffer_id, offset as u32);
                 if bytes.len() > 12 {

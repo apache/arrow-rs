@@ -42,3 +42,16 @@ pub fn check_valid_utf8(val: &[u8]) -> Result<()> {
         Err(e) => Err(general_err!("encountered non UTF-8 data: {}", e)),
     }
 }
+
+/// Check that `value` does not start in the middle of a UTF-8 character.
+///
+/// [`check_valid_utf8`] over values stored back to back misses a character
+/// split across two of them, so each value's start must be checked as well.
+#[inline(always)]
+pub(crate) fn check_utf8_value_start(value: &[u8]) -> Result<()> {
+    match value.first() {
+        // A continuation byte has the form 0b10xxxxxx, bit-magic from `str::is_char_boundary`
+        Some(&b) if (b as i8) < -0x40 => Err(general_err!("encountered non UTF-8 data")),
+        _ => Ok(()),
+    }
+}

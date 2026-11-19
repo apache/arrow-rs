@@ -15,6 +15,7 @@ use crate::data_type::Int32Type;
 use crate::encodings::decoding::{Decoder, DeltaBitPackDecoder};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
+use crate::util::utf8::check_utf8_value_start;
 use arrow_array::{
     Array, ArrayRef, BinaryArray, Decimal128Array, Decimal256Array, OffsetSizeTrait,
 };
@@ -521,6 +522,12 @@ impl ByteArrayDecoderDeltaLength {
         self.length_offset += to_read;
 
         if self.validate_utf8 {
+            let mut start = initial_values_length;
+            for length in src_lengths {
+                let end = start + *length as usize;
+                check_utf8_value_start(&output.values[start..end])?;
+                start = end;
+            }
             output.check_valid_utf8(initial_values_length)?;
         }
         Ok(to_read)
