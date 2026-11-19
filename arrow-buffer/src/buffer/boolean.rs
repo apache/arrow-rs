@@ -3,7 +3,9 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
-use crate::bit_iterator::{BitIndexIterator, BitIndexU32Iterator, BitIterator, BitSliceIterator};
+use crate::bit_iterator::{
+    BitIndexIterator, BitIndexU32Iterator, BitIterator, BitSliceIterator, SetBitCounter,
+};
 use crate::bit_util::read_u64;
 use crate::{
     BooleanBufferBuilder, Buffer, MutableBuffer, bit_util, buffer_bin_and, buffer_bin_or,
@@ -618,6 +620,25 @@ impl BooleanBuffer {
     /// Returns a [`BitSliceIterator`] yielding contiguous ranges of set bits
     pub fn set_slices(&self) -> BitSliceIterator<'_> {
         BitSliceIterator::new(self.values(), self.bit_offset, self.bit_len)
+    }
+
+    /// Returns a [`SetBitCounter`] that counts the set bits before positions in
+    /// this [`BooleanBuffer`]
+    ///
+    /// ```
+    /// # use arrow_buffer::{BooleanBuffer, OffsetBuffer};
+    /// // Validity of the elements of a list with rows of 3, 0, and 2 elements
+    /// let valid = BooleanBuffer::from(&[true, false, true, true, true][..]);
+    /// let offsets = OffsetBuffer::<i32>::from_lengths([3, 0, 2]);
+    /// let mut counter = valid.set_bit_counter();
+    /// let valid_per_row = offsets
+    ///     .windows(2)
+    ///     .map(|w| counter.count_range(w[0] as usize..w[1] as usize))
+    ///     .collect::<Vec<_>>();
+    /// assert_eq!(valid_per_row, [2, 0, 2]);
+    /// ```
+    pub fn set_bit_counter(&self) -> SetBitCounter<'_> {
+        SetBitCounter::new(self.values(), self.bit_offset, self.bit_len)
     }
 
     /// Block size for chunked fold operations in [`Self::has_true`] and [`Self::has_false`].
