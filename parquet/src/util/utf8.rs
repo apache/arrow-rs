@@ -50,9 +50,8 @@ pub fn check_valid_utf8(val: &[u8]) -> Result<()> {
 #[inline(always)]
 pub(crate) fn check_utf8_value_start(value: &[u8]) -> Result<()> {
     match value.first() {
-        // A continuation byte has the form 0b10xxxxxx, so as a signed byte it is
-        // below -0x40. This is the same test as `str::is_char_boundary`, see
-        // https://doc.rust-lang.org/std/primitive.str.html#method.is_char_boundary
+        // A continuation byte has the form 0b10xxxxxx, bit majic from `str::is_char_boundary`
+        // see https://github.com/rust-lang/rust/blob/1.100.0/library/core/src/num/mod.rs#L1232-L1235
         Some(&b) if (b as i8) < -0x40 => Err(general_err!("encountered non UTF-8 data")),
         _ => Ok(()),
     }
