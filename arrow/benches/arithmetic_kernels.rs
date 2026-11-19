@@ -112,12 +112,12 @@ fn decimal_benchmark(c: &mut Criterion) {
                 .with_precision_and_scale(18, 2)
                 .unwrap(),
         );
-        let a64 = seeded_array::<Decimal64Type>(BATCH_SIZE, null_density, -999_999..1_000_000, 1)
-            .with_precision_and_scale(18, 2)
-            .unwrap();
-        let b64 = seeded_array::<Decimal64Type>(BATCH_SIZE, null_density, -999_999..1_000_000, 2)
-            .with_precision_and_scale(18, 2)
-            .unwrap();
+        let decimal64 = |seed| {
+            seeded_array::<Decimal64Type>(BATCH_SIZE, null_density, -999_999..1_000_000, seed)
+                .with_precision_and_scale(18, 2)
+                .unwrap()
+        };
+        let (a64, b64) = (decimal64(1), decimal64(2));
         // Four digits, so that products fit in `i32`.
         let decimal32 = |seed| {
             seeded_array::<Decimal32Type>(BATCH_SIZE, null_density, -9_999..10_000, seed)

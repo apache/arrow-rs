@@ -594,6 +594,19 @@ fn rescale_left<N: OverflowingOp>(l: N, mul: N, r: N, op: impl Fn(N, N) -> (N, b
     (value, l_overflow | overflow)
 }
 
+/// Like [`rescale_left`], but multiplies `r` by `mul`.
+#[inline]
+fn rescale_right<N: OverflowingOp>(
+    l: N,
+    r: N,
+    mul: N,
+    op: impl Fn(N, N) -> (N, bool),
+) -> (N, bool) {
+    let (r, r_overflow) = r.mul_overflowing(mul);
+    let (value, overflow) = op(l, r);
+    (value, r_overflow | overflow)
+}
+
 /// Multiplies the value of the decimal scalar `array` by `mul`, so that the
 /// kernel doesn't rescale it on every row.
 ///
@@ -620,19 +633,6 @@ where
     values.try_reserve_exact(1).ok()?;
     values.push(value);
     Some(PrimitiveArray::new(values.into(), None))
-}
-
-/// Like [`rescale_left`], but multiplies `r` by `mul`.
-#[inline]
-fn rescale_right<N: OverflowingOp>(
-    l: N,
-    r: N,
-    mul: N,
-    op: impl Fn(N, N) -> (N, bool),
-) -> (N, bool) {
-    let (r, r_overflow) = r.mul_overflowing(mul);
-    let (value, overflow) = op(l, r);
-    (value, r_overflow | overflow)
 }
 
 /// Defines `$fn`, which computes `/` or `%` of an array by a scalar with a precomputed divisor.
@@ -1509,6 +1509,33 @@ where
             let (r, r_mul) = r_rescaled.as_ref().map_or((r, r_mul), |r| (r, one));
             let unscaled = l_mul.is_eq(one) && r_mul.is_eq(one);
 
+            // `move` copies the multipliers into the closures. Borrowed, they
+            // keep the loop from vectorizing under thin LTO, like the borrowed
+            // captures #11525 fixed in `unary`.
+            macro_rules! rescaled_op {
+                ($overflowing:ident, $checked:ident) => {{
+                    let op = T::Native::$overflowing;
+                    let array = match s1 < s2 {
+                        true => overflowing_op(l, l_s, r, r_s, move |l, r| {
+                            rescale_left(l, l_mul, r, op)
+                        })?,
+                        false => overflowing_op(l, l_s, r, r_s, move |l, r| {
+                            rescale_right(l, r, r_mul, op)
+                        })?,
+                    };
+                    match array {
+                        Some(array) => array,
+                        None => try_op!(
+                            l,
+                            l_s,
+                            r,
+                            r_s,
+                            l.mul_checked(l_mul)?.$checked(r.mul_checked(r_mul)?)
+                        ),
+                    }
+                }};
+            }
+
             match op {
                 Op::Add | Op::AddWrapping if unscaled => {
                     match overflowing_op(l, l_s, r, r_s, T::Native::add_overflowing)? {
@@ -1522,51 +1549,8 @@ where
                         None => try_op!(l, l_s, r, r_s, l.sub_checked(r)),
                     }
                 }
-                // `move` copies the multipliers into the closures. Borrowed, they
-                // keep the loop from vectorizing under thin LTO, like the borrowed
-                // captures #11525 fixed in `unary`.
-                Op::Add | Op::AddWrapping => {
-                    let add = T::Native::add_overflowing;
-                    let array = match s1 < s2 {
-                        true => overflowing_op(l, l_s, r, r_s, move |l, r| {
-                            rescale_left(l, l_mul, r, add)
-                        })?,
-                        false => overflowing_op(l, l_s, r, r_s, move |l, r| {
-                            rescale_right(l, r, r_mul, add)
-                        })?,
-                    };
-                    match array {
-                        Some(array) => array,
-                        None => try_op!(
-                            l,
-                            l_s,
-                            r,
-                            r_s,
-                            l.mul_checked(l_mul)?.add_checked(r.mul_checked(r_mul)?)
-                        ),
-                    }
-                }
-                Op::Sub | Op::SubWrapping => {
-                    let sub = T::Native::sub_overflowing;
-                    let array = match s1 < s2 {
-                        true => overflowing_op(l, l_s, r, r_s, move |l, r| {
-                            rescale_left(l, l_mul, r, sub)
-                        })?,
-                        false => overflowing_op(l, l_s, r, r_s, move |l, r| {
-                            rescale_right(l, r, r_mul, sub)
-                        })?,
-                    };
-                    match array {
-                        Some(array) => array,
-                        None => try_op!(
-                            l,
-                            l_s,
-                            r,
-                            r_s,
-                            l.mul_checked(l_mul)?.sub_checked(r.mul_checked(r_mul)?)
-                        ),
-                    }
-                }
+                Op::Add | Op::AddWrapping => rescaled_op!(add_overflowing, add_checked),
+                Op::Sub | Op::SubWrapping => rescaled_op!(sub_overflowing, sub_checked),
                 _ => unreachable!(),
             }
             .with_precision_and_scale(result_precision, result_scale as i8)?
@@ -2167,20 +2151,6 @@ mod tests {
     type Kernel = fn(&dyn Datum, &dyn Datum) -> Result<ArrayRef, ArrowError>;
     type Checked<N> = fn(N, N) -> Result<N, ArrowError>;
 
-    fn assert_decimal_result<T: DecimalType>(
-        actual: Result<ArrayRef, ArrowError>,
-        expected: Result<Vec<Option<T::Native>>, ArrowError>,
-    ) {
-        match (actual, expected) {
-            (Ok(actual), Ok(expected)) => {
-                let actual: Vec<_> = actual.as_primitive::<T>().iter().collect();
-                assert_eq!(actual, expected)
-            }
-            (Err(actual), Err(expected)) => assert_eq!(actual.to_string(), expected.to_string()),
-            (actual, expected) => panic!("got {actual:?}, expected {expected:?}"),
-        }
-    }
-
     /// Checks `kernel` against `checked` for every pair of `edges`, with
     /// arrays on both sides, with each pair as a one-row slice, and with a
     /// scalar on either side. Every third row of the left array is null, so
@@ -2210,26 +2180,40 @@ mod tests {
             true => checked(x, y).map(Some),
             false => Ok(None),
         };
+        let context = format!("scales {l_scale} and {r_scale}");
 
         // The kernels report the first valid row that overflows.
         let expected = (0..l.len()).map(|i| row(i, l[i], r[i])).collect();
-        assert_decimal_result::<T>(kernel(&l_array, &r_array), expected);
+        assert_kernel_result::<T>(
+            kernel(&l_array, &r_array),
+            expected,
+            &format!("{context}: array, array"),
+        );
 
         // An overflow in one row sends the whole array to the checked kernel,
         // which would hide a missed overflow in another row, so also check each
         // row alone.
         for i in 0..l.len() {
             let actual = kernel(&l_array.slice(i, 1), &r_array.slice(i, 1));
-            assert_decimal_result::<T>(actual, row(i, l[i], r[i]).map(|v| vec![v]));
+            let expected = row(i, l[i], r[i]).map(|v| vec![v]);
+            assert_kernel_result::<T>(actual, expected, &format!("{context}: row {i}"));
         }
 
         for &x in edges {
             let l_scalar = Scalar::new(decimal(PrimitiveArray::from_iter_values([x]), l_scale));
             let expected = r.iter().map(|&y| checked(x, y).map(Some)).collect();
-            assert_decimal_result::<T>(kernel(&l_scalar, &r_array), expected);
+            assert_kernel_result::<T>(
+                kernel(&l_scalar, &r_array),
+                expected,
+                &format!("{context}: scalar {x:?}, array"),
+            );
             let r_scalar = Scalar::new(decimal(PrimitiveArray::from_iter_values([x]), r_scale));
             let expected = (0..l.len()).map(|i| row(i, l[i], x)).collect();
-            assert_decimal_result::<T>(kernel(&l_array, &r_scalar), expected);
+            assert_kernel_result::<T>(
+                kernel(&l_array, &r_scalar),
+                expected,
+                &format!("{context}: array, scalar {x:?}"),
+            );
         }
     }
 
@@ -2396,10 +2380,28 @@ mod tests {
                                 })
                                 .collect()
                         };
-                    assert_decimal_result::<T>(kernel(&array, &other_array), expected(true));
-                    assert_decimal_result::<T>(kernel(&other_array, &array), expected(false));
-                    assert_decimal_result::<T>(kernel(&array, &other_scalar), expected(true));
-                    assert_decimal_result::<T>(kernel(&other_scalar, &array), expected(false));
+                    let context =
+                        format!("row {i}, null {null:?}, scales {batch_scale} and {other_scale}");
+                    assert_kernel_result::<T>(
+                        kernel(&array, &other_array),
+                        expected(true),
+                        &format!("{context}: array, array"),
+                    );
+                    assert_kernel_result::<T>(
+                        kernel(&other_array, &array),
+                        expected(false),
+                        &format!("{context}: other array, array"),
+                    );
+                    assert_kernel_result::<T>(
+                        kernel(&array, &other_scalar),
+                        expected(true),
+                        &format!("{context}: array, scalar"),
+                    );
+                    assert_kernel_result::<T>(
+                        kernel(&other_scalar, &array),
+                        expected(false),
+                        &format!("{context}: scalar, array"),
+                    );
                 }
             }
         }
