@@ -988,10 +988,8 @@ fn test_read_non_utf8_binary_as_utf8() {
             let Err(err) = arrow_reader.next().unwrap() else {
                 panic!("{values:?} written as {encodings:?} read as {supplied_type}: no error");
             };
-            // Dictionary values are validated by `StringArray::try_from_binary`,
-            // which reports a split character as "Split UTF-8 codepoint"
             assert!(
-                err.to_string().contains("UTF-8"),
+                err.to_string().contains("encountered non UTF-8 data"),
                 "{values:?} written as {encodings:?} read as {supplied_type}: unexpected error: {err}"
             );
         }
