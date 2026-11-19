@@ -220,16 +220,8 @@ impl RecordDecoder {
                 })
             })?;
 
-        // Need to truncate data t1o the actual amount of data read
-        let data = std::str::from_utf8(&self.data[..self.data_len]).map_err(|e| {
-            let valid_up_to = e.valid_up_to();
-
-            // We can't use binary search because of empty fields
-            let idx = self.offsets[..self.offsets_len]
-                .iter()
-                .rposition(|x| *x <= valid_up_to)
-                .unwrap();
-
+        let offsets = &self.offsets[..self.offsets_len];
+        let invalid_utf8 = |idx: usize| {
             let field = idx % self.num_columns + 1;
             let line_offset = self.line_number - self.num_rows;
             let line = line_offset + idx / self.num_columns;
@@ -237,9 +229,26 @@ impl RecordDecoder {
             ArrowError::CsvError(format!(
                 "Encountered invalid UTF-8 data for line {line} and field {field}"
             ))
+        };
+
+        // Need to truncate data t1o the actual amount of data read
+        let data = std::str::from_utf8(&self.data[..self.data_len]).map_err(|e| {
+            let valid_up_to = e.valid_up_to();
+
+            // We can't use binary search because of empty fields
+            let idx = offsets.iter().rposition(|x| *x <= valid_up_to).unwrap();
+
+            invalid_utf8(idx)
         })?;
 
-        let offsets = &self.offsets[..self.offsets_len];
+        // Invalid bytes on either side of a field boundary can join into a valid sequence.
+        // ASCII data has no multi-byte sequences, so only scan the offsets otherwise
+        if !data.is_ascii()
+            && let Some(idx) = split_char_field(offsets, data)
+        {
+            return Err(invalid_utf8(idx));
+        }
+
         let num_rows = self.num_rows;
 
         // Reset state
@@ -256,6 +265,13 @@ impl RecordDecoder {
             data,
         })
     }
+}
+
+/// Returns the index of the first field that ends in the middle of a multi-byte character
+#[inline(never)]
+fn split_char_field(offsets: &[usize], data: &str) -> Option<usize> {
+    let idx = offsets.iter().position(|x| !data.is_char_boundary(*x))?;
+    Some(idx - 1)
 }
 
 /// A collection of parsed, UTF-8 CSV records

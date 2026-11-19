@@ -360,7 +360,9 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     fn get_offset(&self, i: usize) -> Result<u32, ArrowError> {
         let byte_range = self.first_field_offset_byte as _..self.first_value_byte as _;
         let field_offsets = slice_from_slice(self.value, byte_range)?;
-        self.header.field_offset_size.unpack_u32(field_offsets, i)
+        self.header
+            .field_offset_size
+            .unpack_u32_at_offset(field_offsets, 0, i)
     }
 
     /// Get a field's name by index in `0..self.len()`
@@ -379,7 +381,10 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     fn try_field_name(&self, i: usize) -> Result<&'m str, ArrowError> {
         let byte_range = self.header.field_ids_start_byte() as _..self.first_field_offset_byte as _;
         let field_id_bytes = slice_from_slice(self.value, byte_range)?;
-        let field_id = self.header.field_id_size.unpack_u32(field_id_bytes, i)?;
+        let field_id = self
+            .header
+            .field_id_size
+            .unpack_u32_at_offset(field_id_bytes, 0, i)?;
         self.metadata.get(field_id as _)
     }
 
