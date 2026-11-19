@@ -4930,6 +4930,52 @@ mod tests {
     }
 
     #[test]
+    fn test_file_embeds_stream() {
+        let dict = DictionaryArray::<Int32Type>::from_iter(["a", "b", "a"]);
+        let decimal = Decimal128Array::from(vec![Some(1), None, Some(3)]);
+        let batch = RecordBatch::try_from_iter([
+            ("dict", Arc::new(dict) as ArrayRef),
+            ("decimal", Arc::new(decimal) as ArrayRef),
+        ])
+        .unwrap();
+
+        for (alignment, legacy, version) in [
+            (8, false, MetadataVersion::V5),
+            (16, false, MetadataVersion::V5),
+            (32, false, MetadataVersion::V5),
+            (64, false, MetadataVersion::V5),
+            (64, true, MetadataVersion::V4),
+        ] {
+            let options = IpcWriteOptions::try_new(alignment, legacy, version).unwrap();
+            let mut writer =
+                FileWriter::try_new_with_options(vec![], batch.schema_ref(), options).unwrap();
+            writer.write(&batch).unwrap();
+            writer.write(&batch).unwrap();
+            let file = writer.into_inner().unwrap();
+
+            // An IPC file is `ARROW1`, padding to 8 bytes, then an IPC stream
+            let stream = StreamReader::try_new(&file[8..], None).unwrap();
+            let from_stream = stream.collect::<Result<Vec<_>, _>>().unwrap();
+            let reader = FileReader::try_new(Cursor::new(&file), None).unwrap();
+            let from_file = reader.collect::<Result<Vec<_>, _>>().unwrap();
+            assert_eq!(from_stream, [batch.clone(), batch.clone()]);
+            assert_eq!(from_file, from_stream);
+
+            // The dictionary and record batch messages, and so their bodies, stay aligned
+            let trailer_start = file.len() - 10;
+            let footer_len = read_footer_length(file[trailer_start..].try_into().unwrap()).unwrap();
+            let footer = root_as_footer(&file[trailer_start - footer_len..trailer_start]).unwrap();
+            let dictionaries = footer.dictionaries().unwrap();
+            let record_batches = footer.recordBatches().unwrap();
+            assert_eq!((dictionaries.len(), record_batches.len()), (1, 2));
+            for block in dictionaries.iter().chain(record_batches.iter()) {
+                assert_eq!(block.offset() as usize % alignment, 0);
+                assert_eq!(block.metaDataLength() as usize % alignment, 0);
+            }
+        }
+    }
+
+    #[test]
     fn test_flush() {
         // We write a schema which is small enough to fit into a buffer and not get flushed,
         // and then force the write with .flush().
