@@ -95,13 +95,13 @@ fn integer_benchmark<T>(
     name: &str,
     a_range: Range<T::Native>,
     b_range: Range<T::Native>,
-    max: T::Native,
 ) where
     T: ArrowPrimitiveType,
     T::Native: SampleUniform,
 {
     const BATCH_SIZE: usize = 8192;
     let one = T::Native::ONE;
+    let max = T::Native::MAX_TOTAL_ORDER;
     for null_density in [0., 0.1] {
         let a = seeded_array::<T>(BATCH_SIZE, null_density, a_range.clone(), 1);
         let b = seeded_array::<T>(BATCH_SIZE, null_density, b_range.clone(), 2);
@@ -143,7 +143,7 @@ fn integer_benchmark<T>(
         .to_vec();
     values[BATCH_SIZE - 1] = max;
     let overflow = PrimitiveArray::<T>::from_iter_values(values);
-    let one = Scalar::new(PrimitiveArray::<T>::from_iter_values([one]));
+    let one = PrimitiveArray::<T>::new_scalar(one);
     c.bench_function(&format!("{name}_add_checked_overflow"), |bench| {
         bench.iter(|| hint::black_box(add(&overflow, &one).unwrap_err()))
     });
@@ -159,11 +159,11 @@ fn integer_benchmark<T>(
 }
 
 fn integer_benchmarks(c: &mut Criterion) {
-    integer_benchmark::<Int32Type>(c, "int32", -1000..1000, -1000..1000, i32::MAX);
-    integer_benchmark::<Int64Type>(c, "int64", -1000..1000, -1000..1000, i64::MAX);
+    integer_benchmark::<Int32Type>(c, "int32", -1000..1000, -1000..1000);
+    integer_benchmark::<Int64Type>(c, "int64", -1000..1000, -1000..1000);
     // The left operands are larger, so that subtraction doesn't overflow.
-    integer_benchmark::<UInt32Type>(c, "uint32", 1000..2000, 0..1000, u32::MAX);
-    integer_benchmark::<UInt64Type>(c, "uint64", 1000..2000, 0..1000, u64::MAX);
+    integer_benchmark::<UInt32Type>(c, "uint32", 1000..2000, 0..1000);
+    integer_benchmark::<UInt64Type>(c, "uint64", 1000..2000, 0..1000);
 }
 
 criterion_group!(benches, add_benchmark, integer_benchmarks);
