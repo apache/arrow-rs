@@ -65,7 +65,7 @@ impl FixedSizeBinaryBuilder {
     /// distinct value element.
     #[inline]
     pub fn append_value(&mut self, value: impl AsRef<[u8]>) -> Result<(), ArrowError> {
-        if self.value_length != value.as_ref().len() as i32 {
+        if value.as_ref().len() != self.value_length as usize {
             Err(ArrowError::InvalidArgumentError(
                 "Byte slice does not have the same length as FixedSizeBinaryBuilder value lengths"
                     .to_string(),
@@ -146,7 +146,7 @@ impl FixedSizeBinaryBuilder {
     }
     ///  Returns the total memory capacity in bytes currently
     pub fn capacity(&self) -> usize {
-        self.values_builder.capacity() + self.null_buffer_builder.allocated_size() + 4 // i32 
+        self.values_builder.capacity() + self.null_buffer_builder.allocated_size() + 4 // i32
     }
 }
 

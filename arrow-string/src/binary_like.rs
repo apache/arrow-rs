@@ -53,6 +53,17 @@ pub(crate) fn binary_apply<'a, T: BinaryArrayType<'a> + 'a>(
     r_v: Option<&'a dyn AnyDictionaryArray>,
 ) -> Result<BooleanArray, ArrowError> {
     let l_len = l_v.map_or_else(|| l.len(), |l| l.len());
+    // A valid dictionary without values can only contain null keys.
+    if l_v.is_some_and(|dict| dict.values().is_empty())
+        || r_v.is_some_and(|dict| dict.values().is_empty())
+    {
+        let len = if l_s {
+            r_v.map_or_else(|| r.len(), |r| r.len())
+        } else {
+            l_len
+        };
+        return Ok(BooleanArray::new_null(len));
+    }
     if r_s {
         let idx = match r_v {
             Some(dict) if dict.null_count() != 0 => return Ok(BooleanArray::new_null(l_len)),

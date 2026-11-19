@@ -180,8 +180,11 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     /// Create a new [`GenericByteArray`] where `value` is repeated `repeat_count` times.
     ///
     /// # Panics
-    /// This will panic if value's length multiplied by `repeat_count` overflows usize.
     ///
+    /// Panics if value's length multiplied by `repeat_count` overflows `usize`
+    /// or exceeds `T::Offset::MAX`.
+    ///
+    /// Use [`Self::try_new_repeated`] for a fallible version.
     pub fn new_repeated(value: impl AsRef<T::Native>, repeat_count: usize) -> Self {
         let s: &[u8] = value.as_ref().as_ref();
         let value_offsets = OffsetBuffer::from_repeated_length(s.len(), repeat_count);
@@ -198,6 +201,46 @@ impl<T: ByteArrayType> GenericByteArray<T> {
             value_offsets,
             nulls: None,
         }
+    }
+
+    /// Create a new [`GenericByteArray`] where `value` is repeated `repeat_count` times.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if value's length multiplied by `repeat_count` overflows `usize`,
+    /// exceeds `T::Offset::MAX`, or if the buffer cannot be allocated.
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_array::{Array, StringArray};
+    /// let array = StringArray::try_new_repeated("hello", 3).unwrap();
+    /// assert_eq!(array.len(), 3);
+    /// assert_eq!(array.value(0), "hello");
+    /// assert_eq!(array.value(1), "hello");
+    /// assert_eq!(array.value(2), "hello");
+    /// ```
+    pub fn try_new_repeated(
+        value: impl AsRef<T::Native>,
+        repeat_count: usize,
+    ) -> Result<Self, ArrowError> {
+        let s: &[u8] = value.as_ref().as_ref();
+        let value_offsets = OffsetBuffer::try_from_repeated_length(s.len(), repeat_count)
+            .map_err(|err| ArrowError::OffsetOverflowError(err.value().unwrap_or(usize::MAX)))?;
+        let bytes: Buffer = {
+            let mut mutable_buffer = MutableBuffer::with_capacity(0);
+            mutable_buffer
+                .try_repeat_slice_n_times(s, repeat_count)
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+
+            mutable_buffer.into()
+        };
+
+        Ok(Self {
+            data_type: T::DATA_TYPE,
+            value_data: bytes,
+            value_offsets,
+            nulls: None,
+        })
     }
 
     /// Creates a [`GenericByteArray`] based on an iterator of values without nulls
@@ -601,8 +644,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::{Array, BinaryArray, StringArray};
+    use crate::{Array, BinaryArray, LargeBinaryArray, StringArray};
     use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer};
+    use arrow_schema::ArrowError;
 
     /// `from_iter_values` must work with iterators that report no upper size bound,
     /// and must not trust the size hint it does get.
@@ -716,5 +760,57 @@ mod tests {
     #[should_panic(expected = "offset overflow")]
     fn create_repeated_i32_offset_overflow_2() {
         let _arr = BinaryArray::new_repeated(b"hello", ((i32::MAX as usize) / "hello".len()) + 1);
+    }
+
+    #[test]
+    fn try_new_repeated() {
+        // BinaryArray with multiple elements
+        let arr = BinaryArray::try_new_repeated(b"\x00\x01\xff", 3).unwrap();
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr.null_count(), 0);
+        for i in 0..3 {
+            assert_eq!(arr.value(i), b"\x00\x01\xff");
+        }
+        assert_eq!(arr.value_offsets(), &[0, 3, 6, 9]);
+
+        // Zero repeats
+        let arr = BinaryArray::try_new_repeated(b"test", 0).unwrap();
+        assert_eq!(arr.len(), 0);
+        assert_eq!(arr.value_offsets(), &[0]);
+
+        // Empty values with non-zero repeats
+        let arr = BinaryArray::try_new_repeated(b"", 5).unwrap();
+        assert_eq!(arr.len(), 5);
+        assert_eq!(arr.value_offsets(), &[0, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn try_new_repeated_overflow() {
+        // usize multiplication overflow
+        let err =
+            BinaryArray::try_new_repeated(b"hello", (usize::MAX / "hello".len()) + 1).unwrap_err();
+        assert!(matches!(err, ArrowError::OffsetOverflowError(usize::MAX)));
+
+        // i32 offset overflow (fits in usize, exceeds i32::MAX)
+        let err = BinaryArray::try_new_repeated(b"a", (i32::MAX as usize) + 1).unwrap_err();
+        assert!(matches!(
+            err,
+            ArrowError::OffsetOverflowError(val) if val == (i32::MAX as usize) + 1
+        ));
+
+        // i64 offset overflow (fits in usize, exceeds i64::MAX on 64-bit platforms)
+        #[cfg(target_pointer_width = "64")]
+        {
+            // Valid within i64 offset bounds, but offset-buffer allocation overflows memory/usize
+            let err = LargeBinaryArray::try_new_repeated(b"x", i64::MAX as usize).unwrap_err();
+            assert!(matches!(err, ArrowError::OffsetOverflowError(_)));
+
+            let err =
+                LargeBinaryArray::try_new_repeated(b"a", (i64::MAX as usize) + 1).unwrap_err();
+            assert!(matches!(
+                err,
+                ArrowError::OffsetOverflowError(9223372036854775808)
+            ));
+        }
     }
 }

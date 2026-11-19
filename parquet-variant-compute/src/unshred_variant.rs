@@ -22,8 +22,8 @@ use arrow::temporal_conversions::time64us_to_time;
 use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
 use parquet_variant::{
-    ListBuilder, ObjectBuilder, ObjectFieldBuilder, Variant, VariantBuilderExt, VariantDecimal4,
-    VariantDecimal8, VariantDecimal16, VariantDecimalType, VariantMetadata,
+    ObjectFieldBuilder, Variant, VariantBuilderExt, VariantDecimal4, VariantDecimal8,
+    VariantDecimal16, VariantDecimalType, VariantMetadata,
 };
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -53,7 +53,7 @@ pub fn unshred_variant(array: &VariantArray) -> Result<VariantArray> {
     // Already unshredded: no data movement needed, but the output must annotate `value` as
     // non-nullable per the spec. Inputs whose value-nulls are not all masked by the parent null
     // buffer (spec-invalid "missing" rows) cannot be re-annotated and fall through to the row
-    // loop below, whose top-level sink materializes `Variant::Null` for such rows.
+    // loop below, whose top-level builder materializes `Variant::Null` for such rows.
     if typed_value_col.is_none() {
         if value_field_is_non_nullable(array) {
             return Ok(array.clone());
@@ -83,8 +83,8 @@ pub fn unshred_variant(array: &VariantArray) -> Result<VariantArray> {
                 )
             })?;
             let metadata = VariantMetadata::try_new(metadata_bytes)?;
-            let mut row_sink = TopLevelRowSink(value_builder.builder_ext(&metadata));
-            row_builder.append_row(&mut row_sink, &metadata, i)?;
+            let mut value_builder = value_builder.builder_ext(&metadata);
+            row_builder.append_row(&mut value_builder, &metadata, i)?;
         }
     }
 
@@ -110,38 +110,6 @@ fn value_nulls_are_masked(value: &ArrayRef, parent_nulls: Option<&NullBuffer>) -
         || parent_nulls
             .zip(value.nulls())
             .is_some_and(|(parent, value_nulls)| parent.contains(value_nulls))
-}
-
-/// Wraps the sink that every top-level row is appended into. The row builders signal a missing
-/// value (value and typed_value both NULL) by calling `append_null`, and this wrapper gives that
-/// signal its top-level meaning: `Variant::Null`, because the non-nullable output `value` column
-/// cannot hold a physical NULL. Array-level NULL rows are appended before the sink is built, so
-/// they never reach it. Nested builders created via `try_new_object`/`try_new_list` are returned
-/// unwrapped, so nested missing values keep their own semantics, e.g. [`ObjectFieldBuilder`]
-/// omits the field.
-struct TopLevelRowSink<B>(B);
-
-impl<B: VariantBuilderExt> VariantBuilderExt for TopLevelRowSink<B> {
-    type State<'a>
-        = B::State<'a>
-    where
-        Self: 'a;
-
-    fn append_null(&mut self) {
-        self.0.append_value(Variant::Null);
-    }
-
-    fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>) {
-        self.0.append_value(value);
-    }
-
-    fn try_new_list(&mut self) -> Result<ListBuilder<'_, Self::State<'_>>> {
-        self.0.try_new_list()
-    }
-
-    fn try_new_object(&mut self) -> Result<ObjectBuilder<'_, Self::State<'_>>> {
-        self.0.try_new_object()
-    }
 }
 
 /// Row builder for converting shredded VariantArray rows back to unshredded form
