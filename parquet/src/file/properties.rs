@@ -238,21 +238,31 @@ enum OffsetIndexSetting {
 /// are best effort, so a page can end up larger than the limit set for it. Limits
 /// are only checked between batches, and [`set_write_batch_size`](WriterPropertiesBuilder::set_write_batch_size)
 /// sets how large those batches are. A page can therefore pass its limit by up to
-/// one batch worth of data, and lowering the write batch size keeps pages closer
-/// to their limits.
+/// one batch worth of data. Chunks also extend to record boundaries, so a column
+/// with large repeated values can pass it by more than that. Lowering the write
+/// batch size keeps pages closer to their limits.
 ///
-/// There is one exception. When the definition and repetition levels of a batch
-/// are all the same value, for example a nullable column whose batch happens to
-/// contain no nulls, there is no level array to split and a larger batch costs
-/// no extra work. Those batches are written
+/// [`set_data_page_size_limit`](WriterPropertiesBuilder::set_data_page_size_limit)
+/// can also make pages smaller than the row count limit alone would. When a batch
+/// would not fit the byte budget the writer splits it further, so an `INT64`
+/// column with a 10,000 byte page limit holds pages to about 1,250 rows even with
+/// a much larger write batch size.
+///
+/// There is one exception to the batch size rule. When the definition and
+/// repetition levels of a batch are all the same value, for example a nullable
+/// column whose batch happens to contain no nulls, there is no level array to
+/// split and a larger batch costs no extra work. Those batches are written
 /// [`set_data_page_row_count_limit`](WriterPropertiesBuilder::set_data_page_row_count_limit)
 /// rows at a time instead, so for them that limit is the enforcement granularity
 /// and the write batch size does not move page boundaries.
 ///
-/// Which of the two applies depends on the data being written and not only on
-/// the schema, so the same column can be batched at either size. A column with
-/// no level data at all, such as a non-nullable flat column, is always batched
-/// at the write batch size.
+/// Which of the two applies depends on the write path and on the data being
+/// written, not only on the schema. The Arrow writer can pass levels in compact
+/// form, while level slices supplied by the caller are always kept in full, so
+/// `write_batch_size` keeps its usual effect on that path. Even within one path
+/// the same column can be batched at either size, depending on whether a given
+/// batch contains a null. A column with no level data at all, such as a
+/// non-nullable flat column, is always batched at the write batch size.
 #[derive(Debug, Clone)]
 pub struct WriterProperties {
     write_batch_size: usize,
