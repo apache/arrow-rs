@@ -16,8 +16,10 @@ use arrow_array::{
         UInt8Type, UInt16Type, UInt32Type, UInt64Type,
     },
 };
+use arrow_buffer::bit_iterator::BitSliceIterator;
 use arrow_buffer::{
-    ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, ScalarBuffer,
+    ArrowNativeType, BooleanBuffer, BooleanBufferBuilder, Buffer, MutableBuffer, NullBuffer,
+    ScalarBuffer,
 };
 use arrow_schema::DataType as ArrowType;
 use hashbrown::HashMap as HbHashMap;
@@ -36,6 +38,9 @@ pub enum DictionaryBuffer<K: ArrowNativeType, V: OffsetSizeTrait> {
         values: ArrayRef,
         /// Exclusive upper bound for decoded keys.
         key_upper_bound: Option<u64>,
+        /// Validity of the first `nulls.len()` keys, recorded when padding nulls.
+        /// The keys after them are valid.
+        nulls: BooleanBufferBuilder,
     },
     Values {
         values: OffsetBuffer<V>,
@@ -81,6 +86,7 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                 keys,
                 values,
                 key_upper_bound,
+                ..
             } => {
                 // Need to discard fat pointer for equality check
                 // - https://stackoverflow.com/a/67114787
@@ -103,6 +109,7 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                     keys: Default::default(),
                     values: Arc::clone(dictionary),
                     key_upper_bound: incoming_bound,
+                    nulls: BooleanBufferBuilder::new(0),
                 };
                 match self {
                     Self::Dict { keys, .. } => Some(keys),
@@ -120,7 +127,12 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
     pub fn spill_values(&mut self) -> Result<&mut OffsetBuffer<V>> {
         match self {
             Self::Values { values } => Ok(values),
-            Self::Dict { keys, values, .. } => {
+            Self::Dict {
+                keys,
+                values,
+                nulls,
+                ..
+            } => {
                 let mut spilled = OffsetBuffer::with_capacity(0);
                 let data = values.to_data();
                 let dict_buffers = data.buffers();
@@ -131,12 +143,19 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                     // If dictionary is empty, zero pad offsets
                     spilled.offsets.resize(keys.len() + 1, V::default());
                 } else {
-                    // Note: at this point null positions will have arbitrary dictionary keys
-                    // and this will hydrate them to the corresponding byte array. This is
-                    // likely sub-optimal, as we would prefer zero length null "slots", but
-                    // spilling is already a degenerate case and so it is unclear if this is
-                    // worth optimising for, e.g. by keeping a null mask around
-                    spilled.extend_from_dictionary(keys.as_slice(), dict_offsets, dict_values)?;
+                    // Null slots hold arbitrary keys, so write them as empty values
+                    nulls.append_n(keys.len() - nulls.len(), true);
+                    for (start, end) in BitSliceIterator::new(nulls.as_slice(), 0, keys.len()) {
+                        let offset = *spilled.offsets.last().unwrap();
+                        spilled.offsets.resize(start + 1, offset);
+                        spilled.extend_from_dictionary(
+                            &keys[start..end],
+                            dict_offsets,
+                            dict_values,
+                        )?;
+                    }
+                    let offset = *spilled.offsets.last().unwrap();
+                    spilled.offsets.resize(keys.len() + 1, offset);
                 }
 
                 *self = Self::Values { values: spilled };
@@ -162,6 +181,7 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                 keys,
                 values,
                 key_upper_bound,
+                ..
             } => {
                 let keys_provably_in_range = key_upper_bound
                     .map(|bound| bound <= values.len() as u64)
@@ -219,8 +239,13 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                 if let ArrowType::FixedSizeBinary(size) = value_type {
                     let binary = values.into_array(null_buffer, GenericBinaryArray::<V>::DATA_TYPE);
                     let binary = binary.as_binary::<V>();
-                    let array =
-                        FixedSizeBinaryArray::try_from_sparse_iter_with_size(binary.iter(), size)?;
+                    // Padding for a nullable parent leaves empty slots that a non-nullable
+                    // field has no null buffer for, so fill them with zeros
+                    let zeros = vec![0; size as usize];
+                    let slots = binary
+                        .iter()
+                        .map(|slot| slot.map(|v| if v.is_empty() { zeros.as_slice() } else { v }));
+                    let array = FixedSizeBinaryArray::try_from_sparse_iter_with_size(slots, size)?;
                     return pack_fixed_values(key_type, &array);
                 }
 
@@ -255,8 +280,9 @@ impl<K: ArrowNativeType, V: OffsetSizeTrait> ValuesBuffer for DictionaryBuffer<K
         valid_mask: &[u8],
     ) -> Result<()> {
         match self {
-            Self::Dict { keys, .. } => {
+            Self::Dict { keys, nulls, .. } => {
                 keys.resize(read_offset + levels_read, K::default());
+                nulls.append_packed_range(nulls.len()..keys.len(), valid_mask);
                 keys.pad_nulls(read_offset, values_read, levels_read, valid_mask)
             }
             Self::Values { values, .. } => {
