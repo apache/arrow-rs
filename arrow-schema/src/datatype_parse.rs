@@ -109,9 +109,12 @@ impl<'a> Parser<'a> {
             self.tokenizer.peek(),
             Some(Ok(Token::DoubleQuotedString(_)))
         ) {
+            // New named field syntax: `"foo": non-null Int64`.
             return self.parse_field();
         }
 
+        // Parse unnamed fields such as `non-null Int64`, and keep the old
+        // `non-null Int64, field: 'foo'` syntax for backwards compatibility.
         let nullable = self.parse_opt_nullable();
         let data_type = self.parse_next_type()?;
 
@@ -133,7 +136,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses the List type (called after `List` has been consumed)
-    /// E.g: List("foo": non-null Int64)
+    /// E.g: `List("foo": non-null Int64)` or `List(non-null Int64, field: 'foo')`
     fn parse_list(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
         let field = self.parse_list_field("List")?;
@@ -142,7 +145,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses the ListView type (called after `ListView` has been consumed)
-    /// E.g: ListView("foo": non-null Int64)
+    /// E.g: `ListView("foo": non-null Int64)` or `ListView(non-null Int64, field: 'foo')`
     fn parse_list_view(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
         let field = self.parse_list_field("ListView")?;
@@ -151,7 +154,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses the LargeList type (called after `LargeList` has been consumed)
-    /// E.g: LargeList("foo": non-null Int64)
+    /// E.g: `LargeList("foo": non-null Int64)` or `LargeList(non-null Int64, field: 'foo')`
     fn parse_large_list(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
         let field = self.parse_list_field("LargeList")?;
@@ -160,7 +163,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses the LargeListView type (called after `LargeListView` has been consumed)
-    /// E.g: LargeListView("foo": non-null Int64)
+    /// E.g: `LargeListView("foo": non-null Int64)` or `LargeListView(non-null Int64, field: 'foo')`
     fn parse_large_list_view(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
         let field = self.parse_list_field("LargeListView")?;
