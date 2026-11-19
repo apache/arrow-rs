@@ -1173,3 +1173,67 @@ fn test_dictionary_preservation() {
     assert_eq!(get_dict(&batches[3]), get_dict(&batches[4]));
     assert_eq!(get_dict(&batches[4]), get_dict(&batches[5]));
 }
+
+#[test]
+fn test_dictionary_fallback_with_nulls() {
+    // Buffered dictionary keys are converted to plain values when a batch reaches a
+    // new dictionary or a PLAIN page. Nulls padded before that must stay empty.
+    let large = "a".repeat(64 * 1024);
+    let rows: Vec<_> = std::iter::once(Some(large.as_str()))
+        .chain(std::iter::repeat_n(None, 100))
+        .chain([Some("b"), Some("c")])
+        .collect();
+    let array: DictionaryArray<arrow::datatypes::Int32Type> = rows.iter().copied().collect();
+    let batch = RecordBatch::try_from_iter([("c", Arc::new(array) as ArrayRef)]).unwrap();
+    let split_rows = [&rows[..50], &rows[51..]].concat();
+
+    let cases = [
+        // [large, null x 100] and ["b", "c"] in two row groups, read as one batch
+        (
+            WriterProperties::builder()
+                .set_max_row_group_row_count(Some(101))
+                .build(),
+            vec![RowSelector::select(rows.len())],
+            &rows,
+        ),
+        // One row group whose dictionary page fills up at "b", so "c" is PLAIN
+        // encoded, read in two parts
+        (
+            WriterProperties::builder()
+                .set_write_batch_size(1)
+                .set_data_page_row_count_limit(1)
+                .set_dictionary_page_size_limit(large.len() + 8)
+                .build(),
+            vec![
+                RowSelector::select(50),
+                RowSelector::skip(1),
+                RowSelector::select(52),
+            ],
+            &split_rows,
+        ),
+    ];
+    for (props, selection, expected) in cases {
+        let mut buf = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let read = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(buf))
+            .unwrap()
+            .with_row_selection(selection.into())
+            .with_row_selection_policy(crate::arrow::arrow_reader::RowSelectionPolicy::Selectors)
+            .build()
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+        let strings = arrow::compute::cast(read.column(0), &ArrowDataType::Utf8).unwrap();
+        assert_eq!(
+            strings.as_string::<i32>(),
+            &StringArray::from(expected.clone())
+        );
+        // Null rows must not hold copies of `large`
+        let memory = read.get_array_memory_size();
+        assert!(memory < 2 * large.len(), "batch uses {memory} bytes");
+    }
+}

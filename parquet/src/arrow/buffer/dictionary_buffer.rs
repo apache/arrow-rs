@@ -557,6 +557,8 @@ mod tests {
         // Read some data not preserving the dictionary
 
         let values = buffer.spill_values().unwrap();
+        // Null slots spill as empty values
+        assert_eq!(values.values, b"worldhelloab");
         let read_offset = values.len();
         values.try_push(b"bingo", false).unwrap();
         values.try_push(b"bongo", false).unwrap();
