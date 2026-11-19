@@ -93,6 +93,7 @@ impl Display for DataType {
                     "LargeListView"
                 };
 
+                // e.g. `LargeList(non-null UInt32)` or `LargeList("value": non-null UInt32)`
                 write!(f, "{type_name}({})", format_list_field(field))
             }
             Self::FixedSizeList(field, size) => {
