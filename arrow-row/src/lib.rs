@@ -138,9 +138,10 @@
 //! reported by [`UnionArray::logical_nulls`]. These nulls compare equal regardless
 //! of their type IDs, so they share one row encoding.
 //!
-//! Decoding represents every logical null using the first field marked nullable
-//! in schema order, or the first field if none is marked nullable. This can change
-//! the type ID at null positions. The decoded Union array can therefore compare
+//! Decoding assigns logical nulls to fields in schema order, preferring nullable
+//! fields. A dense Union shares an offset for consecutive nulls within a child
+//! and can use additional fields if a child reaches its run-end limit. This can
+//! change the type ID at null positions. The decoded Union array can therefore compare
 //! unequal to the input under Arrow array equality, which distinguishes these
 //! type IDs. Non-null type IDs and values are preserved.
 //!
@@ -562,9 +563,9 @@ const DICTIONARY_GATHER_RATIO: usize = 4;
 /// ```
 ///
 /// All logical nulls have the same one-byte encoding, regardless of their active
-/// type ID. Decoding represents them as a null in the first nullable field in
-/// schema order, or the first field if none is marked nullable. Non-null values
-/// retain their type IDs; null type IDs are canonicalized.
+/// type ID. Decoding prefers nullable fields in schema order. Dense decoding can
+/// use additional fields when a child reaches its run-end limit. Non-null values
+/// retain their type IDs.
 ///
 /// See [`UnionArray`] for more details on union types.
 ///
@@ -2627,109 +2628,130 @@ unsafe fn decode_column(
 
             let mut type_ids = Vec::with_capacity(len);
             let mut rows_by_field: Vec<Vec<(usize, &[u8])>> = vec![Vec::new(); converters.len()];
+            let mut dense_null_rows = Vec::new();
             let null_field_idx = union_fields
                 .iter()
                 .position(|(_, field)| field.is_nullable())
                 .unwrap_or(0);
 
-            for (idx, row) in rows.iter().enumerate() {
-                let (type_id, child_row) = if row[0] == null_sentinel {
-                    // Decode nulls through a synthetic child row; the input contains only
-                    // the null marker and cannot preserve the original active tag.
-                    (
-                        field_to_type_ids[null_field_idx],
-                        null_rows[null_field_idx].data.as_ref(),
-                    )
+            for (idx, row) in rows.iter_mut().enumerate() {
+                if row[0] == null_sentinel {
+                    type_ids.push(field_to_type_ids[null_field_idx]);
+                    if *mode == UnionMode::Dense {
+                        dense_null_rows.push(idx);
+                    }
+                    *row = &row[1..];
                 } else {
-                    let id = if options.descending { !row[1] } else { row[1] };
-                    (id as i8, &row[2..])
-                };
-                type_ids.push(type_id);
-
-                let field_idx = type_id_to_field_idx[type_id as usize];
-
-                rows_by_field[field_idx].push((idx, child_row));
+                    let id = if options.descending { !row[1] } else { row[1] } as i8;
+                    type_ids.push(id);
+                    rows_by_field[type_id_to_field_idx[id as usize]].push((idx, &row[2..]));
+                }
             }
 
             let mut child_arrays: Vec<ArrayRef> = Vec::with_capacity(converters.len());
-            let mut offsets = (*mode == UnionMode::Dense).then(|| Vec::with_capacity(len));
-
-            for (field_idx, converter) in converters.iter().enumerate() {
-                let field_rows = &rows_by_field[field_idx];
-
-                match &mode {
-                    UnionMode::Dense => {
-                        let mut child_data = field_rows
+            let offsets_buffer = match mode {
+                UnionMode::Dense => {
+                    let mut offsets = vec![0; len];
+                    let mut decoded_children: Vec<_> =
+                        (0..converters.len()).map(|_| None).collect();
+                    let mut remaining_nulls = dense_null_rows.as_slice();
+                    // Prefer nullable fields in schema order. If a child reaches its
+                    // run-end limit, assign the remaining nulls to the next field.
+                    let candidates = [true, false].into_iter().flat_map(|nullable| {
+                        union_fields
                             .iter()
-                            .map(|(_, bytes)| *bytes)
-                            .collect::<Vec<_>>();
-
-                        let child_array =
-                            unsafe { converter.convert_raw(&mut child_data, validate_utf8) }?;
-
-                        // advance row slices by the bytes consumed
-                        for ((row_idx, original_bytes), remaining_bytes) in
-                            field_rows.iter().zip(child_data)
-                        {
-                            let consumed_length = if rows[*row_idx][0] == null_sentinel {
-                                1
-                            } else {
-                                2 + original_bytes.len() - remaining_bytes.len()
-                            };
-                            rows[*row_idx] = &rows[*row_idx][consumed_length..];
+                            .enumerate()
+                            .filter_map(move |(i, (_, field))| {
+                                (field.is_nullable() == nullable).then_some(i)
+                            })
+                    });
+                    for field_idx in candidates {
+                        if remaining_nulls.is_empty() {
+                            break;
                         }
-
-                        child_arrays.push(child_array.into_iter().next().unwrap());
-                    }
-                    UnionMode::Sparse => {
-                        let mut sparse_data: Vec<&[u8]> = Vec::with_capacity(len);
-                        let mut field_row_iter = field_rows.iter().peekable();
-                        let null_row_bytes: &[u8] = &null_rows[field_idx].data;
-
-                        for idx in 0..len {
-                            if let Some((next_idx, bytes)) = field_row_iter.peek()
-                                && *next_idx == idx
-                            {
-                                sparse_data.push(*bytes);
-
-                                field_row_iter.next();
-                                continue;
+                        let child = unsafe {
+                            fit_dense_union_nulls(
+                                &converters[field_idx],
+                                &rows_by_field[field_idx],
+                                remaining_nulls,
+                                &null_rows[field_idx].data,
+                                validate_utf8,
+                            )
+                        }?;
+                        if let Some(child) = child {
+                            let (assigned, rest) =
+                                remaining_nulls.split_at(child.null_offsets.len());
+                            for (&row_idx, &offset) in assigned.iter().zip(&child.null_offsets) {
+                                type_ids[row_idx] = field_to_type_ids[field_idx];
+                                offsets[row_idx] = offset;
                             }
-                            sparse_data.push(null_row_bytes);
+                            decoded_children[field_idx] = Some(child);
+                            remaining_nulls = rest;
                         }
-
-                        let child_array =
-                            unsafe { converter.convert_raw(&mut sparse_data, validate_utf8) }?;
-
-                        // advance row slices by the bytes consumed for rows that belong to this field
-                        for (row_idx, child_row) in field_rows {
-                            let remaining_len = sparse_data[*row_idx].len();
-                            let consumed_length = if rows[*row_idx][0] == null_sentinel {
-                                1
-                            } else {
-                                2 + child_row.len() - remaining_len
-                            };
-                            rows[*row_idx] = &rows[*row_idx][consumed_length..];
-                        }
-
-                        child_arrays.push(child_array.into_iter().next().unwrap());
                     }
-                }
-            }
+                    if !remaining_nulls.is_empty() {
+                        return Err(ArrowError::RunEndIndexOverflowError);
+                    }
 
-            // build offsets for dense unions
-            if let Some(ref mut offsets_vec) = offsets {
-                let mut count = vec![0i32; converters.len()];
-                for type_id in &type_ids {
-                    let field_idx = type_id_to_field_idx[*type_id as usize];
-                    offsets_vec.push(count[field_idx]);
-
-                    count[field_idx] += 1;
+                    for (field_idx, converter) in converters.iter().enumerate() {
+                        let field_rows = &rows_by_field[field_idx];
+                        let child = match decoded_children[field_idx].take() {
+                            Some(child) => child,
+                            None => unsafe {
+                                decode_dense_union_child(
+                                    converter,
+                                    field_rows,
+                                    &[],
+                                    &[],
+                                    validate_utf8,
+                                )
+                            }?,
+                        };
+                        let mut null_offsets = child
+                            .null_offsets
+                            .chunk_by(|a, b| a == b)
+                            .map(|offsets| offsets[0] as usize)
+                            .peekable();
+                        let values = child
+                            .rows
+                            .into_iter()
+                            .enumerate()
+                            .filter(|(offset, _)| null_offsets.next_if_eq(offset).is_none());
+                        for ((offset, remaining), &(row_idx, _)) in values.zip(field_rows) {
+                            let consumed = rows[row_idx].len() - remaining.len();
+                            rows[row_idx] = &rows[row_idx][consumed..];
+                            offsets[row_idx] = i32::try_from(offset)
+                                .map_err(|_| ArrowError::OffsetOverflowError(offset))?;
+                        }
+                        child_arrays.push(child.array);
+                    }
+                    Some(ScalarBuffer::from(offsets))
                 }
-            }
+                UnionMode::Sparse => {
+                    for (field_idx, converter) in converters.iter().enumerate() {
+                        let field_rows = &rows_by_field[field_idx];
+                        let mut field_row_iter = field_rows.iter().peekable();
+                        let null_row: &[u8] = &null_rows[field_idx].data;
+                        let mut sparse_data: Vec<_> = (0..len)
+                            .map(|idx| {
+                                field_row_iter
+                                    .next_if(|(row_idx, _)| *row_idx == idx)
+                                    .map_or(null_row, |(_, bytes)| *bytes)
+                            })
+                            .collect();
+                        let child =
+                            unsafe { converter.convert_raw(&mut sparse_data, validate_utf8) }?;
+                        for &(row_idx, _) in field_rows {
+                            let consumed = rows[row_idx].len() - sparse_data[row_idx].len();
+                            rows[row_idx] = &rows[row_idx][consumed..];
+                        }
+                        child_arrays.push(child.into_iter().next().unwrap());
+                    }
+                    None
+                }
+            };
 
             let type_ids_buffer = ScalarBuffer::from(type_ids);
-            let offsets_buffer = offsets.map(ScalarBuffer::from);
 
             // Dictionary children, including nested ones, decode to their value types.
             let decoded_fields = union_fields
@@ -2757,6 +2779,91 @@ unsafe fn decode_column(
         }
     };
     Ok(array)
+}
+
+struct DenseUnionChild<'a> {
+    array: ArrayRef,
+    rows: Vec<&'a [u8]>,
+    null_offsets: Vec<i32>,
+}
+
+/// Decode a child's selected rows and assign one slot to each run of logical
+/// nulls in that child's row order, keeping its dense offsets nondecreasing.
+///
+/// # Safety
+///
+/// The supplied rows must contain valid data for the child converter.
+unsafe fn decode_dense_union_child<'a>(
+    converter: &RowConverter,
+    field_rows: &[(usize, &'a [u8])],
+    null_indices: &[usize],
+    null_row: &'a [u8],
+    validate_utf8: bool,
+) -> Result<DenseUnionChild<'a>, ArrowError> {
+    let mut rows = Vec::with_capacity(field_rows.len());
+    let mut null_offsets = Vec::with_capacity(null_indices.len());
+    let mut field_rows = field_rows.iter().peekable();
+    let mut in_null_run = false;
+    for &null_idx in null_indices {
+        while let Some(&(_, row)) = field_rows.next_if(|(idx, _)| *idx < null_idx) {
+            rows.push(row);
+            in_null_run = false;
+        }
+        if !in_null_run {
+            rows.push(null_row);
+            in_null_run = true;
+        }
+        let offset = rows.len() - 1;
+        null_offsets
+            .push(i32::try_from(offset).map_err(|_| ArrowError::OffsetOverflowError(offset))?);
+    }
+    rows.extend(field_rows.map(|(_, row)| *row));
+
+    let arrays = unsafe { converter.convert_raw(&mut rows, validate_utf8) }?;
+    Ok(DenseUnionChild {
+        array: arrays.into_iter().next().unwrap(),
+        rows,
+        null_offsets,
+    })
+}
+
+/// Try all remaining nulls first. On a run-end overflow, find the largest
+/// prefix this child can hold, leaving the rest for other children.
+///
+/// # Safety
+///
+/// The supplied rows must contain valid data for the child converter.
+unsafe fn fit_dense_union_nulls<'a>(
+    converter: &RowConverter,
+    field_rows: &[(usize, &'a [u8])],
+    null_indices: &[usize],
+    null_row: &'a [u8],
+    validate_utf8: bool,
+) -> Result<Option<DenseUnionChild<'a>>, ArrowError> {
+    let mut fitted = 0;
+    let mut limit = null_indices.len();
+    let mut count = limit;
+    let mut best = None;
+    while count > fitted {
+        match unsafe {
+            decode_dense_union_child(
+                converter,
+                field_rows,
+                &null_indices[..count],
+                null_row,
+                validate_utf8,
+            )
+        } {
+            Ok(child) => {
+                fitted = count;
+                best = Some(child);
+            }
+            Err(ArrowError::RunEndIndexOverflowError) => limit = count - 1,
+            Err(e) => return Err(e),
+        }
+        count = fitted + (limit - fitted).div_ceil(2);
+    }
+    Ok(best)
 }
 
 #[cfg(test)]
@@ -6540,6 +6647,156 @@ mod tests {
                         "{mode:?}, {name}, {options:?}"
                     );
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn dense_union_nulls_respect_run_end_capacity() {
+        let max_run_end = i16::MAX as usize;
+        let tail: ArrayRef = Arc::new(Int32Array::from_iter_values(0..(max_run_end as i32 + 2)));
+
+        for (run_len, expected_first_null_id) in
+            [(0, 127), (max_run_end - 1, 127), (max_run_end, 3)]
+        {
+            let run_ends = if run_len == 0 {
+                Int16Array::from(Vec::<i16>::new())
+            } else {
+                Int16Array::from(vec![run_len as i16])
+            };
+            let values = Int32Array::from(vec![7; run_ends.len()]);
+            let run = RunArray::<Int16Type>::try_new(&run_ends, &values).unwrap();
+            let fields = UnionFields::try_new(
+                [127, 3],
+                [
+                    Field::new("run", run.data_type().clone(), true),
+                    Field::new("int", DataType::Int32, true),
+                ],
+            )
+            .unwrap();
+            let (type_ids, offsets, ints, first_null_idx, last_null_idx, expected_last_null_id) =
+                if run_len == 0 {
+                    // All logical nulls can reuse one offset in the preferred child.
+                    let len = max_run_end + 1;
+                    (
+                        vec![3; len],
+                        vec![0; len],
+                        Int32Array::new_null(1),
+                        0,
+                        len - 1,
+                        127,
+                    )
+                } else {
+                    // Two nulls separated by a value in the preferred child need
+                    // distinct offsets there. The preferred child can fit at most one.
+                    let first_null_idx = run_len - 1;
+                    let mut type_ids = vec![127; run_len + 2];
+                    type_ids[first_null_idx] = 3;
+                    type_ids[run_len + 1] = 3;
+                    let mut offsets: Vec<_> = (0..first_null_idx as i32).collect();
+                    offsets.extend([0, first_null_idx as i32, 1]);
+                    (
+                        type_ids,
+                        offsets,
+                        Int32Array::new_null(2),
+                        first_null_idx,
+                        run_len + 1,
+                        3,
+                    )
+                };
+            let union = UnionArray::try_new(
+                fields,
+                type_ids.into(),
+                Some(offsets.into()),
+                vec![Arc::new(run), Arc::new(ints)],
+            )
+            .unwrap();
+            let tail = tail.slice(0, union.len());
+            let columns = [Arc::new(union.clone()) as ArrayRef, tail.clone()];
+
+            for options in all_sort_options() {
+                let decoded = check_reencoding(&columns, &[options; 2]);
+                let decoded_union = decoded[0].as_union();
+                assert_eq!(decoded_union.data_type(), union.data_type());
+                assert_eq!(decoded_union.logical_nulls(), union.logical_nulls());
+                assert_eq!(
+                    decoded_union.type_id(first_null_idx),
+                    expected_first_null_id
+                );
+                assert_eq!(decoded_union.type_id(last_null_idx), expected_last_null_id);
+                assert_eq!(decoded[1].to_data(), tail.to_data());
+
+                if run_len == 0 {
+                    assert_eq!(decoded_union.child(127).len(), 1);
+                    assert!(
+                        decoded_union
+                            .offsets()
+                            .unwrap()
+                            .iter()
+                            .all(|&offset| offset == 0)
+                    );
+                } else {
+                    let value = decoded_union.value(run_len);
+                    let run = value.as_run::<Int16Type>();
+                    let values = run.values().as_primitive::<Int32Type>();
+                    assert_eq!(values.value(run.get_physical_index(0)), 7);
+                    let child_offsets = decoded_union
+                        .type_ids()
+                        .iter()
+                        .zip(decoded_union.offsets().unwrap().iter())
+                        .filter_map(|(&id, &offset)| (id == 127).then_some(offset));
+                    assert!(child_offsets.is_sorted());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn dense_union_preserves_unused_run_end_fields() {
+        let run_ends_field =
+            Arc::new(Field::new("ends", DataType::Int16, false).with_metadata([("unit", "index")]));
+        let dictionary = DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int32));
+        for values_type in [DataType::Int32, dictionary] {
+            let values_field = Field::new("run_values", values_type.clone(), false)
+                .with_metadata([("source", "union")]);
+            let run_type = DataType::RunEndEncoded(
+                Arc::clone(&run_ends_field),
+                Arc::new(values_field.clone()),
+            );
+            let fields = UnionFields::try_new(
+                [127, 3],
+                [
+                    Field::new("run", run_type.clone(), true),
+                    Field::new("int", DataType::Int32, true),
+                ],
+            )
+            .unwrap();
+            let expected_run_type = DataType::RunEndEncoded(
+                Arc::clone(&run_ends_field),
+                Arc::new(values_field.with_data_type(DataType::Int32)),
+            );
+            let union = UnionArray::try_new(
+                fields,
+                vec![3].into(),
+                Some(vec![0].into()),
+                vec![
+                    new_empty_array(&run_type),
+                    Arc::new(Int32Array::from(vec![42])),
+                ],
+            )
+            .unwrap();
+
+            let columns = [Arc::new(union) as ArrayRef];
+            let decoded = check_reencoding(&columns, &[SortOptions::default()]);
+            let child = decoded[0].as_union().child(127);
+            assert!(child.is_empty());
+            assert_eq!(child.data_type(), &expected_run_type);
+            if values_type == DataType::Int32 {
+                assert_eq!(decoded[0].data_type(), columns[0].data_type());
+                let converter =
+                    RowConverter::new(vec![SortField::new(columns[0].data_type().clone())])
+                        .unwrap();
+                converter.convert_columns(&decoded).unwrap();
             }
         }
     }
