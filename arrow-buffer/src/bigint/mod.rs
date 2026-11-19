@@ -412,7 +412,7 @@ impl i256 {
     }
 
     /// Const helper to check equality of two `i256` instances
-    pub(crate) const fn is_eq(&self, other: Self) -> bool {
+    const fn is_eq(&self, other: Self) -> bool {
         (self.high == other.high) && (self.low == other.low)
     }
 

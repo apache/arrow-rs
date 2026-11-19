@@ -22,12 +22,14 @@ macro_rules! divisor_enum {
     (
         $name:ident,
         $t:ty,
+        [$($c:tt)?],
         [$(#[$enum_doc:meta])*],
         $($(#[$doc:meta])* $variant:ident($inner:ident),)+
     ) => {
         divisor_enum!(
             $name,
             $t,
+            [$($c)?],
             concat!(
                 "# use arrow_buffer::", stringify!($name), ";\n",
                 "let values: Vec<", stringify!($t), "> = vec![100, 7, 64];\n",
@@ -51,6 +53,7 @@ macro_rules! divisor_enum {
     (
         $name:ident,
         $t:ty,
+        [$($c:tt)?],
         $example:expr,
         $div_rem_example:expr,
         $branch_doc:expr,
@@ -91,7 +94,7 @@ macro_rules! divisor_enum {
             #[doc = $div_rem_example]
             /// ```
             #[inline]
-            pub const fn wrapping_div_rem(self, n: $t) -> ($t, $t) {
+            pub $($c)? fn wrapping_div_rem(self, n: $t) -> ($t, $t) {
                 match self {
                     $(Self::$variant(d) => d.wrapping_div_rem(n),)+
                 }
@@ -139,6 +142,7 @@ macro_rules! unsigned_divisor {
         divisor_enum!(
             $name,
             $t,
+            [const],
             [],
             /// A divisor that is a power of two
             PowerOfTwo($power_of_two),
@@ -310,7 +314,8 @@ macro_rules! unsigned_divisor {
 }
 
 /// `$multiplier` computes `m - 2^N` from figure 5.1 for `|divisor|` and `l`, and `$high` computes
-/// `n + MULSH(m - 2^N, n)`, which is `floor(m * n / 2^N)`. `[const]` makes `new` a `const fn`
+/// `n + MULSH(m - 2^N, n)`, which is `floor(m * n / 2^N)`. `[const]` makes `new` and the
+/// division methods `const fn`s
 macro_rules! signed_divisor {
     (
         $name:ident,
@@ -325,6 +330,7 @@ macro_rules! signed_divisor {
         divisor_enum!(
             $name,
             $t,
+            [$($c)?],
             [$(#[$enum_doc])*],
             /// A divisor whose magnitude is a power of two
             PowerOfTwo($power_of_two),
@@ -365,7 +371,7 @@ macro_rules! signed_divisor {
             #[doc = concat!("assert_eq!(minus_one.checked_div_rem(", stringify!($t), "::MIN), None);")]
             /// ```
             #[inline]
-            pub const fn checked_div_rem(self, n: $t) -> Option<($t, $t)> {
+            pub $($c)? fn checked_div_rem(self, n: $t) -> Option<($t, $t)> {
                 match self {
                     Self::PowerOfTwo(d) => d.checked_div_rem(n),
                     Self::AddIndicator(d) => Some(d.wrapping_div_rem(n)),
@@ -413,7 +419,7 @@ macro_rules! signed_divisor {
             #[doc = concat!("assert_eq!(minus_one.wrapping_div_rem(", stringify!($t), "::MIN), (", stringify!($t), "::MIN, 0));")]
             /// ```
             #[inline]
-            pub const fn wrapping_div_rem(self, n: $t) -> ($t, $t) {
+            pub $($c)? fn wrapping_div_rem(self, n: $t) -> ($t, $t) {
                 // Adding `|divisor| - 1` to a negative `n` makes the shift round toward zero
                 let t = n + ((n >> (<$t>::BITS - 1)) & self.mask);
                 let q = t >> self.shift;
@@ -434,7 +440,7 @@ macro_rules! signed_divisor {
             #[doc = concat!("assert_eq!(minus_one.checked_div_rem(", stringify!($t), "::MIN), None);")]
             /// ```
             #[inline]
-            pub const fn checked_div_rem(self, n: $t) -> Option<($t, $t)> {
+            pub $($c)? fn checked_div_rem(self, n: $t) -> Option<($t, $t)> {
                 // -1 is the only divisor with a negative sign and a zero mask
                 if n == <$t>::MIN && self.sign == -1 && self.mask == 0 {
                     None
@@ -480,7 +486,7 @@ macro_rules! signed_divisor {
             /// assert_eq!(divisor.wrapping_div_rem(-100), (14, -2));
             /// ```
             #[inline]
-            pub const fn wrapping_div_rem(self, n: $t) -> ($t, $t) {
+            pub $($c)? fn wrapping_div_rem(self, n: $t) -> ($t, $t) {
                 let ($m, $n) = (self.multiplier, n);
                 // The shift rounds down, and subtracting the sign of `n` rounds toward zero instead
                 let q = ($high >> self.shift) - (n >> (<$t>::BITS - 1));
@@ -597,12 +603,11 @@ signed_divisor!(
     ]
 );
 
-// `signed_divisor!` can't build `DivisorI256`, because `i256` has no `BITS` or `unsigned_abs` and
-// its operators can't be called in a `const fn`. Its variants compute on the parts of the values
-// with the helpers below `impl DivisorI256` instead
+// `signed_divisor!` can't build `DivisorI256`, because `i256` has no `BITS` or `unsigned_abs`
 divisor_enum!(
     DivisorI256,
     i256,
+    [],
     concat!(
         "# use arrow_buffer::{i256, DivisorI256};\n",
         "let values: Vec<i256> = [100, 7, 64].map(i256::from_i128).to_vec();\n",
@@ -667,7 +672,7 @@ impl DivisorI256 {
     /// assert_eq!(minus_one.checked_div_rem(i256::MIN), None);
     /// ```
     #[inline]
-    pub const fn checked_div_rem(self, n: i256) -> Option<(i256, i256)> {
+    pub fn checked_div_rem(self, n: i256) -> Option<(i256, i256)> {
         match self {
             Self::PowerOfTwo(d) => d.checked_div_rem(n),
             Self::AddIndicator(d) => Some(d.wrapping_div_rem(n)),
@@ -675,42 +680,9 @@ impl DivisorI256 {
     }
 }
 
-/// `i256` operations that a `const fn` can call, on the parts of the values. `shr` is `SRA` from
-/// table 3.1 of Granlund and Montgomery for `0..=255` bits
-///
-/// It branches on the shift, see [`DivisorI256`]
-const fn shr(x: i256, shift: u32) -> i256 {
-    let (low, high) = x.to_parts();
-    if shift == 0 {
-        x
-    } else if shift < 128 {
-        i256::from_parts(
-            (low >> shift) | ((high as u128) << (128 - shift)),
-            high >> shift,
-        )
-    } else {
-        i256::from_parts((high >> (shift - 128)) as u128, high >> 127)
-    }
-}
-
-const fn and(a: i256, b: i256) -> i256 {
-    let ((al, ah), (bl, bh)) = (a.to_parts(), b.to_parts());
-    i256::from_parts(al & bl, ah & bh)
-}
-
-const fn xor(a: i256, b: i256) -> i256 {
-    let ((al, ah), (bl, bh)) = (a.to_parts(), b.to_parts());
-    i256::from_parts(al ^ bl, ah ^ bh)
-}
-
-const fn not(a: i256) -> i256 {
-    let (low, high) = a.to_parts();
-    i256::from_parts(!low, !high)
-}
-
 /// The high 256 bits of the unsigned product of the bits of `a` and `b`
 #[inline]
-const fn mul_high_u256(a: i256, b: i256) -> i256 {
+fn mul_high_u256(a: i256, b: i256) -> i256 {
     let ((a0, a1), (b0, b1)) = (a.to_parts(), b.to_parts());
     let (a1, b1) = (a1 as u128, b1 as u128);
     let (_, p00) = mulx(a0, b0);
@@ -736,7 +708,8 @@ const fn mul_high_u256(a: i256, b: i256) -> i256 {
 /// which it computes once for the divisor.
 #[derive(Debug, Clone, Copy)]
 pub struct PowerOfTwoDivisorI256 {
-    shift: u32,
+    /// Below 256, so it fits the `u8` that `i256` shifts by
+    shift: u8,
     /// `|divisor| - 1`
     mask: i256,
     /// -1 if the divisor is negative, otherwise 0
@@ -752,7 +725,8 @@ impl PowerOfTwoDivisorI256 {
             return None;
         }
         Some(Self {
-            shift: magnitude.trailing_zeros(),
+            // The magnitude is a nonzero `i256`, so it has at most 255 trailing zeros
+            shift: magnitude.trailing_zeros() as u8,
             mask,
             sign: divisor.sign_mask(),
         })
@@ -772,15 +746,15 @@ impl PowerOfTwoDivisorI256 {
     /// assert_eq!(minus_one.wrapping_div_rem(i256::MIN), (i256::MIN, i256::ZERO));
     /// ```
     #[inline]
-    pub const fn wrapping_div_rem(self, n: i256) -> (i256, i256) {
+    pub fn wrapping_div_rem(self, n: i256) -> (i256, i256) {
         // Adding `|divisor| - 1` to a negative `n` makes the shift round toward zero
-        let t = n.wrapping_add(and(n.sign_mask(), self.mask));
-        let q = shr(t, self.shift);
+        let t = n.wrapping_add(n.sign_mask() & self.mask);
+        let q = t >> self.shift;
         // `(x ^ sign) - sign` negates `x` when `sign` is -1, and wraps only for `MIN / -1`
         // `t & !mask` is `n` rounded toward zero to a multiple of `|divisor|`
         (
-            xor(q, self.sign).wrapping_sub(self.sign),
-            n.wrapping_sub(and(t, not(self.mask))),
+            (q ^ self.sign).wrapping_sub(self.sign),
+            n.wrapping_sub(t & !self.mask),
         )
     }
 
@@ -797,9 +771,9 @@ impl PowerOfTwoDivisorI256 {
     /// assert_eq!(minus_one.checked_div_rem(i256::MIN), None);
     /// ```
     #[inline]
-    pub const fn checked_div_rem(self, n: i256) -> Option<(i256, i256)> {
+    pub fn checked_div_rem(self, n: i256) -> Option<(i256, i256)> {
         // -1 is the only divisor with a negative sign and a zero mask
-        if n.is_eq(i256::MIN) && self.sign.is_eq(i256::MINUS_ONE) && self.mask.is_eq(i256::ZERO) {
+        if n == i256::MIN && self.sign == i256::MINUS_ONE && self.mask == i256::ZERO {
             None
         } else {
             Some(self.wrapping_div_rem(n))
@@ -817,8 +791,8 @@ pub struct AddIndicatorDivisorI256 {
     divisor: i256,
     /// `m'` in figure 5.1
     multiplier: i256,
-    /// `sh_post` in figure 5.1
-    shift: u32,
+    /// `sh_post` in figure 5.1, below 255, so it fits the `u8` that `i256` shifts by
+    shift: u8,
 }
 
 impl AddIndicatorDivisorI256 {
@@ -838,7 +812,8 @@ impl AddIndicatorDivisorI256 {
         Self {
             divisor,
             multiplier: q.wrapping_add(i256::ONE),
-            shift: l - 1,
+            // `l` is at most 255
+            shift: (l - 1) as u8,
         }
     }
 
@@ -854,22 +829,21 @@ impl AddIndicatorDivisorI256 {
     // At `#[inline]`, LLVM calls this out of line for each value, without LTO and with thin or
     // fat LTO, at 16 codegen units and at 1
     #[inline(always)]
-    pub const fn wrapping_div_rem(self, n: i256) -> (i256, i256) {
+    pub fn wrapping_div_rem(self, n: i256) -> (i256, i256) {
         // `n + MULSH(m', n)` from figure 5.1, computed as `MULUH(m', n) - AND(m', XSIGN(n))`,
         // because `m'` is negative. See the identity in section 3 and `DivisorI128`
-        let high =
-            mul_high_u256(self.multiplier, n).wrapping_sub(and(n.sign_mask(), self.multiplier));
+        let high = mul_high_u256(self.multiplier, n).wrapping_sub(n.sign_mask() & self.multiplier);
         // The shift rounds down, and subtracting the sign of `n` rounds toward zero instead
-        let q = shr(high, self.shift).wrapping_sub(n.sign_mask());
+        let q = (high >> self.shift).wrapping_sub(n.sign_mask());
         let divisor_sign = self.divisor.sign_mask();
         // Figure 5.1 gives only the quotient. The remainder doesn't depend on the sign of the
         // divisor, as section 3.1 of Lemire, Kaser and Kurz, "Faster Remainder by Direct
         // Computation", https://arxiv.org/abs/1902.01961, states, so it uses `q` before the sign
         // fix and `|divisor|`, which saves negating `q` before the multiply. `divisor` is never
         // `MIN`, whose magnitude is a power of two
-        let magnitude = xor(self.divisor, divisor_sign).wrapping_sub(divisor_sign);
+        let magnitude = (self.divisor ^ divisor_sign).wrapping_sub(divisor_sign);
         (
-            xor(q, divisor_sign).wrapping_sub(divisor_sign),
+            (q ^ divisor_sign).wrapping_sub(divisor_sign),
             n.wrapping_sub(q.wrapping_mul(magnitude)),
         )
     }
@@ -957,16 +931,18 @@ mod tests {
                 let mut rng = StdRng::seed_from_u64(42);
                 let bits = <$t>::BITS;
 
-                let mut magnitudes: Vec<$t> = (1..=1000).collect();
-                for k in 0..bits - 1 {
-                    let p: $t = 1 << k;
-                    magnitudes.extend([p, p - 1, p + 1]);
-                }
+                // Every power of two and ten. Each side of them includes the 64-bit limbs of the
+                // multiply, the edges of the narrower types a kernel may divide in instead, and
+                // the largest values of each decimal precision
+                let mut edges: Vec<$t> = (0..bits - 1).map(|k| 1 << k).collect();
                 let mut p: $t = 10;
                 while let Some(next) = p.checked_mul(10) {
-                    magnitudes.extend([p - 1, p, p + 1]);
+                    edges.push(p);
                     p = next;
                 }
+
+                let mut magnitudes: Vec<$t> = (1..=1000).collect();
+                magnitudes.extend(edges.iter().flat_map(|&p| [p - 1, p, p + 1]));
                 magnitudes.extend(
                     (0..200).map(|_| (rng.random::<$u>() >> rng.random_range(1..bits)) as $t),
                 );
@@ -976,18 +952,11 @@ mod tests {
                 divisors.retain(|d| *d != 0);
 
                 let mut values: Vec<$t> = vec![0, 1, -1, <$t>::MIN, <$t>::MAX, <$t>::MIN + 1];
-                // Each side of every power of two, which includes the 64-bit limbs of the
-                // multiply and the edges of the narrower types a kernel may divide in instead,
-                // and the largest values of each decimal precision
-                for k in 0..bits - 1 {
-                    let p: $t = 1 << k;
-                    values.extend([p - 1, p, p + 1, 1 - p, -p, -p - 1]);
-                }
-                let mut p: $t = 10;
-                while let Some(next) = p.checked_mul(10) {
-                    values.extend([p - 1, p, p + 1, 1 - p, -p, -p - 1]);
-                    p = next;
-                }
+                values.extend(
+                    edges
+                        .iter()
+                        .flat_map(|&p| [p - 1, p, p + 1, 1 - p, -p, -p - 1]),
+                );
                 values.extend((0..200).flat_map(|_| {
                     let v = (rng.random::<$u>() >> rng.random_range(1..bits)) as $t;
                     [v, -v]
@@ -1041,17 +1010,16 @@ mod tests {
             v >> rng.random_range(1..=254u8)
         };
 
-        let mut magnitudes: Vec<i256> = (1..=1000).map(i256::from_i128).collect();
-        for k in 0..255u8 {
-            let p = one << k;
-            magnitudes.extend([p, p.wrapping_sub(one), p.wrapping_add(one)]);
-        }
+        let mut edges: Vec<i256> = (0..255u8).map(|k| one << k).collect();
         let ten = i256::from_i128(10);
         let mut p = ten;
         while let Some(next) = p.checked_mul(ten) {
-            magnitudes.extend([p - one, p, p + one]);
+            edges.push(p);
             p = next;
         }
+
+        let mut magnitudes: Vec<i256> = (1..=1000).map(i256::from_i128).collect();
+        magnitudes.extend(edges.iter().flat_map(|&p| [p - one, p, p + one]));
         magnitudes.extend((0..200).map(|_| random()));
 
         let mut divisors: Vec<i256> = magnitudes.iter().flat_map(|d| [*d, -*d]).collect();
@@ -1066,18 +1034,11 @@ mod tests {
             i256::MAX,
             i256::MIN + one,
         ];
-        let mut edges = vec![];
-        for k in 0..255u8 {
-            edges.push(one << k);
-        }
-        let mut p = ten;
-        while let Some(next) = p.checked_mul(ten) {
-            edges.push(p);
-            p = next;
-        }
-        for p in edges {
-            values.extend([p - one, p, p + one, one - p, -p, -p - one]);
-        }
+        values.extend(
+            edges
+                .iter()
+                .flat_map(|&p| [p - one, p, p + one, one - p, -p, -p - one]),
+        );
         values.extend((0..200).flat_map(|_| {
             let v = random();
             [v, -v]
