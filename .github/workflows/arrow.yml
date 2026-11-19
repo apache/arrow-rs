@@ -37,7 +37,7 @@ jobs:
           cargo test -p arrow-array --all-features
           # Disable feature `force_validate`
           cargo test -p arrow-array --features=ffi
-          # `--all-features` resolves named timezones with jiff, so test chrono-tz on its own
+          # `jiff` takes precedence over `chrono-tz`, so test `chrono-tz` on its own
           cargo test -p arrow-array --features=chrono-tz
       - name: Test arrow-cmp
         run: cargo test -p arrow-cmp --all-features
@@ -51,7 +51,7 @@ jobs:
         run: cargo test -p arrow-csv --all-features
       - name: Test arrow-json
         run: cargo test -p arrow-json --all-features
-      - name: Test arrow-cast, arrow-csv and arrow-json with named timezones resolved by jiff
+      - name: Test arrow-cast, arrow-csv and arrow-json with jiff
         run: |
           cargo test -p arrow-cast --all-features --features arrow-array/jiff
           cargo test -p arrow-csv --all-features --features arrow-array/jiff
@@ -72,7 +72,7 @@ jobs:
         run: cargo test -p arrow
       - name: Test arrow except pyarrow
         run: cargo test -p arrow --features=force_validate,prettyprint,ipc_compression,ffi,chrono-tz
-      - name: Test arrow with named timezones resolved by jiff
+      - name: Test arrow with jiff
         run: cargo test -p arrow --features=force_validate,prettyprint,ipc_compression,ffi,chrono-tz,jiff
       - name: Run examples
         run: |
@@ -207,7 +207,7 @@ jobs:
       - name: Clippy arrow-array
         run: |
           cargo clippy -p arrow-array --all-targets --all-features -- -D warnings
-          # `--all-features` resolves named timezones with jiff, so lint chrono-tz on its own
+          # `jiff` takes precedence over `chrono-tz`, so lint `chrono-tz` on its own
           cargo clippy -p arrow-array --all-targets --features chrono-tz -- -D warnings
       - name: Clippy arrow-cmp
         run: cargo clippy -p arrow-cmp --all-targets --all-features -- -D warnings

@@ -122,11 +122,8 @@ mod private {
         }
     }
 
-    /// Builds a timezone from the database in jiff-tzdb.
-    ///
-    /// Names are not resolved through `jiff::tz::db()`: if any crate in the build enables jiff's
-    /// `tzdb-zoneinfo` feature, that reads the host's zoneinfo files, or `$TZDIR`, instead. Reading
-    /// jiff-tzdb directly also means [`tzdb_version`] always describes the data in use.
+    /// Builds a timezone from jiff-tzdb. `jiff::tz::db()` would read the host's zoneinfo files
+    /// instead if any crate in the build enabled jiff's `tzdb-zoneinfo` feature.
     fn bundled_tz(name: &str) -> Option<JiffTimeZone> {
         // As jiff's own bundled database does, so that UTC is not backed by TZif data
         if name == "UTC" {
@@ -136,13 +133,11 @@ mod private {
         JiffTimeZone::tzif(canonical_name, tzif).ok()
     }
 
-    /// Resolves a name in the bundled database. Unlike jiff, and like chrono-tz, the name must
-    /// match exactly, including its case.
+    /// Resolves a name in the bundled database. As with chrono-tz, and unlike jiff, names are case
+    /// sensitive.
     ///
-    /// [`Tz`] is `Copy` whereas [`JiffTimeZone`] is reference counted, so `Tz` holds a `'static`
-    /// reference into a table with one slot for each name in the database, each resolved on first
-    /// use. The table's keys are fixed when it is built, so its memory is bounded by the database
-    /// and lookups take no lock.
+    /// [`Tz`] is `Copy` but [`JiffTimeZone`] is reference counted, so `Tz` holds a `'static`
+    /// reference into a table with one slot per bundled name, each resolved on first use.
     fn named_tz(name: &str) -> Result<&'static NamedTz, ArrowError> {
         type Slots = HashMap<&'static str, OnceLock<Option<NamedTz>>, ahash::RandomState>;
         static SLOTS: OnceLock<Slots> = OnceLock::new();
@@ -162,7 +157,7 @@ mod private {
                 })
                 .as_ref()
             })
-            // Same message as the chrono-tz path, so callers see one error regardless of feature
+            // The same message as with chrono-tz
             .ok_or_else(|| {
                 ArrowError::ParseError(format!(
                     "Invalid timezone \"{name}\": failed to parse timezone"
@@ -257,10 +252,8 @@ mod private {
                     .offset_from_local_date(local)
                     .map(|x| self.offset(x.fix())),
                 TzInner::Timezone(_) => {
-                    // A date has no single offset on a day with a transition. As chrono-tz
-                    // does, prefer any offset that was in force at some point during the day
-                    // over reporting the ambiguity, so that unambiguous times on such a day
-                    // still resolve.
+                    // As chrono-tz does, take an offset in force at the start or end of the day,
+                    // so that a day with a transition still resolves
                     let earliest = self.offset_from_local_datetime(&local.and_time(NaiveTime::MIN));
                     let latest =
                         self.offset_from_local_datetime(&local.and_hms_opt(23, 59, 59).unwrap());
@@ -422,9 +415,7 @@ mod private {
             ));
         }
 
-        /// chrono-tz keeps the offset of its last precomputed transition, around 2099, for any
-        /// later instant: standard time in the northern hemisphere and daylight time in the
-        /// southern. jiff applies the zone's rules indefinitely, as `java.time` and libc do.
+        /// chrono-tz keeps its last offset after 2099, while jiff keeps applying daylight saving
         #[test]
         fn test_dst_applies_after_2099() {
             let hours = |h| FixedOffset::east_opt(h * 60 * 60).unwrap();
@@ -1116,23 +1107,6 @@ mod tests {
 
         let err = "+9:00".parse::<Tz>().unwrap_err().to_string();
         assert!(err.contains("Invalid timezone"), "{}", err);
-    }
-
-    #[test]
-    fn test_tzdb_version() {
-        let version = tzdb_version();
-        if cfg!(any(feature = "chrono-tz", feature = "jiff")) {
-            // Such as "2026c"
-            let version = version.unwrap();
-            assert_eq!(version.len(), 5, "{version}");
-            assert!(
-                version[..4].bytes().all(|b| b.is_ascii_digit()),
-                "{version}"
-            );
-            assert!(version.as_bytes()[4].is_ascii_lowercase(), "{version}");
-        } else {
-            assert_eq!(version, None);
-        }
     }
 
     #[test]

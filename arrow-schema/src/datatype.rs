@@ -202,10 +202,8 @@ pub enum DataType {
     /// are also allowed, which include [IANA database](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)
     /// timezones.
     ///
-    /// When feature `jiff` is enabled, named timezones are instead resolved with [jiff](https://docs.rs/jiff/latest/jiff/),
-    /// which applies a zone's daylight saving rules to any instant rather than only up to the last
-    /// precomputed transition. It takes precedence over `chrono-tz`, so enabling it for any crate
-    /// in a build applies to the whole build.
+    /// When feature `jiff` is enabled, the same strings are allowed, and named timezones are resolved
+    /// with [jiff](https://docs.rs/jiff/latest/jiff/) instead. `jiff` takes precedence over `chrono-tz`.
     Timestamp(TimeUnit, Option<Arc<str>>),
     /// A signed 32-bit date representing the elapsed time since UNIX epoch (1970-01-01)
     /// in days.

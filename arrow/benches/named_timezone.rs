@@ -22,10 +22,8 @@ const Y2038: i64 = 2_145_916_800_000_000;
 const Y2100: i64 = 4_102_444_800_000_000;
 const Y2300: i64 = 10_413_792_000_000_000;
 
-/// Instant ranges in microseconds. Up to 2038 both read a transition table, as fat TZif data, and
-/// so jiff's tables, stop there. From 2038 to 2100, jiff evaluates the zone's POSIX TZ rule while
-/// chrono-tz still reads its table, which runs to 2099, and both agree. After 2100, chrono-tz
-/// keeps its last offset, standard time for these zones, where jiff still applies daylight saving.
+/// Instant ranges in microseconds. jiff's transition tables end in 2038, after which it evaluates
+/// each zone's rule, and chrono-tz's end in 2099.
 const RANGES: [(&str, i64, i64); 3] = [
     ("1970_to_2038", 0, Y2038),
     ("2038_to_2100", Y2038, Y2100),
