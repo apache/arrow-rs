@@ -291,6 +291,12 @@ impl VariableShapeTensorMetadata {
         permutations: Option<Vec<usize>>,
         uniform_shapes: Option<Vec<Option<i32>>>,
     ) -> Result<Self, ArrowError> {
+        i32::try_from(dimensions).map_err(|_| {
+            ArrowError::InvalidArgumentError(format!(
+                "VariableShapeTensor dimensions exceed i32::MAX: {dimensions}"
+            ))
+        })?;
+
         let dim_names = dimension_names.map(|dimension_names| {
             if dimension_names.len() != dimensions {
                 Err(ArrowError::InvalidArgumentError(format!(
@@ -433,7 +439,11 @@ impl ExtensionType for VariableShapeTensor {
                 let shape_field = &fields[1];
                 match shape_field.data_type() {
                     DataType::FixedSizeList(_, list_size) => {
-                        let dimensions = usize::try_from(*list_size).expect("conversion failed");
+                        let dimensions = usize::try_from(*list_size).map_err(|_| {
+                            ArrowError::InvalidArgumentError(format!(
+                                "VariableShapeTensor dimensions must be non-negative, found {list_size}"
+                            ))
+                        })?;
                         // Make sure the metadata is valid.
                         let metadata = VariableShapeTensorMetadata::try_new(
                             dimensions,
@@ -513,6 +523,52 @@ mod tests {
             CanonicalExtensionType::VariableShapeTensor(variable_shape_tensor)
         );
         Ok(())
+    }
+
+    #[test]
+    fn dimensions_must_fit_fixed_size_list() {
+        let dimensions = i32::MAX as usize + 1;
+        let error = VariableShapeTensor::try_new(DataType::Float32, dimensions, None, None, None)
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "Invalid argument error: VariableShapeTensor dimensions exceed i32::MAX: {dimensions}"
+            )
+        );
+    }
+
+    #[test]
+    fn negative_storage_dimensions_return_error() {
+        let data_type = DataType::Struct(
+            [
+                Field::new_list(
+                    "data",
+                    Field::new_list_field(DataType::Float32, false),
+                    false,
+                ),
+                Field::new_fixed_size_list(
+                    "shape",
+                    Field::new("", DataType::Int32, false),
+                    -1,
+                    false,
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let field = Field::new("", data_type, false).with_metadata([
+            (EXTENSION_TYPE_NAME_KEY, VariableShapeTensor::NAME),
+            (EXTENSION_TYPE_METADATA_KEY, "{}"),
+        ]);
+
+        let error = field
+            .try_extension_type::<VariableShapeTensor>()
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Invalid argument error: VariableShapeTensor dimensions must be non-negative, found -1"
+        );
     }
 
     #[test]

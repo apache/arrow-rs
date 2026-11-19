@@ -324,6 +324,20 @@ impl FixedShapeTensorMetadata {
         let shape = shape.into_iter().collect::<Vec<_>>();
         let dimensions = shape.len();
 
+        if !shape.contains(&0)
+            && shape
+                .iter()
+                .try_fold(1_i32, |size, &dimension| {
+                    let dimension = i32::try_from(dimension).ok()?;
+                    size.checked_mul(dimension)
+                })
+                .is_none()
+        {
+            return Err(ArrowError::InvalidArgumentError(
+                "FixedShapeTensor shape product exceeds i32::MAX".to_owned(),
+            ));
+        }
+
         let dim_names = dimension_names.map(|dimension_names| {
             if dimension_names.len() != dimensions {
                 Err(ArrowError::InvalidArgumentError(format!(
@@ -369,7 +383,11 @@ impl FixedShapeTensorMetadata {
 
     /// Returns the product of all the elements in tensor shape.
     pub fn list_size(&self) -> usize {
-        self.shape.iter().product()
+        if self.shape.contains(&0) {
+            0
+        } else {
+            self.shape.iter().product()
+        }
     }
 
     /// Returns the number of dimensions in this fixed shape tensor.
@@ -546,6 +564,33 @@ mod tests {
         assert_eq!(tall.shape(), &[3, 4]);
         assert_ne!(wide.shape(), tall.shape());
         Ok(())
+    }
+
+    #[test]
+    fn shape_product_must_fit_fixed_size_list() {
+        let max =
+            FixedShapeTensor::try_new(DataType::Float32, [i32::MAX as usize], None, None).unwrap();
+        assert_eq!(max.list_size(), i32::MAX as usize);
+
+        let error =
+            FixedShapeTensor::try_new(DataType::Float32, [i32::MAX as usize, 2], None, None)
+                .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Invalid argument error: FixedShapeTensor shape product exceeds i32::MAX"
+        );
+
+        let field =
+            Field::new_fixed_size_list("", Field::new("", DataType::Float32, false), 1, false)
+                .with_metadata([
+                    (EXTENSION_TYPE_NAME_KEY, FixedShapeTensor::NAME),
+                    (EXTENSION_TYPE_METADATA_KEY, r#"{"shape":[2147483647,2]}"#),
+                ]);
+        assert!(field.try_extension_type::<FixedShapeTensor>().is_err());
+
+        let empty =
+            FixedShapeTensor::try_new(DataType::Float32, [usize::MAX, 2, 0], None, None).unwrap();
+        assert_eq!(empty.list_size(), 0);
     }
 
     #[test]
