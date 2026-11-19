@@ -258,12 +258,10 @@ impl ArrowJson {
 impl ArrowJsonSchema {
     /// Compare the Arrow JSON schema with the Arrow `Schema`
     fn equals_schema(&self, schema: &Schema) -> bool {
-        let field_len = self.fields.len();
-        if field_len != schema.fields().len() {
+        if self.fields.len() != schema.fields().len() {
             return false;
         }
-        for i in 0..field_len {
-            let json_field = &self.fields[i];
+        for (i, json_field) in self.fields.iter().enumerate() {
             let field = schema.field(i);
             if !json_field.equals_field(field) {
                 return false;
