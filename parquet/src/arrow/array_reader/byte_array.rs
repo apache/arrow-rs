@@ -191,7 +191,7 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
     }
 
     fn set_validate_utf8(&mut self, validate_utf8: bool) {
-        self.validate_utf8 |= validate_utf8;
+        self.validate_utf8 = validate_utf8;
     }
 
     fn set_dict(

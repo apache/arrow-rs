@@ -74,9 +74,10 @@ pub trait ColumnValueDecoder {
     /// Create a new [`ColumnValueDecoder`]
     fn new(col: &ColumnDescPtr) -> Self;
 
-    /// Validate decoded values as UTF-8 even if the column is not annotated as a string.
+    /// Set whether decoded values are validated as UTF-8.
     ///
-    /// Only turns validation on: a column annotated as a string is validated regardless.
+    /// The Arrow type being built decides this, not the Parquet annotation: a
+    /// supplied schema can read an unannotated `BYTE_ARRAY` column as a string.
     fn set_validate_utf8(&mut self, _validate_utf8: bool) {}
 
     /// Set the current dictionary page
