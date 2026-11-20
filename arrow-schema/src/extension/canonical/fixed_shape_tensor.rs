@@ -260,6 +260,7 @@ impl<'de> Visitor<'de> for FixedShapeTensorMetadataVisitor {
         V: MapAccess<'de>,
     {
         let mut shape = None;
+        // Track key presence separately so repeated null values are duplicates.
         let mut dim_names = None;
         let mut permutations = None;
 
@@ -290,8 +291,8 @@ impl<'de> Visitor<'de> for FixedShapeTensorMetadataVisitor {
 
         Ok(FixedShapeTensorMetadata {
             shape,
-            dim_names,
-            permutations,
+            dim_names: dim_names.flatten(),
+            permutations: permutations.flatten(),
         })
     }
 }
@@ -487,31 +488,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn valid() -> Result<(), ArrowError> {
-        let fixed_shape_tensor = FixedShapeTensor::try_new(
-            DataType::Float32,
-            [100, 200, 500],
+    fn round_trip_optional_metadata() -> Result<(), ArrowError> {
+        for dimension_names in [
+            None,
             Some(vec!["C".to_owned(), "H".to_owned(), "W".to_owned()]),
-            Some(vec![2, 0, 1]),
-        )?;
-        let mut field = Field::new_fixed_size_list(
-            "",
-            Field::new("", DataType::Float32, false),
-            i32::try_from(fixed_shape_tensor.list_size()).expect("overflow"),
-            false,
-        );
-        field.try_with_extension_type(fixed_shape_tensor.clone())?;
-        assert_eq!(
-            field.try_extension_type::<FixedShapeTensor>()?,
-            fixed_shape_tensor
-        );
-        assert_eq!(fixed_shape_tensor.shape(), &[100, 200, 500]);
-        assert_eq!(fixed_shape_tensor.metadata().shape(), &[100, 200, 500]);
-        #[cfg(feature = "canonical_extension_types")]
-        assert_eq!(
-            field.try_canonical_extension_type()?,
-            CanonicalExtensionType::FixedShapeTensor(fixed_shape_tensor)
-        );
+        ] {
+            for permutations in [None, Some(vec![2, 0, 1])] {
+                let fixed_shape_tensor = FixedShapeTensor::try_new(
+                    DataType::Float32,
+                    [100, 200, 500],
+                    dimension_names.clone(),
+                    permutations,
+                )?;
+                let mut field = Field::new_fixed_size_list(
+                    "",
+                    Field::new("", DataType::Float32, false),
+                    i32::try_from(fixed_shape_tensor.list_size()).expect("overflow"),
+                    false,
+                );
+                field.try_with_extension_type(fixed_shape_tensor.clone())?;
+                assert_eq!(
+                    field.try_extension_type::<FixedShapeTensor>()?,
+                    fixed_shape_tensor
+                );
+                assert_eq!(fixed_shape_tensor.shape(), &[100, 200, 500]);
+                assert_eq!(fixed_shape_tensor.metadata().shape(), &[100, 200, 500]);
+                #[cfg(feature = "canonical_extension_types")]
+                assert_eq!(
+                    field.try_canonical_extension_type()?,
+                    CanonicalExtensionType::FixedShapeTensor(fixed_shape_tensor)
+                );
+            }
+        }
         Ok(())
     }
 
@@ -635,5 +643,33 @@ mod tests {
             Some(vec![4, 3, 2]),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn missing_and_null_optional_metadata() -> Result<(), ArrowError> {
+        let expected = FixedShapeTensorMetadata::try_new([2, 3], None, None)?;
+        for metadata in [
+            r#"{"shape":[2,3]}"#,
+            r#"{"shape":[2,3],"dim_names":null,"permutations":null}"#,
+        ] {
+            assert_eq!(
+                FixedShapeTensor::deserialize_metadata(Some(metadata))?,
+                expected
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn duplicate_null_metadata() {
+        for key in ["dim_names", "permutations"] {
+            let metadata = format!(r#"{{"shape":[2,3],"{key}":null,"{key}":null}}"#);
+            let error = FixedShapeTensor::deserialize_metadata(Some(&metadata)).unwrap_err();
+            assert!(matches!(
+                error,
+                ArrowError::InvalidArgumentError(message)
+                    if message.contains(&format!("duplicate field `{key}`"))
+            ));
+        }
     }
 }
