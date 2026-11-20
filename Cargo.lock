@@ -350,6 +350,7 @@ dependencies = [
  "half",
  "num-integer",
  "num-traits",
+ "rstest",
 ]
 
 [[package]]
