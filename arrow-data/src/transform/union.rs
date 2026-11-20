@@ -1,26 +1,30 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use super::{_MutableArrayData, Extend};
 use crate::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 
+fn nullable_union_field(fields: &arrow_schema::UnionFields) -> Result<(usize, i8), ArrowError> {
+    fields
+        .iter()
+        .enumerate()
+        .find_map(|(index, (type_id, field))| field.is_nullable().then_some((index, type_id)))
+        .ok_or_else(|| {
+            ArrowError::InvalidArgumentError(if fields.is_empty() {
+                "Cannot extend a union with no fields with nulls".to_owned()
+            } else {
+                "Cannot extend a union with no nullable fields with nulls".to_owned()
+            })
+        })
+}
+
 pub(super) fn build_extend_sparse(array: &ArrayData) -> Extend<'_> {
+    // `buffer` already applies the parent offset to the type ids
     let type_ids = array.buffer::<i8>(0);
+    // but a sparse union's children are not sliced by the parent offset
+    let offset = array.offset();
 
     Box::new(
         move |mutable: &mut _MutableArrayData, index: usize, start: usize, len: usize| {
@@ -29,8 +33,18 @@ pub(super) fn build_extend_sparse(array: &ArrayData) -> Extend<'_> {
                 .buffer1
                 .extend_from_slice(&type_ids[start..start + len]);
 
+            let child_start = start.checked_add(offset).ok_or_else(|| {
+                ArrowError::InvalidArgumentError(format!(
+                    "sparse union offset {offset} with start {start} overflows usize"
+                ))
+            })?;
+            let child_end = child_start.checked_add(len).ok_or_else(|| {
+                ArrowError::InvalidArgumentError(format!(
+                    "sparse union start {child_start} with length {len} overflows usize"
+                ))
+            })?;
             for child in &mut mutable.child_data {
-                child.try_extend(index, start, start + len)?;
+                child.try_extend(index, child_start, child_end)?;
             }
             Ok(())
         },
@@ -77,23 +91,19 @@ pub(super) fn extend_nulls_dense(
     let DataType::Union(fields, _) = &mutable.data_type else {
         unreachable!()
     };
-    let first_type_id = fields
-        .iter()
-        .next()
-        .expect("union must have at least one field")
-        .0;
+    let (child_index, null_type_id) = nullable_union_field(fields)?;
 
     // Extend type_ids buffer
     mutable
         .buffer1
-        .try_extend_from_slice(&vec![first_type_id; len])
+        .try_extend_from_slice(&vec![null_type_id; len])
         .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
-    // Dense: extend offsets pointing into the first child, then extend nulls in that child
-    let child_offset = mutable.child_data[0].len();
+    // Dense: point into a nullable child and extend its values with nulls.
+    let child_offset = mutable.child_data[child_index].len();
     let (start, end) = (child_offset as i32, (child_offset + len) as i32);
     mutable.buffer2.extend(start..end);
-    mutable.child_data[0].try_extend_nulls(len)?;
+    mutable.child_data[child_index].try_extend_nulls(len)?;
     Ok(())
 }
 
@@ -104,16 +114,12 @@ pub(super) fn extend_nulls_sparse(
     let DataType::Union(fields, _) = &mutable.data_type else {
         unreachable!()
     };
-    let first_type_id = fields
-        .iter()
-        .next()
-        .expect("union must have at least one field")
-        .0;
+    let (_, null_type_id) = nullable_union_field(fields)?;
 
     // Extend type_ids buffer
     mutable
         .buffer1
-        .try_extend_from_slice(&vec![first_type_id; len])
+        .try_extend_from_slice(&vec![null_type_id; len])
         .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
     // Sparse: extend nulls in ALL children

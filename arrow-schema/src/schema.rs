@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::fmt;
 use std::hash::Hash;
@@ -532,7 +519,7 @@ impl Schema {
     /// Normalize a [`Schema`] into a flat table.
     ///
     /// Nested [`Field`]s will generate names separated by `separator`, up to a depth of `max_level`
-    /// (unlimited if `None`).
+    /// (unlimited if `None`). Flattened fields inherit nullability from their expanded ancestors.
     ///
     /// e.g. given a [`Schema`]:
     ///
@@ -577,18 +564,19 @@ impl Schema {
             0 => usize::MAX,
             val => val,
         };
-        let mut stack: Vec<(usize, Vec<&str>, &FieldRef)> = self
+        let mut stack: Vec<(usize, Vec<&str>, &FieldRef, bool)> = self
             .fields()
             .iter()
             .rev()
             .map(|f| {
                 let name_vec: Vec<&str> = vec![f.name()];
-                (0, name_vec, f)
+                (0, name_vec, f, false)
             })
             .collect();
         let mut fields: Vec<FieldRef> = Vec::new();
 
-        while let Some((depth, name, field_ref)) = stack.pop() {
+        while let Some((depth, name, field_ref, parent_nullable)) = stack.pop() {
+            let nullable = parent_nullable || field_ref.is_nullable();
             match field_ref.data_type() {
                 DataType::Struct(ff) if depth < max_level => {
                     // Need to zip these in reverse to maintain original order
@@ -596,15 +584,12 @@ impl Schema {
                         let mut name = name.clone();
                         name.push(separator);
                         name.push(fff.name());
-                        stack.push((depth + 1, name, fff))
+                        stack.push((depth + 1, name, fff, nullable))
                     }
                 }
                 _ => {
-                    let updated_field = Field::new(
-                        name.concat(),
-                        field_ref.data_type().clone(),
-                        field_ref.is_nullable(),
-                    );
+                    let updated_field =
+                        Field::new(name.concat(), field_ref.data_type().clone(), nullable);
                     fields.push(Arc::new(updated_field));
                 }
             }
@@ -922,6 +907,46 @@ mod tests {
     }
 
     #[test]
+    fn normalize_inherits_parent_nullability() {
+        for parent_nullable in [false, true] {
+            for middle_nullable in [false, true] {
+                for child_nullable in [false, true] {
+                    for data_type in [DataType::Int32, DataType::new_list(DataType::Int32, false)] {
+                        let child = Field::new("child", data_type.clone(), child_nullable);
+                        let middle =
+                            Field::new_struct("middle", vec![child.clone()], middle_nullable);
+                        let sibling = Field::new("sibling", DataType::Int32, false);
+                        let schema = Schema::new(vec![
+                            Field::new_struct("parent", vec![middle], parent_nullable),
+                            sibling.clone(),
+                        ]);
+                        for max_level in [None, Some(0), Some(1), Some(2)] {
+                            let expected_field = if max_level == Some(1) {
+                                Field::new_struct(
+                                    "parent.middle",
+                                    vec![child.clone()],
+                                    parent_nullable || middle_nullable,
+                                )
+                            } else {
+                                Field::new(
+                                    "parent.middle.child",
+                                    data_type.clone(),
+                                    parent_nullable || middle_nullable || child_nullable,
+                                )
+                            };
+                            assert_eq!(
+                                schema.normalize(".", max_level).unwrap(),
+                                Schema::new(vec![expected_field, sibling.clone()]),
+                                "parent_nullable={parent_nullable}, middle_nullable={middle_nullable}, child_nullable={child_nullable}, max_level={max_level:?}, data_type={data_type:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn normalize_nested() {
         let a = Arc::new(Field::new("a", DataType::Utf8, true));
         let b = Arc::new(Field::new("b", DataType::Int64, false));
@@ -957,7 +982,7 @@ mod tests {
             Field::new("!.1.b", DataType::Int64, false),
             Field::new("!.1.c", DataType::Int64, true),
             Field::new("!.2.d", DataType::Utf8, true),
-            Field::new("!.2.e", DataType::Int64, false),
+            Field::new("!.2.e", DataType::Int64, true),
             Field::new("!.2.f", DataType::Int64, true),
         ]);
 
@@ -1013,7 +1038,7 @@ mod tests {
         // List shouldn't be affected
         let expected = Schema::new(vec![
             Field::new("!.1.a", DataType::Utf8, true),
-            Field::new("!.1.b", DataType::Int64, false),
+            Field::new("!.1.b", DataType::Int64, true),
             Field::new("!.1.c", DataType::Int64, true),
             Field::new(
                 "!.2",
@@ -1059,7 +1084,7 @@ mod tests {
         // FixedSizeList shouldn't be affected
         let expected = Schema::new(vec![
             Field::new("!.1.a", DataType::Utf8, true),
-            Field::new("!.1.b", DataType::Int64, false),
+            Field::new("!.1.b", DataType::Int64, true),
             Field::new("!.1.c", DataType::Int64, true),
             Field::new(
                 "!.2",
@@ -1112,7 +1137,7 @@ mod tests {
         // LargeList shouldn't be affected
         let expected = Schema::new(vec![
             Field::new("!.1.a", DataType::Utf8, true),
-            Field::new("!.1.b", DataType::Int64, false),
+            Field::new("!.1.b", DataType::Int64, true),
             Field::new("!.1.c", DataType::Int64, true),
             Field::new(
                 "!.2",
@@ -1476,6 +1501,27 @@ mod tests {
                 ],
                 UnionMode::Dense
             ),]),
+        );
+
+        // union members with the same type id must be the same field
+        let res = Schema::try_merge(vec![
+            Schema::new(vec![Field::new_union(
+                "c1",
+                vec![0],
+                vec![Field::new("c11", DataType::Utf8, true)],
+                UnionMode::Dense,
+            )]),
+            Schema::new(vec![Field::new_union(
+                "c1",
+                vec![0],
+                vec![Field::new("c12", DataType::Int64, true)],
+                UnionMode::Dense,
+            )]),
+        ])
+        .unwrap_err();
+        assert_eq!(
+            res.to_string(),
+            "Schema error: Fail to merge schema field 'c12' because type id 0 is already used by field 'c11'"
         );
 
         // incompatible field should throw error

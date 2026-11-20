@@ -1,43 +1,22 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 #[macro_use]
 extern crate criterion;
 use criterion::Criterion;
 use rand::RngExt;
-use rand::distr::{Distribution, StandardUniform, Uniform};
+use rand::distr::Uniform;
 use std::hint;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime};
 use std::sync::Arc;
 
 use arrow::array::*;
-use arrow::compute::cast;
+use arrow::compute::{CastOptions, cast, cast_with_options};
 use arrow::datatypes::*;
 use arrow::util::bench_util::*;
 use arrow::util::test_util::seedable_rng;
-
-fn build_array<T: ArrowPrimitiveType>(size: usize) -> ArrayRef
-where
-    StandardUniform: Distribution<T::Native>,
-{
-    let array = create_primitive_array::<T>(size, 0.1);
-    Arc::new(array)
-}
 
 fn build_utf8_date_array(size: usize, with_nulls: bool) -> ArrayRef {
     use chrono::NaiveDate;
@@ -79,38 +58,6 @@ fn build_utf8_date_time_array(size: usize, with_nulls: bool) -> ArrayRef {
         }
     }
     Arc::new(builder.finish())
-}
-
-fn build_decimal128_array(size: usize, precision: u8, scale: i8) -> ArrayRef {
-    let mut rng = seedable_rng();
-    let mut builder = Decimal128Builder::with_capacity(size);
-
-    for _ in 0..size {
-        builder.append_value(rng.random_range::<i128, _>(0..1000000000));
-    }
-    Arc::new(
-        builder
-            .finish()
-            .with_precision_and_scale(precision, scale)
-            .unwrap(),
-    )
-}
-
-fn build_decimal256_array(size: usize, precision: u8, scale: i8) -> ArrayRef {
-    let mut rng = seedable_rng();
-    let mut builder = Decimal256Builder::with_capacity(size);
-    let mut bytes = [0; 32];
-    for _ in 0..size {
-        let num = rng.random_range::<i128, _>(0..1000000000);
-        bytes[0..16].clone_from_slice(&num.to_le_bytes());
-        builder.append_value(i256::from_le_bytes(bytes));
-    }
-    Arc::new(
-        builder
-            .finish()
-            .with_precision_and_scale(precision, scale)
-            .unwrap(),
-    )
 }
 
 fn build_string_array(size: usize) -> ArrayRef {
@@ -258,32 +205,61 @@ fn cast_array(array: &ArrayRef, to_type: DataType) {
 }
 
 fn add_benchmark(c: &mut Criterion) {
-    let i32_array = build_array::<Int32Type>(512);
-    let i32_array_8192 = build_array::<Int32Type>(8192);
+    let i32_array: ArrayRef = Arc::new(create_primitive_array::<Int32Type>(512, 0.1));
+    let i32_array_8192: ArrayRef = Arc::new(create_primitive_array::<Int32Type>(8192, 0.1));
     let bool_array: ArrayRef = Arc::new(create_boolean_array(8192, 0.1, 0.5));
     let bool_array_no_nulls: ArrayRef = Arc::new(create_boolean_array(8192, 0.0, 0.5));
-    let i64_array = build_array::<Int64Type>(512);
+    let i64_array: ArrayRef = Arc::new(create_primitive_array::<Int64Type>(512, 0.1));
     let i64_within_1e6 = create_primitive_array_range::<Int64Type>(512, 0.1, -1_000_000..1_000_000);
     let mut values: Vec<Option<i64>> = i64_within_1e6.iter().collect();
     *values.last_mut().unwrap() = Some(10_000_000_000_000_000);
     let i64_late_overflow = Arc::new(Int64Array::from(values)) as ArrayRef;
     let i64_within_1e6 = Arc::new(i64_within_1e6) as ArrayRef;
-    let f32_array = build_array::<Float32Type>(512);
-    let f32_utf8_array = cast(&build_array::<Float32Type>(512), &DataType::Utf8).unwrap();
-    let i32_utf8_array = cast(&build_array::<Int32Type>(512), &DataType::Utf8).unwrap();
+    let f32_array: ArrayRef = Arc::new(create_primitive_array::<Float32Type>(512, 0.1));
+    let f32_utf8_array = cast(
+        &create_primitive_array::<Float32Type>(512, 0.1),
+        &DataType::Utf8,
+    )
+    .unwrap();
+    let i32_utf8_array = cast(
+        &create_primitive_array::<Int32Type>(512, 0.1),
+        &DataType::Utf8,
+    )
+    .unwrap();
 
-    let f64_array = build_array::<Float64Type>(512);
-    let date64_array = build_array::<Date64Type>(512);
-    let date32_array = build_array::<Date32Type>(512);
-    let time32s_array = build_array::<Time32SecondType>(512);
-    let time64ns_array = build_array::<Time64NanosecondType>(512);
-    let time_ns_array = build_array::<TimestampNanosecondType>(512);
-    let time_ms_array = build_array::<TimestampMillisecondType>(512);
+    let f64_array: ArrayRef = Arc::new(create_primitive_array::<Float64Type>(512, 0.1));
+    let date64_array: ArrayRef = Arc::new(create_primitive_array::<Date64Type>(512, 0.1));
+    let date32_array: ArrayRef = Arc::new(create_primitive_array::<Date32Type>(512, 0.1));
+    let time32s_array: ArrayRef = Arc::new(create_primitive_array::<Time32SecondType>(512, 0.1));
+    let time64ns_array: ArrayRef =
+        Arc::new(create_primitive_array::<Time64NanosecondType>(512, 0.1));
+    let time_ns_array: ArrayRef =
+        Arc::new(create_primitive_array::<TimestampNanosecondType>(512, 0.1));
+    let time_ms_array: ArrayRef =
+        Arc::new(create_primitive_array::<TimestampMillisecondType>(512, 0.1));
     let utf8_date_array = build_utf8_date_array(512, true);
     let utf8_date_time_array = build_utf8_date_time_array(512, true);
 
-    let decimal128_array = build_decimal128_array(8_000, 10, 3);
-    let decimal256_array = build_decimal256_array(8_000, 50, 3);
+    let decimal128_array: ArrayRef = Arc::new(create_decimal128_array(8_000, 10, 3));
+    let decimal256_array: ArrayRef = Arc::new(create_decimal256_array(8_000, 50, 3));
+    // Downscaling rounds on the sign of each value and on its remainder. These inputs
+    // have random signs, or remainders that are always zero.
+    let mixed_sign =
+        create_primitive_array_range::<Int64Type>(8_000, 0.0, -1_000_000_000..1_000_000_000);
+    let small = create_primitive_array_range::<Int64Type>(8_000, 0.0, 0..100_000);
+    let decimal128 = |array: &Int64Array, mul: i64| -> ArrayRef {
+        let array = array.unary::<_, Decimal128Type>(|v| (v * mul) as i128);
+        Arc::new(array.with_precision_and_scale(10, 3).unwrap())
+    };
+    let decimal256 = |array: &Int64Array, mul: i64| -> ArrayRef {
+        let array = array.unary::<_, Decimal256Type>(|v| i256::from_i128((v * mul) as i128));
+        Arc::new(array.with_precision_and_scale(50, 3).unwrap())
+    };
+    let decimal128_mixed_sign = decimal128(&mixed_sign, 1);
+    let decimal256_mixed_sign = decimal256(&mixed_sign, 1);
+    // Multiples of 10^4 and 10, the divisors of the two downscales below
+    let decimal128_zero_remainder = decimal128(&small, 10_000);
+    let decimal256_zero_remainder = decimal256(&small, 10);
     let string_array = build_string_array(512);
     let wide_string_array = cast(&string_array, &DataType::LargeUtf8).unwrap();
 
@@ -441,6 +417,12 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("cast decimal256 to decimal128 512", |b| {
         b.iter(|| cast_array(&decimal256_array, DataType::Decimal128(38, 2)))
     });
+    c.bench_function("cast decimal256 to decimal128 512 mixed sign", |b| {
+        b.iter(|| cast_array(&decimal256_mixed_sign, DataType::Decimal128(38, 2)))
+    });
+    c.bench_function("cast decimal256 to decimal128 512 zero remainder", |b| {
+        b.iter(|| cast_array(&decimal256_zero_remainder, DataType::Decimal128(38, 2)))
+    });
     c.bench_function("cast decimal256 to decimal256 512", |b| {
         b.iter(|| cast_array(&decimal256_array, DataType::Decimal256(50, 5)))
     });
@@ -452,6 +434,14 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function(
         "cast decimal128 to decimal128 512 with lower scale (infallible)",
         |b| b.iter(|| cast_array(&decimal128_array, DataType::Decimal128(7, -1))),
+    );
+    c.bench_function(
+        "cast decimal128 to decimal128 512 with lower scale (infallible) mixed sign",
+        |b| b.iter(|| cast_array(&decimal128_mixed_sign, DataType::Decimal128(7, -1))),
+    );
+    c.bench_function(
+        "cast decimal128 to decimal128 512 with lower scale (infallible) zero remainder",
+        |b| b.iter(|| cast_array(&decimal128_zero_remainder, DataType::Decimal128(7, -1))),
     );
 
     c.bench_function("cast decimal256 to decimal256 512 with same scale", |b| {
@@ -716,6 +706,133 @@ fn add_benchmark(c: &mut Criterion) {
         let target_type = DataType::Utf8;
         b.iter(|| cast(&timestamp_micro_utc_array, &target_type).unwrap());
     });
+
+    const ROWS: usize = 8192;
+    let mut bench = |name: &str, input: ArrayRef, target: DataType, modes: &[bool]| {
+        for &safe in modes {
+            let options = CastOptions {
+                safe,
+                ..Default::default()
+            };
+            let mode = if safe { "safe" } else { "strict" };
+            c.bench_function(&format!("{name} {mode}"), |b| {
+                b.iter(|| {
+                    cast_with_options(
+                        hint::black_box(input.as_ref()),
+                        hint::black_box(&target),
+                        &options,
+                    )
+                    .unwrap()
+                })
+            });
+        }
+    };
+
+    // Choose fixtures for distinct conversion paths, rather than every type pair.
+    let int32: ArrayRef = Arc::new(create_primitive_array_range::<Int32Type>(
+        ROWS,
+        0.1,
+        -1_000_000..1_000_000,
+    ));
+    let int64: ArrayRef = Arc::new(create_primitive_array_range::<Int64Type>(
+        ROWS,
+        0.1,
+        10..1_000_000,
+    ));
+    let uint64: ArrayRef = Arc::new(create_primitive_array_range::<UInt64Type>(
+        ROWS,
+        0.1,
+        10..1_000_000,
+    ));
+    for (name, input, target) in [
+        (
+            "cast int32 to decimal32(9, 0) 8192 valid",
+            int32,
+            DataType::Decimal32(9, 0),
+        ),
+        (
+            "cast int64 to decimal128(38, 2) 8192 valid",
+            int64.clone(),
+            DataType::Decimal128(38, 2),
+        ),
+    ] {
+        bench(name, input, target, &[true, false]);
+    }
+    bench(
+        "cast uint64 to decimal256(76, -1) 8192 scale down",
+        uint64,
+        DataType::Decimal256(76, -1),
+        &[true],
+    );
+    bench(
+        "cast int64 to decimal32(9, -20) 8192 all zero",
+        int64,
+        DataType::Decimal32(9, -20),
+        &[true],
+    );
+    let overflow: ArrayRef = Arc::new(create_primitive_array_range::<Int32Type>(
+        ROWS,
+        0.1,
+        100_000_000..1_000_000_000,
+    ));
+    bench(
+        "cast int32 to decimal32(8, 0) 8192 precision overflow",
+        overflow,
+        DataType::Decimal32(8, 0),
+        &[true],
+    );
+    let wide: ArrayRef = Arc::new(Int64Array::from_iter(
+        (0..ROWS).map(|i| (i % 10 != 0).then_some(5_000_000_000 + i as i64)),
+    ));
+    bench(
+        "cast int64 to decimal32(9, -1) 8192 scale before narrowing",
+        wide,
+        DataType::Decimal32(9, -1),
+        &[true],
+    );
+
+    // Choose distinct conversion paths, not every source/destination pair.
+    let float32: ArrayRef = Arc::new(create_primitive_array_range::<Float32Type>(
+        ROWS,
+        0.1,
+        -9999.0..9999.0,
+    ));
+    bench(
+        "cast float32 to decimal32(7, 2) 8192 valid",
+        float32,
+        DataType::Decimal32(7, 2),
+        &[true, false],
+    );
+    let float64: ArrayRef = Arc::new(create_primitive_array_range::<Float64Type>(
+        ROWS,
+        0.1,
+        -9999.0..9999.0,
+    ));
+    // Safe Float64 -> Decimal128 and non-finite inputs are already covered above.
+    bench(
+        "cast float64 to decimal128(20, 3) 8192 valid",
+        float64.clone(),
+        DataType::Decimal128(20, 3),
+        &[false],
+    );
+    // Decimal256 uses a separate float-to-i256 conversion implementation.
+    bench(
+        "cast float64 to decimal256(40, -2) 8192 scale down",
+        float64,
+        DataType::Decimal256(40, -2),
+        &[true],
+    );
+    // Direct and rounding-induced overflow share the precision-failure path.
+    // The existing non-finite benchmark already covers native conversion failure.
+    let samples = [1000.0, -1000.0, 999.75, -999.75];
+    let mut builder = Float64Builder::with_capacity(ROWS);
+    let overflow = build_array_with_samples!(builder, ROWS, 0.1, samples);
+    bench(
+        "cast float64 to decimal64(3, 0) 8192 precision overflow",
+        overflow,
+        DataType::Decimal64(3, 0),
+        &[true],
+    );
 }
 
 criterion_group!(benches, add_benchmark);

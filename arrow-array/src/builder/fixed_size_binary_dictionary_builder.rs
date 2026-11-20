@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::builder::{ArrayBuilder, FixedSizeBinaryBuilder, PrimitiveBuilder};
 use crate::types::ArrowDictionaryKeyType;
@@ -247,7 +234,7 @@ where
     ///
     /// Returns an error if the new index would overflow the key type.
     pub fn append(&mut self, value: impl AsRef<[u8]>) -> Result<K::Native, ArrowError> {
-        if self.byte_width != value.as_ref().len() as i32 {
+        if value.as_ref().len() != self.byte_width as usize {
             Err(ArrowError::InvalidArgumentError(format!(
                 "Invalid input length passed to FixedSizeBinaryBuilder. Expected {} got {}",
                 self.byte_width,
@@ -269,7 +256,7 @@ where
         value: impl AsRef<[u8]>,
         count: usize,
     ) -> Result<K::Native, ArrowError> {
-        if self.byte_width != value.as_ref().len() as i32 {
+        if value.as_ref().len() != self.byte_width as usize {
             Err(ArrowError::InvalidArgumentError(format!(
                 "Invalid input length passed to FixedSizeBinaryBuilder. Expected {} got {}",
                 self.byte_width,

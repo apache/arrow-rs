@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Logic for selecting which rows to read: [`RowSelection`] and [`RowSelector`]
 //!
@@ -44,8 +31,8 @@ mod ranges;
 mod selector;
 
 use algebra::{
-    and_then_mask, and_then_row_selections, and_then_selectors_with_mask, intersect_masks,
-    intersect_row_selections, union_masks, union_row_selections,
+    and_then_mask, and_then_row_selections, and_then_selectors_with_mask, combine_mixed_selection,
+    intersect_masks, intersect_row_selections, union_masks, union_row_selections,
 };
 pub use boolean::MaskRunIter;
 use boolean::{
@@ -54,7 +41,9 @@ use boolean::{
 };
 pub(crate) use cursor::{LoadedRowRanges, MaskCursor, RowSelectionStrategy};
 pub use cursor::{RowSelectionCursor, RowSelectionPolicy};
-use ranges::{expand_to_batch_boundaries_from_selectors, scan_ranges_from_selectors};
+use ranges::{
+    expand_to_batch_boundaries_from_selectors, scan_ranges_from_mask, scan_ranges_from_selectors,
+};
 pub use selector::RowSelector;
 use selector::{limit_selectors, offset_selectors, split_off_selectors};
 
@@ -443,9 +432,7 @@ impl RowSelection {
             RowSelectionInner::Selectors(selectors) => {
                 scan_ranges_from_selectors(selectors.iter().copied(), page_locations)
             }
-            RowSelectionInner::Mask(mask) => {
-                scan_ranges_from_selectors(MaskRunIter::new(mask.mask()), page_locations)
-            }
+            RowSelectionInner::Mask(mask) => scan_ranges_from_mask(mask.mask(), page_locations),
         }
     }
 
@@ -547,6 +534,10 @@ impl RowSelection {
     }
 
     /// Compute the intersection of two [`RowSelection`]
+    ///
+    /// Nonempty mixed inputs return a mask-backed result.
+    /// If only one input is empty, the result keeps the other's representation.
+    ///
     /// For example:
     /// self:      NNYYYYNNYYNYN
     /// other:     NYNNNNNNY
@@ -560,16 +551,18 @@ impl RowSelection {
             (RowSelectionInner::Selectors(l), RowSelectionInner::Selectors(r)) => {
                 intersect_row_selections(l, r)
             }
-            (RowSelectionInner::Selectors(l), RowSelectionInner::Mask(r)) => {
-                intersect_row_selections(l, &r.borrowed_selectors())
-            }
-            (RowSelectionInner::Mask(l), RowSelectionInner::Selectors(r)) => {
-                intersect_row_selections(&l.borrowed_selectors(), r)
+            (RowSelectionInner::Selectors(selectors), RowSelectionInner::Mask(mask))
+            | (RowSelectionInner::Mask(mask), RowSelectionInner::Selectors(selectors)) => {
+                combine_mixed_selection(selectors, mask, intersect_masks)
             }
         }
     }
 
     /// Compute the union of two [`RowSelection`]
+    ///
+    /// Nonempty mixed inputs return a mask-backed result.
+    /// If only one input is empty, the result keeps the other's representation.
+    ///
     /// For example:
     /// self:      NNYYYYNNYYNYN
     /// other:     NYNNNNNNN
@@ -583,11 +576,9 @@ impl RowSelection {
             (RowSelectionInner::Selectors(l), RowSelectionInner::Selectors(r)) => {
                 union_row_selections(l, r)
             }
-            (RowSelectionInner::Selectors(l), RowSelectionInner::Mask(r)) => {
-                union_row_selections(l, &r.borrowed_selectors())
-            }
-            (RowSelectionInner::Mask(l), RowSelectionInner::Selectors(r)) => {
-                union_row_selections(&l.borrowed_selectors(), r)
+            (RowSelectionInner::Selectors(selectors), RowSelectionInner::Mask(mask))
+            | (RowSelectionInner::Mask(mask), RowSelectionInner::Selectors(selectors)) => {
+                combine_mixed_selection(selectors, mask, union_masks)
             }
         }
     }
@@ -848,26 +839,10 @@ impl FromIterator<RowSelector> for RowSelection {
     fn from_iter<T: IntoIterator<Item = RowSelector>>(iter: T) -> Self {
         let iter = iter.into_iter();
 
-        // Capacity before filter
         let mut selectors = Vec::with_capacity(iter.size_hint().0);
 
-        let mut filtered = iter.filter(|x| x.row_count != 0);
-        if let Some(x) = filtered.next() {
-            selectors.push(x);
-        }
-
-        for s in filtered {
-            if s.row_count == 0 {
-                continue;
-            }
-
-            // Combine consecutive selectors
-            let last = selectors.last_mut().unwrap();
-            if last.skip == s.skip {
-                last.row_count = last.row_count.checked_add(s.row_count).unwrap();
-            } else {
-                selectors.push(s)
-            }
+        for selector in iter {
+            append_normalized_selector(&mut selectors, selector);
         }
 
         Self::from_selectors(selectors)

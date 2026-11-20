@@ -1,28 +1,24 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit, UnionMode};
 use arrow::error::{ArrowError, Result};
 use std::sync::Arc;
 
 /// Read a JSON number as an integer of type `T`.
-fn json_int<T: TryFrom<i64>>(what: &str, value: &serde_json::Value) -> Result<T> {
+pub(crate) fn json_int<T: TryFrom<i64>>(what: &str, value: &serde_json::Value) -> Result<T> {
     let int = value
         .as_i64()
+        .ok_or_else(|| ArrowError::ParseError(format!("Expecting {what} to be an integer")))?;
+    T::try_from(int)
+        .map_err(|_| ArrowError::ParseError(format!("{what} is out of range for its type: {int}")))
+}
+
+/// Read a JSON number as an unsigned integer of type `T`.
+pub(crate) fn json_uint<T: TryFrom<u64>>(what: &str, value: &serde_json::Value) -> Result<T> {
+    let int = value
+        .as_u64()
         .ok_or_else(|| ArrowError::ParseError(format!("Expecting {what} to be an integer")))?;
     T::try_from(int)
         .map_err(|_| ArrowError::ParseError(format!("{what} is out of range for its type: {int}")))

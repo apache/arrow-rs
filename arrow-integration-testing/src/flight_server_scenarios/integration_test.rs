@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Integration tests for the Flight server.
 
@@ -71,6 +58,16 @@ pub async fn scenario_setup(port: u16) -> Result {
 struct IntegrationDataset {
     schema: Schema,
     chunks: Vec<RecordBatch>,
+}
+
+fn total_record_count(chunks: &[RecordBatch]) -> Result<i64, Status> {
+    chunks.iter().try_fold(0_i64, |total, chunk| {
+        let rows = i64::try_from(chunk.num_rows())
+            .map_err(|_| Status::out_of_range("Flight record count exceeds i64::MAX"))?;
+        total
+            .checked_add(rows)
+            .ok_or_else(|| Status::out_of_range("Flight record count exceeds i64::MAX"))
+    })
 }
 
 /// Flight service implementation for integration testing
@@ -203,7 +200,7 @@ impl FlightService for FlightServiceImpl {
 
                 let endpoint = self.endpoint_from_path(&path[0]);
 
-                let total_records: usize = flight.chunks.iter().map(|chunk| chunk.num_rows()).sum();
+                let total_records = total_record_count(&flight.chunks)?;
 
                 let options = arrow::ipc::writer::IpcWriteOptions::default();
                 let message = SchemaAsIpc::new(&flight.schema, &options)
@@ -218,7 +215,7 @@ impl FlightService for FlightServiceImpl {
                     schema,
                     flight_descriptor: Some(descriptor.clone()),
                     endpoint: vec![endpoint],
-                    total_records: total_records as i64,
+                    total_records,
                     total_bytes: -1,
                     ordered: false,
                     app_metadata: vec![].into(),

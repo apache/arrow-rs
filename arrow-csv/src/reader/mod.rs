@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! CSV Reading: [`Reader`] and [`ReaderBuilder`]
 //!
@@ -41,6 +28,13 @@
 //! let mut csv = ReaderBuilder::new(Arc::new(schema)).build(file).unwrap();
 //! let batch = csv.next().unwrap().unwrap();
 //! ```
+//!
+//! # Timestamps
+//!
+//! Timestamps are parsed with [`arrow_cast::parse::string_to_datetime`]. A
+//! timestamp without an explicit offset that falls in a daylight savings gap or
+//! overlap of the target timezone is resolved as described there, rather than
+//! returning an error.
 //!
 //! # Example: Numeric calculations on CSV
 //! This code finds the maximum value in column 0 of a CSV file containing
@@ -165,7 +159,7 @@
 
 mod records;
 
-use arrow_array::builder::{NullBuilder, PrimitiveBuilder};
+use arrow_array::builder::{NullBuilder, PrimitiveBuilder, StringDictionaryBuilder};
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_cast::parse::{Parser, parse_decimal, string_to_datetime};
@@ -252,6 +246,15 @@ impl InferredDataType {
 
     /// Updates the [`InferredDataType`] with the given string
     fn update(&mut self, string: &str) {
+        if string.is_ascii() {
+            self.update_lexical(string);
+        } else {
+            self.packed |= 1 << 8; // Utf8
+        }
+    }
+
+    // Header detection retains lexical hints even when the decoder needs Utf8.
+    fn update_lexical(&mut self, string: &str) {
         self.packed |= if string.starts_with('"') {
             1 << 8 // Utf8
         } else if let Some(m) = REGEX_SET.matches(string).into_iter().next() {
@@ -410,7 +413,7 @@ impl Format {
         let mut first_types = vec![InferredDataType::default(); first_record.len()];
         for (value, inferred) in first_record.iter().zip(&mut first_types) {
             if !self.null_regex.is_null(value) {
-                inferred.update(value);
+                inferred.update_lexical(value);
             }
         }
 
@@ -424,7 +427,7 @@ impl Format {
             records_count += 1;
             for (value, inferred) in record.iter().zip(&mut column_types) {
                 if !self.null_regex.is_null(value) {
-                    inferred.update(value);
+                    inferred.update_lexical(value);
                 }
             }
         }
@@ -1033,70 +1036,20 @@ fn parse(
                     if value_type.as_ref() == &DataType::Utf8 =>
                 {
                     match key_type.as_ref() {
-                        DataType::Int8 => Ok(Arc::new(
-                            rows.iter()
-                                .map(|row| {
-                                    let s = row.get(i);
-                                    (!null_regex.is_null(s)).then_some(s)
-                                })
-                                .collect::<DictionaryArray<Int8Type>>(),
-                        ) as ArrayRef),
-                        DataType::Int16 => Ok(Arc::new(
-                            rows.iter()
-                                .map(|row| {
-                                    let s = row.get(i);
-                                    (!null_regex.is_null(s)).then_some(s)
-                                })
-                                .collect::<DictionaryArray<Int16Type>>(),
-                        ) as ArrayRef),
-                        DataType::Int32 => Ok(Arc::new(
-                            rows.iter()
-                                .map(|row| {
-                                    let s = row.get(i);
-                                    (!null_regex.is_null(s)).then_some(s)
-                                })
-                                .collect::<DictionaryArray<Int32Type>>(),
-                        ) as ArrayRef),
-                        DataType::Int64 => Ok(Arc::new(
-                            rows.iter()
-                                .map(|row| {
-                                    let s = row.get(i);
-                                    (!null_regex.is_null(s)).then_some(s)
-                                })
-                                .collect::<DictionaryArray<Int64Type>>(),
-                        ) as ArrayRef),
-                        DataType::UInt8 => Ok(Arc::new(
-                            rows.iter()
-                                .map(|row| {
-                                    let s = row.get(i);
-                                    (!null_regex.is_null(s)).then_some(s)
-                                })
-                                .collect::<DictionaryArray<UInt8Type>>(),
-                        ) as ArrayRef),
-                        DataType::UInt16 => Ok(Arc::new(
-                            rows.iter()
-                                .map(|row| {
-                                    let s = row.get(i);
-                                    (!null_regex.is_null(s)).then_some(s)
-                                })
-                                .collect::<DictionaryArray<UInt16Type>>(),
-                        ) as ArrayRef),
-                        DataType::UInt32 => Ok(Arc::new(
-                            rows.iter()
-                                .map(|row| {
-                                    let s = row.get(i);
-                                    (!null_regex.is_null(s)).then_some(s)
-                                })
-                                .collect::<DictionaryArray<UInt32Type>>(),
-                        ) as ArrayRef),
-                        DataType::UInt64 => Ok(Arc::new(
-                            rows.iter()
-                                .map(|row| {
-                                    let s = row.get(i);
-                                    (!null_regex.is_null(s)).then_some(s)
-                                })
-                                .collect::<DictionaryArray<UInt64Type>>(),
-                        ) as ArrayRef),
+                        DataType::Int8 => build_dictionary_array::<Int8Type>(rows, i, null_regex),
+                        DataType::Int16 => build_dictionary_array::<Int16Type>(rows, i, null_regex),
+                        DataType::Int32 => build_dictionary_array::<Int32Type>(rows, i, null_regex),
+                        DataType::Int64 => build_dictionary_array::<Int64Type>(rows, i, null_regex),
+                        DataType::UInt8 => build_dictionary_array::<UInt8Type>(rows, i, null_regex),
+                        DataType::UInt16 => {
+                            build_dictionary_array::<UInt16Type>(rows, i, null_regex)
+                        }
+                        DataType::UInt32 => {
+                            build_dictionary_array::<UInt32Type>(rows, i, null_regex)
+                        }
+                        DataType::UInt64 => {
+                            build_dictionary_array::<UInt64Type>(rows, i, null_regex)
+                        }
                         _ => Err(ArrowError::ParseError(format!(
                             "Unsupported dictionary key type {key_type}"
                         ))),
@@ -1280,6 +1233,24 @@ fn build_boolean_array(
         })
         .collect::<Result<BooleanArray, _>>()
         .map(|e| Arc::new(e) as ArrayRef)
+}
+
+// parses a specific column (col_idx) into an Arrow dictionary array of strings.
+fn build_dictionary_array<K: ArrowDictionaryKeyType>(
+    rows: &StringRecords<'_>,
+    col_idx: usize,
+    null_regex: &NullRegex,
+) -> Result<ArrayRef, ArrowError> {
+    let mut builder = StringDictionaryBuilder::<K>::with_capacity(rows.len(), 256, 1024);
+    for row in rows.iter() {
+        let s = row.get(col_idx);
+        if null_regex.is_null(s) {
+            builder.append_null();
+        } else {
+            builder.append(s)?;
+        }
+    }
+    Ok(Arc::new(builder.finish()))
 }
 
 /// Builder for CSV [`Reader`]s
@@ -1502,6 +1473,133 @@ mod tests {
             let rows: usize = reader.map(|batch| batch.unwrap().num_rows()).sum();
             assert_eq!(rows, records_read, "CSV: {csv:?}");
         }
+    }
+
+    fn read_inferred_csv(schema: Schema, format: Format, csv: &str) -> RecordBatch {
+        let mut batches = ReaderBuilder::new(Arc::new(schema))
+            .with_format(format)
+            .build(Cursor::new(csv))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(batches.len(), 1);
+        batches.pop().unwrap()
+    }
+
+    #[test]
+    fn test_infer_schema_unicode_values() {
+        for csv in [
+            "١\n٢\n",
+            "１\n２\n",
+            "١.٥\n٢.٥\n",
+            "1e٣\n2e٣\n",
+            "1\n٢\n",
+            "٢٠٢٦-١١-٠٩\n٢٠٢٦-١١-١٠\n",
+            "٢٠٢٦-١١-٠٩T١٢:٣٠:٠٠\n٢٠٢٦-١١-١٠T١٢:٣٠:٠٠\n",
+            "٢٠٢٦-١١-٠٩T١٢:٣٠:٠٠.١٢٣\n٢٠٢٦-١١-١٠T١٢:٣٠:٠٠.١٢٣\n",
+            "2026-11-09T12:30:00.١٢٣٤٥٦\n2026-11-10T12:30:00.١٢٣٤٥٦\n",
+            "2026-11-09T12:30:00.١٢٣٤٥٦٧٨٩\n2026-11-10T12:30:00.١٢٣٤٥٦٧٨٩\n",
+            "2026-11-09T12:30:00+٠١:٠٠\n2026-11-10T12:30:00+٠١:٠٠\n",
+            "falſe\nfalſe\n",
+            "α\nβ\n",
+        ] {
+            let (schema, records) = Format::default()
+                .infer_schema(Cursor::new(csv), None)
+                .unwrap();
+            assert_eq!(schema.field(0).data_type(), &DataType::Utf8, "{csv:?}");
+            assert_eq!(records, 2);
+            let batch = read_inferred_csv(schema, Format::default(), csv);
+            assert_eq!(
+                batch.column(0).as_string::<i32>(),
+                &StringArray::from_iter_values(csv.lines())
+            );
+        }
+    }
+
+    #[test]
+    fn test_infer_format_unicode_values() {
+        for (csv, max_records, name, expected) in [
+            ("١\n2\n3\n", None, "column_1", vec!["١", "2", "3"]),
+            ("count\n١\n٢\n", None, "count", vec!["١", "٢"]),
+            (
+                "count\n1\n٢\n",
+                Some(0),
+                "column_1",
+                vec!["count", "1", "٢"],
+            ),
+            ("count\n1\n٢\n", Some(1), "count", vec!["1", "٢"]),
+        ] {
+            let (format, format_records) = Format::default()
+                .infer_format(Cursor::new(csv), max_records)
+                .unwrap();
+            assert_eq!(format_records, max_records.map_or(3, |n| n + 1));
+            let (schema, records) = format.infer_schema(Cursor::new(csv), None).unwrap();
+            assert_eq!(schema.fields().len(), 1);
+            assert_eq!(schema.field(0), &Field::new(name, DataType::Utf8, true));
+            assert_eq!(records, expected.len());
+            let batch = read_inferred_csv(schema, format, csv);
+            assert_eq!(
+                batch.column(0).as_string::<i32>(),
+                &StringArray::from(expected)
+            );
+        }
+
+        let csv = "name,count,rank\nalice,١,1\nbob,٢,2\n";
+        let (format, _) = Format::default()
+            .infer_format(Cursor::new(csv), None)
+            .unwrap();
+        let (schema, records) = format.infer_schema(Cursor::new(csv), None).unwrap();
+        assert_eq!(records, 2);
+        assert_eq!(
+            schema,
+            Schema::new(vec![
+                Field::new("name", DataType::Utf8, true),
+                Field::new("count", DataType::Utf8, true),
+                Field::new("rank", DataType::Int64, true),
+            ])
+        );
+        let batch = read_inferred_csv(schema, format, csv);
+        assert_eq!(
+            batch.column(0).as_string::<i32>(),
+            &StringArray::from(vec!["alice", "bob"])
+        );
+        assert_eq!(
+            batch.column(1).as_string::<i32>(),
+            &StringArray::from(vec!["١", "٢"])
+        );
+        assert_eq!(
+            batch.column(2).as_primitive::<Int64Type>(),
+            &Int64Array::from(vec![1, 2])
+        );
+    }
+
+    #[test]
+    fn test_infer_schema_unicode_nulls_and_sample() {
+        let csv = "count\n١\n2\n";
+        let (format, _) = Format::default()
+            .with_null_regex(Regex::new("^١$").unwrap())
+            .infer_format(Cursor::new(csv), None)
+            .unwrap();
+        let (schema, records) = format.infer_schema(Cursor::new(csv), None).unwrap();
+        assert_eq!(records, 2);
+        assert_eq!(schema.field(0), &Field::new("count", DataType::Int64, true));
+        let batch = read_inferred_csv(schema, format, csv);
+        assert_eq!(
+            batch.column(0).as_primitive::<Int64Type>(),
+            &Int64Array::from(vec![None, Some(2)])
+        );
+
+        // A value beyond the schema sample cannot change the inferred type.
+        let csv = "1\n٢\n";
+        let (schema, records) = Format::default()
+            .infer_schema(Cursor::new(csv), Some(1))
+            .unwrap();
+        assert_eq!(records, 1);
+        assert_eq!(schema.field(0).data_type(), &DataType::Int64);
+        let mut reader = ReaderBuilder::new(Arc::new(schema))
+            .build(Cursor::new(csv))
+            .unwrap();
+        assert!(reader.next().unwrap().is_err());
     }
 
     #[test]
@@ -2069,6 +2167,27 @@ mod tests {
     }
 
     #[test]
+    fn test_csv_dictionary_key_overflow() {
+        let schema = Arc::new(Schema::new(vec![Field::new_dictionary(
+            "c",
+            DataType::Int8,
+            DataType::Utf8,
+            false,
+        )]));
+        let read = |distinct: usize| {
+            let rows = (0..distinct).map(|i| format!("v{i}")).collect::<Vec<_>>();
+            let mut reader = ReaderBuilder::new(schema.clone())
+                .build(Cursor::new(rows.join("\n")))
+                .unwrap();
+            reader.next().unwrap()
+        };
+
+        assert_eq!(read(128).unwrap().num_rows(), 128);
+        let err = read(129).unwrap_err();
+        assert!(matches!(err, ArrowError::DictionaryKeyOverflowError));
+    }
+
+    #[test]
     fn test_csv_with_nullable_dictionary() {
         let offset_type = vec![
             DataType::Int8,
@@ -2533,6 +2652,41 @@ mod tests {
             &[10_800_000, 0, -7_200_000],
         );
         test_parse_timestamp_impl::<TimestampSecondType>(Some("-03".into()), &[10_800, 0, -7_200]);
+    }
+
+    // A local time in a DST gap or overlap of the target timezone is resolved
+    // as described in `arrow_cast::parse::string_to_datetime`: an ambiguous
+    // reading takes the later instant, and a nonexistent reading is shifted
+    // forward by the length of the gap.
+    #[test]
+    fn test_parse_timestamp_dst_transitions() {
+        let csv = [
+            // Nonexistent: 02:30 is skipped, read as 03:30 EDT
+            "2024-03-10 02:30:00",
+            // Ambiguous: 01:30 happens twice, the later (EST) instant wins
+            "2024-11-03 01:30:00",
+        ]
+        .join("\n");
+        let timezone: Option<Arc<str>> = Some("America/New_York".into());
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "field",
+            DataType::Timestamp(TimeUnit::Second, timezone.clone()),
+            true,
+        )]));
+
+        let mut decoder = ReaderBuilder::new(schema).build_decoder();
+        let decoded = decoder.decode(csv.as_bytes()).unwrap();
+        assert_eq!(decoded, csv.len());
+        decoder.decode(&[]).unwrap();
+
+        let batch = decoder.flush().unwrap().unwrap();
+        let col = batch.column(0).as_primitive::<TimestampSecondType>();
+        // 2024-03-10T07:30:00Z and 2024-11-03T06:30:00Z
+        assert_eq!(col.values(), &[1_710_055_800, 1_730_615_400]);
+        assert_eq!(
+            col.data_type(),
+            &DataType::Timestamp(TimeUnit::Second, timezone)
+        );
     }
 
     #[test]
@@ -3276,6 +3430,17 @@ mod tests {
         err_test(
             b"\xFFsdf,dsfg\ndksdk,jf\ndsdsfd,hghue\n,sds\nFalhghse,\xFF",
             "Csv error: Encountered invalid UTF-8 data for line 1 and field 1",
+        );
+
+        // 0xCD 0x9C is valid UTF-8 when joined, but split across fields
+        err_test(
+            b"ab\xCD,\x9Ccd\n",
+            "Csv error: Encountered invalid UTF-8 data for line 1 and field 1",
+        );
+
+        err_test(
+            b"a,\xCD\n\x9C,b\n",
+            "Csv error: Encountered invalid UTF-8 data for line 1 and field 2",
         );
     }
 

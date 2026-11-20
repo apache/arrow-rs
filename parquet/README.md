@@ -1,20 +1,7 @@
 <!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+  SPDX-License-Identifier: Apache-2.0
+  SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+  SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # Apache Parquet Official Native Rust Implementation
@@ -65,11 +52,13 @@ The `parquet` crate provides the following features which may be enabled in your
 - `simdutf8` (default) - Use the [`simdutf8`] crate for SIMD-accelerated UTF-8 validation
 - `encryption` - support for reading / writing encrypted Parquet files
 - `variant_experimental` - ⚠️ Experimental [Parquet Variant] support, which may change, even between minor releases.
+- `file_experimental` - ⚠️ Experimental [Parquet FILE] logical type support, which may change, even between minor releases.
 - `geospatial` - ⚠️ Experimental geospatial support, which may change, even between minor releases.
 
 [`arrow`]: https://crates.io/crates/arrow
 [`simdutf8`]: https://crates.io/crates/simdutf8
 [parquet variant]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md
+[parquet file]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#file
 
 ## Parquet Feature Status
 

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Interleave elements from multiple arrays
 
@@ -101,6 +88,7 @@ pub fn interleave(
 
     downcast_primitive! {
         data_type => (primitive_helper, values, indices, data_type),
+        DataType::Boolean => interleave_boolean(values, indices),
         DataType::Utf8 => interleave_bytes::<Utf8Type>(values, indices),
         DataType::LargeUtf8 => interleave_bytes::<LargeUtf8Type>(values, indices),
         DataType::Binary => interleave_bytes::<BinaryType>(values, indices),
@@ -220,6 +208,23 @@ fn interleave_primitive<T: ArrowPrimitiveType>(
     Ok(Arc::new(array.with_data_type(data_type.clone())))
 }
 
+fn interleave_boolean(
+    values: &[&dyn Array],
+    indices: &[(usize, usize)],
+) -> Result<ArrayRef, ArrowError> {
+    let interleaved = Interleave::<'_, BooleanArray>::new(values, indices);
+    let arrays = &interleaved.arrays;
+
+    let mut values_builder = BooleanBufferBuilder::new(indices.len());
+
+    for &(array_idx, row_idx) in indices {
+        values_builder.append(arrays[array_idx].value(row_idx));
+    }
+
+    let array = BooleanArray::new(values_builder.build(), interleaved.nulls);
+    Ok(Arc::new(array))
+}
+
 fn interleave_bytes<T: ByteArrayType>(
     values: &[&dyn Array],
     indices: &[(usize, usize)],
@@ -267,23 +272,25 @@ fn interleave_dictionaries<K: ArrowDictionaryKeyType>(
         };
     }
 
-    let masks: Vec<_> = dictionaries
+    let masks_and_lookups: Result<Vec<_>, ArrowError> = dictionaries
         .iter()
         .enumerate()
         .map(|(a_idx, dictionary)| {
-            let mut key_mask = BooleanBufferBuilder::new_from_buffer(
-                MutableBuffer::new_null(dictionary.len()),
-                dictionary.len(),
-            );
+            let buffer = MutableBuffer::try_from_len_zeroed(bit_util::ceil(dictionary.len(), 8))
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+            let mut key_mask = BooleanBufferBuilder::new_from_buffer(buffer, dictionary.len());
 
+            let mut lookups = 0;
             for (_, key_idx) in indices.iter().filter(|(a, _)| *a == a_idx) {
                 key_mask.set_bit(*key_idx, true);
+                lookups += 1;
             }
-            key_mask.finish()
+            Ok((key_mask.finish(), lookups))
         })
         .collect();
+    let (masks, key_lookups): (Vec<_>, Vec<_>) = masks_and_lookups?.into_iter().unzip();
 
-    let merged = merge_dictionary_values(&dictionaries, Some(&masks))?;
+    let merged = merge_dictionary_values(&dictionaries, Some(&masks), Some(&key_lookups))?;
 
     // Recompute keys
     let mut keys = PrimitiveBuilder::<K>::with_capacity(indices.len());
@@ -292,7 +299,11 @@ fn interleave_dictionaries<K: ArrowDictionaryKeyType>(
         match old_keys.is_valid(*b) {
             true => {
                 let old_key = old_keys.values()[*b];
-                keys.append_value(merged.key_mappings[*a][old_key.as_usize()])
+                keys.append_value(
+                    merged.key_mappings[*a]
+                        .get(old_key.as_usize())
+                        .expect("referenced dictionary key should be mapped"),
+                )
             }
             false => keys.append_null(),
         }
@@ -415,7 +426,7 @@ fn interleave_list_like_primitive_child<L: ListLikeArray, T: ArrowPrimitiveType>
     indices: &[(usize, usize)],
     capacity: usize,
     data_type: &DataType,
-) -> ArrayRef {
+) -> Result<ArrayRef, ArrowError> {
     let child_arrays: Vec<&PrimitiveArray<T>> = interleaved
         .arrays
         .iter()
@@ -438,7 +449,8 @@ fn interleave_list_like_primitive_child<L: ListLikeArray, T: ArrowPrimitiveType>
     // - Sources without nulls: set the bit range to all 1s directly.
     let nulls = if has_child_nulls {
         let null_byte_len = bit_util::ceil(capacity, 8);
-        let mut output_null_buf = MutableBuffer::from_len_zeroed(null_byte_len);
+        let mut output_null_buf = MutableBuffer::try_from_len_zeroed(null_byte_len)
+            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
         let mut offset_write = 0;
         let mut output_null_count = 0usize;
@@ -477,7 +489,9 @@ fn interleave_list_like_primitive_child<L: ListLikeArray, T: ArrowPrimitiveType>
         None
     };
 
-    Arc::new(PrimitiveArray::<T>::new(values.into(), nulls).with_data_type(data_type.clone()))
+    Ok(Arc::new(
+        PrimitiveArray::<T>::new(values.into(), nulls).with_data_type(data_type.clone()),
+    ))
 }
 
 /// Interleave child values for non-primitive child types, shared by List and FixedSizeList.
@@ -528,7 +542,7 @@ fn interleave_list<O: OffsetSizeTrait>(
                 indices,
                 capacity,
                 field.data_type(),
-            )
+            )?
         };
     }
 
@@ -556,7 +570,10 @@ fn interleave_fixed_size_list(
     size: i32,
 ) -> Result<ArrayRef, ArrowError> {
     let interleaved = Interleave::<'_, FixedSizeListArray>::new(values, indices);
-    let capacity = indices.len() * size as usize;
+    let capacity = indices
+        .len()
+        .checked_mul(size as usize)
+        .ok_or_else(|| ArrowError::MemoryError("interleave output size overflow".into()))?;
 
     macro_rules! fsl_primitive_helper {
         ($t:ty) => {
@@ -565,7 +582,7 @@ fn interleave_fixed_size_list(
                 indices,
                 capacity,
                 field.data_type(),
-            )
+            )?
         };
     }
 
@@ -740,7 +757,7 @@ fn interleave_list_view_copy<O: OffsetSizeTrait>(
         .map(|list| list.values().to_data())
         .collect();
     let child_data_refs: Vec<_> = child_data.iter().collect();
-    let mut mutable_child = MutableArrayData::new(child_data_refs, false, capacity);
+    let mut mutable_child = MutableArrayData::try_new(child_data_refs, false, capacity)?;
     for &(array_idx, row_idx) in indices {
         let list = interleaved.arrays[array_idx];
         let start = list.offsets()[row_idx].as_usize();
@@ -951,7 +968,12 @@ pub fn interleave_record_batch(
     record_batches: &[&RecordBatch],
     indices: &[(usize, usize)],
 ) -> Result<RecordBatch, ArrowError> {
-    let schema = record_batches[0].schema();
+    let Some(first) = record_batches.first() else {
+        return Err(ArrowError::InvalidArgumentError(
+            "interleave_record_batch requires input of at least one record batch".to_string(),
+        ));
+    };
+    let schema = first.schema();
     let columns = (0..schema.fields().len())
         .map(|i| {
             let column_values: Vec<&dyn Array> = record_batches
@@ -961,7 +983,13 @@ pub fn interleave_record_batch(
             interleave(&column_values, indices)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    RecordBatch::try_new(schema, columns)
+    // The row count is set explicitly so that a batch with no columns still
+    // produces a batch with `indices.len()` rows, like `take_record_batch`.
+    RecordBatch::try_new_with_options(
+        schema,
+        columns,
+        &RecordBatchOptions::new().with_row_count(Some(indices.len())),
+    )
 }
 
 #[cfg(test)]
@@ -973,7 +1001,7 @@ mod tests {
     };
     use arrow_array::types::{Decimal128Type, Int8Type, TimestampMicrosecondType};
     use arrow_buffer::ScalarBuffer;
-    use arrow_schema::{Field, TimeUnit};
+    use arrow_schema::{Field, Schema, TimeUnit};
 
     #[test]
     fn test_primitive() {
@@ -992,6 +1020,68 @@ mod tests {
         let values = interleave(&[&a, &b], &[(0, 1), (1, 2), (1, 2), (0, 3), (0, 2)]).unwrap();
         let v: Vec<_> = values.as_primitive::<Int32Type>().into_iter().collect();
         assert_eq!(&v, &[Some(2), None, None, Some(4), Some(3)])
+    }
+
+    #[test]
+    fn test_interleave_boolean() {
+        let a = BooleanArray::from(vec![Some(true), Some(false), None, Some(true)]);
+        let b = BooleanArray::from(vec![Some(false), Some(true), Some(true), None]);
+
+        let values = interleave(&[&a, &b], &[(0, 0), (1, 1), (0, 2), (1, 3), (1, 2)]).unwrap();
+
+        let result = values.as_boolean();
+
+        assert_eq!(
+            result.iter().collect::<Vec<_>>(),
+            vec![Some(true), Some(true), None, None, Some(true),]
+        );
+    }
+
+    #[test]
+    fn test_interleave_boolean_sliced() {
+        let original = BooleanArray::from(vec![
+            Some(false),
+            Some(true),
+            Some(false),
+            Some(true),
+            None,
+            Some(false),
+            Some(true),
+        ]);
+
+        let sliced_array = original.slice(1, 5);
+        let sliced = sliced_array
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap();
+        let other = BooleanArray::from(vec![Some(false), Some(false), Some(true)]);
+
+        let values =
+            interleave(&[sliced, &other], &[(0, 0), (1, 2), (0, 3), (0, 4), (1, 0)]).unwrap();
+
+        let result = values.as_boolean();
+
+        assert_eq!(
+            result.iter().collect::<Vec<_>>(),
+            vec![Some(true), Some(true), None, Some(false), Some(false),]
+        );
+    }
+
+    #[test]
+    fn test_interleave_boolean_fallback_matches_specialized() {
+        let a = BooleanArray::from_iter(
+            (0..1024).map(|i| if i % 10 == 0 { None } else { Some(i % 2 == 0) }),
+        );
+        let b = BooleanArray::from_iter((0..1024).map(|i| Some(i % 3 == 0)));
+
+        let indices: Vec<_> = (0..1024).map(|i| (i % 2, (i * 37) % 1024)).collect();
+
+        let values: [&dyn Array; 2] = [&a, &b];
+
+        let specialized = interleave_boolean(&values, &indices).unwrap();
+        let fallback = interleave_fallback(&values, &indices).unwrap();
+
+        assert_eq!(specialized.as_ref(), fallback.as_ref());
     }
 
     #[test]
@@ -1044,6 +1134,43 @@ mod tests {
         let vc = v.downcast_dict::<StringArray>().unwrap();
         let collected: Vec<_> = vc.into_iter().map(Option::unwrap).collect();
         assert_eq!(&collected, &["c", "c", "c"]);
+    }
+
+    #[test]
+    fn test_interleave_sparse_primitive_dictionaries_with_nulls() {
+        let values_len = 2 * crate::dictionary::MAX_DENSE_MAPPING_VALUES_PER_ROW + 1;
+        let last = values_len as i32 - 1;
+        let make_dictionary = |offset, null_value, keys| {
+            let values = Int32Array::from_iter(
+                (0..values_len).map(|idx| (idx != null_value).then_some(offset + idx as i32)),
+            );
+            DictionaryArray::<Int32Type>::new(Int32Array::from(keys), Arc::new(values))
+        };
+        let a = make_dictionary(0, 1, vec![Some(last), None, Some(1)]);
+        let b = make_dictionary(10_000, 2, vec![Some(2), Some(last - 1), None]);
+        let indices = [(0, 2), (1, 0), (0, 0), (1, 2)];
+        let masks = [
+            BooleanBuffer::from_iter([true, false, true]),
+            BooleanBuffer::from_iter([true, false, true]),
+        ];
+
+        let merged = merge_dictionary_values(&[&a, &b], Some(&masks), Some(&[2, 2])).unwrap();
+        assert!(
+            merged
+                .key_mappings
+                .iter()
+                .all(|mapping| matches!(mapping, crate::dictionary::KeyMapping::Sparse(_)))
+        );
+
+        let result = interleave(&[&a, &b], &indices).unwrap();
+        let actual = result
+            .as_dictionary::<Int32Type>()
+            .downcast_dict::<Int32Array>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        assert_eq!(actual, [None, None, Some(last), None]);
     }
 
     #[test]
@@ -2452,5 +2579,24 @@ mod tests {
 
         assert_eq!(result.value(0).len(), 1);
         assert_eq!(result.value(3).len(), 1);
+    }
+
+    #[test]
+    fn test_interleave_record_batch_empty_input() {
+        let err = interleave_record_batch(&[], &[]).unwrap_err();
+        assert!(matches!(err, ArrowError::InvalidArgumentError(_)));
+    }
+
+    #[test]
+    fn test_interleave_record_batch_no_columns() {
+        // A batch with no columns but a known row count interleaves to a
+        // batch with `indices.len()` rows, matching `take_record_batch`.
+        let options = RecordBatchOptions::new().with_row_count(Some(3));
+        let batch =
+            RecordBatch::try_new_with_options(Arc::new(Schema::empty()), vec![], &options).unwrap();
+
+        let result = interleave_record_batch(&[&batch], &[(0, 0), (0, 2)]).unwrap();
+        assert_eq!(result.num_columns(), 0);
+        assert_eq!(result.num_rows(), 2);
     }
 }

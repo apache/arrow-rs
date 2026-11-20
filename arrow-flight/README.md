@@ -1,20 +1,7 @@
 <!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+  SPDX-License-Identifier: Apache-2.0
+  SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+  SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # Apache Arrow Flight
@@ -80,6 +67,44 @@ $ flight_sql_client --host example.com statement-query "SELECT 1;"
 | 1        |
 +----------+
 ```
+
+## Running the Flight SQL Example
+
+The [Flight SQL server example](examples/flight_sql_server.rs) implements the
+`GetFlightInfo` and `DoGet` requests needed to list database schemas. From the
+repository root, start the server with:
+
+```console
+$ cargo run -p arrow-flight --example flight_sql_server --features flight-sql,tls-ring
+Listening on 0.0.0.0:50051
+```
+
+In another terminal, use the bundled client to list schemas:
+
+```console
+$ cargo run -p arrow-flight --bin flight_sql_client --features cli,flight-sql,tls-ring -- \
+    --host localhost --port 50051 db-schemas flight_sql --db-schema-filter '%'
++--------------+----------------+
+| catalog_name | db_schema_name |
++--------------+----------------+
+| flight_sql   | example        |
++--------------+----------------+
+```
+
+This request has two steps:
+
+1. `get_flight_info_schemas` returns a `FlightInfo` containing the result
+   schema and an endpoint ticket. The example uses `FlightInfo::try_with_schema`
+   to encode the schema in the format required by the Flight protocol.
+2. The client passes the ticket to `do_get_schemas`, which builds the metadata
+   `RecordBatch` and uses `FlightDataEncoderBuilder` to produce a correctly
+   framed stream of `FlightData` messages.
+
+`FlightData.data_header` and `FlightData.data_body` are IPC message components,
+not arbitrary schema and IPC stream bytes. Constructing them directly, for
+example by putting `Schema::to_string()` in `data_header`, produces invalid
+messages. Use `FlightInfo::try_with_schema` for `FlightInfo` schemas and
+`FlightDataEncoderBuilder` for `DoGet` response streams.
 
 ## Security
 

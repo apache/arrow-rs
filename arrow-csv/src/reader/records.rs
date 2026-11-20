@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow_schema::ArrowError;
 use csv_core::{ReadRecordResult, Reader};
@@ -97,8 +84,26 @@ impl RecordDecoder {
         }
 
         // Reserve sufficient capacity in offsets
-        self.offsets
-            .resize(self.offsets_len + to_read * self.num_columns, 0);
+        let offsets_capacity = to_read
+            .checked_mul(self.num_columns)
+            .and_then(|capacity| self.offsets_len.checked_add(capacity))
+            .ok_or_else(|| ArrowError::CsvError("CSV decoder capacity overflow".to_string()))?;
+
+        // Validate both allocation layouts before modifying either buffer
+        let data_capacity = to_read
+            .checked_mul(self.num_columns)
+            .and_then(|capacity| capacity.checked_mul(AVERAGE_FIELD_SIZE))
+            .map(|capacity| capacity.max(MIN_CAPACITY))
+            .and_then(|capacity| self.data_len.checked_add(capacity))
+            .ok_or_else(|| ArrowError::CsvError("CSV decoder capacity overflow".to_string()))?;
+        if std::alloc::Layout::array::<usize>(offsets_capacity).is_err()
+            || std::alloc::Layout::array::<u8>(data_capacity).is_err()
+        {
+            return Err(ArrowError::CsvError(
+                "CSV decoder capacity overflow".to_string(),
+            ));
+        }
+        self.offsets.resize(offsets_capacity, 0);
 
         // The current offset into `input`
         let mut input_offset = 0;
@@ -109,9 +114,18 @@ impl RecordDecoder {
         loop {
             // Reserve necessary space in output data based on best estimate
             let remaining_rows = to_read - read;
-            let capacity = remaining_rows * self.num_columns * AVERAGE_FIELD_SIZE;
+            let capacity = remaining_rows
+                .checked_mul(self.num_columns)
+                .and_then(|capacity| capacity.checked_mul(AVERAGE_FIELD_SIZE))
+                .ok_or_else(|| ArrowError::CsvError("CSV decoder capacity overflow".to_string()))?;
             let estimated_data = capacity.max(MIN_CAPACITY);
-            self.data.resize(self.data_len + estimated_data, 0);
+            let data_capacity = self
+                .data_len
+                .checked_add(estimated_data)
+                .ok_or_else(|| ArrowError::CsvError("CSV decoder capacity overflow".to_string()))?;
+            std::alloc::Layout::array::<u8>(data_capacity)
+                .map_err(|_| ArrowError::CsvError("CSV decoder capacity overflow".to_string()))?;
+            self.data.resize(data_capacity, 0);
 
             // Try to read a record
             loop {
@@ -233,16 +247,8 @@ impl RecordDecoder {
                 })
             })?;
 
-        // Need to truncate data t1o the actual amount of data read
-        let data = std::str::from_utf8(&self.data[..self.data_len]).map_err(|e| {
-            let valid_up_to = e.valid_up_to();
-
-            // We can't use binary search because of empty fields
-            let idx = self.offsets[..self.offsets_len]
-                .iter()
-                .rposition(|x| *x <= valid_up_to)
-                .unwrap();
-
+        let offsets = &self.offsets[..self.offsets_len];
+        let invalid_utf8 = |idx: usize| {
             let field = idx % self.num_columns + 1;
             let line_offset = self.line_number - self.num_rows;
             let line = line_offset + idx / self.num_columns;
@@ -250,9 +256,26 @@ impl RecordDecoder {
             ArrowError::CsvError(format!(
                 "Encountered invalid UTF-8 data for line {line} and field {field}"
             ))
+        };
+
+        // Need to truncate data t1o the actual amount of data read
+        let data = std::str::from_utf8(&self.data[..self.data_len]).map_err(|e| {
+            let valid_up_to = e.valid_up_to();
+
+            // We can't use binary search because of empty fields
+            let idx = offsets.iter().rposition(|x| *x <= valid_up_to).unwrap();
+
+            invalid_utf8(idx)
         })?;
 
-        let offsets = &self.offsets[..self.offsets_len];
+        // Invalid bytes on either side of a field boundary can join into a valid sequence.
+        // ASCII data has no multi-byte sequences, so only scan the offsets otherwise
+        if !data.is_ascii()
+            && let Some(idx) = split_char_field(offsets, data)
+        {
+            return Err(invalid_utf8(idx));
+        }
+
         let num_rows = self.num_rows;
 
         // Reset state
@@ -269,6 +292,13 @@ impl RecordDecoder {
             data,
         })
     }
+}
+
+/// Returns the index of the first field that ends in the middle of a multi-byte character
+#[inline(never)]
+fn split_char_field(offsets: &[usize], data: &str) -> Option<usize> {
+    let idx = offsets.iter().position(|x| !data.is_char_boundary(*x))?;
+    Some(idx - 1)
 }
 
 /// A collection of parsed, UTF-8 CSV records

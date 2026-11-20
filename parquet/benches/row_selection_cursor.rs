@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::hint;
 use std::sync::Arc;
@@ -34,9 +21,14 @@ use rand::{RngExt, SeedableRng};
 const TOTAL_ROWS: usize = 1 << 20;
 const BATCH_SIZE: usize = 1 << 10;
 const BASE_SEED: u64 = 0xA55AA55A;
-const AVG_SELECTOR_LENGTHS: &[usize] = &[4, 8, 12, 16, 20, 24, 28, 32, 36, 40];
-const COLUMN_WIDTHS: &[usize] = &[2, 4, 8, 16, 32];
-const UTF8VIEW_LENS: &[usize] = &[4, 8, 16, 32, 64, 128, 256];
+// 4 exercises fragmented selections; 28, 32, and 40 cover average run lengths
+// below, at, and above the default Auto threshold of 32.
+const AVG_SELECTOR_LENGTHS: &[usize] = &[4, 28, 32, 40];
+// 2, 8, and 32 exercise narrow, medium, and wide projections.
+const COLUMN_WIDTHS: &[usize] = &[2, 8, 32];
+// 8 exercises inline Utf8View values, 16 crosses the 12-byte inline limit,
+// and 256 exercises longer strings.
+const UTF8VIEW_LENS: &[usize] = &[8, 16, 256];
 const BENCH_MODES: &[BenchMode] = &[BenchMode::Selector, BenchMode::Mask, BenchMode::Auto];
 const BACKINGS: &[Backing] = &[Backing::Selectors, Backing::Mask];
 
@@ -46,10 +38,6 @@ struct DataProfile {
 }
 
 const DATA_PROFILES: &[DataProfile] = &[
-    DataProfile {
-        name: "int32",
-        build_batch: build_int32_batch,
-    },
     DataProfile {
         name: "float64",
         build_batch: build_float64_batch,
@@ -253,7 +241,13 @@ fn bench_over_lengths(
     }
 }
 
-criterion_group!(benches, criterion_benchmark);
+criterion_group! {
+    name = benches;
+    config = Criterion::default()
+        .warm_up_time(std::time::Duration::from_secs(2))
+        .sample_size(50);
+    targets = criterion_benchmark
+}
 criterion_main!(benches);
 
 struct BenchInput {

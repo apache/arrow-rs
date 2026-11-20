@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use criterion::measurement::WallTime;
 use criterion::{BenchmarkGroup, BenchmarkId, Criterion, criterion_group, criterion_main};
@@ -28,6 +15,10 @@ use arrow::array::*;
 use arrow::datatypes::*;
 use arrow::util::bench_util::*;
 use arrow_select::zip::zip;
+
+/// Each benchmark cycles through this many arrays and random masks, one per
+/// iteration.
+const NUM_INPUTS: usize = 64;
 
 trait InputGenerator {
     fn name(&self) -> &str;
@@ -163,24 +154,43 @@ impl InputGenerator for GenerateStringView {
     }
 }
 
-fn mask_cases(len: usize) -> Vec<(&'static str, BooleanArray)> {
+/// Returns the masks for each mask case: `NUM_INPUTS` of each random case, and
+/// one of each constant case.
+fn mask_cases(len: usize) -> Vec<(&'static str, Vec<BooleanArray>)> {
+    let random = |null_density, true_density| -> Vec<BooleanArray> {
+        (0..NUM_INPUTS as u64)
+            .map(|seed| create_boolean_array_with_seed(len, null_density, true_density, seed))
+            .collect()
+    };
     vec![
-        ("all_true", create_boolean_array(len, 0.0, 1.0)),
-        ("99pct_true", create_boolean_array(len, 0.0, 0.99)),
-        ("90pct_true", create_boolean_array(len, 0.0, 0.9)),
-        ("50pct_true", create_boolean_array(len, 0.0, 0.5)),
+        ("all_true", vec![create_boolean_array(len, 0.0, 1.0)]),
+        ("99pct_true", random(0.0, 0.99)),
+        ("90pct_true", random(0.0, 0.9)),
+        ("50pct_true", random(0.0, 0.5)),
         (
             "true_then_false",
-            BooleanArray::from_iter((0..len).map(|i| i < len / 2)),
+            vec![BooleanArray::from_iter((0..len).map(|i| i < len / 2))],
         ),
-        ("10pct_true", create_boolean_array(len, 0.0, 0.1)),
-        ("1pct_true", create_boolean_array(len, 0.0, 0.01)),
-        ("all_false", create_boolean_array(len, 0.0, 0.0)),
-        ("50pct_nulls", create_boolean_array(len, 0.5, 0.5)),
+        ("10pct_true", random(0.0, 0.1)),
+        ("1pct_true", random(0.0, 0.01)),
+        ("all_false", vec![create_boolean_array(len, 0.0, 0.0)]),
+        ("50pct_nulls", random(0.5, 0.5)),
     ]
 }
 
-fn bench_zip_on_input_generator(c: &mut Criterion, input_generator: &impl InputGenerator) {
+/// Which input combinations to run for a type.
+#[derive(PartialEq)]
+enum Scenarios {
+    All,
+    /// Only an array against a scalar
+    ScalarSide,
+}
+
+fn bench_zip_on_input_generator(
+    c: &mut Criterion,
+    input_generator: &impl InputGenerator,
+    scenarios: Scenarios,
+) {
     const ARRAY_LEN: usize = 8192;
 
     let mut group =
@@ -192,63 +202,92 @@ fn bench_zip_on_input_generator(c: &mut Criterion, input_generator: &impl InputG
         .try_into()
         .unwrap();
 
-    let array_1_10pct_nulls = input_generator.generate_array(42, ARRAY_LEN, 0.1);
-    let array_2_10pct_nulls = input_generator.generate_array(18, ARRAY_LEN, 0.1);
+    let arrays = |first_seed: u64| -> Vec<ArrayRef> {
+        (0..NUM_INPUTS as u64)
+            .map(|i| input_generator.generate_array(first_seed + i, ARRAY_LEN, 0.1))
+            .collect()
+    };
+    let arrays_1_10pct_nulls = arrays(42);
+    let arrays_2_10pct_nulls = arrays(42 + NUM_INPUTS as u64);
 
     let masks = mask_cases(ARRAY_LEN);
 
-    // Benchmarks for different scalar combinations
-    for (description, truthy, falsy) in &[
-        ("null_vs_non_null_scalar", &null_scalar, &non_null_scalar_1),
-        ("non_nulls_scalars", &non_null_scalar_1, &non_null_scalar_2),
-    ] {
-        bench_zip_input_on_all_masks(
-            description,
-            &mut group,
-            &masks,
-            &Scalar::new(truthy),
-            &Scalar::new(falsy),
-        );
+    if scenarios == Scenarios::All {
+        // Benchmarks for different scalar combinations
+        for (description, truthy, falsy) in &[
+            ("null_vs_non_null_scalar", &null_scalar, &non_null_scalar_1),
+            ("non_nulls_scalars", &non_null_scalar_1, &non_null_scalar_2),
+        ] {
+            bench_zip_input_on_all_masks(
+                description,
+                &mut group,
+                &masks,
+                &[Scalar::new(truthy)],
+                &[Scalar::new(falsy)],
+            );
+        }
     }
 
     bench_zip_input_on_all_masks(
         "array_vs_non_null_scalar",
         &mut group,
         &masks,
-        &array_1_10pct_nulls,
-        &Scalar::new(non_null_scalar_1.clone()),
+        &arrays_1_10pct_nulls,
+        &[Scalar::new(non_null_scalar_1.clone())],
     );
 
     bench_zip_input_on_all_masks(
         "non_null_scalar_vs_array",
         &mut group,
         &masks,
-        &Scalar::new(non_null_scalar_1.clone()),
-        &array_1_10pct_nulls,
+        &[Scalar::new(non_null_scalar_1.clone())],
+        &arrays_1_10pct_nulls,
     );
 
     bench_zip_input_on_all_masks(
-        "array_vs_array",
+        "array_vs_null_scalar",
         &mut group,
         &masks,
-        &array_1_10pct_nulls,
-        &array_2_10pct_nulls,
+        &arrays_1_10pct_nulls,
+        &[Scalar::new(null_scalar.clone())],
     );
+
+    if scenarios == Scenarios::All {
+        bench_zip_input_on_all_masks(
+            "array_vs_array",
+            &mut group,
+            &masks,
+            &arrays_1_10pct_nulls,
+            &arrays_2_10pct_nulls,
+        );
+    }
 
     group.finish();
 }
 
+/// Benchmarks `zip` for each mask case. Each iteration takes the next of the
+/// case's masks, of `truthy` and of `falsy`, cycling through each list on its
+/// own, so a one-element list stays the same.
 fn bench_zip_input_on_all_masks(
     description: &str,
     group: &mut BenchmarkGroup<WallTime>,
-    masks: &[(&str, BooleanArray)],
-    truthy: &impl Datum,
-    falsy: &impl Datum,
+    mask_cases: &[(&str, Vec<BooleanArray>)],
+    truthy: &[impl Datum],
+    falsy: &[impl Datum],
 ) {
-    for (mask_description, mask) in masks {
+    for (mask_description, masks) in mask_cases {
         let id = BenchmarkId::new(description, mask_description);
-        group.bench_with_input(id, mask, |b, mask| {
-            b.iter(|| hint::black_box(zip(mask, truthy, falsy)))
+        let mut masks = masks.iter().cycle();
+        let mut truthy = truthy.iter().cycle();
+        let mut falsy = falsy.iter().cycle();
+        group.bench_function(id, |b| {
+            b.iter(|| {
+                hint::black_box(zip(
+                    masks.next().unwrap(),
+                    truthy.next().unwrap(),
+                    falsy.next().unwrap(),
+                ))
+            })
         });
     }
 }
@@ -260,6 +299,16 @@ fn add_benchmark(c: &mut Criterion) {
             description: "i32".to_string(),
             _marker: std::marker::PhantomData,
         },
+        Scenarios::All,
+    );
+
+    bench_zip_on_input_generator(
+        c,
+        &GeneratePrimitive::<Decimal128Type> {
+            description: "decimal128".to_string(),
+            _marker: std::marker::PhantomData,
+        },
+        Scenarios::ScalarSide,
     );
 
     bench_zip_on_input_generator(
@@ -269,6 +318,7 @@ fn add_benchmark(c: &mut Criterion) {
             range_length: 3..20,
             _marker: std::marker::PhantomData,
         },
+        Scenarios::All,
     );
 
     bench_zip_on_input_generator(
@@ -278,6 +328,7 @@ fn add_benchmark(c: &mut Criterion) {
             range: 3..20,
             _marker: std::marker::PhantomData,
         },
+        Scenarios::All,
     );
 }
 

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Shared round-trip helpers for Arrow writer tests.
 
@@ -35,6 +22,9 @@ pub(super) const SMALL_SIZE: usize = 7;
 
 // Write the batch to parquet and read it back out, ensuring
 // that what comes out is the same as what was written in
+// expect(dead_code) cannot apply to both integration and unit tests with different usage.
+#[expect(clippy::allow_attributes)]
+#[allow(dead_code)]
 pub(super) fn roundtrip(
     expected_batch: RecordBatch,
     max_row_group_size: Option<usize>,
@@ -127,31 +117,43 @@ impl RoundTripTest {
         }
     }
 
-    /// Set the schema
-    pub(super) fn with_schema(mut self, schema: SchemaRef) -> Self {
-        self.schema = Some(schema);
-        self
-    }
-
     /// Set the nullable flag
     pub(super) fn with_nullable(mut self, nullable: bool) -> Self {
         self.nullable = nullable;
         self
     }
 
+    /// Set the schema
+    // expect(dead_code) cannot apply to both integration and unit tests with different usage.
+    #[expect(clippy::allow_attributes)]
+    #[allow(dead_code)]
+    pub(super) fn with_schema(mut self, schema: SchemaRef) -> Self {
+        self.schema = Some(schema);
+        self
+    }
+
     /// Set bloom filter
+    // expect(dead_code) cannot apply to both integration and unit tests with different usage.
+    #[expect(clippy::allow_attributes)]
+    #[allow(dead_code)]
     pub(super) fn with_bloom_filter(mut self, bloom_filter: bool) -> Self {
         self.bloom_filter = bloom_filter;
         self
     }
 
     /// Set bloom filter max ndv
+    // expect(dead_code) cannot apply to both integration and unit tests with different usage.
+    #[expect(clippy::allow_attributes)]
+    #[allow(dead_code)]
     pub(super) fn with_bloom_filter_ndv(mut self, bloom_filter_ndv: u64) -> Self {
         self.bloom_filter_ndv = Some(bloom_filter_ndv);
         self
     }
 
     /// Set bloom filter position
+    // expect(dead_code) cannot apply to both integration and unit tests with different usage.
+    #[expect(clippy::allow_attributes)]
+    #[allow(dead_code)]
     pub(super) fn with_bloom_filter_position(
         mut self,
         bloom_filter_position: BloomFilterPosition,

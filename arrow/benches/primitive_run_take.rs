@@ -1,43 +1,12 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use arrow::array::UInt32Builder;
 use arrow::compute::take;
 use arrow::datatypes::{Int32Type, Int64Type};
 use arrow::util::bench_util::*;
-use arrow::util::test_util::seedable_rng;
-use arrow_array::UInt32Array;
 use criterion::{Criterion, criterion_group, criterion_main};
-use rand::RngExt;
 use std::hint;
-
-fn create_random_index(size: usize, null_density: f32, max_value: usize) -> UInt32Array {
-    let mut rng = seedable_rng();
-    let mut builder = UInt32Builder::with_capacity(size);
-    for _ in 0..size {
-        if rng.random::<f32>() < null_density {
-            builder.append_null();
-        } else {
-            let value = rng.random_range::<u32, _>(0u32..max_value as u32);
-            builder.append_value(value);
-        }
-    }
-    builder.finish()
-}
 
 fn criterion_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("primitive_run_take");

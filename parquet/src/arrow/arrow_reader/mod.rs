@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Contains reader which reads parquet data into arrow [`RecordBatch`]
 
@@ -36,17 +23,14 @@ use crate::arrow::schema::{
     ParquetField, parquet_to_arrow_schema_and_fields, virtual_type::is_virtual_column,
 };
 use crate::arrow::{FieldLevels, ProjectionMask, parquet_to_arrow_field_levels_with_virtual};
-use crate::basic::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
-use crate::bloom_filter::{
-    SBBF_HEADER_SIZE_ESTIMATE, Sbbf, chunk_read_bloom_filter_header_and_offset,
-};
+use crate::bloom_filter::Sbbf;
 use crate::column::page::{PageIterator, PageReader};
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{
-    PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataReader,
-    ParquetStatisticsPolicy, RowGroupMetaData,
+    ColumnChunkMask, PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions,
+    ParquetMetaDataReader, ParquetStatisticsPolicy, RowGroupMetaData,
 };
 use crate::file::reader::{ChunkReader, SerializedPageReader};
 use crate::schema::types::SchemaDescriptor;
@@ -593,8 +577,10 @@ pub struct ArrowReaderOptions {
     /// [ARROW_SCHEMA_META_KEY]: crate::arrow::ARROW_SCHEMA_META_KEY
     supplied_schema: Option<SchemaRef>,
 
-    pub(crate) column_index: PageIndexPolicy,
-    pub(crate) offset_index: PageIndexPolicy,
+    column_index: PageIndexPolicy,
+    offset_index: PageIndexPolicy,
+    column_index_mask: ColumnChunkMask,
+    offset_index_mask: ColumnChunkMask,
 
     /// Options to control reading of Parquet metadata
     metadata_options: ParquetMetaDataOptions,
@@ -774,6 +760,55 @@ impl ArrowReaderOptions {
         self
     }
 
+    // TODO: deprecate the following as part of https://github.com/apache/arrow-rs/issues/11395
+
+    /// Sets the same [`ColumnChunkMask`] for both page-index structures.
+    pub fn with_page_index_mask(self, mask: ColumnChunkMask) -> Self {
+        self.with_column_index_mask(mask.clone())
+            .with_offset_index_mask(mask)
+    }
+
+    /// Sets the [`ColumnChunkMask`] for the Parquet [ColumnIndex] structure.
+    ///
+    /// The column index can be costly to decode and store, especially when it is needed
+    /// only for a subset of row groups or columns (such as when filtering by a predicate
+    /// on a single column). Providing a [`ColumnChunkMask`] can greatly decrease
+    /// the time needed to decode this metadata.
+    ///
+    /// The mask applies only if the column-index policy is not [`PageIndexPolicy::Skip`]
+    /// (the default), or an underlying reader is configured to preload the index. It is
+    /// honored by loading APIs such as [`ArrowReaderMetadata::load`];
+    /// [`ArrowReaderMetadata::try_new`] does not load or filter page indexes.
+    ///
+    /// See [`PageIndexProvider`] for more details on customizing page index loading.
+    ///
+    /// [`PageIndexProvider`]: crate::file::metadata::page_index::PageIndexProvider
+    /// [ColumnIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+    pub fn with_column_index_mask(mut self, mask: ColumnChunkMask) -> Self {
+        self.column_index_mask = mask;
+        self
+    }
+
+    /// Sets the [`ColumnChunkMask`] for the Parquet [OffsetIndex] structure.
+    ///
+    /// The offset index can be costly to decode and store, especially when it is needed
+    /// only for a subset of row groups or columns (such as when projecting a small subset
+    /// of columns). Providing a [`ColumnChunkMask`] can greatly decrease
+    /// the time needed to decode this metadata.
+    ///
+    /// Page pruning also needs the offset index for predicate columns, so callers should
+    /// include those columns in addition to projected columns. The same loading and policy
+    /// qualifications as [`Self::with_column_index_mask`] apply.
+    ///
+    /// See [`PageIndexProvider`] for more details on customizing page index loading.
+    ///
+    /// [`PageIndexProvider`]: crate::file::metadata::page_index::PageIndexProvider
+    /// [OffsetIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+    pub fn with_offset_index_mask(mut self, mask: ColumnChunkMask) -> Self {
+        self.offset_index_mask = mask;
+        self
+    }
+
     /// Provide a Parquet schema to use when decoding the metadata. The schema in the Parquet
     /// footer will be skipped.
     ///
@@ -924,6 +959,22 @@ impl ArrowReaderOptions {
         self.column_index
     }
 
+    // TODO: deprecate the following as part of https://github.com/apache/arrow-rs/issues/11395
+
+    /// Retrieve the currently set [`ColumnChunkMask`] for the offset index.
+    ///
+    /// This can be set via [`with_offset_index_mask`][Self::with_offset_index_mask].
+    pub fn offset_index_mask(&self) -> &ColumnChunkMask {
+        &self.offset_index_mask
+    }
+
+    /// Retrieve the currently set [`ColumnChunkMask`] for the column index.
+    ///
+    /// This can be set via [`with_column_index_mask`][Self::with_column_index_mask].
+    pub fn column_index_mask(&self) -> &ColumnChunkMask {
+        &self.column_index_mask
+    }
+
     /// Retrieve the currently set metadata decoding options.
     pub fn metadata_options(&self) -> &ParquetMetaDataOptions {
         &self.metadata_options
@@ -973,6 +1024,18 @@ impl ParquetMetaDataReader {
                 .with_offset_index_policy(options.offset_index_policy());
         }
 
+        // Preload settings on the underlying reader may enable an index even when the
+        // corresponding options policy is `Skip`, so apply non-default masks independently.
+        //
+        // TODO: https://github.com/apache/arrow-rs/issues/11395 may deprecate this API. Decide
+        // at that time if masks should be added to ParquetObjectReader.
+        if !options.column_index_mask().is_all() {
+            self = self.with_column_index_mask(options.column_index_mask().clone());
+        }
+        if !options.offset_index_mask().is_all() {
+            self = self.with_offset_index_mask(options.offset_index_mask().clone());
+        }
+
         self
     }
 }
@@ -1019,6 +1082,8 @@ impl ArrowReaderMetadata {
         let metadata = ParquetMetaDataReader::new()
             .with_column_index_policy(options.column_index_policy())
             .with_offset_index_policy(options.offset_index_policy())
+            .with_column_index_mask(options.column_index_mask().clone())
+            .with_offset_index_mask(options.offset_index_mask().clone())
             .with_metadata_options(Some(options.metadata_options.clone()));
         #[cfg(feature = "encryption")]
         let metadata = metadata.with_decryption_properties(
@@ -1278,56 +1343,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
         let metadata = self.metadata.row_group(row_group_idx);
         let column_metadata = metadata.column(column_idx);
 
-        let offset: u64 = if let Some(offset) = column_metadata.bloom_filter_offset() {
-            offset
-                .try_into()
-                .map_err(|_| ParquetError::General("Bloom filter offset is invalid".to_string()))?
-        } else {
-            return Ok(None);
-        };
-
-        let buffer = match column_metadata.bloom_filter_length() {
-            Some(length) => self.input.0.get_bytes(offset, length as usize),
-            None => self.input.0.get_bytes(offset, SBBF_HEADER_SIZE_ESTIMATE),
-        }?;
-
-        let (header, bitset_offset) =
-            chunk_read_bloom_filter_header_and_offset(offset, buffer.clone())?;
-
-        match header.algorithm {
-            BloomFilterAlgorithm::BLOCK => {
-                // this match exists to future proof the singleton algorithm enum
-            }
-        }
-        match header.compression {
-            BloomFilterCompression::UNCOMPRESSED => {
-                // this match exists to future proof the singleton compression enum
-            }
-        }
-        match header.hash {
-            BloomFilterHash::XXHASH => {
-                // this match exists to future proof the singleton hash enum
-            }
-        }
-
-        let bitset = match column_metadata.bloom_filter_length() {
-            Some(_) => {
-                let bitset_start = bitset_offset
-                    .checked_sub(offset)
-                    .and_then(|start| usize::try_from(start).ok())
-                    .ok_or_else(|| {
-                        ParquetError::General("Bloom filter offset is invalid".to_string())
-                    })?;
-                buffer.slice(bitset_start..)
-            }
-            None => {
-                let bitset_length: usize = header.num_bytes.try_into().map_err(|_| {
-                    ParquetError::General("Bloom filter length is invalid".to_string())
-                })?;
-                self.input.0.get_bytes(bitset_offset, bitset_length)?
-            }
-        };
-        Ok(Some(Sbbf::new(&bitset)))
+        Sbbf::read_from_column_chunk(column_metadata, &self.input.0)
     }
 
     /// Build a [`ParquetRecordBatchReader`]

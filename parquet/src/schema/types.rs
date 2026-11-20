@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Contains structs and methods to build Parquet schema and schema descriptors.
 
@@ -1532,9 +1519,17 @@ fn schema_from_array_helper(
         Some(n) => {
             let repetition = element.repetition_type;
 
-            let mut fields = Vec::with_capacity(usize::try_from(n)?);
+            let num_children = usize::try_from(n)?;
+            if num_children > elements.len() {
+                return Err(general_err!(
+                    "Schema children count {} exceeds remaining schema elements {}",
+                    num_children,
+                    elements.len()
+                ));
+            }
+            let mut fields = Vec::with_capacity(num_children);
             let mut next_index = index + 1;
-            for _ in 0..n {
+            for _ in 0..num_children {
                 let child_result = schema_from_array_helper(elements, num_elements, next_index)?;
                 next_index = child_result.0;
                 fields.push(child_result.1);
@@ -2822,6 +2817,37 @@ mod tests {
             .with_logical_type(Some(LogicalType::File))
             .build();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parquet_schema_from_array_rejects_huge_num_children() {
+        let schema = Arc::new(parse_message_type("message schema {}").unwrap());
+        let mut buf = schema_to_buf(&schema).unwrap();
+        let mut elements = buf_to_schema_list(&mut buf).unwrap();
+        elements[0].num_children = Some(i32::MAX);
+        let err = parquet_schema_from_array(elements).unwrap_err().to_string();
+        assert!(
+            err.contains("Schema children count 2147483647 exceeds remaining schema elements 0"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn test_parquet_schema_from_array_rejects_children_exceeding_remaining_elements() {
+        let schema = Arc::new(
+            parse_message_type("message schema { REQUIRED group nested { REQUIRED INT32 leaf; } }")
+                .unwrap(),
+        );
+        let mut buf = schema_to_buf(&schema).unwrap();
+        let mut elements = buf_to_schema_list(&mut buf).unwrap();
+        // Two children fit in the original three-element array, but only one
+        // element remains after consuming the root and nested group.
+        elements[1].num_children = Some(2);
+        let err = parquet_schema_from_array(elements).unwrap_err().to_string();
+        assert!(
+            err.contains("Schema children count 2 exceeds remaining schema elements 1"),
+            "{err}"
+        );
     }
 
     #[test]

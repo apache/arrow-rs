@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Structs used for encoding and decoding Parquet Thrift objects.
 //!
@@ -324,6 +311,11 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
         }
     }
 
+    /// Read a binary length, bounded to the signed 32-bit range used by Java and C++ Thrift.
+    fn read_binary_len(&mut self) -> ThriftProtocolResult<usize> {
+        Ok(i32::try_from(self.read_vlq()?)? as usize)
+    }
+
     /// Read a zig-zag encoded signed varint from the input.
     fn read_zig_zag(&mut self) -> ThriftProtocolResult<i64> {
         let val = self.read_vlq()?;
@@ -474,7 +466,7 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
     ///
     /// [binary]: https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#binary-encoding
     fn skip_binary(&mut self) -> ThriftProtocolResult<()> {
-        let len = self.read_vlq()? as usize;
+        let len = self.read_binary_len()?;
         self.skip_bytes(len)
     }
 
@@ -528,29 +520,61 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
             // see https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#list-and-set
             FieldType::List | FieldType::Set => {
                 let list_ident = self.read_list_begin()?;
-                let element_type = FieldType::from(list_ident.element_type);
-                for _ in 0..list_ident.size {
-                    self.skip_till_depth(element_type, depth - 1)?;
+                if list_ident.element_type == ElementType::Bool {
+                    self.skip_bool_list(list_ident.size, depth - 1)
+                } else {
+                    let field_type = list_ident.element_type.into();
+                    for _ in 0..list_ident.size {
+                        self.skip_till_depth(field_type, depth - 1)?;
+                    }
+                    Ok(())
                 }
-                Ok(())
             }
             // see https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#map
-            FieldType::Map => {
-                let size = i32::try_from(self.read_vlq()?)?;
-                if size > 0 {
-                    let kv = self.read_byte()?;
-                    let key_type = FieldType::from(ElementType::try_from(kv >> 4)?);
-                    let val_type = FieldType::from(ElementType::try_from(kv & 0xf)?);
-                    for _ in 0..size {
-                        self.skip_till_depth(key_type, depth - 1)?;
-                        self.skip_till_depth(val_type, depth - 1)?;
-                    }
-                }
-                Ok(())
-            }
+            FieldType::Map => self.skip_map(depth),
             // see https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#universal-unique-identifier-encoding
             FieldType::Uuid => self.skip_bytes(16),
             FieldType::Stop => Err(ThriftProtocolError::SkipUnsupportedType(field_type)),
+        }
+    }
+
+    /// Skip boolean list or set payloads after reading their header.
+    #[cold]
+    fn skip_bool_list(&mut self, size: i32, depth: i8) -> ThriftProtocolResult<()> {
+        if size > 0 && depth == 0 {
+            return Err(ThriftProtocolError::SkipDepth(FieldType::BooleanTrue));
+        }
+        self.skip_bytes(size as usize)
+    }
+
+    /// Skip maps, which are not used by the current Parquet metadata schema.
+    #[cold]
+    fn skip_map(&mut self, depth: i8) -> ThriftProtocolResult<()> {
+        let size = i32::try_from(self.read_vlq()?)?;
+        if size > 0 {
+            let kv = self.read_byte()?;
+            let key_type = ElementType::try_from(kv >> 4)?;
+            let val_type = ElementType::try_from(kv & 0xf)?;
+            for _ in 0..size {
+                self.skip_element_till_depth(key_type, depth - 1)?;
+                self.skip_element_till_depth(val_type, depth - 1)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Collection booleans have a payload byte, unlike inline struct fields.
+    fn skip_element_till_depth(
+        &mut self,
+        element_type: ElementType,
+        depth: i8,
+    ) -> ThriftProtocolResult<()> {
+        if depth == 0 {
+            return Err(ThriftProtocolError::SkipDepth(element_type.into()));
+        }
+        match element_type {
+            ElementType::Bool => self.skip_bytes(1),
+            other => self.skip_till_depth(other.into(), depth),
         }
     }
 }
@@ -581,7 +605,7 @@ impl<'b, 'a: 'b> ThriftCompactInputProtocol<'b> for ThriftSliceInputProtocol<'a>
     }
 
     fn read_bytes(&mut self) -> ThriftProtocolResult<&'b [u8]> {
-        let len = self.read_vlq()? as usize;
+        let len = self.read_binary_len()?;
         let ret = self.buf.get(..len).ok_or(ThriftProtocolError::Eof)?;
         self.buf = &self.buf[len..];
         Ok(ret)
@@ -639,17 +663,23 @@ impl<'a, R: Read> ThriftCompactInputProtocol<'a> for ThriftReadInputProtocol<R> 
     }
 
     fn read_bytes_owned(&mut self) -> ThriftProtocolResult<Vec<u8>> {
-        let len = self.read_vlq()? as usize;
-        let mut v = Vec::with_capacity(len);
-        std::io::copy(&mut self.reader.by_ref().take(len as u64), &mut v)?;
+        let len = self.read_binary_len()?;
+        let mut v = Vec::with_capacity(len.min(8 * 1024));
+        let copied = std::io::copy(&mut self.reader.by_ref().take(len as u64), &mut v)?;
+        if copied != len as u64 {
+            return Err(ThriftProtocolError::Eof);
+        }
         Ok(v)
     }
 
     fn skip_bytes(&mut self, n: usize) -> ThriftProtocolResult<()> {
-        std::io::copy(
+        let skipped = std::io::copy(
             &mut self.reader.by_ref().take(n as u64),
             &mut std::io::sink(),
         )?;
+        if skipped != n as u64 {
+            return Err(ThriftProtocolError::Eof);
+        }
         Ok(())
     }
 
@@ -734,18 +764,7 @@ where
     let list_ident = prot.read_list_begin()?;
     validate_list_type(T::ELEMENT_TYPE, &list_ident)?;
     let size = list_ident.size as usize;
-    // Each list element occupies at least one byte on the wire. Bound the
-    // declared count by remaining input before reserving, so a malformed
-    // header cannot abort the process with a huge allocation.
-    if let Some(remaining) = prot.remaining_bytes()
-        && size > remaining
-    {
-        return Err(general_err!(
-            "Thrift list size {} exceeds remaining input length {}",
-            size,
-            remaining
-        ));
-    }
+    check_list_size(prot.remaining_bytes(), size)?;
     let mut res = Vec::with_capacity(size);
     for _ in 0..list_ident.size {
         let val = T::read_thrift(prot)?;
@@ -755,11 +774,29 @@ where
 }
 
 pub(crate) fn validate_list_type(expected: ElementType, got: &ListIdentifier) -> Result<()> {
-    if got.element_type != expected {
+    // An empty list decodes no elements, and some writers (e.g. fastparquet)
+    // encode it as a bare 0x00 header with no meaningful element type.
+    if got.element_type != expected && got.size != 0 {
         return Err(general_err!(
             "Expected list element type of {:?} but got {:?}",
             expected,
             got.element_type
+        ));
+    }
+    Ok(())
+}
+
+/// Reject a declared list size that cannot fit the remaining input. Each list
+/// element is at least one byte on the wire, so a size past the remaining
+/// bytes is a malformed header; bounding it before reserving stops a huge
+/// allocation. `remaining` is `None` when the protocol is not backed by a
+/// finite buffer, in which case there is nothing to check against.
+pub(crate) fn check_list_size(remaining: Option<usize>, size: usize) -> Result<()> {
+    if let Some(remaining) = remaining
+        && size > remaining
+    {
+        return Err(general_err!(
+            "Thrift list size {size} exceeds remaining input length {remaining}"
         ));
     }
     Ok(())
@@ -1167,6 +1204,7 @@ pub(crate) mod tests {
 
     use super::*;
     use std::fmt::Debug;
+    use std::io::{ErrorKind, Result as IoResult};
 
     pub(crate) fn test_roundtrip<T>(val: T)
     where
@@ -1181,6 +1219,99 @@ pub(crate) mod tests {
         let mut prot = ThriftSliceInputProtocol::new(&buf);
         let read_val = T::read_thrift(&mut prot).unwrap();
         assert_eq!(val, read_val);
+    }
+
+    #[test]
+    fn test_binary_length_bound() {
+        let oversized = [0x80, 0x80, 0x80, 0x80, 8]; // i32::MAX + 1
+        let maximum = [0xff, 0xff, 0xff, 0xff, 7]; // i32::MAX, no payload
+        for bytes in [&oversized, &maximum] {
+            let check = |result: ThriftProtocolResult<()>| {
+                if bytes == &oversized {
+                    assert!(matches!(result, Err(ThriftProtocolError::IntegerOverflow)));
+                } else {
+                    assert!(matches!(result, Err(ThriftProtocolError::Eof)));
+                }
+            };
+            check(
+                ThriftSliceInputProtocol::new(bytes)
+                    .read_bytes()
+                    .map(|_| ()),
+            );
+            check(
+                ThriftSliceInputProtocol::new(bytes)
+                    .read_bytes_owned()
+                    .map(|_| ()),
+            );
+            check(ThriftSliceInputProtocol::new(bytes).skip_binary());
+            check(
+                ThriftReadInputProtocol::new(bytes.as_slice())
+                    .read_bytes_owned()
+                    .map(|_| ()),
+            );
+            check(ThriftReadInputProtocol::new(bytes.as_slice()).skip_binary());
+        }
+    }
+
+    struct FragmentedReader<'a>(&'a [u8]);
+
+    impl Read for FragmentedReader<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
+            let len = buf.len().min(2);
+            self.0.read(&mut buf[..len])
+        }
+    }
+
+    #[test]
+    fn test_read_bytes_owned_complete_and_fragmented() {
+        let large_payload = vec![7; 16 * 1024];
+        for payload in [b"".as_slice(), b"abcde".as_slice(), &large_payload] {
+            let mut data = Vec::new();
+            ThriftCompactOutputProtocol::new(&mut data)
+                .write_bytes(payload)
+                .unwrap();
+            data.push(42);
+            let mut slice = ThriftSliceInputProtocol::new(&data);
+            let mut stream = ThriftReadInputProtocol::new(data.as_slice());
+            let mut fragmented = ThriftReadInputProtocol::new(FragmentedReader(&data));
+            assert_eq!(slice.read_bytes_owned().unwrap(), payload);
+            assert_eq!(stream.read_bytes_owned().unwrap(), payload);
+            assert_eq!(fragmented.read_bytes_owned().unwrap(), payload);
+            assert_eq!(slice.read_byte().unwrap(), 42);
+            assert_eq!(stream.read_byte().unwrap(), 42);
+            assert_eq!(fragmented.read_byte().unwrap(), 42);
+        }
+    }
+
+    #[test]
+    fn test_read_bytes_owned_truncated_payload() {
+        for len in [5, 1024 * 1024, i32::MAX as u64] {
+            let mut data = Vec::new();
+            ThriftCompactOutputProtocol::new(&mut data)
+                .write_vlq(len)
+                .unwrap();
+            data.extend_from_slice(b"abc");
+            let mut stream = ThriftReadInputProtocol::new(FragmentedReader(&data));
+            assert!(matches!(
+                stream.read_bytes_owned(),
+                Err(ThriftProtocolError::Eof)
+            ));
+        }
+    }
+
+    #[test]
+    fn test_read_bytes_owned_preserves_io_error() {
+        struct FailingReader;
+        impl Read for FailingReader {
+            fn read(&mut self, _: &mut [u8]) -> IoResult<usize> {
+                Err(Error::new(ErrorKind::PermissionDenied, "payload error"))
+            }
+        }
+        let reader = b"\x05ab".as_slice().chain(FailingReader);
+        let mut stream = ThriftReadInputProtocol::new(reader);
+        assert!(
+            matches!(stream.read_bytes_owned(), Err(ThriftProtocolError::IO(e)) if e.kind() == ErrorKind::PermissionDenied)
+        );
     }
 
     #[test]
@@ -1211,6 +1342,14 @@ pub(crate) mod tests {
         assert_eq!(header.element_type, ElementType::Byte);
     }
 
+    #[test]
+    fn test_read_empty_list_with_zero_header() {
+        let data = [0u8];
+        let mut prot = ThriftSliceInputProtocol::new(&data);
+        let result = read_thrift_vec::<i32, ThriftSliceInputProtocol>(&mut prot).unwrap();
+        assert!(result.is_empty());
+    }
+
     /// A Thrift list header whose `size` varint decodes above `i32::MAX`
     /// must be rejected at the protocol layer rather than wrapping into a
     /// negative `i32` and being smuggled into downstream allocation code.
@@ -1223,6 +1362,34 @@ pub(crate) mod tests {
         let mut prot = ThriftSliceInputProtocol::new(&data);
         let result = prot.read_list_begin();
         assert!(result.is_err(), "expected error, got {result:?}");
+    }
+
+    // Unknown fields must leave the following known field aligned.
+    crate::thrift_struct! {
+        struct KnownField {
+            2: required i32 value;
+        }
+    }
+
+    #[test]
+    fn test_skip_boolean_collections_before_known_field() {
+        for collection_type in [FieldType::List, FieldType::Set] {
+            // False then true must not be mistaken for inline field headers.
+            // Known field 2 follows with i32(42).
+            let data = [0x10 | collection_type as u8, 0x22, 2, 1, 0x15, 84, 0];
+            let mut protocol = ThriftSliceInputProtocol::new(&data);
+            assert_eq!(KnownField::read_thrift(&mut protocol).unwrap().value, 42);
+            assert!(protocol.as_slice().is_empty());
+        }
+    }
+
+    #[test]
+    fn test_skip_map_before_known_field() {
+        // Unknown field 1: map<bool, i32> with two entries. Known field 2: i32(42).
+        let data = [0x1b, 2, 0x25, 1, 14, 2, 16, 0x15, 84, 0];
+        let mut protocol = ThriftSliceInputProtocol::new(&data);
+        assert_eq!(KnownField::read_thrift(&mut protocol).unwrap().value, 42);
+        assert!(protocol.as_slice().is_empty());
     }
 
     #[test]
