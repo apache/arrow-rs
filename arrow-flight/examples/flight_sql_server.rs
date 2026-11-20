@@ -722,6 +722,18 @@ impl FlightSqlService for FlightSqlServiceImpl {
     }
 }
 
+fn flight_server(
+    mut builder: Server,
+) -> Result<tonic::transport::server::Router, tonic_reflection::server::Error> {
+    let reflection_service = tonic_reflection::server::Builder::configure()
+        .register_encoded_file_descriptor_set(arrow_flight::FILE_DESCRIPTOR_SET)
+        .build_v1()?;
+
+    Ok(builder
+        .add_service(FlightServiceServer::new(FlightSqlServiceImpl {}))
+        .add_service(reflection_service))
+}
+
 /// This example shows how to run a FlightSql server
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -735,20 +747,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let key = std::fs::read_to_string("arrow-flight/examples/data/server.key")?;
         let client_ca = std::fs::read_to_string("arrow-flight/examples/data/ca_root.pem")?;
 
-        let svc = FlightServiceServer::new(FlightSqlServiceImpl {});
         let tls_config = ServerTlsConfig::new()
             .identity(Identity::from_pem(&cert, &key))
             .client_ca_root(Certificate::from_pem(&client_ca));
 
-        Server::builder()
-            .tls_config(tls_config)?
-            .add_service(svc)
+        flight_server(Server::builder().tls_config(tls_config)?)?
             .serve(addr)
             .await?;
     } else {
-        let svc = FlightServiceServer::new(FlightSqlServiceImpl {});
-
-        Server::builder().add_service(svc).serve(addr).await?;
+        flight_server(Server::builder())?.serve(addr).await?;
     }
 
     Ok(())
@@ -789,9 +796,15 @@ mod tests {
     use tonic::transport::{Channel, ClientTlsConfig};
 
     use arrow_cast::pretty::pretty_format_batches;
+    use arrow_flight::flight_service_client::FlightServiceClient;
     use arrow_flight::sql::client::FlightSqlServiceClient;
+    use prost_types::FileDescriptorProto;
     use tonic::transport::server::TcpIncoming;
     use tonic::transport::{Certificate, Endpoint};
+    use tonic_reflection::pb::v1::{
+        ServerReflectionRequest, server_reflection_client::ServerReflectionClient,
+        server_reflection_request::MessageRequest, server_reflection_response::MessageResponse,
+    };
     use tower::service_fn;
 
     async fn bind_tcp() -> (TcpIncoming, SocketAddr) {
@@ -822,7 +835,7 @@ mod tests {
 
     async fn test_uds_client<F, C>(f: F)
     where
-        F: FnOnce(FlightSqlServiceClient<Channel>) -> C,
+        F: FnOnce(Channel) -> C,
         C: Future<Output = ()>,
     {
         let file = NamedTempFile::new().unwrap();
@@ -832,9 +845,8 @@ mod tests {
         let uds = UnixListener::bind(path.clone()).unwrap();
         let stream = UnixListenerStream::new(uds);
 
-        let service = FlightSqlServiceImpl {};
-        let serve_future = Server::builder()
-            .add_service(FlightServiceServer::new(service))
+        let serve_future = flight_server(Server::builder())
+            .unwrap()
             .serve_with_incoming(stream);
 
         let request_future = async {
@@ -845,8 +857,7 @@ mod tests {
                 .connect_with_connector(connector)
                 .await
                 .unwrap();
-            let client = FlightSqlServiceClient::new(channel);
-            f(client).await
+            f(channel).await
         };
 
         tokio::select! {
@@ -857,22 +868,20 @@ mod tests {
 
     async fn test_http_client<F, C>(f: F)
     where
-        F: FnOnce(FlightSqlServiceClient<Channel>) -> C,
+        F: FnOnce(Channel) -> C,
         C: Future<Output = ()>,
     {
         let (incoming, addr) = bind_tcp().await;
         let uri = format!("http://{}:{}", addr.ip(), addr.port());
 
-        let service = FlightSqlServiceImpl {};
-        let serve_future = Server::builder()
-            .add_service(FlightServiceServer::new(service))
+        let serve_future = flight_server(Server::builder())
+            .unwrap()
             .serve_with_incoming(incoming);
 
         let request_future = async {
             let endpoint = endpoint(uri).unwrap();
             let channel = endpoint.connect().await.unwrap();
-            let client = FlightSqlServiceClient::new(channel);
-            f(client).await
+            f(channel).await
         };
 
         tokio::select! {
@@ -883,7 +892,7 @@ mod tests {
 
     async fn test_https_client<F, C>(f: F)
     where
-        F: FnOnce(FlightSqlServiceClient<Channel>) -> C,
+        F: FnOnce(Channel) -> C,
         C: Future<Output = ()>,
     {
         let cert_dir = PathBuf::from("examples/data");
@@ -899,12 +908,8 @@ mod tests {
         let (incoming, addr) = bind_tcp().await;
         let uri = format!("https://{}:{}", addr.ip(), addr.port());
 
-        let svc = FlightServiceServer::new(FlightSqlServiceImpl {});
-
-        let serve_future = Server::builder()
-            .tls_config(tls_config)
+        let serve_future = flight_server(Server::builder().tls_config(tls_config).unwrap())
             .unwrap()
-            .add_service(svc)
             .serve_with_incoming(incoming);
 
         let request_future = async move {
@@ -918,8 +923,7 @@ mod tests {
 
             let endpoint = endpoint(uri).unwrap().tls_config(tls_config).unwrap();
             let channel = endpoint.connect().await.unwrap();
-            let client = FlightSqlServiceClient::new(channel);
-            f(client).await
+            f(channel).await
         };
 
         tokio::select! {
@@ -930,7 +934,7 @@ mod tests {
 
     async fn test_all_clients<F, C>(task: F)
     where
-        F: FnOnce(FlightSqlServiceClient<Channel>) -> C + Copy,
+        F: FnOnce(Channel) -> C + Copy,
         C: Future<Output = ()>,
     {
         println!("testing uds client");
@@ -947,8 +951,125 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_reflection() {
+        test_all_clients(|channel| async move {
+            let mut reflection = ServerReflectionClient::new(channel.clone());
+            let requests = [
+                MessageRequest::ListServices(String::new()),
+                MessageRequest::FileContainingSymbol("arrow.flight.protocol.ActionType".into()),
+                MessageRequest::FileByFilename("google/protobuf/timestamp.proto".into()),
+            ]
+            .map(|message_request| ServerReflectionRequest {
+                host: String::new(),
+                message_request: Some(message_request),
+            });
+            let responses: Vec<_> = reflection
+                .server_reflection_info(stream::iter(requests))
+                .await
+                .expect("Reflection RPC failed")
+                .into_inner()
+                .try_collect()
+                .await
+                .expect("Failed to read reflection responses");
+            assert_eq!(
+                responses.len(),
+                3,
+                "Expected one response per reflection request"
+            );
+
+            let Some(MessageResponse::ListServicesResponse(services)) =
+                &responses[0].message_response
+            else {
+                panic!("Expected service list, got {:?}", responses[0]);
+            };
+            assert!(
+                services
+                    .service
+                    .iter()
+                    .any(|service| service.name == "arrow.flight.protocol.FlightService"),
+                "Service list is missing arrow.flight.protocol.FlightService"
+            );
+
+            let files: Vec<_> = responses[1..]
+                .iter()
+                .flat_map(|response| match &response.message_response {
+                    Some(MessageResponse::FileDescriptorResponse(descriptors)) => {
+                        &descriptors.file_descriptor_proto
+                    }
+                    _ => panic!("Expected file descriptors, got {response:?}"),
+                })
+                .map(|bytes| {
+                    FileDescriptorProto::decode(bytes.as_slice())
+                        .expect("Failed to decode reflected file descriptor")
+                })
+                .collect();
+            let flight = files
+                .iter()
+                .find(|file| file.name() == "Flight.proto")
+                .expect("Reflection responses are missing Flight.proto");
+            assert_eq!(
+                flight.package(),
+                "arrow.flight.protocol",
+                "Unexpected package in Flight.proto"
+            );
+            let action_type = flight
+                .message_type
+                .iter()
+                .find(|message| message.name() == "ActionType")
+                .expect("Flight.proto is missing message arrow.flight.protocol.ActionType");
+            for field in ["type", "description"] {
+                assert!(
+                    action_type.field.iter().any(|f| f.name() == field),
+                    "Message arrow.flight.protocol.ActionType is missing field {field}"
+                );
+            }
+            for file in &files {
+                assert!(
+                    file.source_code_info.is_none(),
+                    "{} contains source metadata",
+                    file.name()
+                );
+                for dependency in &file.dependency {
+                    assert!(
+                        files.iter().any(|f| f.name() == dependency),
+                        "Reflection responses are missing dependency {dependency} required by {}",
+                        file.name()
+                    );
+                }
+            }
+            assert!(
+                files.iter().any(|file| {
+                    file.package() == "google.protobuf"
+                        && file
+                            .message_type
+                            .iter()
+                            .any(|message| message.name() == "Timestamp")
+                }),
+                "Reflection responses are missing message google.protobuf.Timestamp"
+            );
+
+            let actions: Vec<_> = FlightServiceClient::new(channel)
+                .list_actions(arrow_flight::Empty {})
+                .await
+                .expect("FlightService/ListActions RPC failed")
+                .into_inner()
+                .try_collect()
+                .await
+                .expect("Failed to read FlightService/ListActions responses");
+            assert!(
+                actions
+                    .iter()
+                    .any(|action| action.r#type == "CreatePreparedStatement"),
+                "ListActions response is missing action CreatePreparedStatement"
+            );
+        })
+        .await
+    }
+
+    #[tokio::test]
     async fn test_select() {
-        test_all_clients(|mut client| async move {
+        test_all_clients(|channel| async move {
+            let mut client = FlightSqlServiceClient::new(channel);
             auth_client(&mut client).await;
 
             let mut stmt = client.prepare("select 1;".to_string(), None).await.unwrap();
@@ -975,7 +1096,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_update() {
-        test_all_clients(|mut client| async move {
+        test_all_clients(|channel| async move {
+            let mut client = FlightSqlServiceClient::new(channel);
             auth_client(&mut client).await;
             let res = client
                 .execute_update("creat table test(a int);".to_string(), None)
@@ -988,7 +1110,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_auth() {
-        test_all_clients(|mut client| async move {
+        test_all_clients(|channel| async move {
+            let mut client = FlightSqlServiceClient::new(channel);
             // no handshake
             assert_contains(
                 client
