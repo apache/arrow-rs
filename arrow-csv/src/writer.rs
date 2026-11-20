@@ -668,6 +668,7 @@ mod tests {
     use arrow_array::types::*;
     use arrow_buffer::i256;
     use core::str;
+    use rstest::rstest;
     use std::io::{Cursor, Read, Seek};
     use std::sync::Arc;
 
@@ -800,8 +801,24 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
         assert_eq!(expected, str::from_utf8(&buffer).unwrap());
     }
 
-    #[test]
-    fn test_write_csv_custom_options() {
+    #[rstest]
+    #[case::custom_delimiter_quote_null_and_time(
+        WriterBuilder::new()
+            .with_header(false)
+            .with_delimiter(b'|')
+            .with_quote(b'\'')
+            .with_null("NULL".to_string())
+            .with_time_format("%r".to_string()),
+        "'Lorem ipsum \ndolor sit amet'|123.564532|3|true|12:20:34 AM\nconsectetur \"adipiscing\" elit|NULL|2|false|06:51:20 AM\nsed do eiusmod tempor|-556132.25|1|NULL|11:46:03 PM\n"
+    )]
+    #[case::custom_escape_with_header(
+        WriterBuilder::new()
+            .with_header(true)
+            .with_double_quote(false)
+            .with_escape(b'$'),
+        "c1,c2,c3,c4,c6\n\"Lorem ipsum \ndolor sit amet\",123.564532,3,true,00:20:34\n\"consectetur $\"adipiscing$\" elit\",,2,false,06:51:20\nsed do eiusmod tempor,-556132.25,1,,23:46:03\n"
+    )]
+    fn test_write_csv_custom_options(#[case] builder: WriterBuilder, #[case] expected: &str) {
         let schema = Schema::new(vec![
             Field::new("c1", DataType::Utf8, false),
             Field::new("c2", DataType::Float64, true),
@@ -834,53 +851,14 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
         .unwrap();
 
         let mut file = tempfile::tempfile().unwrap();
-
-        let builder = WriterBuilder::new()
-            .with_header(false)
-            .with_delimiter(b'|')
-            .with_quote(b'\'')
-            .with_null("NULL".to_string())
-            .with_time_format("%r".to_string());
         let mut writer = builder.build(&mut file);
-        let batches = vec![&batch];
-        for batch in batches {
-            writer.write(batch).unwrap();
-        }
-        drop(writer);
-
-        // check that file was written successfully
-        file.rewind().unwrap();
-        let mut buffer: Vec<u8> = vec![];
-        file.read_to_end(&mut buffer).unwrap();
-
-        assert_eq!(
-            "'Lorem ipsum \ndolor sit amet'|123.564532|3|true|12:20:34 AM\nconsectetur \"adipiscing\" elit|NULL|2|false|06:51:20 AM\nsed do eiusmod tempor|-556132.25|1|NULL|11:46:03 PM\n"
-            .to_string(),
-            String::from_utf8(buffer).unwrap()
-        );
-
-        let mut file = tempfile::tempfile().unwrap();
-
-        let builder = WriterBuilder::new()
-            .with_header(true)
-            .with_double_quote(false)
-            .with_escape(b'$');
-        let mut writer = builder.build(&mut file);
-        let batches = vec![&batch];
-        for batch in batches {
-            writer.write(batch).unwrap();
-        }
+        writer.write(&batch).unwrap();
         drop(writer);
 
         file.rewind().unwrap();
         let mut buffer: Vec<u8> = vec![];
         file.read_to_end(&mut buffer).unwrap();
-
-        assert_eq!(
-            "c1,c2,c3,c4,c6\n\"Lorem ipsum \ndolor sit amet\",123.564532,3,true,00:20:34\n\"consectetur $\"adipiscing$\" elit\",,2,false,06:51:20\nsed do eiusmod tempor,-556132.25,1,,23:46:03\n"
-            .to_string(),
-            String::from_utf8(buffer).unwrap()
-        );
+        assert_eq!(String::from_utf8(buffer).unwrap(), expected);
     }
 
     #[test]
@@ -1143,8 +1121,26 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
         );
     }
 
-    #[test]
-    fn test_write_csv_whitespace_handling() {
+    #[rstest]
+    #[case::default(
+        WriterBuilder::new(),
+        "c1,c2,c3\n  leading space,123.45,  test  \ntrailing space  ,678.9,value  \n  both spaces  ,,\nno spaces,111.22,  another\n"
+    )]
+    #[case::trim_leading(
+        WriterBuilder::new().with_ignore_leading_whitespace(true),
+        "c1,c2,c3\nleading space,123.45,test  \ntrailing space  ,678.9,value  \nboth spaces  ,,\nno spaces,111.22,another\n"
+    )]
+    #[case::trim_trailing(
+        WriterBuilder::new().with_ignore_trailing_whitespace(true),
+        "c1,c2,c3\n  leading space,123.45,  test\ntrailing space,678.9,value\n  both spaces,,\nno spaces,111.22,  another\n"
+    )]
+    #[case::trim_both(
+        WriterBuilder::new()
+            .with_ignore_leading_whitespace(true)
+            .with_ignore_trailing_whitespace(true),
+        "c1,c2,c3\nleading space,123.45,test\ntrailing space,678.9,value\nboth spaces,,\nno spaces,111.22,another\n"
+    )]
+    fn test_write_csv_whitespace_handling(#[case] builder: WriterBuilder, #[case] expected: &str) {
         let schema = Schema::new(vec![
             Field::new("c1", DataType::Utf8, false),
             Field::new("c2", DataType::Float64, true),
@@ -1176,51 +1172,11 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
         )
         .unwrap();
 
-        // Test with no whitespace handling (default)
         let mut buf = Vec::new();
-        let builder = WriterBuilder::new();
         let mut writer = builder.build(&mut buf);
         writer.write(&batch).unwrap();
         drop(writer);
-        assert_eq!(
-            "c1,c2,c3\n  leading space,123.45,  test  \ntrailing space  ,678.9,value  \n  both spaces  ,,\nno spaces,111.22,  another\n",
-            String::from_utf8(buf).unwrap()
-        );
-
-        // Test with ignore leading whitespace only
-        let mut buf = Vec::new();
-        let builder = WriterBuilder::new().with_ignore_leading_whitespace(true);
-        let mut writer = builder.build(&mut buf);
-        writer.write(&batch).unwrap();
-        drop(writer);
-        assert_eq!(
-            "c1,c2,c3\nleading space,123.45,test  \ntrailing space  ,678.9,value  \nboth spaces  ,,\nno spaces,111.22,another\n",
-            String::from_utf8(buf).unwrap()
-        );
-
-        // Test with ignore trailing whitespace only
-        let mut buf = Vec::new();
-        let builder = WriterBuilder::new().with_ignore_trailing_whitespace(true);
-        let mut writer = builder.build(&mut buf);
-        writer.write(&batch).unwrap();
-        drop(writer);
-        assert_eq!(
-            "c1,c2,c3\n  leading space,123.45,  test\ntrailing space,678.9,value\n  both spaces,,\nno spaces,111.22,  another\n",
-            String::from_utf8(buf).unwrap()
-        );
-
-        // Test with both ignore leading and trailing whitespace
-        let mut buf = Vec::new();
-        let builder = WriterBuilder::new()
-            .with_ignore_leading_whitespace(true)
-            .with_ignore_trailing_whitespace(true);
-        let mut writer = builder.build(&mut buf);
-        writer.write(&batch).unwrap();
-        drop(writer);
-        assert_eq!(
-            "c1,c2,c3\nleading space,123.45,test\ntrailing space,678.9,value\nboth spaces,,\nno spaces,111.22,another\n",
-            String::from_utf8(buf).unwrap()
-        );
+        assert_eq!(String::from_utf8(buf).unwrap(), expected);
     }
 
     #[test]
@@ -1252,8 +1208,29 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
         );
     }
 
-    #[test]
-    fn test_write_csv_whitespace_all_string_types() {
+    #[rstest]
+    #[case::default(
+        WriterBuilder::new(),
+        "utf8,large_utf8,utf8_view\n  leading,  leading,  leading\ntrailing  ,trailing  ,trailing  \n  both  ,  both  ,  both  \nno_spaces,no_spaces,no_spaces\n"
+    )]
+    #[case::trim_leading(
+        WriterBuilder::new().with_ignore_leading_whitespace(true),
+        "utf8,large_utf8,utf8_view\nleading,leading,leading\ntrailing  ,trailing  ,trailing  \nboth  ,both  ,both  \nno_spaces,no_spaces,no_spaces\n"
+    )]
+    #[case::trim_trailing(
+        WriterBuilder::new().with_ignore_trailing_whitespace(true),
+        "utf8,large_utf8,utf8_view\n  leading,  leading,  leading\ntrailing,trailing,trailing\n  both,  both,  both\nno_spaces,no_spaces,no_spaces\n"
+    )]
+    #[case::trim_both(
+        WriterBuilder::new()
+            .with_ignore_leading_whitespace(true)
+            .with_ignore_trailing_whitespace(true),
+        "utf8,large_utf8,utf8_view\nleading,leading,leading\ntrailing,trailing,trailing\nboth,both,both\nno_spaces,no_spaces,no_spaces\n"
+    )]
+    fn test_write_csv_whitespace_all_string_types(
+        #[case] builder: WriterBuilder,
+        #[case] expected: &str,
+    ) {
         use arrow_array::{LargeStringArray, StringViewArray};
 
         let schema = Schema::new(vec![
@@ -1276,51 +1253,11 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
         )
         .unwrap();
 
-        // Test with no whitespace handling (default)
         let mut buf = Vec::new();
-        let builder = WriterBuilder::new();
         let mut writer = builder.build(&mut buf);
         writer.write(&batch).unwrap();
         drop(writer);
-        assert_eq!(
-            "utf8,large_utf8,utf8_view\n  leading,  leading,  leading\ntrailing  ,trailing  ,trailing  \n  both  ,  both  ,  both  \nno_spaces,no_spaces,no_spaces\n",
-            String::from_utf8(buf).unwrap()
-        );
-
-        // Test with both ignore leading and trailing whitespace
-        let mut buf = Vec::new();
-        let builder = WriterBuilder::new()
-            .with_ignore_leading_whitespace(true)
-            .with_ignore_trailing_whitespace(true);
-        let mut writer = builder.build(&mut buf);
-        writer.write(&batch).unwrap();
-        drop(writer);
-        assert_eq!(
-            "utf8,large_utf8,utf8_view\nleading,leading,leading\ntrailing,trailing,trailing\nboth,both,both\nno_spaces,no_spaces,no_spaces\n",
-            String::from_utf8(buf).unwrap()
-        );
-
-        // Test with only leading whitespace trimming
-        let mut buf = Vec::new();
-        let builder = WriterBuilder::new().with_ignore_leading_whitespace(true);
-        let mut writer = builder.build(&mut buf);
-        writer.write(&batch).unwrap();
-        drop(writer);
-        assert_eq!(
-            "utf8,large_utf8,utf8_view\nleading,leading,leading\ntrailing  ,trailing  ,trailing  \nboth  ,both  ,both  \nno_spaces,no_spaces,no_spaces\n",
-            String::from_utf8(buf).unwrap()
-        );
-
-        // Test with only trailing whitespace trimming
-        let mut buf = Vec::new();
-        let builder = WriterBuilder::new().with_ignore_trailing_whitespace(true);
-        let mut writer = builder.build(&mut buf);
-        writer.write(&batch).unwrap();
-        drop(writer);
-        assert_eq!(
-            "utf8,large_utf8,utf8_view\n  leading,  leading,  leading\ntrailing,trailing,trailing\n  both,  both,  both\nno_spaces,no_spaces,no_spaces\n",
-            String::from_utf8(buf).unwrap()
-        );
+        assert_eq!(String::from_utf8(buf).unwrap(), expected);
     }
 
     fn write_quote_style(batch: &RecordBatch, quote_style: QuoteStyle) -> String {
