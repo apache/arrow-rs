@@ -96,6 +96,7 @@ impl Fields {
     ///
     /// This can therefore be used to select a subset of fields from nested types
     /// such as [`DataType::Struct`] or [`DataType::List`].
+    /// A [`DataType::Map`] is excluded if filtering removes its key or value field.
     ///
     /// ```
     /// # use arrow_schema::{DataType, Field, Fields};
@@ -181,12 +182,13 @@ impl Fields {
                     }
                 }
                 Map(child, ordered) => {
-                    let fields = filter_field(child, filter)?;
-                    if let Some(fields) = fields {
-                        Map(fields, *ordered)
-                    } else {
+                    let Some(child) = filter_field(child, filter)? else {
+                        return Ok(None);
+                    };
+                    if !matches!(child.data_type(), Struct(fields) if fields.len() == 2) {
                         return Ok(None);
                     }
+                    Map(child, *ordered)
                 }
                 FixedSizeList(child, size) => {
                     let fields = filter_field(child, filter)?;
@@ -815,6 +817,88 @@ mod tests {
         // Propagate error
         let r = fields.try_filter_leaves(|_, _| Err(ArrowError::SchemaError("error".to_string())));
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn test_filter_map() {
+        for ordered in [false, true] {
+            let fields = Fields::from(vec![
+                Field::new_map(
+                    "map",
+                    "pairs",
+                    Field::new("k", DataType::Utf8, false),
+                    Field::new("v", DataType::Int32, true),
+                    ordered,
+                    true,
+                ),
+                Field::new("sibling", DataType::Boolean, false),
+            ]);
+
+            for keep_key in [false, true] {
+                for keep_value in [false, true] {
+                    let mut visited = Vec::new();
+                    let filtered = fields.filter_leaves(|idx, _| {
+                        visited.push(idx);
+                        [keep_key, keep_value, true][idx]
+                    });
+                    let expected = if keep_key && keep_value {
+                        fields.clone()
+                    } else {
+                        Fields::from(vec![fields[1].clone()])
+                    };
+                    assert_eq!(filtered, expected);
+                    assert_eq!(visited, vec![0, 1, 2]);
+                }
+            }
+
+            let error = fields.try_filter_leaves(|idx, _| match idx {
+                0 => Ok(false),
+                _ => Err(ArrowError::SchemaError("predicate failed".to_owned())),
+            });
+            assert!(
+                matches!(error, Err(ArrowError::SchemaError(message)) if message == "predicate failed")
+            );
+        }
+    }
+
+    #[test]
+    fn test_filter_map_nested_fields() {
+        let fields = Fields::from(vec![Field::new_map(
+            "map",
+            "pairs",
+            Field::new_struct(
+                "k",
+                vec![
+                    Field::new("a", DataType::Int32, false),
+                    Field::new("b", DataType::Int32, false),
+                ],
+                false,
+            ),
+            Field::new_struct(
+                "v",
+                vec![
+                    Field::new("c", DataType::Int32, false),
+                    Field::new("d", DataType::Int32, false),
+                ],
+                true,
+            ),
+            false,
+            true,
+        )]);
+        let expected = Fields::from(vec![Field::new_map(
+            "map",
+            "pairs",
+            Field::new_struct("k", vec![Field::new("a", DataType::Int32, false)], false),
+            Field::new_struct("v", vec![Field::new("c", DataType::Int32, false)], true),
+            false,
+            true,
+        )]);
+        assert_eq!(
+            fields.filter_leaves(|idx, _| idx == 0 || idx == 2),
+            expected
+        );
+        assert!(fields.filter_leaves(|idx, _| idx < 2).is_empty());
+        assert!(fields.filter_leaves(|idx, _| idx >= 2).is_empty());
     }
 
     #[test]
