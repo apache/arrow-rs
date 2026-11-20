@@ -261,6 +261,7 @@ dependencies = [
  "object_store",
  "opendal",
  "rand",
+ "rstest",
  "serde",
  "serde_json",
  "sha2",

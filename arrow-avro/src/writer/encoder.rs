@@ -2386,6 +2386,8 @@ mod tests {
     };
     use arrow_buffer::Buffer;
     use arrow_schema::{DataType, Field, Fields, UnionFields};
+    #[cfg(feature = "avro_custom_types")]
+    use rstest::rstest;
 
     fn zigzag_i64(v: i64) -> u64 {
         ((v << 1) ^ (v >> 63)) as u64
@@ -3112,49 +3114,21 @@ mod tests {
         assert_bytes_eq(&got_b, &expected_b);
     }
 
-    #[test]
     #[cfg(feature = "avro_custom_types")]
-    fn duration_encoding_seconds() {
-        let arr: PrimitiveArray<DurationSecondType> = vec![0i64, -1, 2].into();
+    #[rstest]
+    #[case::seconds(DurationSecondType {}, [0, -1, 2])]
+    #[case::milliseconds(DurationMillisecondType {}, [1, 0, -2])]
+    #[case::microseconds(DurationMicrosecondType {}, [5, -6, 7])]
+    #[case::nanoseconds(DurationNanosecondType {}, [8, 9, -10])]
+    fn duration_encoding<T: ArrowPrimitiveType<Native = i64>>(
+        #[case] duration_type: T,
+        #[case] values: [i64; 3],
+    ) {
+        let _ = duration_type;
+        let arr = PrimitiveArray::<T>::from_iter_values(values);
         let mut expected = Vec::new();
-        for v in [0i64, -1, 2] {
-            expected.extend_from_slice(&avro_long_bytes(v));
-        }
-        let got = encode_all(&arr, &FieldPlan::Scalar, None);
-        assert_bytes_eq(&got, &expected);
-    }
-
-    #[test]
-    #[cfg(feature = "avro_custom_types")]
-    fn duration_encoding_milliseconds() {
-        let arr: PrimitiveArray<DurationMillisecondType> = vec![1i64, 0, -2].into();
-        let mut expected = Vec::new();
-        for v in [1i64, 0, -2] {
-            expected.extend_from_slice(&avro_long_bytes(v));
-        }
-        let got = encode_all(&arr, &FieldPlan::Scalar, None);
-        assert_bytes_eq(&got, &expected);
-    }
-
-    #[test]
-    #[cfg(feature = "avro_custom_types")]
-    fn duration_encoding_microseconds() {
-        let arr: PrimitiveArray<DurationMicrosecondType> = vec![5i64, -6, 7].into();
-        let mut expected = Vec::new();
-        for v in [5i64, -6, 7] {
-            expected.extend_from_slice(&avro_long_bytes(v));
-        }
-        let got = encode_all(&arr, &FieldPlan::Scalar, None);
-        assert_bytes_eq(&got, &expected);
-    }
-
-    #[test]
-    #[cfg(feature = "avro_custom_types")]
-    fn duration_encoding_nanoseconds() {
-        let arr: PrimitiveArray<DurationNanosecondType> = vec![8i64, 9, -10].into();
-        let mut expected = Vec::new();
-        for v in [8i64, 9, -10] {
-            expected.extend_from_slice(&avro_long_bytes(v));
+        for value in values {
+            expected.extend_from_slice(&avro_long_bytes(value));
         }
         let got = encode_all(&arr, &FieldPlan::Scalar, None);
         assert_bytes_eq(&got, &expected);

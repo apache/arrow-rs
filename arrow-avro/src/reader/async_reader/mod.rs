@@ -551,6 +551,7 @@ mod tests {
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
     use object_store::{ObjectStore, ObjectStoreExt};
+    use rstest::rstest;
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -1581,36 +1582,26 @@ mod tests {
         assert_eq!(id.values(), &[4, 5, 6, 7, 2, 3, 0, 1]);
     }
 
+    #[rstest]
+    #[case::large_batch(1024, &[8])]
+    #[case::small_batch(5, &[5, 3])]
     #[tokio::test]
-    async fn test_alltypes_with_empty_schema_large_batch() {
+    async fn test_alltypes_with_empty_schema(
+        #[case] batch_size: usize,
+        #[case] expected_rows: &[usize],
+    ) {
         // With an empty reader schema -- should count rows but produce no columns
         let file = arrow_test_data("avro/alltypes_plain.avro");
         let schema = Arc::new(Schema::new(Vec::<Field>::new()));
-        let batches = read_async_file(&file, 1024, None, Some(schema), None)
-            .await
-            .unwrap();
-        assert_eq!(batches.len(), 1);
-        let batch = &batches[0];
-
-        assert_eq!(batch.num_rows(), 8);
-        assert_eq!(batch.num_columns(), 0);
-    }
-
-    #[tokio::test]
-    async fn test_alltypes_with_empty_schema_small_batch() {
-        // With an empty reader schema -- should count rows but produce no columns
-        let file = arrow_test_data("avro/alltypes_plain.avro");
-        let schema = Arc::new(Schema::new(Vec::<Field>::new()));
-        let batches = read_async_file(&file, 5, None, Some(schema), None)
+        let batches = read_async_file(&file, batch_size, None, Some(schema), None)
             .await
             .unwrap();
 
-        assert_eq!(batches.len(), 2);
-
-        assert_eq!(batches[0].num_rows(), 5);
-        assert_eq!(batches[0].num_columns(), 0);
-        assert_eq!(batches[1].num_rows(), 3);
-        assert_eq!(batches[1].num_columns(), 0);
+        assert_eq!(batches.len(), expected_rows.len());
+        for (batch, &rows) in batches.iter().zip(expected_rows) {
+            assert_eq!(batch.num_rows(), rows);
+            assert_eq!(batch.num_columns(), 0);
+        }
     }
 
     #[tokio::test]
@@ -1811,9 +1802,11 @@ mod tests {
         assert_eq!(batch.schema().as_ref(), &expected_schema);
     }
 
+    #[rstest]
+    #[case::small(64)]
+    #[case::large(64 * 1024)]
     #[tokio::test]
-    async fn test_with_header_size_hint_small() {
-        // Use a very small header size hint to force multiple fetches
+    async fn test_with_header_size_hint(#[case] header_size_hint: u64) {
         let file = arrow_test_data("avro/alltypes_plain.avro");
         let store: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem::new());
         let location = Path::from_filesystem_path(&file).unwrap();
@@ -1823,37 +1816,9 @@ mod tests {
         let schema = get_alltypes_schema();
         let reader_schema = AvroSchema::try_from(schema.as_ref()).unwrap();
 
-        // Use a tiny header hint (64 bytes) - header is much larger
         let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
             .with_reader_schema(reader_schema)
-            .with_header_size_hint(64)
-            .try_build()
-            .await
-            .unwrap();
-
-        let batches: Vec<RecordBatch> = reader.try_collect().await.unwrap();
-        let batch = &batches[0];
-
-        assert_eq!(batch.num_rows(), 8);
-        assert_eq!(batch.num_columns(), 11);
-    }
-
-    #[tokio::test]
-    async fn test_with_header_size_hint_large() {
-        // Use a larger header size hint than needed
-        let file = arrow_test_data("avro/alltypes_plain.avro");
-        let store: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem::new());
-        let location = Path::from_filesystem_path(&file).unwrap();
-        let file_size = store.head(&location).await.unwrap().size;
-
-        let file_reader = ObjectStoreReader::new(store, location);
-        let schema = get_alltypes_schema();
-        let reader_schema = AvroSchema::try_from(schema.as_ref()).unwrap();
-
-        // Use a large header hint (64KB)
-        let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
-            .with_reader_schema(reader_schema)
-            .with_header_size_hint(64 * 1024)
+            .with_header_size_hint(header_size_hint)
             .try_build()
             .await
             .unwrap();
@@ -1901,9 +1866,11 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::enabled(true, DataType::Utf8View)]
+    #[case::disabled(false, DataType::Utf8)]
     #[tokio::test]
-    async fn test_with_utf8_view_enabled() {
-        // Test that utf8_view produces StringViewArray instead of StringArray
+    async fn test_with_utf8_view(#[case] utf8_view: bool, #[case] expected_type: DataType) {
         let file = arrow_test_data("avro/nested_records.avro");
         let store: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem::new());
         let location = Path::from_filesystem_path(&file).unwrap();
@@ -1912,7 +1879,7 @@ mod tests {
         let file_reader = ObjectStoreReader::new(store, location);
 
         let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
-            .with_utf8_view(true)
+            .with_utf8_view(utf8_view)
             .try_build()
             .await
             .unwrap();
@@ -1923,43 +1890,11 @@ mod tests {
         assert_eq!(batch.num_rows(), 2);
 
         // The f1 struct contains f1_1 which is a string field
-        // With utf8_view enabled, it should be Utf8View type
         let f1_col = batch.column(0);
         let f1_struct = f1_col.as_struct();
         let f1_1_field = f1_struct.column_by_name("f1_1").unwrap();
 
-        // Check that the data type is Utf8View
-        assert_eq!(f1_1_field.data_type(), &DataType::Utf8View);
-    }
-
-    #[tokio::test]
-    async fn test_with_utf8_view_disabled() {
-        // Test that without utf8_view, we get regular Utf8
-        let file = arrow_test_data("avro/nested_records.avro");
-        let store: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem::new());
-        let location = Path::from_filesystem_path(&file).unwrap();
-        let file_size = store.head(&location).await.unwrap().size;
-
-        let file_reader = ObjectStoreReader::new(store, location);
-
-        let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
-            .with_utf8_view(false)
-            .try_build()
-            .await
-            .unwrap();
-
-        let batches: Vec<RecordBatch> = reader.try_collect().await.unwrap();
-        let batch = &batches[0];
-
-        assert_eq!(batch.num_rows(), 2);
-
-        // The f1 struct contains f1_1 which is a string field
-        // Without utf8_view, it should be regular Utf8
-        let f1_col = batch.column(0);
-        let f1_struct = f1_col.as_struct();
-        let f1_1_field = f1_struct.column_by_name("f1_1").unwrap();
-
-        assert_eq!(f1_1_field.data_type(), &DataType::Utf8);
+        assert_eq!(f1_1_field.data_type(), &expected_type);
     }
 
     #[tokio::test]
