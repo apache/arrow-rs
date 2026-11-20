@@ -262,36 +262,49 @@ impl<T: ParquetValueType> WriteThrift for PrimitiveColumnIndex<T> {
         &self,
         writer: &mut ThriftCompactOutputProtocol<W>,
     ) -> Result<()> {
-        self.null_pages.write_thrift_field(writer, 1, 0)?;
+        use crate::file::metadata::thrift_fields::column_index as fields;
+        self.null_pages
+            .write_thrift_field(writer, fields::NULL_PAGES, 0)?;
 
         // need to handle min/max manually
         let len = self.null_pages.len();
-        writer.write_field_begin(FieldType::List, 2, 1)?;
+        writer.write_field_begin(FieldType::List, fields::MIN_VALUES, fields::NULL_PAGES)?;
         writer.write_list_begin(ElementType::Binary, len)?;
         for i in 0..len {
             let min = self.min_value(i).map(|m| m.as_bytes()).unwrap_or(&[]);
             min.write_thrift(writer)?;
         }
-        writer.write_field_begin(FieldType::List, 3, 2)?;
+        writer.write_field_begin(FieldType::List, fields::MAX_VALUES, fields::MIN_VALUES)?;
         writer.write_list_begin(ElementType::Binary, len)?;
         for i in 0..len {
             let max = self.max_value(i).map(|m| m.as_bytes()).unwrap_or(&[]);
             max.write_thrift(writer)?;
         }
-        let mut last_field_id = self.boundary_order.write_thrift_field(writer, 4, 3)?;
+        let mut last_field_id = self.boundary_order.write_thrift_field(
+            writer,
+            fields::BOUNDARY_ORDER,
+            fields::MAX_VALUES,
+        )?;
         if let Some(null_counts) = &self.null_counts {
-            last_field_id = null_counts.write_thrift_field(writer, 5, last_field_id)?;
+            last_field_id =
+                null_counts.write_thrift_field(writer, fields::NULL_COUNTS, last_field_id)?;
         }
         if let Some(repetition_level_histograms) = &self.repetition_level_histograms {
-            last_field_id =
-                repetition_level_histograms.write_thrift_field(writer, 6, last_field_id)?;
+            last_field_id = repetition_level_histograms.write_thrift_field(
+                writer,
+                fields::REPETITION_LEVEL_HISTOGRAMS,
+                last_field_id,
+            )?;
         }
         if let Some(definition_level_histograms) = &self.definition_level_histograms {
-            last_field_id =
-                definition_level_histograms.write_thrift_field(writer, 7, last_field_id)?;
+            last_field_id = definition_level_histograms.write_thrift_field(
+                writer,
+                fields::DEFINITION_LEVEL_HISTOGRAMS,
+                last_field_id,
+            )?;
         }
         if let Some(nan_counts) = &self.nan_counts {
-            nan_counts.write_thrift_field(writer, 8, last_field_id)?;
+            nan_counts.write_thrift_field(writer, fields::NAN_COUNTS, last_field_id)?;
         }
         writer.write_struct_end()
     }
@@ -471,36 +484,49 @@ impl WriteThrift for ByteArrayColumnIndex {
         &self,
         writer: &mut ThriftCompactOutputProtocol<W>,
     ) -> Result<()> {
-        self.null_pages.write_thrift_field(writer, 1, 0)?;
+        use crate::file::metadata::thrift_fields::column_index as fields;
+        self.null_pages
+            .write_thrift_field(writer, fields::NULL_PAGES, 0)?;
 
         // need to handle min/max manually
         let len = self.null_pages.len();
-        writer.write_field_begin(FieldType::List, 2, 1)?;
+        writer.write_field_begin(FieldType::List, fields::MIN_VALUES, fields::NULL_PAGES)?;
         writer.write_list_begin(ElementType::Binary, len)?;
         for i in 0..len {
             let min = self.min_value(i).unwrap_or(&[]);
             min.write_thrift(writer)?;
         }
-        writer.write_field_begin(FieldType::List, 3, 2)?;
+        writer.write_field_begin(FieldType::List, fields::MAX_VALUES, fields::MIN_VALUES)?;
         writer.write_list_begin(ElementType::Binary, len)?;
         for i in 0..len {
             let max = self.max_value(i).unwrap_or(&[]);
             max.write_thrift(writer)?;
         }
-        let mut last_field_id = self.boundary_order.write_thrift_field(writer, 4, 3)?;
+        let mut last_field_id = self.boundary_order.write_thrift_field(
+            writer,
+            fields::BOUNDARY_ORDER,
+            fields::MAX_VALUES,
+        )?;
         if let Some(null_counts) = &self.null_counts {
-            last_field_id = null_counts.write_thrift_field(writer, 5, last_field_id)?;
+            last_field_id =
+                null_counts.write_thrift_field(writer, fields::NULL_COUNTS, last_field_id)?;
         }
         if let Some(repetition_level_histograms) = &self.repetition_level_histograms {
-            last_field_id =
-                repetition_level_histograms.write_thrift_field(writer, 6, last_field_id)?;
+            last_field_id = repetition_level_histograms.write_thrift_field(
+                writer,
+                fields::REPETITION_LEVEL_HISTOGRAMS,
+                last_field_id,
+            )?;
         }
         if let Some(definition_level_histograms) = &self.definition_level_histograms {
-            last_field_id =
-                definition_level_histograms.write_thrift_field(writer, 7, last_field_id)?;
+            last_field_id = definition_level_histograms.write_thrift_field(
+                writer,
+                fields::DEFINITION_LEVEL_HISTOGRAMS,
+                last_field_id,
+            )?;
         }
         if let Some(nan_counts) = &self.nan_counts {
-            nan_counts.write_thrift_field(writer, 8, last_field_id)?;
+            nan_counts.write_thrift_field(writer, fields::NAN_COUNTS, last_field_id)?;
         }
         writer.write_struct_end()
     }

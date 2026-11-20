@@ -8,6 +8,9 @@ use std::io::Write;
 
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::HeapSize;
+use crate::file::metadata::thrift_fields::{
+    column_crypto_meta_data as cm, encryption_with_column_key as ck,
+};
 use crate::parquet_thrift::{
     ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol, ThriftCompactOutputProtocol,
     WriteThrift, WriteThriftField, read_thrift_vec,
@@ -21,10 +24,10 @@ thrift_struct!(
 /// Encryption metadata for a column chunk encrypted with a column-specific key
 pub struct EncryptionWithColumnKey {
   /// Path to the column in the Parquet schema
-  1: required list<string> path_in_schema
+  ck::PATH_IN_SCHEMA: required list<string> path_in_schema
 
   /// Path to the column in the Parquet schema
-  2: optional binary key_metadata
+  ck::KEY_METADATA: optional binary key_metadata
 }
 );
 
@@ -37,8 +40,8 @@ impl HeapSize for EncryptionWithColumnKey {
 thrift_union!(
 /// ColumnCryptoMetadata for a column chunk
 union ColumnCryptoMetaData {
-  1: ENCRYPTION_WITH_FOOTER_KEY
-  2: (EncryptionWithColumnKey) ENCRYPTION_WITH_COLUMN_KEY
+  cm::ENCRYPTION_WITH_FOOTER_KEY: ENCRYPTION_WITH_FOOTER_KEY
+  cm::ENCRYPTION_WITH_COLUMN_KEY: (EncryptionWithColumnKey) ENCRYPTION_WITH_COLUMN_KEY
 }
 );
 

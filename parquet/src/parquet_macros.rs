@@ -126,7 +126,7 @@ macro_rules! thrift_enum {
 #[expect(clippy::allow_attributes)]
 #[allow(clippy::crate_in_macro_def)]
 macro_rules! thrift_union_all_empty {
-    ($(#[$($def_attrs:tt)*])* union $identifier:ident { $($(#[$($field_attrs:tt)*])* $field_id:literal : $field_type:ident $(< $element_type:ident >)? $field_name:ident $(;)?)* }) => {
+    ($(#[$($def_attrs:tt)*])* union $identifier:ident { $($(#[$($field_attrs:tt)*])* $($field_id:literal)? $($field_constant:path)? : $field_type:ident $(< $element_type:ident >)? $field_name:ident $(;)?)* }) => {
         $(#[cfg_attr(not(doctest), $($def_attrs)*)])*
         #[derive(Clone, Copy, Debug, Eq, PartialEq)]
         #[allow(clippy::allow_attributes)]
@@ -144,7 +144,7 @@ macro_rules! thrift_union_all_empty {
                     return Err(general_err!("Received empty union from remote {}", stringify!($identifier)));
                 }
                 let ret = match field_ident.id {
-                    $($field_id => {
+                    $($($field_id)? $($field_constant)? => {
                         prot.skip_empty_struct()?;
                         Self::$field_name
                     }
@@ -168,7 +168,7 @@ macro_rules! thrift_union_all_empty {
 
             fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
                 match *self {
-                    $(Self::$field_name => writer.write_empty_struct($field_id, 0)?,)*
+                    $(Self::$field_name => writer.write_empty_struct($($field_id)? $($field_constant)?, 0)?,)*
                 };
                 // write end of struct for this union
                 writer.write_struct_end()
@@ -202,7 +202,7 @@ macro_rules! thrift_union_all_empty {
 #[expect(clippy::allow_attributes)]
 #[allow(clippy::crate_in_macro_def)]
 macro_rules! thrift_union {
-    ($(#[$($def_attrs:tt)*])* union $identifier:ident $(< $lt:lifetime >)? { $($(#[$($field_attrs:tt)*])* $field_id:literal : $( ( $field_type:ident $(< $element_type:ident >)? $(< $field_lt:lifetime >)?) )? $field_name:ident $(;)?)* }) => {
+    ($(#[$($def_attrs:tt)*])* union $identifier:ident $(< $lt:lifetime >)? { $($(#[$($field_attrs:tt)*])* $($field_id:literal)? $($field_constant:path)? : $( ( $field_type:ident $(< $element_type:ident >)? $(< $field_lt:lifetime >)?) )? $field_name:ident $(;)?)* }) => {
         $(#[cfg_attr(not(doctest), $($def_attrs)*)])*
         #[derive(Clone, Debug, Eq, PartialEq)]
         #[allow(clippy::allow_attributes)]
@@ -220,7 +220,7 @@ macro_rules! thrift_union {
                     return Err(general_err!("Received empty union from remote {}", stringify!($identifier)));
                 }
                 let ret = match field_ident.id {
-                    $($field_id => {
+                    $($($field_id)? $($field_constant)? => {
                         let val = $crate::__thrift_read_variant!(prot, $field_name $($field_type $($element_type)?)?);
                         val
                     })*
@@ -244,7 +244,7 @@ macro_rules! thrift_union {
             fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
                 match self {
                     $($crate::__thrift_write_variant_lhs!($field_name $($field_type)?, variant_val) =>
-                      $crate::__thrift_write_variant_rhs!($field_id $($field_type)?, writer, variant_val),)*
+                      $crate::__thrift_write_variant_rhs!($($field_id)? $($field_constant)? $($field_type)?, writer, variant_val),)*
                 };
                 writer.write_struct_end()
             }
@@ -276,7 +276,7 @@ macro_rules! thrift_union {
 #[expect(clippy::allow_attributes)]
 #[allow(clippy::crate_in_macro_def)]
 macro_rules! thrift_union_with_unknown {
-    ($(#[$($def_attrs:tt)*])* union $identifier:ident $(< $lt:lifetime >)? { $($(#[$($field_attrs:tt)*])* $field_id:literal : $( ( $field_type:ident $(< $element_type:ident >)? $(< $field_lt:lifetime >)?) )? $field_name:ident $(;)?)* }) => {
+    ($(#[$($def_attrs:tt)*])* union $identifier:ident $(< $lt:lifetime >)? { $($(#[$($field_attrs:tt)*])* $($field_id:literal)? $($field_constant:path)? : $( ( $field_type:ident $(< $element_type:ident >)? $(< $field_lt:lifetime >)?) )? $field_name:ident $(;)?)* }) => {
         $(#[cfg_attr(not(doctest), $($def_attrs)*)])*
         #[derive(Clone, Debug, Eq, PartialEq)]
         #[allow(clippy::allow_attributes)]
@@ -298,7 +298,7 @@ macro_rules! thrift_union_with_unknown {
                     return Err(general_err!("Received empty union from remote {}", stringify!($identifier)));
                 }
                 let ret = match field_ident.id {
-                    $($field_id => {
+                    $($($field_id)? $($field_constant)? => {
                         let val = $crate::__thrift_read_variant!(prot, $field_name $($field_type $($element_type)?)?);
                         val
                     })*
@@ -325,7 +325,7 @@ macro_rules! thrift_union_with_unknown {
             fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
                 match self {
                     $($crate::__thrift_write_variant_lhs!($field_name $($field_type)?, variant_val) =>
-                      $crate::__thrift_write_variant_rhs!($field_id $($field_type)?, writer, variant_val),)*
+                      $crate::__thrift_write_variant_rhs!($($field_id)? $($field_constant)? $($field_type)?, writer, variant_val),)*
                     Self::_Unknown{..} => return Err(general_err!("Trying to write unknown variant")),
                 };
                 writer.write_struct_end()
@@ -352,7 +352,8 @@ macro_rules! thrift_union_with_unknown {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! thrift_struct {
-    ($(#[$($def_attrs:tt)*])* $vis:vis struct $identifier:ident $(< $lt:lifetime >)? { $($(#[$($field_attrs:tt)*])* $field_id:literal : $required_or_optional:ident $field_type:ident $(< $field_lt:lifetime >)? $(< $element_type:ident >)? $field_name:ident $(= $default_value:literal)? $(;)?)* }) => {
+    // A field ID can be a literal or a constant path.
+    ($(#[$($def_attrs:tt)*])* $vis:vis struct $identifier:ident $(< $lt:lifetime >)? { $($(#[$($field_attrs:tt)*])* $($field_id:literal)? $($field_constant:path)? : $required_or_optional:ident $field_type:ident $(< $field_lt:lifetime >)? $(< $element_type:ident >)? $field_name:ident $(= $default_value:literal)? $(;)?)* }) => {
         $(#[cfg_attr(not(doctest), $($def_attrs)*)])*
         #[derive(Clone, Debug, Eq, PartialEq)]
         #[allow(clippy::allow_attributes)]
@@ -373,7 +374,7 @@ macro_rules! thrift_struct {
                         break;
                     }
                     match field_ident.id {
-                        $($field_id => {
+                        $($($field_id)? $($field_constant)? => {
                             let val = $crate::__thrift_read_field!(prot, field_ident, $field_type $($field_lt)? $($element_type)?);
                             $field_name = Some(val);
                         })*
@@ -398,7 +399,7 @@ macro_rules! thrift_struct {
             fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
                 #[allow(unused_mut, unused_variables)]
                 let mut last_field_id = 0i16;
-                $($crate::__thrift_write_required_or_optional_field!($required_or_optional $field_name, $field_id, $field_type, self, writer, last_field_id);)*
+                $($crate::__thrift_write_required_or_optional_field!($required_or_optional $field_name, $($field_id)? $($field_constant)?, $field_type, self, writer, last_field_id);)*
                 writer.write_struct_end()
             }
         }
@@ -431,7 +432,7 @@ macro_rules! write_thrift_field {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __thrift_write_required_or_optional_field {
-    (required $field_name:ident, $field_id:literal, $field_type:ident, $self:tt, $writer:tt, $last_id:tt) => {
+    (required $field_name:ident, $field_id:tt, $field_type:ident, $self:tt, $writer:tt, $last_id:tt) => {
         $crate::__thrift_write_required_field!(
             $field_type,
             $field_name,
@@ -441,7 +442,7 @@ macro_rules! __thrift_write_required_or_optional_field {
             $last_id
         )
     };
-    (optional $field_name:ident, $field_id:literal, $field_type:ident, $self:tt, $writer:tt, $last_id:tt) => {
+    (optional $field_name:ident, $field_id:tt, $field_type:ident, $self:tt, $writer:tt, $last_id:tt) => {
         $crate::__thrift_write_optional_field!(
             $field_type,
             $field_name,
@@ -456,12 +457,12 @@ macro_rules! __thrift_write_required_or_optional_field {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __thrift_write_required_field {
-    (binary, $field_name:ident, $field_id:literal, $self:ident, $writer:ident, $last_id:ident) => {
+    (binary, $field_name:ident, $field_id:tt, $self:ident, $writer:ident, $last_id:ident) => {
         $writer.write_field_begin(FieldType::Binary, $field_id, $last_id)?;
         $writer.write_bytes($self.$field_name)?;
         $last_id = $field_id;
     };
-    ($field_type:ident, $field_name:ident, $field_id:literal, $self:ident, $writer:ident, $last_id:ident) => {
+    ($field_type:ident, $field_name:ident, $field_id:tt, $self:ident, $writer:ident, $last_id:ident) => {
         $last_id = $self
             .$field_name
             .write_thrift_field($writer, $field_id, $last_id)?;
@@ -471,14 +472,14 @@ macro_rules! __thrift_write_required_field {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __thrift_write_optional_field {
-    (binary, $field_name:ident, $field_id:literal, $self:ident, $writer:tt, $last_id:tt) => {
+    (binary, $field_name:ident, $field_id:tt, $self:ident, $writer:tt, $last_id:tt) => {
         if $self.$field_name.is_some() {
             $writer.write_field_begin(FieldType::Binary, $field_id, $last_id)?;
             $writer.write_bytes($self.$field_name.as_ref().unwrap())?;
             $last_id = $field_id;
         }
     };
-    ($field_type:ident, $field_name:ident, $field_id:literal, $self:ident, $writer:tt, $last_id:tt) => {
+    ($field_type:ident, $field_name:ident, $field_id:tt, $self:ident, $writer:tt, $last_id:tt) => {
         if $self.$field_name.is_some() {
             $last_id = $self
                 .$field_name
@@ -609,10 +610,10 @@ macro_rules! __thrift_write_variant_lhs {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __thrift_write_variant_rhs {
-    ($field_id:literal $field_type:ident, $writer:tt, $val:ident) => {
+    ($field_id:tt $field_type:ident, $writer:tt, $val:ident) => {
         $val.write_thrift_field($writer, $field_id, 0)?
     };
-    ($field_id:literal, $writer:tt, $val:tt) => {
+    ($field_id:tt, $writer:tt, $val:tt) => {
         $writer.write_empty_struct($field_id, 0)?
     };
 }

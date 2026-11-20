@@ -133,19 +133,21 @@ const SALT: [u32; 8] = [
     0x5c6bfb31_u32,
 ];
 
+use crate::file::metadata::thrift_fields::bloom_filter_header as fields;
+
 thrift_struct!(
 /// Bloom filter header is stored at beginning of Bloom filter data of each column
 /// and followed by its bitset.
 ///
 pub struct BloomFilterHeader {
   /// The size of bitset in bytes
-  1: required i32 num_bytes;
+  fields::NUM_BYTES: required i32 num_bytes;
   /// The algorithm for setting bits.
-  2: required BloomFilterAlgorithm algorithm;
+  fields::ALGORITHM: required BloomFilterAlgorithm algorithm;
   /// The hash function used for Bloom filter
-  3: required BloomFilterHash hash;
+  fields::HASH: required BloomFilterHash hash;
   /// The compression used in the Bloom filter
-  4: required BloomFilterCompression compression;
+  fields::COMPRESSION: required BloomFilterCompression compression;
 }
 );
 
