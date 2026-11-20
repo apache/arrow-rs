@@ -401,6 +401,7 @@ impl LoadedRowRanges {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     /// Compare chunks with the selected row positions, independently of how
     /// the cursor scans the bitmap. A chunk may consume at most `batch_size`
@@ -452,81 +453,86 @@ mod tests {
         assert_mask_chunks(mask, None, 1);
     }
 
-    #[test]
-    fn test_mask_chunks_word_boundaries_and_offsets() {
+    #[rstest]
+    #[case::all_unset(0)]
+    #[case::all_set(1)]
+    #[case::alternating(2)]
+    #[case::every_129th_row(3)]
+    #[case::random_10_percent(4)]
+    #[case::random_50_percent(5)]
+    #[case::random_90_percent(6)]
+    fn test_mask_chunks_word_boundaries_and_offsets(
+        #[case] pattern: usize,
+        #[values(0, 1, 7, 8, 63, 64, 65, 127, 128, 129, 511, 2049)] len: usize,
+    ) {
         use rand::{RngExt, SeedableRng, rngs::StdRng};
 
-        for len in [0, 1, 7, 8, 63, 64, 65, 127, 128, 129, 511, 2049] {
-            for offset in [0, 1, 3, 7, 8, 31, 63, 64, 65] {
-                for pattern in 0..7 {
-                    let mut rng = StdRng::seed_from_u64(42);
-                    let mask = BooleanBuffer::from_iter((0..offset + len + 64).map(|row| {
-                        if !(offset..offset + len).contains(&row) {
-                            // Set padding on both sides to catch reads outside
-                            // the logical slice, including its final word.
-                            return true;
-                        }
-                        let row = row - offset;
-                        match pattern {
-                            0 => false,
-                            1 => true,
-                            2 => row % 2 == 0,
-                            3 => row % 129 == 128,
-                            4 => rng.random_bool(0.1),
-                            5 => rng.random_bool(0.5),
-                            _ => rng.random_bool(0.9),
-                        }
-                    }))
-                    .slice(offset, len);
-                    for batch_size in [1, 2, 3, 63, 64, 65, 1024] {
-                        assert_mask_chunks(mask.clone(), None, batch_size);
-                    }
+        for offset in [0, 1, 3, 7, 8, 31, 63, 64, 65] {
+            let mut rng = StdRng::seed_from_u64(42);
+            let mask = BooleanBuffer::from_iter((0..offset + len + 64).map(|row| {
+                if !(offset..offset + len).contains(&row) {
+                    // Set padding on both sides to catch reads outside
+                    // the logical slice, including its final word.
+                    return true;
                 }
+                let row = row - offset;
+                match pattern {
+                    0 => false,
+                    1 => true,
+                    2 => row % 2 == 0,
+                    3 => row % 129 == 128,
+                    4 => rng.random_bool(0.1),
+                    5 => rng.random_bool(0.5),
+                    _ => rng.random_bool(0.9),
+                }
+            }))
+            .slice(offset, len);
+            for batch_size in [1, 2, 3, 63, 64, 65, 1024] {
+                assert_mask_chunks(mask.clone(), None, batch_size);
             }
         }
     }
 
-    #[test]
-    fn test_mask_chunks_loaded_ranges_word_boundaries() {
-        for page_rows in [1, 31, 63, 64, 65, 127, 257] {
-            let len = page_rows * 7 + 13;
-            let ranges: Vec<_> = (0..len)
-                .step_by(page_rows)
-                .enumerate()
-                .filter(|(page, _)| page % 3 != 1)
-                .map(|(_, start)| start..(start + page_rows).min(len))
-                .collect();
-            let loaded = LoadedRowRanges::from_selection(RowSelection::from_consecutive_ranges(
-                ranges.iter().cloned(),
-                len,
-            ));
-            for offset in [0, 1, 3, 7, 31, 63, 64, 65] {
-                for pattern in 0..4 {
-                    let mask = BooleanBuffer::from_iter((0..offset + len + 64).map(|row| {
-                        if !(offset..offset + len).contains(&row) {
-                            return true;
-                        }
-                        let row = row - offset;
-                        ranges.iter().any(|range| range.contains(&row))
-                            && match pattern {
-                                0 => true,
-                                1 => row % 2 == 0,
-                                // Leave an unset tail in every loaded range.
-                                2 => row % page_rows == 0,
-                                // Select directly on either side of page and
-                                // word boundaries, including the final page.
-                                _ => {
-                                    row % page_rows == page_rows - 1
-                                        || row % 64 == 0
-                                        || row % 64 == 63
-                                }
-                            }
-                    }))
-                    .slice(offset, len);
-                    for batch_size in [1, 2, 3, 63, 64, 65, 1024] {
-                        assert_mask_chunks(mask.clone(), Some(loaded.clone()), batch_size);
-                    }
+    #[rstest]
+    #[case::all_loaded_rows(0)]
+    #[case::alternating_rows(1)]
+    #[case::page_starts(2)]
+    #[case::page_ends_and_word_boundaries(3)]
+    fn test_mask_chunks_loaded_ranges_word_boundaries(
+        #[case] pattern: usize,
+        #[values(1, 31, 63, 64, 65, 127, 257)] page_rows: usize,
+    ) {
+        let len = page_rows * 7 + 13;
+        let ranges: Vec<_> = (0..len)
+            .step_by(page_rows)
+            .enumerate()
+            .filter(|(page, _)| page % 3 != 1)
+            .map(|(_, start)| start..(start + page_rows).min(len))
+            .collect();
+        let loaded = LoadedRowRanges::from_selection(RowSelection::from_consecutive_ranges(
+            ranges.iter().cloned(),
+            len,
+        ));
+        for offset in [0, 1, 3, 7, 31, 63, 64, 65] {
+            let mask = BooleanBuffer::from_iter((0..offset + len + 64).map(|row| {
+                if !(offset..offset + len).contains(&row) {
+                    return true;
                 }
+                let row = row - offset;
+                ranges.iter().any(|range| range.contains(&row))
+                    && match pattern {
+                        0 => true,
+                        1 => row % 2 == 0,
+                        // Leave an unset tail in every loaded range.
+                        2 => row % page_rows == 0,
+                        // Select directly on either side of page and
+                        // word boundaries, including the final page.
+                        _ => row % page_rows == page_rows - 1 || row % 64 == 0 || row % 64 == 63,
+                    }
+            }))
+            .slice(offset, len);
+            for batch_size in [1, 2, 3, 63, 64, 65, 1024] {
+                assert_mask_chunks(mask.clone(), Some(loaded.clone()), batch_size);
             }
         }
     }

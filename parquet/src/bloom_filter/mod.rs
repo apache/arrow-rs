@@ -975,6 +975,7 @@ fn read_bloom_filter_header_and_length(buffer: &[u8]) -> Result<(BloomFilterHead
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     fn insert_all(f: &mut Sbbf, hashes: &[u64]) {
         for &h in hashes {
@@ -1274,27 +1275,26 @@ mod tests {
         assert_eq!(sbbf.num_blocks(), 1);
     }
 
-    #[test]
-    fn test_estimated_fpp_matches_serialized_bitset() {
-        for num_bytes in [BITSET_MIN_LENGTH, 1024, 64 * 1024] {
-            for ndv in [0u64, 1, 10, 100, 1_000, 10_000, 100_000] {
-                let mut sbbf = Sbbf::new_with_num_of_bytes(num_bytes);
-                for i in 0..ndv {
-                    sbbf.insert(&i);
-                }
-
-                let mut bitset = Vec::new();
-                sbbf.write_bitset(&mut bitset).unwrap();
-                let set_bits: u64 = bitset.iter().map(|b| u64::from(b.count_ones())).sum();
-                let expected = (set_bits as f64 / (bitset.len() as f64 * 8.0)).powi(8);
-
-                assert_eq!(
-                    sbbf.estimated_fpp().to_bits(),
-                    expected.to_bits(),
-                    "{num_bytes} bytes, {ndv} values"
-                );
-            }
+    #[rstest]
+    fn test_estimated_fpp_matches_serialized_bitset(
+        #[values(BITSET_MIN_LENGTH, 1024, 64 * 1024)] num_bytes: usize,
+        #[values(0, 1, 10, 100, 1_000, 10_000, 100_000)] ndv: u64,
+    ) {
+        let mut sbbf = Sbbf::new_with_num_of_bytes(num_bytes);
+        for i in 0..ndv {
+            sbbf.insert(&i);
         }
+
+        let mut bitset = Vec::new();
+        sbbf.write_bitset(&mut bitset).unwrap();
+        let set_bits: u64 = bitset.iter().map(|b| u64::from(b.count_ones())).sum();
+        let expected = (set_bits as f64 / (bitset.len() as f64 * 8.0)).powi(8);
+
+        assert_eq!(
+            sbbf.estimated_fpp().to_bits(),
+            expected.to_bits(),
+            "{num_bytes} bytes, {ndv} values"
+        );
     }
 
     #[test]

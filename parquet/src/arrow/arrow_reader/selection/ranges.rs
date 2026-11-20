@@ -138,6 +138,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     fn page_locations(starts: impl IntoIterator<Item = usize>) -> Vec<PageLocation> {
         starts
@@ -183,52 +184,57 @@ mod tests {
         assert!(selection.scan_ranges(&[]).is_empty());
     }
 
-    #[test]
-    fn test_mask_scan_ranges_matches_selectors() {
+    #[rstest]
+    #[case::all_unset(0)]
+    #[case::all_set(1)]
+    #[case::alternating(2)]
+    #[case::page_ends(3)]
+    #[case::random_1_percent(4)]
+    #[case::random_50_percent(5)]
+    #[case::random_99_percent(6)]
+    fn test_mask_scan_ranges_matches_selectors(
+        #[case] pattern: usize,
+        #[values(0, 1, 7, 8, 63, 64, 65, 127, 128, 129, 511, 2049)] len: usize,
+    ) {
         use rand::{RngExt, SeedableRng, rngs::StdRng};
 
-        for len in [0, 1, 7, 8, 63, 64, 65, 127, 128, 129, 511, 2049] {
-            for page_rows in [1, 7, 31, 63, 64, 65, 127, 257] {
-                // Include pages beyond the selection and a final partial page.
-                let total_rows = len + 37;
-                let pages = page_locations((0..total_rows).step_by(page_rows));
-                for pattern in 0..7 {
-                    let mut rng = StdRng::seed_from_u64(42);
-                    let mask = BooleanBuffer::from_iter((0..len).map(|row| match pattern {
-                        0 => false,
-                        1 => true,
-                        2 => row % 2 == 0,
-                        3 => row % page_rows == page_rows - 1,
-                        4 => rng.random_bool(0.01),
-                        5 => rng.random_bool(0.5),
-                        _ => rng.random_bool(0.99),
-                    }));
-                    for offset in [0, 1, 3, 7, 31, 63, 64, 65] {
-                        assert_mask_scan_ranges(&mask, offset, &pages, total_rows);
-                    }
-                }
+        for page_rows in [1, 7, 31, 63, 64, 65, 127, 257] {
+            // Include pages beyond the selection and a final partial page.
+            let total_rows = len + 37;
+            let pages = page_locations((0..total_rows).step_by(page_rows));
+            let mut rng = StdRng::seed_from_u64(42);
+            let mask = BooleanBuffer::from_iter((0..len).map(|row| match pattern {
+                0 => false,
+                1 => true,
+                2 => row % 2 == 0,
+                3 => row % page_rows == page_rows - 1,
+                4 => rng.random_bool(0.01),
+                5 => rng.random_bool(0.5),
+                _ => rng.random_bool(0.99),
+            }));
+            for offset in [0, 1, 3, 7, 31, 63, 64, 65] {
+                assert_mask_scan_ranges(&mask, offset, &pages, total_rows);
             }
         }
     }
 
-    #[test]
-    fn test_mask_scan_ranges_single_bits_and_padding() {
+    #[rstest]
+    fn test_mask_scan_ranges_single_bits_and_padding(
+        #[values(130, 257, 511, 512)] len: usize,
+        #[values(0, 1, 7, 8, 31, 63, 64, 65)] offset: usize,
+    ) {
         let pages = page_locations([0, 1, 130, 257, 386, 512, 549]);
-        for len in [130, 257, 511, 512] {
-            let selected_rows = std::iter::once(None).chain(
-                [
-                    0, 1, 7, 8, 55, 56, 63, 64, 65, 127, 128, 129, 130, 255, 256, 257, 510, 511,
-                ]
-                .into_iter()
-                .filter(|&row| row < len)
-                .map(Some),
-            );
-            for selected_row in selected_rows {
-                let mask = BooleanBuffer::from_iter((0..len).map(|row| selected_row == Some(row)));
-                for offset in [0, 1, 7, 8, 31, 63, 64, 65] {
-                    assert_mask_scan_ranges(&mask, offset, &pages, 600);
-                }
-            }
+        let selected_rows = std::iter::once(None).chain(
+            [
+                0, 1, 7, 8, 55, 56, 63, 64, 65, 127, 128, 129, 130, 255, 256, 257, 510, 511,
+            ]
+            .into_iter()
+            .filter(|&row| row < len)
+            .map(Some),
+        );
+        for selected_row in selected_rows {
+            let mask = BooleanBuffer::from_iter((0..len).map(|row| selected_row == Some(row)));
+            assert_mask_scan_ranges(&mask, offset, &pages, 600);
         }
     }
 

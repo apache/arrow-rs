@@ -21,6 +21,7 @@ use parquet::arrow::arrow_reader::{
 };
 use parquet::column::reader::ColumnReader;
 use parquet::file::reader::{FileReader, SerializedFileReader};
+use rstest::rstest;
 
 // Every row group has four rows, with a nullable flat column and a list column
 // containing nullable leaves. Column chunks have multiple data pages; spill
@@ -126,31 +127,26 @@ fn assert_batches(batches: &[RecordBatch], groups: &[usize], skip: bool) {
     }
 }
 
-#[test]
-fn read_legacy_fixed_len_byte_array() {
+#[rstest]
+fn read_legacy_fixed_len_byte_array(
+    #[values(false, true)] skip_metadata: bool,
+    #[values(1, 3, 1024)] batch_size: usize,
+    #[values(false, true)] skip: bool,
+) {
     let data = fixture();
     for groups in row_group_selections() {
-        for skip_metadata in [false, true] {
-            for batch_size in [1, 3, 1024] {
-                for skip in [false, true] {
-                    let options = ArrowReaderOptions::new().with_skip_arrow_metadata(skip_metadata);
-                    let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
-                        data.clone(),
-                        options,
-                    )
-                    .unwrap();
-                    let batches = builder
-                        .with_row_groups(groups.clone())
-                        .with_batch_size(batch_size)
-                        .with_row_selection(selection(groups.len(), skip))
-                        .build()
-                        .unwrap()
-                        .collect::<Result<Vec<_>, _>>()
-                        .unwrap();
-                    assert_batches(&batches, &groups, skip);
-                }
-            }
-        }
+        let options = ArrowReaderOptions::new().with_skip_arrow_metadata(skip_metadata);
+        let builder =
+            ParquetRecordBatchReaderBuilder::try_new_with_options(data.clone(), options).unwrap();
+        let batches = builder
+            .with_row_groups(groups.clone())
+            .with_batch_size(batch_size)
+            .with_row_selection(selection(groups.len(), skip))
+            .build()
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_batches(&batches, &groups, skip);
     }
 }
 
@@ -215,35 +211,34 @@ fn read_legacy_fixed_len_byte_array_typed() {
 }
 
 #[cfg(feature = "async")]
+#[rstest]
 #[tokio::test]
-async fn read_legacy_fixed_len_byte_array_async() {
+async fn read_legacy_fixed_len_byte_array_async(
+    #[values(false, true)] skip_metadata: bool,
+    #[values(1, 3, 1024)] batch_size: usize,
+    #[values(false, true)] skip: bool,
+) {
     use futures::TryStreamExt;
     use parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder;
 
     let data = fixture();
     for groups in row_group_selections() {
-        for skip_metadata in [false, true] {
-            for batch_size in [1, 3, 1024] {
-                for skip in [false, true] {
-                    let options = ArrowReaderOptions::new().with_skip_arrow_metadata(skip_metadata);
-                    let builder = ParquetRecordBatchStreamBuilder::new_with_options(
-                        std::io::Cursor::new(data.clone()),
-                        options,
-                    )
-                    .await
-                    .unwrap();
-                    let batches: Vec<_> = builder
-                        .with_row_groups(groups.clone())
-                        .with_batch_size(batch_size)
-                        .with_row_selection(selection(groups.len(), skip))
-                        .build()
-                        .unwrap()
-                        .try_collect()
-                        .await
-                        .unwrap();
-                    assert_batches(&batches, &groups, skip);
-                }
-            }
-        }
+        let options = ArrowReaderOptions::new().with_skip_arrow_metadata(skip_metadata);
+        let builder = ParquetRecordBatchStreamBuilder::new_with_options(
+            std::io::Cursor::new(data.clone()),
+            options,
+        )
+        .await
+        .unwrap();
+        let batches: Vec<_> = builder
+            .with_row_groups(groups.clone())
+            .with_batch_size(batch_size)
+            .with_row_selection(selection(groups.len(), skip))
+            .build()
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_batches(&batches, &groups, skip);
     }
 }
