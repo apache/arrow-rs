@@ -1056,6 +1056,11 @@ fn test_fixed_size_binary_in_dict_dictionary_disabled() {
             .unwrap();
     let data = DictionaryArray::<UInt8Type>::new(keys, Arc::new(values));
     let batch = RecordBatch::try_new(schema, vec![Arc::new(data)]).unwrap();
+    // The same column as a non-nullable field, whose null comes from its parent
+    let column = batch.column(0);
+    let fields = Fields::from(vec![batch.schema().field(0).clone().with_nullable(false)]);
+    let parent = StructArray::new(fields, vec![Arc::clone(column)], column.nulls().cloned());
+    let nested = RecordBatch::try_from_iter([("s", Arc::new(parent) as ArrayRef)]).unwrap();
     for encoding in [
         Encoding::PLAIN,
         Encoding::DELTA_BYTE_ARRAY,
@@ -1068,7 +1073,8 @@ fn test_fixed_size_binary_in_dict_dictionary_disabled() {
                 .set_write_batch_size(1)
                 .set_encoding(encoding)
                 .build();
-            roundtrip_opts(&batch, props);
+            roundtrip_opts(&batch, props.clone());
+            roundtrip_opts(&nested, props);
         }
     }
 }
