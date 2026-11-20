@@ -73,6 +73,86 @@ fn test_cast_date32_to_date64() {
 }
 
 #[test]
+fn test_cast_timestamp_to_coarser_unit_floors() {
+    // An instant before the epoch stays in the coarser interval containing it,
+    // matching the `Date32` cast instead of truncating toward the epoch.
+    let array =
+        TimestampMillisecondArray::from(vec![-1, -999, -1_000, -1_500, 0, 999, 1_000, 1_500]);
+    let to_type = DataType::Timestamp(TimeUnit::Second, None);
+
+    let casted = cast(&array, &to_type).unwrap();
+    assert_eq!(
+        casted.as_primitive::<TimestampSecondType>().values(),
+        &[-1, -1, -1, -2, 0, 0, 1, 1]
+    );
+
+    // The same input cast to Date32 agrees on the day boundary.
+    let date = cast(&array, &DataType::Date32).unwrap();
+    assert_eq!(
+        date.as_primitive::<Date32Type>().values(),
+        &[-1, -1, -1, -1, 0, 0, 0, 0]
+    );
+
+    // Every unit pair must floor, not truncate toward zero.
+    let base = TimestampNanosecondArray::from(vec![-1, -1_500, 1_500]);
+    for unit in [
+        TimeUnit::Microsecond,
+        TimeUnit::Millisecond,
+        TimeUnit::Second,
+    ] {
+        let divisor = time_unit_multiple(&TimeUnit::Nanosecond) / time_unit_multiple(&unit);
+        let expected: Vec<i64> = [-1i64, -1_500, 1_500]
+            .iter()
+            .map(|v| v.div_euclid(divisor))
+            .collect();
+        let casted = cast(&base, &DataType::Timestamp(unit, None)).unwrap();
+        let values = match unit {
+            TimeUnit::Second => casted
+                .as_primitive::<TimestampSecondType>()
+                .values()
+                .clone(),
+            TimeUnit::Millisecond => casted
+                .as_primitive::<TimestampMillisecondType>()
+                .values()
+                .clone(),
+            TimeUnit::Microsecond => casted
+                .as_primitive::<TimestampMicrosecondType>()
+                .values()
+                .clone(),
+            TimeUnit::Nanosecond => unreachable!(),
+        };
+        assert_eq!(values.as_ref(), expected.as_slice(), "{unit}");
+    }
+}
+
+#[test]
+fn test_cast_date64_negative_floors() {
+    // A Date64 just before the epoch floors to the preceding day, consistent
+    // with the `Timestamp` to `Date32` cast.
+    let array = Date64Array::from(vec![-1, -1_000, -MILLISECONDS_IN_DAY, 0, 1]);
+
+    let date = cast(&array, &DataType::Date32).unwrap();
+    assert_eq!(
+        date.as_primitive::<Date32Type>().values(),
+        &[-1, -1, -1, 0, 0]
+    );
+
+    let ts = cast(&array, &DataType::Timestamp(TimeUnit::Second, None)).unwrap();
+    assert_eq!(
+        ts.as_primitive::<TimestampSecondType>().values(),
+        &[-1, -1, -86_400, 0, 0]
+    );
+
+    // Both paths agree with the `Timestamp` to `Date32` cast for the same instant.
+    let millis = TimestampMillisecondArray::from(vec![-1, -1_000, -86_400_000, 0, 1]);
+    let ts_date = cast(&millis, &DataType::Date32).unwrap();
+    assert_eq!(
+        ts_date.as_primitive::<Date32Type>().values(),
+        &[-1, -1, -1, 0, 0]
+    );
+}
+
+#[test]
 fn test_cast_date64_to_date32() {
     let a = Date64Array::from(vec![Some(864000000005), Some(1545696000001), None]);
     let array = Arc::new(a) as ArrayRef;

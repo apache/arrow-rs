@@ -497,7 +497,9 @@ fn cast_reinterpret_arrays<I: ArrowPrimitiveType, O: ArrowPrimitiveType<Native =
 /// * Primitive to `List`: a list array with 1 value per slot is created
 /// * `Date32` and `Date64`: precision lost when going to higher interval
 /// * `Time32` and `Time64`: precision lost when going to higher interval
-/// * `Timestamp` and `Date{32|64}`: precision lost when going to higher interval
+/// * `Timestamp` and `Date{32|64}`: precision lost when going to higher interval.
+///   Casting a `Timestamp` to a coarser unit floors, so an instant before the Unix
+///   epoch stays in the coarser interval that contains it, matching the `Date32` cast
 /// * `Timestamp` to `Date32`, `Time32`, or `Time64`: timestamps without a timezone
 ///   support the full `i64` range; timestamps with a timezone must lie within Chrono's
 ///   date range. If safe is true, a timestamp outside that range or a `Date32` day
@@ -1631,11 +1633,15 @@ pub fn cast_with_options(
         )),
         (Date64, Date32) => {
             let array = array.as_primitive::<Date64Type>();
+            // Floor so a value before the epoch belongs to the preceding day,
+            // matching the `Timestamp` to `Date32` cast.
             let result = if cast_options.safe {
-                array.unary_opt::<_, Date32Type>(|x| i32::try_from(x / MILLISECONDS_IN_DAY).ok())
+                array.unary_opt::<_, Date32Type>(|x| {
+                    i32::try_from(x.div_euclid(MILLISECONDS_IN_DAY)).ok()
+                })
             } else {
                 array.try_unary::<_, Date32Type, _>(|x| {
-                    i32::try_from(x / MILLISECONDS_IN_DAY).map_err(|_| {
+                    i32::try_from(x.div_euclid(MILLISECONDS_IN_DAY)).map_err(|_| {
                         ArrowError::CastError(format!(
                             "Cannot cast Date64 value {x} to Date32 without overflow"
                         ))
@@ -1768,7 +1774,11 @@ pub fn cast_with_options(
             let converted = match from_size.cmp(&to_size) {
                 Ordering::Greater => {
                     let divisor = from_size / to_size;
-                    time_array.unary::<_, Int64Type>(|o| o / divisor)
+                    // Floor rather than truncate toward zero so an instant before the
+                    // epoch stays in the coarser unit interval that contains it, which
+                    // matches the `Date32` cast. Truncation would move e.g.
+                    // 1969-12-31T23:59:59.999 to 1970-01-01T00:00:00.
+                    time_array.unary::<_, Int64Type>(|o| o.div_euclid(divisor))
                 }
                 Ordering::Equal => time_array.clone(),
                 Ordering::Less => {
@@ -1864,9 +1874,11 @@ pub fn cast_with_options(
             cast_timestamp_to_time::<TimestampNanosecondType>(array, to_type, cast_options)
         }
         (Date64, Timestamp(TimeUnit::Second, _)) => {
+            // Floor rather than truncate toward zero so a value before the epoch
+            // does not round up to the epoch, matching the `Date32` cast.
             let array = array
                 .as_primitive::<Date64Type>()
-                .unary::<_, TimestampSecondType>(|x| x / MILLISECONDS);
+                .unary::<_, TimestampSecondType>(|x| x.div_euclid(MILLISECONDS));
 
             cast_with_options(&array, to_type, cast_options)
         }
