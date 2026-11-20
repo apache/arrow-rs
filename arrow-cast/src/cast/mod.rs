@@ -630,7 +630,8 @@ pub fn cast_with_options(
     let from_type = array.data_type();
     // clone array if types are the same
     if from_type == to_type {
-        return Ok(make_array(array.to_data()));
+        // TODO: Array::as_arc? https://github.com/apache/arrow-rs/issues/8794#issuecomment-3563886963
+        return Ok(array.slice(0, array.len()));
     }
     match (from_type, to_type) {
         (Null, _) => Ok(new_null_array(to_type, array.len())),
@@ -1751,6 +1752,12 @@ pub fn cast_with_options(
             cast_with_options(&array, to_type, cast_options)
         }
 
+        // reinterpret Int64 without going through slice
+        (Int64, Timestamp(unit, tz)) => Ok(make_timestamp_array(
+            array.as_primitive(),
+            *unit,
+            tz.clone(),
+        )),
         (_, Timestamp(unit, tz)) if from_type.is_numeric() => {
             let array = cast_with_options(array, &Int64, cast_options)?;
             Ok(make_timestamp_array(
@@ -1935,6 +1942,8 @@ pub fn cast_with_options(
             cast_with_options(&converted, to_type, cast_options)
         }
 
+        // reinterpret Int64 without going through slice
+        (Int64, Duration(unit)) => Ok(make_duration_array(array.as_primitive(), *unit)),
         (_, Duration(unit)) if from_type.is_numeric() => {
             let array = cast_with_options(array, &Int64, cast_options)?;
             Ok(make_duration_array(array.as_primitive(), *unit))
