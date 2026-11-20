@@ -1261,7 +1261,7 @@ impl IpcDataGenerator {
                 ipc_write_context,
                 write_options,
             )?;
-            append_variadic_buffer_counts(&mut variadic_buffer_counts, &array_data);
+            append_variadic_buffer_counts(&mut variadic_buffer_counts, &array_data)?;
         }
 
         // Each buffer is padded to the alignment as it is written, so `offset` is
@@ -1338,21 +1338,52 @@ fn ensure_supported_ipc_data_type(
     }
 }
 
-fn append_variadic_buffer_counts(counts: &mut Vec<i64>, array: &ArrayData) {
+fn append_variadic_buffer_counts(
+    counts: &mut Vec<i64>,
+    array: &ArrayData,
+) -> Result<(), ArrowError> {
     match array.data_type() {
         DataType::BinaryView | DataType::Utf8View => {
             // The spec documents the counts only includes the variadic buffers, not the view/null buffers.
             // https://arrow.apache.org/docs/format/Columnar.html#variadic-buffers
             counts.push(array.buffers().len() as i64 - 1);
+            Ok(())
         }
         DataType::Dictionary(_, _) => {
             // Do nothing
             // Dictionary values are handled in special dictionary messages
+            Ok(())
+        }
+        DataType::RunEndEncoded(_, _) => {
+            // The writer writes the children of the unsliced run array, so
+            // the counts must come from the same unsliced array: the
+            // original can still hold data buffers (e.g. a Utf8View values
+            // array with a non-inlined string) that the unsliced array
+            // does not write.
+            let array = unslice_run_array(array.clone())?;
+            for child in array.child_data() {
+                append_variadic_buffer_counts(counts, child)?;
+            }
+            Ok(())
+        }
+        DataType::List(_) | DataType::LargeList(_) | DataType::Map(_, _) => {
+            // The writer truncates the offsets and slices the child to the
+            // list's range, so the counts must come from the same sliced
+            // child: the original child can still hold data buffers that
+            // the sliced child does not write.
+            let (_, child) = match array.data_type() {
+                DataType::List(_) | DataType::Map(_, _) => get_list_array_buffers::<i32>(array),
+                DataType::LargeList(_) => get_list_array_buffers::<i64>(array),
+                _ => unreachable!(),
+            };
+            append_variadic_buffer_counts(counts, &child)?;
+            Ok(())
         }
         _ => {
             for child in array.child_data() {
-                append_variadic_buffer_counts(counts, child)
+                append_variadic_buffer_counts(counts, child)?;
             }
+            Ok(())
         }
     }
 }
