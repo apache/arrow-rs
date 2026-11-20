@@ -349,10 +349,13 @@ impl TryFrom<&crate::file::metadata::thrift::PageHeader> for PageMetadata {
     ) -> std::result::Result<Self, Self::Error> {
         match value.r#type {
             PageType::DATA_PAGE => {
-                let header = value.data_page_header.as_ref().unwrap();
+                let header = value
+                    .data_page_header
+                    .as_ref()
+                    .ok_or_else(|| general_err!("Missing V1 data page header"))?;
                 Ok(PageMetadata {
                     num_rows: None,
-                    num_levels: Some(header.num_values as _),
+                    num_levels: Some(header.num_values.try_into()?),
                     is_dict: false,
                 })
             }
@@ -362,10 +365,13 @@ impl TryFrom<&crate::file::metadata::thrift::PageHeader> for PageMetadata {
                 is_dict: true,
             }),
             PageType::DATA_PAGE_V2 => {
-                let header = value.data_page_header_v2.as_ref().unwrap();
+                let header = value
+                    .data_page_header_v2
+                    .as_ref()
+                    .ok_or_else(|| general_err!("Missing V2 data page header"))?;
                 Ok(PageMetadata {
-                    num_rows: Some(header.num_rows as _),
-                    num_levels: Some(header.num_values as _),
+                    num_rows: Some(header.num_rows.try_into()?),
+                    num_levels: Some(header.num_values.try_into()?),
                     is_dict: false,
                 })
             }
