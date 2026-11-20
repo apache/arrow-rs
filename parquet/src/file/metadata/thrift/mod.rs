@@ -384,6 +384,27 @@ fn validate_column_metadata(mask: u16) -> Result<()> {
     Ok(())
 }
 
+fn validate_column_byte_range(column: &ColumnChunkMetaData) -> Result<()> {
+    if column.data_page_offset < 0 {
+        return Err(general_err!("Column data_page_offset must not be negative"));
+    }
+    if column
+        .dictionary_page_offset
+        .is_some_and(|offset| offset < 0)
+    {
+        return Err(general_err!(
+            "Column dictionary_page_offset must not be negative"
+        ));
+    }
+    if column.total_compressed_size < 0 {
+        return Err(general_err!(
+            "Column total_compressed_size must not be negative"
+        ));
+    }
+
+    Ok(())
+}
+
 fn read_encoding_stats_as_mask(prot: &mut ThriftSliceInputProtocol<'_>) -> Result<EncodingMask> {
     // read the vector of stats, setting mask bits for data pages
     let mut mask = 0i32;
@@ -610,6 +631,9 @@ fn read_column_chunk(
     if !has_file_offset {
         return Err(general_err!("Required field file_offset is missing"));
     }
+
+    // Plaintext range fields can remain in use when the column key is unavailable.
+    validate_column_byte_range(&col)?;
 
     // if encrypted just return. we'll decrypt after finishing the footer and populate the rest.
     #[cfg(feature = "encryption")]
@@ -1580,9 +1604,9 @@ impl WriteThrift for RowGroupMetaData {
             last_field_id = file_offset.write_thrift_field(writer, 5, last_field_id)?;
         }
         // this is optional, but we'll always write it
-        last_field_id = self
-            .compressed_size()
-            .write_thrift_field(writer, 6, last_field_id)?;
+        last_field_id =
+            self.checked_compressed_size()?
+                .write_thrift_field(writer, 6, last_field_id)?;
 
         // write ordinal if it will fit in an i16
         if writer.write_row_group_ordinal()

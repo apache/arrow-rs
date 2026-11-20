@@ -103,6 +103,14 @@ impl<T: ParquetValueType> PrimitiveColumnIndex<T> {
     ) -> Result<Self> {
         let len = null_pages.len();
 
+        if let Some(ref nc) = nan_counts
+            && nc.len() != len
+        {
+            return Err(ParquetError::General(format!(
+                "ColumnIndex nan_counts length mismatch: expected {len}, got {}",
+                nc.len()
+            )));
+        }
         if min_bytes.len() != len || max_bytes.len() != len {
             return Err(ParquetError::General(format!(
                 "ColumnIndex min/max length mismatch: expected {len}, got min={} max={}",
@@ -322,6 +330,14 @@ impl ByteArrayColumnIndex {
     ) -> Result<Self> {
         let len = null_pages.len();
 
+        if let Some(ref nc) = nan_counts
+            && nc.len() != len
+        {
+            return Err(ParquetError::General(format!(
+                "ColumnIndex nan_counts length mismatch: expected {len}, got {}",
+                nc.len()
+            )));
+        }
         if min_values.len() != len || max_values.len() != len {
             return Err(ParquetError::General(format!(
                 "ColumnIndex min/max length mismatch: expected {len}, got min={} max={}",

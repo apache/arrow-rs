@@ -19,7 +19,10 @@ use crate::{
     file::column_crypto_metadata::ColumnCryptoMetaData,
     file::metadata::thrift::encryption::{AesGcmV1, EncryptionAlgorithm, FileCryptoMetaData},
 };
-use crate::{errors::Result, file::page_index::column_index::ColumnIndexMetaData};
+use crate::{
+    errors::{ParquetError, Result},
+    file::page_index::column_index::ColumnIndexMetaData,
+};
 
 use crate::{
     file::writer::{TrackedWrite, get_file_magic},
@@ -134,7 +137,11 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
 
     /// Assembles and writes the final metadata to self.buf
     pub(crate) fn finish(mut self) -> Result<ParquetMetaData> {
-        let num_rows = self.row_groups.iter().map(|x| x.num_rows).sum();
+        let num_rows = self.row_groups.iter().try_fold(0i64, |total, row_group| {
+            total
+                .checked_add(row_group.num_rows)
+                .ok_or_else(|| general_err!("File row count exceeds i64 range"))
+        })?;
 
         // serialize page indexes and update index locations
         let page_index = self.page_index.take();

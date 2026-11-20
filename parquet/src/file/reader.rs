@@ -84,7 +84,14 @@ impl ChunkReader for File {
     }
 
     fn get_bytes(&self, start: u64, length: usize) -> Result<Bytes> {
-        let mut buffer = Vec::with_capacity(length);
+        // Avoid a file-length query for small reservations; bound larger untrusted lengths.
+        let capacity = if length <= 64 * 1024 {
+            length
+        } else {
+            let available = self.len().saturating_sub(start);
+            length.min(usize::try_from(available).unwrap_or(usize::MAX))
+        };
+        let mut buffer = Vec::with_capacity(capacity);
         let mut reader = self.try_clone()?;
         reader.seek(SeekFrom::Start(start))?;
         let read = reader.take(length as _).read_to_end(&mut buffer)?;
@@ -110,7 +117,7 @@ impl ChunkReader for Bytes {
     type T = bytes::buf::Reader<Bytes>;
 
     fn get_read(&self, start: u64) -> Result<Self::T> {
-        let start = start as usize;
+        let start = usize::try_from(start)?;
         if start > self.len() {
             return Err(eof_err!(
                 "Expected to read at offset {start}, while file has length {}",
@@ -121,16 +128,19 @@ impl ChunkReader for Bytes {
     }
 
     fn get_bytes(&self, start: u64, length: usize) -> Result<Bytes> {
-        let start = start as usize;
-        if start > self.len() || start + length > self.len() {
+        let range = usize::try_from(start)
+            .ok()
+            .and_then(|start| Some(start..start.checked_add(length)?))
+            .filter(|range| range.end <= self.len());
+        let Some(range) = range else {
             return Err(eof_err!(
                 "Expected to read {} bytes at offset {}, while file has length {}",
                 length,
                 start,
                 self.len()
             ));
-        }
-        Ok(self.slice(start..start + length))
+        };
+        Ok(self.slice(range))
     }
 }
 
@@ -279,6 +289,32 @@ impl PageIterator for FilePageIterator {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_file_chunk_reader_get_bytes_oversized_length() {
+        let mut file = tempfile::tempfile().unwrap();
+        std::io::Write::write_all(&mut file, &[0, 1, 2, 3]).unwrap();
+
+        assert_eq!(file.get_bytes(1, 3).unwrap(), Bytes::from(vec![1, 2, 3]));
+        // A length that is far beyond the file must be an error, not an allocation failure
+        for length in [4, usize::MAX] {
+            let err = file.get_bytes(1, length).unwrap_err();
+            assert!(
+                err.to_string().starts_with("EOF: Expected to read"),
+                "{err}"
+            );
+        }
+        // as is a start offset beyond the end of the file
+        file.get_bytes(10, usize::MAX).unwrap_err();
+    }
+
+    #[test]
+    fn test_bytes_chunk_reader_get_bytes_oversized_length() {
+        let data = Bytes::from(vec![0, 1, 2, 3]);
+        assert_eq!(data.get_bytes(1, 3).unwrap(), Bytes::from(vec![1, 2, 3]));
+        data.get_bytes(1, usize::MAX).unwrap_err();
+        data.get_bytes(u64::MAX, 1).unwrap_err();
+    }
 
     #[test]
     fn test_bytes_chunk_reader_get_read_out_of_bounds() {
