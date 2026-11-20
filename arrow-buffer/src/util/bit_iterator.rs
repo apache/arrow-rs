@@ -4,7 +4,9 @@
 
 //! Types for iterating over packed bitmasks
 
-use crate::bit_chunk_iterator::{BitChunks, UnalignedBitChunk, UnalignedBitChunkIterator};
+use crate::bit_chunk_iterator::{
+    BitChunkIterator, BitChunks, UnalignedBitChunk, UnalignedBitChunkIterator,
+};
 use crate::bit_util::{ceil, get_bit_raw};
 use std::ops::Range;
 
@@ -399,13 +401,15 @@ impl Iterator for BitIndexU32Iterator<'_> {
 #[derive(Debug)]
 pub struct SetBitCounter<'a> {
     chunks: BitChunks<'a>,
+    /// Yields the words after `word`
+    iter: BitChunkIterator<'a>,
     /// The bitmask's final partial word, zero padded
     remainder: u64,
-    /// Index of `word`, where `chunks.chunk_len()` is the remainder
-    word_index: usize,
     /// The word containing the most recent position
     word: u64,
-    /// Set bits before `word`
+    /// Position of the first bit of `word`
+    word_start: usize,
+    /// Set bits before `word_start`
     count_before_word: usize,
     len: usize,
 }
@@ -428,24 +432,37 @@ impl<'a> SetBitCounter<'a> {
     pub fn new(buffer: &'a [u8], offset: usize, len: usize) -> Self {
         let chunks = BitChunks::new(buffer, offset, len);
         let mut counter = Self {
+            iter: chunks.iter(),
             remainder: chunks.remainder_bits(),
             chunks,
-            word_index: 0,
             word: 0,
+            word_start: 0,
             count_before_word: 0,
             len,
         };
-        counter.word = counter.word_at(0);
+        counter.word = counter.next_word();
         counter
     }
 
     #[inline]
-    fn word_at(&self, index: usize) -> u64 {
-        if index < self.chunks.chunk_len() {
-            self.chunks.chunk(index)
-        } else {
-            self.remainder
+    fn next_word(&mut self) -> u64 {
+        self.iter.next().unwrap_or(self.remainder)
+    }
+
+    // Cold and out of line because callers that pass positions in order never
+    // call it, and inlining would copy it into every caller of the inlined
+    // `count_before`.
+    #[cold]
+    fn step_back(&mut self, end: usize) {
+        while end < self.word_start {
+            self.word_start -= 64;
+            // A word before the current one is never the remainder
+            self.word = self.chunks.chunk(self.word_start / 64);
+            self.count_before_word -= self.word.count_ones() as usize;
         }
+        // Leave `iter` after `word`
+        self.iter = self.chunks.iter();
+        self.iter.nth(self.word_start / 64);
     }
 
     /// Returns the number of set bits before position `end`
@@ -469,18 +486,15 @@ impl<'a> SetBitCounter<'a> {
             "position {end} out of bounds for length {}",
             self.len
         );
-        // `word_index * 64` does not overflow because it is at most `len`
-        while end < self.word_index * 64 {
-            self.word_index -= 1;
-            self.word = self.word_at(self.word_index);
-            self.count_before_word -= self.word.count_ones() as usize;
+        if end < self.word_start {
+            self.step_back(end);
         }
-        while end - self.word_index * 64 >= 64 {
+        while end - self.word_start >= 64 {
             self.count_before_word += self.word.count_ones() as usize;
-            self.word_index += 1;
-            self.word = self.word_at(self.word_index);
+            self.word = self.next_word();
+            self.word_start += 64;
         }
-        let mask = (1u64 << (end - self.word_index * 64)) - 1;
+        let mask = (1u64 << (end - self.word_start)) - 1;
         self.count_before_word + (self.word & mask).count_ones() as usize
     }
 
