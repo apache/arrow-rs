@@ -299,6 +299,7 @@ static GET_TABLES_SCHEMA_WITH_TABLE_SCHEMA: LazyLock<SchemaRef> = LazyLock::new(
 mod tests {
     use super::*;
     use arrow_array::{StringArray, UInt32Array};
+    use rstest::rstest;
 
     fn get_ref_batch() -> RecordBatch {
         RecordBatch::try_new(
@@ -369,47 +370,28 @@ mod tests {
         builder
     }
 
-    #[test]
-    fn test_tables_are_filtered() {
+    #[rstest]
+    #[case::no_filters(None, None, None, vec![], vec![0, 1, 2, 3, 4, 5, 6, 7])]
+    #[case::schema_and_table_pattern(None, Some("a%"), Some("a%"), vec![], vec![0, 4, 5])]
+    #[case::catalog(Some("a_catalog"), None, None, vec![], vec![0, 1, 2, 3])]
+    #[case::table_type(None, None, None, vec!["VIEW"], vec![5, 7])]
+    fn test_tables_are_filtered(
+        #[case] catalog: Option<&str>,
+        #[case] db_schema_filter_pattern: Option<&str>,
+        #[case] table_name_filter_pattern: Option<&str>,
+        #[case] table_types: Vec<&str>,
+        #[case] expected_indices: Vec<u32>,
+    ) {
         let ref_batch = get_ref_batch();
-
-        let builder = get_ref_builder(None, None, None, Vec::new(), false);
+        let builder = get_ref_builder(
+            catalog,
+            db_schema_filter_pattern,
+            table_name_filter_pattern,
+            table_types,
+            false,
+        );
         let table_batch = builder.build().unwrap();
-        assert_eq!(table_batch, ref_batch);
-
-        let builder = get_ref_builder(None, Some("a%"), Some("a%"), Vec::new(), false);
-        let table_batch = builder.build().unwrap();
-        let indices = UInt32Array::from(vec![0, 4, 5]);
-        let ref_filtered = RecordBatch::try_new(
-            get_tables_schema(false),
-            ref_batch
-                .columns()
-                .iter()
-                .map(|c| take(c, &indices, None))
-                .collect::<std::result::Result<Vec<_>, _>>()
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(table_batch, ref_filtered);
-
-        let builder = get_ref_builder(Some("a_catalog"), None, None, Vec::new(), false);
-        let table_batch = builder.build().unwrap();
-        let indices = UInt32Array::from(vec![0, 1, 2, 3]);
-        let ref_filtered = RecordBatch::try_new(
-            get_tables_schema(false),
-            ref_batch
-                .columns()
-                .iter()
-                .map(|c| take(c, &indices, None))
-                .collect::<std::result::Result<Vec<_>, _>>()
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(table_batch, ref_filtered);
-
-        let builder = get_ref_builder(None, None, None, vec!["VIEW"], false);
-        let table_batch = builder.build().unwrap();
-        let indices = UInt32Array::from(vec![5, 7]);
+        let indices = UInt32Array::from(expected_indices);
         let ref_filtered = RecordBatch::try_new(
             get_tables_schema(false),
             ref_batch

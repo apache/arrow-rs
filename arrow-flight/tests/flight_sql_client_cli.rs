@@ -29,6 +29,7 @@ use assert_cmd::Command;
 use bytes::Bytes;
 use futures::{Stream, TryStreamExt};
 use prost::Message;
+use rstest::rstest;
 use tonic::{Request, Response, Status, Streaming};
 
 const QUERY: &str = "SELECT * FROM table;";
@@ -155,46 +156,26 @@ async fn test_get_db_schemas() {
     );
 }
 
-#[tokio::test]
-async fn test_get_tables() {
-    let test_server = FlightSqlServiceImpl::default();
-    let fixture = TestFixture::new(test_server.service()).await;
-    let addr = fixture.addr;
-
-    let stdout = tokio::task::spawn_blocking(move || {
-        flight_sql_client_cmd()
-            .env_clear()
-            .env("RUST_BACKTRACE", "1")
-            .env("RUST_LOG", "warn")
-            .arg("--host")
-            .arg(addr.ip().to_string())
-            .arg("--port")
-            .arg(addr.port().to_string())
-            .arg("tables")
-            .arg("catalog_a")
-            .assert()
-            .success()
-            .get_output()
-            .stdout
-            .clone()
-    })
-    .await
-    .unwrap();
-
-    fixture.shutdown_and_wait().await;
-
-    assert_eq!(
-        std::str::from_utf8(&stdout).unwrap().trim(),
-        "+--------------+----------------+------------+------------+\
+#[rstest]
+#[case::all_schemas(
+    &["tables", "catalog_a"],
+    "+--------------+----------------+------------+------------+\
         \n| catalog_name | db_schema_name | table_name | table_type |\
         \n+--------------+----------------+------------+------------+\
         \n| catalog_a    | schema_1       | table_1    | TABLE      |\
         \n| catalog_a    | schema_2       | table_2    | VIEW       |\
-        \n+--------------+----------------+------------+------------+",
-    );
-}
+        \n+--------------+----------------+------------+------------+"
+)]
+#[case::db_schema_filter(
+    &["tables", "catalog_a", "--db-schema-filter", "schema_2"],
+    "+--------------+----------------+------------+------------+\
+        \n| catalog_name | db_schema_name | table_name | table_type |\
+        \n+--------------+----------------+------------+------------+\
+        \n| catalog_a    | schema_2       | table_2    | VIEW       |\
+        \n+--------------+----------------+------------+------------+"
+)]
 #[tokio::test]
-async fn test_get_tables_db_filter() {
+async fn test_get_tables(#[case] args: &'static [&'static str], #[case] expected_output: &str) {
     let test_server = FlightSqlServiceImpl::default();
     let fixture = TestFixture::new(test_server.service()).await;
     let addr = fixture.addr;
@@ -208,10 +189,7 @@ async fn test_get_tables_db_filter() {
             .arg(addr.ip().to_string())
             .arg("--port")
             .arg(addr.port().to_string())
-            .arg("tables")
-            .arg("catalog_a")
-            .arg("--db-schema-filter")
-            .arg("schema_2")
+            .args(args)
             .assert()
             .success()
             .get_output()
@@ -225,11 +203,7 @@ async fn test_get_tables_db_filter() {
 
     assert_eq!(
         std::str::from_utf8(&stdout).unwrap().trim(),
-        "+--------------+----------------+------------+------------+\
-        \n| catalog_name | db_schema_name | table_name | table_type |\
-        \n+--------------+----------------+------------+------------+\
-        \n| catalog_a    | schema_2       | table_2    | VIEW       |\
-        \n+--------------+----------------+------------+------------+",
+        expected_output,
     );
 }
 
