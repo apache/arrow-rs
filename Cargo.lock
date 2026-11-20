@@ -283,6 +283,7 @@ dependencies = [
  "num-bigint 0.5.1",
  "num-traits",
  "rand",
+ "rstest",
 ]
 
 [[package]]
