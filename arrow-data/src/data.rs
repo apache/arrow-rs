@@ -2566,6 +2566,7 @@ mod tests {
     use crate::transform::MutableArrayData;
     use arrow_buffer::{OffsetBuffer, ScalarBuffer};
     use arrow_schema::{Field, Fields};
+    use rstest::rstest;
 
     // See arrow/tests/array_data_validation.rs for test of array validation
 
@@ -3573,34 +3574,20 @@ mod tests {
         data.validate_full().unwrap();
     }
 
-    #[test]
-    fn test_null_view_types() {
+    #[rstest]
+    #[case::binary_view(DataType::BinaryView)]
+    #[case::utf8_view(DataType::Utf8View)]
+    #[case::list_view(DataType::ListView(Arc::new(Field::new_list_field(
+        DataType::Int32,
+        true
+    ))))]
+    #[case::large_list_view(DataType::LargeListView(Arc::new(Field::new_list_field(
+        DataType::Int32,
+        true
+    ))))]
+    fn test_null_view_types(#[case] data_type: DataType) {
         let array_len = 32;
-        let array = ArrayData::new_null(&DataType::BinaryView, array_len);
-        assert_eq!(array.len(), array_len);
-        for i in 0..array.len() {
-            assert!(array.is_null(i));
-        }
-
-        let array = ArrayData::new_null(&DataType::Utf8View, array_len);
-        assert_eq!(array.len(), array_len);
-        for i in 0..array.len() {
-            assert!(array.is_null(i));
-        }
-
-        let array = ArrayData::new_null(
-            &DataType::ListView(Arc::new(Field::new_list_field(DataType::Int32, true))),
-            array_len,
-        );
-        assert_eq!(array.len(), array_len);
-        for i in 0..array.len() {
-            assert!(array.is_null(i));
-        }
-
-        let array = ArrayData::new_null(
-            &DataType::LargeListView(Arc::new(Field::new_list_field(DataType::Int32, true))),
-            array_len,
-        );
+        let array = ArrayData::new_null(&data_type, array_len);
         assert_eq!(array.len(), array_len);
         for i in 0..array.len() {
             assert!(array.is_null(i));
