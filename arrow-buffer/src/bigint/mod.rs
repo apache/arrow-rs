@@ -1165,6 +1165,17 @@ impl ToPrimitive for i256 {
         }
     }
 
+    fn to_f32(&self) -> Option<f32> {
+        // `u128 as f32` rounds once; a magnitude of 2^128 or more overflows `f32` to infinity.
+        let (low, high) = self.wrapping_abs().to_parts();
+        let magnitude = if high == 0 { low as f32 } else { f32::INFINITY };
+        Some(if *self < i256::ZERO {
+            -magnitude
+        } else {
+            magnitude
+        })
+    }
+
     fn to_u64(&self) -> Option<u64> {
         u64::try_from(i256::to_i128(*self)?).ok()
     }
@@ -2000,6 +2011,41 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn test_i256_to_f32_midpoint_rounding() {
+        // One above a binary32 midpoint: rounding via `f64` first picks the wrong `f32`.
+        let integer = (1_i128 << 53) + (1 << 29) + 1;
+        assert_eq!(
+            i256::from_i128(integer).to_f32().unwrap().to_bits(),
+            (integer as f32).to_bits()
+        );
+
+        let two = i256::from(2);
+        // The tie sits 2^(e-24) above 2^e. Start at e = 24 (below it the tie is not an integer)
+        // and stop at 254 (2^255 overflows `i256`). Past 2^128 the result is infinity.
+        for exponent in 24..=254 {
+            let midpoint = two.wrapping_pow(exponent) + two.wrapping_pow(exponent - 24);
+            for delta in -2_i64..=2 {
+                for value in [
+                    midpoint + i256::from(delta),
+                    -(midpoint + i256::from(delta)),
+                ] {
+                    let expected: f32 = value.to_string().parse().unwrap();
+                    assert_eq!(
+                        value.to_f32().unwrap().to_bits(),
+                        expected.to_bits(),
+                        "i256 {value} should round to nearest"
+                    );
+                }
+            }
+        }
+
+        for value in [i256::MIN, i256::MAX, i256::MINUS_ONE, i256::ZERO, i256::ONE] {
+            let expected: f32 = value.to_string().parse().unwrap();
+            assert_eq!(value.to_f32().unwrap().to_bits(), expected.to_bits());
         }
     }
 
