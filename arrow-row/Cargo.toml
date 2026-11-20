@@ -34,6 +34,7 @@ arrow-cast = { workspace = true }
 arrow-ord = { workspace = true }
 arrow-select = { workspace = true }
 rand = { version = "0.10", default-features = false, features = ["std", "std_rng", "thread_rng"] }
+rstest = { version = "0.28.0", default-features = false }
 
 [lints]
 workspace = true

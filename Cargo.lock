@@ -510,6 +510,7 @@ dependencies = [
  "arrow-select",
  "half",
  "rand",
+ "rstest",
 ]
 
 [[package]]
