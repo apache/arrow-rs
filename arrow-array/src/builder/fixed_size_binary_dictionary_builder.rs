@@ -234,7 +234,7 @@ where
     ///
     /// Returns an error if the new index would overflow the key type.
     pub fn append(&mut self, value: impl AsRef<[u8]>) -> Result<K::Native, ArrowError> {
-        if self.byte_width != value.as_ref().len() as i32 {
+        if value.as_ref().len() != self.byte_width as usize {
             Err(ArrowError::InvalidArgumentError(format!(
                 "Invalid input length passed to FixedSizeBinaryBuilder. Expected {} got {}",
                 self.byte_width,
@@ -256,7 +256,7 @@ where
         value: impl AsRef<[u8]>,
         count: usize,
     ) -> Result<K::Native, ArrowError> {
-        if self.byte_width != value.as_ref().len() as i32 {
+        if value.as_ref().len() != self.byte_width as usize {
             Err(ArrowError::InvalidArgumentError(format!(
                 "Invalid input length passed to FixedSizeBinaryBuilder. Expected {} got {}",
                 self.byte_width,
