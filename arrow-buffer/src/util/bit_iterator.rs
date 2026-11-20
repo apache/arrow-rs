@@ -427,6 +427,9 @@ impl<'a> SetBitCounter<'a> {
         counter
     }
 
+    // Cold and out of line because after `new`, only a position before the
+    // current word calls it, and inlining would copy it into every caller of
+    // the inlined `count_before`.
     #[cold]
     fn restart(&mut self) {
         self.iter = self.chunks.iter();
@@ -1203,7 +1206,7 @@ mod tests {
         let bits = &bits[5..];
         let mut counter = buffer.set_bit_counter();
         // Back to an earlier word, back within the current word, then forward.
-        for end in [290, 130, 10, 129, 128, 70, 64, 0, 200] {
+        for end in [290, 130, 10, 129, 128, 70, 64, 0, 200, 290] {
             assert_eq!(
                 counter.count_before(end),
                 count_set(&bits[..end]),
