@@ -1189,6 +1189,41 @@ mod tests {
     }
 
     #[test]
+    fn test_set_bit_counter_every_position_reversed() {
+        for (buffer, bits) in set_bit_counter_cases() {
+            let mut counter = buffer.set_bit_counter();
+            for end in (0..=bits.len()).rev() {
+                assert_eq!(
+                    counter.count_before(end),
+                    count_set(&bits[..end]),
+                    "offset {} len {} end {end}",
+                    buffer.offset(),
+                    buffer.len()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_set_bit_counter_shuffled_ranges() {
+        let mut rng = StdRng::seed_from_u64(42);
+        for (buffer, bits) in set_bit_counter_cases() {
+            let len = bits.len();
+            let mut counter = buffer.set_bit_counter();
+            for _ in 0..100 {
+                let start = rng.random_range(0..=len);
+                let end = rng.random_range(start..=len);
+                assert_eq!(
+                    counter.count_range(start..end),
+                    count_set(&bits[start..end]),
+                    "offset {} len {len} range {start}..{end}",
+                    buffer.offset()
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_set_bit_counter_ranges() {
         for (buffer, bits) in set_bit_counter_cases() {
             let len = bits.len();

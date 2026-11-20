@@ -8,6 +8,7 @@
 use arrow_buffer::{BooleanBuffer, OffsetBuffer};
 use criterion::*;
 use rand::rngs::StdRng;
+use rand::seq::SliceRandom;
 use rand::{RngExt, SeedableRng};
 use std::hint;
 
@@ -21,45 +22,57 @@ fn criterion_benchmark(c: &mut Criterion) {
         for (lengths_name, random_lengths) in [("constant", false), ("random", true)] {
             // A byte-aligned bitmap, and one sliced to an unaligned offset.
             for offset in [0, 3] {
-                let mut rng = StdRng::seed_from_u64(42);
-                let offsets = OffsetBuffer::<i32>::from_lengths((0..ROWS).map(|_| {
-                    if random_lengths {
-                        rng.random_range(0..=2 * width)
-                    } else {
-                        width
+                // Rows in order, as in a list, and in reverse and random
+                // order, as in a list view.
+                for order in ["forward", "reverse", "shuffled"] {
+                    let mut rng = StdRng::seed_from_u64(42);
+                    let offsets = OffsetBuffer::<i32>::from_lengths((0..ROWS).map(|_| {
+                        if random_lengths {
+                            rng.random_range(0..=2 * width)
+                        } else {
+                            width
+                        }
+                    }));
+                    let len = offsets.last() as usize;
+                    let bits = (0..offset + len)
+                        .map(|_| rng.random_bool(0.5))
+                        .collect::<BooleanBuffer>()
+                        .slice(offset, len);
+                    let mut ranges: Vec<_> = offsets
+                        .windows(2)
+                        .map(|w| w[0] as usize..w[1] as usize)
+                        .collect();
+                    match order {
+                        "reverse" => ranges.reverse(),
+                        "shuffled" => ranges.shuffle(&mut rng),
+                        _ => {}
                     }
-                }));
-                let len = offsets.last() as usize;
-                let bits = (0..offset + len)
-                    .map(|_| rng.random_bool(0.5))
-                    .collect::<BooleanBuffer>()
-                    .slice(offset, len);
-                let name = format!("width_{width}/{lengths_name}/offset_{offset}");
+                    let name = format!("width_{width}/{lengths_name}/offset_{offset}/{order}");
 
-                group.bench_function(format!("count_set_bits_offset/{name}"), |b| {
-                    b.iter(|| {
-                        let buffer = hint::black_box(&bits);
-                        offsets
-                            .windows(2)
-                            .map(|w| {
-                                let (start, end) = (w[0] as usize, w[1] as usize);
-                                buffer
-                                    .inner()
-                                    .count_set_bits_offset(buffer.offset() + start, end - start)
-                            })
-                            .sum::<usize>()
-                    })
-                });
+                    group.bench_function(format!("count_set_bits_offset/{name}"), |b| {
+                        b.iter(|| {
+                            let buffer = hint::black_box(&bits);
+                            ranges
+                                .iter()
+                                .map(|r| {
+                                    buffer
+                                        .inner()
+                                        .count_set_bits_offset(buffer.offset() + r.start, r.len())
+                                })
+                                .sum::<usize>()
+                        })
+                    });
 
-                group.bench_function(format!("set_bit_counter/{name}"), |b| {
-                    b.iter(|| {
-                        let mut counter = hint::black_box(&bits).set_bit_counter();
-                        offsets
-                            .windows(2)
-                            .map(|w| counter.count_range(w[0] as usize..w[1] as usize))
-                            .sum::<usize>()
-                    })
-                });
+                    group.bench_function(format!("set_bit_counter/{name}"), |b| {
+                        b.iter(|| {
+                            let mut counter = hint::black_box(&bits).set_bit_counter();
+                            ranges
+                                .iter()
+                                .map(|r| counter.count_range(r.clone()))
+                                .sum::<usize>()
+                        })
+                    });
+                }
             }
         }
     }
