@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::array::print_long_array;
 use crate::builder::{BooleanBufferBuilder, PrimitiveBuilder};
@@ -930,7 +917,9 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         F: Fn(T::Native) -> O::Native,
     {
         let nulls = self.nulls().cloned();
-        let values = self.values().into_iter().map(|v| op(*v));
+        // `move` puts `op`'s captures in the iterator rather than behind a reference, so the
+        // loop doesn't reload them for each value when `collect` isn't inlined
+        let values = self.values().into_iter().map(move |v| op(*v));
         let buffer: Vec<_> = values.collect();
         PrimitiveArray::new(buffer.into(), nulls)
     }
@@ -1190,7 +1179,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         };
 
         match try_mutable_buffers {
-            Ok(builder) => Ok(builder),
+            Ok(builder) => Ok(builder.with_data_type(data_type)),
             Err((buffer, null_bit_buffer)) => {
                 let builder = ArrayData::builder(data_type)
                     .len(len)
@@ -1717,7 +1706,7 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
     /// Validates values in this array can be properly interpreted
     /// with the specified precision.
     pub fn validate_decimal_precision(&self, precision: u8) -> Result<(), ArrowError> {
-        if precision < self.scale() as u8 {
+        if self.scale() > 0 && precision < self.scale() as u8 {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Decimal precision {precision} is less than scale {}",
                 self.scale()
@@ -1737,6 +1726,7 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
     /// will be casted to Null
     pub fn null_if_overflow_precision(&self, precision: u8) -> Self {
         self.unary_opt::<_, T>(|v| T::is_valid_decimal_precision(v, precision).then_some(v))
+            .with_data_type(self.data_type().clone())
     }
 
     /// Returns [`Self::value`] formatted as a string
@@ -2628,6 +2618,56 @@ mod tests {
     }
 
     #[test]
+    fn test_decimal_validate_precision_with_negative_scale() {
+        fn check<T: DecimalType>()
+        where
+            T::Native: From<i32>,
+        {
+            for scale in [i8::MIN, -2, -1, 0, 2] {
+                let array = PrimitiveArray::<T>::from_iter(
+                    [Some(-99), Some(0), Some(1), Some(99), None]
+                        .into_iter()
+                        .map(|v| v.map(T::Native::from)),
+                )
+                .with_precision_and_scale(2, scale)
+                .unwrap();
+                array.validate_decimal_precision(2).unwrap();
+
+                for value in [-100, 100] {
+                    let array = PrimitiveArray::<T>::from_iter_values([T::Native::from(value)])
+                        .with_precision_and_scale(3, scale)
+                        .unwrap();
+                    assert!(array.validate_decimal_precision(2).is_err());
+                }
+            }
+
+            let array = PrimitiveArray::<T>::from_iter_values([T::Native::from(100)])
+                .with_precision_and_scale(3, -2)
+                .unwrap();
+            assert_eq!(
+                array.validate_decimal_precision(2).unwrap_err().to_string(),
+                format!(
+                    "Invalid argument error: 10000 is too large to store in a {} of precision 2. Max is 9900",
+                    T::PREFIX
+                )
+            );
+
+            let array = PrimitiveArray::<T>::from_iter_values([T::Native::from(0)])
+                .with_precision_and_scale(2, 2)
+                .unwrap();
+            assert_eq!(
+                array.validate_decimal_precision(1).unwrap_err().to_string(),
+                "Invalid argument error: Decimal precision 1 is less than scale 2"
+            );
+        }
+
+        check::<Decimal32Type>();
+        check::<Decimal64Type>();
+        check::<Decimal128Type>();
+        check::<Decimal256Type>();
+    }
+
+    #[test]
     fn test_decimal_from_iter_values() {
         let array = Decimal128Array::from_iter_values(vec![-100, 0, 101]);
         assert_eq!(array.len(), 3);
@@ -2756,6 +2796,29 @@ mod tests {
         let result = array.null_if_overflow_precision(5);
         let expected = Decimal128Array::from(vec![None, Some(123), None, None]);
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_null_if_overflow_precision_keeps_data_type() {
+        let array = Decimal32Array::from(vec![99])
+            .with_precision_and_scale(2, 1)
+            .unwrap();
+        assert_eq!(array.null_if_overflow_precision(2), array);
+
+        let array = Decimal64Array::from(vec![99])
+            .with_precision_and_scale(2, 1)
+            .unwrap();
+        assert_eq!(array.null_if_overflow_precision(2), array);
+
+        let array = Decimal128Array::from(vec![99])
+            .with_precision_and_scale(2, 1)
+            .unwrap();
+        assert_eq!(array.null_if_overflow_precision(2), array);
+
+        let array = Decimal256Array::from(vec![i256::from(99)])
+            .with_precision_and_scale(2, 1)
+            .unwrap();
+        assert_eq!(array.null_if_overflow_precision(2), array);
     }
 
     #[test]
@@ -2937,14 +3000,22 @@ mod tests {
     }
 
     #[test]
-    fn test_into_builder_err_keeps_data_type() {
+    fn test_into_builder_keeps_data_type() {
         let array = Decimal128Array::from(vec![1, 2])
             .with_precision_and_scale(10, 2)
             .unwrap();
-        let shared = array.clone();
+        let data_type = array.data_type().clone();
 
-        let err_return = array.into_builder().unwrap_err();
-        assert_eq!(err_return.data_type(), shared.data_type());
+        // Shared buffers: the array is returned
+        let shared = array.clone();
+        let array = array.into_builder().unwrap_err();
+        assert_eq!(array.data_type(), &data_type);
+        drop(shared);
+
+        // Unshared buffers: the buffers are reused by the builder
+        let mut builder = array.into_builder().unwrap();
+        builder.append_value(3);
+        assert_eq!(builder.finish().data_type(), &data_type);
     }
 
     #[test]

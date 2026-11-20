@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::DataType;
 use crate::Field;
@@ -37,6 +24,15 @@ impl Display for DataType {
             let data_type = field.data_type();
             let metadata_str = format_metadata(field.metadata());
             format!("{name:?}: {maybe_nullable}{data_type}{metadata_str}")
+        }
+
+        fn format_list_field_name(name: &str) -> String {
+            if name == "item" {
+                String::new()
+            } else {
+                let escaped: String = name.chars().flat_map(char::escape_debug).collect();
+                format!(", field: '{escaped}'")
+            }
         }
 
         // A lot of these can still be improved a lot.
@@ -98,11 +94,7 @@ impl Display for DataType {
                 let name = field.name();
                 let maybe_nullable = format_nullability(field);
                 let data_type = field.data_type();
-                let field_name_str = if name == "item" {
-                    String::default()
-                } else {
-                    format!(", field: '{name}'")
-                };
+                let field_name_str = format_list_field_name(name);
                 let metadata_str = format_metadata(field.metadata());
 
                 // e.g. `LargeList(non-null Uint32)
@@ -115,11 +107,7 @@ impl Display for DataType {
                 let name = field.name();
                 let maybe_nullable = format_nullability(field);
                 let data_type = field.data_type();
-                let field_name_str = if name == "item" {
-                    String::default()
-                } else {
-                    format!(", field: '{name}'")
-                };
+                let field_name_str = format_list_field_name(name);
                 let metadata_str = format_metadata(field.metadata());
 
                 write!(
@@ -224,6 +212,16 @@ mod tests {
     use crate::Field;
 
     use super::*;
+
+    #[test]
+    fn test_display_escaped_list_field_name() {
+        let field = Arc::new(Field::new("a'b\\c\"d\n", DataType::Int32, true));
+        let data_type = DataType::List(field);
+        assert_eq!(
+            data_type.to_string(),
+            r#"List(Int32, field: 'a\'b\\c\"d\n')"#
+        );
+    }
 
     #[test]
     fn test_display_list() {

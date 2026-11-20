@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 #[macro_use]
 extern crate criterion;
@@ -29,6 +16,7 @@ use criterion::{Criterion, Throughput};
 use rand::RngExt;
 use rand::rngs::StdRng;
 use std::hint;
+use std::sync::Arc;
 
 const SIZE: usize = 65536;
 
@@ -614,6 +602,49 @@ fn add_benchmark(c: &mut Criterion) {
 
         group.bench_function(format!("eq_ree_flat({tag})"), |b| {
             b.iter(|| eq(&ree_a, &flat).unwrap())
+        });
+    }
+
+    group.finish();
+
+    // RunEndEncoded LIKE benchmarks
+
+    let mut group = c.benchmark_group("ree_like");
+
+    for (physical, logical) in [(64, SIZE), (1024, SIZE), (SIZE / 2, SIZE)] {
+        let strings = create_string_array_for_runs(physical, logical, 16);
+        let flat = StringArray::from_iter_values(&strings);
+        let ree: RunArray<Int32Type> = strings.iter().map(String::as_str).collect();
+        let dict_values: DictionaryArray<Int32Type> =
+            ree.values().as_string::<i32>().iter().collect();
+        let ree_dict = ree.with_values(Arc::new(dict_values));
+        let pattern = StringArray::new_scalar("%ab%");
+
+        let tag = format!("phys={physical},log={logical}");
+
+        group.bench_function(format!("like_flat_scalar({tag})"), |b| {
+            b.iter(|| like(&flat, &pattern).unwrap())
+        });
+
+        group.bench_function(format!("like_ree_scalar({tag})"), |b| {
+            b.iter(|| like(&ree, &pattern).unwrap())
+        });
+
+        group.bench_function(format!("like_ree_dict_scalar({tag})"), |b| {
+            b.iter(|| like(&ree_dict, &pattern).unwrap())
+        });
+
+        // Without native support, callers have to decode before matching.
+        group.bench_function(format!("like_ree_decoded_scalar({tag})"), |b| {
+            b.iter(|| {
+                let decoded =
+                    arrow::compute::cast(&ree, &arrow::datatypes::DataType::Utf8).unwrap();
+                like(&decoded, &pattern).unwrap()
+            })
+        });
+
+        group.bench_function(format!("like_ree_flat({tag})"), |b| {
+            b.iter(|| like(&ree, &flat).unwrap())
         });
     }
 

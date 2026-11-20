@@ -1,35 +1,20 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use bytes::Bytes;
 
 use crate::basic::{ConvertedType, Encoding, LogicalType, Type};
 use crate::bloom_filter::Sbbf;
-use crate::column::writer::{
-    compare_greater, fallback_encoding, has_dictionary_support, is_nan, update_max, update_min,
-};
+use crate::column::writer::{fallback_encoding, has_dictionary_support, update_max, update_min};
 use crate::data_type::DataType;
 use crate::data_type::private::ParquetValueType;
-use crate::encodings::encoding::{DictEncoder, Encoder, get_encoder};
+use crate::encodings::encoding::{DictEncoder, Encoder, get_encoder_with_properties};
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::{EnabledStatistics, ResolvedColumnProperties, WriterProperties};
 use crate::geospatial::accumulator::{GeoStatsAccumulator, try_new_geo_stats_accumulator};
 use crate::geospatial::statistics::GeospatialStatistics;
-use crate::schema::types::{BasicTypeInfo, ColumnDescPtr};
+use crate::schema::types::ColumnDescPtr;
 
 /// A collection of [`ParquetValueType`] encoded by a [`ColumnValueEncoder`]
 pub trait ColumnValues {
@@ -99,7 +84,19 @@ pub trait ColumnValueEncoder {
     fn write(&mut self, values: &Self::Values, offset: usize, len: usize) -> Result<()>;
 
     /// Write the values at the indexes in `indices` to this [`ColumnValueEncoder`]
-    fn write_gather(&mut self, values: &Self::Values, indices: &[usize]) -> Result<()>;
+    ///
+    /// `num_values_in_batch` is the number of non-null values in the whole write. The
+    /// column writer may split one write into several calls of this method (for
+    /// example by `write_batch_size` or the page size limit), so it can be larger than
+    /// `indices.len()`. It is the length of the write's full index list, which has one
+    /// entry per non-null value. The byte array encoder uses it to decide whether a
+    /// dictionary cache pays off.
+    fn write_gather(
+        &mut self,
+        values: &Self::Values,
+        indices: &[usize],
+        num_values_in_batch: usize,
+    ) -> Result<()>;
 
     /// Returns the largest `k` such that the first `k` values in
     /// `values[offset..offset + len]` encode to at most `byte_budget`
@@ -226,7 +223,7 @@ impl<T: DataType> ColumnValueEncoderImpl<T> {
             if let Some(accumulator) = self.geo_stats_accumulator.as_deref_mut() {
                 update_geo_stats_accumulator(accumulator, slice.iter());
             } else if let Some((min, max, nan_count)) =
-                get_min_max(self.descr.get_basic_info(), slice.iter())
+                T::T::min_max(self.descr.get_basic_info(), slice)
             {
                 update_min(&self.descr, &min, &mut self.min_value);
                 update_max(&self.descr, &max, &mut self.max_value);
@@ -276,16 +273,17 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
         props: &WriterProperties,
         column_props: &ResolvedColumnProperties,
     ) -> Result<Self> {
-        let dict_supported = column_props.dictionary_enabled
-            && has_dictionary_support(T::get_physical_type(), props);
+        let dict_supported =
+            column_props.dictionary_enabled && has_dictionary_support(T::get_physical_type());
         let dict_encoder = dict_supported.then(|| DictEncoder::new(descr.clone()));
 
         // Set either main encoder or fallback encoder.
-        let encoder = get_encoder(
+        let encoder = get_encoder_with_properties(
             column_props
                 .encoding
                 .unwrap_or_else(|| fallback_encoding(T::get_physical_type(), props)),
             descr,
+            column_props,
         )?;
 
         let statistics_enabled = column_props.statistics_enabled;
@@ -324,7 +322,12 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
         self.write_slice(slice)
     }
 
-    fn write_gather(&mut self, values: &Self::Values, indices: &[usize]) -> Result<()> {
+    fn write_gather(
+        &mut self,
+        values: &Self::Values,
+        indices: &[usize],
+        _num_values_in_batch: usize,
+    ) -> Result<()> {
         self.num_values += indices.len();
         let slice: Vec<_> = indices.iter().map(|idx| values[*idx].clone()).collect();
         self.write_slice(&slice)
@@ -453,52 +456,6 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
     fn flush_geospatial_statistics(&mut self) -> Option<Box<GeospatialStatistics>> {
         self.geo_stats_accumulator.as_mut().map(|a| a.finish())?
     }
-}
-
-// Get min and max values for all values in `iter`.
-//
-// For floating point we need to compare NaN values until we encounter a non-NaN
-// value which then becomes the new min/max. After this, only non-NaN values are
-// evaluated. If all values are NaN, then the min/max NaNs as determined by
-// IEEE 754 total order are returned.
-fn get_min_max<'a, T, I>(basic_type_info: &BasicTypeInfo, mut iter: I) -> Option<(T, T, u64)>
-where
-    T: ParquetValueType + 'a,
-    I: Iterator<Item = &'a T>,
-{
-    let first = iter.next()?;
-    let mut min_max_nan = is_nan(basic_type_info, first);
-    let mut nan_count = min_max_nan as u64;
-
-    let mut min = first;
-    let mut max = first;
-    for val in iter {
-        match (min_max_nan, is_nan(basic_type_info, val)) {
-            // skip NaNs if we've encounter non-NaN
-            (false, true) => {
-                nan_count += 1;
-            }
-            // if min/max are NaN, check for non-NaN and reset
-            (true, false) => {
-                min = val;
-                max = val;
-                min_max_nan = false;
-            }
-            // both are NaN or non-NaN, so do the comparison
-            (_, val_is_nan) => {
-                nan_count += val_is_nan as u64;
-                // we've already initialized min and max, so a single value can't be both
-                // extremes
-                if compare_greater(basic_type_info, min, val) {
-                    min = val;
-                } else if compare_greater(basic_type_info, val, max) {
-                    max = val;
-                }
-            }
-        }
-    }
-
-    Some((min.clone(), max.clone(), nan_count))
 }
 
 /// Creates a bloom filter sized for the column's configured NDV, returning the filter

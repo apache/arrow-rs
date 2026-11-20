@@ -1,64 +1,19 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 ---
 # tests for parquet and related crates
 name: "parquet"
 
-concurrency:
-  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
-  cancel-in-progress: true
-
-# trigger for all PRs that touch certain files and changes to main
+# Triggered by ci.yml, which owns event routing and concurrency.
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    paths:
-      - Cargo.toml
-      - Cargo.lock
-      - rust-toolchain.toml
-      - .gitmodules
-      - testing
-      - parquet-testing
-      - arrow/**
-      - arrow-arith/**
-      - arrow-array/**
-      - arrow-buffer/**
-      - arrow-cast/**
-      - arrow-cmp/**
-      - arrow-csv/**
-      - arrow-data/**
-      - arrow-ipc/**
-      - arrow-json/**
-      - arrow-ord/**
-      - arrow-row/**
-      - arrow-schema/**
-      - arrow-select/**
-      - arrow-string/**
-      - parquet/**
-      - parquet_derive/**
-      - parquet_derive_test/**
-      - parquet-geospatial/**
-      - parquet-variant/**
-      - parquet-variant-compute/**
-      - parquet-variant-json/**
-      - .github/**
+  workflow_call:
+    inputs:
+      cache-refresh-only:
+        description: Populate caches without running tests or linters
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -66,16 +21,18 @@ permissions:
 jobs:
   # test the crate
   linux-test:
+    if: ${{ !inputs.cache-refresh-only }}
     name: Test
     runs-on: ubuntu-latest
     container:
-      image: amd64/rust
+      image: amd64/rust@sha256:5b5938cbb2951fc2869eaf891a6616f722ef5bf28c90dc6a074c35c141e31537 # v1.99.1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
+          persist-credentials: false
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
       - name: Test
         run: cargo test -p parquet
       - name: Test --all-features
@@ -100,16 +57,18 @@ jobs:
 
   # test compilation
   linux-features:
+    if: ${{ !inputs.cache-refresh-only }}
     name: Check Compilation
     runs-on: ubuntu-latest
     container:
-      image: amd64/rust
+      image: amd64/rust@sha256:5b5938cbb2951fc2869eaf891a6616f722ef5bf28c90dc6a074c35c141e31537 # v1.99.1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
+          persist-credentials: false
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
 
         # Run different tests for the library on its own as well as
         # all targets to ensure that it still works in the absence of
@@ -151,6 +110,8 @@ jobs:
         run: cargo check -p parquet --no-default-features --features flate2 --features flate2-zlib-rs
       - name: Check compilation --no-default-features --features variant_experimental
         run: cargo check -p parquet --no-default-features --features variant_experimental
+      - name: Check compilation --no-default-features --features file_experimental
+        run: cargo check -p parquet --no-default-features --features file_experimental
       - name: Check compilation (parquet-variant)
         run: cargo check -p parquet-variant
       - name: Check compilation (parquet-variant-json)
@@ -163,16 +124,18 @@ jobs:
 
   # test the parquet crate builds against wasm32 in stable rust
   wasm32-build:
+    if: ${{ !inputs.cache-refresh-only }}
     name: Build wasm32
     runs-on: ubuntu-latest
     container:
-      image: amd64/rust
+      image: amd64/rust@sha256:5b5938cbb2951fc2869eaf891a6616f722ef5bf28c90dc6a074c35c141e31537 # v1.99.1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
+          persist-credentials: false
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
       - name: Install wasm32 targets
         run: |
             rustup target add wasm32-unknown-unknown
@@ -192,42 +155,58 @@ jobs:
         rust: [ stable ]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - name: Setup Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: "3.10"
           cache: "pip"
+      - name: Setup Java
+        # The default JDK on ubuntu-latest (26.04) is 25, but PySpark 3.5 needs
+        # Java 8/11/17, so use version 17
+        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880  # v6.3.0
+        with:
+          distribution: temurin
+          java-version: "17"
       - name: Install Python dependencies
         run: |
           cd parquet/pytest
           pip install -r requirements.txt
       - name: Black check the test files
+        if: ${{ !inputs.cache-refresh-only }}
         run: |
           cd parquet/pytest
           black --check *.py --verbose
       - name: Setup Rust toolchain
+        if: ${{ !inputs.cache-refresh-only }}
         run: |
           rustup toolchain install ${{ matrix.rust }}
           rustup default ${{ matrix.rust }}
       - name: Install binary for checking
+        if: ${{ !inputs.cache-refresh-only }}
         run: |
           cargo install --path parquet --bin parquet-show-bloom-filter --features=cli
           cargo install --path parquet --bin parquet-fromcsv --features=arrow,cli
           cargo install --path parquet --bin parquet-index --features=cli
       - name: Run pytest
+        if: ${{ !inputs.cache-refresh-only }}
         run: |
           cd parquet/pytest
           pytest -v
 
   clippy:
+    if: ${{ !inputs.cache-refresh-only }}
     name: Clippy
     runs-on: ubuntu-latest
     container:
-      image: amd64/rust
+      image: amd64/rust@sha256:5b5938cbb2951fc2869eaf891a6616f722ef5bf28c90dc6a074c35c141e31537 # v1.99.1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
       - name: Setup Clippy
         run: rustup component add clippy
       - name: Run clippy

@@ -1,23 +1,132 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Single-column decoding across physical types, encodings, nulls, and read boundaries.
 
 use super::*;
+
+#[test]
+fn test_truncated_definition_level_bitpacked_run_returns_error() {
+    let array: Int32Array = (0..1000).map(|i| (i % 2 == 0).then_some(i)).collect();
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "c",
+        ArrowDataType::Int32,
+        true,
+    )]));
+    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(array)]).unwrap();
+    let props = WriterProperties::builder()
+        .set_dictionary_enabled(false)
+        .build();
+
+    let mut buf = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut buf, schema, Some(props)).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+
+    // Shorten the definition-level payload while leaving its packed-run header intact.
+    let pattern = [0x7F, 0, 0, 0, 0x7F, 0x55];
+    let pos = buf
+        .windows(pattern.len())
+        .position(|w| w == pattern)
+        .unwrap();
+    buf[pos] = 3;
+
+    let mut reader = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(buf))
+        .unwrap()
+        .build()
+        .unwrap();
+    let error = reader.next().unwrap().unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("unexpected end of file whilst decoding definition levels bit-packed run"),
+        "{error}"
+    );
+}
+
+fn write_plain_utf8(array: StringArray, writer_version: WriterVersion) -> Vec<u8> {
+    let nullable = array.null_count() > 0;
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "c",
+        ArrowDataType::Utf8,
+        nullable,
+    )]));
+    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(array)]).unwrap();
+    let props = WriterProperties::builder()
+        .set_dictionary_enabled(false)
+        .set_encoding(Encoding::PLAIN)
+        .set_writer_version(writer_version)
+        .build();
+
+    let mut buf = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut buf, schema, Some(props)).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+    buf
+}
+
+#[test]
+fn test_plain_byte_array_skip_corrupt_length_returns_error() {
+    let mut buf = write_plain_utf8(
+        StringArray::from(vec!["first", "second", "third"]),
+        WriterVersion::PARQUET_1_0,
+    );
+
+    // Make the first value's length prefix point past the end of the page.
+    let pattern = [5, 0, 0, 0, b'f', b'i', b'r', b's', b't'];
+    let pos = buf
+        .windows(pattern.len())
+        .position(|w| w == pattern)
+        .unwrap();
+    buf[pos + 1] = 0xFF;
+
+    let selection = RowSelection::from(vec![RowSelector::skip(1), RowSelector::select(2)]);
+    let mut reader = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(buf))
+        .unwrap()
+        .with_row_selection(selection)
+        .with_row_selection_policy(crate::arrow::arrow_reader::RowSelectionPolicy::Selectors)
+        .build()
+        .unwrap();
+    let error = reader.next().unwrap().unwrap_err();
+
+    assert!(
+        error.to_string().contains("eof decoding byte array"),
+        "{error}"
+    );
+}
+
+#[test]
+fn test_plain_byte_array_all_null_page_with_values_returns_error() {
+    let mut buf = write_plain_utf8(
+        StringArray::from(vec![Some("a"), None]),
+        WriterVersion::PARQUET_2_0,
+    );
+
+    // Patch the v2 page header from num_nulls = 1 to num_nulls = 2, so the
+    // header says the page has no non-null values while the levels and value
+    // buffer still contain one.
+    let pattern = [0x15, 0x04, 0x15, 0x02, 0x15, 0x04];
+    let pos = buf
+        .windows(pattern.len())
+        .position(|w| w == pattern)
+        .unwrap();
+    buf[pos + 3] = 0x04;
+
+    let mut reader = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(buf))
+        .unwrap()
+        .build()
+        .unwrap();
+    let error = reader.next().unwrap().unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("insufficient values read from column - expected: 1, got: 0"),
+        "{error}"
+    );
+}
 
 #[test]
 fn test_null_column_reader_test() {

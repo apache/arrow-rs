@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::ops::Range;
 
@@ -338,8 +325,6 @@ fn decode_range<Value: AlpFloat>(
         cur.exception_positions.len() / std::mem::size_of::<u16>(),
         cur.exception_values.len() / Value::Exact::WIDTH,
     );
-    #[expect(clippy::chunks_exact_to_as_chunks)]
-    // Requires using generic parameters in const operations: generic_const_exprs
     let values_chunks = cur.exception_values.chunks_exact(Value::Exact::WIDTH);
     for (pos_chunk, value_chunk) in cur
         .exception_positions
@@ -364,7 +349,7 @@ fn decode_range<Value: AlpFloat>(
 /// Values are decoded directly into the caller's output buffer, one vector at a
 /// time: `set_data` validates the page header, and each vector is parsed and
 /// decoded on demand as the read cursor reaches it.
-pub(crate) struct AlpDecoder<T: DataType>
+pub struct AlpDecoder<T: DataType>
 where
     T::T: AlpFloat,
     <T::T as AlpFloat>::Exact: Send,
@@ -387,12 +372,22 @@ where
     num_values: usize,
 }
 
+impl<T: DataType> Default for AlpDecoder<T>
+where
+    T::T: AlpFloat,
+    <T::T as AlpFloat>::Exact: Send,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T: DataType> AlpDecoder<T>
 where
     T::T: AlpFloat,
     <T::T as AlpFloat>::Exact: Send,
 {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             // Benign placeholder header; replaced on the first `set_data`. The
             // cursor never consults it while `num_values == 0`.

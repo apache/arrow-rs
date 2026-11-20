@@ -1,23 +1,10 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::ArrayData;
 use crate::data::count_nulls;
-use crate::equal::equal_values;
+use crate::equal::equal_range;
 use arrow_buffer::ArrowNativeType;
 use num_integer::Integer;
 
@@ -66,8 +53,7 @@ pub(super) fn list_view_equal<T: ArrowNativeType + Integer>(
             let rhs_offset = rhs_offset.to_usize().unwrap();
             let size = size.to_usize().unwrap();
 
-            // Check if offsets are valid for the given range
-            if !equal_values(lhs_data, rhs_data, lhs_offset, rhs_offset, size) {
+            if !equal_range(lhs_data, rhs_data, lhs_offset, rhs_offset, size) {
                 return false;
             }
         }
@@ -77,10 +63,10 @@ pub(super) fn list_view_equal<T: ArrowNativeType + Integer>(
         let rhs_nulls = rhs.nulls().unwrap().slice(rhs_start, len);
 
         // Check values for equality, with null checking
-        for (index, ((&lhs_offset, &rhs_offset), &size)) in lhs_range_offsets
+        for (index, ((&lhs_offset, &rhs_offset), (&lhs_size, &rhs_size))) in lhs_range_offsets
             .iter()
             .zip(rhs_range_offsets)
-            .zip(lhs_range_sizes)
+            .zip(lhs_range_sizes.iter().zip(rhs_range_sizes))
             .enumerate()
         {
             let lhs_is_null = lhs_nulls.is_null(index);
@@ -90,12 +76,20 @@ pub(super) fn list_view_equal<T: ArrowNativeType + Integer>(
                 return false;
             }
 
+            // Null rows are equal whatever their sizes and values
+            if lhs_is_null {
+                continue;
+            }
+
+            if lhs_size != rhs_size {
+                return false;
+            }
+
             let lhs_offset = lhs_offset.to_usize().unwrap();
             let rhs_offset = rhs_offset.to_usize().unwrap();
-            let size = size.to_usize().unwrap();
+            let size = lhs_size.to_usize().unwrap();
 
-            // Check if values match in the range
-            if !lhs_is_null && !equal_values(lhs_data, rhs_data, lhs_offset, rhs_offset, size) {
+            if !equal_range(lhs_data, rhs_data, lhs_offset, rhs_offset, size) {
                 return false;
             }
         }

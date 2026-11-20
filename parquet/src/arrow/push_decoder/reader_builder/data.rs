@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`DataRequest`] tracks and holds data needed to construct InMemoryRowGroups
 
@@ -235,5 +222,39 @@ impl<'a> DataRequestBuilder<'a> {
             ranges,
             page_start_offsets,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A zero-length requested range (for example, a column chunk with no
+    /// bytes) must never be in `NeedsData`. Before, the decoder requested it
+    /// again after each push, because an empty push is not stored, and did
+    /// not make progress.
+    #[test]
+    fn needed_ranges_never_contains_an_empty_range() {
+        let request = DataRequest {
+            column_chunks: vec![None, None],
+            ranges: vec![100..100, 200..210],
+            page_start_offsets: None,
+        };
+        let mut buffers = PushBuffers::new(1000);
+        assert_eq!(request.needed_ranges(&buffers), vec![200..210]);
+
+        // A caller that pushes the empty range anyway does not change this.
+        buffers.push_range(100..100, Bytes::new()).unwrap();
+        assert_eq!(request.needed_ranges(&buffers), vec![200..210]);
+
+        buffers
+            .push_range(200..210, Bytes::from_static(b"0123456789"))
+            .unwrap();
+        assert!(request.needed_ranges(&buffers).is_empty());
+        let chunks = request.get_chunks(&buffers).unwrap();
+        assert_eq!(
+            chunks,
+            vec![Bytes::new(), Bytes::from_static(b"0123456789")]
+        );
     }
 }

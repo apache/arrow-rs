@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::array::{get_offsets_from_buffer, print_long_array};
 use crate::builder::GenericByteBuilder;
@@ -193,8 +180,11 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     /// Create a new [`GenericByteArray`] where `value` is repeated `repeat_count` times.
     ///
     /// # Panics
-    /// This will panic if value's length multiplied by `repeat_count` overflows usize.
     ///
+    /// Panics if value's length multiplied by `repeat_count` overflows `usize`
+    /// or exceeds `T::Offset::MAX`.
+    ///
+    /// Use [`Self::try_new_repeated`] for a fallible version.
     pub fn new_repeated(value: impl AsRef<T::Native>, repeat_count: usize) -> Self {
         let s: &[u8] = value.as_ref().as_ref();
         let value_offsets = OffsetBuffer::from_repeated_length(s.len(), repeat_count);
@@ -211,6 +201,46 @@ impl<T: ByteArrayType> GenericByteArray<T> {
             value_offsets,
             nulls: None,
         }
+    }
+
+    /// Create a new [`GenericByteArray`] where `value` is repeated `repeat_count` times.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if value's length multiplied by `repeat_count` overflows `usize`,
+    /// exceeds `T::Offset::MAX`, or if the buffer cannot be allocated.
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_array::{Array, StringArray};
+    /// let array = StringArray::try_new_repeated("hello", 3).unwrap();
+    /// assert_eq!(array.len(), 3);
+    /// assert_eq!(array.value(0), "hello");
+    /// assert_eq!(array.value(1), "hello");
+    /// assert_eq!(array.value(2), "hello");
+    /// ```
+    pub fn try_new_repeated(
+        value: impl AsRef<T::Native>,
+        repeat_count: usize,
+    ) -> Result<Self, ArrowError> {
+        let s: &[u8] = value.as_ref().as_ref();
+        let value_offsets = OffsetBuffer::try_from_repeated_length(s.len(), repeat_count)
+            .map_err(|err| ArrowError::OffsetOverflowError(err.value().unwrap_or(usize::MAX)))?;
+        let bytes: Buffer = {
+            let mut mutable_buffer = MutableBuffer::with_capacity(0);
+            mutable_buffer
+                .try_repeat_slice_n_times(s, repeat_count)
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+
+            mutable_buffer.into()
+        };
+
+        Ok(Self {
+            data_type: T::DATA_TYPE,
+            value_data: bytes,
+            value_offsets,
+            nulls: None,
+        })
     }
 
     /// Creates a [`GenericByteArray`] based on an iterator of values without nulls
@@ -282,13 +312,18 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     /// Returns the values of this array
     ///
     /// Unlike [`Self::value_data`] this returns the [`Buffer`]
-    /// allowing for zero-copy cloning
+    /// allowing for zero-copy cloning. Like [`Self::value_data`], it can
+    /// include bytes that are not part of any value.
     #[inline]
     pub fn values(&self) -> &Buffer {
         &self.value_data
     }
 
     /// Returns the raw value data
+    ///
+    /// This can include bytes before the first offset or after the last one,
+    /// for example when the array is a slice of a larger array. Those bytes are
+    /// not part of any value, and in a string array they need not be valid UTF-8.
     pub fn value_data(&self) -> &[u8] {
         self.value_data.as_slice()
     }
@@ -378,87 +413,56 @@ impl<T: ByteArrayType> GenericByteArray<T> {
         }
     }
 
-    /// Returns `GenericByteBuilder` of this byte array for mutating its values if the underlying
-    /// offset and data buffers are not shared by others.
+    /// Converts this array into a [`GenericByteBuilder`] that reuses its buffers,
+    /// if possible.
+    ///
+    /// Returns `Err(self)` if the offsets or values cannot be reused, for
+    /// example because they are shared with another array, or because this is a
+    /// sliced array with a non-zero first offset.
+    ///
+    /// The null buffer is copied if it cannot be reused.
     pub fn into_builder(self) -> Result<GenericByteBuilder<T>, Self> {
-        let len = self.len();
-        let value_len = T::Offset::as_usize(self.value_offsets()[len] - self.value_offsets()[0]);
+        let (offsets, values, nulls) = self.into_parts();
 
-        let data = self.into_data();
-        let null_bit_buffer = data.nulls().map(|b| b.inner().sliced());
-
-        let element_len = std::mem::size_of::<T::Offset>();
-        let offset_buffer = data.buffers()[0]
-            .slice_with_length(data.offset() * element_len, (len + 1) * element_len);
-
-        let element_len = std::mem::size_of::<u8>();
-        let value_buffer = data.buffers()[1]
-            .slice_with_length(data.offset() * element_len, value_len * element_len);
-
-        drop(data);
-
-        let try_mutable_null_buffer = match null_bit_buffer {
-            None => Ok(None),
-            Some(null_buffer) => {
-                // Null buffer exists, tries to make it mutable
-                null_buffer.into_mutable().map(Some)
+        // Puts the parts back together into the original array
+        let rebuild = |offsets: Buffer, values: Buffer, nulls: Option<NullBuffer>| {
+            // SAFETY: the parts come unchanged from `self`
+            unsafe {
+                Self::new_unchecked(OffsetBuffer::new_unchecked(offsets.into()), values, nulls)
             }
         };
 
-        let try_mutable_buffers = match try_mutable_null_buffer {
-            Ok(mutable_null_buffer) => {
-                // Got mutable null buffer, tries to get mutable value buffer
-                let try_mutable_offset_buffer = offset_buffer.into_mutable();
-                let try_mutable_value_buffer = value_buffer.into_mutable();
-
-                // try_mutable_offset_buffer.map(...).map_err(...) doesn't work as the compiler complains
-                // mutable_null_buffer is moved into map closure.
-                match (try_mutable_offset_buffer, try_mutable_value_buffer) {
-                    (Ok(mutable_offset_buffer), Ok(mutable_value_buffer)) => unsafe {
-                        Ok(GenericByteBuilder::<T>::new_from_buffer(
-                            mutable_offset_buffer,
-                            mutable_value_buffer,
-                            mutable_null_buffer,
-                        ))
-                    },
-                    (Ok(mutable_offset_buffer), Err(value_buffer)) => Err((
-                        mutable_offset_buffer.into(),
-                        value_buffer,
-                        mutable_null_buffer.map(|b| b.into()),
-                    )),
-                    (Err(offset_buffer), Ok(mutable_value_buffer)) => Err((
-                        offset_buffer,
-                        mutable_value_buffer.into(),
-                        mutable_null_buffer.map(|b| b.into()),
-                    )),
-                    (Err(offset_buffer), Err(value_buffer)) => Err((
-                        offset_buffer,
-                        value_buffer,
-                        mutable_null_buffer.map(|b| b.into()),
-                    )),
-                }
-            }
-            Err(mutable_null_buffer) => {
-                // Unable to get mutable null buffer
-                Err((offset_buffer, value_buffer, Some(mutable_null_buffer)))
-            }
+        // A buffer can be reused only if this array is its only owner and it
+        // starts at the beginning of its allocation. Otherwise, the original
+        // array is returned.
+        let offsets = match offsets.into_inner().into_inner().into_mutable() {
+            Ok(offsets) => offsets,
+            Err(offsets) => return Err(rebuild(offsets, values, nulls)),
+        };
+        let values = match values.into_mutable() {
+            Ok(values) => values,
+            Err(values) => return Err(rebuild(offsets.into(), values, nulls)),
         };
 
-        match try_mutable_buffers {
-            Ok(builder) => Ok(builder),
-            Err((offset_buffer, value_buffer, null_bit_buffer)) => {
-                let builder = ArrayData::builder(T::DATA_TYPE)
-                    .len(len)
-                    .add_buffer(offset_buffer)
-                    .add_buffer(value_buffer)
-                    .null_bit_buffer(null_bit_buffer);
-
-                let array_data = unsafe { builder.build_unchecked() };
-                let array = GenericByteArray::<T>::from(array_data);
-
-                Err(array)
+        // The builder needs a null buffer whose first bit is for the first row.
+        // That is the case when the bit offset is 0, and then the buffer is reused
+        // if this array is its only owner. Otherwise, the bits are copied, which is
+        // cheap as there is one bit per row.
+        let nulls = nulls.map(|nulls| {
+            let bits = nulls.into_inner();
+            if bits.offset() == 0 {
+                let len = bits.len();
+                bits.into_inner()
+                    .into_mutable()
+                    .unwrap_or_else(|buffer| buffer[..len.div_ceil(8)].to_vec().into())
+            } else {
+                // `sliced` returns the bits starting at the first row
+                bits.sliced().to_vec().into()
             }
-        }
+        });
+
+        // SAFETY: the buffers come from a valid array
+        Ok(unsafe { GenericByteBuilder::new_from_buffer(offsets, values, nulls) })
     }
 }
 
@@ -640,8 +644,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::{Array, BinaryArray, StringArray};
+    use crate::{Array, BinaryArray, LargeBinaryArray, StringArray};
     use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer};
+    use arrow_schema::ArrowError;
 
     /// `from_iter_values` must work with iterators that report no upper size bound,
     /// and must not trust the size hint it does get.
@@ -755,5 +760,57 @@ mod tests {
     #[should_panic(expected = "offset overflow")]
     fn create_repeated_i32_offset_overflow_2() {
         let _arr = BinaryArray::new_repeated(b"hello", ((i32::MAX as usize) / "hello".len()) + 1);
+    }
+
+    #[test]
+    fn try_new_repeated() {
+        // BinaryArray with multiple elements
+        let arr = BinaryArray::try_new_repeated(b"\x00\x01\xff", 3).unwrap();
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr.null_count(), 0);
+        for i in 0..3 {
+            assert_eq!(arr.value(i), b"\x00\x01\xff");
+        }
+        assert_eq!(arr.value_offsets(), &[0, 3, 6, 9]);
+
+        // Zero repeats
+        let arr = BinaryArray::try_new_repeated(b"test", 0).unwrap();
+        assert_eq!(arr.len(), 0);
+        assert_eq!(arr.value_offsets(), &[0]);
+
+        // Empty values with non-zero repeats
+        let arr = BinaryArray::try_new_repeated(b"", 5).unwrap();
+        assert_eq!(arr.len(), 5);
+        assert_eq!(arr.value_offsets(), &[0, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn try_new_repeated_overflow() {
+        // usize multiplication overflow
+        let err =
+            BinaryArray::try_new_repeated(b"hello", (usize::MAX / "hello".len()) + 1).unwrap_err();
+        assert!(matches!(err, ArrowError::OffsetOverflowError(usize::MAX)));
+
+        // i32 offset overflow (fits in usize, exceeds i32::MAX)
+        let err = BinaryArray::try_new_repeated(b"a", (i32::MAX as usize) + 1).unwrap_err();
+        assert!(matches!(
+            err,
+            ArrowError::OffsetOverflowError(val) if val == (i32::MAX as usize) + 1
+        ));
+
+        // i64 offset overflow (fits in usize, exceeds i64::MAX on 64-bit platforms)
+        #[cfg(target_pointer_width = "64")]
+        {
+            // Valid within i64 offset bounds, but offset-buffer allocation overflows memory/usize
+            let err = LargeBinaryArray::try_new_repeated(b"x", i64::MAX as usize).unwrap_err();
+            assert!(matches!(err, ArrowError::OffsetOverflowError(_)));
+
+            let err =
+                LargeBinaryArray::try_new_repeated(b"a", (i64::MAX as usize) + 1).unwrap_err();
+            assert!(matches!(
+                err,
+                ArrowError::OffsetOverflowError(9223372036854775808)
+            ));
+        }
     }
 }

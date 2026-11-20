@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::any::Any;
 use std::sync::Arc;
@@ -64,7 +51,7 @@ macro_rules! ree_map {
 ///   ┌─────────────────┐  ┌─────────┐       ┌─────────────────┐
 /// │ │        A        │  │    2    │ │     │        A        │
 ///   ├─────────────────┤  ├─────────┤       ├─────────────────┤
-/// │ │        D        │  │    3    │ │     │        A        │    run length of 'A' = runs_ends[0] - 0 = 2
+/// │ │        D        │  │    3    │ │     │        A        │    run length of 'A' = run_ends[0] - 0 = 2
 ///   ├─────────────────┤  ├─────────┤       ├─────────────────┤
 /// │ │        B        │  │    6    │ │     │        D        │    run length of 'D' = run_ends[1] - run_ends[0] = 1
 ///   └─────────────────┘  └─────────┘       ├─────────────────┤
@@ -73,11 +60,65 @@ macro_rules! ree_map {
 /// └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┘     │        B        │
 ///                                          ├─────────────────┤
 ///                RunArray                  │        B        │    run length of 'B' = run_ends[2] - run_ends[1] = 3
-///               length = 3                 └─────────────────┘
+///          offset = 0, len = 6             └─────────────────┘
 ///
 ///                                             Logical array
 ///                                                Contents
 /// ```
+///
+/// # `offset` and `len`
+///
+/// The [`Array::len`] and [`Array::offset`] for a `RunArray` refer to the
+/// **logical** length, not the `run_ends` and `values` child arrays. In the
+/// example above the `RunArray` has length `6` even though `run_ends` and
+/// `values` each contain `3` elements.
+///
+/// The values in `run_ends` represent indexes of the *unsliced* logical array.
+/// This allows zero-copy [`RunArray::slice`]: `run_ends` and `values` are left
+/// untouched and only `offset` and `len` are adjusted.
+///
+/// A [`RunArray`] must satisfy the following invariants:
+///
+/// * every run end is greater than zero and `run_ends` is strictly increasing
+/// * `run_ends` has no null values
+/// * `run_ends` and `values` have the same length
+/// * if `len > 0`, the last run end is greater than or equal to `offset + len`.
+///
+/// Note an empty `RunArray` (`len == 0`) is valid even when `run_ends` is empty
+/// or its last run end is less than `offset`. Note this is more permissive than
+/// the Arrow C++ implementation.
+///
+/// The example below shows the same array as above after calling `slice(1, 3)`
+///
+/// ```text
+/// ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┐
+///   ┌─────────────────┐  ┌─────────┐       ┌ ─ ─ ─ ─ ─ ─ ─ ─ ┐
+/// │ │        A        │  │    2    │ │              A             logical index 0: before offset, not visible
+///   ├─────────────────┤  ├─────────┤       ┌─────────────────┐ ◄── offset = 1
+/// │ │        D        │  │    3    │ │     │        A        │    logical index 1 < run_ends[0] = 2, so 'A'
+///   ├─────────────────┤  ├─────────┤       ├─────────────────┤
+/// │ │        B        │  │    6    │ │     │        D        │    logical index 2 < run_ends[1] = 3, so 'D'
+///   └─────────────────┘  └─────────┘       ├─────────────────┤
+/// │        values          run_ends  │     │        B        │    logical index 3 < run_ends[2] = 6, so 'B'
+///                                          └─────────────────┘ ◄── offset + len = 4
+/// └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┘              B             logical index 4: after offset + len, not visible
+///                                          ├ ─ ─ ─ ─ ─ ─ ─ ─ ┤
+///                RunArray                           B             logical index 5: after offset + len, not visible
+///          offset = 1, len = 3             └ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+///
+///                                             Logical array
+///                                                Contents
+/// ```
+///
+/// # Sliced child arrays
+///
+/// [`RunArray::slice`] doesn't slice child arrays, but a `RunArray` may be
+/// built (for example from [`ArrayData`]) from child arrays that are already
+/// sliced. In that case each child's own `offset` and `len` are respected,
+/// independently of the logical `offset` and `len` of the `RunArray`:
+///
+/// * Run `i` ends at `run_ends.value(i)`, the `i`th (logical) element
+/// * The value of run `i` is `values.value(i)`, the `i`th (logical) element
 ///
 /// [run-end encoded values]: https://arrow.apache.org/docs/format/Columnar.html#run-end-encoded-layout
 /// [run-length encoding (RLE)]: https://en.wikipedia.org/wiki/Run-length_encoding
@@ -110,11 +151,18 @@ impl<R: RunEndIndexType> RunArray<R> {
 
     /// Attempts to create a [`RunArray`] using the given `run_ends` and `values`.
     ///
+    /// The resulting array is unsliced: its logical offset is `0` and its logical
+    /// length is the last value of `run_ends` (or `0` if `run_ends` is empty).
+    ///
     /// # Errors
+    ///
+    /// Returns an error if the [`RunArray` invariants] are not satisfied:
     ///
     /// - If `run_ends` and `values` have different lengths
     /// - If `run_ends` has any null values
     /// - If `run_ends` doesn't consist of strictly increasing positive integers
+    ///
+    /// [`RunArray` invariants]: RunArray#offset-and-len
     pub fn try_new(run_ends: &PrimitiveArray<R>, values: &dyn Array) -> Result<Self, ArrowError> {
         // 1. run_ends and values must have the same (physical) length.
         if run_ends.len() != values.len() {
@@ -182,7 +230,10 @@ impl<R: RunEndIndexType> RunArray<R> {
     ///
     /// # Safety
     ///
-    /// Safe if [`Self::try_new`] would not error
+    /// Safe if [`Self::try_new`] would not error, that is if `run_ends` and
+    /// `values` satisfy the [`RunArray` invariants]
+    ///
+    /// [`RunArray` invariants]: RunArray#offset-and-len
     pub unsafe fn new_unchecked(
         data_type: DataType,
         run_ends: RunEndBuffer<R::Native>,
@@ -405,6 +456,22 @@ impl<R: RunEndIndexType> RunArray<R> {
     }
 }
 
+/// Converts an [`ArrayData`] into a [`RunArray`].
+///
+/// The `len` and `offset` of `data` become the logical length and offset of the
+/// [`RunArray`]; see the [`RunArray`] documentation for how they relate to the
+/// run ends.
+///
+/// The `offset` and `len` of the `run_ends` child are respected: only the `len`
+/// elements starting at `offset` are used as run ends. See [Sliced child
+/// arrays].
+///
+/// [Sliced child arrays]: RunArray#sliced-child-arrays
+///
+/// # Panics
+///
+/// Panics if `data` is not a [`DataType::RunEndEncoded`] array with a `run_ends`
+/// child of type `R`, or does not have exactly two children.
 impl<R: RunEndIndexType> From<ArrayData> for RunArray<R> {
     // The method assumes the caller already validated the data using `ArrayData::validate_data()`
     fn from(data: ArrayData) -> Self {
@@ -426,9 +493,9 @@ impl<R: RunEndIndexType> From<ArrayData> for RunArray<R> {
         // deconstruct the run ends child array
         let (
             run_end_data_type,
-            _run_end_len,
+            run_end_len,
             _run_end_nulls,
-            _run_end_offset,
+            run_end_offset,
             run_end_buffers,
             _run_end_child_data,
         ) = run_end_child.into_parts();
@@ -436,7 +503,7 @@ impl<R: RunEndIndexType> From<ArrayData> for RunArray<R> {
         let [run_end_buffer]: [arrow_buffer::Buffer; 1] = run_end_buffers
             .try_into()
             .expect("Run ends should have exactly one buffer");
-        let scalar = ScalarBuffer::from(run_end_buffer);
+        let scalar = ScalarBuffer::new(run_end_buffer, run_end_offset, run_end_len);
         let run_ends = unsafe { RunEndBuffer::new_unchecked(scalar, offset, len) };
 
         let values = make_array(values_child);
@@ -870,6 +937,7 @@ mod tests {
     use rand::seq::SliceRandom;
 
     use super::*;
+    use crate::Float32Array;
     use crate::Int64Array;
     use crate::builder::PrimitiveRunBuilder;
     use crate::cast::AsArray;
@@ -1570,5 +1638,41 @@ mod tests {
         let created_from_parts =
             unsafe { RunArray::<Int32Type>::new_unchecked(dt, buffer, values) };
         assert_eq!(array, created_from_parts);
+    }
+
+    #[test]
+    fn test_from_array_data_offset() {
+        let dt = DataType::RunEndEncoded(
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Float32,
+                true,
+            )),
+        );
+
+        let runs = ArrayData::builder(DataType::Int32)
+            .len(2)
+            .offset(2)
+            .add_buffer(vec![-10_i32, -20, 1_i32, 4, 0, 100].into())
+            .build()
+            .unwrap();
+        let values = Float32Array::from(vec![1.5, 2.5]);
+
+        let data = ArrayDataBuilder::new(dt)
+            .len(3)
+            .child_data(vec![runs, values.to_data()])
+            .build()
+            .unwrap();
+        let array = RunArray::<Int32Type>::from(data);
+        let array = array.downcast::<Float32Array>().unwrap();
+
+        assert_eq!(array.value(0), 1.5);
+        assert_eq!(array.value(1), 2.5);
+        assert_eq!(array.value(2), 2.5);
     }
 }
