@@ -378,10 +378,25 @@ impl Iterator for BitIndexU32Iterator<'_> {
 /// the start of the bitmask, so the counts are correct for positions in any
 /// order.
 ///
-/// See [`BooleanBuffer::set_bit_counter`] for an example.
+/// # Example: Count the valid elements of each row of a list
+/// ```
+/// # use arrow_buffer::{BooleanBuffer, OffsetBuffer};
+/// // A list with rows of 3, 0, and 2 elements, and the validity of its elements
+/// let offsets = OffsetBuffer::<i32>::from_lengths([3, 0, 2]);
+/// let valid = BooleanBuffer::from(&[true, false, true, true, true][..]);
+///
+/// // One counter for every row. The rows are visited in order, so each word
+/// // of `valid` is read once.
+/// let mut counter = valid.set_bit_counter();
+/// // Each pair of adjacent offsets is the start and end of a row
+/// let valid_per_row: Vec<usize> = offsets
+///     .windows(2)
+///     .map(|w| counter.count_range(w[0] as usize..w[1] as usize))
+///     .collect();
+/// assert_eq!(valid_per_row, [2, 0, 2]);
+/// ```
 ///
 /// [`Buffer::count_set_bits_offset`]: crate::Buffer::count_set_bits_offset
-/// [`BooleanBuffer::set_bit_counter`]: crate::BooleanBuffer::set_bit_counter
 #[derive(Debug)]
 pub struct SetBitCounter<'a> {
     chunks: BitChunks<'a>,
