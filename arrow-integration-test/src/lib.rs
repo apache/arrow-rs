@@ -48,6 +48,8 @@ mod datatype;
 mod field;
 mod schema;
 
+use datatype::{json_int, json_uint};
+
 pub use datatype::*;
 pub use field::*;
 pub use schema::*;
@@ -369,9 +371,7 @@ pub fn array_from_json(
                 .zip(json_col.data.unwrap())
             {
                 match is_valid {
-                    1 => b.append_value(value.as_i64().ok_or_else(|| {
-                        ArrowError::JsonError(format!("Unable to get {value:?} as int64"))
-                    })? as i8),
+                    1 => b.append_value(json_int("int8 value", &value)?),
                     _ => b.append_null(),
                 }
             }
@@ -387,7 +387,7 @@ pub fn array_from_json(
                 .zip(json_col.data.unwrap())
             {
                 match is_valid {
-                    1 => b.append_value(value.as_i64().unwrap() as i16),
+                    1 => b.append_value(json_int("int16 value", &value)?),
                     _ => b.append_null(),
                 }
             }
@@ -403,7 +403,7 @@ pub fn array_from_json(
                 .zip(json_col.data.unwrap())
             {
                 match is_valid {
-                    1 => b.append_value(value.as_i64().unwrap() as i32),
+                    1 => b.append_value(json_int("int32 value", &value)?),
                     _ => b.append_null(),
                 }
             }
@@ -420,7 +420,7 @@ pub fn array_from_json(
                 .zip(json_col.data.unwrap())
             {
                 match is_valid {
-                    1 => b.append_value(value.as_i64().unwrap() as i32),
+                    1 => b.append_value(json_int("year-month interval", &value)?),
                     _ => b.append_null(),
                 }
             }
@@ -469,17 +469,9 @@ pub fn array_from_json(
                                 DataType::Interval(IntervalUnit::DayTime) => {
                                     let days = map.get("days").unwrap();
                                     let milliseconds = map.get("milliseconds").unwrap();
-
-                                    match (days, milliseconds) {
-                                        (Value::Number(d), Value::Number(m)) => {
-                                            let days = d.as_i64().unwrap() as _;
-                                            let millis = m.as_i64().unwrap() as _;
-                                            IntervalDayTime::new(days, millis)
-                                        }
-                                        _ => {
-                                            panic!("Unable to parse {value:?} as interval daytime")
-                                        }
-                                    }
+                                    let days = json_int("interval days", days)?;
+                                    let millis = json_int("interval milliseconds", milliseconds)?;
+                                    IntervalDayTime::new(days, millis)
                                 }
                                 _ => panic!("Unable to parse {value:?} as interval daytime"),
                             }
@@ -501,7 +493,7 @@ pub fn array_from_json(
                 .zip(json_col.data.unwrap())
             {
                 match is_valid {
-                    1 => b.append_value(value.as_u64().unwrap() as u8),
+                    1 => b.append_value(json_uint("uint8 value", &value)?),
                     _ => b.append_null(),
                 }
             }
@@ -517,7 +509,7 @@ pub fn array_from_json(
                 .zip(json_col.data.unwrap())
             {
                 match is_valid {
-                    1 => b.append_value(value.as_u64().unwrap() as u16),
+                    1 => b.append_value(json_uint("uint16 value", &value)?),
                     _ => b.append_null(),
                 }
             }
@@ -533,7 +525,7 @@ pub fn array_from_json(
                 .zip(json_col.data.unwrap())
             {
                 match is_valid {
-                    1 => b.append_value(value.as_u64().unwrap() as u32),
+                    1 => b.append_value(json_uint("uint32 value", &value)?),
                     _ => b.append_null(),
                 }
             }
@@ -590,8 +582,14 @@ pub fn array_from_json(
                                     Value::Number(days),
                                     Value::Number(nanoseconds),
                                 ) => {
-                                    let months = months.as_i64().unwrap() as i32;
-                                    let days = days.as_i64().unwrap() as i32;
+                                    let months = json_int(
+                                        "month-day-nano interval months",
+                                        &Value::Number(months.clone()),
+                                    )?;
+                                    let days = json_int(
+                                        "month-day-nano interval days",
+                                        &Value::Number(days.clone()),
+                                    )?;
                                     let nanoseconds = nanoseconds.as_i64().unwrap();
                                     IntervalMonthDayNano::new(months, days, nanoseconds)
                                 }
@@ -710,6 +708,15 @@ pub fn array_from_json(
             Ok(Arc::new(b.finish()))
         }
         DataType::FixedSizeBinary(len) => {
+            let byte_width = usize::try_from(*len).map_err(|_| {
+                ArrowError::JsonError("FixedSizeBinary byte width must be non-negative".to_string())
+            })?;
+            let capacity = json_col.count.checked_mul(byte_width).ok_or_else(|| {
+                ArrowError::JsonError("FixedSizeBinary capacity overflow".to_string())
+            })?;
+            std::alloc::Layout::array::<u8>(capacity).map_err(|_| {
+                ArrowError::JsonError("FixedSizeBinary capacity overflow".to_string())
+            })?;
             let mut b = FixedSizeBinaryBuilder::with_capacity(json_col.count, *len);
             for (is_valid, value) in json_col
                 .validity
@@ -736,8 +743,8 @@ pub fn array_from_json(
                 .offset
                 .unwrap()
                 .iter()
-                .map(|v| v.as_i64().unwrap() as i32)
-                .collect();
+                .map(|v| json_int("list offset", v))
+                .collect::<Result<_>>()?;
             let list_data = ArrayData::builder(field.data_type().clone())
                 .len(json_col.count)
                 .offset(0)
@@ -780,14 +787,14 @@ pub fn array_from_json(
                 .offset
                 .unwrap()
                 .iter()
-                .map(|v| v.as_i64().unwrap() as i32)
-                .collect();
+                .map(|v| json_int("list view offset", v))
+                .collect::<Result<_>>()?;
             let sizes: Vec<i32> = json_col
                 .size
                 .unwrap()
                 .iter()
-                .map(|v| v.as_i64().unwrap() as i32)
-                .collect();
+                .map(|v| json_int("list view size", v))
+                .collect::<Result<_>>()?;
             let list_data = ArrayData::builder(field.data_type().clone())
                 .len(json_col.count)
                 .add_buffer(Buffer::from(offsets.to_byte_slice()))
@@ -962,6 +969,11 @@ pub fn array_from_json(
                         } else {
                             [0_u8; 32]
                         };
+                        if integer_bytes.len() > bytes.len() {
+                            return Err(ArrowError::JsonError(
+                                "Decimal256 value exceeds 256 bits".to_string(),
+                            ));
+                        }
                         bytes[0..integer_bytes.len()].copy_from_slice(integer_bytes.as_slice());
                         b.append_value(i256::from_le_bytes(bytes));
                     }
@@ -980,8 +992,8 @@ pub fn array_from_json(
                 .offset
                 .unwrap()
                 .iter()
-                .map(|v| v.as_i64().unwrap() as i32)
-                .collect();
+                .map(|v| json_int("map offset", v))
+                .collect::<Result<_>>()?;
             let array_data = ArrayData::builder(field.data_type().clone())
                 .len(json_col.count)
                 .add_buffer(Buffer::from(offsets.to_byte_slice()))
@@ -1002,7 +1014,13 @@ pub fn array_from_json(
 
             let offset: Option<ScalarBuffer<i32>> = json_col
                 .offset
-                .map(|offsets| offsets.iter().map(|v| v.as_i64().unwrap() as i32).collect());
+                .map(|offsets| {
+                    offsets
+                        .iter()
+                        .map(|v| json_int("union offset", v))
+                        .collect::<Result<_>>()
+                })
+                .transpose()?;
 
             let mut children = Vec::with_capacity(fields.len());
             for ((_, field), col) in fields.iter().zip(json_col.children.unwrap()) {
@@ -1028,16 +1046,26 @@ pub fn array_from_json(
                     builder.append_null();
                 } else {
                     let view_obj = view.as_object().unwrap();
-                    let size = view_obj["SIZE"].as_u64().unwrap() as usize;
+                    let size: usize = json_uint("view size", &view_obj["SIZE"])?;
                     // Check for INLINED key presence - inlined if SIZE <= 12
                     if let Some(inlined) = view_obj.get("INLINED") {
                         builder.append_value(inlined.as_str().unwrap());
                     } else {
                         // Reference to variadic buffer
-                        let buffer_index = view_obj["BUFFER_INDEX"].as_u64().unwrap() as usize;
-                        let offset = view_obj["OFFSET"].as_u64().unwrap() as usize;
-                        let buffer_data = hex::decode(&variadic_buffers[buffer_index]).unwrap();
-                        let s = std::str::from_utf8(&buffer_data[offset..offset + size]).unwrap();
+                        let buffer_index: usize =
+                            json_uint("view buffer index", &view_obj["BUFFER_INDEX"])?;
+                        let offset: usize = json_uint("view offset", &view_obj["OFFSET"])?;
+                        let end = offset.checked_add(size).ok_or_else(|| {
+                            ArrowError::JsonError("View offset overflow".to_string())
+                        })?;
+                        let buffer = variadic_buffers.get(buffer_index).ok_or_else(|| {
+                            ArrowError::JsonError("View buffer index out of bounds".to_string())
+                        })?;
+                        let buffer_data = hex::decode(buffer).unwrap();
+                        let data = buffer_data.get(offset..end).ok_or_else(|| {
+                            ArrowError::JsonError("View range out of bounds".to_string())
+                        })?;
+                        let s = std::str::from_utf8(data).unwrap();
                         builder.append_value(s);
                     }
                 }
@@ -1058,17 +1086,27 @@ pub fn array_from_json(
                     builder.append_null();
                 } else {
                     let view_obj = view.as_object().unwrap();
-                    let size = view_obj["SIZE"].as_u64().unwrap() as usize;
+                    let size: usize = json_uint("view size", &view_obj["SIZE"])?;
                     // Check for INLINED key presence - inlined if SIZE <= 12
                     if let Some(inlined) = view_obj.get("INLINED") {
                         let data = hex::decode(inlined.as_str().unwrap()).unwrap();
                         builder.append_value(&data);
                     } else {
                         // Reference to variadic buffer
-                        let buffer_index = view_obj["BUFFER_INDEX"].as_u64().unwrap() as usize;
-                        let offset = view_obj["OFFSET"].as_u64().unwrap() as usize;
-                        let buffer_data = hex::decode(&variadic_buffers[buffer_index]).unwrap();
-                        builder.append_value(&buffer_data[offset..offset + size]);
+                        let buffer_index: usize =
+                            json_uint("view buffer index", &view_obj["BUFFER_INDEX"])?;
+                        let offset: usize = json_uint("view offset", &view_obj["OFFSET"])?;
+                        let end = offset.checked_add(size).ok_or_else(|| {
+                            ArrowError::JsonError("View offset overflow".to_string())
+                        })?;
+                        let buffer = variadic_buffers.get(buffer_index).ok_or_else(|| {
+                            ArrowError::JsonError("View buffer index out of bounds".to_string())
+                        })?;
+                        let buffer_data = hex::decode(buffer).unwrap();
+                        let data = buffer_data.get(offset..end).ok_or_else(|| {
+                            ArrowError::JsonError("View range out of bounds".to_string())
+                        })?;
+                        builder.append_value(data);
                     }
                 }
             }
