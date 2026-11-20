@@ -117,11 +117,13 @@ impl BufferedLocation<'_> {
 /// # {
 /// use parquet::file::metadata::ParquetMetaDataOptions;
 /// use parquet::file::metadata::extensions::{MetadataSite, MetadataExtensionSelection};
+/// // The same fixed UUID used by the MetadataExtensionHook examples.
+/// const EXTENSION_ID: [u8; 16] = 0xb773c8ba_842a_4855_83fe_ff81b127db13u128.to_be_bytes();
 /// let options = ParquetMetaDataOptions::new().with_metadata_extension_listener(
 ///     [MetadataExtensionSelection::all()],
 ///     |site: &mut MetadataSite<'_>, payload: &[u8]| {
 ///         // Other applications' payloads incur no location-resolution cost.
-///         if payload.starts_with(b"example.org/extension/v1\0") {
+///         if payload.starts_with(&EXTENSION_ID) {
 ///             println!("{:?}", site.root());
 ///             for element in site.resolve_path()?.iter() {
 ///                 println!("{:?}", element);

@@ -71,6 +71,8 @@ pub const SIGNED_FOOTER_EXTENSION_SUFFIX_SIZE: usize = UNSIGNED_FOOTER_EXTENSION
 /// use parquet::schema::parser::parse_message_type;
 /// use std::sync::Arc;
 ///
+/// // Fixed UUID for this example's extension format, encoded as 16 raw bytes.
+/// const EXTENSION_ID: [u8; 16] = 0xb773c8ba_842a_4855_83fe_ff81b127db13u128.to_be_bytes();
 /// let schema = Arc::new(parse_message_type("message schema { REQUIRED INT32 id; }")?);
 /// let targets = [
 ///     MetadataExtensionSelection::roots([ThriftStruct::FileMetaData]).root_only(),
@@ -80,7 +82,7 @@ pub const SIGNED_FOOTER_EXTENSION_SUFFIX_SIZE: usize = UNSIGNED_FOOTER_EXTENSION
 ///     .with_metadata_extension_hook(targets,
 ///         |site: &mut MetadataSite<'_>| -> parquet::errors::Result<Option<&'static [u8]>> {
 ///             assert!(site.at_root());
-///             Ok(Some(b"example.org/extension/v1\0"))
+///             Ok(Some(&EXTENSION_ID))
 ///         },
 ///     )?;
 /// writer.close()?;
@@ -106,12 +108,16 @@ pub const SIGNED_FOOTER_EXTENSION_SUFFIX_SIZE: usize = UNSIGNED_FOOTER_EXTENSION
 /// # #[cfg(feature = "experimental")]
 /// # {
 /// use parquet::file::metadata::extensions::{MetadataSite, MetadataExtensionHook};
+/// const EXTENSION_ID: [u8; 16] = 0xb773c8ba_842a_4855_83fe_ff81b127db13u128.to_be_bytes();
 /// struct Payload(Vec<u8>);
 /// impl MetadataExtensionHook for Payload {
 ///     fn on_site(&mut self, _: &mut MetadataSite<'_>) -> parquet::errors::Result<Option<&[u8]>> {
 ///         Ok(Some(&self.0))
 ///     }
 /// }
+/// let mut bytes = EXTENSION_ID.to_vec();
+/// bytes.extend_from_slice(b"application data");
+/// let hook = Payload(bytes);
 /// # }
 /// ```
 pub trait MetadataExtensionHook: Send {
@@ -119,8 +125,10 @@ pub trait MetadataExtensionHook: Send {
     ///
     /// Return `Ok(None)` to omit the field, or `Ok(Some(&[]))` to write an empty field.
     /// Bytes are written unchanged. The [Parquet specification](https://github.com/apache/parquet-format/blob/master/BinaryProtocolExtensions.md)
-    /// defines no payload format; include enough information to distinguish your
-    /// extensions from other implementations'.
+    /// requires application-defined disambiguation and suggests a UUID at either end.
+    /// These examples prefix payloads with a fixed UUID's 16 raw bytes. Choose a UUID
+    /// once per extension format; use a different one for unrelated formats.
+    /// The crate neither imposes nor validates a payload layout.
     ///
     /// Hook errors propagate unchanged to the enclosing write operation, as do
     /// payload-length and output I/O errors. Bytes already written and earlier

@@ -171,6 +171,11 @@ name = "page_index_cache"
 required-features = ["arrow"]
 path = "./examples/page_index_cache.rs"
 
+[[example]]
+name = "metadata_extensions"
+required-features = ["experimental"]
+path = "./examples/metadata_extensions.rs"
+
 [[test]]
 name = "arrow_reader"
 required-features = ["arrow"]

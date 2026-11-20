@@ -9,6 +9,10 @@
 //! [`thrift_fields`](super::thrift_fields). Paths are library-derived; no
 //! payload-side coordinate convention is required. Decoding and rewriting
 //! metadata does not automatically preserve extensions.
+//!
+//! See the [schema-unit example] for writing and checking schema-element annotations.
+//!
+//! [schema-unit example]: https://github.com/apache/arrow-rs/blob/main/parquet/examples/metadata_extensions.rs
 
 mod path;
 mod scope;
