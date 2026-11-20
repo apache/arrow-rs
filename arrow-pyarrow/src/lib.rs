@@ -77,7 +77,7 @@ use arrow_array::{
 };
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaRef};
-use pyo3::exceptions::{PyTypeError, PyValueError};
+use pyo3::exceptions::{PyMemoryError, PyTypeError, PyValueError};
 use pyo3::ffi::Py_uintptr_t;
 use pyo3::prelude::*;
 use pyo3::sync::PyOnceLock;
@@ -390,7 +390,11 @@ impl<T: FromPyArrow> FromPyArrow for Vec<T> {
     );
 
     fn from_pyarrow_bound(value: &Bound<PyAny>) -> PyResult<Self> {
-        let mut v = Vec::with_capacity(value.len().unwrap_or(0));
+        let mut v = Vec::new();
+        if let Ok(len) = value.len() {
+            v.try_reserve(len)
+                .map_err(|e| PyMemoryError::new_err(e.to_string()))?;
+        }
         for item in value.try_iter()? {
             v.push(T::from_pyarrow_bound(&item?)?);
         }
