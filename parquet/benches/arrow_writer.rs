@@ -33,6 +33,7 @@ use arrow_array::{
 };
 use arrow_buffer::{BooleanBuffer, NullBuffer, OffsetBuffer};
 use arrow_select::filter::filter_record_batch;
+use parquet::arrow::arrow_reader::RowSelection;
 use parquet::errors::Result;
 use parquet::file::properties::{CdcOptions, WriterProperties, WriterVersion};
 
@@ -2099,8 +2100,9 @@ fn bench_ndv(c: &mut Criterion) {
     }
 }
 
-/// Writes the rows of a batch that a selection selects with `filter_record_batch` and
-/// [`ArrowWriter::write`].
+/// Writes the rows of a batch that a selection selects with
+/// [`ArrowWriter::write_with_selection`], with `filter_record_batch` and
+/// [`ArrowWriter::write`] on the same rows as a baseline.
 ///
 /// Rows are skipped at random, as rows that a change stream later replaces or deletes
 /// would be, or in runs, which leave fewer runs of selected rows.
@@ -2115,7 +2117,8 @@ fn bench_write_with_selection(c: &mut Criterion) {
         ("skip_50pct_runs_of_64", 0.5, 64),
     ] {
         let mask = create_selection_mask(BATCH_SIZE, skipped, run);
-        let filter = BooleanArray::new(mask, None);
+        let filter = BooleanArray::new(mask.clone(), None);
+        let selection = RowSelection::from_boolean_buffer(mask);
 
         let mut group = c.benchmark_group(format!("write_with_selection/{name}"));
         group.throughput(Throughput::Elements(BATCH_SIZE as u64));
@@ -2125,6 +2128,16 @@ fn bench_write_with_selection(c: &mut Criterion) {
                     ArrowWriter::try_new(Empty::default(), batch.schema(), None).unwrap();
                 let filtered = filter_record_batch(black_box(&batch), &filter).unwrap();
                 writer.write(&filtered).unwrap();
+                black_box(writer.close()).unwrap();
+            })
+        });
+        group.bench_function("write_with_selection", |b| {
+            b.iter(|| {
+                let mut writer =
+                    ArrowWriter::try_new(Empty::default(), batch.schema(), None).unwrap();
+                writer
+                    .write_with_selection(black_box(&batch), &selection)
+                    .unwrap();
                 black_box(writer.close()).unwrap();
             })
         });
