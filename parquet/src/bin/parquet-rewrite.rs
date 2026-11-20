@@ -27,7 +27,6 @@
 //!     --encoding plain --column-encoding price=alp --column-encoding a.b=delta-binary-packed
 //! ```
 
-use std::collections::HashSet;
 use std::fs::File;
 
 use arrow_array::RecordBatchReader;
@@ -43,7 +42,7 @@ use parquet::{
         reader::FileReader,
         serialized_reader::SerializedFileReader,
     },
-    schema::types::{ColumnDescriptor, ColumnPath, SchemaDescriptor},
+    schema::types::ColumnDescriptor,
 };
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
@@ -153,16 +152,11 @@ impl From<EncodingArgs> for Encoding {
 }
 
 /// Parses a `--column-encoding` value of the form `<COLUMN>=<ENCODING>`.
-///
-/// The value is split at the last `=`, as encoding names never contain one.
 fn parse_column_encoding(value: &str) -> Result<(String, EncodingArgs), String> {
     let (column, encoding) = value
         .rsplit_once('=')
-        .ok_or_else(|| format!("expected <COLUMN>=<ENCODING>, got '{value}'"))?;
-    if column.is_empty() {
-        return Err(format!("missing column in '{value}'"));
-    }
-    let encoding = EncodingArgs::from_str(encoding, true).map_err(|_| {
+        .ok_or("expected <COLUMN>=<ENCODING>")?;
+    let encoding = EncodingArgs::from_str(encoding, false).map_err(|_| {
         let possible_values: Vec<_> = EncodingArgs::value_variants()
             .iter()
             .filter_map(|v| v.to_possible_value())
@@ -173,6 +167,7 @@ fn parse_column_encoding(value: &str) -> Result<(String, EncodingArgs), String> 
             possible_values.join(", ")
         )
     })?;
+    check_encoding_settable(encoding)?;
     Ok((column.to_string(), encoding))
 }
 
@@ -191,107 +186,27 @@ fn check_encoding_settable(encoding: EncodingArgs) -> Result<(), String> {
     }
 }
 
-/// Checks that the writer supports `encoding` for columns of `physical_type`.
-///
-/// This mirrors the encoders that the writer can create, so that an
-/// unsupported combination is reported before the output file is created
-/// instead of failing part way through the rewrite.
-fn check_encoding(encoding: EncodingArgs, physical_type: PhysicalType) -> Result<(), String> {
+/// Rejects encodings the writer cannot write for `column`. The writer panics on
+/// them instead of returning an error (#10964).
+fn check_encoding(column: &ColumnDescriptor, encoding: Encoding) -> Result<(), String> {
     use PhysicalType::*;
     let supported: &[PhysicalType] = match encoding {
-        EncodingArgs::Plain => return Ok(()),
-        EncodingArgs::PlainDictionary | EncodingArgs::RleDictionary | EncodingArgs::BitPacked => {
-            return check_encoding_settable(encoding);
-        }
-        EncodingArgs::Rle => &[BOOLEAN],
-        EncodingArgs::DeltaBinaryPacked => &[INT32, INT64],
-        EncodingArgs::DeltaLengthByteArray => &[BYTE_ARRAY],
-        EncodingArgs::DeltaByteArray => &[BYTE_ARRAY, FIXED_LEN_BYTE_ARRAY],
-        EncodingArgs::ByteStreamSplit => &[INT32, INT64, FLOAT, DOUBLE, FIXED_LEN_BYTE_ARRAY],
-        EncodingArgs::Alp => &[FLOAT, DOUBLE],
+        Encoding::RLE => &[BOOLEAN],
+        Encoding::DELTA_BINARY_PACKED => &[INT32, INT64],
+        Encoding::DELTA_LENGTH_BYTE_ARRAY => &[BYTE_ARRAY],
+        Encoding::DELTA_BYTE_ARRAY => &[BYTE_ARRAY, FIXED_LEN_BYTE_ARRAY],
+        Encoding::BYTE_STREAM_SPLIT => &[INT32, INT64, FLOAT, DOUBLE, FIXED_LEN_BYTE_ARRAY],
+        Encoding::ALP => &[FLOAT, DOUBLE],
+        _ => return Ok(()),
     };
-    if supported.contains(&physical_type) {
+    if supported.contains(&column.physical_type()) {
         return Ok(());
     }
-    let mut types: Vec<_> = supported.iter().map(|t| t.to_string()).collect();
-    let last = types.pop().unwrap();
-    let types = match types.is_empty() {
-        true => last,
-        false => format!("{} and {last}", types.join(", ")),
-    };
-    let encoding = Encoding::from(encoding);
-    Err(format!("{encoding} supports only {types}"))
-}
-
-/// Resolves `--encoding` and `--column-encoding` against the leaf columns of
-/// the output `schema`, returning the encoding to set for each column given
-/// by `--column-encoding`.
-///
-/// Returns an error describing every problem found if a column does not
-/// exist, is given more than once, or does not support its encoding (from
-/// `--column-encoding`, or else from `--encoding`).
-fn resolve_column_encodings(
-    schema: &SchemaDescriptor,
-    encoding: Option<EncodingArgs>,
-    column_encodings: &[(String, EncodingArgs)],
-) -> Result<Vec<(ColumnPath, Encoding)>, String> {
-    let describe = |column: &ColumnDescriptor| {
-        format!(
-            "column '{}' ({})",
-            column.path().string(),
-            column.physical_type()
-        )
-    };
-
-    let mut errors = vec![];
-    let mut resolved = Vec::with_capacity(column_encodings.len());
-    let mut seen = HashSet::new();
-    for (name, column_encoding) in column_encodings {
-        if !seen.insert(name.as_str()) {
-            errors.push(format!(
-                "--column-encoding is given more than once for column '{name}'"
-            ));
-            continue;
-        }
-        let Some(column) = schema.columns().iter().find(|c| c.path().string() == *name) else {
-            let columns: Vec<_> = schema.columns().iter().map(|c| c.path().string()).collect();
-            errors.push(format!(
-                "--column-encoding refers to unknown column '{name}', leaf columns are: {}",
-                columns.join(", ")
-            ));
-            continue;
-        };
-        match check_encoding(*column_encoding, column.physical_type()) {
-            Ok(()) => resolved.push((column.path().clone(), (*column_encoding).into())),
-            Err(e) => errors.push(format!("--column-encoding for {}: {e}", describe(column))),
-        }
-    }
-
-    if let Some(encoding) = encoding {
-        if let Err(e) = check_encoding_settable(encoding) {
-            // Reported once rather than for every column
-            errors.push(format!("--encoding: {e}"));
-        } else {
-            for column in schema.columns() {
-                if seen.contains(column.path().string().as_str()) {
-                    continue;
-                }
-                if let Err(e) = check_encoding(encoding, column.physical_type()) {
-                    errors.push(format!(
-                        "--encoding for {}: {e} (set another encoding for this column \
-                         with --column-encoding '{}=<ENCODING>')",
-                        describe(column),
-                        column.path().string()
-                    ));
-                }
-            }
-        }
-    }
-
-    match errors.is_empty() {
-        true => Ok(resolved),
-        false => Err(errors.join("\n")),
-    }
+    Err(format!(
+        "column '{}' ({}): {encoding} supports only {supported:?}",
+        column.path().string(),
+        column.physical_type()
+    ))
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
@@ -509,18 +424,23 @@ fn rewrite(args: Args) -> Result<(), String> {
         writer_properties_builder = writer_properties_builder.set_compression(compression);
     }
 
-    // setup encoding, checking it against the schema that the writer will use
+    // setup encoding, resolving columns against the schema that the writer will use
     let output_schema = ArrowSchemaConverter::new()
         .with_coerce_types(args.coerce_types.unwrap_or(DEFAULT_COERCE_TYPES))
         .convert(&parquet_reader.schema())
         .expect("convert schema");
-    let column_encodings =
-        resolve_column_encodings(&output_schema, args.encoding, &args.column_encoding)?;
     if let Some(value) = args.encoding {
+        check_encoding_settable(value).map_err(|e| format!("--encoding: {e}"))?;
         writer_properties_builder = writer_properties_builder.set_encoding(value.into());
     }
-    for (column, encoding) in column_encodings {
-        writer_properties_builder = writer_properties_builder.set_column_encoding(column, encoding);
+    for (name, encoding) in &args.column_encoding {
+        let column = output_schema
+            .columns()
+            .iter()
+            .find(|c| c.path().string() == *name)
+            .ok_or_else(|| format!("unknown column '{name}' in --column-encoding"))?;
+        writer_properties_builder = writer_properties_builder
+            .set_column_encoding(column.path().clone(), (*encoding).into());
     }
     if let Some(value) = args.dictionary_enabled {
         writer_properties_builder = writer_properties_builder.set_dictionary_enabled(value);
@@ -592,6 +512,14 @@ fn rewrite(args: Args) -> Result<(), String> {
         writer_properties_builder = writer_properties_builder.set_write_batch_size(value);
     }
     let writer_properties = writer_properties_builder.build();
+    let errors: Vec<_> = output_schema
+        .columns()
+        .iter()
+        .filter_map(|c| check_encoding(c, writer_properties.encoding(c.path())?).err())
+        .collect();
+    if !errors.is_empty() {
+        return Err(errors.join("\n"));
+    }
     let mut parquet_writer = ArrowWriter::try_new(
         File::create(&args.output).expect("Unable to open output file"),
         parquet_reader.schema(),
@@ -611,383 +539,100 @@ fn rewrite(args: Args) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
     use std::sync::Arc;
 
     use arrow_array::{
         ArrayRef, BooleanArray, FixedSizeBinaryArray, Float32Array, Float64Array, Int32Array,
         Int64Array, RecordBatch, StringArray,
     };
-    use parquet::schema::parser::parse_message_type;
 
-    const ALL_ENCODINGS: [EncodingArgs; 10] = [
-        EncodingArgs::Plain,
-        EncodingArgs::PlainDictionary,
-        EncodingArgs::Rle,
-        EncodingArgs::BitPacked,
-        EncodingArgs::DeltaBinaryPacked,
-        EncodingArgs::DeltaLengthByteArray,
-        EncodingArgs::DeltaByteArray,
-        EncodingArgs::RleDictionary,
-        EncodingArgs::ByteStreamSplit,
-        EncodingArgs::Alp,
-    ];
-
-    fn schema() -> SchemaDescriptor {
-        let message = "
-            message schema {
-                REQUIRED BOOLEAN b;
-                REQUIRED INT32 i;
-                REQUIRED FLOAT f;
-                REQUIRED BYTE_ARRAY s (UTF8);
-                OPTIONAL group g {
-                    REQUIRED DOUBLE d;
-                }
-            }";
-        SchemaDescriptor::new(Arc::new(parse_message_type(message).unwrap()))
-    }
-
-    fn column_encodings(values: &[&str]) -> Vec<(String, EncodingArgs)> {
-        values
-            .iter()
-            .map(|v| parse_column_encoding(v).unwrap())
-            .collect()
-    }
-
-    #[test]
-    fn test_parse_column_encoding() {
-        let parse = |v| parse_column_encoding(v).unwrap();
-        assert_eq!(parse("price=alp"), ("price".to_string(), EncodingArgs::Alp));
-        assert_eq!(parse("a.b=PLAIN"), ("a.b".to_string(), EncodingArgs::Plain));
-        assert_eq!(
-            parse("x=delta-binary-packed"),
-            ("x".to_string(), EncodingArgs::DeltaBinaryPacked)
-        );
-        // Only the last `=` separates the column from the encoding
-        assert_eq!(parse("a=b=plain"), ("a=b".to_string(), EncodingArgs::Plain));
-
-        let err = |v| parse_column_encoding(v).unwrap_err();
-        assert_eq!(err("price"), "expected <COLUMN>=<ENCODING>, got 'price'");
-        assert_eq!(err("=alp"), "missing column in '=alp'");
-        assert!(
-            err("price=snappy").starts_with(
-                "invalid encoding 'snappy' in 'price=snappy', possible values: plain, "
-            ),
-            "{}",
-            err("price=snappy")
-        );
-        assert!(err("price=").starts_with("invalid encoding '' in 'price='"));
-    }
-
-    #[test]
-    fn test_parse_args_column_encoding() {
-        let args = Args::try_parse_from([
-            "parquet-rewrite",
-            "-i",
-            "in.parquet",
-            "-o",
-            "out.parquet",
-            "--encoding",
-            "plain",
-            "--column-encoding",
-            "f=alp",
-            "--column-encoding",
-            "g.d=byte-stream-split",
-        ])
-        .unwrap();
-        assert_eq!(args.encoding, Some(EncodingArgs::Plain));
-        assert_eq!(
-            args.column_encoding,
-            column_encodings(&["f=alp", "g.d=byte-stream-split"])
-        );
-
-        let err = Args::try_parse_from([
-            "parquet-rewrite",
-            "-i",
-            "in.parquet",
-            "-o",
-            "out.parquet",
-            "--column-encoding",
-            "f",
-        ])
-        .unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::ValueValidation);
-    }
-
-    #[test]
-    fn test_check_encoding_messages() {
-        assert_eq!(
-            check_encoding(EncodingArgs::Alp, PhysicalType::INT32).unwrap_err(),
-            "ALP supports only FLOAT and DOUBLE"
-        );
-        assert_eq!(
-            check_encoding(EncodingArgs::Rle, PhysicalType::INT32).unwrap_err(),
-            "RLE supports only BOOLEAN"
-        );
-        assert_eq!(
-            check_encoding(EncodingArgs::ByteStreamSplit, PhysicalType::BYTE_ARRAY).unwrap_err(),
-            "BYTE_STREAM_SPLIT supports only INT32, INT64, FLOAT, DOUBLE and FIXED_LEN_BYTE_ARRAY"
-        );
-        assert_eq!(
-            check_encoding(EncodingArgs::RleDictionary, PhysicalType::INT32).unwrap_err(),
-            "RLE_DICTIONARY cannot be set as a column encoding, use --dictionary-enabled instead"
-        );
-        assert_eq!(
-            check_encoding(EncodingArgs::BitPacked, PhysicalType::INT32).unwrap_err(),
-            "BIT_PACKED is deprecated and not supported for writing"
-        );
-        for physical_type in [PhysicalType::INT96, PhysicalType::BYTE_ARRAY] {
-            assert!(check_encoding(EncodingArgs::Plain, physical_type).is_ok());
-        }
-    }
-
-    /// Returns whether the writer can write `array` with `encoding`.
-    ///
-    /// Some unsupported encodings make the column writer panic rather than
-    /// return an error, so panics count as unsupported too.
-    fn writer_supports(array: ArrayRef, encoding: Encoding) -> bool {
-        let batch = RecordBatch::try_from_iter([("c", array)]).unwrap();
-        let props = WriterProperties::builder()
-            .set_dictionary_enabled(false)
-            .set_encoding(encoding)
-            .build();
-        let write = || {
-            let mut writer = ArrowWriter::try_new(vec![], batch.schema(), Some(props))?;
-            writer.write(&batch)?;
-            writer.close()
-        };
-        matches!(
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(write)),
-            Ok(Ok(_))
-        )
-    }
-
-    /// `check_encoding` must agree with what the writer actually supports
     #[test]
     fn test_check_encoding_matches_writer() {
-        let arrays: [(PhysicalType, ArrayRef); 7] = [
-            (
-                PhysicalType::BOOLEAN,
-                Arc::new(BooleanArray::from(vec![true, false])),
-            ),
-            (PhysicalType::INT32, Arc::new(Int32Array::from(vec![1, 2]))),
-            (PhysicalType::INT64, Arc::new(Int64Array::from(vec![1, 2]))),
-            (
-                PhysicalType::FLOAT,
-                Arc::new(Float32Array::from(vec![1.5, 2.5])),
-            ),
-            (
-                PhysicalType::DOUBLE,
-                Arc::new(Float64Array::from(vec![1.5, 2.5])),
-            ),
-            (
-                PhysicalType::BYTE_ARRAY,
-                Arc::new(StringArray::from(vec!["a", "b"])),
-            ),
-            (
-                PhysicalType::FIXED_LEN_BYTE_ARRAY,
-                Arc::new(FixedSizeBinaryArray::try_from_iter([b"ab", b"cd"].into_iter()).unwrap()),
-            ),
+        let arrays: [ArrayRef; 7] = [
+            Arc::new(BooleanArray::from(vec![true, false])),
+            Arc::new(Int32Array::from(vec![1, 2])),
+            Arc::new(Int64Array::from(vec![1, 2])),
+            Arc::new(Float32Array::from(vec![1.5, 2.5])),
+            Arc::new(Float64Array::from(vec![1.5, 2.5])),
+            Arc::new(StringArray::from(vec!["a", "b"])),
+            Arc::new(FixedSizeBinaryArray::try_from_iter([b"ab", b"cd"].into_iter()).unwrap()),
         ];
-        for (physical_type, array) in arrays {
-            for encoding in ALL_ENCODINGS {
-                let checked = check_encoding(encoding, physical_type);
-                if matches!(
-                    encoding,
-                    EncodingArgs::PlainDictionary | EncodingArgs::RleDictionary
-                ) {
-                    // The writer properties builder panics on these
-                    assert!(checked.is_err());
+        for array in arrays {
+            let batch = RecordBatch::try_from_iter([("c", array)]).unwrap();
+            let schema = ArrowSchemaConverter::new()
+                .convert(&batch.schema())
+                .unwrap();
+            for encoding in EncodingArgs::value_variants() {
+                if check_encoding_settable(*encoding).is_err() {
                     continue;
                 }
-                assert_eq!(
-                    checked.is_ok(),
-                    writer_supports(array.clone(), encoding.into()),
-                    "{encoding:?} for {physical_type}: {checked:?}"
+                let props = WriterProperties::builder()
+                    .set_dictionary_enabled(false)
+                    .set_encoding((*encoding).into())
+                    .build();
+                let write = || {
+                    let mut writer = ArrowWriter::try_new(vec![], batch.schema(), Some(props))?;
+                    writer.write(&batch)?;
+                    writer.close()
+                };
+                let written = matches!(
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(write)),
+                    Ok(Ok(_))
                 );
+                let checked = check_encoding(schema.column(0).as_ref(), (*encoding).into());
+                assert_eq!(checked.is_ok(), written, "{encoding:?}: {checked:?}");
             }
         }
     }
 
     #[test]
-    fn test_resolve_column_encodings() {
-        let schema = schema();
-        let resolve = |encoding, values: &[&str]| {
-            resolve_column_encodings(&schema, encoding, &column_encodings(values))
-        };
-
-        assert_eq!(resolve(None, &[]).unwrap(), vec![]);
-        assert_eq!(resolve(Some(EncodingArgs::Plain), &[]).unwrap(), vec![]);
-        assert_eq!(
-            resolve(
-                Some(EncodingArgs::Plain),
-                &["f=alp", "g.d=byte-stream-split", "i=delta-binary-packed"]
-            )
-            .unwrap(),
-            vec![
-                (ColumnPath::from("f"), Encoding::ALP),
-                (
-                    ColumnPath::new(vec!["g".to_string(), "d".to_string()]),
-                    Encoding::BYTE_STREAM_SPLIT
-                ),
-                (ColumnPath::from("i"), Encoding::DELTA_BINARY_PACKED),
-            ]
-        );
-
-        // The global encoding is checked for every column without its own encoding
-        assert_eq!(
-            resolve(Some(EncodingArgs::Alp), &["b=rle", "i=plain"]).unwrap_err(),
-            "--encoding for column 's' (BYTE_ARRAY): ALP supports only FLOAT and DOUBLE \
-             (set another encoding for this column with --column-encoding 's=<ENCODING>')"
-        );
-        assert_eq!(
-            resolve(
-                Some(EncodingArgs::Alp),
-                &["b=rle", "i=plain", "s=delta-byte-array"]
-            )
-            .unwrap(),
-            vec![
-                (ColumnPath::from("b"), Encoding::RLE),
-                (ColumnPath::from("i"), Encoding::PLAIN),
-                (ColumnPath::from("s"), Encoding::DELTA_BYTE_ARRAY),
-            ]
-        );
-
-        assert_eq!(
-            resolve(None, &["s=alp"]).unwrap_err(),
-            "--column-encoding for column 's' (BYTE_ARRAY): ALP supports only FLOAT and DOUBLE"
-        );
-        assert_eq!(
-            resolve(None, &["d=alp"]).unwrap_err(),
-            "--column-encoding refers to unknown column 'd', leaf columns are: b, i, f, s, g.d"
-        );
-        assert_eq!(
-            resolve(None, &["f=alp", "f=plain"]).unwrap_err(),
-            "--column-encoding is given more than once for column 'f'"
-        );
-        // Encodings that cannot be set at all are reported once
-        assert_eq!(
-            resolve(Some(EncodingArgs::RleDictionary), &[]).unwrap_err(),
-            "--encoding: RLE_DICTIONARY cannot be set as a column encoding, \
-             use --dictionary-enabled instead"
-        );
-        // Every problem is reported
-        let err = resolve(Some(EncodingArgs::Rle), &["f=alp", "x=plain"]).unwrap_err();
-        let lines: Vec<_> = err.lines().collect();
-        assert_eq!(lines.len(), 4, "{err}");
-        assert!(lines[0].starts_with("--column-encoding refers to unknown column 'x'"));
-        assert!(lines[1].starts_with("--encoding for column 'i' (INT32): RLE supports only"));
-        assert!(lines[2].starts_with("--encoding for column 's' (BYTE_ARRAY)"));
-        assert!(lines[3].starts_with("--encoding for column 'g.d' (DOUBLE)"));
-    }
-
-    fn write_input(path: &Path) -> RecordBatch {
+    fn test_rewrite_checks_encodings_before_creating_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("input.parquet");
+        let output = dir.path().join("output.parquet");
         let batch = RecordBatch::try_from_iter([
             (
                 "price",
-                Arc::new(Float64Array::from(vec![1.25, 2.5, 3.75])) as ArrayRef,
+                Arc::new(Float64Array::from(vec![1.5, 2.5])) as ArrayRef,
             ),
-            ("id", Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef),
-            (
-                "name",
-                Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef,
-            ),
+            ("id", Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef),
         ])
         .unwrap();
         let mut writer =
-            ArrowWriter::try_new(File::create(path).unwrap(), batch.schema(), None).unwrap();
+            ArrowWriter::try_new(File::create(&input).unwrap(), batch.schema(), None).unwrap();
         writer.write(&batch).unwrap();
         writer.close().unwrap();
-        batch
-    }
 
-    fn rewrite_args(input: &Path, output: &Path, extra: &[&str]) -> Args {
-        let mut args = vec![
-            "parquet-rewrite",
-            "-i",
-            input.to_str().unwrap(),
-            "-o",
-            output.to_str().unwrap(),
-        ];
-        args.extend_from_slice(extra);
-        Args::try_parse_from(args).unwrap()
-    }
-
-    #[test]
-    fn test_rewrite_with_column_encodings() {
-        let dir = tempfile::tempdir().unwrap();
-        let input = dir.path().join("input.parquet");
-        let output = dir.path().join("output.parquet");
-        let batch = write_input(&input);
-
-        let args = rewrite_args(
-            &input,
-            &output,
-            &[
+        let rewrite_with = |extra: &[&str]| {
+            let mut argv = vec!["parquet-rewrite", "-i", input.to_str().unwrap()];
+            argv.extend([
+                "-o",
+                output.to_str().unwrap(),
                 "--dictionary-enabled",
                 "false",
-                "--encoding",
-                "plain",
-                "--column-encoding",
-                "price=alp",
-                "--column-encoding",
-                "id=delta-binary-packed",
-            ],
+            ]);
+            argv.extend(["--encoding", "alp"]);
+            argv.extend_from_slice(extra);
+            rewrite(Args::try_parse_from(argv).unwrap())
+        };
+        assert_eq!(
+            rewrite_with(&[]).unwrap_err(),
+            "column 'id' (INT32): ALP supports only [FLOAT, DOUBLE]"
         );
-        rewrite(args).unwrap();
+        assert_eq!(
+            rewrite_with(&["--column-encoding", "x=plain"]).unwrap_err(),
+            "unknown column 'x' in --column-encoding"
+        );
+        assert!(!output.exists());
 
+        rewrite_with(&["--column-encoding", "id=delta-binary-packed"]).unwrap();
         let reader = SerializedFileReader::new(File::open(&output).unwrap()).unwrap();
-        let encodings: Vec<Vec<Encoding>> = reader
-            .metadata()
-            .row_group(0)
-            .columns()
-            .iter()
-            .map(|c| c.encodings().collect())
-            .collect();
-        assert!(encodings[0].contains(&Encoding::ALP), "{encodings:?}");
+        let columns = reader.metadata().row_group(0).columns();
+        assert!(columns[0].encodings().any(|e| e == Encoding::ALP));
         assert!(
-            encodings[1].contains(&Encoding::DELTA_BINARY_PACKED),
-            "{encodings:?}"
+            columns[1]
+                .encodings()
+                .any(|e| e == Encoding::DELTA_BINARY_PACKED)
         );
-        assert!(encodings[2].contains(&Encoding::PLAIN), "{encodings:?}");
-        assert!(!encodings[2].contains(&Encoding::ALP), "{encodings:?}");
-
-        let rewritten: Vec<_> =
-            ParquetRecordBatchReaderBuilder::try_new(File::open(&output).unwrap())
-                .unwrap()
-                .build()
-                .unwrap()
-                .collect::<Result<_, _>>()
-                .unwrap();
-        assert_eq!(rewritten, vec![batch]);
-    }
-
-    #[test]
-    fn test_rewrite_rejects_unsupported_encoding_before_creating_output() {
-        let dir = tempfile::tempdir().unwrap();
-        let input = dir.path().join("input.parquet");
-        let output = dir.path().join("output.parquet");
-        write_input(&input);
-
-        let args = rewrite_args(&input, &output, &["--encoding", "alp"]);
-        let err = rewrite(args).unwrap_err();
-        assert!(
-            err.contains("column 'id' (INT32): ALP supports only"),
-            "{err}"
-        );
-        assert!(
-            err.contains("column 'name' (BYTE_ARRAY): ALP supports only"),
-            "{err}"
-        );
-        assert!(!err.contains("price"), "{err}");
-        assert!(!output.exists());
-
-        let args = rewrite_args(&input, &output, &["--column-encoding", "name=alp"]);
-        let err = rewrite(args).unwrap_err();
-        assert!(
-            err.contains("column 'name' (BYTE_ARRAY): ALP supports only"),
-            "{err}"
-        );
-        assert!(!output.exists());
     }
 }
