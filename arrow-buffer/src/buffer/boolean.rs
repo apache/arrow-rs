@@ -626,16 +626,14 @@ impl BooleanBuffer {
     /// this [`BooleanBuffer`]
     ///
     /// ```
-    /// # use arrow_buffer::{BooleanBuffer, OffsetBuffer};
+    /// # use arrow_buffer::BooleanBuffer;
     /// // Validity of the elements of a list with rows of 3, 0, and 2 elements
     /// let valid = BooleanBuffer::from(&[true, false, true, true, true][..]);
-    /// let offsets = OffsetBuffer::<i32>::from_lengths([3, 0, 2]);
     /// let mut counter = valid.set_bit_counter();
-    /// let valid_per_row = offsets
-    ///     .windows(2)
-    ///     .map(|w| counter.count_range(w[0] as usize..w[1] as usize))
-    ///     .collect::<Vec<_>>();
-    /// assert_eq!(valid_per_row, [2, 0, 2]);
+    /// // Count the valid elements of each row, in row order
+    /// assert_eq!(counter.count_range(0..3), 2); // row 0 holds elements 0..3
+    /// assert_eq!(counter.count_range(3..3), 0); // row 1 is empty
+    /// assert_eq!(counter.count_range(3..5), 2); // row 2 holds elements 3..5
     /// ```
     pub fn set_bit_counter(&self) -> SetBitCounter<'_> {
         SetBitCounter::new(self.values(), self.bit_offset, self.bit_len)
