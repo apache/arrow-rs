@@ -99,5 +99,9 @@ harness = false
 name = "primitive_array"
 harness = false
 
+[[bench]]
+name = "builder_finish"
+harness = false
+
 [lints]
 workspace = true
