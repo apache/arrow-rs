@@ -7,9 +7,10 @@ use criterion::*;
 use arrow::compute::kernels::numeric::*;
 use arrow::datatypes::{
     ArrowPrimitiveType, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, Float32Type,
+    Int32Type, Int64Type, UInt32Type, UInt64Type,
 };
 use arrow::util::bench_util::*;
-use arrow_array::{Array, Decimal128Array, PrimitiveArray, Scalar};
+use arrow_array::{Array, ArrowNativeTypeOp, Decimal128Array, PrimitiveArray, Scalar};
 use arrow_buffer::i256;
 use rand::distr::uniform::SampleUniform;
 use rand::rngs::StdRng;
@@ -83,6 +84,80 @@ where
     (0..size)
         .map(|_| (rng.random::<f32>() >= null_density).then(|| rng.random_range(range.clone())))
         .collect()
+}
+
+/// Checked and wrapping integer arithmetic at DataFusion's default batch size.
+///
+/// The left operands come from `a_range` and the right ones from `b_range`, so
+/// the checked cases never overflow in a valid row unless the case name says
+/// so. Null slots hold 0, as a builder writes them, so with unsigned types
+/// `subtract_checked_scalar` overflows in null slots.
+fn integer_benchmark<T>(
+    c: &mut Criterion,
+    name: &str,
+    a_range: Range<T::Native>,
+    b_range: Range<T::Native>,
+) where
+    T: ArrowPrimitiveType,
+    T::Native: SampleUniform,
+{
+    const BATCH_SIZE: usize = 8192;
+    let one = T::Native::ONE;
+    let max = T::Native::MAX_TOTAL_ORDER;
+    for null_density in [0., 0.1] {
+        let a = seeded_array::<T>(BATCH_SIZE, null_density, a_range.clone(), 1);
+        let b = seeded_array::<T>(BATCH_SIZE, null_density, b_range.clone(), 2);
+        let scalar = Scalar::new(seeded_array::<T>(1, 0., one..b_range.end, 3));
+
+        c.bench_function(&format!("{name}_add({null_density})"), |bench| {
+            bench.iter(|| hint::black_box(add_wrapping(&a, &b).unwrap()))
+        });
+        c.bench_function(&format!("{name}_add_checked({null_density})"), |bench| {
+            bench.iter(|| hint::black_box(add(&a, &b).unwrap()))
+        });
+        c.bench_function(
+            &format!("{name}_add_checked_scalar({null_density})"),
+            |bench| bench.iter(|| hint::black_box(add(&a, &scalar).unwrap())),
+        );
+        c.bench_function(&format!("{name}_subtract({null_density})"), |bench| {
+            bench.iter(|| hint::black_box(sub_wrapping(&a, &b).unwrap()))
+        });
+        c.bench_function(
+            &format!("{name}_subtract_checked({null_density})"),
+            |bench| bench.iter(|| hint::black_box(sub(&a, &b).unwrap())),
+        );
+        c.bench_function(
+            &format!("{name}_subtract_checked_scalar({null_density})"),
+            |bench| bench.iter(|| hint::black_box(sub(&a, &scalar).unwrap())),
+        );
+        c.bench_function(&format!("{name}_multiply({null_density})"), |bench| {
+            bench.iter(|| hint::black_box(mul_wrapping(&a, &b).unwrap()))
+        });
+        c.bench_function(
+            &format!("{name}_multiply_checked({null_density})"),
+            |bench| bench.iter(|| hint::black_box(mul(&a, &b).unwrap())),
+        );
+    }
+
+    // Overflow in the last row, so the whole array is processed before the error.
+    let mut values = seeded_array::<T>(BATCH_SIZE, 0., a_range.clone(), 4)
+        .values()
+        .to_vec();
+    values[BATCH_SIZE - 1] = max;
+    let overflow = PrimitiveArray::<T>::from_iter_values(values);
+    let one = PrimitiveArray::<T>::new_scalar(one);
+    c.bench_function(&format!("{name}_add_checked_overflow"), |bench| {
+        bench.iter(|| hint::black_box(add(&overflow, &one).unwrap_err()))
+    });
+
+    // Null slots hold `max`, which overflows, but no valid row does.
+    let a = seeded_array::<T>(BATCH_SIZE, 0.1, a_range, 5);
+    let b = seeded_array::<T>(BATCH_SIZE, 0., T::Native::ONE..b_range.end, 6);
+    let values = (0..BATCH_SIZE).map(|i| if a.is_null(i) { max } else { a.value(i) });
+    let null_overflow = PrimitiveArray::<T>::new(values.collect(), a.nulls().cloned());
+    c.bench_function(&format!("{name}_add_checked_null_slot_overflow"), |bench| {
+        bench.iter(|| hint::black_box(add(&null_overflow, &b).unwrap()))
+    });
 }
 
 /// Decimal arithmetic at DataFusion's default batch size.
@@ -222,5 +297,18 @@ fn decimal_benchmark(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, add_benchmark, decimal_benchmark);
+fn integer_benchmarks(c: &mut Criterion) {
+    integer_benchmark::<Int32Type>(c, "int32", -1000..1000, -1000..1000);
+    integer_benchmark::<Int64Type>(c, "int64", -1000..1000, -1000..1000);
+    // The left operands are larger, so that subtraction doesn't overflow.
+    integer_benchmark::<UInt32Type>(c, "uint32", 1000..2000, 0..1000);
+    integer_benchmark::<UInt64Type>(c, "uint64", 1000..2000, 0..1000);
+}
+
+criterion_group!(
+    benches,
+    add_benchmark,
+    integer_benchmarks,
+    decimal_benchmark
+);
 criterion_main!(benches);
