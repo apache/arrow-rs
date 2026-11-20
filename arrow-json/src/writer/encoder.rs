@@ -389,7 +389,7 @@ pub fn make_encoder<'a>(
 
         DataType::Dictionary(_, _) => downcast_dictionary_array! {
             array => {
-                NullableEncoder::new(Box::new(DictionaryEncoder::try_new(field, array, options)?), array.nulls().cloned())
+                NullableEncoder::new(Box::new(DictionaryEncoder::try_new(field, array, options)?), array.logical_nulls())
             },
             _ => unreachable!()
         }
