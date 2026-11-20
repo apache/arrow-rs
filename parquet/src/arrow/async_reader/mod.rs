@@ -574,10 +574,19 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         row_group_idx: usize,
         column_idx: usize,
     ) -> Result<Option<Sbbf>> {
-        let metadata = self.metadata.row_group(row_group_idx);
-        let column_metadata = metadata.column(column_idx);
-
-        Sbbf::read_from_column_chunk_async(column_metadata, &mut self.input.0).await
+        let column = self
+            .reader_metadata
+            .metadata()
+            .row_group(row_group_idx)
+            .column(column_idx);
+        Sbbf::read_from_column_chunk_async_with_context(
+            column,
+            &mut self.input.0,
+            self.reader_metadata.extension_observer.as_ref(),
+            Some(row_group_idx),
+            Some(column_idx),
+        )
+        .await
     }
 
     /// Select row groups and rows using row-group-local coordinates.
@@ -627,11 +636,12 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         row_group_idx: usize,
         column_idx: usize,
     ) -> Result<Option<ArrayRef>> {
-        ParquetMetaDataReader::read_column_dictionary_async(
+        ParquetMetaDataReader::read_column_dictionary_async_impl(
             &mut self.input.0,
-            &self.metadata,
+            self.reader_metadata.metadata(),
             row_group_idx,
             column_idx,
+            self.reader_metadata.extension_observer.as_ref(),
         )
         .await
     }
@@ -642,9 +652,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     pub fn build(self) -> Result<ParquetRecordBatchStream<T>> {
         let Self {
             input,
-            metadata,
-            schema,
-            fields,
+            reader_metadata,
             batch_size,
             row_group_plan,
             projection,
@@ -659,16 +667,15 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         // Ensure schema of ParquetRecordBatchStream respects projection, and does
         // not store metadata (same as for ParquetRecordBatchReader and emitted RecordBatches)
         let projection_len = projection.mask.as_ref().map_or(usize::MAX, |m| m.len());
-        let projected_fields = schema
+        let projected_fields = reader_metadata
+            .schema()
             .fields
             .filter_leaves(|idx, _| idx < projection_len && projection.leaf_included(idx));
         let projected_schema = Arc::new(Schema::new(projected_fields));
 
         let decoder = ParquetPushDecoderBuilder {
             input: PushDecoderInput::default(),
-            metadata,
-            schema,
-            fields,
+            reader_metadata,
             projection,
             filter,
             row_group_plan,

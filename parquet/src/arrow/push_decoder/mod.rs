@@ -300,9 +300,7 @@ impl ParquetPushDecoderBuilder {
     pub fn build(self) -> Result<ParquetPushDecoder, ParquetError> {
         let Self {
             input: PushDecoderInput { buffers },
-            metadata: parquet_metadata,
-            schema,
-            fields,
+            reader_metadata,
             batch_size,
             row_group_plan,
             projection,
@@ -315,9 +313,8 @@ impl ParquetPushDecoderBuilder {
         } = self;
 
         // Evaluate eligible same-projection predicates as one predicate.
-        let filter = filter.map(|filter| {
-            filter.fuse_same_projection(parquet_metadata.file_metadata().schema_descr())
-        });
+        let filter =
+            filter.map(|filter| filter.fuse_same_projection(reader_metadata.parquet_schema()));
 
         let has_predicates = filter
             .as_ref()
@@ -329,8 +326,7 @@ impl ParquetPushDecoderBuilder {
         let row_group_reader_builder = RowGroupReaderBuilder::new(
             batch_size,
             projection,
-            Arc::clone(&parquet_metadata),
-            fields,
+            reader_metadata,
             filter,
             metrics,
             max_predicate_cache_size,
@@ -340,8 +336,6 @@ impl ParquetPushDecoderBuilder {
 
         // Initialize the decoder with the configured options
         let mut remaining_row_groups = RemainingRowGroups::new(
-            schema,
-            parquet_metadata,
             row_group_plan,
             RowBudget::new(offset, limit),
             has_predicates,
@@ -366,17 +360,15 @@ impl ParquetPushDecoderBuilder {
 /// buffered bytes.
 fn builder_from_remaining(parts: RemainingRowGroupsParts) -> ParquetPushDecoderBuilder {
     let RemainingRowGroupsParts {
-        metadata,
-        schema,
         row_group_plan,
         offset,
         limit,
         reader_builder,
     } = parts;
     let RowGroupReaderBuilderParts {
+        reader_metadata,
         batch_size,
         projection,
-        fields,
         filter,
         max_predicate_cache_size,
         metrics,
@@ -386,9 +378,7 @@ fn builder_from_remaining(parts: RemainingRowGroupsParts) -> ParquetPushDecoderB
 
     ArrowReaderBuilder {
         input: PushDecoderInput::default(),
-        metadata,
-        schema,
-        fields,
+        reader_metadata,
         batch_size,
         row_group_plan,
         projection,

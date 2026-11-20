@@ -16,7 +16,7 @@ fn test_page_encoding_stats_mask() {
     let builder =
         ParquetRecordBatchReaderBuilder::try_new_with_options(file, arrow_options).unwrap();
 
-    let row_group_metadata = builder.metadata.row_group(0);
+    let row_group_metadata = builder.metadata().row_group(0);
 
     // test page encoding stats
     let page_encoding_stats = row_group_metadata
@@ -47,7 +47,7 @@ fn test_stats_stats_skipped() {
     )
     .unwrap();
 
-    let row_group_metadata = builder.metadata.row_group(0);
+    let row_group_metadata = builder.metadata().row_group(0);
     for column in row_group_metadata.columns() {
         assert!(column.page_encoding_stats().is_none());
         assert!(column.page_encoding_stats_mask().is_none());
@@ -65,7 +65,7 @@ fn test_stats_stats_skipped() {
     )
     .unwrap();
 
-    let row_group_metadata = builder.metadata.row_group(0);
+    let row_group_metadata = builder.metadata().row_group(0);
     for (idx, column) in row_group_metadata.columns().iter().enumerate() {
         assert!(column.page_encoding_stats().is_none());
         assert_eq!(column.page_encoding_stats_mask().is_some(), idx == 0);
@@ -88,7 +88,7 @@ fn test_size_stats_stats_skipped() {
     )
     .unwrap();
 
-    let row_group_metadata = builder.metadata.row_group(0);
+    let row_group_metadata = builder.metadata().row_group(0);
     for column in row_group_metadata.columns() {
         assert!(column.repetition_level_histogram().is_none());
         assert!(column.definition_level_histogram().is_none());
@@ -105,7 +105,7 @@ fn test_size_stats_stats_skipped() {
     )
     .unwrap();
 
-    let row_group_metadata = builder.metadata.row_group(0);
+    let row_group_metadata = builder.metadata().row_group(0);
     for (idx, column) in row_group_metadata.columns().iter().enumerate() {
         assert_eq!(column.repetition_level_histogram().is_some(), idx == 1);
         assert_eq!(column.definition_level_histogram().is_some(), idx == 1);

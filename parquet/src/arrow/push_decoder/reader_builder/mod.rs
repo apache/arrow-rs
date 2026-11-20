@@ -11,8 +11,8 @@ use crate::arrow::array_reader::{ArrayReaderBuilder, CacheOptions, RowGroupCache
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use crate::arrow::arrow_reader::selection::{LoadedRowRanges, RowSelectionStrategy};
 use crate::arrow::arrow_reader::{
-    ParquetRecordBatchReader, PredicateOptions, ReadPlanBuilder, RowFilter, RowSelection,
-    RowSelectionPolicy,
+    ArrowReaderMetadata, ParquetRecordBatchReader, PredicateOptions, ReadPlanBuilder, RowFilter,
+    RowSelection, RowSelectionPolicy,
 };
 use crate::arrow::in_memory_row_group::ColumnChunkData;
 use crate::arrow::push_decoder::reader_builder::data::DataRequestBuilder;
@@ -20,7 +20,6 @@ use crate::arrow::push_decoder::reader_builder::filter::CacheInfo;
 use crate::arrow::push_decoder::scan_plan::{
     BudgetedReadPlan, RowBudget, RowGroupFrontier, ScanPlanBuilder,
 };
-use crate::arrow::schema::ParquetField;
 use crate::errors::ParquetError;
 use crate::file::metadata::page_index::RowGroupPageIndex;
 use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaData};
@@ -148,6 +147,22 @@ impl NextState {
     }
 }
 
+/// The parts of a [`RowGroupReaderBuilder`] needed to rebuild it, recovered by
+/// [`RowGroupReaderBuilder::into_parts`].
+#[derive(Debug)]
+pub(crate) struct RowGroupReaderBuilderParts {
+    pub reader_metadata: ArrowReaderMetadata,
+    pub batch_size: usize,
+    pub projection: ProjectionMask,
+    pub filter: Option<RowFilter>,
+    pub max_predicate_cache_size: usize,
+    pub metrics: ArrowReaderMetrics,
+    pub row_selection_policy: RowSelectionPolicy,
+    /// Bytes already pushed into the decoder, carried across a rebuild so they
+    /// are not re-requested.
+    pub buffers: PushBuffers,
+}
+
 /// Builder for [`ParquetRecordBatchReader`] for a single row group
 ///
 /// This struct drives the main state machine for decoding each row group -- it
@@ -155,17 +170,13 @@ impl NextState {
 /// `ParquetRecordBatchReader` when all data is available.
 #[derive(Debug)]
 pub(crate) struct RowGroupReaderBuilder {
+    /// File metadata and reader configuration shared with child readers.
+    pub(super) reader_metadata: ArrowReaderMetadata,
     /// The output batch size
     batch_size: usize,
 
     /// What columns to project (produce in each output batch)
     projection: ProjectionMask,
-
-    /// The Parquet file metadata
-    metadata: Arc<ParquetMetaData>,
-
-    /// Top level parquet schema and arrow schema mapping
-    fields: Option<Arc<ParquetField>>,
 
     /// Optional filter
     filter: Option<RowFilter>,
@@ -195,33 +206,13 @@ pub(crate) struct RowGroupReaderBuilder {
     stages: Arc<StageSchedule>,
 }
 
-/// The parts of a [`RowGroupReaderBuilder`] needed to rebuild it, recovered by
-/// [`RowGroupReaderBuilder::into_parts`].
-///
-/// `metadata` is not included: it is a whole-file property carried alongside
-/// `schema` in `RemainingRowGroupsParts`.
-#[derive(Debug)]
-pub(crate) struct RowGroupReaderBuilderParts {
-    pub batch_size: usize,
-    pub projection: ProjectionMask,
-    pub fields: Option<Arc<ParquetField>>,
-    pub filter: Option<RowFilter>,
-    pub max_predicate_cache_size: usize,
-    pub metrics: ArrowReaderMetrics,
-    pub row_selection_policy: RowSelectionPolicy,
-    /// Bytes already pushed into the decoder, carried across a rebuild so they
-    /// are not re-requested.
-    pub buffers: PushBuffers,
-}
-
 impl RowGroupReaderBuilder {
     /// Create a new RowGroupReaderBuilder
     #[expect(clippy::too_many_arguments)]
     pub(crate) fn new(
         batch_size: usize,
         projection: ProjectionMask,
-        metadata: Arc<ParquetMetaData>,
-        fields: Option<Arc<ParquetField>>,
+        reader_metadata: ArrowReaderMetadata,
         filter: Option<RowFilter>,
         metrics: ArrowReaderMetrics,
         max_predicate_cache_size: usize,
@@ -238,7 +229,7 @@ impl RowGroupReaderBuilder {
                 Self::compute_cache_projection_inner(
                     filter,
                     &projection,
-                    &metadata,
+                    reader_metadata.metadata(),
                     max_predicate_cache_size,
                 ),
             ),
@@ -247,10 +238,9 @@ impl RowGroupReaderBuilder {
         let stages =
             StageSchedule::new(projection.clone(), predicate_projections, cache_projection);
         Self {
+            reader_metadata,
             batch_size,
             projection,
-            metadata,
-            fields,
             filter,
             metrics,
             max_predicate_cache_size,
@@ -262,16 +252,15 @@ impl RowGroupReaderBuilder {
     }
 
     /// Decompose into [`RowGroupReaderBuilderParts`] so the builder can be
-    /// reconstructed. The runtime decode `state` is discarded; `metadata` is
-    /// recovered from the frontier instead (see `RemainingRowGroups::into_parts`).
+    /// reconstructed. Reader metadata and configuration are carried intact;
+    /// only the runtime decode `state` is discarded.
     pub(crate) fn into_parts(self) -> RowGroupReaderBuilderParts {
         // If a new field is added to `RowGroupReaderBuilder`, it must be added here and in `RowGroupReaderBuilderParts`,
         // or at least evaluate how it should be handled in the decomposition and reconstruction of the builder.
         let Self {
+            reader_metadata,
             batch_size,
             projection,
-            metadata: _,
-            fields,
             filter,
             max_predicate_cache_size,
             metrics,
@@ -282,9 +271,9 @@ impl RowGroupReaderBuilder {
             stages: _,
         } = self;
         RowGroupReaderBuilderParts {
+            reader_metadata,
             batch_size,
             projection,
-            fields,
             filter,
             max_predicate_cache_size,
             metrics,
@@ -493,7 +482,7 @@ impl RowGroupReaderBuilder {
                     row_group_idx,
                     row_count,
                     self.batch_size,
-                    &self.metadata,
+                    &self.reader_metadata,
                     fetch.projection, // use the predicate's projection
                 )
                 .with_selection(plan_builder.selection())
@@ -549,7 +538,7 @@ impl RowGroupReaderBuilder {
                 let row_group = data_request.try_into_in_memory_row_group(
                     row_group_idx,
                     row_count,
-                    &self.metadata,
+                    &self.reader_metadata,
                     predicate.projection(),
                     &mut self.buffers,
                 )?;
@@ -559,8 +548,11 @@ impl RowGroupReaderBuilder {
                 let array_reader = ArrayReaderBuilder::new(&row_group, &self.metrics)
                     .with_batch_size(self.batch_size)
                     .with_cache_options(Some(&cache_options))
-                    .with_parquet_metadata(&self.metadata)
-                    .build_array_reader(self.fields.as_deref(), predicate.projection())?;
+                    .with_parquet_metadata(self.reader_metadata.metadata())
+                    .build_array_reader(
+                        self.reader_metadata.fields.as_deref(),
+                        predicate.projection(),
+                    )?;
 
                 // Auto resolution and loaded ranges are projection-specific, so restore the
                 // configured policy before preparing each predicate.
@@ -571,7 +563,7 @@ impl RowGroupReaderBuilder {
                     plan_builder,
                     predicate.projection(),
                     self.row_group_offset_index(row_group_idx),
-                    self.metadata.file_metadata().schema_descr().num_columns(),
+                    self.reader_metadata.parquet_schema().num_columns(),
                     row_count,
                 );
 
@@ -665,7 +657,7 @@ impl RowGroupReaderBuilder {
                     row_group_idx,
                     row_count,
                     self.batch_size,
-                    &self.metadata,
+                    &self.reader_metadata,
                     fetch.projection,
                 )
                 .with_selection(plan_builder.selection())
@@ -679,7 +671,7 @@ impl RowGroupReaderBuilder {
                     plan_builder,
                     &self.projection,
                     self.row_group_offset_index(row_group_idx),
-                    self.metadata.file_metadata().schema_descr().num_columns(),
+                    self.reader_metadata.parquet_schema().num_columns(),
                     row_count,
                 );
 
@@ -726,7 +718,7 @@ impl RowGroupReaderBuilder {
                 let row_group = data_request.try_into_in_memory_row_group(
                     row_group_idx,
                     row_count,
-                    &self.metadata,
+                    &self.reader_metadata,
                     &self.projection,
                     &mut self.buffers,
                 )?;
@@ -736,15 +728,15 @@ impl RowGroupReaderBuilder {
                 // if we have any cached results, connect them up
                 let array_reader_builder = ArrayReaderBuilder::new(&row_group, &self.metrics)
                     .with_batch_size(self.batch_size)
-                    .with_parquet_metadata(&self.metadata);
+                    .with_parquet_metadata(self.reader_metadata.metadata());
+                let fields = self.reader_metadata.fields.as_deref();
                 let array_reader = if let Some(cache_info) = cache_info.as_ref() {
                     let cache_options: CacheOptions = cache_info.builder().consumer();
                     array_reader_builder
                         .with_cache_options(Some(&cache_options))
-                        .build_array_reader(self.fields.as_deref(), &self.projection)
+                        .build_array_reader(fields, &self.projection)
                 } else {
-                    array_reader_builder
-                        .build_array_reader(self.fields.as_deref(), &self.projection)
+                    array_reader_builder.build_array_reader(fields, &self.projection)
                 }?;
 
                 let reader = ParquetRecordBatchReader::new(array_reader, plan);
@@ -778,7 +770,8 @@ impl RowGroupReaderBuilder {
     /// buffer.
     pub(crate) fn release_row_group(&mut self, row_group_idx: usize) {
         let ranges: Vec<Range<u64>> = self
-            .metadata
+            .reader_metadata
+            .metadata()
             .row_group(row_group_idx)
             .columns()
             .iter()
@@ -802,7 +795,12 @@ impl RowGroupReaderBuilder {
         }
         let mut keep = vec![];
         for row_group_idx in row_groups {
-            let Some(row_group) = self.metadata.row_groups().get(row_group_idx) else {
+            let Some(row_group) = self
+                .reader_metadata
+                .metadata()
+                .row_groups()
+                .get(row_group_idx)
+            else {
                 continue;
             };
             keep.extend(
@@ -828,11 +826,11 @@ impl RowGroupReaderBuilder {
     /// Returns the columns that are used by the filters *and* then used in the
     /// final projection, excluding any nested columns.
     fn compute_cache_projection(&self, row_group_idx: usize, filter: &RowFilter) -> ProjectionMask {
-        let meta = self.metadata.row_group(row_group_idx);
+        let meta = self.reader_metadata.metadata().row_group(row_group_idx);
         let cache_projection = Self::compute_cache_projection_inner(
             filter,
             &self.projection,
-            &self.metadata,
+            self.reader_metadata.metadata(),
             self.max_predicate_cache_size,
         );
         match cache_projection {
@@ -864,12 +862,12 @@ impl RowGroupReaderBuilder {
 
     /// Get the offset index for the specified row group, if any
     fn row_group_offset_index(&self, row_group_idx: usize) -> Option<RowGroupPageIndex> {
-        if self
-            .metadata
+        let metadata = self.reader_metadata.metadata();
+        if metadata
             .page_index()
             .is_some_and(|pi| pi.has_offset_indexes())
         {
-            Some(self.metadata.page_index_for_row_group(row_group_idx))
+            Some(metadata.page_index_for_row_group(row_group_idx))
         } else {
             None
         }

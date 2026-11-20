@@ -5,11 +5,10 @@
 use crate::basic::PageType;
 use crate::column::page::CompressedPage;
 use crate::encryption::ciphers::BlockEncryptor;
-use crate::encryption::encrypt::{FileEncryptor, encrypt_thrift_object};
+use crate::encryption::encrypt::{FileEncryptor, encrypt_thrift};
 use crate::encryption::modules::{ModuleType, create_module_aad};
 use crate::errors::ParquetError;
 use crate::errors::Result;
-use crate::file::metadata::thrift::PageHeader;
 use bytes::Bytes;
 use std::io::Write;
 use std::sync::Arc;
@@ -79,17 +78,18 @@ impl PageEncryptor {
     /// Encrypt a column page header
     pub fn encrypt_page_header<W: Write>(
         &mut self,
-        page_header: &PageHeader,
+        page_type: PageType,
         sink: &mut W,
+        encode: impl FnOnce(&mut Vec<u8>) -> Result<()>,
     ) -> Result<()> {
-        let module_type = match page_header.r#type {
+        let module_type = match page_type {
             PageType::DATA_PAGE => ModuleType::DataPageHeader,
             PageType::DATA_PAGE_V2 => ModuleType::DataPageHeader,
             PageType::DICTIONARY_PAGE => ModuleType::DictionaryPageHeader,
             PageType::INDEX_PAGE => {
                 return Err(general_err!(
                     "Unsupported page type for page header encryption: {:?}",
-                    page_header.r#type
+                    page_type
                 ));
             }
         };
@@ -101,6 +101,6 @@ impl PageEncryptor {
             Some(self.page_index),
         )?;
 
-        encrypt_thrift_object(page_header, &mut self.block_encryptor, sink, &aad)
+        encrypt_thrift(encode, &mut self.block_encryptor, sink, &aad)
     }
 }

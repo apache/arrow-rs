@@ -4,13 +4,15 @@
 
 use crate::arrow::ProjectionMask;
 use crate::arrow::array_reader::RowGroups;
-use crate::arrow::arrow_reader::RowSelection;
+use crate::arrow::arrow_reader::{ArrowReaderMetadata, RowSelection};
 use crate::column::page::{PageIterator, PageReader};
 use crate::errors::ParquetError;
 use crate::file::metadata::page_index::RowGroupPageIndex;
 use crate::file::metadata::{ParquetMetaData, RowGroupMetaData};
 use crate::file::page_index::offset_index::PageLocation;
+use crate::file::properties::ReaderProperties;
 use crate::file::reader::{ChunkReader, Length, SerializedPageReader};
+use crate::file::serialized_reader::SerializedPageReaderContext;
 use bytes::{Buf, Bytes};
 use std::ops::Range;
 use std::sync::Arc;
@@ -23,7 +25,7 @@ pub(crate) struct InMemoryRowGroup<'a> {
     pub(crate) column_chunks: Vec<Option<Arc<ColumnChunkData>>>,
     pub(crate) row_count: usize,
     pub(crate) row_group_idx: usize,
-    pub(crate) metadata: &'a ParquetMetaData,
+    pub(crate) reader_metadata: &'a ArrowReaderMetadata,
 }
 
 /// What ranges to fetch for the columns in this row group
@@ -53,7 +55,10 @@ impl InMemoryRowGroup<'_> {
         batch_size: usize,
         cache_mask: Option<&ProjectionMask>,
     ) -> FetchRanges {
-        let metadata = self.metadata.row_group(self.row_group_idx);
+        let metadata = self
+            .reader_metadata
+            .metadata()
+            .row_group(self.row_group_idx);
         // With a `RowSelection` and an `OffsetIndex`, only fetch the pages
         // required for the `RowSelection`
         let page_index = self.page_index.as_ref().filter(|_| selection.is_some());
@@ -106,7 +111,10 @@ impl InMemoryRowGroup<'_> {
         I: IntoIterator<Item = Bytes>,
     {
         let mut chunk_data = chunk_data.into_iter();
-        let metadata = self.metadata.row_group(self.row_group_idx);
+        let metadata = self
+            .reader_metadata
+            .metadata()
+            .row_group(self.row_group_idx);
         if let Some(page_start_offsets) = page_start_offsets {
             // If we have a `RowSelection` and an `OffsetIndex` then only fetch pages required for the
             // `RowSelection`
@@ -299,18 +307,28 @@ impl RowGroups for InMemoryRowGroup<'_> {
                     .page_index
                     .as_ref()
                     .and_then(|pi| pi.page_locations(i).cloned());
-                let column_chunk_metadata = self.metadata.row_group(self.row_group_idx).column(i);
-                let page_reader = SerializedPageReader::new(
+                let metadata = self.reader_metadata.metadata();
+                let context = SerializedPageReaderContext {
+                    extension_observer: self.reader_metadata.extension_observer.clone(),
+                    row_group: Some(self.row_group_idx),
+                    column: Some(i),
+                    ..Default::default()
+                };
+                let column_metadata = metadata.row_group(self.row_group_idx).column(i);
+                let props = ReaderProperties::builder().build();
+                let page_reader = SerializedPageReader::new_with_context(
                     data.clone(),
-                    column_chunk_metadata,
+                    column_metadata,
                     self.row_count,
                     page_locations,
-                )?;
-                let page_reader = page_reader.add_crypto_context(
+                    props.codec_options(),
+                    context,
+                )?
+                .add_crypto_context(
                     self.row_group_idx,
                     i,
-                    self.metadata,
-                    column_chunk_metadata,
+                    metadata,
+                    column_metadata,
                 )?;
 
                 let page_reader: Box<dyn PageReader> = Box::new(page_reader);
@@ -323,11 +341,15 @@ impl RowGroups for InMemoryRowGroup<'_> {
     }
 
     fn row_groups(&self) -> Box<dyn Iterator<Item = &RowGroupMetaData> + '_> {
-        Box::new(std::iter::once(self.metadata.row_group(self.row_group_idx)))
+        Box::new(std::iter::once(
+            self.reader_metadata
+                .metadata()
+                .row_group(self.row_group_idx),
+        ))
     }
 
     fn metadata(&self) -> &ParquetMetaData {
-        self.metadata
+        self.reader_metadata.metadata()
     }
 }
 
@@ -386,6 +408,15 @@ impl Length for ColumnChunkData {
 
 impl ChunkReader for ColumnChunkData {
     type T = bytes::buf::Reader<Bytes>;
+
+    fn try_get_buffered_range(&self, start: u64, length: usize) -> Option<Bytes> {
+        let Self::Dense { offset, data } = self else {
+            // Sparse chunks already use complete page ranges from the offset index.
+            return None;
+        };
+        let start = start.checked_sub(*offset as u64)?;
+        data.try_get_buffered_range(start, length)
+    }
 
     fn get_read(&self, start: u64) -> crate::errors::Result<Self::T> {
         Ok(self.get(start)?.reader())

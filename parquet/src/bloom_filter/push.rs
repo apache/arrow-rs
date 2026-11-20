@@ -12,8 +12,15 @@ use super::{SBBF_HEADER_SIZE_ESTIMATE, Sbbf, bloom_filter_bitset_range, bloom_fi
 use crate::DecodeResult;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::ColumnChunkMetaData;
+use crate::file::metadata::extensions::{ObserverHandle, SiteInfo};
 use crate::file::reader::ChunkReader;
+use crate::parquet_thrift::ThriftSliceInputProtocol;
 use crate::util::push_buffers::PushBuffers;
+
+pub(super) struct ObservedBloom<'a> {
+    pub(super) observer: &'a ObserverHandle,
+    pub(super) root: SiteInfo,
+}
 
 /// Decoding state machine
 #[derive(Debug)]
@@ -215,6 +222,13 @@ impl SbbfPushDecoder {
     ///    push_range(s) supplies bytes without changing state.
     ///  - Header parsing/validation must succeed before advancing. Any decoding error leaves the decoder unusable.
     pub fn try_decode(&mut self) -> Result<DecodeResult<Sbbf>> {
+        self.try_decode_with(None)
+    }
+
+    pub(super) fn try_decode_with(
+        &mut self,
+        observation: Option<&ObservedBloom<'_>>,
+    ) -> Result<DecodeResult<Sbbf>> {
         loop {
             match std::mem::replace(&mut self.state, DecodeState::Intermediate) {
                 DecodeState::FindingRange => {
@@ -230,7 +244,13 @@ impl SbbfPushDecoder {
                         return Ok(DecodeResult::NeedsData(vec![range]));
                     }
                     let buffer = self.get_bytes(&range)?;
-                    let bitset_range = bloom_filter_bitset_range(&buffer, self.length)?;
+                    let bitset_range = crate::file::metadata::extensions::with_read_extensions!(
+                        ThriftSliceInputProtocol::new(&buffer),
+                        observation.map(|o| o.observer),
+                        observation.expect("observer has a root").root,
+                        with_observer,
+                        |mut prot| bloom_filter_bitset_range(&mut prot, self.length)
+                    )?;
                     if self.length.is_some() {
                         let bitset = buffer.slice(bitset_range);
                         self.state = DecodeState::Finished;
