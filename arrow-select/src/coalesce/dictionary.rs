@@ -4,11 +4,13 @@
 
 use super::{InProgressArray, generic::GenericInProgressArray};
 use crate::dictionary::{KeyMapping, child_values_ptr_eq, merge_dictionary_values_with_masks};
+use crate::take::{TakeOptions, take};
 use ahash::RandomState;
 use arrow_array::cast::AsArray;
 use arrow_array::types::ArrowDictionaryKeyType;
 use arrow_array::{
-    Array, ArrayRef, DictionaryArray, PrimitiveArray, downcast_integer, new_empty_array,
+    Array, ArrayRef, DictionaryArray, PrimitiveArray, UInt32Array, downcast_integer,
+    new_empty_array,
 };
 use arrow_buffer::{
     ArrowNativeType, BooleanBufferBuilder, NullBuffer, NullBufferBuilder, ScalarBuffer,
@@ -17,6 +19,8 @@ use arrow_schema::{ArrowError, DataType};
 use std::collections::HashMap;
 use std::mem::size_of;
 use std::sync::Arc;
+
+const INDEXED_COPY_MAX_SELECTIVITY_DENOMINATOR: usize = 16;
 
 struct KeyChunk<K: ArrowDictionaryKeyType> {
     /// Zero-copy slice of source-local keys for the retained rows.
@@ -205,6 +209,66 @@ impl<K: ArrowDictionaryKeyType> InProgressArray for InProgressDictionaryArray<K>
         Ok(())
     }
 
+    unsafe fn copy_rows_by_indices(
+        &mut self,
+        source: &ArrayRef,
+        indices: &UInt32Array,
+    ) -> Result<(), ArrowError> {
+        if indices.is_empty() {
+            return Ok(());
+        }
+        if indices.len() > source.len() / INDEXED_COPY_MAX_SELECTIVITY_DENOMINATOR {
+            let taken = take(
+                source.as_ref(),
+                indices,
+                Some(TakeOptions {
+                    check_bounds: false,
+                }),
+            )?;
+            self.set_source(Some(taken));
+            let result = self.copy_rows(0, indices.len());
+            self.set_source(None);
+            return result;
+        }
+        let dictionary = source.as_dictionary::<K>();
+        let values = dictionary.values();
+        let keys = dictionary.keys();
+        let key_values = keys.values();
+        debug_assert!(
+            indices
+                .values()
+                .iter()
+                .all(|&idx| (idx as usize) < key_values.len()),
+            "copy_rows_by_indices requires caller-validated in-bounds indices",
+        );
+        let mut gathered = Vec::with_capacity(indices.len());
+        // SAFETY: the caller guarantees every index is less than `source.len()`,
+        // which equals `key_values.len()`.
+        unsafe {
+            for &idx in indices.values() {
+                gathered.push(*key_values.get_unchecked(idx as usize));
+            }
+        }
+        let nulls = keys.nulls().and_then(|nulls| {
+            if nulls.null_count() == 0 {
+                return None;
+            }
+            let mut gathered = NullBufferBuilder::new(indices.len());
+            // SAFETY: the caller validated every index against `keys.len()`,
+            // which equals the length of its null buffer.
+            unsafe { super::append_gathered_nulls(&mut gathered, nulls, indices) };
+            gathered.finish()
+        });
+        let source = self.source_id(Arc::clone(values));
+        self.chunks.push(KeyChunk {
+            keys: ScalarBuffer::from(gathered),
+            nulls,
+            source,
+        });
+        self.len += indices.len();
+        Ok(())
+    }
+
     fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
         let sources = std::mem::take(&mut self.sources);
         let chunks = std::mem::take(&mut self.chunks);
@@ -307,6 +371,96 @@ mod tests {
         let output = coalescer.next_completed_batch().unwrap();
         let output = output.column(0).as_dictionary::<Int32Type>();
         assert!(Arc::ptr_eq(output.values(), &values));
+    }
+
+    #[test]
+    fn indexed_copy_reuses_values_and_preserves_sliced_null_keys() {
+        let values = Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef;
+        let keys =
+            Int32Array::from_iter((0..66).map(|idx| (idx != 1).then_some(idx % 3))).slice(1, 64);
+        let source =
+            Arc::new(DictionaryArray::<Int32Type>::new(keys, Arc::clone(&values))) as ArrayRef;
+        let mut in_progress = InProgressDictionaryArray::<Int32Type>::new(&DataType::Utf8);
+        // SAFETY: all indices are non-null and in bounds.
+        unsafe {
+            in_progress
+                .copy_rows_by_indices(&source, &UInt32Array::from(vec![9, 1, 0, 1]))
+                .unwrap()
+        };
+
+        let output = in_progress.finish().unwrap();
+        let output = output.as_dictionary::<Int32Type>();
+        assert!(Arc::ptr_eq(output.values(), &values));
+        assert_eq!(
+            output.keys(),
+            &Int32Array::from(vec![Some(1), Some(2), None, Some(2)])
+        );
+    }
+
+    #[test]
+    fn indexed_copy_remaps_sparse_values_across_sources() {
+        let first_values = Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef;
+        let second_values = Arc::new(StringArray::from(vec!["c", "a", "d"])) as ArrayRef;
+        let keys = (0..64)
+            .map(|idx| (idx != 3).then_some(idx % 3))
+            .collect::<Vec<_>>();
+        let first = batch(&first_values, keys.clone());
+        let second = batch(&second_values, keys);
+        let mut coalescer = BatchCoalescer::new(first.schema(), 8);
+
+        // Four out of 64 rows is the maximum selection that uses the direct sparse path.
+        coalescer
+            .push_batch_with_indices(first, &UInt32Array::from(vec![3, 1, 0, 1]))
+            .unwrap();
+        coalescer
+            .push_batch_with_indices(second, &UInt32Array::from(vec![2, 0, 3, 0]))
+            .unwrap();
+
+        let output = coalescer.next_completed_batch().unwrap();
+        let output = output.column(0).as_dictionary::<Int32Type>();
+        let values = output.values().as_string::<i32>();
+        let decoded = output
+            .keys_iter()
+            .map(|key| key.map(|key| values.value(key)))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            decoded,
+            vec![
+                None,
+                Some("b"),
+                Some("a"),
+                Some("b"),
+                Some("d"),
+                Some("c"),
+                None,
+                Some("c"),
+            ]
+        );
+        assert_eq!(values.len(), 4);
+    }
+
+    #[test]
+    fn indexed_copy_dense_fallback_preserves_null_keys() {
+        let values = Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef;
+        let source = Arc::new(DictionaryArray::<Int32Type>::new(
+            Int32Array::from(vec![Some(0), None, Some(2), Some(1)]),
+            Arc::clone(&values),
+        )) as ArrayRef;
+        let mut in_progress = InProgressDictionaryArray::<Int32Type>::new(&DataType::Utf8);
+        // SAFETY: all indices are non-null and in bounds.
+        unsafe {
+            in_progress
+                .copy_rows_by_indices(&source, &UInt32Array::from(vec![3, 1, 0]))
+                .unwrap()
+        };
+
+        let output = in_progress.finish().unwrap();
+        let output = output.as_dictionary::<Int32Type>();
+        assert!(Arc::ptr_eq(output.values(), &values));
+        assert_eq!(
+            output.keys(),
+            &Int32Array::from(vec![Some(1), None, Some(0)])
+        );
     }
 
     #[test]
