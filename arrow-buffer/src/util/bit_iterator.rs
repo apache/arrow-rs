@@ -4,9 +4,7 @@
 
 //! Types for iterating over packed bitmasks
 
-use crate::bit_chunk_iterator::{
-    BitChunkIterator, BitChunks, UnalignedBitChunk, UnalignedBitChunkIterator,
-};
+use crate::bit_chunk_iterator::{BitChunks, UnalignedBitChunk, UnalignedBitChunkIterator};
 use crate::bit_util::{ceil, get_bit_raw};
 use std::ops::Range;
 
@@ -374,9 +372,10 @@ impl Iterator for BitIndexU32Iterator<'_> {
 /// counting the valid elements of each row, where calling
 /// [`Buffer::count_set_bits_offset`] for each row rescans from the row's start.
 ///
-/// A position before the word of the previous position restarts the scan from
-/// the start of the bitmask, so the counts are correct for positions in any
-/// order.
+/// Positions can come in any order. A call reads each word between the
+/// previous position and the new one, in either direction. When positions jump
+/// across the bitmask, such as the rows of a list view in random order, calling
+/// [`Buffer::count_set_bits_offset`] for each row reads fewer words.
 ///
 /// # Example: Count the valid elements of each row of a list
 /// ```
@@ -400,14 +399,13 @@ impl Iterator for BitIndexU32Iterator<'_> {
 #[derive(Debug)]
 pub struct SetBitCounter<'a> {
     chunks: BitChunks<'a>,
-    iter: BitChunkIterator<'a>,
-    /// The bitmask's final partial word, zero padded, until it is read
+    /// The bitmask's final partial word, zero padded
     remainder: u64,
+    /// Index of `word`, where `chunks.chunk_len()` is the remainder
+    word_index: usize,
     /// The word containing the most recent position
     word: u64,
-    /// Position of the first bit of `word`
-    word_start: usize,
-    /// Set bits before `word_start`
+    /// Set bits before `word`
     count_before_word: usize,
     len: usize,
 }
@@ -430,35 +428,24 @@ impl<'a> SetBitCounter<'a> {
     pub fn new(buffer: &'a [u8], offset: usize, len: usize) -> Self {
         let chunks = BitChunks::new(buffer, offset, len);
         let mut counter = Self {
-            iter: chunks.iter(),
+            remainder: chunks.remainder_bits(),
             chunks,
-            remainder: 0,
+            word_index: 0,
             word: 0,
-            word_start: 0,
             count_before_word: 0,
             len,
         };
-        counter.restart();
+        counter.word = counter.word_at(0);
         counter
     }
 
-    // Cold and out of line because after `new`, only a position before the
-    // current word calls it, and inlining would copy it into every caller of
-    // the inlined `count_before`.
-    #[cold]
-    fn restart(&mut self) {
-        self.iter = self.chunks.iter();
-        self.remainder = self.chunks.remainder_bits();
-        self.word = self.next_word();
-        self.word_start = 0;
-        self.count_before_word = 0;
-    }
-
     #[inline]
-    fn next_word(&mut self) -> u64 {
-        self.iter
-            .next()
-            .unwrap_or_else(|| std::mem::take(&mut self.remainder))
+    fn word_at(&self, index: usize) -> u64 {
+        if index < self.chunks.chunk_len() {
+            self.chunks.chunk(index)
+        } else {
+            self.remainder
+        }
     }
 
     /// Returns the number of set bits before position `end`
@@ -482,15 +469,18 @@ impl<'a> SetBitCounter<'a> {
             "position {end} out of bounds for length {}",
             self.len
         );
-        if end < self.word_start {
-            self.restart();
+        // `word_index * 64` does not overflow because it is at most `len`
+        while end < self.word_index * 64 {
+            self.word_index -= 1;
+            self.word = self.word_at(self.word_index);
+            self.count_before_word -= self.word.count_ones() as usize;
         }
-        while end - self.word_start >= 64 {
+        while end - self.word_index * 64 >= 64 {
             self.count_before_word += self.word.count_ones() as usize;
-            self.word = self.next_word();
-            self.word_start += 64;
+            self.word_index += 1;
+            self.word = self.word_at(self.word_index);
         }
-        let mask = (1u64 << (end - self.word_start)) - 1;
+        let mask = (1u64 << (end - self.word_index * 64)) - 1;
         self.count_before_word + (self.word & mask).count_ones() as usize
     }
 
