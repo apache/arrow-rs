@@ -20,18 +20,19 @@ pub struct DeltaByteArrayDecoder {
 
 impl DeltaByteArrayDecoder {
     /// Create a new [`DeltaByteArrayDecoder`] with the provided data page
-    pub fn new(data: Bytes) -> Result<Self> {
+    /// holding at most `num_values` values
+    pub fn new(data: Bytes, num_values: usize) -> Result<Self> {
         let mut prefix = DeltaBitPackDecoder::<Int32Type>::new();
-        prefix.set_data(data.clone(), 0)?;
+        prefix.set_data(data.clone(), num_values)?;
 
-        let num_prefix = prefix.values_left();
+        let num_prefix = prefix.checked_values_left(num_values)?;
         let mut prefix_lengths = vec![0; num_prefix];
         assert_eq!(prefix.get(&mut prefix_lengths)?, num_prefix);
 
         let mut suffix = DeltaBitPackDecoder::<Int32Type>::new();
-        suffix.set_data(data.slice(prefix.get_offset()..), 0)?;
+        suffix.set_data(data.slice(prefix.get_offset()..), num_values)?;
 
-        let num_suffix = suffix.values_left();
+        let num_suffix = suffix.checked_values_left(num_values)?;
         let mut suffix_lengths = vec![0; num_suffix];
         assert_eq!(suffix.get(&mut suffix_lengths)?, num_suffix);
 
@@ -153,7 +154,7 @@ mod tests {
 
     #[test]
     fn test_negative_suffix_length() {
-        let Err(err) = DeltaByteArrayDecoder::new(page(&[0, 0], &[1, -1], b"ab")) else {
+        let Err(err) = DeltaByteArrayDecoder::new(page(&[0, 0], &[1, -1], b"ab"), 2) else {
             panic!("expected error");
         };
         assert!(
@@ -164,7 +165,7 @@ mod tests {
 
     #[test]
     fn test_negative_prefix_length() {
-        let Err(err) = DeltaByteArrayDecoder::new(page(&[0, -1], &[1, 1], b"ab")) else {
+        let Err(err) = DeltaByteArrayDecoder::new(page(&[0, -1], &[1, 1], b"ab"), 2) else {
             panic!("expected error");
         };
         assert!(

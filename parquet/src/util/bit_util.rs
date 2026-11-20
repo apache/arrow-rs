@@ -886,6 +886,12 @@ impl BitReader {
         self.byte_offset + ceil(self.bit_offset, 8)
     }
 
+    /// Returns the number of bytes in the buffer after [`Self::get_byte_offset`]
+    #[inline]
+    pub(crate) fn bytes_left(&self) -> usize {
+        self.buffer.len().saturating_sub(self.get_byte_offset())
+    }
+
     /// Reads a single bit-packed value of `num_bits` bits as a `T` from the
     /// stream.
     ///
