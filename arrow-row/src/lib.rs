@@ -177,6 +177,7 @@ use arrow_array::types::{Int16Type, Int32Type, Int64Type};
 
 mod fixed;
 mod list;
+pub mod radix;
 mod run;
 mod variable;
 
@@ -5401,7 +5402,7 @@ mod tests {
         )
     }
 
-    fn generate_column(rng: &mut StdRng, len: usize) -> ArrayRef {
+    pub(crate) fn generate_column(rng: &mut StdRng, len: usize) -> ArrayRef {
         match rng.random_range(0..24) {
             0 => Arc::new(generate_primitive_array::<Int32Type>(rng, len, 0.8)),
             1 => Arc::new(generate_primitive_array::<UInt32Type>(rng, len, 0.8)),
