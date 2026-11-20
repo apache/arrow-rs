@@ -363,6 +363,10 @@ impl<T: ArrowNativeType> Default for BufferBuilder<T> {
 }
 
 impl<T: ArrowNativeType> Extend<T> for BufferBuilder<T> {
+    /// Appends the items of `iter`.
+    ///
+    /// If `iter`'s [`size_hint`](Iterator::size_hint) reports an exact length,
+    /// at most that many items are appended.
     fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
         self.buffer.extend(iter)
     }
@@ -378,6 +382,10 @@ impl<T: ArrowNativeType> From<Vec<T>> for BufferBuilder<T> {
 }
 
 impl<T: ArrowNativeType> FromIterator<T> for BufferBuilder<T> {
+    /// Collects the items of `iter`.
+    ///
+    /// If `iter`'s [`size_hint`](Iterator::size_hint) reports an exact length,
+    /// at most that many items are collected.
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
         let mut builder = Self::default();
         builder.extend(iter);
