@@ -480,6 +480,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow_array::cast::AsArray;
+    use rstest::rstest;
     use serde_json::{Value, json};
 
     use super::LineDelimited;
@@ -1323,44 +1324,31 @@ mod tests {
         test_write_for_file("test/data/nested_with_nulls.json", false);
     }
 
-    #[test]
-    fn json_line_writer_empty() {
-        let mut writer = LineDelimitedWriter::new(vec![] as Vec<u8>);
+    #[rstest]
+    #[case::line_delimited(LineDelimitedWriter::new(Vec::new()), "")]
+    #[case::json_array(ArrayWriter::new(Vec::new()), "[]")]
+    fn json_writer_empty<F: JsonFormat>(
+        #[case] mut writer: Writer<Vec<u8>, F>,
+        #[case] expected: &str,
+    ) {
         writer.finish().unwrap();
-        assert_eq!(str::from_utf8(&writer.into_inner()).unwrap(), "");
+        assert_eq!(str::from_utf8(&writer.into_inner()).unwrap(), expected);
     }
 
-    #[test]
-    fn json_array_writer_empty() {
-        let mut writer = ArrayWriter::new(vec![] as Vec<u8>);
-        writer.finish().unwrap();
-        assert_eq!(str::from_utf8(&writer.into_inner()).unwrap(), "[]");
-    }
-
-    #[test]
-    fn json_line_writer_empty_batch() {
-        let mut writer = LineDelimitedWriter::new(vec![] as Vec<u8>);
-
+    #[rstest]
+    #[case::line_delimited(LineDelimitedWriter::new(Vec::new()), "")]
+    #[case::json_array(ArrayWriter::new(Vec::new()), "[]")]
+    fn json_writer_empty_batch<F: JsonFormat>(
+        #[case] mut writer: Writer<Vec<u8>, F>,
+        #[case] expected: &str,
+    ) {
         let array = Int32Array::from(Vec::<i32>::new());
         let schema = Schema::new(vec![Field::new("c", DataType::Int32, true)]);
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap();
 
         writer.write(&batch).unwrap();
         writer.finish().unwrap();
-        assert_eq!(str::from_utf8(&writer.into_inner()).unwrap(), "");
-    }
-
-    #[test]
-    fn json_array_writer_empty_batch() {
-        let mut writer = ArrayWriter::new(vec![] as Vec<u8>);
-
-        let array = Int32Array::from(Vec::<i32>::new());
-        let schema = Schema::new(vec![Field::new("c", DataType::Int32, true)]);
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap();
-
-        writer.write(&batch).unwrap();
-        writer.finish().unwrap();
-        assert_eq!(str::from_utf8(&writer.into_inner()).unwrap(), "[]");
+        assert_eq!(str::from_utf8(&writer.into_inner()).unwrap(), expected);
     }
 
     #[test]
@@ -2079,87 +2067,51 @@ mod tests {
         )
     }
 
-    #[test]
-    fn test_decimal32_encoder() {
-        let array = Decimal32Array::from_iter_values([1234, 5678, 9012])
+    #[rstest]
+    #[case::decimal32(
+        Decimal32Array::from_iter_values([1234, 5678, 9012])
             .with_precision_and_scale(8, 2)
-            .unwrap();
-        let field = Arc::new(Field::new("decimal", array.data_type().clone(), true));
-        let schema = Schema::new(vec![field]);
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap();
-
-        let mut buf = Vec::new();
-        {
-            let mut writer = LineDelimitedWriter::new(&mut buf);
-            writer.write_batches(&[&batch]).unwrap();
-        }
-
-        assert_json_eq(
-            &buf,
-            r#"{"decimal":12.34}
+            .unwrap(),
+        r#"{"decimal":12.34}
 {"decimal":56.78}
 {"decimal":90.12}
-"#,
-        );
-    }
-
-    #[test]
-    fn test_decimal64_encoder() {
-        let array = Decimal64Array::from_iter_values([1234, 5678, 9012])
+"#
+    )]
+    #[case::decimal64(
+        Decimal64Array::from_iter_values([1234, 5678, 9012])
             .with_precision_and_scale(10, 2)
-            .unwrap();
-        let field = Arc::new(Field::new("decimal", array.data_type().clone(), true));
-        let schema = Schema::new(vec![field]);
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap();
-
-        let mut buf = Vec::new();
-        {
-            let mut writer = LineDelimitedWriter::new(&mut buf);
-            writer.write_batches(&[&batch]).unwrap();
-        }
-
-        assert_json_eq(
-            &buf,
-            r#"{"decimal":12.34}
+            .unwrap(),
+        r#"{"decimal":12.34}
 {"decimal":56.78}
 {"decimal":90.12}
-"#,
-        );
-    }
-
-    #[test]
-    fn test_decimal128_encoder() {
-        let array = Decimal128Array::from_iter_values([1234, 5678, 9012])
+"#
+    )]
+    #[case::decimal128(
+        Decimal128Array::from_iter_values([1234, 5678, 9012])
             .with_precision_and_scale(10, 2)
-            .unwrap();
-        let field = Arc::new(Field::new("decimal", array.data_type().clone(), true));
-        let schema = Schema::new(vec![field]);
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap();
-
-        let mut buf = Vec::new();
-        {
-            let mut writer = LineDelimitedWriter::new(&mut buf);
-            writer.write_batches(&[&batch]).unwrap();
-        }
-
-        assert_json_eq(
-            &buf,
-            r#"{"decimal":12.34}
+            .unwrap(),
+        r#"{"decimal":12.34}
 {"decimal":56.78}
 {"decimal":90.12}
-"#,
-        );
-    }
-
-    #[test]
-    fn test_decimal256_encoder() {
-        let array = Decimal256Array::from_iter_values([
+"#
+    )]
+    #[case::decimal256(
+        Decimal256Array::from_iter_values([
             i256::from(123400),
             i256::from(567800),
             i256::from(901200),
         ])
         .with_precision_and_scale(10, 4)
-        .unwrap();
+        .unwrap(),
+        r#"{"decimal":12.3400}
+{"decimal":56.7800}
+{"decimal":90.1200}
+"#
+    )]
+    fn test_decimal_encoder<T: DecimalType>(
+        #[case] array: PrimitiveArray<T>,
+        #[case] expected: &str,
+    ) {
         let field = Arc::new(Field::new("decimal", array.data_type().clone(), true));
         let schema = Schema::new(vec![field]);
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap();
@@ -2170,13 +2122,7 @@ mod tests {
             writer.write_batches(&[&batch]).unwrap();
         }
 
-        assert_json_eq(
-            &buf,
-            r#"{"decimal":12.3400}
-{"decimal":56.7800}
-{"decimal":90.1200}
-"#,
-        );
+        assert_json_eq(&buf, expected);
     }
 
     #[test]
@@ -2417,97 +2363,71 @@ mod tests {
         (batch, Arc::new(UnionEncoderFactory))
     }
 
-    #[test]
-    fn test_fallback_encoder_factory_line_delimited_implicit_nulls() {
-        let (batch, encoder_factory) = make_fallback_encoder_test_data();
-
-        let mut buf = Vec::new();
-        {
-            let mut writer = WriterBuilder::new()
-                .with_encoder_factory(encoder_factory)
-                .with_explicit_nulls(false)
-                .build::<_, LineDelimited>(&mut buf);
-            writer.write_batches(&[&batch]).unwrap();
-            writer.finish().unwrap();
-        }
-
-        println!("{}", str::from_utf8(&buf).unwrap());
-
-        assert_json_eq(
-            &buf,
-            r#"{"union":1,"float":1.0}
+    #[rstest]
+    #[case::implicit_nulls(
+        WriterBuilder::new().with_explicit_nulls(false),
+        r#"{"union":1,"float":1.0}
 {"union":"a"}
 {"union":null,"float":3.4}
-"#,
-        );
-    }
-
-    #[test]
-    fn test_fallback_encoder_factory_line_delimited_explicit_nulls() {
+"#
+    )]
+    #[case::explicit_nulls(
+        WriterBuilder::new().with_explicit_nulls(true),
+        r#"{"union":1,"float":1.0}
+{"union":"a","float":null}
+{"union":null,"float":3.4}
+"#
+    )]
+    fn test_fallback_encoder_factory_line_delimited(
+        #[case] builder: WriterBuilder,
+        #[case] expected: &str,
+    ) {
         let (batch, encoder_factory) = make_fallback_encoder_test_data();
 
         let mut buf = Vec::new();
         {
-            let mut writer = WriterBuilder::new()
+            let mut writer = builder
                 .with_encoder_factory(encoder_factory)
-                .with_explicit_nulls(true)
                 .build::<_, LineDelimited>(&mut buf);
             writer.write_batches(&[&batch]).unwrap();
             writer.finish().unwrap();
         }
 
-        assert_json_eq(
-            &buf,
-            r#"{"union":1,"float":1.0}
-{"union":"a","float":null}
-{"union":null,"float":3.4}
-"#,
-        );
+        assert_json_eq(&buf, expected);
     }
 
-    #[test]
-    fn test_fallback_encoder_factory_array_implicit_nulls() {
-        let (batch, encoder_factory) = make_fallback_encoder_test_data();
-
-        let json_value: Value = {
-            let mut buf = Vec::new();
-            let mut writer = WriterBuilder::new()
-                .with_encoder_factory(encoder_factory)
-                .build::<_, JsonArray>(&mut buf);
-            writer.write_batches(&[&batch]).unwrap();
-            writer.finish().unwrap();
-            serde_json::from_slice(&buf).unwrap()
-        };
-
-        let expected = json!([
+    #[rstest]
+    #[case::default_implicit_nulls(
+        WriterBuilder::new(),
+        json!([
             {"union":1,"float":1.0},
             {"union":"a"},
             {"float":3.4,"union":null},
-        ]);
-
-        assert_eq!(json_value, expected);
-    }
-
-    #[test]
-    fn test_fallback_encoder_factory_array_explicit_nulls() {
+        ])
+    )]
+    #[case::explicit_nulls(
+        WriterBuilder::new().with_explicit_nulls(true),
+        json!([
+            {"union":1,"float":1.0},
+            {"union":"a", "float": null},
+            {"union":null,"float":3.4},
+        ])
+    )]
+    fn test_fallback_encoder_factory_array(
+        #[case] builder: WriterBuilder,
+        #[case] expected: Value,
+    ) {
         let (batch, encoder_factory) = make_fallback_encoder_test_data();
 
         let json_value: Value = {
             let mut buf = Vec::new();
-            let mut writer = WriterBuilder::new()
+            let mut writer = builder
                 .with_encoder_factory(encoder_factory)
-                .with_explicit_nulls(true)
                 .build::<_, JsonArray>(&mut buf);
             writer.write_batches(&[&batch]).unwrap();
             writer.finish().unwrap();
             serde_json::from_slice(&buf).unwrap()
         };
-
-        let expected = json!([
-            {"union":1,"float":1.0},
-            {"union":"a", "float": null},
-            {"union":null,"float":3.4},
-        ]);
 
         assert_eq!(json_value, expected);
     }
