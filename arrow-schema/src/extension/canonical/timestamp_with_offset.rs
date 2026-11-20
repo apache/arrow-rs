@@ -144,6 +144,7 @@ mod tests {
     };
 
     use super::*;
+    use rstest::rstest;
 
     fn make_valid_field_primitive(time_unit: TimeUnit) -> Field {
         Field::new(
@@ -336,58 +337,27 @@ mod tests {
         Field::new("", data_type, false).with_extension_type(TimestampWithOffset);
     }
 
-    #[test]
+    #[rstest]
+    #[case::primitive(DataType::UInt64)]
+    #[case::dictionary_key(DataType::Dictionary(
+        Box::new(DataType::Boolean),
+        Box::new(DataType::Int16)
+    ))]
+    #[case::dictionary_value(DataType::Dictionary(
+        Box::new(DataType::UInt8),
+        Box::new(DataType::Int32)
+    ))]
     #[should_panic(
         expected = "expected Struct(\"timestamp\": Timestamp(_, Some(\"UTC\")), \"offset_minutes\": Int16), found Struct"
     )]
-    fn invalid_type_wrong_offset_type() {
+    fn invalid_type_wrong_offset_type(#[case] offset_type: DataType) {
         let data_type = DataType::Struct(Fields::from_iter([
             Field::new(
                 TIMESTAMP_FIELD_NAME,
                 DataType::Timestamp(TimeUnit::Second, Some("UTC".into())),
                 false,
             ),
-            Field::new(OFFSET_FIELD_NAME, DataType::UInt64, false),
-        ]));
-        Field::new("", data_type, false).with_extension_type(TimestampWithOffset);
-    }
-
-    #[test]
-    #[should_panic(
-        expected = "expected Struct(\"timestamp\": Timestamp(_, Some(\"UTC\")), \"offset_minutes\": Int16), found Struct"
-    )]
-    fn invalid_type_wrong_offset_key_dict_encoded() {
-        let data_type = DataType::Struct(Fields::from_iter([
-            Field::new(
-                TIMESTAMP_FIELD_NAME,
-                DataType::Timestamp(TimeUnit::Second, Some("UTC".into())),
-                false,
-            ),
-            Field::new(
-                OFFSET_FIELD_NAME,
-                DataType::Dictionary(Box::new(DataType::Boolean), Box::new(DataType::Int16)),
-                false,
-            ),
-        ]));
-        Field::new("", data_type, false).with_extension_type(TimestampWithOffset);
-    }
-
-    #[test]
-    #[should_panic(
-        expected = "expected Struct(\"timestamp\": Timestamp(_, Some(\"UTC\")), \"offset_minutes\": Int16), found Struct"
-    )]
-    fn invalid_type_wrong_offset_value_dict_encoded() {
-        let data_type = DataType::Struct(Fields::from_iter([
-            Field::new(
-                TIMESTAMP_FIELD_NAME,
-                DataType::Timestamp(TimeUnit::Second, Some("UTC".into())),
-                false,
-            ),
-            Field::new(
-                OFFSET_FIELD_NAME,
-                DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Int32)),
-                false,
-            ),
+            Field::new(OFFSET_FIELD_NAME, offset_type, false),
         ]));
         Field::new("", data_type, false).with_extension_type(TimestampWithOffset);
     }
@@ -454,63 +424,38 @@ mod tests {
         Field::new("", data_type, false).with_extension_type(TimestampWithOffset);
     }
 
-    #[test]
+    #[rstest]
+    #[case::timestamp(true, false)]
+    #[case::offset(false, true)]
     #[should_panic(
         expected = "expected Struct(\"timestamp\": Timestamp(_, Some(\"UTC\")), \"offset_minutes\": Int16), found Struct"
     )]
-    fn invalid_type_nullable_timestamp() {
+    fn invalid_type_nullable_field(
+        #[case] timestamp_nullable: bool,
+        #[case] offset_nullable: bool,
+    ) {
         let data_type = DataType::Struct(Fields::from_iter([
             Field::new(
                 TIMESTAMP_FIELD_NAME,
                 DataType::Timestamp(TimeUnit::Second, Some("UTC".into())),
-                true,
+                timestamp_nullable,
             ),
-            Field::new(OFFSET_FIELD_NAME, DataType::Int16, false),
+            Field::new(OFFSET_FIELD_NAME, DataType::Int16, offset_nullable),
         ]));
         Field::new("", data_type, false).with_extension_type(TimestampWithOffset);
     }
 
-    #[test]
+    #[rstest]
+    #[case::missing(None)]
+    #[case::non_utc(Some("Americas/Sao_Paulo".into()))]
     #[should_panic(
         expected = "expected Struct(\"timestamp\": Timestamp(_, Some(\"UTC\")), \"offset_minutes\": Int16), found Struct"
     )]
-    fn invalid_type_nullable_offset() {
+    fn invalid_type_timezone(#[case] timezone: Option<Arc<str>>) {
         let data_type = DataType::Struct(Fields::from_iter([
             Field::new(
                 TIMESTAMP_FIELD_NAME,
-                DataType::Timestamp(TimeUnit::Second, Some("UTC".into())),
-                false,
-            ),
-            Field::new(OFFSET_FIELD_NAME, DataType::Int16, true),
-        ]));
-        Field::new("", data_type, false).with_extension_type(TimestampWithOffset);
-    }
-
-    #[test]
-    #[should_panic(
-        expected = "expected Struct(\"timestamp\": Timestamp(_, Some(\"UTC\")), \"offset_minutes\": Int16), found Struct"
-    )]
-    fn invalid_type_no_timezone() {
-        let data_type = DataType::Struct(Fields::from_iter([
-            Field::new(
-                TIMESTAMP_FIELD_NAME,
-                DataType::Timestamp(TimeUnit::Second, None),
-                false,
-            ),
-            Field::new(OFFSET_FIELD_NAME, DataType::Int16, false),
-        ]));
-        Field::new("", data_type, false).with_extension_type(TimestampWithOffset);
-    }
-
-    #[test]
-    #[should_panic(
-        expected = "expected Struct(\"timestamp\": Timestamp(_, Some(\"UTC\")), \"offset_minutes\": Int16), found Struct"
-    )]
-    fn invalid_type_wrong_timezone() {
-        let data_type = DataType::Struct(Fields::from_iter([
-            Field::new(
-                TIMESTAMP_FIELD_NAME,
-                DataType::Timestamp(TimeUnit::Second, Some("Americas/Sao_Paulo".into())),
+                DataType::Timestamp(TimeUnit::Second, timezone),
                 false,
             ),
             Field::new(OFFSET_FIELD_NAME, DataType::Int16, false),

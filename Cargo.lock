@@ -521,6 +521,7 @@ dependencies = [
  "criterion",
  "insta",
  "postcard",
+ "rstest",
  "serde",
  "serde_core",
  "serde_json",
