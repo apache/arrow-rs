@@ -312,7 +312,10 @@ mod tests {
     fn test_bytes_chunk_reader_get_bytes_oversized_length() {
         let data = Bytes::from(vec![0, 1, 2, 3]);
         assert_eq!(data.get_bytes(1, 3).unwrap(), Bytes::from(vec![1, 2, 3]));
+        // Adding the requested length to the start offset overflows usize.
         data.get_bytes(1, usize::MAX).unwrap_err();
+        // The start offset cannot fit in usize on 32-bit targets; on 64-bit targets,
+        // adding the requested length overflows usize.
         data.get_bytes(u64::MAX, 1).unwrap_err();
     }
 
