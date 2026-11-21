@@ -2766,6 +2766,124 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "arrow_canonical_extension_types")]
+    fn assert_list_of_uuid(field: &Field) -> Result<()> {
+        use arrow_schema::extension::Uuid;
+        let DataType::List(element) = field.data_type() else {
+            panic!("expected a list, got {}", field.data_type());
+        };
+        assert_eq!(
+            field.extension_type_name(),
+            None,
+            "list field must not carry an extension"
+        );
+        assert_eq!(element.data_type(), &DataType::FixedSizeBinary(16));
+        assert_eq!(element.try_extension_type::<Uuid>()?, Uuid);
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(feature = "arrow_canonical_extension_types")]
+    fn parquet_uuid_in_two_level_repeated_primitive_tags_the_element() -> Result<()> {
+        let message_type = "
+        message test_schema {
+            repeated fixed_len_byte_array(16) col (UUID);
+        }
+        ";
+        let parquet_schema = SchemaDescriptor::new(Arc::new(parse_message_type(message_type)?));
+        let arrow_schema = parquet_to_arrow_schema(&parquet_schema, None)?;
+        assert_list_of_uuid(arrow_schema.field(0))
+    }
+
+    #[test]
+    #[cfg(feature = "arrow_canonical_extension_types")]
+    fn parquet_uuid_in_two_level_list_group_tags_the_element() -> Result<()> {
+        let message_type = "
+        message test_schema {
+            optional group col (LIST) {
+                repeated fixed_len_byte_array(16) element (UUID);
+            }
+        }
+        ";
+        let parquet_schema = SchemaDescriptor::new(Arc::new(parse_message_type(message_type)?));
+        let arrow_schema = parquet_to_arrow_schema(&parquet_schema, None)?;
+        assert_list_of_uuid(arrow_schema.field(0))
+    }
+
+    #[test]
+    #[cfg(feature = "arrow_canonical_extension_types")]
+    fn parquet_json_in_two_level_lists_tags_the_element() -> Result<()> {
+        use arrow_schema::extension::Json;
+        let message_type = "
+        message test_schema {
+            repeated binary bare (JSON);
+            optional group grouped (LIST) {
+                repeated binary element (JSON);
+            }
+        }
+        ";
+        let parquet_schema = SchemaDescriptor::new(Arc::new(parse_message_type(message_type)?));
+        let arrow_schema = parquet_to_arrow_schema(&parquet_schema, None)?;
+        for field in arrow_schema.fields() {
+            let DataType::List(element) = field.data_type() else {
+                panic!("expected a list, got {}", field.data_type());
+            };
+            assert_eq!(
+                field.extension_type_name(),
+                None,
+                "list field {} must not carry an extension",
+                field.name()
+            );
+            assert_eq!(element.data_type(), &DataType::Utf8);
+            element.try_extension_type::<Json>()?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(feature = "arrow_canonical_extension_types")]
+    fn parquet_uuid_in_three_level_list_tags_the_element() -> Result<()> {
+        let message_type = "
+        message test_schema {
+            optional group col (LIST) {
+                repeated group list {
+                    optional fixed_len_byte_array(16) element (UUID);
+                }
+            }
+        }
+        ";
+        let parquet_schema = SchemaDescriptor::new(Arc::new(parse_message_type(message_type)?));
+        let arrow_schema = parquet_to_arrow_schema(&parquet_schema, None)?;
+        assert_list_of_uuid(arrow_schema.field(0))
+    }
+
+    #[test]
+    #[cfg(feature = "arrow_canonical_extension_types")]
+    fn parquet_uuid_in_repeated_element_of_three_level_list_tags_the_inner_element() -> Result<()> {
+        // A list of 2-level lists
+        let message_type = "
+        message test_schema {
+            optional group col (LIST) {
+                repeated group list {
+                    repeated fixed_len_byte_array(16) element (UUID);
+                }
+            }
+        }
+        ";
+        let parquet_schema = SchemaDescriptor::new(Arc::new(parse_message_type(message_type)?));
+        let arrow_schema = parquet_to_arrow_schema(&parquet_schema, None)?;
+        let outer = arrow_schema.field(0);
+        let DataType::List(inner) = outer.data_type() else {
+            panic!("expected a list, got {}", outer.data_type());
+        };
+        assert_eq!(
+            outer.extension_type_name(),
+            None,
+            "outer list field must not carry an extension"
+        );
+        assert_list_of_uuid(inner)
+    }
+
     #[test]
     #[cfg(feature = "arrow_canonical_extension_types")]
     fn arrow_json_to_parquet_json() -> Result<()> {

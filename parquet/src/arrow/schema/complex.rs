@@ -48,16 +48,21 @@ impl ParquetField {
     /// Converts `self` into an arrow list, with its current type as the field type
     ///
     /// This is used to convert repeated columns, into their arrow representation
-    fn into_list(self, name: &str) -> Self {
-        ParquetField {
+    ///
+    /// `parquet_type` is the repeated node, and its logical type describes the element. Any
+    /// extension type it maps to is attached to the element field of the created list.
+    fn into_list(self, parquet_type: &Type) -> Result<Self, ParquetError> {
+        let element = Field::new(parquet_type.name(), self.arrow_type.clone(), false);
+        let element = try_add_extension_type(element, parquet_type)?;
+        Ok(ParquetField {
             rep_level: self.rep_level,
             def_level: self.def_level,
             nullable: false,
-            arrow_type: DataType::List(Arc::new(Field::new(name, self.arrow_type.clone(), false))),
+            arrow_type: DataType::List(Arc::new(element)),
             field_type: ParquetFieldType::Group {
                 children: vec![self],
             },
-        }
+        })
     }
 
     /// Converts `self` into an arrow list, with its current type as the field type
@@ -244,7 +249,7 @@ impl Visitor {
             Repetition::REPEATED if context.treat_repeated_as_list_arrow_hint => {
                 primitive_field.into_list_with_arrow_list_hint(primitive_type, context.data_type)?
             }
-            Repetition::REPEATED => primitive_field.into_list(primitive_type.name()),
+            Repetition::REPEATED => primitive_field.into_list(primitive_type)?,
             _ => primitive_field,
         }))
     }
@@ -360,7 +365,7 @@ impl Visitor {
             Repetition::REPEATED if context.treat_repeated_as_list_arrow_hint => {
                 struct_field.into_list_with_arrow_list_hint(struct_type, context.data_type)?
             }
-            Repetition::REPEATED => struct_field.into_list(struct_type.name()),
+            Repetition::REPEATED => struct_field.into_list(struct_type)?,
             _ => struct_field,
         }))
     }
@@ -758,6 +763,11 @@ fn convert_field(
                     basic_info.id().to_string(),
                 );
                 ret.set_metadata(meta);
+            }
+            // Repeated elements are wrapped in a new list. The element already carries any
+            // extension type, so don't annotate the wrapper list itself.
+            if field.arrow_type.is_list() && get_repetition(parquet_type) == Repetition::REPEATED {
+                return Ok(ret);
             }
             try_add_extension_type(ret, parquet_type)
         }
