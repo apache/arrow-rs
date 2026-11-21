@@ -4,9 +4,9 @@
 
 use crate::decoder::{OffsetSizeBytes, map_bytes_to_offsets};
 use crate::utils::{
-    first_byte_from_slice, overflow_error, slice_from_slice, slice_from_slice_at_offset,
-    string_from_slice, try_binary_search_range_by,
+    overflow_error, slice_from_slice, str_from_bytes, string_from_slice, try_binary_search_range_by,
 };
+use crate::variant::view::VariantMetadataView;
 
 use arrow_schema::ArrowError;
 
@@ -14,9 +14,9 @@ use arrow_schema::ArrowError;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct VariantMetadataHeader {
     version: u8,
-    is_sorted: bool,
+    pub(crate) is_sorted: bool,
     /// Note: This is `offset_size_minus_one` + 1
-    offset_size: OffsetSizeBytes,
+    pub(crate) offset_size: OffsetSizeBytes,
 }
 
 /// The version of the Variant specification implemented by this crate.
@@ -32,12 +32,12 @@ const NUM_HEADER_BYTES: u32 = 1;
 
 impl VariantMetadataHeader {
     // Hide the cast
-    const fn offset_size(&self) -> u32 {
+    pub(crate) const fn offset_size(&self) -> u32 {
         self.offset_size as u32
     }
 
     // Avoid materializing this offset, since it's cheaply and safely computable
-    const fn first_offset_byte(&self) -> u32 {
+    pub(crate) const fn first_offset_byte(&self) -> u32 {
         NUM_HEADER_BYTES + self.offset_size()
     }
 
@@ -57,6 +57,7 @@ impl VariantMetadataHeader {
     /// - sorted_strings is a 1-bit value indicating whether dictionary strings are sorted and unique.
     /// - offset_size_minus_one is a 2-bit value providing the number of bytes per dictionary size and offset field.
     /// - The actual number of bytes, offset_size, is offset_size_minus_one + 1
+    #[inline]
     pub(crate) fn try_new(header_byte: u8) -> Result<Self, ArrowError> {
         let version = header_byte & 0x0F; // First four bits
         if version != VARIANT_SPEC_VERSION {
@@ -199,35 +200,14 @@ impl<'m> VariantMetadata<'m> {
 
     // The actual constructor, which performs only basic (constant-const) validation.
     pub(crate) fn try_new_with_shallow_validation(bytes: &'m [u8]) -> Result<Self, ArrowError> {
-        let header_byte = first_byte_from_slice(bytes)?;
-        let header = VariantMetadataHeader::try_new(header_byte)?;
+        VariantMetadataView::try_new(bytes)?.into_metadata()
+    }
 
-        // First element after header is dictionary size; the offset array immediately follows.
-        let dictionary_size =
-            header
-                .offset_size
-                .unpack_u32_at_offset(bytes, NUM_HEADER_BYTES as usize, 0)?;
-
-        // Calculate the starting offset of the dictionary string bytes.
-        //
-        // There are dict_size + 1 offsets, and the value bytes immediately follow
-        // = (dict_size + 1) * offset_size + header.first_offset_byte()
-        let first_value_byte = dictionary_size
-            .checked_add(1)
-            .and_then(|n| n.checked_mul(header.offset_size()))
-            .and_then(|n| n.checked_add(header.first_offset_byte()))
-            .ok_or_else(|| overflow_error("offset of variant metadata dictionary"))?;
-
-        let mut new_self = Self {
-            bytes,
-            header,
-            dictionary_size,
-            first_value_byte,
-            validated: false,
-        };
-
-        // Validate just the first and last offset, ignoring the other offsets and all value bytes.
-        let first_offset = new_self.get_offset(0)?;
+    // Promotes a view by validating just the first and last offset, ignoring the other offsets
+    // and all value bytes.
+    #[inline]
+    pub(crate) fn try_from_view(view: VariantMetadataView<'m>) -> Result<Self, ArrowError> {
+        let first_offset = view.offset(0)?;
         if first_offset != 0 {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "First offset is not zero: {first_offset}"
@@ -235,12 +215,28 @@ impl<'m> VariantMetadata<'m> {
         }
 
         // Use the last offset to upper-bound the byte slice
-        let last_offset = new_self
-            .get_offset(dictionary_size as _)?
-            .checked_add(first_value_byte)
+        let last_offset = view
+            .offset(view.len())?
+            .checked_add(view.first_value_byte)
             .ok_or_else(|| overflow_error("variant metadata size"))?;
-        new_self.bytes = slice_from_slice(bytes, ..last_offset as _)?;
-        Ok(new_self)
+        Ok(Self {
+            bytes: slice_from_slice(view.bytes, ..last_offset as _)?,
+            header: view.header,
+            dictionary_size: view.dictionary_size,
+            first_value_byte: view.first_value_byte,
+            validated: false,
+        })
+    }
+
+    /// A view of this dictionary, which reads only the entries it is asked for.
+    #[inline]
+    pub fn view(&self) -> VariantMetadataView<'m> {
+        VariantMetadataView {
+            bytes: self.bytes,
+            header: self.header,
+            dictionary_size: self.dictionary_size,
+            first_value_byte: self.first_value_byte,
+        }
     }
 
     /// The number of metadata dictionary entries
@@ -334,16 +330,6 @@ impl<'m> VariantMetadata<'m> {
         self.header.version
     }
 
-    /// Gets an offset into the dictionary entry by index.
-    ///
-    /// This offset is an index into the dictionary, at the boundary between string `i-1` and string
-    /// `i`. See [`Self::get`] to retrieve a specific dictionary entry.
-    fn get_offset(&self, i: usize) -> Result<u32, ArrowError> {
-        let offset_byte_range = self.header.first_offset_byte() as _..self.first_value_byte as _;
-        let bytes = slice_from_slice(self.bytes, offset_byte_range)?;
-        self.header.offset_size.unpack_u32_at_offset(bytes, 0, i)
-    }
-
     /// Returns the total size, in bytes, of the metadata.
     ///
     /// Note this value may be smaller than what was passed to [`Self::new`] or
@@ -358,16 +344,13 @@ impl<'m> VariantMetadata<'m> {
     ///
     /// [invalid]: Self#Validation
     pub fn get(&self, i: usize) -> Result<&'m str, ArrowError> {
-        let byte_range = self.get_offset(i)? as _..self.get_offset(i + 1)? as _;
+        let value_bytes = self.view().entry(i)?;
         if !self.validated {
-            return string_from_slice(self.bytes, self.first_value_byte as _, byte_range);
+            return str_from_bytes(value_bytes);
         }
 
         // Full validation already proved every dictionary entry is valid UTF-8, so validating
         // again here would charge that cost once per field access instead of once per buffer.
-        let value_bytes =
-            slice_from_slice_at_offset(self.bytes, self.first_value_byte as _, byte_range)?;
-
         debug_assert!(std::str::from_utf8(value_bytes).is_ok());
 
         // SAFETY: `validated` is set only by `with_full_validation`, which proved that every
@@ -472,15 +455,11 @@ impl<'m> VariantMetadata<'m> {
             return Some((field_id, self.get_impl(field_id as _)));
         }
 
-        let field_id = if self.is_sorted() && self.len() > 10 {
-            // Binary search is faster for a not-tiny sorted metadata dictionary
-            let cmp = |i| Some(self.get_impl(i).cmp(field_name));
-            try_binary_search_range_by(0..self.len(), cmp)?.ok()?
-        } else {
-            // Fall back to Linear search for tiny or unsorted dictionary
-            (0..self.len()).find(|i| self.get_impl(*i) == field_name)?
-        };
-        Some((field_id as u32, self.get_impl(field_id)))
+        let field_id = self
+            .view()
+            .find(field_name.as_bytes())
+            .expect("Invalid metadata dictionary entry")?;
+        Some((field_id, self.get_impl(field_id as _)))
     }
 
     /// Returns an iterator that attempts to visit all dictionary entries, producing `Err` if the
@@ -549,11 +528,11 @@ mod tests {
         assert_eq!(&md[1], "dog");
 
         // Offsets
-        assert_eq!(md.get_offset(0).unwrap(), 0x00);
-        assert_eq!(md.get_offset(1).unwrap(), 0x03);
-        assert_eq!(md.get_offset(2).unwrap(), 0x06);
+        assert_eq!(md.view().offset(0).unwrap(), 0x00);
+        assert_eq!(md.view().offset(1).unwrap(), 0x03);
+        assert_eq!(md.view().offset(2).unwrap(), 0x06);
 
-        let err = md.get_offset(3).unwrap_err();
+        let err = md.get(2).unwrap_err();
         assert!(
             matches!(err, ArrowError::InvalidArgumentError(_)),
             "unexpected error: {err:?}"
