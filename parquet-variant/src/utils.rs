@@ -57,6 +57,7 @@ pub(crate) fn array_from_slice<const N: usize>(
         .map_err(|e: TryFromSliceError| ArrowError::InvalidArgumentError(e.to_string()))
 }
 
+#[inline]
 pub(crate) fn first_byte_from_slice(slice: &[u8]) -> Result<u8, ArrowError> {
     slice
         .first()
@@ -91,6 +92,25 @@ pub(crate) fn str_from_bytes(bytes: &[u8]) -> Result<&str, ArrowError> {
     #[cfg(not(feature = "simdutf8"))]
     str::from_utf8(bytes)
         .map_err(|_| ArrowError::InvalidArgumentError("invalid UTF-8 string".to_string()))
+}
+
+/// Binary search over `0..len` with a fallible comparison, which returns the first error it hits.
+///
+/// Returns the index for which `cmp` returns [`Ordering::Equal`], if any.
+pub(crate) fn try_binary_search(
+    len: usize,
+    cmp: impl Fn(usize) -> Result<Ordering, ArrowError>,
+) -> Result<Option<usize>, ArrowError> {
+    let (mut low, mut high) = (0, len);
+    while low < high {
+        let mid = low + (high - low) / 2;
+        match cmp(mid)? {
+            Ordering::Less => low = mid + 1,
+            Ordering::Greater => high = mid,
+            Ordering::Equal => return Ok(Some(mid)),
+        }
+    }
+    Ok(None)
 }
 
 /// Performs a binary search over a range using a fallible key extraction function; a failed key
