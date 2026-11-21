@@ -11,6 +11,7 @@ use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 use arrow_cast::display::FormatOptions;
 use arrow_cast::{CastOptions, can_cast_types, cast, cast_with_options};
 use arrow_schema::{ArrowError, DataType, IntervalUnit, TimeUnit};
+use rstest::rstest;
 
 /// Number of `unit`s per second; mirrors the private `time_unit_multiple` in `arrow_cast`.
 const fn time_unit_multiple(unit: &TimeUnit) -> i64 {
@@ -243,59 +244,60 @@ fn test_cast_duration_to_i64() {
     }
 }
 
+#[rstest]
+#[case::seconds_to_milliseconds(DurationSecondType {}, DurationMillisecondType {})]
+#[case::seconds_to_microseconds(DurationSecondType {}, DurationMicrosecondType {})]
+#[case::seconds_to_nanoseconds(DurationSecondType {}, DurationNanosecondType {})]
+#[case::milliseconds_to_seconds(DurationMillisecondType {}, DurationSecondType {})]
+#[case::milliseconds_to_microseconds(DurationMillisecondType {}, DurationMicrosecondType {})]
+#[case::milliseconds_to_nanoseconds(DurationMillisecondType {}, DurationNanosecondType {})]
+#[case::microseconds_to_seconds(DurationMicrosecondType {}, DurationSecondType {})]
+#[case::microseconds_to_milliseconds(DurationMicrosecondType {}, DurationMillisecondType {})]
+#[case::microseconds_to_nanoseconds(DurationMicrosecondType {}, DurationNanosecondType {})]
+#[case::nanoseconds_to_seconds(DurationNanosecondType {}, DurationSecondType {})]
+#[case::nanoseconds_to_milliseconds(DurationNanosecondType {}, DurationMillisecondType {})]
+#[case::nanoseconds_to_microseconds(DurationNanosecondType {}, DurationMicrosecondType {})]
+fn test_cast_between_durations<FromType, ToType>(
+    #[case] from_type: FromType,
+    #[case] to_type: ToType,
+) where
+    FromType: ArrowPrimitiveType<Native = i64>,
+    ToType: ArrowPrimitiveType<Native = i64>,
+    PrimitiveArray<FromType>: From<Vec<Option<i64>>>,
+{
+    let _ = (from_type, to_type);
+    let DataType::Duration(from_unit) = FromType::DATA_TYPE else {
+        panic!("Expected a duration type")
+    };
+    let DataType::Duration(to_unit) = ToType::DATA_TYPE else {
+        panic!("Expected a duration type")
+    };
+    let from_size = time_unit_multiple(&from_unit);
+    let to_size = time_unit_multiple(&to_unit);
+
+    let (v1_before, v2_before) = (8640003005, 1696002001);
+    let (v1_after, v2_after) = if from_size >= to_size {
+        (
+            v1_before / (from_size / to_size),
+            v2_before / (from_size / to_size),
+        )
+    } else {
+        (
+            v1_before * (to_size / from_size),
+            v2_before * (to_size / from_size),
+        )
+    };
+
+    let array = PrimitiveArray::<FromType>::from(vec![Some(v1_before), Some(v2_before), None]);
+    let b = cast(&array, &ToType::DATA_TYPE).unwrap();
+    let c = b.as_primitive::<ToType>();
+    assert_eq!(v1_after, c.value(0));
+    assert_eq!(v2_after, c.value(1));
+    assert!(c.is_null(2));
+}
+
 #[test]
-fn test_cast_between_durations_and_numerics() {
-    fn test_cast_between_durations<FromType, ToType>()
-    where
-        FromType: ArrowPrimitiveType<Native = i64>,
-        ToType: ArrowPrimitiveType<Native = i64>,
-        PrimitiveArray<FromType>: From<Vec<Option<i64>>>,
-    {
-        let DataType::Duration(from_unit) = FromType::DATA_TYPE else {
-            panic!("Expected a duration type")
-        };
-        let DataType::Duration(to_unit) = ToType::DATA_TYPE else {
-            panic!("Expected a duration type")
-        };
-        let from_size = time_unit_multiple(&from_unit);
-        let to_size = time_unit_multiple(&to_unit);
-
-        let (v1_before, v2_before) = (8640003005, 1696002001);
-        let (v1_after, v2_after) = if from_size >= to_size {
-            (
-                v1_before / (from_size / to_size),
-                v2_before / (from_size / to_size),
-            )
-        } else {
-            (
-                v1_before * (to_size / from_size),
-                v2_before * (to_size / from_size),
-            )
-        };
-
-        let array = PrimitiveArray::<FromType>::from(vec![Some(v1_before), Some(v2_before), None]);
-        let b = cast(&array, &ToType::DATA_TYPE).unwrap();
-        let c = b.as_primitive::<ToType>();
-        assert_eq!(v1_after, c.value(0));
-        assert_eq!(v2_after, c.value(1));
-        assert!(c.is_null(2));
-    }
-
-    // between each individual duration type
-    test_cast_between_durations::<DurationSecondType, DurationMillisecondType>();
-    test_cast_between_durations::<DurationSecondType, DurationMicrosecondType>();
-    test_cast_between_durations::<DurationSecondType, DurationNanosecondType>();
-    test_cast_between_durations::<DurationMillisecondType, DurationSecondType>();
-    test_cast_between_durations::<DurationMillisecondType, DurationMicrosecondType>();
-    test_cast_between_durations::<DurationMillisecondType, DurationNanosecondType>();
-    test_cast_between_durations::<DurationMicrosecondType, DurationSecondType>();
-    test_cast_between_durations::<DurationMicrosecondType, DurationMillisecondType>();
-    test_cast_between_durations::<DurationMicrosecondType, DurationNanosecondType>();
-    test_cast_between_durations::<DurationNanosecondType, DurationSecondType>();
-    test_cast_between_durations::<DurationNanosecondType, DurationMillisecondType>();
-    test_cast_between_durations::<DurationNanosecondType, DurationMicrosecondType>();
-
-    // cast failed
+fn test_cast_duration_second_to_nanosecond_overflow() {
     let array = DurationSecondArray::from(vec![
         Some(i64::MAX),
         Some(8640203410378005),
@@ -308,8 +310,10 @@ fn test_cast_between_durations_and_numerics() {
     assert!(c.is_null(1));
     assert_eq!(10241096000000000, c.value(2));
     assert!(c.is_null(3));
+}
 
-    // durations to numerics
+#[test]
+fn test_cast_duration_second_to_integers() {
     let array = DurationSecondArray::from(vec![
         Some(i64::MAX),
         Some(8640203410378005),
@@ -329,8 +333,10 @@ fn test_cast_between_durations_and_numerics() {
     assert_eq!(0, c.value(1));
     assert_eq!(10241096, c.value(2));
     assert!(c.is_null(3));
+}
 
-    // numerics to durations
+#[test]
+fn test_cast_int32_to_duration_second() {
     let array = Int32Array::from(vec![Some(i32::MAX), Some(802034103), Some(10241096), None]);
     let b = cast(&array, &DataType::Duration(TimeUnit::Second)).unwrap();
     let c = b.as_any().downcast_ref::<DurationSecondArray>().unwrap();
@@ -353,115 +359,53 @@ fn cast_from_duration_to_interval<T: ArrowTemporalType<Native = i64>>(
     Ok(out)
 }
 
+#[rstest]
+#[case::seconds(DurationSecondType {}, 1234567000000000)]
+#[case::milliseconds(DurationMillisecondType {}, 1234567000000)]
+#[case::microseconds(DurationMicrosecondType {}, 1234567000)]
+#[case::nanoseconds(DurationNanosecondType {}, 1234567)]
+fn test_cast_from_duration_to_interval<T: ArrowTemporalType<Native = i64>>(
+    #[case] duration_type: T,
+    #[case] expected_nanos: i64,
+) {
+    let _ = duration_type;
+    let array = vec![1234567];
+    let casted_array = cast_from_duration_to_interval::<T>(array, &CastOptions::default()).unwrap();
+    assert_eq!(
+        casted_array.data_type(),
+        &DataType::Interval(IntervalUnit::MonthDayNano)
+    );
+    assert_eq!(
+        casted_array.value(0),
+        IntervalMonthDayNano::new(0, 0, expected_nanos)
+    );
+}
+
+#[rstest]
+#[case::seconds(DurationSecondType {})]
+#[case::milliseconds(DurationMillisecondType {})]
+#[case::microseconds(DurationMicrosecondType {})]
+fn test_cast_from_duration_to_interval_overflow<T: ArrowTemporalType<Native = i64>>(
+    #[case] duration_type: T,
+) {
+    let _ = duration_type;
+    let array = vec![i64::MAX];
+    let casted_array =
+        cast_from_duration_to_interval::<T>(array.clone(), &CastOptions::default()).unwrap();
+    assert!(!casted_array.is_valid(0));
+
+    let casted_array = cast_from_duration_to_interval::<T>(
+        array,
+        &CastOptions {
+            safe: false,
+            format_options: FormatOptions::default(),
+        },
+    );
+    assert!(casted_array.is_err());
+}
+
 #[test]
-fn test_cast_from_duration_to_interval() {
-    // from duration second to interval month day nano
-    let array = vec![1234567];
-    let casted_array =
-        cast_from_duration_to_interval::<DurationSecondType>(array, &CastOptions::default())
-            .unwrap();
-    assert_eq!(
-        casted_array.data_type(),
-        &DataType::Interval(IntervalUnit::MonthDayNano)
-    );
-    assert_eq!(
-        casted_array.value(0),
-        IntervalMonthDayNano::new(0, 0, 1234567000000000)
-    );
-
-    let array = vec![i64::MAX];
-    let casted_array = cast_from_duration_to_interval::<DurationSecondType>(
-        array.clone(),
-        &CastOptions::default(),
-    )
-    .unwrap();
-    assert!(!casted_array.is_valid(0));
-
-    let casted_array = cast_from_duration_to_interval::<DurationSecondType>(
-        array,
-        &CastOptions {
-            safe: false,
-            format_options: FormatOptions::default(),
-        },
-    );
-    assert!(casted_array.is_err());
-
-    // from duration millisecond to interval month day nano
-    let array = vec![1234567];
-    let casted_array =
-        cast_from_duration_to_interval::<DurationMillisecondType>(array, &CastOptions::default())
-            .unwrap();
-    assert_eq!(
-        casted_array.data_type(),
-        &DataType::Interval(IntervalUnit::MonthDayNano)
-    );
-    assert_eq!(
-        casted_array.value(0),
-        IntervalMonthDayNano::new(0, 0, 1234567000000)
-    );
-
-    let array = vec![i64::MAX];
-    let casted_array = cast_from_duration_to_interval::<DurationMillisecondType>(
-        array.clone(),
-        &CastOptions::default(),
-    )
-    .unwrap();
-    assert!(!casted_array.is_valid(0));
-
-    let casted_array = cast_from_duration_to_interval::<DurationMillisecondType>(
-        array,
-        &CastOptions {
-            safe: false,
-            format_options: FormatOptions::default(),
-        },
-    );
-    assert!(casted_array.is_err());
-
-    // from duration microsecond to interval month day nano
-    let array = vec![1234567];
-    let casted_array =
-        cast_from_duration_to_interval::<DurationMicrosecondType>(array, &CastOptions::default())
-            .unwrap();
-    assert_eq!(
-        casted_array.data_type(),
-        &DataType::Interval(IntervalUnit::MonthDayNano)
-    );
-    assert_eq!(
-        casted_array.value(0),
-        IntervalMonthDayNano::new(0, 0, 1234567000)
-    );
-
-    let array = vec![i64::MAX];
-    let casted_array = cast_from_duration_to_interval::<DurationMicrosecondType>(
-        array.clone(),
-        &CastOptions::default(),
-    )
-    .unwrap();
-    assert!(!casted_array.is_valid(0));
-
-    let casted_array = cast_from_duration_to_interval::<DurationMicrosecondType>(
-        array,
-        &CastOptions {
-            safe: false,
-            format_options: FormatOptions::default(),
-        },
-    );
-    assert!(casted_array.is_err());
-
-    // from duration nanosecond to interval month day nano
-    let array = vec![1234567];
-    let casted_array =
-        cast_from_duration_to_interval::<DurationNanosecondType>(array, &CastOptions::default())
-            .unwrap();
-    assert_eq!(
-        casted_array.data_type(),
-        &DataType::Interval(IntervalUnit::MonthDayNano)
-    );
-    assert_eq!(
-        casted_array.value(0),
-        IntervalMonthDayNano::new(0, 0, 1234567)
-    );
-
+fn test_cast_from_duration_nanosecond_to_interval_max_value() {
     let array = vec![i64::MAX];
     let casted_array = cast_from_duration_to_interval::<DurationNanosecondType>(
         array,
@@ -490,71 +434,46 @@ fn cast_from_interval_to_duration<T: ArrowTemporalType>(
         .cloned()
 }
 
-#[test]
-fn test_cast_from_interval_to_duration() {
-    let nullable = CastOptions::default();
+#[rstest]
+#[case::seconds(DurationSecondType {}, 0)]
+#[case::milliseconds(DurationMillisecondType {}, 1)]
+#[case::microseconds(DurationMicrosecondType {}, 1234)]
+#[case::nanoseconds(DurationNanosecondType {}, 1234567)]
+fn test_cast_from_interval_to_duration<T: ArrowTemporalType<Native = i64>>(
+    #[case] duration_type: T,
+    #[case] expected: i64,
+) {
+    let _ = duration_type;
+    let array = vec![IntervalMonthDayNano::new(0, 0, 1234567)].into();
+    let casted_array =
+        cast_from_interval_to_duration::<T>(&array, &CastOptions::default()).unwrap();
+    assert_eq!(casted_array.value(0), expected);
+}
+
+#[rstest]
+#[case::seconds(DurationSecondType {})]
+#[case::milliseconds(DurationMillisecondType {})]
+#[case::microseconds(DurationMicrosecondType {})]
+#[case::nanoseconds(DurationNanosecondType {})]
+fn test_cast_from_interval_to_duration_invalid<T: ArrowTemporalType<Native = i64>>(
+    #[case] duration_type: T,
+) {
+    let _ = duration_type;
+    let array = vec![IntervalMonthDayNano::MAX].into();
+    let casted_array =
+        cast_from_interval_to_duration::<T>(&array, &CastOptions::default()).unwrap();
+    assert!(!casted_array.is_valid(0));
+
     let fallible = CastOptions {
         safe: false,
         format_options: FormatOptions::default(),
     };
-    let v = IntervalMonthDayNano::new(0, 0, 1234567);
+    assert!(cast_from_interval_to_duration::<T>(&array, &fallible).is_err());
+}
 
-    // from interval month day nano to duration second
-    let array = vec![v].into();
-    let casted_array: DurationSecondArray =
-        cast_from_interval_to_duration(&array, &nullable).unwrap();
-    assert_eq!(casted_array.value(0), 0);
-
-    let array = vec![IntervalMonthDayNano::MAX].into();
-    let casted_array: DurationSecondArray =
-        cast_from_interval_to_duration(&array, &nullable).unwrap();
-    assert!(!casted_array.is_valid(0));
-
-    let res = cast_from_interval_to_duration::<DurationSecondType>(&array, &fallible);
-    assert!(res.is_err());
-
-    // from interval month day nano to duration millisecond
-    let array = vec![v].into();
-    let casted_array: DurationMillisecondArray =
-        cast_from_interval_to_duration(&array, &nullable).unwrap();
-    assert_eq!(casted_array.value(0), 1);
-
-    let array = vec![IntervalMonthDayNano::MAX].into();
-    let casted_array: DurationMillisecondArray =
-        cast_from_interval_to_duration(&array, &nullable).unwrap();
-    assert!(!casted_array.is_valid(0));
-
-    let res = cast_from_interval_to_duration::<DurationMillisecondType>(&array, &fallible);
-    assert!(res.is_err());
-
-    // from interval month day nano to duration microsecond
-    let array = vec![v].into();
-    let casted_array: DurationMicrosecondArray =
-        cast_from_interval_to_duration(&array, &nullable).unwrap();
-    assert_eq!(casted_array.value(0), 1234);
-
-    let array = vec![IntervalMonthDayNano::MAX].into();
-    let casted_array =
-        cast_from_interval_to_duration::<DurationMicrosecondType>(&array, &nullable).unwrap();
-    assert!(!casted_array.is_valid(0));
-
-    let casted_array = cast_from_interval_to_duration::<DurationMicrosecondType>(&array, &fallible);
-    assert!(casted_array.is_err());
-
-    // from interval month day nano to duration nanosecond
-    let array = vec![v].into();
-    let casted_array: DurationNanosecondArray =
-        cast_from_interval_to_duration(&array, &nullable).unwrap();
-    assert_eq!(casted_array.value(0), 1234567);
-
-    let array = vec![IntervalMonthDayNano::MAX].into();
-    let casted_array: DurationNanosecondArray =
-        cast_from_interval_to_duration(&array, &nullable).unwrap();
-    assert!(!casted_array.is_valid(0));
-
-    let casted_array = cast_from_interval_to_duration::<DurationNanosecondType>(&array, &fallible);
-    assert!(casted_array.is_err());
-
+#[test]
+fn test_cast_interval_with_months_or_days_to_duration_nanosecond() {
+    let nullable = CastOptions::default();
     let array = vec![
         IntervalMonthDayNanoType::make_value(0, 1, 0),
         IntervalMonthDayNanoType::make_value(-1, 0, 0),

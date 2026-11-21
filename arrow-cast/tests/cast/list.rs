@@ -20,33 +20,11 @@ use arrow_cast::{CastOptions, can_cast_types, cast, cast_with_options};
 use arrow_data::ArrayData;
 use arrow_schema::{DataType, Field, FieldRef, TimeUnit};
 use half::f16;
-#[test]
-fn test_cast_i32_to_list_i32() {
-    let array = Int32Array::from(vec![5, 6, 7, 8, 9]);
-    let b = cast(
-        &array,
-        &DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
-    )
-    .unwrap();
-    assert_eq!(5, b.len());
-    let arr = b.as_list::<i32>();
-    assert_eq!(&[0, 1, 2, 3, 4, 5], arr.value_offsets());
-    assert_eq!(1, arr.value_length(0));
-    assert_eq!(1, arr.value_length(1));
-    assert_eq!(1, arr.value_length(2));
-    assert_eq!(1, arr.value_length(3));
-    assert_eq!(1, arr.value_length(4));
-    let c = arr.values().as_primitive::<Int32Type>();
-    assert_eq!(5, c.value(0));
-    assert_eq!(6, c.value(1));
-    assert_eq!(7, c.value(2));
-    assert_eq!(8, c.value(3));
-    assert_eq!(9, c.value(4));
-}
-
-#[test]
-fn test_cast_i32_to_list_i32_nullable() {
-    let array = Int32Array::from(vec![Some(5), None, Some(7), Some(8), Some(9)]);
+use rstest::rstest;
+#[rstest]
+#[case::all_valid(Int32Array::from(vec![5, 6, 7, 8, 9]))]
+#[case::with_null(Int32Array::from(vec![Some(5), None, Some(7), Some(8), Some(9)]))]
+fn test_cast_i32_to_list_i32(#[case] array: Int32Array) {
     let b = cast(
         &array,
         &DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
@@ -63,12 +41,7 @@ fn test_cast_i32_to_list_i32_nullable() {
     assert_eq!(1, arr.value_length(4));
 
     let c = arr.values().as_primitive::<Int32Type>();
-    assert_eq!(1, c.null_count());
-    assert_eq!(5, c.value(0));
-    assert!(!c.is_valid(1));
-    assert_eq!(7, c.value(2));
-    assert_eq!(8, c.value(3));
-    assert_eq!(9, c.value(4));
+    assert_eq!(c, &array);
 }
 
 #[test]
@@ -605,8 +578,21 @@ fn test_non_list_to_list_view() {
     assert_eq!(actual.as_ref(), &expected);
 }
 
-#[test]
-fn test_cast_list_to_zero_size_fsl() {
+#[rstest]
+#[case::list(|field, length| Arc::new(ListArray::new(
+    field,
+    OffsetBuffer::from_repeated_length(0, length),
+    new_empty_array(&DataType::Null),
+    None,
+)) as ArrayRef)]
+#[case::list_view(|field, length| Arc::new(ListViewArray::new(
+    field,
+    vec![0; length].into(),
+    vec![0; length].into(),
+    new_empty_array(&DataType::Null),
+    None,
+)) as ArrayRef)]
+fn test_cast_list_to_zero_size_fsl(#[case] make_input: fn(FieldRef, usize) -> ArrayRef) {
     let field = Arc::new(Field::new("a", DataType::Null, true));
     let length = 2;
     let expected = Arc::new(
@@ -619,26 +605,19 @@ fn test_cast_list_to_zero_size_fsl() {
         )
         .unwrap(),
     ) as ArrayRef;
-
-    let list = Arc::new(ListArray::new(
-        field.clone(),
-        OffsetBuffer::from_repeated_length(0, length),
-        new_empty_array(&DataType::Null),
-        None,
-    ));
+    let list = make_input(field, length);
     let fsl = cast(list.as_ref(), expected.data_type()).unwrap();
     assert_eq!(&expected, &fsl);
+}
 
-    let list = Arc::new(ListViewArray::new(
-        field.clone(),
-        vec![0; length].into(),
-        vec![0; length].into(),
-        new_empty_array(&DataType::Null),
-        None,
-    ));
-    let fsl = cast(list.as_ref(), expected.data_type()).unwrap();
-    assert_eq!(&expected, &fsl);
-
+#[rstest]
+#[case::no_nulls(None)]
+#[case::mixed_nulls(Some(NullBuffer::from(vec![true, false])))]
+fn test_cast_list_to_zero_size_fsl_nonzero_offset<O: OffsetSizeTrait>(
+    #[case] nulls: Option<NullBuffer>,
+    #[values(0_i32, 0_i64)] offset_type: O,
+) {
+    let _ = offset_type;
     // Direct non-zero offsets must retain the row count and validity.
     let field = Arc::new(Field::new_list_field(DataType::Int32, true));
     let target = DataType::FixedSizeList(field.clone(), 0);
@@ -646,30 +625,18 @@ fn test_cast_list_to_zero_size_fsl() {
         safe: false,
         ..Default::default()
     };
-    for nulls in [None, Some(NullBuffer::from(vec![true, false]))] {
-        let values = Arc::new(Int32Array::from(vec![1, 2, 3]));
-        let inputs: [ArrayRef; 2] = [
-            Arc::new(ListArray::new(
-                field.clone(),
-                OffsetBuffer::new(vec![3; 3].into()),
-                values.clone(),
-                nulls.clone(),
-            )),
-            Arc::new(LargeListArray::new(
-                field.clone(),
-                OffsetBuffer::new(vec![3; 3].into()),
-                values,
-                nulls.clone(),
-            )),
-        ];
-        for input in inputs {
-            let actual = cast_with_options(input.as_ref(), &target, &strict).unwrap();
-            assert_eq!(actual.len(), 2);
-            assert_eq!(actual.data_type(), &target);
-            assert_eq!(actual.nulls(), nulls.as_ref());
-            assert_eq!(actual.as_fixed_size_list().values().len(), 0);
-        }
-    }
+    let values = Arc::new(Int32Array::from(vec![1, 2, 3]));
+    let input = GenericListArray::<O>::new(
+        field,
+        OffsetBuffer::new(vec![O::from_usize(3).unwrap(); 3].into()),
+        values,
+        nulls.clone(),
+    );
+    let actual = cast_with_options(&input, &target, &strict).unwrap();
+    assert_eq!(actual.len(), 2);
+    assert_eq!(actual.data_type(), &target);
+    assert_eq!(actual.nulls(), nulls.as_ref());
+    assert_eq!(actual.as_fixed_size_list().values().len(), 0);
 }
 
 #[test]
@@ -698,78 +665,75 @@ fn test_issue_10975_sliced_list_to_fsl() {
     test::<i64>();
 }
 
-#[test]
-fn test_issue_10975_sliced_list_to_fsl_subcast() {
-    fn test<O: OffsetSizeTrait>() {
-        // A differently sized prefix and invalid excluded children must not
-        // affect selection or the recursive child cast.
-        let input = GenericListArray::<O>::from_iter_primitive::<Int32Type, _, _>([
-            Some(vec![Some(i32::MAX); 3]),
-            Some(vec![Some(3), None]),
-            Some(vec![Some(5), Some(6)]),
-            Some(vec![Some(i32::MAX); 2]),
-        ]);
-        let selected = input.slice(1, 3).slice(0, 2);
-        let expected = FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
-            [Some([Some(3), None]), Some([Some(5), Some(6)])],
-            2,
-        );
-        for safe in [true, false] {
-            let options = CastOptions {
-                safe,
-                ..Default::default()
-            };
-            for child_type in [DataType::Int32, DataType::Int64, DataType::Int16] {
-                let target =
-                    DataType::FixedSizeList(Arc::new(Field::new_list_field(child_type, true)), 2);
-                let actual = cast_with_options(&selected, &target, &options).unwrap();
-                let expected = cast_with_options(&expected, &target, &options).unwrap();
-                assert_eq!(actual.as_ref(), expected.as_ref());
-                assert_eq!(actual.as_fixed_size_list().values().len(), 4);
-            }
-        }
-    }
-    test::<i32>();
-    test::<i64>();
+#[rstest]
+#[case::list(0_i32)]
+#[case::large_list(0_i64)]
+fn test_issue_10975_sliced_list_to_fsl_subcast<O: OffsetSizeTrait>(
+    #[case] offset_type: O,
+    #[values(true, false)] safe: bool,
+    #[values(DataType::Int32, DataType::Int64, DataType::Int16)] child_type: DataType,
+) {
+    let _ = offset_type;
+    // A differently sized prefix and invalid excluded children must not
+    // affect selection or the recursive child cast.
+    let input = GenericListArray::<O>::from_iter_primitive::<Int32Type, _, _>([
+        Some(vec![Some(i32::MAX); 3]),
+        Some(vec![Some(3), None]),
+        Some(vec![Some(5), Some(6)]),
+        Some(vec![Some(i32::MAX); 2]),
+    ]);
+    let selected = input.slice(1, 3).slice(0, 2);
+    let expected = FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+        [Some([Some(3), None]), Some([Some(5), Some(6)])],
+        2,
+    );
+    let options = CastOptions {
+        safe,
+        ..Default::default()
+    };
+    let target = DataType::FixedSizeList(Arc::new(Field::new_list_field(child_type, true)), 2);
+    let actual = cast_with_options(&selected, &target, &options).unwrap();
+    let expected = cast_with_options(&expected, &target, &options).unwrap();
+    assert_eq!(actual.as_ref(), expected.as_ref());
+    assert_eq!(actual.as_fixed_size_list().values().len(), 4);
 }
 
-#[test]
-fn test_issue_10975_sliced_list_to_fsl_padding() {
-    fn test<O: OffsetSizeTrait>() {
-        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
-        let lengths = [3, 0, 0, 2, 1, 3, 2, 2, 0, 2];
-        let values = Int32Array::from_iter_values(0..16).slice(1, 15);
-        let input = GenericListArray::<O>::new(
-            field.clone(),
-            OffsetBuffer::from_lengths(lengths),
-            Arc::new(values),
-            Some(NullBuffer::from(vec![
-                false, false, false, true, false, false, true, false, false, true,
-            ])),
-        );
-        let target = DataType::FixedSizeList(field, 2);
-        for safe in [true, false] {
-            let options = CastOptions {
-                safe,
-                ..Default::default()
-            };
-            let full = cast_with_options(&input, &target, &options).unwrap();
-            for (start, len) in [
-                (1, 8), // Leading/consecutive empty nulls, short/long and exact-width nulls.
-                (1, 2), // Only consecutive empty nulls.
-                (3, 4), // Short and long nulls between valid rows.
-                (6, 2), // Valid row and exact-width null: no padding needed.
-                (8, 1), // Only one empty null at a non-zero child offset.
-            ] {
-                let selected = input.slice(start, len);
-                let actual = cast_with_options(&selected, &target, &options).unwrap();
-                assert_eq!(actual.as_ref(), full.slice(start, len).as_ref());
-                assert_eq!(actual.as_fixed_size_list().values().len(), len * 2);
-            }
-        }
-    }
-    test::<i32>();
-    test::<i64>();
+#[rstest]
+// Leading/consecutive empty nulls, short/long and exact-width nulls.
+#[case::mixed_null_widths(1, 8)]
+#[case::consecutive_empty_nulls(1, 2)]
+#[case::short_and_long_nulls_between_valid_rows(3, 4)]
+// Valid row and exact-width null: no padding needed.
+#[case::exact_width_null(6, 2)]
+#[case::empty_null_at_nonzero_child_offset(8, 1)]
+fn test_issue_10975_sliced_list_to_fsl_padding<O: OffsetSizeTrait>(
+    #[case] start: usize,
+    #[case] len: usize,
+    #[values(0_i32, 0_i64)] offset_type: O,
+    #[values(true, false)] safe: bool,
+) {
+    let _ = offset_type;
+    let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+    let lengths = [3, 0, 0, 2, 1, 3, 2, 2, 0, 2];
+    let values = Int32Array::from_iter_values(0..16).slice(1, 15);
+    let input = GenericListArray::<O>::new(
+        field.clone(),
+        OffsetBuffer::from_lengths(lengths),
+        Arc::new(values),
+        Some(NullBuffer::from(vec![
+            false, false, false, true, false, false, true, false, false, true,
+        ])),
+    );
+    let target = DataType::FixedSizeList(field, 2);
+    let options = CastOptions {
+        safe,
+        ..Default::default()
+    };
+    let full = cast_with_options(&input, &target, &options).unwrap();
+    let selected = input.slice(start, len);
+    let actual = cast_with_options(&selected, &target, &options).unwrap();
+    assert_eq!(actual.as_ref(), full.slice(start, len).as_ref());
+    assert_eq!(actual.as_fixed_size_list().values().len(), len * 2);
 }
 
 #[test]
@@ -1068,20 +1032,22 @@ fn test_cast_list_view_to_fsl() {
     }
 }
 
-#[test]
-fn test_cast_list_to_fsl_safety() {
+type Int32ListValues = Vec<Option<Vec<Option<i32>>>>;
+
+#[rstest]
+#[case::list(ListArray::from_iter_primitive::<Int32Type, _, _>)]
+#[case::list_view(ListViewArray::from_iter_primitive::<Int32Type, _, _>)]
+fn test_cast_list_to_fsl_safety<A: Array>(#[case] make_input: fn(Int32ListValues) -> A) {
     let values = vec![
         Some(vec![Some(1), Some(2), Some(3)]),
         Some(vec![Some(4), Some(5)]),
         Some(vec![Some(6), Some(7), Some(8), Some(9)]),
         Some(vec![Some(3), Some(4), Some(5)]),
     ];
-    let array = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(
-        values.clone(),
-    )) as ArrayRef;
+    let array = make_input(values);
 
     let res = cast_with_options(
-        array.as_ref(),
+        &array,
         &DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, true)), 3),
         &CastOptions {
             safe: false,
@@ -1094,10 +1060,9 @@ fn test_cast_list_to_fsl_safety() {
             .contains("Cannot cast to FixedSizeList(3): value at index 1 has length 2")
     );
 
-    // When safe=true (default), the cast will fill nulls for lists that are
-    // too short and truncate lists that are too long.
+    // When safe=true (default), lists with a mismatched length are replaced with null.
     let res = cast(
-        array.as_ref(),
+        &array,
         &DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, true)), 3),
     )
     .unwrap();
@@ -1108,84 +1073,22 @@ fn test_cast_list_to_fsl_safety() {
             None, // Too long -> replaced with null
             Some(vec![Some(3), Some(4), Some(5)]),
         ],
-        3,
-    )) as ArrayRef;
-    assert_eq!(expected.as_ref(), res.as_ref());
-
-    // The safe option is false and the source array contains a null list.
-    // issue: https://github.com/apache/arrow-rs/issues/5642
-    let array = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-        Some(vec![Some(1), Some(2), Some(3)]),
-        None,
-    ])) as ArrayRef;
-    let res = cast_with_options(
-        array.as_ref(),
-        &DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, true)), 3),
-        &CastOptions {
-            safe: false,
-            ..Default::default()
-        },
-    )
-    .unwrap();
-    let expected = Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
-        vec![Some(vec![Some(1), Some(2), Some(3)]), None],
         3,
     )) as ArrayRef;
     assert_eq!(expected.as_ref(), res.as_ref());
 }
 
-#[test]
-fn test_cast_list_view_to_fsl_safety() {
-    let values = vec![
-        Some(vec![Some(1), Some(2), Some(3)]),
-        Some(vec![Some(4), Some(5)]),
-        Some(vec![Some(6), Some(7), Some(8), Some(9)]),
-        Some(vec![Some(3), Some(4), Some(5)]),
-    ];
-    let array = Arc::new(ListViewArray::from_iter_primitive::<Int32Type, _, _>(
-        values.clone(),
-    )) as ArrayRef;
-
-    let res = cast_with_options(
-        array.as_ref(),
-        &DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, true)), 3),
-        &CastOptions {
-            safe: false,
-            ..Default::default()
-        },
-    );
-    assert!(res.is_err());
-    assert!(
-        format!("{res:?}")
-            .contains("Cannot cast to FixedSizeList(3): value at index 1 has length 2")
-    );
-
-    // When safe=true (default), the cast will fill nulls for lists that are
-    // too short and truncate lists that are too long.
-    let res = cast(
-        array.as_ref(),
-        &DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, true)), 3),
-    )
-    .unwrap();
-    let expected = Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
-        vec![
-            Some(vec![Some(1), Some(2), Some(3)]),
-            None, // Too short -> replaced with null
-            None, // Too long -> replaced with null
-            Some(vec![Some(3), Some(4), Some(5)]),
-        ],
-        3,
-    )) as ArrayRef;
-    assert_eq!(expected.as_ref(), res.as_ref());
-
+#[rstest]
+#[case::list(ListArray::from_iter_primitive::<Int32Type, _, _>)]
+#[case::list_view(ListViewArray::from_iter_primitive::<Int32Type, _, _>)]
+fn test_cast_list_to_fsl_strict_preserves_nulls<A: Array>(
+    #[case] make_input: fn(Int32ListValues) -> A,
+) {
     // The safe option is false and the source array contains a null list.
     // issue: https://github.com/apache/arrow-rs/issues/5642
-    let array = Arc::new(ListViewArray::from_iter_primitive::<Int32Type, _, _>(vec![
-        Some(vec![Some(1), Some(2), Some(3)]),
-        None,
-    ])) as ArrayRef;
+    let array = make_input(vec![Some(vec![Some(1), Some(2), Some(3)]), None]);
     let res = cast_with_options(
-        array.as_ref(),
+        &array,
         &DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, true)), 3),
         &CastOptions {
             safe: false,
@@ -1257,32 +1160,29 @@ fn test_cast_list_to_fsl_subcast() {
     assert!(format!("{res:?}").contains("Can't cast value 2147483647 to type Int16"));
 }
 
-#[test]
-fn test_cast_list_to_fsl_empty() {
+#[rstest]
+#[case::empty_list(|field| new_empty_array(&DataType::List(field)))]
+#[case::empty_large_list(|field| new_empty_array(&DataType::LargeList(field)))]
+#[case::empty_list_view(|field| new_empty_array(&DataType::ListView(field)))]
+#[case::empty_large_list_view(|field| new_empty_array(&DataType::LargeListView(field)))]
+// Empty slices with non-zero child offsets (issue #10975).
+#[case::sliced_list(|_| make_list_array().slice(2, 0))]
+#[case::sliced_large_list(|_| make_large_list_array().slice(2, 0))]
+fn test_cast_list_to_fsl_empty(
+    #[case] make_input: fn(FieldRef) -> ArrayRef,
+    #[values(true, false)] safe: bool,
+) {
     let inner_field = Arc::new(Field::new_list_field(DataType::Int32, true));
     let target_type = DataType::FixedSizeList(inner_field.clone(), 3);
     let expected = new_empty_array(&target_type);
-
-    let cases = [
-        new_empty_array(&DataType::List(inner_field.clone())),
-        new_empty_array(&DataType::LargeList(inner_field.clone())),
-        new_empty_array(&DataType::ListView(inner_field.clone())),
-        new_empty_array(&DataType::LargeListView(inner_field.clone())),
-        // Empty slices with non-zero child offsets (issue #10975).
-        make_list_array().slice(2, 0),
-        make_large_list_array().slice(2, 0),
-    ];
-    for array in cases {
-        assert!(can_cast_types(array.data_type(), &target_type));
-        for safe in [true, false] {
-            let options = CastOptions {
-                safe,
-                ..Default::default()
-            };
-            let actual = cast_with_options(array.as_ref(), &target_type, &options).unwrap();
-            assert_eq!(expected.as_ref(), actual.as_ref());
-        }
-    }
+    let array = make_input(inner_field);
+    assert!(can_cast_types(array.data_type(), &target_type));
+    let options = CastOptions {
+        safe,
+        ..Default::default()
+    };
+    let actual = cast_with_options(array.as_ref(), &target_type, &options).unwrap();
+    assert_eq!(expected.as_ref(), actual.as_ref());
 }
 
 fn make_list_array() -> ArrayRef {
@@ -1476,77 +1376,81 @@ fn int32_list_values() -> Vec<Option<Vec<Option<i32>>>> {
     ]
 }
 
-#[test]
-fn test_cast_list_view_to_list() {
-    let list_view = ListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
-    let target_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+#[rstest]
+#[case::list_view_to_list(0_i32, 0_i32)]
+#[case::list_view_to_large_list(0_i32, 0_i64)]
+#[case::large_list_view_to_large_list(0_i64, 0_i64)]
+#[case::large_list_view_to_list(0_i64, 0_i32)]
+fn test_cast_list_view_to_list<I: OffsetSizeTrait, O: OffsetSizeTrait>(
+    #[case] input_offset_type: I,
+    #[case] output_offset_type: O,
+) {
+    let _ = (input_offset_type, output_offset_type);
+    let list_view =
+        GenericListViewArray::<I>::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
+    let target_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(Field::new(
+        "item",
+        DataType::Int32,
+        true,
+    )));
     assert!(can_cast_types(list_view.data_type(), &target_type));
     let cast_result = cast(&list_view, &target_type).unwrap();
-    let got_list = cast_result.as_list::<i32>();
-    let expected_list = ListArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
+    let got_list = cast_result.as_list::<O>();
+    let expected_list =
+        GenericListArray::<O>::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
     assert_eq!(got_list, &expected_list);
 }
 
-#[test]
-fn test_cast_list_view_to_large_list() {
-    let list_view = ListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
-    let target_type = DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, true)));
-    assert!(can_cast_types(list_view.data_type(), &target_type));
-    let cast_result = cast(&list_view, &target_type).unwrap();
-    let got_list = cast_result.as_list::<i64>();
-    let expected_list = LargeListArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
-    assert_eq!(got_list, &expected_list);
-}
-
-#[test]
-fn test_cast_list_to_list_view() {
-    let list = ListArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
-    let target_type = DataType::ListView(Arc::new(Field::new("item", DataType::Int32, true)));
+#[rstest]
+#[case::list_to_list_view(0_i32)]
+#[case::large_list_to_large_list_view(0_i64)]
+fn test_cast_list_to_list_view<O: OffsetSizeTrait>(#[case] offset_type: O) {
+    let _ = offset_type;
+    let list = GenericListArray::<O>::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
+    let target_type = GenericListViewArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(Field::new(
+        "item",
+        DataType::Int32,
+        true,
+    )));
     assert!(can_cast_types(list.data_type(), &target_type));
     let cast_result = cast(&list, &target_type).unwrap();
 
-    let got_list_view = cast_result.as_list_view::<i32>();
+    let got_list_view = cast_result.as_list_view::<O>();
     let expected_list_view =
-        ListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
-    assert_eq!(got_list_view, &expected_list_view);
-
-    // inner types get cast
-    let list = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-        Some(vec![Some(1), Some(2)]),
-        None,
-        Some(vec![None, Some(3)]),
-    ]);
-    let target_type = DataType::ListView(Arc::new(Field::new("item", DataType::Float32, true)));
-    assert!(can_cast_types(list.data_type(), &target_type));
-    let cast_result = cast(&list, &target_type).unwrap();
-
-    let got_list_view = cast_result.as_list_view::<i32>();
-    let expected_list_view = ListViewArray::from_iter_primitive::<Float32Type, _, _>(vec![
-        Some(vec![Some(1.0), Some(2.0)]),
-        None,
-        Some(vec![None, Some(3.0)]),
-    ]);
+        GenericListViewArray::<O>::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
     assert_eq!(got_list_view, &expected_list_view);
 }
 
-#[test]
-fn test_cast_list_to_large_list_view() {
-    let list = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+#[rstest]
+#[case::list_to_list_view(0_i32, 0_i32)]
+#[case::list_to_large_list_view(0_i32, 0_i64)]
+#[case::large_list_to_large_list_view(0_i64, 0_i64)]
+#[case::large_list_to_list_view(0_i64, 0_i32)]
+fn test_cast_list_to_list_view_subcast<I: OffsetSizeTrait, O: OffsetSizeTrait>(
+    #[case] input_offset_type: I,
+    #[case] output_offset_type: O,
+) {
+    let _ = (input_offset_type, output_offset_type);
+    let list = GenericListArray::<I>::from_iter_primitive::<Int32Type, _, _>(vec![
         Some(vec![Some(1), Some(2)]),
         None,
         Some(vec![None, Some(3)]),
     ]);
-    let target_type =
-        DataType::LargeListView(Arc::new(Field::new("item", DataType::Float32, true)));
+    let target_type = GenericListViewArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(Field::new(
+        "item",
+        DataType::Float32,
+        true,
+    )));
     assert!(can_cast_types(list.data_type(), &target_type));
     let cast_result = cast(&list, &target_type).unwrap();
 
-    let got_list_view = cast_result.as_list_view::<i64>();
-    let expected_list_view = LargeListViewArray::from_iter_primitive::<Float32Type, _, _>(vec![
-        Some(vec![Some(1.0), Some(2.0)]),
-        None,
-        Some(vec![None, Some(3.0)]),
-    ]);
+    let got_list_view = cast_result.as_list_view::<O>();
+    let expected_list_view =
+        GenericListViewArray::<O>::from_iter_primitive::<Float32Type, _, _>(vec![
+            Some(vec![Some(1.0), Some(2.0)]),
+            None,
+            Some(vec![None, Some(3.0)]),
+        ]);
     assert_eq!(got_list_view, &expected_list_view);
 }
 
@@ -1570,100 +1474,39 @@ fn test_cast_list_to_list_view_null_in_non_nullable_field() {
     }
 }
 
-#[test]
-fn test_cast_large_list_view_to_large_list() {
-    let list_view = LargeListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
-    let target_type = DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, true)));
-    assert!(can_cast_types(list_view.data_type(), &target_type));
-    let cast_result = cast(&list_view, &target_type).unwrap();
-    let got_list = cast_result.as_list::<i64>();
-
-    let expected_list = LargeListArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
-    assert_eq!(got_list, &expected_list);
-}
-
-#[test]
-fn test_cast_large_list_view_to_list() {
-    let list_view = LargeListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
-    let target_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
-    assert!(can_cast_types(list_view.data_type(), &target_type));
-    let cast_result = cast(&list_view, &target_type).unwrap();
-    let got_list = cast_result.as_list::<i32>();
-
-    let expected_list = ListArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
-    assert_eq!(got_list, &expected_list);
-}
-
-#[test]
-fn test_cast_large_list_to_large_list_view() {
-    let list = LargeListArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
-    let target_type = DataType::LargeListView(Arc::new(Field::new("item", DataType::Int32, true)));
-    assert!(can_cast_types(list.data_type(), &target_type));
-    let cast_result = cast(&list, &target_type).unwrap();
-
-    let got_list_view = cast_result.as_list_view::<i64>();
-    let expected_list_view =
-        LargeListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
-    assert_eq!(got_list_view, &expected_list_view);
-
-    // inner types get cast
-    let list = LargeListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-        Some(vec![Some(1), Some(2)]),
-        None,
-        Some(vec![None, Some(3)]),
-    ]);
-    let target_type =
-        DataType::LargeListView(Arc::new(Field::new("item", DataType::Float32, true)));
-    assert!(can_cast_types(list.data_type(), &target_type));
-    let cast_result = cast(&list, &target_type).unwrap();
-
-    let got_list_view = cast_result.as_list_view::<i64>();
-    let expected_list_view = LargeListViewArray::from_iter_primitive::<Float32Type, _, _>(vec![
-        Some(vec![Some(1.0), Some(2.0)]),
-        None,
-        Some(vec![None, Some(3.0)]),
-    ]);
-    assert_eq!(got_list_view, &expected_list_view);
-}
-
-#[test]
-fn test_cast_large_list_to_list_view() {
-    let list = LargeListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-        Some(vec![Some(1), Some(2)]),
-        None,
-        Some(vec![None, Some(3)]),
-    ]);
-    let target_type = DataType::ListView(Arc::new(Field::new("item", DataType::Float32, true)));
-    assert!(can_cast_types(list.data_type(), &target_type));
-    let cast_result = cast(&list, &target_type).unwrap();
-
-    let got_list_view = cast_result.as_list_view::<i32>();
-    let expected_list_view = ListViewArray::from_iter_primitive::<Float32Type, _, _>(vec![
-        Some(vec![Some(1.0), Some(2.0)]),
-        None,
-        Some(vec![None, Some(3.0)]),
-    ]);
-    assert_eq!(got_list_view, &expected_list_view);
-}
-
-#[test]
-fn test_cast_list_view_to_list_out_of_order() {
+#[rstest]
+#[case::without_nulls(
+    None,
+    ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+        Some(vec![Some(1), Some(2), Some(3)]),
+        Some(vec![Some(7), Some(8), Some(9)]),
+        Some(vec![Some(4), Some(5), Some(6)]),
+    ]),
+)]
+#[case::with_nulls(
+    Some(NullBuffer::from(vec![false, true, false])),
+    ListArray::new(
+        Arc::new(Field::new("item", DataType::Int32, true)),
+        OffsetBuffer::from_lengths([3, 3, 3]),
+        Arc::new(Int32Array::from(vec![1, 2, 3, 7, 8, 9, 4, 5, 6])),
+        Some(NullBuffer::from(vec![false, true, false])),
+    ),
+)]
+fn test_cast_list_view_to_list_out_of_order(
+    #[case] nulls: Option<NullBuffer>,
+    #[case] expected_list: ListArray,
+) {
     let list_view = ListViewArray::new(
         Arc::new(Field::new("item", DataType::Int32, true)),
         ScalarBuffer::from(vec![0, 6, 3]),
         ScalarBuffer::from(vec![3, 3, 3]),
         Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9])),
-        None,
+        nulls,
     );
     let target_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
     assert!(can_cast_types(list_view.data_type(), &target_type));
     let cast_result = cast(&list_view, &target_type).unwrap();
     let got_list = cast_result.as_list::<i32>();
-    let expected_list = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-        Some(vec![Some(1), Some(2), Some(3)]),
-        Some(vec![Some(7), Some(8), Some(9)]),
-        Some(vec![Some(4), Some(5), Some(6)]),
-    ]);
     assert_eq!(got_list, &expected_list);
 }
 
@@ -1719,85 +1562,44 @@ fn test_cast_list_view_to_list_different_inner_type() {
     assert_eq!(got_list, &expected_list);
 }
 
-#[test]
-fn test_cast_list_view_to_list_out_of_order_with_nulls() {
-    let list_view = ListViewArray::new(
-        Arc::new(Field::new("item", DataType::Int32, true)),
-        ScalarBuffer::from(vec![0, 6, 3]),
-        ScalarBuffer::from(vec![3, 3, 3]),
-        Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9])),
-        Some(NullBuffer::from(vec![false, true, false])),
-    );
-    let target_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+#[rstest]
+#[case::list_view_to_large_list_view(0_i32, 0_i64)]
+#[case::large_list_view_to_list_view(0_i64, 0_i32)]
+fn test_cast_list_view_offset_width<I: OffsetSizeTrait, O: OffsetSizeTrait>(
+    #[case] input_offset_type: I,
+    #[case] output_offset_type: O,
+) {
+    let _ = (input_offset_type, output_offset_type);
+    let list_view =
+        GenericListViewArray::<I>::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
+    let target_type = GenericListViewArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(Field::new(
+        "item",
+        DataType::Int32,
+        true,
+    )));
     assert!(can_cast_types(list_view.data_type(), &target_type));
     let cast_result = cast(&list_view, &target_type).unwrap();
-    let got_list = cast_result.as_list::<i32>();
-    let expected_list = ListArray::new(
-        Arc::new(Field::new("item", DataType::Int32, true)),
-        OffsetBuffer::from_lengths([3, 3, 3]),
-        Arc::new(Int32Array::from(vec![1, 2, 3, 7, 8, 9, 4, 5, 6])),
-        Some(NullBuffer::from(vec![false, true, false])),
-    );
-    assert_eq!(got_list, &expected_list);
-}
+    let got = cast_result.as_list_view::<O>();
 
-#[test]
-fn test_cast_list_view_to_large_list_view() {
-    let list_view = ListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
-    let target_type = DataType::LargeListView(Arc::new(Field::new("item", DataType::Int32, true)));
-    assert!(can_cast_types(list_view.data_type(), &target_type));
-    let cast_result = cast(&list_view, &target_type).unwrap();
-    let got = cast_result.as_list_view::<i64>();
-
-    let expected = LargeListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
+    let expected =
+        GenericListViewArray::<O>::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
     assert_eq!(got, &expected);
 }
 
-#[test]
-fn test_cast_large_list_view_to_list_view() {
-    let list_view = LargeListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
-    let target_type = DataType::ListView(Arc::new(Field::new("item", DataType::Int32, true)));
-    assert!(can_cast_types(list_view.data_type(), &target_type));
-    let cast_result = cast(&list_view, &target_type).unwrap();
-    let got = cast_result.as_list_view::<i32>();
-
-    let expected = ListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
-    assert_eq!(got, &expected);
-}
-
-#[test]
-fn test_first_none() {
-    let array = Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
-        None,
-        Some(vec![Some(1), Some(2)]),
-    ])) as ArrayRef;
-    let data_type =
-        DataType::FixedSizeList(FieldRef::new(Field::new("item", DataType::Int64, true)), 2);
-    let opt = CastOptions::default();
-    let r = cast_with_options(&array, &data_type, &opt).unwrap();
-
-    let fixed_array = Arc::new(FixedSizeListArray::from_iter_primitive::<Int64Type, _, _>(
-        vec![None, Some(vec![Some(1), Some(2)])],
-        2,
+#[rstest]
+#[case::first_null(vec![None, Some(vec![Some(1), Some(2)])])]
+#[case::first_and_last_null(vec![None, Some(vec![Some(1), Some(2)]), None])]
+fn test_cast_list_to_fsl_preserves_boundary_nulls(#[case] values: Vec<Option<Vec<Option<i64>>>>) {
+    let array = Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(
+        values.clone(),
     )) as ArrayRef;
-    assert_eq!(*fixed_array, *r);
-}
-
-#[test]
-fn test_first_last_none() {
-    let array = Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
-        None,
-        Some(vec![Some(1), Some(2)]),
-        None,
-    ])) as ArrayRef;
     let data_type =
         DataType::FixedSizeList(FieldRef::new(Field::new("item", DataType::Int64, true)), 2);
     let opt = CastOptions::default();
     let r = cast_with_options(&array, &data_type, &opt).unwrap();
 
     let fixed_array = Arc::new(FixedSizeListArray::from_iter_primitive::<Int64Type, _, _>(
-        vec![None, Some(vec![Some(1), Some(2)]), None],
-        2,
+        values, 2,
     )) as ArrayRef;
     assert_eq!(*fixed_array, *r);
 }
