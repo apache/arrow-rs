@@ -31,7 +31,9 @@ use arrow_array::{
     Float64Array, Int8Array, Int32Array, Int64Array, LargeBinaryArray, ListArray,
     RecordBatchOptions, RunArray, StringArray, StringViewArray, StructArray,
 };
-use arrow_buffer::{NullBuffer, OffsetBuffer};
+use arrow_buffer::{BooleanBuffer, NullBuffer, OffsetBuffer};
+use arrow_select::filter::filter_record_batch;
+use parquet::arrow::arrow_reader::RowSelection;
 use parquet::errors::Result;
 use parquet::file::properties::{CdcOptions, WriterProperties, WriterVersion};
 
@@ -1194,6 +1196,34 @@ fn create_decimal128_dictionary_bench_batch_1pct_cardinality(
     Ok(RecordBatch::try_from_iter([("col", array)])?)
 }
 
+/// Columns of the types of a typical table of records, with some nulls
+fn create_selection_bench_batch(size: usize) -> Result<RecordBatch> {
+    let fields = vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new("count", DataType::Int32, true),
+        Field::new("price", DataType::Decimal128(12, 2), true),
+        Field::new("weight", DataType::Float64, true),
+        Field::new("name", DataType::Utf8, true),
+        Field::new(
+            "updated",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            true,
+        ),
+    ];
+    let schema = Arc::new(Schema::new(fields));
+    Ok(create_random_batch(schema, size, 0.1, 0.5)?)
+}
+
+/// Selects all but a `skipped` fraction of `size` rows, skipping single rows, or runs of
+/// `run` rows, at random
+fn create_selection_mask(size: usize, skipped: f64, run: usize) -> BooleanBuffer {
+    let mut rng = seedable_rng();
+    let runs: Vec<bool> = (0..size.div_ceil(run))
+        .map(|_| !rng.random_bool(skipped))
+        .collect();
+    BooleanBuffer::from_iter((0..size).map(|row| runs[row / run]))
+}
+
 struct BatchBenchmark {
     name: &'static str,
     logical_rows: u64,
@@ -2070,11 +2100,57 @@ fn bench_ndv(c: &mut Criterion) {
     }
 }
 
+/// Writes the rows of a batch that a selection selects with
+/// [`ArrowWriter::write_with_selection`], with `filter_record_batch` and
+/// [`ArrowWriter::write`] on the same rows as a baseline.
+///
+/// Rows are skipped at random, as rows that a change stream later replaces or deletes
+/// would be, or in runs, which leave fewer runs of selected rows.
+fn bench_write_with_selection(c: &mut Criterion) {
+    const BATCH_SIZE: usize = 1024 * 1024;
+    let batch = create_selection_bench_batch(BATCH_SIZE).unwrap();
+
+    for (name, skipped, run) in [
+        ("skip_10pct_random", 0.1, 1),
+        ("skip_50pct_random", 0.5, 1),
+        ("skip_99pct_random", 0.99, 1),
+        ("skip_50pct_runs_of_64", 0.5, 64),
+    ] {
+        let mask = create_selection_mask(BATCH_SIZE, skipped, run);
+        let filter = BooleanArray::new(mask.clone(), None);
+        let selection = RowSelection::from_boolean_buffer(mask);
+
+        let mut group = c.benchmark_group(format!("write_with_selection/{name}"));
+        group.throughput(Throughput::Elements(BATCH_SIZE as u64));
+        group.bench_function("filter_then_write", |b| {
+            b.iter(|| {
+                let mut writer =
+                    ArrowWriter::try_new(Empty::default(), batch.schema(), None).unwrap();
+                let filtered = filter_record_batch(black_box(&batch), &filter).unwrap();
+                writer.write(&filtered).unwrap();
+                black_box(writer.close()).unwrap();
+            })
+        });
+        group.bench_function("write_with_selection", |b| {
+            b.iter(|| {
+                let mut writer =
+                    ArrowWriter::try_new(Empty::default(), batch.schema(), None).unwrap();
+                writer
+                    .write_with_selection(black_box(&batch), &selection)
+                    .unwrap();
+                black_box(writer.close()).unwrap();
+            })
+        });
+        group.finish();
+    }
+}
+
 criterion_group!(
     benches,
     bench_all_writers,
     bench_small_delta_byte_array_writers,
     bench_delta_byte_array_writers,
     bench_ndv,
+    bench_write_with_selection,
 );
 criterion_main!(benches);
