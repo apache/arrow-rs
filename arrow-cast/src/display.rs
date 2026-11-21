@@ -1425,6 +1425,7 @@ pub fn lexical_to_string<N: lexical_core::ToLexical>(n: N) -> String {
 mod tests {
     use super::*;
     use arrow_array::builder::StringRunBuilder;
+    use rstest::rstest;
     /// Test to verify options can be constant. See #4580
     const TEST_CONST_OPTIONS: FormatOptions<'static> = FormatOptions::new()
         .with_date_format(Some("foo"))
@@ -1527,106 +1528,121 @@ mod tests {
         assert!(formatter.value(0).try_to_string().is_err());
     }
 
-    #[test]
-    fn test_array_value_to_string_duration() {
-        let iso_fmt = FormatOptions::new();
-        let pretty_fmt = FormatOptions::new().with_duration_format(DurationFormat::Pretty);
-
-        let array = DurationNanosecondArray::from(vec![
+    #[rstest]
+    #[case::nanoseconds(
+        DurationNanosecondArray::from(vec![
             1,
             -1,
             1000,
             -1000,
             (45 * 60 * 60 * 24 + 14 * 60 * 60 + 2 * 60 + 34) * 1_000_000_000 + 123456789,
             -(45 * 60 * 60 * 24 + 14 * 60 * 60 + 2 * 60 + 34) * 1_000_000_000 - 123456789,
-        ]);
-        let iso = format_array(&array, &iso_fmt);
-        let pretty = format_array(&array, &pretty_fmt);
-
-        assert_eq!(iso[0], "PT0.000000001S");
-        assert_eq!(pretty[0], "0 days 0 hours 0 mins 0.000000001 secs");
-        assert_eq!(iso[1], "-PT0.000000001S");
-        assert_eq!(pretty[1], "0 days 0 hours 0 mins -0.000000001 secs");
-        assert_eq!(iso[2], "PT0.000001S");
-        assert_eq!(pretty[2], "0 days 0 hours 0 mins 0.000001000 secs");
-        assert_eq!(iso[3], "-PT0.000001S");
-        assert_eq!(pretty[3], "0 days 0 hours 0 mins -0.000001000 secs");
-        assert_eq!(iso[4], "PT3938554.123456789S");
-        assert_eq!(pretty[4], "45 days 14 hours 2 mins 34.123456789 secs");
-        assert_eq!(iso[5], "-PT3938554.123456789S");
-        assert_eq!(pretty[5], "-45 days -14 hours -2 mins -34.123456789 secs");
-
-        let array = DurationMicrosecondArray::from(vec![
+        ]),
+        [
+            "PT0.000000001S",
+            "-PT0.000000001S",
+            "PT0.000001S",
+            "-PT0.000001S",
+            "PT3938554.123456789S",
+            "-PT3938554.123456789S",
+        ],
+        [
+            "0 days 0 hours 0 mins 0.000000001 secs",
+            "0 days 0 hours 0 mins -0.000000001 secs",
+            "0 days 0 hours 0 mins 0.000001000 secs",
+            "0 days 0 hours 0 mins -0.000001000 secs",
+            "45 days 14 hours 2 mins 34.123456789 secs",
+            "-45 days -14 hours -2 mins -34.123456789 secs",
+        ],
+    )]
+    #[case::microseconds(
+        DurationMicrosecondArray::from(vec![
             1,
             -1,
             1000,
             -1000,
             (45 * 60 * 60 * 24 + 14 * 60 * 60 + 2 * 60 + 34) * 1_000_000 + 123456,
             -(45 * 60 * 60 * 24 + 14 * 60 * 60 + 2 * 60 + 34) * 1_000_000 - 123456,
-        ]);
-        let iso = format_array(&array, &iso_fmt);
-        let pretty = format_array(&array, &pretty_fmt);
-
-        assert_eq!(iso[0], "PT0.000001S");
-        assert_eq!(pretty[0], "0 days 0 hours 0 mins 0.000001 secs");
-        assert_eq!(iso[1], "-PT0.000001S");
-        assert_eq!(pretty[1], "0 days 0 hours 0 mins -0.000001 secs");
-        assert_eq!(iso[2], "PT0.001S");
-        assert_eq!(pretty[2], "0 days 0 hours 0 mins 0.001000 secs");
-        assert_eq!(iso[3], "-PT0.001S");
-        assert_eq!(pretty[3], "0 days 0 hours 0 mins -0.001000 secs");
-        assert_eq!(iso[4], "PT3938554.123456S");
-        assert_eq!(pretty[4], "45 days 14 hours 2 mins 34.123456 secs");
-        assert_eq!(iso[5], "-PT3938554.123456S");
-        assert_eq!(pretty[5], "-45 days -14 hours -2 mins -34.123456 secs");
-
-        let array = DurationMillisecondArray::from(vec![
+        ]),
+        [
+            "PT0.000001S",
+            "-PT0.000001S",
+            "PT0.001S",
+            "-PT0.001S",
+            "PT3938554.123456S",
+            "-PT3938554.123456S",
+        ],
+        [
+            "0 days 0 hours 0 mins 0.000001 secs",
+            "0 days 0 hours 0 mins -0.000001 secs",
+            "0 days 0 hours 0 mins 0.001000 secs",
+            "0 days 0 hours 0 mins -0.001000 secs",
+            "45 days 14 hours 2 mins 34.123456 secs",
+            "-45 days -14 hours -2 mins -34.123456 secs",
+        ],
+    )]
+    #[case::milliseconds(
+        DurationMillisecondArray::from(vec![
             1,
             -1,
             1000,
             -1000,
             (45 * 60 * 60 * 24 + 14 * 60 * 60 + 2 * 60 + 34) * 1_000 + 123,
             -(45 * 60 * 60 * 24 + 14 * 60 * 60 + 2 * 60 + 34) * 1_000 - 123,
-        ]);
-        let iso = format_array(&array, &iso_fmt);
-        let pretty = format_array(&array, &pretty_fmt);
-
-        assert_eq!(iso[0], "PT0.001S");
-        assert_eq!(pretty[0], "0 days 0 hours 0 mins 0.001 secs");
-        assert_eq!(iso[1], "-PT0.001S");
-        assert_eq!(pretty[1], "0 days 0 hours 0 mins -0.001 secs");
-        assert_eq!(iso[2], "PT1S");
-        assert_eq!(pretty[2], "0 days 0 hours 0 mins 1.000 secs");
-        assert_eq!(iso[3], "-PT1S");
-        assert_eq!(pretty[3], "0 days 0 hours 0 mins -1.000 secs");
-        assert_eq!(iso[4], "PT3938554.123S");
-        assert_eq!(pretty[4], "45 days 14 hours 2 mins 34.123 secs");
-        assert_eq!(iso[5], "-PT3938554.123S");
-        assert_eq!(pretty[5], "-45 days -14 hours -2 mins -34.123 secs");
-
-        let array = DurationSecondArray::from(vec![
+        ]),
+        [
+            "PT0.001S",
+            "-PT0.001S",
+            "PT1S",
+            "-PT1S",
+            "PT3938554.123S",
+            "-PT3938554.123S",
+        ],
+        [
+            "0 days 0 hours 0 mins 0.001 secs",
+            "0 days 0 hours 0 mins -0.001 secs",
+            "0 days 0 hours 0 mins 1.000 secs",
+            "0 days 0 hours 0 mins -1.000 secs",
+            "45 days 14 hours 2 mins 34.123 secs",
+            "-45 days -14 hours -2 mins -34.123 secs",
+        ],
+    )]
+    #[case::seconds(
+        DurationSecondArray::from(vec![
             1,
             -1,
             1000,
             -1000,
             45 * 60 * 60 * 24 + 14 * 60 * 60 + 2 * 60 + 34,
             -45 * 60 * 60 * 24 - 14 * 60 * 60 - 2 * 60 - 34,
-        ]);
-        let iso = format_array(&array, &iso_fmt);
-        let pretty = format_array(&array, &pretty_fmt);
+        ]),
+        [
+            "PT1S",
+            "-PT1S",
+            "PT1000S",
+            "-PT1000S",
+            "PT3938554S",
+            "-PT3938554S",
+        ],
+        [
+            "0 days 0 hours 0 mins 1 secs",
+            "0 days 0 hours 0 mins -1 secs",
+            "0 days 0 hours 16 mins 40 secs",
+            "0 days 0 hours -16 mins -40 secs",
+            "45 days 14 hours 2 mins 34 secs",
+            "-45 days -14 hours -2 mins -34 secs",
+        ],
+    )]
+    fn test_array_value_to_string_duration<A: Array>(
+        #[case] array: A,
+        #[case] expected_iso: [&str; 6],
+        #[case] expected_pretty: [&str; 6],
+    ) {
+        let iso_fmt = FormatOptions::new();
+        let pretty_fmt = FormatOptions::new().with_duration_format(DurationFormat::Pretty);
 
-        assert_eq!(iso[0], "PT1S");
-        assert_eq!(pretty[0], "0 days 0 hours 0 mins 1 secs");
-        assert_eq!(iso[1], "-PT1S");
-        assert_eq!(pretty[1], "0 days 0 hours 0 mins -1 secs");
-        assert_eq!(iso[2], "PT1000S");
-        assert_eq!(pretty[2], "0 days 0 hours 16 mins 40 secs");
-        assert_eq!(iso[3], "-PT1000S");
-        assert_eq!(pretty[3], "0 days 0 hours -16 mins -40 secs");
-        assert_eq!(iso[4], "PT3938554S");
-        assert_eq!(pretty[4], "45 days 14 hours 2 mins 34 secs");
-        assert_eq!(iso[5], "-PT3938554S");
-        assert_eq!(pretty[5], "-45 days -14 hours -2 mins -34 secs");
+        assert_eq!(format_array(&array, &iso_fmt), expected_iso);
+        assert_eq!(format_array(&array, &pretty_fmt), expected_pretty);
     }
 
     #[test]
@@ -1654,24 +1670,12 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_list_view_to_string() {
-        let list_view = ListViewArray::from_iter_primitive::<Int32Type, _, _>(vec![
-            Some(vec![Some(1), Some(2), Some(3)]),
-            None,
-            Some(vec![Some(4), None, Some(6)]),
-            Some(vec![]),
-        ]);
-
-        assert_eq!("[1, 2, 3]", array_value_to_string(&list_view, 0).unwrap());
-        assert_eq!("", array_value_to_string(&list_view, 1).unwrap());
-        assert_eq!("[4, , 6]", array_value_to_string(&list_view, 2).unwrap());
-        assert_eq!("[]", array_value_to_string(&list_view, 3).unwrap());
-    }
-
-    #[test]
-    fn test_large_list_view_to_string() {
-        let list_view = LargeListViewArray::from_iter_primitive::<Int32Type, _, _>(vec![
+    #[rstest]
+    #[case::list_view(0_i32)]
+    #[case::large_list_view(0_i64)]
+    fn test_list_view_to_string<O: OffsetSizeTrait>(#[case] offset_type: O) {
+        let _ = offset_type;
+        let list_view = GenericListViewArray::<O>::from_iter_primitive::<Int32Type, _, _>(vec![
             Some(vec![Some(1), Some(2), Some(3)]),
             None,
             Some(vec![Some(4), None, Some(6)]),

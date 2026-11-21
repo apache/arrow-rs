@@ -23,6 +23,7 @@ use arrow_schema::DataType::{
     UInt32, UInt64, Utf8, Utf8View,
 };
 use half::f16;
+use rstest::rstest;
 
 #[test]
 fn test_cast_i32_to_f64() {
@@ -137,21 +138,10 @@ fn test_cast_float_to_utf8view() {
     }
 }
 
-#[test]
-fn test_cast_utf8_to_i32() {
-    let array = StringArray::from(vec!["5", "6", "seven", "8", "9.1"]);
-    let b = cast(&array, &DataType::Int32).unwrap();
-    let c = b.as_primitive::<Int32Type>();
-    assert_eq!(5, c.value(0));
-    assert_eq!(6, c.value(1));
-    assert!(!c.is_valid(2));
-    assert_eq!(8, c.value(3));
-    assert!(!c.is_valid(4));
-}
-
-#[test]
-fn test_cast_utf8view_to_i32() {
-    let array = StringViewArray::from(vec!["5", "6", "seven", "8", "9.1"]);
+#[rstest]
+#[case::utf8(Arc::new(StringArray::from(vec!["5", "6", "seven", "8", "9.1"])))]
+#[case::utf8view(Arc::new(StringViewArray::from(vec!["5", "6", "seven", "8", "9.1"])))]
+fn test_cast_string_to_i32(#[case] array: ArrayRef) {
     let b = cast(&array, &DataType::Int32).unwrap();
     let c = b.as_primitive::<Int32Type>();
     assert_eq!(5, c.value(0));
@@ -213,17 +203,10 @@ fn test_cast_with_options_utf8_to_i32() {
     }
 }
 
-#[test]
-fn test_cast_utf8_to_bool() {
-    let strings = StringArray::from(vec!["true", "false", "invalid", " Y ", ""]);
-    let casted = cast(&strings, &DataType::Boolean).unwrap();
-    let expected = BooleanArray::from(vec![Some(true), Some(false), None, Some(true), None]);
-    assert_eq!(*as_boolean_array(&casted), expected);
-}
-
-#[test]
-fn test_cast_utf8view_to_bool() {
-    let strings = StringViewArray::from(vec!["true", "false", "invalid", " Y ", ""]);
+#[rstest]
+#[case::utf8(Arc::new(StringArray::from(vec!["true", "false", "invalid", " Y ", ""])))]
+#[case::utf8view(Arc::new(StringViewArray::from(vec!["true", "false", "invalid", " Y ", ""])))]
+fn test_cast_string_to_bool(#[case] strings: ArrayRef) {
     let casted = cast(&strings, &DataType::Boolean).unwrap();
     let expected = BooleanArray::from(vec![Some(true), Some(false), None, Some(true), None]);
     assert_eq!(*as_boolean_array(&casted), expected);
@@ -261,35 +244,34 @@ fn test_cast_bool_to_i32() {
     assert!(!c.is_valid(2));
 }
 
-#[test]
-fn test_cast_bool_numeric_sliced() {
-    for nulls in [
-        None,
-        Some(NullBuffer::from(
-            [false, true, true, false, true, true].repeat(12),
-        )),
-        Some(NullBuffer::new_null(72)),
-    ] {
-        // Include true values under nulls and slices crossing a bitmap word boundary.
-        let booleans = BooleanArray::new(
-            BooleanBuffer::from([true, false, true, false, true, false].repeat(12)),
-            nulls.clone(),
-        );
-        let numbers = Int32Array::new([1, 0, 1, 0, 1, 0].repeat(12).into(), nulls);
-        for data_type in [
-            Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float16, Float32, Float64,
-        ] {
-            let expected = cast(&numbers, &data_type).unwrap();
-            for offset in [0, 3, 63, 72] {
-                let input = booleans.slice(offset, 72 - offset);
-                let expected = expected.slice(offset, 72 - offset);
-                let actual = cast(&input, &data_type).unwrap();
-                assert_eq!(actual.as_ref(), expected.as_ref());
+#[rstest]
+#[case::no_nulls(None)]
+#[case::mixed_nulls(Some(NullBuffer::from(
+    [false, true, true, false, true, true].repeat(12),
+)))]
+#[case::all_nulls(Some(NullBuffer::new_null(72)))]
+fn test_cast_bool_numeric_sliced(
+    #[case] nulls: Option<NullBuffer>,
+    #[values(
+        Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float16, Float32, Float64
+    )]
+    data_type: DataType,
+) {
+    // Include true values under nulls and slices crossing a bitmap word boundary.
+    let booleans = BooleanArray::new(
+        BooleanBuffer::from([true, false, true, false, true, false].repeat(12)),
+        nulls.clone(),
+    );
+    let numbers = Int32Array::new([1, 0, 1, 0, 1, 0].repeat(12).into(), nulls);
+    let expected = cast(&numbers, &data_type).unwrap();
+    for offset in [0, 3, 63, 72] {
+        let input = booleans.slice(offset, 72 - offset);
+        let expected = expected.slice(offset, 72 - offset);
+        let actual = cast(&input, &data_type).unwrap();
+        assert_eq!(actual.as_ref(), expected.as_ref());
 
-                let actual = cast(expected.as_ref(), &Boolean).unwrap();
-                assert_eq!(actual.as_ref(), &input);
-            }
-        }
+        let actual = cast(expected.as_ref(), &Boolean).unwrap();
+        assert_eq!(actual.as_ref(), &input);
     }
 }
 
@@ -312,35 +294,33 @@ fn test_cast_float_to_bool_special_values() {
     }
 }
 
-#[test]
-fn test_cast_bool_to_string() {
-    for nulls in [
-        None,
-        Some(NullBuffer::from([false, false, true, true].repeat(18))),
-        Some(NullBuffer::new_null(72)),
-    ] {
-        // Include both Boolean values under nulls, an unaligned slice, and an empty slice.
-        let array = BooleanArray::new(BooleanBuffer::from([true, false].repeat(36)), nulls);
-        let expected: Vec<_> = ["true", "false"]
-            .repeat(36)
-            .into_iter()
-            .enumerate()
-            .map(|(i, value)| array.is_valid(i).then_some(value))
-            .collect();
-        for (offset, len) in [(0, 72), (3, 65), (72, 0)] {
-            let input = array.slice(offset, len);
-            for data_type in [Utf8, LargeUtf8, Utf8View] {
-                let actual = cast(&input, &data_type).unwrap();
-                let values: Vec<_> = match data_type {
-                    Utf8 => actual.as_string::<i32>().iter().collect(),
-                    LargeUtf8 => actual.as_string::<i64>().iter().collect(),
-                    Utf8View => actual.as_string_view().iter().collect(),
-                    _ => unreachable!(),
-                };
-                assert_eq!(values, expected[offset..offset + len]);
-            }
-        }
-    }
+#[rstest]
+#[case::no_nulls(None)]
+#[case::mixed_nulls(Some(NullBuffer::from([false, false, true, true].repeat(18))))]
+#[case::all_nulls(Some(NullBuffer::new_null(72)))]
+fn test_cast_bool_to_string(
+    #[case] nulls: Option<NullBuffer>,
+    #[values((0, 72), (3, 65), (72, 0))] slice: (usize, usize),
+    #[values(Utf8, LargeUtf8, Utf8View)] data_type: DataType,
+) {
+    // Include both Boolean values under nulls, an unaligned slice, and an empty slice.
+    let array = BooleanArray::new(BooleanBuffer::from([true, false].repeat(36)), nulls);
+    let expected: Vec<_> = ["true", "false"]
+        .repeat(36)
+        .into_iter()
+        .enumerate()
+        .map(|(i, value)| array.is_valid(i).then_some(value))
+        .collect();
+    let (offset, len) = slice;
+    let input = array.slice(offset, len);
+    let actual = cast(&input, &data_type).unwrap();
+    let values: Vec<_> = match data_type {
+        Utf8 => actual.as_string::<i32>().iter().collect(),
+        LargeUtf8 => actual.as_string::<i64>().iter().collect(),
+        Utf8View => actual.as_string_view().iter().collect(),
+        _ => unreachable!(),
+    };
+    assert_eq!(values, expected[offset..offset + len]);
 }
 
 #[test]

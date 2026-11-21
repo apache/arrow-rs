@@ -719,6 +719,7 @@ where
 mod tests {
     use super::*;
     use DataType::*;
+    use rstest::rstest;
 
     // Too few keys for the dictionary, so `is_sparse` holds and views are built per row.
     // Covers an inlined value, a buffer backed one, a null key and a null dictionary value.
@@ -756,8 +757,14 @@ mod tests {
         DictionaryArray::try_new(keys.clone(), values.clone()).unwrap()
     }
 
-    #[test]
-    fn test_dict_to_view_matches_take_then_cast() {
+    #[rstest]
+    #[case::sparse(sparse_keys)]
+    #[case::dense(dense_keys)]
+    fn test_dict_to_view_matches_take_then_cast(
+        #[case] make_keys: fn(&ArrayRef) -> Int32Array,
+        #[values(Utf8, LargeUtf8, Binary, LargeBinary)] from: DataType,
+        #[values(Utf8View, BinaryView)] to: DataType,
+    ) {
         let long = "a value over twelve bytes";
         let utf8: ArrayRef = Arc::new(StringArray::from(vec![
             Some("aa"),
@@ -772,20 +779,35 @@ mod tests {
             Some("jj"),
         ]));
 
-        for from in [Utf8, LargeUtf8, Binary, LargeBinary] {
-            let values = cast(&utf8, &from).unwrap();
-            for to in [Utf8View, BinaryView] {
-                for keys in [sparse_keys(&values), dense_keys(&values)] {
-                    let expected = cast(&take(&values, &keys, None).unwrap(), &to).unwrap();
-                    let casted = cast(&make_dict(&keys, &values), &to).unwrap();
-                    assert_eq!(casted.as_ref(), expected.as_ref(), "{from:?} -> {to:?}");
-                }
-            }
-        }
+        let values = cast(&utf8, &from).unwrap();
+        let keys = make_keys(&values);
+        let expected = cast(&take(&values, &keys, None).unwrap(), &to).unwrap();
+        let casted = cast(&make_dict(&keys, &values), &to).unwrap();
+        assert_eq!(casted.as_ref(), expected.as_ref(), "{from:?} -> {to:?}");
     }
 
-    #[test]
-    fn test_dict_binary_to_utf8view_invalid_utf8() {
+    #[rstest]
+    #[case::sparse(sparse_keys, vec![Some("aa"), None, None, Some("dd")])]
+    #[case::dense(
+        dense_keys,
+        vec![
+            Some("aa"),
+            None,
+            None,
+            Some("dd"),
+            Some("bb"),
+            Some("aa"),
+            Some("ee"),
+            None,
+            Some("dd"),
+            Some("ff"),
+        ]
+    )]
+    fn test_dict_binary_to_utf8view_invalid_utf8(
+        #[case] make_keys: fn(&ArrayRef) -> Int32Array,
+        #[case] expected: Vec<Option<&str>>,
+        #[values(Binary, LargeBinary)] from: DataType,
+    ) {
         let bytes: Vec<&[u8]> = vec![
             b"aa",
             b"bb",
@@ -807,38 +829,17 @@ mod tests {
             ..Default::default()
         };
 
-        for values in [
-            Arc::new(BinaryArray::from_vec(bytes.clone())) as ArrayRef,
-            Arc::new(LargeBinaryArray::from_vec(bytes.clone())) as ArrayRef,
-        ] {
-            // index 2 holds the invalid value, so keys pointing at it are nullified when safe
-            for (keys, expected) in [
-                (
-                    sparse_keys(&values),
-                    vec![Some("aa"), None, None, Some("dd")],
-                ),
-                (
-                    dense_keys(&values),
-                    vec![
-                        Some("aa"),
-                        None,
-                        None,
-                        Some("dd"),
-                        Some("bb"),
-                        Some("aa"),
-                        Some("ee"),
-                        None,
-                        Some("dd"),
-                        Some("ff"),
-                    ],
-                ),
-            ] {
-                let dict = make_dict(&keys, &values);
-                assert!(cast_with_options(&dict, &Utf8View, &strict).is_err());
+        let values: ArrayRef = match from {
+            Binary => Arc::new(BinaryArray::from_vec(bytes)),
+            LargeBinary => Arc::new(LargeBinaryArray::from_vec(bytes)),
+            _ => unreachable!(),
+        };
+        let keys = make_keys(&values);
+        let dict = make_dict(&keys, &values);
+        assert!(cast_with_options(&dict, &Utf8View, &strict).is_err());
 
-                let casted = cast_with_options(&dict, &Utf8View, &safe).unwrap();
-                assert_eq!(casted.as_string_view(), &StringViewArray::from(expected));
-            }
-        }
+        // index 2 holds the invalid value, so keys pointing at it are nullified when safe
+        let casted = cast_with_options(&dict, &Utf8View, &safe).unwrap();
+        assert_eq!(casted.as_string_view(), &StringViewArray::from(expected));
     }
 }
