@@ -5,6 +5,7 @@
 mod common;
 
 use crate::common::fixture::TestFixture;
+use crate::common::server::TestFlightServer;
 use crate::common::utils::make_primitive_batch;
 
 use arrow_array::RecordBatch;
@@ -15,9 +16,10 @@ use arrow_flight::flight_service_server::FlightServiceServer;
 use arrow_flight::sql::client::FlightSqlServiceClient;
 use arrow_flight::sql::server::{FlightSqlService, PeekableFlightDataStream};
 use arrow_flight::sql::{
-    ActionBeginTransactionRequest, ActionBeginTransactionResult, ActionEndTransactionRequest,
-    CommandStatementIngest, EndTransaction, FallibleRequestStream, ProstMessageExt,
-    TableDefinitionOptions, TableExistsOption, TableNotExistOption,
+    ActionBeginTransactionRequest, ActionBeginTransactionResult,
+    ActionCreatePreparedStatementResult, ActionEndTransactionRequest, CommandStatementIngest,
+    EndTransaction, FallibleRequestStream, ProstMessageExt, TableDefinitionOptions,
+    TableExistsOption, TableNotExistOption,
 };
 use arrow_flight::{Action, FlightData, FlightDescriptor};
 use futures::{StreamExt, TryStreamExt};
@@ -27,6 +29,33 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tonic::{IntoStreamingRequest, Request, Status};
 use uuid::Uuid;
+
+#[tokio::test]
+pub async fn test_prepare_is_update() {
+    let test_server = TestFlightServer::new();
+    let fixture = TestFixture::new(test_server.service()).await;
+    let channel = fixture.channel().await;
+    let mut flight_sql_client = FlightSqlServiceClient::new(channel);
+
+    for is_update in [Some(true), Some(false), None] {
+        let response = ActionCreatePreparedStatementResult {
+            prepared_statement_handle: "handle".into(),
+            is_update,
+            ..Default::default()
+        };
+        test_server.set_do_action_response(vec![Ok(arrow_flight::Result::new(
+            response.as_any().encode_to_vec(),
+        ))]);
+
+        let statement = flight_sql_client
+            .prepare("SELECT 1".to_string(), None)
+            .await
+            .unwrap();
+        assert_eq!(statement.is_update(), is_update);
+    }
+
+    fixture.shutdown_and_wait().await;
+}
 
 #[tokio::test]
 pub async fn test_begin_end_transaction() {
