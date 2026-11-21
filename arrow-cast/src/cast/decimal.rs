@@ -174,8 +174,7 @@ impl DecimalCast for i256 {
 ///
 /// Returns `None` if the required scale increase `delta_scale = output_scale - input_scale`
 /// exceeds the supported precomputed precision table `O::MAX_FOR_EACH_PRECISION`.
-/// In that case, the caller should treat this as an overflow for the output scale
-/// and handle it accordingly (e.g., return a cast error).
+/// In that case, non-zero values overflow the output scale while zero values remain representable.
 #[expect(clippy::type_complexity)]
 fn make_upscaler<I: DecimalType, O: DecimalType>(
     input_precision: u8,
@@ -309,9 +308,9 @@ where
 /// The function first validates that the requested precision and scale are supported for
 /// both the source and destination decimal types. It then either upscales (multiplying
 /// by an appropriate power of ten) or downscales (dividing with rounding) the input value.
-/// When the scaling factor exceeds the precision table of the destination type, the value
-/// is treated as an overflow for upscaling, or rounded to zero for downscaling (as any
-/// possible result would be zero at the requested scale).
+/// When the scaling factor exceeds the precision table of the destination type, zero remains
+/// representable while non-zero values overflow for upscaling, or rounded to zero for downscaling
+/// (as any possible result would be zero at the requested scale).
 ///
 /// This mirrors the column-oriented helpers of decimal casting but operates on a single value
 /// (row-level) instead of an entire array.
@@ -332,9 +331,14 @@ where
     validate_decimal_precision_and_scale::<O>(output_precision, output_scale).ok()?;
 
     if input_scale <= output_scale {
-        let (f, f_infallible) =
-            make_upscaler::<I, O>(input_precision, input_scale, output_precision, output_scale)?;
-        apply_rescaler::<I, O>(value, output_precision, f, f_infallible)
+        if let Some((f, f_infallible)) =
+            make_upscaler::<I, O>(input_precision, input_scale, output_precision, output_scale)
+        {
+            apply_rescaler::<I, O>(value, output_precision, f, f_infallible)
+        } else {
+            // Scale increase exceeds supported precision table; zero remains representable, non-zero overflows
+            (value == I::Native::ZERO).then_some(O::Native::ZERO)
+        }
     } else {
         let Some((f, f_infallible)) =
             make_downscaler::<I, O>(input_precision, input_scale, output_precision, output_scale)
@@ -453,13 +457,17 @@ where
             cast_options,
         )
     } else {
-        // Scale increase exceeds supported precision; return overflow error
-        Err(ArrowError::CastError(format!(
-            "Cannot cast to {}({}, {}). Value overflows for output scale",
-            O::PREFIX,
+        // Scale increase exceeds supported precision table; non-zero values overflow
+        // while zero remains representable.
+        let f_fallible = move |x| (x == I::Native::ZERO).then_some(O::Native::ZERO);
+        apply_decimal_cast(
+            array,
             output_precision,
-            output_scale
-        )))
+            output_scale,
+            f_fallible,
+            None::<fn(I::Native) -> O::Native>,
+            cast_options,
+        )
     }
 }
 
@@ -1404,5 +1412,25 @@ mod tests {
     fn test_rescale_decimal_invalid_output_precision_scale_returns_none() {
         let result = rescale_decimal::<Decimal128Type, Decimal128Type>(123_i128, 38, 38, 39, 39);
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_rescale_decimal_upscale_large_delta() {
+        // Delta scale 40 exceeds Decimal128 table (38 max precision)
+        let zero = rescale_decimal::<Decimal128Type, Decimal128Type>(0_i128, 5, -2, 38, 38);
+        assert_eq!(zero, Some(0_i128));
+
+        let non_zero = rescale_decimal::<Decimal128Type, Decimal128Type>(1_i128, 5, -2, 38, 38);
+        assert_eq!(non_zero, None);
+
+        let negative = rescale_decimal::<Decimal128Type, Decimal128Type>(-1_i128, 5, -2, 38, 38);
+        assert_eq!(negative, None);
+
+        // Delta scale 19 exceeds Decimal32 table (9 max precision)
+        let zero_d32 = rescale_decimal::<Decimal32Type, Decimal32Type>(0_i32, 3, -10, 9, 9);
+        assert_eq!(zero_d32, Some(0_i32));
+
+        let non_zero_d32 = rescale_decimal::<Decimal32Type, Decimal32Type>(1_i32, 3, -10, 9, 9);
+        assert_eq!(non_zero_d32, None);
     }
 }

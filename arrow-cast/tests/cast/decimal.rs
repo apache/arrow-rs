@@ -2425,17 +2425,28 @@ fn test_cast_decimal256_extreme_scale_difference() {
     let input = Decimal256Array::from(vec![Some(i256::ONE), Some(i256::MINUS_ONE), None])
         .with_precision_and_scale(76, i8::MIN)
         .unwrap();
-    for safe in [true, false] {
-        let options = CastOptions {
-            safe,
-            ..Default::default()
-        };
-        let error = cast_with_options(&input, &DataType::Decimal256(76, 76), &options).unwrap_err();
-        assert_eq!(
-            error.to_string(),
-            "Cast error: Cannot cast to Decimal256(76, 76). Value overflows for output scale"
-        );
-    }
+
+    let safe_options = CastOptions {
+        safe: true,
+        ..Default::default()
+    };
+    let safe_result =
+        cast_with_options(&input, &DataType::Decimal256(76, 76), &safe_options).unwrap();
+    let expected_safe = Decimal256Array::from(vec![None, None, None])
+        .with_precision_and_scale(76, 76)
+        .unwrap();
+    assert_eq!(safe_result.as_primitive::<Decimal256Type>(), &expected_safe);
+
+    let strict_options = CastOptions {
+        safe: false,
+        ..Default::default()
+    };
+    let error =
+        cast_with_options(&input, &DataType::Decimal256(76, 76), &strict_options).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Cast error: Cannot cast to Decimal256(76, 76). Overflowing on 1"
+    );
 
     let input = input.with_precision_and_scale(76, 76).unwrap();
     let expected = Decimal256Array::from(vec![Some(i256::ZERO), Some(i256::ZERO), None])
@@ -2450,6 +2461,140 @@ fn test_cast_decimal256_extreme_scale_difference() {
             cast_with_options(&input, &DataType::Decimal256(76, i8::MIN), &options).unwrap();
         assert_eq!(result.as_primitive::<Decimal256Type>(), &expected);
     }
+}
+
+#[test]
+fn test_cast_decimal_extreme_scale_increase() {
+    let safe_opts = CastOptions {
+        safe: true,
+        ..Default::default()
+    };
+    let strict_opts = CastOptions {
+        safe: false,
+        ..Default::default()
+    };
+
+    // 1. Decimal128: delta_scale = 40 (exceeds table length 39)
+    let mixed = Decimal128Array::from(vec![Some(0), Some(1), Some(-1), None])
+        .with_precision_and_scale(5, -2)
+        .unwrap();
+    let res = cast_with_options(&mixed, &DataType::Decimal128(38, 38), &safe_opts).unwrap();
+    let expected = Decimal128Array::from(vec![Some(0), None, None, None])
+        .with_precision_and_scale(38, 38)
+        .unwrap();
+    assert_eq!(res.as_primitive::<Decimal128Type>(), &expected);
+
+    let err = cast_with_options(&mixed, &DataType::Decimal128(38, 38), &strict_opts).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "Cast error: Cannot cast to Decimal128(38, 38). Overflowing on 1"
+    );
+
+    // All zeros: succeeds for both safe and strict
+    let zeros = Decimal128Array::from(vec![Some(0), Some(0)])
+        .with_precision_and_scale(5, -2)
+        .unwrap();
+    for opts in [&safe_opts, &strict_opts] {
+        let res = cast_with_options(&zeros, &DataType::Decimal128(38, 38), opts).unwrap();
+        let expected = Decimal128Array::from(vec![Some(0), Some(0)])
+            .with_precision_and_scale(38, 38)
+            .unwrap();
+        assert_eq!(res.as_primitive::<Decimal128Type>(), &expected);
+    }
+
+    // All nulls and empty arrays
+    let nulls = Decimal128Array::from(vec![None, None] as Vec<Option<i128>>)
+        .with_precision_and_scale(5, -2)
+        .unwrap();
+    for opts in [&safe_opts, &strict_opts] {
+        let res = cast_with_options(&nulls, &DataType::Decimal128(38, 38), opts).unwrap();
+        let expected = Decimal128Array::from(vec![None, None] as Vec<Option<i128>>)
+            .with_precision_and_scale(38, 38)
+            .unwrap();
+        assert_eq!(res.as_primitive::<Decimal128Type>(), &expected);
+    }
+
+    let empty = Decimal128Array::from(vec![] as Vec<i128>)
+        .with_precision_and_scale(5, -2)
+        .unwrap();
+    for opts in [&safe_opts, &strict_opts] {
+        let res = cast_with_options(&empty, &DataType::Decimal128(38, 38), opts).unwrap();
+        assert_eq!(res.len(), 0);
+    }
+
+    // 2. Decimal32: delta_scale = 19 (exceeds table length 10)
+    let d32 = Decimal32Array::from(vec![Some(0), Some(1), None])
+        .with_precision_and_scale(3, -10)
+        .unwrap();
+    let res = cast_with_options(&d32, &DataType::Decimal32(9, 9), &safe_opts).unwrap();
+    let expected = Decimal32Array::from(vec![Some(0), None, None])
+        .with_precision_and_scale(9, 9)
+        .unwrap();
+    assert_eq!(res.as_primitive::<Decimal32Type>(), &expected);
+    let err = cast_with_options(&d32, &DataType::Decimal32(9, 9), &strict_opts).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "Cast error: Cannot cast to Decimal32(9, 9). Overflowing on 1"
+    );
+
+    // 3. Decimal64: delta_scale = 33 (exceeds table length 19)
+    let d64 = Decimal64Array::from(vec![Some(0), Some(-1), None])
+        .with_precision_and_scale(5, -15)
+        .unwrap();
+    let res = cast_with_options(&d64, &DataType::Decimal64(18, 18), &safe_opts).unwrap();
+    let expected = Decimal64Array::from(vec![Some(0), None, None])
+        .with_precision_and_scale(18, 18)
+        .unwrap();
+    assert_eq!(res.as_primitive::<Decimal64Type>(), &expected);
+    let err = cast_with_options(&d64, &DataType::Decimal64(18, 18), &strict_opts).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "Cast error: Cannot cast to Decimal64(18, 18). Overflowing on -1"
+    );
+
+    // 4. Decimal256: delta_scale = 152 (exceeds table length 77)
+    let d256 = Decimal256Array::from(vec![Some(i256::ZERO), Some(i256::ONE), None])
+        .with_precision_and_scale(10, -76)
+        .unwrap();
+    let res = cast_with_options(&d256, &DataType::Decimal256(76, 76), &safe_opts).unwrap();
+    let expected = Decimal256Array::from(vec![Some(i256::ZERO), None, None])
+        .with_precision_and_scale(76, 76)
+        .unwrap();
+    assert_eq!(res.as_primitive::<Decimal256Type>(), &expected);
+
+    // 5. Cross-type: Decimal32 -> Decimal64 (delta_scale = 33, exceeds Decimal64 table length 19)
+    let cross_d32 = Decimal32Array::from(vec![Some(0), Some(5)])
+        .with_precision_and_scale(3, -15)
+        .unwrap();
+    let res = cast_with_options(&cross_d32, &DataType::Decimal64(18, 18), &safe_opts).unwrap();
+    let expected = Decimal64Array::from(vec![Some(0), None])
+        .with_precision_and_scale(18, 18)
+        .unwrap();
+    assert_eq!(res.as_primitive::<Decimal64Type>(), &expected);
+
+    // 6. Boundary transition: immediately within (delta_scale = 38) vs immediately beyond (delta_scale = 39)
+    let boundary_in = Decimal128Array::from(vec![Some(0), Some(1)])
+        .with_precision_and_scale(1, 0)
+        .unwrap();
+    let res_in =
+        cast_with_options(&boundary_in, &DataType::Decimal128(38, 38), &safe_opts).unwrap();
+    let expected_in = Decimal128Array::from(vec![Some(0), None])
+        .with_precision_and_scale(38, 38)
+        .unwrap();
+    assert_eq!(res_in.as_primitive::<Decimal128Type>(), &expected_in);
+
+    let boundary_out = Decimal128Array::from(vec![Some(0), Some(1)])
+        .with_precision_and_scale(1, -1)
+        .unwrap();
+    let res_out =
+        cast_with_options(&boundary_out, &DataType::Decimal128(38, 38), &safe_opts).unwrap();
+    assert_eq!(res_out.as_primitive::<Decimal128Type>(), &expected_in);
+    let err_out =
+        cast_with_options(&boundary_out, &DataType::Decimal128(38, 38), &strict_opts).unwrap_err();
+    assert_eq!(
+        err_out.to_string(),
+        "Cast error: Cannot cast to Decimal128(38, 38). Overflowing on 1"
+    );
 }
 
 #[test]
