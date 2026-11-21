@@ -1,0 +1,936 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+//! Views over encoded variant bytes that read only what they use. See [`VariantView`].
+
+use arrow_schema::ArrowError;
+
+use crate::decoder::{VariantBasicType, VariantPrimitiveType, get_basic_type};
+use crate::path::VariantPathElement;
+use crate::utils::{
+    array_from_slice, first_byte_from_slice, overflow_error, slice_from_slice,
+    slice_from_slice_at_offset, str_from_bytes, try_binary_search,
+};
+use crate::variant::list::VariantListHeader;
+use crate::variant::metadata::VariantMetadataHeader;
+use crate::variant::object::VariantObjectHeader;
+use crate::variant::{
+    EMPTY_VARIANT_METADATA, Variant, VariantList, VariantMetadata, VariantObject,
+};
+
+/// The size of the header byte of a metadata dictionary, object or list.
+const NUM_HEADER_BYTES: u32 = 1;
+
+#[inline]
+fn checked(value: Option<u32>, what: &str) -> Result<u32, ArrowError> {
+    value.ok_or_else(|| overflow_error(what))
+}
+
+fn index_error(kind: &str, index: usize, len: usize) -> ArrowError {
+    ArrowError::InvalidArgumentError(format!(
+        "{kind} index {index} is out of bounds for length {len}"
+    ))
+}
+
+/// A metadata dictionary of which only the header has been read. See [`VariantView`].
+#[derive(Debug, Clone, Copy)]
+pub struct VariantMetadataView<'m> {
+    pub(crate) bytes: &'m [u8],
+    pub(crate) header: VariantMetadataHeader,
+    pub(crate) dictionary_size: u32,
+    pub(crate) first_value_byte: u32,
+}
+
+impl<'m> VariantMetadataView<'m> {
+    /// Reads the header and the dictionary size of the metadata dictionary in `bytes`.
+    #[inline]
+    pub fn try_new(bytes: &'m [u8]) -> Result<Self, ArrowError> {
+        let header = VariantMetadataHeader::try_new(first_byte_from_slice(bytes)?)?;
+        let dictionary_size =
+            header
+                .offset_size
+                .unpack_u32_at_offset(bytes, NUM_HEADER_BYTES as _, 0)?;
+
+        // There are dictionary_size + 1 offsets, and the string bytes immediately follow them.
+        let first_value_byte = checked(
+            dictionary_size
+                .checked_add(1)
+                .and_then(|n| n.checked_mul(header.offset_size()))
+                .and_then(|n| n.checked_add(header.first_offset_byte())),
+            "offset of variant metadata dictionary",
+        )?;
+
+        Ok(Self {
+            bytes,
+            header,
+            dictionary_size,
+            first_value_byte,
+        })
+    }
+
+    /// The number of entries in the dictionary.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.dictionary_size as _
+    }
+
+    /// True if the dictionary has no entries.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.dictionary_size == 0
+    }
+
+    /// True if the header declares the entries unique and sorted.
+    #[inline]
+    pub fn is_sorted(&self) -> bool {
+        self.header.is_sorted
+    }
+
+    /// The bytes of entry `id`, without UTF-8 validation.
+    #[inline]
+    pub fn entry(&self, id: usize) -> Result<&'m [u8], ArrowError> {
+        if id >= self.len() {
+            return Err(index_error("Metadata dictionary", id, self.len()));
+        }
+        self.read_entry(id)
+    }
+
+    /// The entry `id` as a string.
+    pub fn entry_str(&self, id: usize) -> Result<&'m str, ArrowError> {
+        str_from_bytes(self.entry(id)?)
+    }
+
+    /// The id of the entry equal to `name`, if any.
+    ///
+    /// The search is a binary search if the dictionary is sorted and has more than a few entries,
+    /// and a linear scan otherwise.
+    pub fn find(&self, name: &[u8]) -> Result<Option<u32>, ArrowError> {
+        if self.is_sorted() && self.len() > 10 {
+            let found = try_binary_search(self.len(), |id| Ok(self.read_entry(id)?.cmp(name)))?;
+            return Ok(found.map(|id| id as u32));
+        }
+        for id in 0..self.len() {
+            if self.read_entry(id)? == name {
+                return Ok(Some(id as u32));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Checks the first and last offsets, and returns the bounded [`VariantMetadata`].
+    #[inline]
+    pub fn into_metadata(self) -> Result<VariantMetadata<'m>, ArrowError> {
+        VariantMetadata::try_from_view(self)
+    }
+
+    /// Entry `i` of the offset array, for `i` in `0..=self.len()`.
+    #[inline]
+    pub(crate) fn offset(&self, i: usize) -> Result<u32, ArrowError> {
+        self.header.offset_size.unpack_u32_at_offset(
+            self.bytes,
+            self.header.first_offset_byte() as _,
+            i,
+        )
+    }
+
+    // The bytes of entry `id`, for `id` in `0..self.len()`.
+    #[inline]
+    fn read_entry(&self, id: usize) -> Result<&'m [u8], ArrowError> {
+        let range = self.offset(id)? as usize..self.offset(id + 1)? as usize;
+        slice_from_slice_at_offset(self.bytes, self.first_value_byte as _, range)
+    }
+}
+
+/// A variant value of which only the header byte has been read.
+///
+/// Building a view parses one header and nothing else. Each accessor reads and bounds-checks only
+/// the bytes it needs, so malformed input produces an error, never a panic. A view does not check
+/// UTF-8, sort order, or any offset it does not read. Field names are compared as bytes, which
+/// orders them exactly as `str` does.
+///
+/// Use a view to read a few values out of a variant, such as one path per row of a column, without
+/// paying for checks that the access does not use.
+///
+/// # Views and validation
+///
+/// The views [`VariantView`], [`VariantMetadataView`], [`VariantObjectView`] and
+/// [`VariantListView`] are the weakest state of a variant. The [`Variant`], [`VariantMetadata`],
+/// [`VariantObject`] and [`VariantList`] types are the stronger states:
+///
+/// - [`VariantView::to_variant`], [`VariantMetadataView::into_metadata`],
+///   [`VariantObjectView::into_object`] and [`VariantListView::into_list`] check the first and
+///   last offsets, which bound the encoding. Unvalidated instances of the stronger types guarantee
+///   those checks.
+/// - The `with_full_validation` methods of the stronger types check everything else.
+///
+/// # Value bytes
+///
+/// A child value starts at its offset and extends to the end of its parent, because object field
+/// values need not be stored in field order. [`VariantView::bytes`] finds the exact encoding of a
+/// value when a caller needs it.
+///
+/// # Example
+///
+/// ```
+/// # use parquet_variant::{Variant, VariantBuilder, VariantMetadataView, VariantPath, VariantView};
+/// # use arrow_schema::ArrowError;
+/// # fn main() -> Result<(), ArrowError> {
+/// let mut builder = VariantBuilder::new();
+/// let mut object = builder.new_object();
+/// object.insert("name", "Ferris");
+/// object.new_list("scores").with_value(7i8).with_value(9i8).finish();
+/// object.finish();
+/// let (metadata, value) = builder.finish();
+///
+/// let view = VariantView::try_new(VariantMetadataView::try_new(&metadata)?, &value)?;
+/// let path = VariantPath::try_from("scores[1]")?;
+/// let found = view.get_path(&path)?.expect("the path exists");
+/// assert_eq!(found.to_variant()?, Variant::Int8(9));
+/// assert!(view.get_field(b"missing")?.is_none());
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug, Clone, Copy)]
+pub struct VariantView<'m, 'v> {
+    pub(crate) metadata: VariantMetadataView<'m>,
+    pub(crate) value: &'v [u8],
+    header: u8,
+}
+
+impl<'m, 'v> VariantView<'m, 'v> {
+    /// Reads the header byte of the value that starts at the beginning of `value`.
+    ///
+    /// `value` may extend past the end of the value.
+    #[inline]
+    pub fn try_new(metadata: VariantMetadataView<'m>, value: &'v [u8]) -> Result<Self, ArrowError> {
+        let header = first_byte_from_slice(value)?;
+        Ok(Self {
+            metadata,
+            value,
+            header,
+        })
+    }
+
+    /// The metadata dictionary of this value.
+    #[inline]
+    pub fn metadata(&self) -> VariantMetadataView<'m> {
+        self.metadata
+    }
+
+    /// The basic type of this value.
+    #[inline]
+    pub fn basic_type(&self) -> VariantBasicType {
+        get_basic_type(self.header)
+    }
+
+    /// This value as an object, or `None` if it is not an object.
+    pub fn as_object(&self) -> Result<Option<VariantObjectView<'m, 'v>>, ArrowError> {
+        match self.basic_type() {
+            VariantBasicType::Object => {
+                VariantObjectView::try_new(self.metadata, self.value).map(Some)
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// This value as a list, or `None` if it is not a list.
+    pub fn as_list(&self) -> Result<Option<VariantListView<'m, 'v>>, ArrowError> {
+        match self.basic_type() {
+            VariantBasicType::Array => {
+                VariantListView::try_new(self.metadata, self.value).map(Some)
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// The value of field `name`, or `None` if this value is not an object or has no such field.
+    pub fn get_field(&self, name: &[u8]) -> Result<Option<Self>, ArrowError> {
+        match self.as_object()? {
+            Some(object) => object.get(name),
+            None => Ok(None),
+        }
+    }
+
+    /// Element `index`, or `None` if this value is not a list or has no such element.
+    pub fn get_index(&self, index: usize) -> Result<Option<Self>, ArrowError> {
+        match self.as_list()? {
+            Some(list) => list.get(index),
+            None => Ok(None),
+        }
+    }
+
+    /// Follows `path` from this value, or returns `None` if a step does not exist.
+    ///
+    /// A [`VariantPathElement::ListElement`] step does not exist, as in [`Variant::get_path`].
+    #[inline]
+    pub fn get_path(&self, path: &[VariantPathElement<'_>]) -> Result<Option<Self>, ArrowError> {
+        let mut current = *self;
+        for element in path {
+            let next = match element {
+                VariantPathElement::Field { name } => current.get_field(name.as_bytes())?,
+                VariantPathElement::Index { index } => current.get_index(*index)?,
+                VariantPathElement::ListElement => None,
+            };
+            match next {
+                Some(next) => current = next,
+                None => return Ok(None),
+            }
+        }
+        Ok(Some(current))
+    }
+
+    /// Decodes this value as an unvalidated [`Variant`].
+    ///
+    /// Only an object or a list reads the metadata dictionary, so only they check its bounds.
+    #[inline]
+    pub fn to_variant(&self) -> Result<Variant<'m, 'v>, ArrowError> {
+        let metadata = match self.basic_type() {
+            VariantBasicType::Object | VariantBasicType::Array => self.metadata.into_metadata()?,
+            VariantBasicType::Primitive | VariantBasicType::ShortString => EMPTY_VARIANT_METADATA,
+        };
+        Variant::try_new_with_metadata_and_shallow_validation(metadata, self.value)
+    }
+
+    /// The exact encoding of this value, without any bytes that follow it.
+    pub fn bytes(&self) -> Result<&'v [u8], ArrowError> {
+        let len = match self.basic_type() {
+            VariantBasicType::Primitive => primitive_len(self.header, self.value)?,
+            VariantBasicType::ShortString => 1 + (self.header >> 2) as usize,
+            VariantBasicType::Object => {
+                VariantObjectView::try_new(self.metadata, self.value)?.byte_len()?
+            }
+            VariantBasicType::Array => {
+                VariantListView::try_new(self.metadata, self.value)?.byte_len()?
+            }
+        };
+        slice_from_slice(self.value, ..len)
+    }
+}
+
+/// The encoded size of the primitive value with header byte `header` at the start of `value`.
+fn primitive_len(header: u8, value: &[u8]) -> Result<usize, ArrowError> {
+    use VariantPrimitiveType::*;
+    let payload = match VariantPrimitiveType::try_from(header >> 2)? {
+        Null | BooleanTrue | BooleanFalse => 0,
+        Int8 => 1,
+        Int16 => 2,
+        Int32 | Date | Float => 4,
+        Decimal4 => 5,
+        Int64 | Double | TimestampMicros | TimestampNtzMicros | TimestampNanos
+        | TimestampNtzNanos | Time => 8,
+        Decimal8 => 9,
+        Uuid => 16,
+        Decimal16 => 17,
+        Binary | String => 4 + u32::from_le_bytes(array_from_slice(value, 1)?) as usize,
+    };
+    Ok(1 + payload)
+}
+
+/// A variant object of which only the header has been read. See [`VariantView`].
+#[derive(Debug, Clone, Copy)]
+pub struct VariantObjectView<'m, 'v> {
+    pub(crate) metadata: VariantMetadataView<'m>,
+    pub(crate) value: &'v [u8],
+    pub(crate) header: VariantObjectHeader,
+    pub(crate) num_elements: u32,
+    pub(crate) first_field_offset_byte: u32,
+    pub(crate) first_value_byte: u32,
+}
+
+impl<'m, 'v> VariantObjectView<'m, 'v> {
+    /// Reads the header and the field count of the object at the start of `value`.
+    #[inline]
+    pub fn try_new(metadata: VariantMetadataView<'m>, value: &'v [u8]) -> Result<Self, ArrowError> {
+        let header = VariantObjectHeader::try_new(first_byte_from_slice(value)?)?;
+        let num_elements =
+            header
+                .num_elements_size
+                .unpack_u32_at_offset(value, NUM_HEADER_BYTES as _, 0)?;
+
+        let first_field_offset_byte = checked(
+            num_elements
+                .checked_mul(header.field_id_size())
+                .and_then(|n| n.checked_add(header.field_ids_start_byte())),
+            "offset of variant object field offsets",
+        )?;
+        let first_value_byte = checked(
+            num_elements
+                .checked_add(1)
+                .and_then(|n| n.checked_mul(header.field_offset_size()))
+                .and_then(|n| n.checked_add(first_field_offset_byte)),
+            "offset of variant object field values",
+        )?;
+
+        Ok(Self {
+            metadata,
+            value,
+            header,
+            num_elements,
+            first_field_offset_byte,
+            first_value_byte,
+        })
+    }
+
+    /// The number of fields.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.num_elements as _
+    }
+
+    /// True if the object has no fields.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.num_elements == 0
+    }
+
+    /// The metadata dictionary id of field `i`.
+    pub fn field_id(&self, i: usize) -> Result<u32, ArrowError> {
+        self.check_index(i)?;
+        self.read_field_id(i)
+    }
+
+    /// The name of field `i`, without UTF-8 validation.
+    pub fn field_name(&self, i: usize) -> Result<&'m [u8], ArrowError> {
+        self.check_index(i)?;
+        self.read_field_name(i)
+    }
+
+    /// The value of field `i`.
+    pub fn field(&self, i: usize) -> Result<VariantView<'m, 'v>, ArrowError> {
+        self.check_index(i)?;
+        self.read_field(i)
+    }
+
+    /// The position of the field named `name`, if any.
+    ///
+    /// The spec requires fields to be sorted by name, so this is a binary search.
+    pub fn find(&self, name: &[u8]) -> Result<Option<usize>, ArrowError> {
+        try_binary_search(self.len(), |i| Ok(self.read_field_name(i)?.cmp(name)))
+    }
+
+    /// The value of the field named `name`, if any.
+    pub fn get(&self, name: &[u8]) -> Result<Option<VariantView<'m, 'v>>, ArrowError> {
+        self.find(name)?.map(|i| self.read_field(i)).transpose()
+    }
+
+    /// The size of the encoded object.
+    ///
+    /// The spec makes the last field offset point one byte past the end of the last value.
+    pub fn byte_len(&self) -> Result<usize, ArrowError> {
+        let end = checked(
+            self.read_offset(self.len())?
+                .checked_add(self.first_value_byte),
+            "variant object size",
+        )?;
+        Ok(end as _)
+    }
+
+    /// Checks the last field offset, and returns the bounded [`VariantObject`] that uses
+    /// `metadata`, the promoted form of this view's metadata dictionary.
+    #[inline]
+    pub fn into_object(
+        self,
+        metadata: VariantMetadata<'m>,
+    ) -> Result<VariantObject<'m, 'v>, ArrowError> {
+        VariantObject::try_from_view(self, metadata)
+    }
+
+    #[inline]
+    fn check_index(&self, i: usize) -> Result<(), ArrowError> {
+        match i < self.len() {
+            true => Ok(()),
+            false => Err(index_error("Variant object field", i, self.len())),
+        }
+    }
+
+    // The reads below take a field index in `0..self.len()`, which the caller has checked.
+    // `read_offset` also takes `self.len()`, for the end of the last value.
+
+    #[inline]
+    pub(crate) fn read_field_id(&self, i: usize) -> Result<u32, ArrowError> {
+        self.header.field_id_size.unpack_u32_at_offset(
+            self.value,
+            self.header.field_ids_start_byte() as _,
+            i,
+        )
+    }
+
+    #[inline]
+    fn read_field_name(&self, i: usize) -> Result<&'m [u8], ArrowError> {
+        self.metadata.entry(self.read_field_id(i)? as _)
+    }
+
+    #[inline]
+    fn read_offset(&self, i: usize) -> Result<u32, ArrowError> {
+        self.header.field_offset_size.unpack_u32_at_offset(
+            self.value,
+            self.first_field_offset_byte as _,
+            i,
+        )
+    }
+
+    #[inline]
+    pub(crate) fn read_field(&self, i: usize) -> Result<VariantView<'m, 'v>, ArrowError> {
+        let start = checked(
+            self.read_offset(i)?.checked_add(self.first_value_byte),
+            "variant object field start",
+        )?;
+        VariantView::try_new(
+            self.metadata,
+            slice_from_slice(self.value, start as usize..)?,
+        )
+    }
+}
+
+/// A variant list of which only the header has been read. See [`VariantView`].
+#[derive(Debug, Clone, Copy)]
+pub struct VariantListView<'m, 'v> {
+    pub(crate) metadata: VariantMetadataView<'m>,
+    pub(crate) value: &'v [u8],
+    pub(crate) header: VariantListHeader,
+    pub(crate) num_elements: u32,
+    pub(crate) first_value_byte: u32,
+}
+
+impl<'m, 'v> VariantListView<'m, 'v> {
+    /// Reads the header and the element count of the list at the start of `value`.
+    #[inline]
+    pub fn try_new(metadata: VariantMetadataView<'m>, value: &'v [u8]) -> Result<Self, ArrowError> {
+        let header = VariantListHeader::try_new(first_byte_from_slice(value)?)?;
+        let num_elements =
+            header
+                .num_elements_size
+                .unpack_u32_at_offset(value, NUM_HEADER_BYTES as _, 0)?;
+
+        // There are num_elements + 1 offsets, and the values immediately follow them.
+        let first_value_byte = checked(
+            num_elements
+                .checked_add(1)
+                .and_then(|n| n.checked_mul(header.offset_size()))
+                .and_then(|n| n.checked_add(header.first_offset_byte())),
+            "offset of variant list values",
+        )?;
+
+        Ok(Self {
+            metadata,
+            value,
+            header,
+            num_elements,
+            first_value_byte,
+        })
+    }
+
+    /// The number of elements.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.num_elements as _
+    }
+
+    /// True if the list has no elements.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.num_elements == 0
+    }
+
+    /// Element `index`, or `None` if `index` is out of bounds.
+    pub fn get(&self, index: usize) -> Result<Option<VariantView<'m, 'v>>, ArrowError> {
+        if index >= self.len() {
+            return Ok(None);
+        }
+        let start = checked(
+            self.read_offset(index)?.checked_add(self.first_value_byte),
+            "variant list element start",
+        )?;
+        VariantView::try_new(
+            self.metadata,
+            slice_from_slice(self.value, start as usize..)?,
+        )
+        .map(Some)
+    }
+
+    /// The size of the encoded list.
+    pub fn byte_len(&self) -> Result<usize, ArrowError> {
+        let end = checked(
+            self.read_offset(self.len())?
+                .checked_add(self.first_value_byte),
+            "variant array size",
+        )?;
+        Ok(end as _)
+    }
+
+    /// Checks the first and last offsets, and returns the bounded [`VariantList`] that uses
+    /// `metadata`, the promoted form of this view's metadata dictionary.
+    #[inline]
+    pub fn into_list(
+        self,
+        metadata: VariantMetadata<'m>,
+    ) -> Result<VariantList<'m, 'v>, ArrowError> {
+        VariantList::try_from_view(self, metadata)
+    }
+
+    /// Entry `i` of the offset array, for `i` in `0..=self.len()`.
+    #[inline]
+    pub(crate) fn read_offset(&self, i: usize) -> Result<u32, ArrowError> {
+        self.header.offset_size.unpack_u32_at_offset(
+            self.value,
+            self.header.first_offset_byte() as _,
+            i,
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{VariantBuilder, VariantDecimal4, VariantDecimal8, VariantDecimal16, VariantPath};
+    use chrono::{NaiveDate, NaiveTime};
+    use uuid::Uuid;
+
+    const LONG_STRING: &str =
+        "a string that is longer than the sixty-three bytes that a short string can hold";
+
+    /// `{"a": 1, "b": "short", "list": [1, "two", {"x": true}], "nested": {"k": LONG_STRING}}`
+    fn sample() -> (Vec<u8>, Vec<u8>) {
+        let mut builder = VariantBuilder::new();
+        let mut object = builder.new_object();
+        object.insert("a", 1i8);
+        object.insert("b", "short");
+        let mut list = object.new_list("list");
+        list.append_value(1i8);
+        list.append_value("two");
+        list.new_object().with_field("x", true).finish();
+        list.finish();
+        object
+            .new_object("nested")
+            .with_field("k", LONG_STRING)
+            .finish();
+        object.finish();
+        builder.finish()
+    }
+
+    fn view<'a>(metadata: &'a [u8], value: &'a [u8]) -> VariantView<'a, 'a> {
+        VariantView::try_new(VariantMetadataView::try_new(metadata).unwrap(), value).unwrap()
+    }
+
+    fn metadata_with_names(names: &[&str]) -> Vec<u8> {
+        let mut builder = VariantBuilder::new().with_field_names(names.iter().copied());
+        builder.append_value(1i8);
+        builder.finish().0
+    }
+
+    fn assert_metadata_view_matches(bytes: &[u8]) {
+        let metadata = VariantMetadata::try_new(bytes).unwrap();
+        let view = VariantMetadataView::try_new(bytes).unwrap();
+        assert_eq!(view.len(), metadata.len());
+        assert_eq!(view.is_empty(), metadata.is_empty());
+        assert_eq!(view.is_sorted(), metadata.is_sorted());
+        for id in 0..metadata.len() {
+            let name = metadata.get(id).unwrap();
+            assert_eq!(view.entry(id).unwrap(), name.as_bytes());
+            assert_eq!(view.entry_str(id).unwrap(), name);
+            assert_eq!(view.find(name.as_bytes()).unwrap(), Some(id as u32));
+        }
+        assert_eq!(view.find(b"no such name").unwrap(), None);
+        assert!(view.entry(view.len()).is_err());
+        assert!(view.entry_str(view.len()).is_err());
+        // Promotion gives the unvalidated form.
+        assert_eq!(view.into_metadata().unwrap(), VariantMetadata::new(bytes));
+    }
+
+    #[test]
+    fn test_metadata_view_sorted() {
+        // More than 10 entries, so `find` uses its binary search.
+        let names: Vec<String> = (0..64).map(|i| format!("field_{i:03}")).collect();
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        let bytes = metadata_with_names(&names);
+        assert!(VariantMetadataView::try_new(&bytes).unwrap().is_sorted());
+        assert_metadata_view_matches(&bytes);
+    }
+
+    #[test]
+    fn test_metadata_view_unsorted() {
+        let bytes = metadata_with_names(&["zebra", "apple", "mango", "kiwi"]);
+        assert!(!VariantMetadataView::try_new(&bytes).unwrap().is_sorted());
+        assert_metadata_view_matches(&bytes);
+    }
+
+    #[test]
+    fn test_metadata_view_empty() {
+        let view = VariantMetadataView::try_new(crate::EMPTY_VARIANT_METADATA_BYTES).unwrap();
+        assert!(view.is_empty());
+        assert_eq!(view.find(b"a").unwrap(), None);
+        assert!(view.entry(0).is_err());
+    }
+
+    #[test]
+    fn test_metadata_view_entry_is_not_utf8_validated() {
+        // Dictionary with one entry, the invalid UTF-8 byte 0xFF.
+        let bytes = [0b0000_0001, 1, 0, 1, 0xFF];
+        let view = VariantMetadataView::try_new(&bytes).unwrap();
+        assert_eq!(view.entry(0).unwrap(), &[0xFF]);
+        assert_eq!(view.find(&[0xFF]).unwrap(), Some(0));
+        assert!(view.entry_str(0).is_err());
+    }
+
+    #[test]
+    fn test_object_view_matches_object() {
+        let (metadata, value) = sample();
+        let variant = Variant::try_new(&metadata, &value).unwrap();
+        let object = variant.as_object().unwrap();
+        let root = view(&metadata, &value);
+        let object_view = root.as_object().unwrap().unwrap();
+
+        assert_eq!(object_view.len(), object.len());
+        assert!(!object_view.is_empty());
+        for i in 0..object.len() {
+            let name = object.field_name(i).unwrap();
+            assert_eq!(object_view.field_name(i).unwrap(), name.as_bytes());
+            let field_id = object_view.field_id(i).unwrap();
+            assert_eq!(root.metadata().entry_str(field_id as _).unwrap(), name);
+            assert_eq!(
+                object_view.field(i).unwrap().to_variant().unwrap(),
+                object.field(i).unwrap()
+            );
+            assert_eq!(object_view.find(name.as_bytes()).unwrap(), Some(i));
+            let found = object_view.get(name.as_bytes()).unwrap().unwrap();
+            assert_eq!(found.to_variant().unwrap(), object.get(name).unwrap());
+        }
+
+        assert_eq!(object_view.find(b"missing").unwrap(), None);
+        assert!(object_view.get(b"missing").unwrap().is_none());
+        assert!(object_view.field(object.len()).is_err());
+        assert!(object_view.field_id(object.len()).is_err());
+        assert!(object_view.field_name(object.len()).is_err());
+
+        assert_eq!(object_view.byte_len().unwrap(), value.len());
+        let metadata = root.metadata().into_metadata().unwrap();
+        assert_eq!(&object_view.into_object(metadata).unwrap(), object);
+    }
+
+    #[test]
+    fn test_list_view_matches_list() {
+        let (metadata, value) = sample();
+        let variant = Variant::try_new(&metadata, &value).unwrap();
+        let variant = variant.get_object_field("list").unwrap();
+        let list = variant.as_list().unwrap();
+        let element = view(&metadata, &value).get_field(b"list").unwrap().unwrap();
+        let list_view = element.as_list().unwrap().unwrap();
+
+        assert_eq!(list_view.len(), list.len());
+        assert!(!list_view.is_empty());
+        for i in 0..list.len() {
+            let found = list_view.get(i).unwrap().unwrap();
+            assert_eq!(found.to_variant().unwrap(), list.get(i).unwrap());
+        }
+        assert!(list_view.get(list.len()).unwrap().is_none());
+
+        assert_eq!(
+            list_view.byte_len().unwrap(),
+            element.bytes().unwrap().len()
+        );
+        let metadata = element.metadata().into_metadata().unwrap();
+        assert_eq!(&list_view.into_list(metadata).unwrap(), list);
+    }
+
+    #[test]
+    fn test_value_view_types() {
+        let (metadata, value) = sample();
+        let root = view(&metadata, &value);
+        assert_eq!(root.basic_type(), VariantBasicType::Object);
+        assert!(root.as_object().unwrap().is_some());
+        assert!(root.as_list().unwrap().is_none());
+        assert!(root.get_index(0).unwrap().is_none());
+
+        let list = root.get_field(b"list").unwrap().unwrap();
+        assert_eq!(list.basic_type(), VariantBasicType::Array);
+        assert!(list.as_list().unwrap().is_some());
+        assert!(list.as_object().unwrap().is_none());
+        assert!(list.get_field(b"a").unwrap().is_none());
+
+        let primitive = root.get_field(b"a").unwrap().unwrap();
+        assert_eq!(primitive.basic_type(), VariantBasicType::Primitive);
+        assert!(primitive.as_object().unwrap().is_none());
+        assert!(primitive.as_list().unwrap().is_none());
+
+        let short_string = root.get_field(b"b").unwrap().unwrap();
+        assert_eq!(short_string.basic_type(), VariantBasicType::ShortString);
+    }
+
+    #[test]
+    fn test_get_path_matches_variant() {
+        let (metadata, value) = sample();
+        let variant = Variant::try_new(&metadata, &value).unwrap();
+        let root = view(&metadata, &value);
+
+        for path in ["", "a", "list[1]", "list[2].x", "nested.k", "nested"] {
+            let path = VariantPath::try_from(path).unwrap();
+            let found = root.get_path(&path).unwrap().unwrap();
+            assert_eq!(
+                found.to_variant().unwrap(),
+                variant.get_path(&path).unwrap()
+            );
+        }
+        for path in ["missing", "a.b", "a[0]", "list[3]", "list.x", "nested.k.z"] {
+            let path = VariantPath::try_from(path).unwrap();
+            assert!(root.get_path(&path).unwrap().is_none(), "{path:?}");
+            assert!(variant.get_path(&path).is_none(), "{path:?}");
+        }
+        assert!(
+            root.get_path(&[VariantPathElement::ListElement])
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// The exact encodings of the children of a container must tile its value region.
+    #[test]
+    fn test_bytes_of_every_type() {
+        let date = NaiveDate::from_ymd_opt(2026, 11, 18).unwrap();
+        let timestamp = date.and_hms_micro_opt(1, 2, 3, 456).unwrap();
+        let values = [
+            Variant::Null,
+            Variant::BooleanTrue,
+            Variant::BooleanFalse,
+            Variant::Int8(1),
+            Variant::Int16(2),
+            Variant::Int32(3),
+            Variant::Int64(4),
+            Variant::Float(5.0),
+            Variant::Double(6.0),
+            Variant::Decimal4(VariantDecimal4::try_new(7, 1).unwrap()),
+            Variant::Decimal8(VariantDecimal8::try_new(8, 1).unwrap()),
+            Variant::Decimal16(VariantDecimal16::try_new(9, 1).unwrap()),
+            Variant::Date(date),
+            Variant::TimestampMicros(timestamp.and_utc()),
+            Variant::TimestampNtzMicros(timestamp),
+            Variant::TimestampNanos(timestamp.and_utc()),
+            Variant::TimestampNtzNanos(timestamp),
+            Variant::Time(NaiveTime::from_hms_opt(1, 2, 3).unwrap()),
+            Variant::Uuid(Uuid::from_u128(10)),
+            Variant::Binary(&[1, 2, 3]),
+            Variant::from("short"),
+            Variant::from(LONG_STRING),
+        ];
+
+        let mut builder = VariantBuilder::new();
+        let mut list = builder.new_list();
+        for value in &values {
+            list.append_value(value.clone());
+        }
+        list.new_object().with_field("x", 1i8).finish();
+        list.new_list().with_value(1i8).finish();
+        list.finish();
+        let (metadata, value) = builder.finish();
+
+        let root = view(&metadata, &value);
+        assert_eq!(root.bytes().unwrap(), value.as_slice());
+        let list = root.as_list().unwrap().unwrap();
+        assert_eq!(list.len(), values.len() + 2);
+
+        let mut total = 0;
+        for i in 0..list.len() {
+            let element = list.get(i).unwrap().unwrap();
+            let bytes = element.bytes().unwrap();
+            assert_eq!(
+                Variant::try_new(&metadata, bytes).unwrap(),
+                element.to_variant().unwrap()
+            );
+            if let Some(expected) = values.get(i) {
+                assert_eq!(&element.to_variant().unwrap(), expected);
+            }
+            total += bytes.len();
+        }
+        assert_eq!(total, value.len() - list.first_value_byte as usize);
+    }
+
+    #[test]
+    fn test_bytes_of_object_fields() {
+        let (metadata, value) = sample();
+        let object = view(&metadata, &value).as_object().unwrap().unwrap();
+        let total: usize = (0..object.len())
+            .map(|i| object.field(i).unwrap().bytes().unwrap().len())
+            .sum();
+        assert_eq!(total, value.len() - object.first_value_byte as usize);
+    }
+
+    /// Reads everything reachable from `value` through the views, ignoring errors.
+    fn walk(value: VariantView<'_, '_>) {
+        // Malformed input may declare more children than its bytes can hold.
+        const MAX_CHILDREN: usize = 64;
+
+        let _ = value.to_variant();
+        let _ = value.bytes();
+        let metadata = value.metadata();
+        for id in 0..metadata.len().min(MAX_CHILDREN) {
+            let _ = metadata.entry(id);
+            let _ = metadata.entry_str(id);
+        }
+        let _ = metadata.find(b"k");
+        let _ = metadata.into_metadata();
+
+        if let Ok(Some(object)) = value.as_object() {
+            let _ = object.byte_len();
+            let _ = object.find(b"k");
+            let _ = object.get(b"k");
+            for i in 0..object.len().min(MAX_CHILDREN) {
+                let _ = object.field_id(i);
+                let _ = object.field_name(i);
+                if let Ok(field) = object.field(i) {
+                    walk(field);
+                }
+            }
+            if let Ok(metadata) = metadata.into_metadata() {
+                let _ = object.into_object(metadata);
+            }
+        }
+        if let Ok(Some(list)) = value.as_list() {
+            let _ = list.byte_len();
+            for i in 0..list.len().min(MAX_CHILDREN) {
+                if let Ok(Some(element)) = list.get(i) {
+                    walk(element);
+                }
+            }
+            if let Ok(metadata) = metadata.into_metadata() {
+                let _ = list.into_list(metadata);
+            }
+        }
+    }
+
+    fn walk_bytes(metadata: &[u8], value: &[u8]) {
+        let Ok(metadata) = VariantMetadataView::try_new(metadata) else {
+            return;
+        };
+        if let Ok(value) = VariantView::try_new(metadata, value) {
+            walk(value);
+        }
+    }
+
+    #[test]
+    fn test_truncated_input_does_not_panic() {
+        let (metadata, value) = sample();
+        for len in 0..metadata.len() {
+            walk_bytes(&metadata[..len], &value);
+        }
+        for len in 0..value.len() {
+            walk_bytes(&metadata, &value[..len]);
+        }
+    }
+
+    #[test]
+    fn test_corrupt_input_does_not_panic() {
+        let (metadata, value) = sample();
+        for corrupt in [0x00, 0x7F, 0xFF] {
+            for i in 0..metadata.len() {
+                let mut metadata = metadata.clone();
+                metadata[i] = corrupt;
+                walk_bytes(&metadata, &value);
+            }
+            for i in 0..value.len() {
+                let mut value = value.clone();
+                value[i] = corrupt;
+                walk_bytes(&metadata, &value);
+            }
+        }
+    }
+}
