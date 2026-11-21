@@ -6,7 +6,7 @@
 
 use crate::take::take;
 use arrow_array::{
-    Array, ArrayRef, BooleanArray, Int32Array, Scalar, UnionArray, make_array, new_empty_array,
+    Array, ArrayRef, Int32Array, UInt64Array, UnionArray, make_array, new_empty_array,
     new_null_array,
 };
 use arrow_buffer::{BooleanBuffer, MutableBuffer, NullBuffer, ScalarBuffer, bit_util};
@@ -147,7 +147,7 @@ fn extract_sparse(
                     Ok(make_array(data))
                 } else {
                     // case 3.2: target can't contain a null mask
-                    Ok(new_null_array(target.data_type(), target.len()))
+                    new_null_target(target, target.len())
                 }
             }
             // case 4: some but not all type_id matches our target
@@ -175,12 +175,10 @@ fn extract_sparse(
 
                     Ok(make_array(data))
                 } else {
-                    // case 4.2: target can't contain a null mask, zip the values that match with a null value
-                    Ok(crate::zip::zip(
-                        &BooleanArray::new(selected, None),
-                        target,
-                        &Scalar::new(new_null_array(target.data_type(), 1)),
-                    )?)
+                    // case 4.2: target can't contain a null mask, take the values that match and a null otherwise
+                    let indices =
+                        UInt64Array::new((0..target.len() as u64).collect(), Some(selected.into()));
+                    Ok(take(target, &indices, None)?)
                 }
             }
         }
@@ -206,7 +204,7 @@ fn extract_dense(
         }
     } else if target.is_empty() {
         // case 2: the union is not empty but the target is, which implies that none type_id points to it. The result is a null array
-        Ok(new_null_array(target.data_type(), union_array.len()))
+        new_null_target(target, union_array.len())
     } else if target.null_count() == target.len() || target.data_type().is_null() {
         // case 3: since all values on our target are null, regardless of selected type ids and offsets, the result is a null array
         match target.len().cmp(&union_array.len()) {
@@ -241,7 +239,7 @@ fn extract_dense(
                 match (target.len().cmp(&union_array.len()), layout(target.data_type()).can_contain_null_mask) {
                     (Ordering::Less, _) // case 5.1A: our target is smaller than the parent union, allocate a new correctly sized null array
                     | (_, false) => { // case 5.1B: target array can't contain a null mask
-                        Ok(new_null_array(target.data_type(), union_array.len()))
+                        new_null_target(target, union_array.len())
                     }
                     // case 5.2: target and parent union lengths are equal, and the target can contain a null mask, let's set it to a all-null null-buffer
                     (Ordering::Equal, true) => {
@@ -281,6 +279,19 @@ fn extract_dense(
                 )?)
             }
         }
+    }
+}
+
+/// Returns `len` nulls of the type of `target`.
+///
+/// A union or run-end encoded array has no validity bitmap, so `take` puts the
+/// nulls in a field that can hold them, or returns an error when none can.
+fn new_null_target(target: &ArrayRef, len: usize) -> Result<ArrayRef, ArrowError> {
+    match target.data_type() {
+        DataType::Union(_, _) | DataType::RunEndEncoded(_, _) => {
+            take(target, &UInt64Array::new_null(len), None)
+        }
+        data_type => Ok(new_null_array(data_type, len)),
     }
 }
 
@@ -424,7 +435,12 @@ mod tests {
     use super::{
         BoolValue, eq_scalar_inner, is_sequential_generic, union_extract, union_extract_by_id,
     };
-    use arrow_array::{Array, Int32Array, NullArray, StringArray, UnionArray, new_null_array};
+    use arrow_array::cast::AsArray;
+    use arrow_array::types::Int32Type;
+    use arrow_array::{
+        Array, ArrayRef, Int32Array, NullArray, RunArray, StringArray, UnionArray, make_array,
+        new_null_array,
+    };
     use arrow_buffer::{BooleanBuffer, ScalarBuffer};
     use arrow_schema::{ArrowError, DataType, Field, UnionFields, UnionMode};
     use std::sync::Arc;
@@ -1362,5 +1378,223 @@ mod tests {
             union_extract_by_id(&union, 5).unwrap_err().to_string(),
             ArrowError::InvalidArgumentError("type_id 5 not found on union".into()).to_string()
         );
+    }
+
+    const REE_NULL_ERROR: &str = "Compute error: Cannot take null indices from a RunEndEncoded array with a non-nullable values field";
+    const UNION_NULL_ERROR: &str = "Compute error: Cannot take null indices from a union with no field that can represent nulls";
+
+    /// A run-end encoded array of `len` sevens.
+    fn ree(len: usize, values_nullable: bool) -> ArrayRef {
+        let run = if len == 0 {
+            RunArray::<Int32Type>::try_new(
+                &Int32Array::from(Vec::<i32>::new()),
+                &Int32Array::from(Vec::<i32>::new()),
+            )
+        } else {
+            RunArray::<Int32Type>::try_new(
+                &Int32Array::from(vec![len as i32]),
+                &Int32Array::from(vec![7]),
+            )
+        }
+        .unwrap();
+        let data_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Int32, values_nullable)),
+        );
+        make_array(
+            run.into_data()
+                .into_builder()
+                .data_type(data_type)
+                .build()
+                .unwrap(),
+        )
+    }
+
+    /// Fields "a" (type id 0, nullable Int32) and "b" (type id 1, of `b_type`).
+    fn int_and(b_type: DataType) -> UnionFields {
+        UnionFields::try_new(
+            [0, 1],
+            [
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", b_type, false),
+            ],
+        )
+        .unwrap()
+    }
+
+    // Issue 10992: a kernel returns an error when it would put a null in a run-end
+    // encoded array whose values field is not nullable. The message is the one
+    // `take` returns for null indices.
+    #[test]
+    fn sparse_ree_target_cannot_hold_null() {
+        let child = ree(2, false);
+        // [0, 0] selects no "b" row (case 3.2), [1, 0] selects one of two (case 4.2)
+        for type_ids in [vec![0, 0], vec![1, 0]] {
+            let union = UnionArray::try_new(
+                int_and(child.data_type().clone()),
+                ScalarBuffer::from(type_ids),
+                None,
+                vec![Arc::new(Int32Array::from(vec![1, 2])), Arc::clone(&child)],
+            )
+            .unwrap();
+            let err = union_extract(&union, "b").unwrap_err();
+            assert_eq!(err.to_string(), REE_NULL_ERROR);
+        }
+    }
+
+    #[test]
+    fn dense_ree_target_cannot_hold_null() {
+        // An empty "b" child is case 2, a non-empty unselected one is case 5.1.
+        for child in [ree(0, false), ree(2, false)] {
+            let union = UnionArray::try_new(
+                int_and(child.data_type().clone()),
+                ScalarBuffer::from(vec![0]),
+                Some(ScalarBuffer::from(vec![0])),
+                vec![Arc::new(Int32Array::from(vec![1])), child],
+            )
+            .unwrap();
+            let err = union_extract(&union, "b").unwrap_err();
+            assert_eq!(err.to_string(), REE_NULL_ERROR);
+        }
+    }
+
+    // Issue 10992: a union null must be stored in a nullable field, and a kernel
+    // returns an error when the union has none.
+    #[test]
+    fn dense_union_target_cannot_hold_null() {
+        let target_fields =
+            UnionFields::try_new([0], [Field::new("x", DataType::Int32, false)]).unwrap();
+        let target_type = DataType::Union(target_fields.clone(), UnionMode::Sparse);
+        let target = UnionArray::try_new(
+            target_fields,
+            ScalarBuffer::from(vec![]),
+            None,
+            vec![Arc::new(Int32Array::from(Vec::<i32>::new()))],
+        )
+        .unwrap();
+        let union = UnionArray::try_new(
+            int_and(target_type),
+            ScalarBuffer::from(vec![0]),
+            Some(ScalarBuffer::from(vec![0])),
+            vec![Arc::new(Int32Array::from(vec![1])), Arc::new(target)],
+        )
+        .unwrap();
+        let err = union_extract(&union, "b").unwrap_err();
+        assert_eq!(err.to_string(), UNION_NULL_ERROR);
+    }
+
+    #[test]
+    fn sparse_union_target_puts_nulls_in_nullable_field() {
+        // "x" (type id 0) cannot hold a null, "y" (type id 1) can
+        let target_fields = UnionFields::try_new(
+            [0, 1],
+            [
+                Field::new("x", DataType::Int32, false),
+                Field::new("y", DataType::Int32, true),
+            ],
+        )
+        .unwrap();
+        let target_type = DataType::Union(target_fields.clone(), UnionMode::Sparse);
+        let target = UnionArray::try_new(
+            target_fields,
+            ScalarBuffer::from(vec![0, 0]),
+            None,
+            vec![
+                Arc::new(Int32Array::from(vec![5, 6])),
+                Arc::new(Int32Array::from(vec![8, 9])),
+            ],
+        )
+        .unwrap();
+        // [1, 0] selects "b" in row 0 only (case 4.2), and [0, 0] in no row (case 3.2)
+        for (type_ids, expected_ids) in [(vec![1, 0], vec![0, 1]), (vec![0, 0], vec![1, 1])] {
+            let union = UnionArray::try_new(
+                int_and(target_type.clone()),
+                ScalarBuffer::from(type_ids),
+                None,
+                vec![
+                    Arc::new(Int32Array::from(vec![1, 2])),
+                    Arc::new(target.clone()),
+                ],
+            )
+            .unwrap();
+            let extracted = union_extract(&union, "b").unwrap();
+            let extracted = extracted.as_union();
+            // Unselected rows select "y", the only field that can hold a null, and
+            // "x" keeps no nulls because it is not nullable.
+            assert_eq!(extracted.type_ids(), &expected_ids[..]);
+            assert_eq!(extracted.child(0).null_count(), 0);
+            let nulls = extracted.logical_nulls().unwrap();
+            for (row, &type_id) in expected_ids.iter().enumerate() {
+                assert_eq!(nulls.is_null(row), type_id == 1);
+            }
+            if expected_ids[0] == 0 {
+                assert_eq!(extracted.value(0).as_primitive::<Int32Type>().value(0), 5);
+            }
+            extracted.to_data().validate_full().unwrap();
+        }
+    }
+
+    #[test]
+    fn sparse_nullable_ree_target_some_match() {
+        let target = ree(2, true);
+        let union = UnionArray::try_new(
+            int_and(target.data_type().clone()),
+            ScalarBuffer::from(vec![1, 0]),
+            None,
+            vec![Arc::new(Int32Array::from(vec![1, 2])), target],
+        )
+        .unwrap();
+        let extracted = union_extract(&union, "b").unwrap();
+        let extracted = extracted.as_run::<Int32Type>();
+        // The target is [7, 7] and only row 0 selects "b" (case 4.2), so the result is [7, null].
+        let values = extracted.values().as_primitive::<Int32Type>();
+        let logical = (0..extracted.len())
+            .map(|i| {
+                let physical = extracted.get_physical_index(i);
+                values.is_valid(physical).then(|| values.value(physical))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(logical, vec![Some(7), None]);
+    }
+
+    #[test]
+    fn dense_union_target_puts_nulls_in_nullable_field() {
+        // "x" (type id 0) cannot hold a null, "y" (type id 1) can
+        let target_fields = UnionFields::try_new(
+            [0, 1],
+            [
+                Field::new("x", DataType::Int32, false),
+                Field::new("y", DataType::Int32, true),
+            ],
+        )
+        .unwrap();
+        let target_type = DataType::Union(target_fields.clone(), UnionMode::Dense);
+        let target = UnionArray::try_new(
+            target_fields,
+            ScalarBuffer::from(vec![]),
+            Some(ScalarBuffer::from(vec![])),
+            vec![
+                Arc::new(Int32Array::from(Vec::<i32>::new())),
+                Arc::new(Int32Array::from(Vec::<i32>::new())),
+            ],
+        )
+        .unwrap();
+        // The only row selects "a", so "b" is null in it (case 2)
+        let union = UnionArray::try_new(
+            int_and(target_type),
+            ScalarBuffer::from(vec![0]),
+            Some(ScalarBuffer::from(vec![0])),
+            vec![Arc::new(Int32Array::from(vec![1])), Arc::new(target)],
+        )
+        .unwrap();
+        let extracted = union_extract(&union, "b").unwrap();
+        let extracted = extracted.as_union();
+        // Issue 10992: a union null is stored in a nullable field, here "y" (type id 1),
+        // and "x" stays empty.
+        assert_eq!(extracted.type_ids(), &[1]);
+        assert!(extracted.child(0).is_empty());
+        assert_eq!(extracted.child(1).null_count(), 1);
+        assert!(extracted.logical_nulls().unwrap().is_null(0));
+        extracted.to_data().validate_full().unwrap();
     }
 }

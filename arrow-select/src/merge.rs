@@ -11,7 +11,7 @@ use arrow_array::{
 };
 use arrow_data::ArrayData;
 use arrow_data::transform::MutableArrayData;
-use arrow_schema::ArrowError;
+use arrow_schema::{ArrowError, DataType};
 
 /// An index for the [merge_n] function.
 ///
@@ -116,6 +116,19 @@ pub fn merge_n(values: &[&dyn Array], indices: &[impl MergeIndex]) -> Result<Arr
 
     if indices.is_empty() {
         return Ok(new_empty_array(data_type));
+    }
+
+    // A run-end encoded null lives in its values child, so it needs a nullable
+    // values field. Checked here because a union or struct parent can mask
+    // the nulls `MutableArrayData` writes into such a child.
+    if let DataType::RunEndEncoded(_, values_field) = data_type
+        && !values_field.is_nullable()
+        && indices.iter().any(|ix| ix.index().is_none())
+    {
+        return Err(ArrowError::InvalidArgumentError(
+            "Cannot introduce nulls into a RunEndEncoded array with a non-nullable values field"
+                .to_string(),
+        ));
     }
 
     #[cfg(debug_assertions)]
@@ -377,12 +390,13 @@ pub fn merge(
 mod tests {
     use crate::merge::{MergeIndex, merge, merge_n};
     use arrow_array::cast::AsArray;
-    use arrow_array::types::Int8Type;
+    use arrow_array::types::{Int8Type, Int32Type};
     use arrow_array::{
-        Array, ArrayRef, BooleanArray, Datum, DictionaryArray, Int8Array, Int32Array, Scalar,
-        StringArray, UInt64Array,
+        Array, ArrayRef, BooleanArray, Datum, DictionaryArray, Int8Array, Int32Array, RunArray,
+        Scalar, StringArray, UInt64Array, UnionArray, make_array,
     };
     use arrow_schema::ArrowError::InvalidArgumentError;
+    use arrow_schema::{DataType, Field, UnionFields};
     use std::sync::Arc;
 
     #[derive(PartialEq, Eq, Copy, Clone)]
@@ -759,5 +773,102 @@ mod tests {
             dictionary_strings(merged.as_ref()),
             [Some("v50"), None, Some("v0"), Some("v1"), None, None]
         );
+    }
+
+    /// A run-end encoded array of `len` sevens.
+    fn ree(len: i32, values_nullable: bool) -> ArrayRef {
+        let run = RunArray::<Int32Type>::try_new(
+            &Int32Array::from(vec![len]),
+            &Int32Array::from(vec![7]),
+        )
+        .unwrap();
+        let data_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Int32, values_nullable)),
+        );
+        make_array(
+            run.into_data()
+                .into_builder()
+                .data_type(data_type)
+                .build()
+                .unwrap(),
+        )
+    }
+
+    #[test]
+    fn merge_n_run_end_encoded_values_nullability() {
+        let cases = [
+            // Issue 10992: a kernel returns an error when it would put a null in a
+            // run-end encoded array whose values field is not nullable.
+            (
+                false,
+                vec![Some(0_usize), None],
+                Err(
+                    "Invalid argument error: Cannot introduce nulls into a RunEndEncoded array with a non-nullable values field",
+                ),
+            ),
+            // A nullable values field can hold the null: row 0 is the first 7, row 1 is null.
+            (true, vec![Some(0), None], Ok(vec![Some(7), None])),
+            // No `None` index introduces no null: both rows are taken from [7, 7].
+            (false, vec![Some(0), Some(0)], Ok(vec![Some(7), Some(7)])),
+        ];
+        for (i, (values_nullable, indices, expected)) in cases.into_iter().enumerate() {
+            let input = ree(2, values_nullable);
+            let result = merge_n(&[input.as_ref()], &indices);
+            match expected {
+                Err(message) => {
+                    let err = result
+                        .err()
+                        .unwrap_or_else(|| panic!("case {i}: expected an error"));
+                    assert_eq!(err.to_string(), message, "case {i}");
+                }
+                Ok(expected) => {
+                    let merged = result.unwrap_or_else(|e| panic!("case {i}: {e}"));
+                    merged
+                        .to_data()
+                        .validate_full()
+                        .unwrap_or_else(|e| panic!("case {i}: {e}"));
+                    let merged = merged.as_run::<Int32Type>();
+                    let values = merged.values().as_primitive::<Int32Type>();
+                    let logical = (0..merged.len())
+                        .map(|row| {
+                            let physical = merged.get_physical_index(row);
+                            values.is_valid(physical).then(|| values.value(physical))
+                        })
+                        .collect::<Vec<_>>();
+                    assert_eq!(logical, expected, "case {i}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn merge_n_union_with_non_nullable_run_end_encoded_child() {
+        // Sparse union {a: nullable Int32, b: non-nullable REE}; the only row selects a = 1
+        let child = ree(1, false);
+        let fields = UnionFields::try_new(
+            [0, 1],
+            [
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", child.data_type().clone(), false),
+            ],
+        )
+        .unwrap();
+        let union = UnionArray::try_new(
+            fields,
+            vec![0].into(),
+            None,
+            vec![Arc::new(Int32Array::from(vec![1])), child],
+        )
+        .unwrap();
+
+        let merged = merge_n(&[&union as &dyn Array], &[Some(0), None]).unwrap();
+        let merged = merged.as_union();
+        // The union stores the new null in "a", its only nullable field (issue 10992),
+        // and row 1 does not select "b", so the type of "b" does not limit the merge.
+        assert_eq!(merged.type_ids(), &[0, 0]);
+        assert_eq!(merged.value(0).as_primitive::<Int32Type>().value(0), 1);
+        assert!(merged.child(0).is_null(1));
+        merged.to_data().validate_full().unwrap();
     }
 }
