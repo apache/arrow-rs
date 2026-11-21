@@ -2547,6 +2547,97 @@ async fn test_decimal_256() {
     }
     .run();
 }
+
+#[test]
+fn test_sign_extended_byte_array_decimal_statistics() {
+    use parquet::data_type::{ByteArray, ByteArrayType};
+    use parquet::file::writer::SerializedFileWriter;
+    use parquet::schema::parser::parse_message_type;
+
+    // Each value is sign-extended to 40 bytes, wider than any Arrow decimal type.
+    let to_bytes = |value: i256| {
+        let fill = if value.is_negative() { 0xFF } else { 0x00 };
+        let mut bytes = vec![fill; 8];
+        bytes.extend_from_slice(&value.to_be_bytes());
+        ByteArray::from(bytes)
+    };
+    let past_i64 = i256::from_i128(1 << 100);
+    let row_groups = [
+        vec![to_bytes(i256::from_i128(-9)), to_bytes(i256::from_i128(9))],
+        vec![to_bytes(i256::ZERO), to_bytes(past_i64)],
+        vec![ByteArray::from(vec![])],
+    ];
+
+    let schema = Arc::new(
+        parse_message_type("message test { REQUIRED BYTE_ARRAY d (DECIMAL(76, 0)); }").unwrap(),
+    );
+    let props = Arc::new(
+        WriterProperties::builder()
+            .set_statistics_enabled(EnabledStatistics::Page)
+            .build(),
+    );
+    let mut buffer = Vec::new();
+    let mut writer = SerializedFileWriter::new(&mut buffer, schema, props).unwrap();
+    for values in row_groups {
+        let mut row_group = writer.next_row_group().unwrap();
+        let mut column = row_group.next_column().unwrap().unwrap();
+        column
+            .typed::<ByteArrayType>()
+            .write_batch(&values, None, None)
+            .unwrap();
+        column.close().unwrap();
+        row_group.close().unwrap();
+    }
+    writer.close().unwrap();
+
+    let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
+    let reader =
+        ParquetRecordBatchReaderBuilder::try_new_with_options(bytes::Bytes::from(buffer), options)
+            .unwrap();
+    let metadata = reader.metadata();
+    let page_index = metadata.page_index().unwrap().as_ref();
+    let indices = [0, 1, 2];
+
+    let expected_mins = [Some(i256::from_i128(-9)), Some(i256::ZERO), None];
+    let cases: [(DataType, [Option<i256>; 3]); 4] = [
+        (
+            DataType::Decimal32(9, 0),
+            [Some(i256::from_i128(9)), None, None],
+        ),
+        (
+            DataType::Decimal64(18, 0),
+            [Some(i256::from_i128(9)), None, None],
+        ),
+        (
+            DataType::Decimal128(38, 0),
+            [Some(i256::from_i128(9)), Some(past_i64), None],
+        ),
+        (
+            DataType::Decimal256(76, 0),
+            [Some(i256::from_i128(9)), Some(past_i64), None],
+        ),
+    ];
+    for (data_type, expected_maxes) in cases {
+        let schema = Schema::new(vec![Field::new("d", data_type.clone(), false)]);
+        let converter =
+            StatisticsConverter::try_new("d", &schema, reader.parquet_schema()).unwrap();
+        let expected = |values: [Option<i256>; 3]| {
+            let values = Decimal256Array::from(values.to_vec())
+                .with_precision_and_scale(76, 0)
+                .unwrap();
+            arrow::compute::cast(&values, &data_type).unwrap()
+        };
+        let mins = converter.row_group_mins(metadata.row_groups()).unwrap();
+        let maxes = converter.row_group_maxes(metadata.row_groups()).unwrap();
+        assert_eq!(&mins, &expected(expected_mins), "{data_type}");
+        assert_eq!(&maxes, &expected(expected_maxes), "{data_type}");
+        let mins = converter.data_page_mins(page_index, &indices).unwrap();
+        let maxes = converter.data_page_maxes(page_index, &indices).unwrap();
+        assert_eq!(&mins, &expected(expected_mins), "{data_type}");
+        assert_eq!(&maxes, &expected(expected_maxes), "{data_type}");
+    }
+}
+
 #[tokio::test]
 async fn test_dictionary() {
     let reader = TestReader {

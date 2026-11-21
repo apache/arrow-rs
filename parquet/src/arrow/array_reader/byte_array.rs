@@ -3,7 +3,7 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::arrow::array_reader::{ArrayReader, read_records, skip_records};
-use crate::arrow::buffer::bit_util::sign_extend_be;
+use crate::arrow::buffer::bit_util::try_sign_extend_be;
 use crate::arrow::buffer::offset_buffer::OffsetBuffer;
 use crate::arrow::decoder::{DeltaByteArrayDecoder, DictIndexDecoder};
 use crate::arrow::record_reader::GenericRecordReader;
@@ -15,9 +15,8 @@ use crate::data_type::Int32Type;
 use crate::encodings::decoding::{Decoder, DeltaBitPackDecoder};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
-use arrow_array::{
-    Array, ArrayRef, BinaryArray, Decimal128Array, Decimal256Array, OffsetSizeTrait,
-};
+use arrow_array::types::{Decimal128Type, Decimal256Type, DecimalType};
+use arrow_array::{Array, ArrayRef, BinaryArray, OffsetSizeTrait, PrimitiveArray};
 use arrow_buffer::i256;
 use arrow_schema::DataType as ArrowType;
 use bytes::Bytes;
@@ -66,6 +65,32 @@ pub fn make_byte_array_reader(
             "invalid data type for byte array reader - {}",
             data_type
         )),
+    }
+}
+
+/// Converts the big-endian two's complement values of `binary` to the decimal type `T`.
+fn decimal_from_binary<T: DecimalType, const N: usize>(
+    binary: &BinaryArray,
+    data_type: &ArrowType,
+    from_be: impl Fn([u8; N]) -> T::Native,
+) -> Result<PrimitiveArray<T>> {
+    let mut out_of_range = None;
+    // Null slots have 0 length, which try_sign_extend_be rejects
+    let decimal = PrimitiveArray::<T>::from_unary(binary, |x| match x.len() {
+        0 => T::Native::default(),
+        _ => match try_sign_extend_be(x) {
+            Some(b) => from_be(b),
+            None => {
+                out_of_range.get_or_insert(x.len());
+                T::Native::default()
+            }
+        },
+    });
+    match out_of_range {
+        Some(len) => Err(general_err!(
+            "BYTE_ARRAY decimal value of {len} bytes is out of range for {data_type}"
+        )),
+        None => Ok(decimal),
     }
 }
 
@@ -121,24 +146,22 @@ impl<I: OffsetSizeTrait> ArrayReader for ByteArrayReader<I> {
             ArrowType::Decimal128(p, s) => {
                 let array = buffer.into_array(null_buffer, ArrowType::Binary);
                 let binary = array.as_any().downcast_ref::<BinaryArray>().unwrap();
-                // Null slots will have 0 length, so we need to check for that in the lambda
-                // or sign_extend_be will panic.
-                let decimal = Decimal128Array::from_unary(binary, |x| match x.len() {
-                    0 => i128::default(),
-                    _ => i128::from_be_bytes(sign_extend_be(x)),
-                })
+                let decimal = decimal_from_binary::<Decimal128Type, 16>(
+                    binary,
+                    &self.data_type,
+                    i128::from_be_bytes,
+                )?
                 .with_precision_and_scale(p, s)?;
                 Arc::new(decimal)
             }
             ArrowType::Decimal256(p, s) => {
                 let array = buffer.into_array(null_buffer, ArrowType::Binary);
                 let binary = array.as_any().downcast_ref::<BinaryArray>().unwrap();
-                // Null slots will have 0 length, so we need to check for that in the lambda
-                // or sign_extend_be will panic.
-                let decimal = Decimal256Array::from_unary(binary, |x| match x.len() {
-                    0 => i256::default(),
-                    _ => i256::from_be_bytes(sign_extend_be(x)),
-                })
+                let decimal = decimal_from_binary::<Decimal256Type, 32>(
+                    binary,
+                    &self.data_type,
+                    i256::from_be_bytes,
+                )?
                 .with_precision_and_scale(p, s)?;
                 Arc::new(decimal)
             }
@@ -623,9 +646,14 @@ impl ByteArrayDecoderDictionary {
 mod tests {
     use super::*;
     use crate::arrow::array_reader::test_util::{byte_array_all_encodings, utf8_column};
+    use crate::arrow::arrow_reader::ParquetRecordBatchReader;
     use crate::arrow::record_reader::buffer::ValuesBuffer;
-    use arrow_array::{Array, StringArray};
+    use crate::data_type::{ByteArray, ByteArrayType};
+    use crate::file::writer::SerializedFileWriter;
+    use crate::schema::parser::parse_message_type;
+    use arrow_array::{Array, Decimal128Array, Decimal256Array, StringArray};
     use arrow_buffer::Buffer;
+    use arrow_schema::ArrowError;
 
     #[test]
     fn test_byte_array_decoder() {
@@ -914,5 +942,89 @@ mod tests {
         assert_eq!(output.offsets, vec![0, i32::MAX, i32::MAX]);
         assert_eq!(decoder.skip(1).unwrap(), 1);
         assert_eq!(decoder.read(&mut output, 1).unwrap(), 0);
+    }
+
+    /// Writes `values` as a `BYTE_ARRAY` `DECIMAL(precision, 0)` column and reads it back.
+    fn read_binary_decimals(
+        precision: u8,
+        values: &[Option<Vec<u8>>],
+    ) -> std::result::Result<ArrayRef, ArrowError> {
+        let schema = parse_message_type(&format!(
+            "message test {{ OPTIONAL BYTE_ARRAY d (DECIMAL({precision}, 0)); }}"
+        ))
+        .unwrap();
+        let mut buffer = Vec::new();
+        let mut writer =
+            SerializedFileWriter::new(&mut buffer, Arc::new(schema), Default::default()).unwrap();
+        let mut row_group = writer.next_row_group().unwrap();
+        let mut column = row_group.next_column().unwrap().unwrap();
+        let def_levels: Vec<i16> = values.iter().map(|v| v.is_some() as i16).collect();
+        let data: Vec<ByteArray> = values.iter().flatten().map(|v| v.clone().into()).collect();
+        column
+            .typed::<ByteArrayType>()
+            .write_batch(&data, Some(&def_levels), None)
+            .unwrap();
+        column.close().unwrap();
+        row_group.close().unwrap();
+        writer.close().unwrap();
+        let batch = ParquetRecordBatchReader::try_new(Bytes::from(buffer), 1024)
+            .unwrap()
+            .next()
+            .unwrap()?;
+        Ok(batch.column(0).clone())
+    }
+
+    /// `value` as big-endian two's complement, sign-extended to `width` bytes.
+    fn be_bytes(value: i256, width: usize) -> Vec<u8> {
+        let fill = if value.is_negative() { 0xFF } else { 0x00 };
+        let mut bytes = vec![fill; width.saturating_sub(32)];
+        bytes.extend_from_slice(&value.to_be_bytes()[32 - width.min(32)..]);
+        bytes
+    }
+
+    #[test]
+    fn test_read_binary_decimal_with_redundant_sign_bytes() {
+        let values = [
+            Some(be_bytes(i256::from_i128(9), 19)),
+            Some(be_bytes(i256::from_i128(-9), 19)),
+            None,
+            Some(be_bytes(i256::from_i128(i128::MIN), 17)),
+            Some(be_bytes(i256::from_i128(127), 1)),
+        ];
+        let read = read_binary_decimals(38, &values).unwrap();
+        let expected =
+            Decimal128Array::from(vec![Some(9), Some(-9), None, Some(i128::MIN), Some(127)])
+                .with_precision_and_scale(38, 0)
+                .unwrap();
+        assert_eq!(read.as_ref(), &expected as &dyn Array);
+
+        let values = [
+            Some(be_bytes(i256::from_i128(5), 34)),
+            None,
+            Some(be_bytes(i256::MIN, 40)),
+        ];
+        let read = read_binary_decimals(76, &values).unwrap();
+        let expected = Decimal256Array::from(vec![Some(i256::from_i128(5)), None, Some(i256::MIN)])
+            .with_precision_and_scale(76, 0)
+            .unwrap();
+        assert_eq!(read.as_ref(), &expected as &dyn Array);
+    }
+
+    #[test]
+    fn test_read_binary_decimal_out_of_range() {
+        let past_i128 = i256::from_i128(i128::MAX).wrapping_add(i256::ONE);
+        let err = read_binary_decimals(38, &[Some(be_bytes(past_i128, 18))]).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet argument error: Parquet error: BYTE_ARRAY decimal value of 18 bytes is out of range for Decimal128(38, 0)"
+        );
+
+        let mut past_i256 = vec![0x00, 0x01];
+        past_i256.extend([0x00; 32]);
+        let err = read_binary_decimals(76, &[Some(past_i256)]).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet argument error: Parquet error: BYTE_ARRAY decimal value of 34 bytes is out of range for Decimal256(76, 0)"
+        );
     }
 }

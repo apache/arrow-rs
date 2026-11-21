@@ -49,6 +49,24 @@ pub fn sign_extend_be<const N: usize>(b: &[u8]) -> [u8; N] {
     result
 }
 
+/// Performs big endian sign extension of `b`, which may be longer than `N` bytes if its
+/// leading bytes only repeat the sign. Returns `None` if `b` is empty or the value does not
+/// fit in `N` bytes.
+pub fn try_sign_extend_be<const N: usize>(b: &[u8]) -> Option<[u8; N]> {
+    // A 0 bit integer is not a valid two's complement integer
+    if b.is_empty() {
+        return None;
+    }
+    if b.len() <= N {
+        return Some(sign_extend_be(b));
+    }
+    let (sign, value) = b.split_at(b.len() - N);
+    let fill = if value[0] & 0x80 != 0 { u8::MAX } else { 0 };
+    sign.iter()
+        .all(|&x| x == fill)
+        .then(|| value.try_into().unwrap())
+}
+
 /// Sign extends `b`, a big-endian two's complement value of `W` bytes, to `N` bytes.
 ///
 /// Equivalent to [`sign_extend_be`] for a width known at compile time, which keeps the
@@ -70,6 +88,34 @@ mod tests {
     use super::*;
     use arrow_array::builder::BooleanBufferBuilder;
     use rand::{prelude::*, rng};
+
+    #[test]
+    fn test_try_sign_extend_be() {
+        assert_eq!(try_sign_extend_be::<2>(&[]), None);
+        assert_eq!(try_sign_extend_be::<2>(&[0x80]), Some([0xFF, 0x80]));
+        assert_eq!(try_sign_extend_be::<3>(&[0x80]), Some([0xFF, 0xFF, 0x80]));
+        assert_eq!(try_sign_extend_be::<3>(&[0x7F]), Some([0x00, 0x00, 0x7F]));
+        assert_eq!(
+            try_sign_extend_be::<2>(&[0x00, 0x00, 0x7F]),
+            Some([0x00, 0x7F])
+        );
+        assert_eq!(
+            try_sign_extend_be::<2>(&[0xFF, 0xFF, 0x80]),
+            Some([0xFF, 0x80])
+        );
+        assert_eq!(
+            try_sign_extend_be::<2>(&[0x00, 0x00, 0x80]),
+            Some([0x00, 0x80])
+        );
+        assert_eq!(
+            try_sign_extend_be::<2>(&[0xFF, 0xFF, 0x7F]),
+            Some([0xFF, 0x7F])
+        );
+        assert_eq!(try_sign_extend_be::<2>(&[0x00, 0x80, 0x00]), None);
+        assert_eq!(try_sign_extend_be::<2>(&[0xFF, 0x7F, 0xFF]), None);
+        assert_eq!(try_sign_extend_be::<2>(&[0x01, 0x00, 0x00]), None);
+        assert_eq!(try_sign_extend_be::<2>(&[0xFF, 0x00, 0x00, 0x00]), None);
+    }
 
     #[test]
     fn test_bit_fns() {
