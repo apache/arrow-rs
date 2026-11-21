@@ -805,6 +805,7 @@ mod tests {
     use arrow_ipc::{CompressionType, MetadataVersion};
     use arrow_schema::{UnionFields, UnionMode};
     use builder::MapBuilder;
+    use rstest::rstest;
     use std::collections::HashMap;
 
     use super::*;
@@ -923,8 +924,17 @@ mod tests {
         }
     }
 
+    #[rstest]
+    #[case::default_hydrate(FlightDataEncoderBuilder::default(), DataType::Utf8)]
+    #[case::resend(
+        FlightDataEncoderBuilder::default().with_dictionary_handling(DictionaryHandling::Resend),
+        DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8))
+    )]
     #[tokio::test]
-    async fn test_dictionary_hydration_known_schema() {
+    async fn test_dictionary_known_schema(
+        #[case] encoder_builder: FlightDataEncoderBuilder,
+        #[case] expected_type: DataType,
+    ) {
         let arr1: DictionaryArray<UInt16Type> = vec!["a", "a", "b"].into_iter().collect();
         let arr2: DictionaryArray<UInt16Type> = vec!["c", "c", "d"].into_iter().collect();
 
@@ -939,35 +949,9 @@ mod tests {
 
         let stream = futures::stream::iter(vec![Ok(batch1), Ok(batch2)]);
 
-        let encoder = FlightDataEncoderBuilder::default()
-            .with_schema(schema)
-            .build(stream);
-        let expected_schema =
-            Arc::new(Schema::new(vec![Field::new("dict", DataType::Utf8, false)]));
+        let encoder = encoder_builder.with_schema(schema).build(stream);
+        let expected_schema = Arc::new(Schema::new(vec![Field::new("dict", expected_type, false)]));
         assert_eq!(Some(expected_schema), encoder.known_schema())
-    }
-
-    #[tokio::test]
-    async fn test_dictionary_resend_known_schema() {
-        let arr1: DictionaryArray<UInt16Type> = vec!["a", "a", "b"].into_iter().collect();
-        let arr2: DictionaryArray<UInt16Type> = vec!["c", "c", "d"].into_iter().collect();
-
-        let schema = Arc::new(Schema::new(vec![Field::new_dictionary(
-            "dict",
-            DataType::UInt16,
-            DataType::Utf8,
-            false,
-        )]));
-        let batch1 = RecordBatch::try_new(schema.clone(), vec![Arc::new(arr1)]).unwrap();
-        let batch2 = RecordBatch::try_new(schema.clone(), vec![Arc::new(arr2)]).unwrap();
-
-        let stream = futures::stream::iter(vec![Ok(batch1), Ok(batch2)]);
-
-        let encoder = FlightDataEncoderBuilder::default()
-            .with_dictionary_handling(DictionaryHandling::Resend)
-            .with_schema(schema.clone())
-            .build(stream);
-        assert_eq!(Some(schema), encoder.known_schema())
     }
 
     #[tokio::test]

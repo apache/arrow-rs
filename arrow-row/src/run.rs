@@ -147,6 +147,7 @@ mod tests {
     use arrow_array::types::{Int16Type, Int32Type, Int64Type, RunEndIndexType};
     use arrow_array::{Array, Int64Array, PrimitiveArray, RunArray, StringArray};
     use arrow_schema::{DataType, Field, SortOptions};
+    use rstest::rstest;
     use std::sync::Arc;
 
     fn assert_roundtrip<R: RunEndIndexType>(
@@ -215,43 +216,17 @@ mod tests {
         )));
     }
 
-    #[test]
-    fn test_run_end_encoded_round_trip_int16_int64s() {
-        // Test round-trip correctness for RunEndEncodedArray with Int64 values making sure it
-        // doesn't just work with eg. strings (which are all the other tests).
-
+    #[rstest]
+    #[case::int16(PrimitiveArray::<Int16Type>::from_iter_values([2, 3, 5, 6]))]
+    #[case::int32(PrimitiveArray::<Int32Type>::from_iter_values([2, 3, 5, 6]))]
+    #[case::int64(PrimitiveArray::<Int64Type>::from_iter_values([2, 3, 5, 6]))]
+    fn test_run_end_encoded_round_trip_int64_values<R: RunEndIndexType>(
+        #[case] run_ends: PrimitiveArray<R>,
+    ) {
         let values = Int64Array::from(vec![100, 200, 100, 300]);
-        let run_ends = vec![2, 3, 5, 6];
-        let array: RunArray<Int16Type> =
-            RunArray::try_new(&PrimitiveArray::from(run_ends), &values).unwrap();
+        let array = RunArray::<R>::try_new(&run_ends, &values).unwrap();
 
-        assert_roundtrip(&array, DataType::Int16, DataType::Int64, None);
-    }
-
-    #[test]
-    fn test_run_end_encoded_round_trip_int32_int64s() {
-        // Test round-trip correctness for RunEndEncodedArray with Int64 values making sure it
-        // doesn't just work with eg. strings (which are all the other tests).
-
-        let values = Int64Array::from(vec![100, 200, 100, 300]);
-        let run_ends = vec![2, 3, 5, 6];
-        let array: RunArray<Int32Type> =
-            RunArray::try_new(&PrimitiveArray::from(run_ends), &values).unwrap();
-
-        assert_roundtrip(&array, DataType::Int32, DataType::Int64, None);
-    }
-
-    #[test]
-    fn test_run_end_encoded_round_trip_int64_int64s() {
-        // Test round-trip correctness for RunEndEncodedArray with Int64 values making sure it
-        // doesn't just work with eg. strings (which are all the other tests).
-
-        let values = Int64Array::from(vec![100, 200, 100, 300]);
-        let run_ends = vec![2, 3, 5, 6];
-        let array: RunArray<Int64Type> =
-            RunArray::try_new(&PrimitiveArray::from(run_ends), &values).unwrap();
-
-        assert_roundtrip(&array, DataType::Int64, DataType::Int64, None);
+        assert_roundtrip(&array, R::DATA_TYPE, DataType::Int64, None);
     }
 
     #[test]
@@ -339,13 +314,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_run_end_encoded_nulls_first_last_configurations() {
-        // Test that nulls_first vs nulls_last configurations work
-
+    #[rstest]
+    #[case::nulls_first(true)]
+    #[case::nulls_last(false)]
+    fn test_run_end_encoded_nulls_first_last_configurations(#[case] nulls_first: bool) {
         let simple_array: RunArray<Int32Type> = vec!["simple"].into_iter().collect();
 
-        let converter_nulls_first = RowConverter::new(vec![SortField::new_with_options(
+        let converter = RowConverter::new(vec![SortField::new_with_options(
             DataType::RunEndEncoded(
                 Arc::new(Field::new(
                     Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
@@ -360,55 +335,21 @@ mod tests {
             ),
             SortOptions {
                 descending: false,
-                nulls_first: true,
+                nulls_first,
             },
         )])
         .unwrap();
 
-        let converter_nulls_last = RowConverter::new(vec![SortField::new_with_options(
-            DataType::RunEndEncoded(
-                Arc::new(Field::new(
-                    Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
-                    DataType::Int32,
-                    false,
-                )),
-                Arc::new(Field::new(
-                    Field::REE_VALUES_FIELD_DEFAULT_NAME,
-                    DataType::Utf8,
-                    true,
-                )),
-            ),
-            SortOptions {
-                descending: false,
-                nulls_first: false,
-            },
-        )])
-        .unwrap();
-
-        // Test that both configurations can handle simple arrays
-        let rows_nulls_first = converter_nulls_first
+        let rows = converter
             .convert_columns(&[Arc::new(simple_array.clone())])
             .unwrap();
-        let arrays_nulls_first = converter_nulls_first
-            .convert_rows(&rows_nulls_first)
-            .unwrap();
-        let result_nulls_first = arrays_nulls_first[0]
+        let arrays = converter.convert_rows(&rows).unwrap();
+        let result = arrays[0]
             .as_any()
             .downcast_ref::<RunArray<Int32Type>>()
             .unwrap();
 
-        let rows_nulls_last = converter_nulls_last
-            .convert_columns(&[Arc::new(simple_array.clone())])
-            .unwrap();
-        let arrays_nulls_last = converter_nulls_last.convert_rows(&rows_nulls_last).unwrap();
-        let result_nulls_last = arrays_nulls_last[0]
-            .as_any()
-            .downcast_ref::<RunArray<Int32Type>>()
-            .unwrap();
-
-        // Both should successfully convert the simple array
-        assert_eq!(simple_array.len(), result_nulls_first.len());
-        assert_eq!(simple_array.len(), result_nulls_last.len());
+        assert_eq!(simple_array.len(), result.len());
     }
 
     #[test]
@@ -459,17 +400,21 @@ mod tests {
         assert_eq!(*result_string, string_array);
     }
 
-    #[test]
-    fn test_run_end_encoded_sorting_behavior() {
-        // Test that the binary row encoding actually produces the correct sort order
-
-        // Create REE arrays with different values to test sorting
+    #[rstest]
+    #[case::ascending(None, std::cmp::Ordering::Less)]
+    #[case::descending(
+        Some(SortOptions { descending: true, nulls_first: true }),
+        std::cmp::Ordering::Greater
+    )]
+    fn test_run_end_encoded_sorting_behavior(
+        #[case] sort_options: Option<SortOptions>,
+        #[case] expected_order: std::cmp::Ordering,
+    ) {
         let array1: RunArray<Int32Type> = vec!["apple", "apple"].into_iter().collect();
         let array2: RunArray<Int32Type> = vec!["banana", "banana"].into_iter().collect();
         let array3: RunArray<Int32Type> = vec!["cherry", "cherry"].into_iter().collect();
 
-        // Test ascending sort
-        let converter_asc = RowConverter::new(vec![SortField::new(DataType::RunEndEncoded(
+        let data_type = DataType::RunEndEncoded(
             Arc::new(Field::new(
                 Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
                 DataType::Int32,
@@ -480,90 +425,45 @@ mod tests {
                 DataType::Utf8,
                 true,
             )),
-        ))])
-        .unwrap();
-
-        let rows1_asc = converter_asc
-            .convert_columns(&[Arc::new(array1.clone())])
-            .unwrap();
-        let rows2_asc = converter_asc
-            .convert_columns(&[Arc::new(array2.clone())])
-            .unwrap();
-        let rows3_asc = converter_asc
-            .convert_columns(&[Arc::new(array3.clone())])
-            .unwrap();
-
-        // For ascending: apple < banana < cherry
-        // So row bytes should sort: rows1 < rows2 < rows3
-        assert!(
-            rows1_asc.row(0) < rows2_asc.row(0),
-            "apple should come before banana in ascending order"
         );
-        assert!(
-            rows2_asc.row(0) < rows3_asc.row(0),
-            "banana should come before cherry in ascending order"
-        );
-        assert!(
-            rows1_asc.row(0) < rows3_asc.row(0),
-            "apple should come before cherry in ascending order"
-        );
+        let sort_field = match sort_options {
+            Some(options) => SortField::new_with_options(data_type, options),
+            None => SortField::new(data_type),
+        };
+        let converter = RowConverter::new(vec![sort_field]).unwrap();
+        let rows1 = converter.convert_columns(&[Arc::new(array1)]).unwrap();
+        let rows2 = converter.convert_columns(&[Arc::new(array2)]).unwrap();
+        let rows3 = converter.convert_columns(&[Arc::new(array3)]).unwrap();
 
-        // Test descending sort
-        let converter_desc = RowConverter::new(vec![SortField::new_with_options(
-            DataType::RunEndEncoded(
-                Arc::new(Field::new(
-                    Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
-                    DataType::Int32,
-                    false,
-                )),
-                Arc::new(Field::new(
-                    Field::REE_VALUES_FIELD_DEFAULT_NAME,
-                    DataType::Utf8,
-                    true,
-                )),
-            ),
-            arrow_schema::SortOptions {
-                descending: true,
-                nulls_first: true,
-            },
-        )])
-        .unwrap();
-
-        let rows1_desc = converter_desc
-            .convert_columns(&[Arc::new(array1.clone())])
-            .unwrap();
-        let rows2_desc = converter_desc
-            .convert_columns(&[Arc::new(array2.clone())])
-            .unwrap();
-        let rows3_desc = converter_desc
-            .convert_columns(&[Arc::new(array3.clone())])
-            .unwrap();
-
-        // For descending: cherry > banana > apple
-        // So row bytes should sort: rows3 < rows2 < rows1 (because byte comparison is ascending)
-        assert!(
-            rows3_desc.row(0) < rows2_desc.row(0),
-            "cherry should come before banana in descending order (byte-wise)"
+        assert_eq!(
+            rows1.row(0).cmp(&rows2.row(0)),
+            expected_order,
+            "apple vs banana"
         );
-        assert!(
-            rows2_desc.row(0) < rows1_desc.row(0),
-            "banana should come before apple in descending order (byte-wise)"
+        assert_eq!(
+            rows2.row(0).cmp(&rows3.row(0)),
+            expected_order,
+            "banana vs cherry"
         );
-        assert!(
-            rows3_desc.row(0) < rows1_desc.row(0),
-            "cherry should come before apple in descending order (byte-wise)"
+        assert_eq!(
+            rows1.row(0).cmp(&rows3.row(0)),
+            expected_order,
+            "apple vs cherry"
         );
     }
 
-    #[test]
-    fn test_run_end_encoded_null_sorting() {
+    #[rstest]
+    #[case::nulls_first(true, std::cmp::Ordering::Less)]
+    #[case::nulls_last(false, std::cmp::Ordering::Greater)]
+    fn test_run_end_encoded_null_sorting(
+        #[case] nulls_first: bool,
+        #[case] expected_order: std::cmp::Ordering,
+    ) {
         // Test null handling in sort order
-
         let array_with_nulls: RunArray<Int32Type> = vec![None, None].into_iter().collect();
         let array_with_values: RunArray<Int32Type> = vec!["apple", "apple"].into_iter().collect();
 
-        // Test nulls_first = true
-        let converter_nulls_first = RowConverter::new(vec![SortField::new_with_options(
+        let converter_nulls = RowConverter::new(vec![SortField::new_with_options(
             DataType::RunEndEncoded(
                 Arc::new(Field::new(
                     Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
@@ -578,57 +478,19 @@ mod tests {
             ),
             arrow_schema::SortOptions {
                 descending: false,
-                nulls_first: true,
+                nulls_first,
             },
         )])
         .unwrap();
 
-        let rows_nulls = converter_nulls_first
+        let rows_nulls = converter_nulls
             .convert_columns(&[Arc::new(array_with_nulls.clone())])
             .unwrap();
-        let rows_values = converter_nulls_first
+        let rows_values = converter_nulls
             .convert_columns(&[Arc::new(array_with_values.clone())])
             .unwrap();
 
-        // nulls should come before values when nulls_first = true
-        assert!(
-            rows_nulls.row(0) < rows_values.row(0),
-            "nulls should come before values when nulls_first=true"
-        );
-
-        // Test nulls_first = false
-        let converter_nulls_last = RowConverter::new(vec![SortField::new_with_options(
-            DataType::RunEndEncoded(
-                Arc::new(Field::new(
-                    Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
-                    DataType::Int32,
-                    false,
-                )),
-                Arc::new(Field::new(
-                    Field::REE_VALUES_FIELD_DEFAULT_NAME,
-                    DataType::Utf8,
-                    true,
-                )),
-            ),
-            arrow_schema::SortOptions {
-                descending: false,
-                nulls_first: false,
-            },
-        )])
-        .unwrap();
-
-        let rows_nulls_last = converter_nulls_last
-            .convert_columns(&[Arc::new(array_with_nulls.clone())])
-            .unwrap();
-        let rows_values_last = converter_nulls_last
-            .convert_columns(&[Arc::new(array_with_values.clone())])
-            .unwrap();
-
-        // values should come before nulls when nulls_first = false
-        assert!(
-            rows_values_last.row(0) < rows_nulls_last.row(0),
-            "values should come before nulls when nulls_first=false"
-        );
+        assert_eq!(rows_nulls.row(0).cmp(&rows_values.row(0)), expected_order);
     }
 
     #[test]

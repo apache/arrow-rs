@@ -2643,6 +2643,7 @@ mod tests {
     use rand::distr::{Distribution, StandardUniform};
     use rand::prelude::StdRng;
     use rand::{RngExt, SeedableRng};
+    use rstest::rstest;
     use std::fmt::Debug;
     use std::iter::Copied;
     use std::slice::Iter;
@@ -2791,25 +2792,49 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_decimal32() {
-        let converter = RowConverter::new(vec![SortField::new(DataType::Decimal32(
-            DECIMAL32_MAX_PRECISION,
+    #[rstest]
+    #[case::decimal32(Decimal32Array::from_iter([
+        None,
+        Some(i32::MIN),
+        Some(-13),
+        Some(46_i32),
+        Some(5456_i32),
+        Some(i32::MAX),
+    ]))]
+    #[case::decimal64(Decimal64Array::from_iter([
+        None,
+        Some(i64::MIN),
+        Some(-13),
+        Some(46_i64),
+        Some(5456_i64),
+        Some(i64::MAX),
+    ]))]
+    #[case::decimal128(Decimal128Array::from_iter([
+        None,
+        Some(i128::MIN),
+        Some(-13),
+        Some(46_i128),
+        Some(5456_i128),
+        Some(i128::MAX),
+    ]))]
+    #[case::decimal256(Decimal256Array::from_iter([
+        None,
+        Some(i256::MIN),
+        Some(i256::from_parts(0, -1)),
+        Some(i256::from_parts(u128::MAX, -1)),
+        Some(i256::from_parts(u128::MAX, 0)),
+        Some(i256::from_parts(0, 46_i128)),
+        Some(i256::from_parts(5, 46_i128)),
+        Some(i256::MAX),
+    ]))]
+    fn test_decimal<T: DecimalType>(#[case] array: PrimitiveArray<T>) {
+        let converter = RowConverter::new(vec![SortField::new(T::TYPE_CONSTRUCTOR(
+            T::MAX_PRECISION,
             7,
         ))])
         .unwrap();
-        let col = Arc::new(
-            Decimal32Array::from_iter([
-                None,
-                Some(i32::MIN),
-                Some(-13),
-                Some(46_i32),
-                Some(5456_i32),
-                Some(i32::MAX),
-            ])
-            .with_precision_and_scale(9, 7)
-            .unwrap(),
-        ) as ArrayRef;
+        let col =
+            Arc::new(array.with_precision_and_scale(T::MAX_PRECISION, 7).unwrap()) as ArrayRef;
 
         let rows = converter.convert_columns(&[Arc::clone(&col)]).unwrap();
         for i in 0..rows.num_rows() - 1 {
@@ -2818,99 +2843,7 @@ mod tests {
 
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
-        assert_eq!(col.as_ref(), back[0].as_ref())
-    }
-
-    #[test]
-    fn test_decimal64() {
-        let converter = RowConverter::new(vec![SortField::new(DataType::Decimal64(
-            DECIMAL64_MAX_PRECISION,
-            7,
-        ))])
-        .unwrap();
-        let col = Arc::new(
-            Decimal64Array::from_iter([
-                None,
-                Some(i64::MIN),
-                Some(-13),
-                Some(46_i64),
-                Some(5456_i64),
-                Some(i64::MAX),
-            ])
-            .with_precision_and_scale(18, 7)
-            .unwrap(),
-        ) as ArrayRef;
-
-        let rows = converter.convert_columns(&[Arc::clone(&col)]).unwrap();
-        for i in 0..rows.num_rows() - 1 {
-            assert!(rows.row(i) < rows.row(i + 1));
-        }
-
-        let back = converter.convert_rows(&rows).unwrap();
-        assert_eq!(back.len(), 1);
-        assert_eq!(col.as_ref(), back[0].as_ref())
-    }
-
-    #[test]
-    fn test_decimal128() {
-        let converter = RowConverter::new(vec![SortField::new(DataType::Decimal128(
-            DECIMAL128_MAX_PRECISION,
-            7,
-        ))])
-        .unwrap();
-        let col = Arc::new(
-            Decimal128Array::from_iter([
-                None,
-                Some(i128::MIN),
-                Some(-13),
-                Some(46_i128),
-                Some(5456_i128),
-                Some(i128::MAX),
-            ])
-            .with_precision_and_scale(38, 7)
-            .unwrap(),
-        ) as ArrayRef;
-
-        let rows = converter.convert_columns(&[Arc::clone(&col)]).unwrap();
-        for i in 0..rows.num_rows() - 1 {
-            assert!(rows.row(i) < rows.row(i + 1));
-        }
-
-        let back = converter.convert_rows(&rows).unwrap();
-        assert_eq!(back.len(), 1);
-        assert_eq!(col.as_ref(), back[0].as_ref())
-    }
-
-    #[test]
-    fn test_decimal256() {
-        let converter = RowConverter::new(vec![SortField::new(DataType::Decimal256(
-            DECIMAL256_MAX_PRECISION,
-            7,
-        ))])
-        .unwrap();
-        let col = Arc::new(
-            Decimal256Array::from_iter([
-                None,
-                Some(i256::MIN),
-                Some(i256::from_parts(0, -1)),
-                Some(i256::from_parts(u128::MAX, -1)),
-                Some(i256::from_parts(u128::MAX, 0)),
-                Some(i256::from_parts(0, 46_i128)),
-                Some(i256::from_parts(5, 46_i128)),
-                Some(i256::MAX),
-            ])
-            .with_precision_and_scale(DECIMAL256_MAX_PRECISION, 7)
-            .unwrap(),
-        ) as ArrayRef;
-
-        let rows = converter.convert_columns(&[Arc::clone(&col)]).unwrap();
-        for i in 0..rows.num_rows() - 1 {
-            assert!(rows.row(i) < rows.row(i + 1));
-        }
-
-        let back = converter.convert_rows(&rows).unwrap();
-        assert_eq!(back.len(), 1);
-        assert_eq!(col.as_ref(), back[0].as_ref())
+        assert_eq!(col.as_ref(), back[0].as_ref());
     }
 
     #[test]
@@ -3580,48 +3513,24 @@ mod tests {
         converter.convert_rows(parsed.iter()).unwrap();
     }
 
-    #[test]
+    #[rstest]
+    #[case::empty(&[])]
+    #[case::truncated(&[0x02])]
     #[should_panic(expected = "index out of bounds")]
-    fn test_invalid_empty() {
-        let binary_row: &[u8] = &[];
-
+    fn test_invalid_row(#[case] binary_row: &[u8]) {
         let converter = RowConverter::new(vec![SortField::new(DataType::Utf8)]).unwrap();
         let parser = converter.parser();
-        let utf8_row = parser.parse(binary_row.as_ref());
+        let utf8_row = parser.parse(binary_row);
 
         converter.convert_rows(std::iter::once(utf8_row)).unwrap();
     }
 
-    #[test]
+    #[rstest]
+    #[case::empty(&[])]
+    #[case::truncated(&[0x02])]
     #[should_panic(expected = "index out of bounds")]
-    fn test_invalid_empty_array() {
-        let row: &[u8] = &[];
+    fn test_invalid_row_array(#[case] row: &[u8]) {
         let binary_rows = BinaryArray::from(vec![row]);
-
-        let converter = RowConverter::new(vec![SortField::new(DataType::Utf8)]).unwrap();
-        let parsed = converter.from_binary(binary_rows);
-
-        converter.convert_rows(parsed.iter()).unwrap();
-    }
-
-    #[test]
-    #[should_panic(expected = "index out of bounds")]
-    fn test_invalid_truncated() {
-        let binary_row: &[u8] = &[0x02];
-
-        let converter = RowConverter::new(vec![SortField::new(DataType::Utf8)]).unwrap();
-        let parser = converter.parser();
-        let utf8_row = parser.parse(binary_row.as_ref());
-
-        converter.convert_rows(std::iter::once(utf8_row)).unwrap();
-    }
-
-    #[test]
-    #[should_panic(expected = "index out of bounds")]
-    fn test_invalid_truncated_array() {
-        let row: &[u8] = &[0x02];
-        let binary_rows = BinaryArray::from(vec![row]);
-
         let converter = RowConverter::new(vec![SortField::new(DataType::Utf8)]).unwrap();
         let parsed = converter.from_binary(binary_rows);
 
@@ -7467,79 +7376,29 @@ mod tests {
         assert_rows_iterator_cases::<NthOp<true>>();
     }
 
-    #[test]
-    fn assert_rows_iterator_nth_and_reuse() {
+    #[rstest]
+    fn assert_rows_iterator_nth_and_reuse(#[values(0, 1, 2)] n: usize) {
         setup_and_assert(
             |_| {},
-            |actual, expected| {
-                {
-                    let mut actual = actual.clone();
-                    let mut expected = expected.clone();
-                    for _ in 0..expected.len() {
-                        #[expect(clippy::iter_nth_zero)]
-                        let actual_val = actual.nth(0);
-                        #[expect(clippy::iter_nth_zero)]
-                        let expected_val = expected.nth(0);
-                        assert_eq!(actual_val, expected_val, "Failed on nth(0)");
-                    }
-                }
-
-                {
-                    let mut actual = actual.clone();
-                    let mut expected = expected.clone();
-                    for _ in 0..expected.len() {
-                        let actual_val = actual.nth(1);
-                        let expected_val = expected.nth(1);
-                        assert_eq!(actual_val, expected_val, "Failed on nth(1)");
-                    }
-                }
-
-                {
-                    let mut actual = actual.clone();
-                    let mut expected = expected.clone();
-                    for _ in 0..expected.len() {
-                        let actual_val = actual.nth(2);
-                        let expected_val = expected.nth(2);
-                        assert_eq!(actual_val, expected_val, "Failed on nth(2)");
-                    }
+            |mut actual, mut expected| {
+                for _ in 0..expected.len() {
+                    let actual_val = actual.nth(n);
+                    let expected_val = expected.nth(n);
+                    assert_eq!(actual_val, expected_val, "Failed on nth({n})");
                 }
             },
         );
     }
 
-    #[test]
-    fn assert_rows_iterator_nth_back_and_reuse() {
+    #[rstest]
+    fn assert_rows_iterator_nth_back_and_reuse(#[values(0, 1, 2)] n: usize) {
         setup_and_assert(
             |_| {},
-            |actual, expected| {
-                {
-                    let mut actual = actual.clone();
-                    let mut expected = expected.clone();
-                    for _ in 0..expected.len() {
-                        let actual_val = actual.nth_back(0);
-                        let expected_val = expected.nth_back(0);
-                        assert_eq!(actual_val, expected_val, "Failed on nth_back(0)");
-                    }
-                }
-
-                {
-                    let mut actual = actual.clone();
-                    let mut expected = expected.clone();
-                    for _ in 0..expected.len() {
-                        let actual_val = actual.nth_back(1);
-                        let expected_val = expected.nth_back(1);
-                        assert_eq!(actual_val, expected_val, "Failed on nth_back(1)");
-                    }
-                }
-
-                {
-                    let mut actual = actual.clone();
-                    let mut expected = expected.clone();
-                    for _ in 0..expected.len() {
-                        let actual_val = actual.nth_back(2);
-                        let expected_val = expected.nth_back(2);
-                        assert_eq!(actual_val, expected_val, "Failed on nth_back(2)");
-                    }
+            |mut actual, mut expected| {
+                for _ in 0..expected.len() {
+                    let actual_val = actual.nth_back(n);
+                    let expected_val = expected.nth_back(n);
+                    assert_eq!(actual_val, expected_val, "Failed on nth_back({n})");
                 }
             },
         );

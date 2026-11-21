@@ -825,6 +825,7 @@ mod tests {
     use super::*;
     use arrow_ipc::MetadataVersion;
     use arrow_schema::{DataType, Field, TimeUnit};
+    use rstest::rstest;
 
     struct TestVector(Vec<u8>, usize);
 
@@ -869,8 +870,11 @@ mod tests {
         assert_eq!(actual, expected);
     }
 
-    #[test]
-    fn ser_deser_schema_result() {
+    #[rstest]
+    // V5 writes the continuation marker; legacy V4 omits it.
+    #[case::default_v5(IpcWriteOptions::default())]
+    #[case::legacy_v4(IpcWriteOptions::try_new(8, true, MetadataVersion::V4).unwrap())]
+    fn ser_deser_schema_result(#[case] option: IpcWriteOptions) {
         let schema = Schema::new(vec![
             Field::new("c1", DataType::Utf8, false),
             Field::new("c2", DataType::Float64, true),
@@ -879,17 +883,6 @@ mod tests {
             Field::new("c5", DataType::Timestamp(TimeUnit::Millisecond, None), true),
             Field::new("c6", DataType::Time32(TimeUnit::Second), false),
         ]);
-        // V5 with write_legacy_ipc_format = false
-        // this will write the continuation marker
-        let option = IpcWriteOptions::default();
-        let schema_ipc = SchemaAsIpc::new(&schema, &option);
-        let result: SchemaResult = schema_ipc.try_into().unwrap();
-        let des_schema: Schema = (&result).try_into().unwrap();
-        assert_eq!(schema, des_schema);
-
-        // V4 with write_legacy_ipc_format = true
-        // this will not write the continuation marker
-        let option = IpcWriteOptions::try_new(8, true, MetadataVersion::V4).unwrap();
         let schema_ipc = SchemaAsIpc::new(&schema, &option);
         let result: SchemaResult = schema_ipc.try_into().unwrap();
         let des_schema: Schema = (&result).try_into().unwrap();

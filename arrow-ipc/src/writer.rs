@@ -2903,6 +2903,7 @@ mod tests {
     use arrow_array::builder::{PrimitiveRunBuilder, UInt32Builder};
     use arrow_array::types::*;
     use arrow_buffer::ScalarBuffer;
+    use rstest::rstest;
 
     use crate::MetadataVersion;
     use crate::convert::try_fb_to_schema;
@@ -2911,8 +2912,15 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn test_roundtrip_sliced_list_of_union() {
+    #[rstest]
+    #[case::full_slice(0, 2)]
+    #[case::suffix_slice(1, 1)]
+    #[case::empty_at_end(2, 0)]
+    fn test_roundtrip_sliced_list_of_union(
+        #[case] offset: usize,
+        #[case] len: usize,
+        #[values(UnionMode::Dense, UnionMode::Sparse)] mode: UnionMode,
+    ) {
         fn decoded(array: &ArrayRef) -> Vec<Vec<Option<i32>>> {
             (0..array.len())
                 .map(|row| {
@@ -2932,53 +2940,50 @@ mod tests {
                 .collect()
         }
 
-        for mode in [UnionMode::Dense, UnionMode::Sparse] {
-            let fields = UnionFields::try_new(
-                [3, 7],
-                [
-                    Field::new("a", DataType::Int32, true),
-                    Field::new("b", DataType::Int32, true),
+        let fields = UnionFields::try_new(
+            [3, 7],
+            [
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Int32, true),
+            ],
+        )
+        .unwrap();
+        let offsets = (mode == UnionMode::Dense).then(|| vec![2, 0, 1].into());
+        let union: ArrayRef = Arc::new(
+            UnionArray::try_new(
+                fields,
+                vec![3_i8, 7, 3].into(),
+                offsets,
+                vec![
+                    Arc::new(Int32Array::from(vec![Some(11), None, Some(33)])),
+                    Arc::new(Int32Array::from(vec![Some(101), Some(202), None])),
                 ],
             )
-            .unwrap();
-            let offsets = (mode == UnionMode::Dense).then(|| vec![2, 0, 1].into());
-            let union: ArrayRef = Arc::new(
-                UnionArray::try_new(
-                    fields,
-                    vec![3_i8, 7, 3].into(),
-                    offsets,
-                    vec![
-                        Arc::new(Int32Array::from(vec![Some(11), None, Some(33)])),
-                        Arc::new(Int32Array::from(vec![Some(101), Some(202), None])),
-                    ],
-                )
-                .unwrap(),
-            );
-            let item = Arc::new(Field::new("item", union.data_type().clone(), true));
-            let list: ArrayRef = Arc::new(ListArray::new(
-                item,
-                arrow_buffer::OffsetBuffer::from_lengths([1, 2]),
-                union,
-                None,
-            ));
-            for (offset, len) in [(0, 2), (1, 1), (2, 0)] {
-                let array = list.slice(offset, len);
-                array.to_data().validate_full().unwrap();
-                let expected = decoded(&array);
-                let schema = Arc::new(Schema::new(vec![Field::new(
-                    "v",
-                    array.data_type().clone(),
-                    true,
-                )]));
-                let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
-                for output in [
-                    deserialize_file(serialize_file(&batch)),
-                    deserialize_stream(serialize_stream(&batch)),
-                ] {
-                    output.column(0).to_data().validate_full().unwrap();
-                    assert_eq!(decoded(output.column(0)), expected);
-                }
-            }
+            .unwrap(),
+        );
+        let item = Arc::new(Field::new("item", union.data_type().clone(), true));
+        let list: ArrayRef = Arc::new(ListArray::new(
+            item,
+            arrow_buffer::OffsetBuffer::from_lengths([1, 2]),
+            union,
+            None,
+        ));
+
+        let array = list.slice(offset, len);
+        array.to_data().validate_full().unwrap();
+        let expected = decoded(&array);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "v",
+            array.data_type().clone(),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
+        for output in [
+            deserialize_file(serialize_file(&batch)),
+            deserialize_stream(serialize_stream(&batch)),
+        ] {
+            output.column(0).to_data().validate_full().unwrap();
+            assert_eq!(decoded(output.column(0)), expected);
         }
     }
 
@@ -3435,58 +3440,36 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_empty_utf8_ipc_writes_nonempty_offsets_buffer() {
-        let name = StringArray::from(Vec::<String>::new());
-        let [offsets, values] = get_byte_array_buffers::<i32>(&name.to_data());
+    #[rstest]
+    #[case::utf8(StringArray::from(Vec::<String>::new()))]
+    #[case::large_utf8(LargeStringArray::from(Vec::<String>::new()))]
+    fn test_empty_utf8_ipc_writes_nonempty_offsets_buffer<O: OffsetSizeTrait>(
+        #[case] name: GenericStringArray<O>,
+    ) {
+        let [offsets, values] = get_byte_array_buffers::<O>(&name.to_data());
 
         assert_eq!(name.len(), 0);
         assert_eq!(
             offsets.len(),
-            std::mem::size_of::<i32>(),
-            "offsets buffer should contain one zero i32 offset"
+            std::mem::size_of::<O>(),
+            "offsets buffer should contain one zero offset"
         );
         assert_eq!(values.len(), 0, "values buffer should remain empty");
     }
 
-    #[test]
-    fn test_empty_large_utf8_ipc_writes_nonempty_offsets_buffer() {
-        let name = LargeStringArray::from(Vec::<String>::new());
-        let [offsets, values] = get_byte_array_buffers::<i64>(&name.to_data());
-
-        assert_eq!(name.len(), 0);
-        assert_eq!(
-            offsets.len(),
-            std::mem::size_of::<i64>(),
-            "offsets buffer should contain one zero i64 offset"
-        );
-        assert_eq!(values.len(), 0, "values buffer should remain empty");
-    }
-
-    #[test]
-    fn test_empty_list_ipc_writes_nonempty_offsets_buffer() {
-        let list = GenericListBuilder::<i32, _>::new(UInt32Builder::new()).finish();
-        let (offsets, child_data) = get_list_array_buffers::<i32>(&list.to_data());
+    #[rstest]
+    #[case::list(GenericListBuilder::<i32, _>::new(UInt32Builder::new()).finish())]
+    #[case::large_list(GenericListBuilder::<i64, _>::new(UInt32Builder::new()).finish())]
+    fn test_empty_list_ipc_writes_nonempty_offsets_buffer<O: OffsetSizeTrait>(
+        #[case] list: GenericListArray<O>,
+    ) {
+        let (offsets, child_data) = get_list_array_buffers::<O>(&list.to_data());
 
         assert_eq!(list.len(), 0);
         assert_eq!(
             offsets.len(),
-            std::mem::size_of::<i32>(),
-            "offsets buffer should contain one zero i32 offset"
-        );
-        assert_eq!(child_data.len(), 0, "child data should remain empty");
-    }
-
-    #[test]
-    fn test_empty_large_list_ipc_writes_nonempty_offsets_buffer() {
-        let list = GenericListBuilder::<i64, _>::new(UInt32Builder::new()).finish();
-        let (offsets, child_data) = get_list_array_buffers::<i64>(&list.to_data());
-
-        assert_eq!(list.len(), 0);
-        assert_eq!(
-            offsets.len(),
-            std::mem::size_of::<i64>(),
-            "offsets buffer should contain one zero i64 offset"
+            std::mem::size_of::<O>(),
+            "offsets buffer should contain one zero offset"
         );
         assert_eq!(child_data.len(), 0, "child data should remain empty");
     }
@@ -4790,8 +4773,20 @@ mod tests {
         assert_eq!(sliced_batch, output_batch);
     }
 
-    #[test]
-    fn test_roundtrip_dense_union_of_dict() {
+    #[rstest]
+    #[case::dense(
+        UnionMode::Dense,
+        Some(vec![0, 1, 0, 2, 1, 3, 4].into()),
+        vec![100, 200],
+        1
+    )]
+    #[case::sparse(UnionMode::Sparse, None, vec![0, 0, 100, 0, 200, 0, 0], 2)]
+    fn test_roundtrip_union_of_dict(
+        #[case] mode: UnionMode,
+        #[case] offsets: Option<ScalarBuffer<i32>>,
+        #[case] int_values: Vec<i32>,
+        #[case] dict_id: i64,
+    ) {
         let values = StringArray::from(vec![Some("alpha"), None, Some("beta"), Some("gamma")]);
         let keys = Int32Array::from_iter_values([0, 0, 1, 2, 3, 0, 2]);
         let dict_array = DictionaryArray::new(keys, Arc::new(values));
@@ -4801,51 +4796,7 @@ mod tests {
             "dict",
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             true,
-            1,
-            false,
-        ));
-        let int_field = Arc::new(Field::new("int", DataType::Int32, false));
-        let union_fields = UnionFields::try_new(vec![0, 1], vec![dict_field, int_field]).unwrap();
-
-        let types = ScalarBuffer::from(vec![0i8, 0, 1, 0, 1, 0, 0]);
-        let offsets = ScalarBuffer::from(vec![0i32, 1, 0, 2, 1, 3, 4]);
-
-        let int_array = Int32Array::from(vec![100, 200]);
-
-        let union = UnionArray::try_new(
-            union_fields.clone(),
-            types,
-            Some(offsets),
-            vec![Arc::new(dict_array), Arc::new(int_array)],
-        )
-        .unwrap();
-
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "union",
-            DataType::Union(union_fields, UnionMode::Dense),
-            false,
-        )]));
-        let input_batch = RecordBatch::try_new(schema, vec![Arc::new(union)]).unwrap();
-
-        let output_batch = deserialize_file(serialize_file(&input_batch));
-        assert_eq!(input_batch, output_batch);
-
-        let output_batch = deserialize_stream(serialize_stream(&input_batch));
-        assert_eq!(input_batch, output_batch);
-    }
-
-    #[test]
-    fn test_roundtrip_sparse_union_of_dict() {
-        let values = StringArray::from(vec![Some("alpha"), None, Some("beta"), Some("gamma")]);
-        let keys = Int32Array::from_iter_values([0, 0, 1, 2, 3, 0, 2]);
-        let dict_array = DictionaryArray::new(keys, Arc::new(values));
-
-        #[expect(deprecated)]
-        let dict_field = Arc::new(Field::new_dict(
-            "dict",
-            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
-            true,
-            2,
+            dict_id,
             false,
         ));
         let int_field = Arc::new(Field::new("int", DataType::Int32, false));
@@ -4853,19 +4804,19 @@ mod tests {
 
         let types = ScalarBuffer::from(vec![0i8, 0, 1, 0, 1, 0, 0]);
 
-        let int_array = Int32Array::from(vec![0, 0, 100, 0, 200, 0, 0]);
+        let int_array = Int32Array::from(int_values);
 
         let union = UnionArray::try_new(
             union_fields.clone(),
             types,
-            None,
+            offsets,
             vec![Arc::new(dict_array), Arc::new(int_array)],
         )
         .unwrap();
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "union",
-            DataType::Union(union_fields, UnionMode::Sparse),
+            DataType::Union(union_fields, mode),
             false,
         )]));
         let input_batch = RecordBatch::try_new(schema, vec![Arc::new(union)]).unwrap();
