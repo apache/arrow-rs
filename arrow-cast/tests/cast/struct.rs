@@ -8,6 +8,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, BooleanArray, Int32Array, StringArray, StructArray};
 use arrow_cast::{can_cast_types, cast};
 use arrow_schema::{DataType, Field};
+use rstest::rstest;
 
 #[test]
 fn test_cast_struct_to_struct() {
@@ -71,76 +72,67 @@ fn test_cast_struct_to_struct() {
     );
 }
 
-#[test]
-fn test_cast_struct_to_struct_nullability() {
+#[rstest]
+#[case::nullable_to_nullable(Int32Array::from(vec![Some(42), None, Some(19), None]), true)]
+#[case::non_nullable_to_non_nullable(Int32Array::from(vec![i32::MAX, 25, 1, 100]), false)]
+fn test_cast_struct_to_struct_nullability(#[case] int: Int32Array, #[case] nullable: bool) {
     let boolean = Arc::new(BooleanArray::from(vec![false, false, true, true]));
-    let int = Arc::new(Int32Array::from(vec![Some(42), None, Some(19), None]));
     let struct_array = StructArray::from(vec![
         (
             Arc::new(Field::new("b", DataType::Boolean, false)),
-            boolean.clone() as ArrayRef,
+            boolean as ArrayRef,
         ),
         (
-            Arc::new(Field::new("c", DataType::Int32, true)),
-            int.clone() as ArrayRef,
+            Arc::new(Field::new("c", DataType::Int32, nullable)),
+            Arc::new(int) as ArrayRef,
         ),
     ]);
-
-    // okay: nullable to nullable
     let to_type = DataType::Struct(
         vec![
             Field::new("a", DataType::Utf8, false),
-            Field::new("b", DataType::Utf8, true),
+            Field::new("b", DataType::Utf8, nullable),
         ]
         .into(),
     );
-    cast(&struct_array, &to_type).expect("Cast nullable to nullable struct field should work");
+    cast(&struct_array, &to_type).expect("Cast preserving struct field nullability should work");
+}
 
-    // error: nullable to non-nullable
-    let to_type = DataType::Struct(
-        vec![
-            Field::new("a", DataType::Utf8, false),
-            Field::new("b", DataType::Utf8, false),
-        ]
-        .into(),
-    );
-    cast(&struct_array, &to_type)
-        .expect_err("Cast nullable to non-nullable struct field should fail");
-
+#[rstest]
+#[case::nullable_to_non_nullable(
+    Int32Array::from(vec![Some(42), None, Some(19), None]),
+    true,
+    DataType::Utf8,
+)]
+#[case::overflow_produces_null(
+    Int32Array::from(vec![i32::MAX, 25, 1, 100]),
+    false,
+    DataType::Int8,
+)]
+fn test_cast_struct_to_struct_nullability_error(
+    #[case] int: Int32Array,
+    #[case] nullable: bool,
+    #[case] to_value_type: DataType,
+) {
     let boolean = Arc::new(BooleanArray::from(vec![false, false, true, true]));
-    let int = Arc::new(Int32Array::from(vec![i32::MAX, 25, 1, 100]));
     let struct_array = StructArray::from(vec![
         (
             Arc::new(Field::new("b", DataType::Boolean, false)),
-            boolean.clone() as ArrayRef,
+            boolean as ArrayRef,
         ),
         (
-            Arc::new(Field::new("c", DataType::Int32, false)),
-            int.clone() as ArrayRef,
+            Arc::new(Field::new("c", DataType::Int32, nullable)),
+            Arc::new(int) as ArrayRef,
         ),
     ]);
-
-    // okay: non-nullable to non-nullable
     let to_type = DataType::Struct(
         vec![
             Field::new("a", DataType::Utf8, false),
-            Field::new("b", DataType::Utf8, false),
+            Field::new("b", to_value_type, false),
         ]
         .into(),
     );
     cast(&struct_array, &to_type)
-        .expect("Cast non-nullable to non-nullable struct field should work");
-
-    // err: non-nullable to non-nullable but overflowing return null during casting
-    let to_type = DataType::Struct(
-        vec![
-            Field::new("a", DataType::Utf8, false),
-            Field::new("b", DataType::Int8, false),
-        ]
-        .into(),
-    );
-    cast(&struct_array, &to_type)
-        .expect_err("Cast non-nullable to non-nullable struct field returning null should fail");
+        .expect_err("Cast producing nulls in a non-nullable struct field should fail");
 }
 
 #[test]

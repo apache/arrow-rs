@@ -15,17 +15,19 @@ use arrow_array::{
 use arrow_cast::display::FormatOptions;
 use arrow_cast::{CastOptions, can_cast_types, cast, cast_with_options};
 use arrow_schema::DataType;
+use rstest::rstest;
 
-#[test]
-fn test_cast_binary_to_fixed_size_binary() {
+#[rstest]
+#[case::binary(0_i32)]
+#[case::large_binary(0_i64)]
+fn test_cast_binary_to_fixed_size_binary<O: OffsetSizeTrait>(#[case] offset_type: O) {
+    let _ = offset_type;
     let bytes_1 = b"Hiiii".as_slice();
     let bytes_2 = b"Hello".as_slice();
 
     let binary_data = vec![Some(bytes_1), Some(bytes_2), None];
-    let a1 = Arc::new(BinaryArray::from(binary_data.clone())) as ArrayRef;
-    let a2 = Arc::new(LargeBinaryArray::from(binary_data)) as ArrayRef;
-
-    let array_ref = cast(&a1, &DataType::FixedSizeBinary(5)).unwrap();
+    let array = GenericBinaryArray::<O>::from(binary_data);
+    let array_ref = cast(&array, &DataType::FixedSizeBinary(5)).unwrap();
     let down_cast = array_ref
         .as_any()
         .downcast_ref::<FixedSizeBinaryArray>()
@@ -33,107 +35,70 @@ fn test_cast_binary_to_fixed_size_binary() {
     assert_eq!(bytes_1, down_cast.value(0));
     assert_eq!(bytes_2, down_cast.value(1));
     assert!(down_cast.is_null(2));
+}
 
-    let array_ref = cast(&a2, &DataType::FixedSizeBinary(5)).unwrap();
-    let down_cast = array_ref
-        .as_any()
-        .downcast_ref::<FixedSizeBinaryArray>()
-        .unwrap();
-    assert_eq!(bytes_1, down_cast.value(0));
-    assert_eq!(bytes_2, down_cast.value(1));
-    assert!(down_cast.is_null(2));
-
-    // test error cases when the length of binary are not same
+#[rstest]
+#[case::binary(0_i32)]
+#[case::large_binary(0_i64)]
+fn test_cast_binary_to_fixed_size_binary_length_mismatch<O: OffsetSizeTrait>(
+    #[case] offset_type: O,
+) {
+    let _ = offset_type;
     let bytes_1 = b"Hi".as_slice();
     let bytes_2 = b"Hello".as_slice();
 
     let binary_data = vec![Some(bytes_1), Some(bytes_2), None];
-    let a1 = Arc::new(BinaryArray::from(binary_data.clone())) as ArrayRef;
-    let a2 = Arc::new(LargeBinaryArray::from(binary_data)) as ArrayRef;
-
-    let array_ref = cast_with_options(
-        &a1,
+    let array = GenericBinaryArray::<O>::from(binary_data);
+    let result = cast_with_options(
+        &array,
         &DataType::FixedSizeBinary(5),
         &CastOptions {
             safe: false,
             format_options: FormatOptions::default(),
         },
     );
-    assert!(array_ref.is_err());
-
-    let array_ref = cast_with_options(
-        &a2,
-        &DataType::FixedSizeBinary(5),
-        &CastOptions {
-            safe: false,
-            format_options: FormatOptions::default(),
-        },
-    );
-    assert!(array_ref.is_err());
+    assert!(result.is_err());
 }
 
-#[test]
-fn test_fixed_size_binary_to_binary() {
+#[rstest]
+#[case::binary(DataType::Binary)]
+#[case::large_binary(DataType::LargeBinary)]
+#[case::binary_view(DataType::BinaryView)]
+fn test_fixed_size_binary_to_binary(#[case] to_type: DataType) {
     let bytes_1 = b"Hiiii".as_slice();
     let bytes_2 = b"Hello".as_slice();
 
     let binary_data = vec![Some(bytes_1), Some(bytes_2), None];
-    let a1 = Arc::new(FixedSizeBinaryArray::try_from(binary_data.clone()).unwrap()) as ArrayRef;
-
-    let array_ref = cast(&a1, &DataType::Binary).unwrap();
-    let down_cast = array_ref.as_binary::<i32>();
-    assert_eq!(bytes_1, down_cast.value(0));
-    assert_eq!(bytes_2, down_cast.value(1));
-    assert!(down_cast.is_null(2));
-
-    let array_ref = cast(&a1, &DataType::LargeBinary).unwrap();
-    let down_cast = array_ref.as_binary::<i64>();
-    assert_eq!(bytes_1, down_cast.value(0));
-    assert_eq!(bytes_2, down_cast.value(1));
-    assert!(down_cast.is_null(2));
-
-    let array_ref = cast(&a1, &DataType::BinaryView).unwrap();
-    let down_cast = array_ref.as_binary_view();
-    assert_eq!(bytes_1, down_cast.value(0));
-    assert_eq!(bytes_2, down_cast.value(1));
-    assert!(down_cast.is_null(2));
+    let array = FixedSizeBinaryArray::try_from(binary_data.clone()).unwrap();
+    let array_ref = cast(&array, &to_type).unwrap();
+    let actual: Vec<_> = match to_type {
+        DataType::Binary => array_ref.as_binary::<i32>().iter().collect(),
+        DataType::LargeBinary => array_ref.as_binary::<i64>().iter().collect(),
+        DataType::BinaryView => array_ref.as_binary_view().iter().collect(),
+        _ => unreachable!(),
+    };
+    assert_eq!(actual, binary_data);
 }
 
-#[test]
-fn test_numeric_to_binary() {
-    let a = Int16Array::from(vec![Some(1), Some(511), None]);
-
-    let array_ref = cast(&a, &DataType::Binary).unwrap();
-    let down_cast = array_ref.as_binary::<i32>();
-    assert_eq!(&1_i16.to_le_bytes(), down_cast.value(0));
-    assert_eq!(&511_i16.to_le_bytes(), down_cast.value(1));
-    assert!(down_cast.is_null(2));
-
-    let a = Int64Array::from(vec![Some(-1), Some(123456789), None]);
-
-    let array_ref = cast(&a, &DataType::Binary).unwrap();
-    let down_cast = array_ref.as_binary::<i32>();
-    assert_eq!(&(-1_i64).to_le_bytes(), down_cast.value(0));
-    assert_eq!(&123456789_i64.to_le_bytes(), down_cast.value(1));
-    assert!(down_cast.is_null(2));
-}
-
-#[test]
-fn test_numeric_to_large_binary() {
-    let a = Int16Array::from(vec![Some(1), Some(511), None]);
-
-    let array_ref = cast(&a, &DataType::LargeBinary).unwrap();
-    let down_cast = array_ref.as_binary::<i64>();
-    assert_eq!(&1_i16.to_le_bytes(), down_cast.value(0));
-    assert_eq!(&511_i16.to_le_bytes(), down_cast.value(1));
-    assert!(down_cast.is_null(2));
-
-    let a = Int64Array::from(vec![Some(-1), Some(123456789), None]);
-
-    let array_ref = cast(&a, &DataType::LargeBinary).unwrap();
-    let down_cast = array_ref.as_binary::<i64>();
-    assert_eq!(&(-1_i64).to_le_bytes(), down_cast.value(0));
-    assert_eq!(&123456789_i64.to_le_bytes(), down_cast.value(1));
+#[rstest]
+#[case::int16(
+    Arc::new(Int16Array::from(vec![Some(1), Some(511), None])) as ArrayRef,
+    [1_i16.to_le_bytes().to_vec(), 511_i16.to_le_bytes().to_vec()]
+)]
+#[case::int64(
+    Arc::new(Int64Array::from(vec![Some(-1), Some(123456789), None])) as ArrayRef,
+    [(-1_i64).to_le_bytes().to_vec(), 123456789_i64.to_le_bytes().to_vec()]
+)]
+fn test_numeric_to_binary<O: OffsetSizeTrait>(
+    #[case] array: ArrayRef,
+    #[case] expected: [Vec<u8>; 2],
+    #[values(0_i32, 0_i64)] offset_type: O,
+) {
+    let _ = offset_type;
+    let array_ref = cast(&array, &GenericBinaryArray::<O>::DATA_TYPE).unwrap();
+    let down_cast = array_ref.as_binary::<O>();
+    assert_eq!(expected[0].as_slice(), down_cast.value(0));
+    assert_eq!(expected[1].as_slice(), down_cast.value(1));
     assert!(down_cast.is_null(2));
 }
 
@@ -207,74 +172,25 @@ fn test_binary_view_to_string_view_with_invalid_utf8() {
     assert_eq!(values, vec![Some("valid"), None, Some("utf8"), None]);
 }
 
-#[test]
-fn test_string_to_view() {
-    _test_string_to_view::<i32>();
-    _test_string_to_view::<i64>();
-}
+#[rstest]
+#[case::utf8(Arc::new(StringArray::from_iter(VIEW_TEST_DATA)))]
+#[case::large_utf8(Arc::new(LargeStringArray::from_iter(VIEW_TEST_DATA)))]
+#[case::binary(Arc::new(BinaryArray::from_iter(VIEW_TEST_DATA)))]
+#[case::large_binary(Arc::new(LargeBinaryArray::from_iter(VIEW_TEST_DATA)))]
+fn test_string_or_binary_to_view(
+    #[case] array: ArrayRef,
+    #[values(DataType::Utf8View, DataType::BinaryView)] to_type: DataType,
+) {
+    assert!(can_cast_types(array.data_type(), &to_type));
+    let actual = cast(&array, &to_type).unwrap();
+    assert_eq!(actual.data_type(), &to_type);
 
-fn _test_string_to_view<O>()
-where
-    O: OffsetSizeTrait,
-{
-    let string_array = GenericStringArray::<O>::from_iter(VIEW_TEST_DATA);
-
-    assert!(can_cast_types(
-        string_array.data_type(),
-        &DataType::Utf8View
-    ));
-
-    assert!(can_cast_types(
-        string_array.data_type(),
-        &DataType::BinaryView
-    ));
-
-    let string_view_array = cast(&string_array, &DataType::Utf8View).unwrap();
-    assert_eq!(string_view_array.data_type(), &DataType::Utf8View);
-
-    let binary_view_array = cast(&string_array, &DataType::BinaryView).unwrap();
-    assert_eq!(binary_view_array.data_type(), &DataType::BinaryView);
-
-    let expect_string_view_array = StringViewArray::from_iter(VIEW_TEST_DATA);
-    assert_eq!(string_view_array.as_ref(), &expect_string_view_array);
-
-    let expect_binary_view_array = BinaryViewArray::from_iter(VIEW_TEST_DATA);
-    assert_eq!(binary_view_array.as_ref(), &expect_binary_view_array);
-}
-
-#[test]
-fn test_binary_to_view() {
-    _test_binary_to_view::<i32>();
-    _test_binary_to_view::<i64>();
-}
-
-fn _test_binary_to_view<O>()
-where
-    O: OffsetSizeTrait,
-{
-    let binary_array = GenericBinaryArray::<O>::from_iter(VIEW_TEST_DATA);
-
-    assert!(can_cast_types(
-        binary_array.data_type(),
-        &DataType::Utf8View
-    ));
-
-    assert!(can_cast_types(
-        binary_array.data_type(),
-        &DataType::BinaryView
-    ));
-
-    let string_view_array = cast(&binary_array, &DataType::Utf8View).unwrap();
-    assert_eq!(string_view_array.data_type(), &DataType::Utf8View);
-
-    let binary_view_array = cast(&binary_array, &DataType::BinaryView).unwrap();
-    assert_eq!(binary_view_array.data_type(), &DataType::BinaryView);
-
-    let expect_string_view_array = StringViewArray::from_iter(VIEW_TEST_DATA);
-    assert_eq!(string_view_array.as_ref(), &expect_string_view_array);
-
-    let expect_binary_view_array = BinaryViewArray::from_iter(VIEW_TEST_DATA);
-    assert_eq!(binary_view_array.as_ref(), &expect_binary_view_array);
+    let expected: ArrayRef = match to_type {
+        DataType::Utf8View => Arc::new(StringViewArray::from_iter(VIEW_TEST_DATA)),
+        DataType::BinaryView => Arc::new(BinaryViewArray::from_iter(VIEW_TEST_DATA)),
+        _ => unreachable!(),
+    };
+    assert_eq!(actual.as_ref(), expected.as_ref());
 }
 
 #[test]
@@ -462,32 +378,45 @@ fn test_cast_invalid_utf8() {
     assert_eq!(a.value(1), "\x00 Foo");
 }
 
-#[test]
-fn test_cast_sliced_binary_with_hidden_invalid_utf8() {
+#[rstest]
+#[case::binary(0_i32)]
+#[case::large_binary(0_i64)]
+fn test_cast_sliced_binary_with_hidden_invalid_utf8<O: OffsetSizeTrait>(
+    #[case] offset_type: O,
+    #[values(DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View)] to_type: DataType,
+) {
+    let _ = offset_type;
     // The invalid first value is outside the slice, so it must not fail the cast
     let values: Vec<&[u8]> = vec![b"\xFF", b"a", b"b", b"c", b"d", b"e", b"f"];
-    let arrays: [ArrayRef; 2] = [
-        Arc::new(BinaryArray::from(values.clone()).slice(1, 6)),
-        Arc::new(LargeBinaryArray::from(values).slice(1, 6)),
-    ];
+    let array = GenericBinaryArray::<O>::from(values).slice(1, 6);
     let options = CastOptions {
         safe: false,
         format_options: FormatOptions::default(),
     };
     let expected = StringArray::from(vec!["a", "b", "c", "d", "e", "f"]);
-    for array in &arrays {
-        for to_type in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
-            let result = cast_with_options(array, &to_type, &options).unwrap();
-            assert_eq!(result.as_ref(), cast(&expected, &to_type).unwrap().as_ref());
-        }
+    let result = cast_with_options(&array, &to_type, &options).unwrap();
+    assert_eq!(result.as_ref(), cast(&expected, &to_type).unwrap().as_ref());
+}
 
-        // A dictionary with fewer keys than half its values takes a separate
-        // path to Utf8View
-        let keys = Int32Array::from(vec![5, 0]);
-        let dict = DictionaryArray::try_new(keys, Arc::clone(array)).unwrap();
-        let result = cast_with_options(&dict, &DataType::Utf8View, &options).unwrap();
-        assert_eq!(result.as_ref(), &StringViewArray::from(vec!["f", "a"]));
-    }
+#[rstest]
+#[case::binary(0_i32)]
+#[case::large_binary(0_i64)]
+fn test_cast_sliced_binary_dict_with_hidden_invalid_utf8<O: OffsetSizeTrait>(
+    #[case] offset_type: O,
+) {
+    let _ = offset_type;
+    let values: Vec<&[u8]> = vec![b"\xFF", b"a", b"b", b"c", b"d", b"e", b"f"];
+    let array = GenericBinaryArray::<O>::from(values).slice(1, 6);
+    let options = CastOptions {
+        safe: false,
+        format_options: FormatOptions::default(),
+    };
+    // A dictionary with fewer keys than half its values takes a separate
+    // path to Utf8View
+    let keys = Int32Array::from(vec![5, 0]);
+    let dict = DictionaryArray::try_new(keys, Arc::new(array)).unwrap();
+    let result = cast_with_options(&dict, &DataType::Utf8View, &options).unwrap();
+    assert_eq!(result.as_ref(), &StringViewArray::from(vec!["f", "a"]));
 }
 
 #[test]

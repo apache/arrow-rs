@@ -1820,6 +1820,7 @@ mod tests {
     use super::*;
     use arrow_array::temporal_conversions::date32_to_datetime;
     use arrow_buffer::i256;
+    use rstest::rstest;
 
     /// Parses `s` without a precision check, for probing the native range
     fn parse_native<T: DecimalType>(s: &str, scale: i8) -> Result<T::Native, DecimalParseError> {
@@ -1833,46 +1834,18 @@ mod tests {
         assert_eq!(parse_nanos::<6, b'0'>(b"123456"), 123_456_000);
     }
 
-    #[test]
-    fn string_to_timestamp_timezone() {
-        // Explicit timezone
-        assert_eq!(
-            1599572549190855000,
-            parse_timestamp("2020-09-08T13:42:29.190855+00:00").unwrap()
-        );
-        assert_eq!(
-            1599572549190855000,
-            parse_timestamp("2020-09-08T13:42:29.190855Z").unwrap()
-        );
-        assert_eq!(
-            1599572549000000000,
-            parse_timestamp("2020-09-08T13:42:29Z").unwrap()
-        ); // no fractional part
-        assert_eq!(
-            1599590549190855000,
-            parse_timestamp("2020-09-08T13:42:29.190855-05:00").unwrap()
-        );
-    }
-
-    #[test]
-    fn string_to_timestamp_timezone_space() {
-        // Ensure space rather than T between time and date is accepted
-        assert_eq!(
-            1599572549190855000,
-            parse_timestamp("2020-09-08 13:42:29.190855+00:00").unwrap()
-        );
-        assert_eq!(
-            1599572549190855000,
-            parse_timestamp("2020-09-08 13:42:29.190855Z").unwrap()
-        );
-        assert_eq!(
-            1599572549000000000,
-            parse_timestamp("2020-09-08 13:42:29Z").unwrap()
-        ); // no fractional part
-        assert_eq!(
-            1599590549190855000,
-            parse_timestamp("2020-09-08 13:42:29.190855-05:00").unwrap()
-        );
+    #[rstest]
+    #[case::utc_offset("13:42:29.190855+00:00", 1599572549190855000)]
+    #[case::utc_z("13:42:29.190855Z", 1599572549190855000)]
+    #[case::whole_seconds("13:42:29Z", 1599572549000000000)]
+    #[case::negative_offset("13:42:29.190855-05:00", 1599590549190855000)]
+    fn string_to_timestamp_timezone(
+        #[case] time: &str,
+        #[case] expected: i64,
+        #[values("T", " ")] separator: &str,
+    ) {
+        let input = format!("2020-09-08{separator}{time}");
+        assert_eq!(expected, parse_timestamp(&input).unwrap());
     }
 
     #[test]
@@ -3790,93 +3763,61 @@ mod tests {
         assert_eq!(Int32Type::parse("3"), Some(3));
     }
 
-    #[test]
-    fn test_parse_temporal_with_surrounding_whitespace() {
-        let date = Date32Type::parse("2024-01-05");
-        assert_eq!(Date32Type::parse(" 2024-01-05 "), date);
-        assert_eq!(Date32Type::parse("\t2024-01-05\n"), date);
-
-        let timestamp = "2024-01-05T10:00:00";
-        let padded_timestamp = " 2024-01-05T10:00:00 ";
-
-        assert_eq!(
-            TimestampNanosecondType::parse(padded_timestamp),
-            TimestampNanosecondType::parse(timestamp)
-        );
-        assert_eq!(
-            TimestampMicrosecondType::parse(padded_timestamp),
-            TimestampMicrosecondType::parse(timestamp)
-        );
-        assert_eq!(
-            TimestampMillisecondType::parse(padded_timestamp),
-            TimestampMillisecondType::parse(timestamp)
-        );
-        assert_eq!(
-            TimestampSecondType::parse(padded_timestamp),
-            TimestampSecondType::parse(timestamp)
-        );
-        assert_eq!(
-            TimestampNanosecondType::parse("\t2024-01-05T10:00:00\n"),
-            TimestampNanosecondType::parse(timestamp)
-        );
-
-        // leet :)
-        let time = "13:37:00";
-        let padded_time = " 13:37:00 ";
-
-        assert_eq!(
-            Time64NanosecondType::parse(padded_time),
-            Time64NanosecondType::parse(time)
-        );
-        assert_eq!(
-            Time64MicrosecondType::parse(padded_time),
-            Time64MicrosecondType::parse(time)
-        );
-        assert_eq!(
-            Time64MicrosecondType::parse("\t13:37:00\n"),
-            Time64MicrosecondType::parse(time)
-        );
+    #[rstest]
+    #[case::date_spaces(Date32Type {}, "2024-01-05", " 2024-01-05 ")]
+    #[case::date_tabs_and_newlines(Date32Type {}, "2024-01-05", "\t2024-01-05\n")]
+    #[case::timestamp_nanoseconds_spaces(
+        TimestampNanosecondType {},
+        "2024-01-05T10:00:00",
+        " 2024-01-05T10:00:00 ",
+    )]
+    #[case::timestamp_microseconds_spaces(
+        TimestampMicrosecondType {},
+        "2024-01-05T10:00:00",
+        " 2024-01-05T10:00:00 ",
+    )]
+    #[case::timestamp_milliseconds_spaces(
+        TimestampMillisecondType {},
+        "2024-01-05T10:00:00",
+        " 2024-01-05T10:00:00 ",
+    )]
+    #[case::timestamp_seconds_spaces(
+        TimestampSecondType {},
+        "2024-01-05T10:00:00",
+        " 2024-01-05T10:00:00 ",
+    )]
+    #[case::timestamp_nanoseconds_tabs_and_newlines(
+        TimestampNanosecondType {},
+        "2024-01-05T10:00:00",
+        "\t2024-01-05T10:00:00\n",
+    )]
+    #[case::time_nanoseconds_spaces(Time64NanosecondType {}, "13:37:00", " 13:37:00 ")]
+    #[case::time_microseconds_spaces(Time64MicrosecondType {}, "13:37:00", " 13:37:00 ")]
+    #[case::time_microseconds_tabs_and_newlines(
+        Time64MicrosecondType {},
+        "13:37:00",
+        "\t13:37:00\n",
+    )]
+    fn test_parse_temporal_with_surrounding_whitespace<T: Parser>(
+        #[case] temporal_type: T,
+        #[case] unpadded: &str,
+        #[case] padded: &str,
+    ) {
+        let _ = temporal_type;
+        assert_eq!(T::parse(padded), T::parse(unpadded));
     }
 
-    #[test]
-    fn test_parse_time_with_surrounding_ascii_whitespace() {
-        let time = "10:00:00";
-        let padded = " 10:00:00 ";
-        let ascii_whitespace = "\t10:00:00\n";
-
-        assert_eq!(
-            Time64NanosecondType::parse(padded),
-            Time64NanosecondType::parse(time)
-        );
-        assert_eq!(
-            Time64MicrosecondType::parse(padded),
-            Time64MicrosecondType::parse(time)
-        );
-        assert_eq!(
-            Time32MillisecondType::parse(padded),
-            Time32MillisecondType::parse(time)
-        );
-        assert_eq!(
-            Time32SecondType::parse(padded),
-            Time32SecondType::parse(time)
-        );
-
-        assert_eq!(
-            Time64NanosecondType::parse(ascii_whitespace),
-            Time64NanosecondType::parse(time)
-        );
-        assert_eq!(
-            Time64MicrosecondType::parse(ascii_whitespace),
-            Time64MicrosecondType::parse(time)
-        );
-        assert_eq!(
-            Time32MillisecondType::parse(ascii_whitespace),
-            Time32MillisecondType::parse(time)
-        );
-        assert_eq!(
-            Time32SecondType::parse(ascii_whitespace),
-            Time32SecondType::parse(time)
-        );
+    #[rstest]
+    #[case::seconds(Time32SecondType {})]
+    #[case::milliseconds(Time32MillisecondType {})]
+    #[case::microseconds(Time64MicrosecondType {})]
+    #[case::nanoseconds(Time64NanosecondType {})]
+    fn test_parse_time_with_surrounding_ascii_whitespace<T: Parser>(
+        #[case] time_type: T,
+        #[values(" 10:00:00 ", "\t10:00:00\n")] padded: &str,
+    ) {
+        let _ = time_type;
+        assert_eq!(T::parse(padded), T::parse("10:00:00"));
     }
 
     /// Parses `s` as a wall clock reading in `zone` and returns the resulting
