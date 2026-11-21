@@ -1213,6 +1213,7 @@ mod tests {
     use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
     use arrow_schema::{Field, Fields};
+    use rstest::rstest;
     use serde_json::json;
     use std::fs::File;
     use std::io::{BufReader, Cursor, Seek};
@@ -1334,8 +1335,28 @@ mod tests {
         assert_eq!(col5.values(), &[0, 254, 0, 0, 0, 0]);
     }
 
-    #[test]
-    fn test_string() {
+    #[rstest]
+    #[case::utf8(
+        DataType::Utf8,
+        Arc::new(StringArray::from(vec![
+            Some("1"),
+            Some("hello"),
+            Some("\nfoobar😀asfgÿ"),
+            None,
+            None,
+        ]))
+    )]
+    #[case::utf8_view(
+        DataType::Utf8View,
+        Arc::new(StringViewArray::from(vec![
+            Some("1"),
+            Some("hello"),
+            Some("\nfoobar😀asfgÿ"),
+            None,
+            None,
+        ]))
+    )]
+    fn test_string(#[case] data_type: DataType, #[case] expected: ArrayRef) {
         let buf = r#"
         {"a": "1", "b": "2"}
         {"a": "hello", "b": "shoo"}
@@ -1346,20 +1367,16 @@ mod tests {
 
         "#;
         let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Utf8, true),
+            Field::new("a", data_type.clone(), true),
             Field::new("b", DataType::LargeUtf8, true),
         ]));
 
         let batches = do_read(buf, 1024, false, false, schema);
         assert_eq!(batches.len(), 1);
 
-        let col1 = batches[0].column(0).as_string::<i32>();
-        assert_eq!(col1.null_count(), 2);
-        assert_eq!(col1.value(0), "1");
-        assert_eq!(col1.value(1), "hello");
-        assert_eq!(col1.value(2), "\nfoobar😀asfgÿ");
-        assert!(col1.is_null(3));
-        assert!(col1.is_null(4));
+        let col1 = batches[0].column(0);
+        assert_eq!(col1.data_type(), &data_type);
+        assert_eq!(col1, &expected);
 
         let col2 = batches[0].column(1).as_string::<i64>();
         assert_eq!(col2.null_count(), 1);
@@ -1466,43 +1483,6 @@ mod tests {
         assert_eq!(string_view_array.value(1), "1000000000000");
         assert_eq!(string_view_array.value(2), "3.1415");
         assert_eq!(string_view_array.value(3), "2.718281828459045");
-    }
-
-    #[test]
-    fn test_string_with_uft8view() {
-        let buf = r#"
-        {"a": "1", "b": "2"}
-        {"a": "hello", "b": "shoo"}
-        {"b": "\t😁foo", "a": "\nfoobar\ud83d\ude00\u0061\u0073\u0066\u0067\u00FF"}
-
-        {"b": null}
-        {"b": "", "a": null}
-
-        "#;
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Utf8View, true),
-            Field::new("b", DataType::LargeUtf8, true),
-        ]));
-
-        let batches = do_read(buf, 1024, false, false, schema);
-        assert_eq!(batches.len(), 1);
-
-        let col1 = batches[0].column(0).as_string_view();
-        assert_eq!(col1.null_count(), 2);
-        assert_eq!(col1.value(0), "1");
-        assert_eq!(col1.value(1), "hello");
-        assert_eq!(col1.value(2), "\nfoobar😀asfgÿ");
-        assert!(col1.is_null(3));
-        assert!(col1.is_null(4));
-        assert_eq!(col1.data_type(), &DataType::Utf8View);
-
-        let col2 = batches[0].column(1).as_string::<i64>();
-        assert_eq!(col2.null_count(), 1);
-        assert_eq!(col2.value(0), "2");
-        assert_eq!(col2.value(1), "shoo");
-        assert_eq!(col2.value(2), "\t😁foo");
-        assert!(col2.is_null(3));
-        assert_eq!(col2.value(4), "");
     }
 
     #[test]
@@ -3094,13 +3074,12 @@ mod tests {
         assert_eq!(vec![5, 5, 2], num_records);
     }
 
-    #[test]
-    fn test_timestamp_from_json_seconds() {
-        let schema = Schema::new(vec![Field::new(
-            "a",
-            DataType::Timestamp(TimeUnit::Second, None),
-            true,
-        )]);
+    #[rstest]
+    #[case::seconds(TimestampSecondType {})]
+    #[case::milliseconds(TimestampMillisecondType {})]
+    fn test_timestamp_from_json<T: ArrowTimestampType>(#[case] timestamp_type: T) {
+        let _ = timestamp_type;
+        let schema = Schema::new(vec![Field::new("a", T::DATA_TYPE, true)]);
 
         let mut reader = read_file("test/data/basic_nulls.json", Some(schema));
         let batch = reader.next().unwrap().unwrap();
@@ -3113,45 +3092,9 @@ mod tests {
         assert_eq!(schema, batch_schema);
 
         let a = schema.column_with_name("a").unwrap();
-        assert_eq!(
-            &DataType::Timestamp(TimeUnit::Second, None),
-            a.1.data_type()
-        );
+        assert_eq!(&T::DATA_TYPE, a.1.data_type());
 
-        let aa = batch.column(a.0).as_primitive::<TimestampSecondType>();
-        assert!(aa.is_valid(0));
-        assert!(!aa.is_valid(1));
-        assert!(!aa.is_valid(2));
-        assert_eq!(1, aa.value(0));
-        assert_eq!(1, aa.value(3));
-        assert_eq!(5, aa.value(7));
-    }
-
-    #[test]
-    fn test_timestamp_from_json_milliseconds() {
-        let schema = Schema::new(vec![Field::new(
-            "a",
-            DataType::Timestamp(TimeUnit::Millisecond, None),
-            true,
-        )]);
-
-        let mut reader = read_file("test/data/basic_nulls.json", Some(schema));
-        let batch = reader.next().unwrap().unwrap();
-
-        assert_eq!(1, batch.num_columns());
-        assert_eq!(12, batch.num_rows());
-
-        let schema = reader.schema();
-        let batch_schema = batch.schema();
-        assert_eq!(schema, batch_schema);
-
-        let a = schema.column_with_name("a").unwrap();
-        assert_eq!(
-            &DataType::Timestamp(TimeUnit::Millisecond, None),
-            a.1.data_type()
-        );
-
-        let aa = batch.column(a.0).as_primitive::<TimestampMillisecondType>();
+        let aa = batch.column(a.0).as_primitive::<T>();
         assert!(aa.is_valid(0));
         assert!(!aa.is_valid(1));
         assert!(!aa.is_valid(2));
@@ -3247,102 +3190,85 @@ mod tests {
     }
 
     #[test]
-    fn test_decoder_error() {
+    fn test_decoder_flush_error_preserves_partial_row() {
         let schema = Arc::new(Schema::new(vec![Field::new_struct(
             "a",
             vec![Field::new("child", DataType::Int32, false)],
             true,
         )]));
 
-        let mut decoder = ReaderBuilder::new(schema.clone()).build_decoder().unwrap();
+        let mut decoder = ReaderBuilder::new(schema).build_decoder().unwrap();
         let _ = decoder.decode(br#"{"a": { "child":"#).unwrap();
         assert!(decoder.tape_decoder.has_partial_row());
         assert_eq!(decoder.tape_decoder.num_buffered_rows(), 1);
         let _ = decoder.flush().unwrap_err();
         assert!(decoder.tape_decoder.has_partial_row());
         assert_eq!(decoder.tape_decoder.num_buffered_rows(), 1);
+    }
 
-        let parse_err = |s: &str| {
-            ReaderBuilder::new(schema.clone())
-                .build(Cursor::new(s.as_bytes()))
-                .unwrap()
-                .next()
-                .unwrap()
-                .unwrap_err()
-                .to_string()
-        };
+    #[rstest]
+    #[case::struct_number(
+        r#"{"a": 123}"#,
+        "Json error: whilst decoding field 'a': expected { got 123"
+    )]
+    #[case::struct_string_list(
+        r#"{"a": ["bar"]}"#,
+        r#"Json error: whilst decoding field 'a': expected { got ["bar"]"#
+    )]
+    #[case::struct_empty_list(
+        r#"{"a": []}"#,
+        "Json error: whilst decoding field 'a': expected { got []"
+    )]
+    #[case::struct_object_list(
+        r#"{"a": [{"child": 234}]}"#,
+        r#"Json error: whilst decoding field 'a': expected { got [{"child": 234}]"#
+    )]
+    #[case::struct_nested_object_list(
+        r#"{"a": [{"child": {"foo": [{"foo": ["bar"]}]}}]}"#,
+        r#"Json error: whilst decoding field 'a': expected { got [{"child": {"foo": [{"foo": ["bar"]}]}}]"#
+    )]
+    #[case::struct_true(
+        r#"{"a": true}"#,
+        "Json error: whilst decoding field 'a': expected { got true"
+    )]
+    #[case::struct_false(
+        r#"{"a": false}"#,
+        "Json error: whilst decoding field 'a': expected { got false"
+    )]
+    #[case::struct_string(
+        r#"{"a": "foo"}"#,
+        "Json error: whilst decoding field 'a': expected { got \"foo\""
+    )]
+    #[case::child_boolean(
+        r#"{"a": {"child": false}}"#,
+        "Json error: whilst decoding field 'a': whilst decoding field 'child': expected primitive got false"
+    )]
+    #[case::child_empty_list(
+        r#"{"a": {"child": []}}"#,
+        "Json error: whilst decoding field 'a': whilst decoding field 'child': expected primitive got []"
+    )]
+    #[case::child_single_item_list(
+        r#"{"a": {"child": [123]}}"#,
+        "Json error: whilst decoding field 'a': whilst decoding field 'child': expected primitive got [123]"
+    )]
+    #[case::child_multi_item_list(
+        r#"{"a": {"child": [123, 3465346]}}"#,
+        "Json error: whilst decoding field 'a': whilst decoding field 'child': expected primitive got [123, 3465346]"
+    )]
+    fn test_decoder_error(#[case] input: &str, #[case] expected: &str) {
+        let schema = Arc::new(Schema::new(vec![Field::new_struct(
+            "a",
+            vec![Field::new("child", DataType::Int32, false)],
+            true,
+        )]));
 
-        let err = parse_err(r#"{"a": 123}"#);
-        assert_eq!(
-            err,
-            "Json error: whilst decoding field 'a': expected { got 123"
-        );
-
-        let err = parse_err(r#"{"a": ["bar"]}"#);
-        assert_eq!(
-            err,
-            r#"Json error: whilst decoding field 'a': expected { got ["bar"]"#
-        );
-
-        let err = parse_err(r#"{"a": []}"#);
-        assert_eq!(
-            err,
-            "Json error: whilst decoding field 'a': expected { got []"
-        );
-
-        let err = parse_err(r#"{"a": [{"child": 234}]}"#);
-        assert_eq!(
-            err,
-            r#"Json error: whilst decoding field 'a': expected { got [{"child": 234}]"#
-        );
-
-        let err = parse_err(r#"{"a": [{"child": {"foo": [{"foo": ["bar"]}]}}]}"#);
-        assert_eq!(
-            err,
-            r#"Json error: whilst decoding field 'a': expected { got [{"child": {"foo": [{"foo": ["bar"]}]}}]"#
-        );
-
-        let err = parse_err(r#"{"a": true}"#);
-        assert_eq!(
-            err,
-            "Json error: whilst decoding field 'a': expected { got true"
-        );
-
-        let err = parse_err(r#"{"a": false}"#);
-        assert_eq!(
-            err,
-            "Json error: whilst decoding field 'a': expected { got false"
-        );
-
-        let err = parse_err(r#"{"a": "foo"}"#);
-        assert_eq!(
-            err,
-            "Json error: whilst decoding field 'a': expected { got \"foo\""
-        );
-
-        let err = parse_err(r#"{"a": {"child": false}}"#);
-        assert_eq!(
-            err,
-            "Json error: whilst decoding field 'a': whilst decoding field 'child': expected primitive got false"
-        );
-
-        let err = parse_err(r#"{"a": {"child": []}}"#);
-        assert_eq!(
-            err,
-            "Json error: whilst decoding field 'a': whilst decoding field 'child': expected primitive got []"
-        );
-
-        let err = parse_err(r#"{"a": {"child": [123]}}"#);
-        assert_eq!(
-            err,
-            "Json error: whilst decoding field 'a': whilst decoding field 'child': expected primitive got [123]"
-        );
-
-        let err = parse_err(r#"{"a": {"child": [123, 3465346]}}"#);
-        assert_eq!(
-            err,
-            "Json error: whilst decoding field 'a': whilst decoding field 'child': expected primitive got [123, 3465346]"
-        );
+        let err = ReaderBuilder::new(schema)
+            .build(Cursor::new(input.as_bytes()))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(err.to_string(), expected);
     }
 
     #[test]
@@ -3510,63 +3436,50 @@ mod tests {
             .unwrap()
     }
 
-    #[test]
-    fn test_struct_decoding_list_length() {
-        use arrow_array::array;
-
-        let row = "[1, 2]";
-
-        let mut fields = vec![Field::new("a", DataType::Int32, true)];
-        let too_few_fields = Fields::from(fields.clone());
-        fields.push(Field::new("b", DataType::Int32, true));
-        let correct_fields = Fields::from(fields.clone());
-        fields.push(Field::new("c", DataType::Int32, true));
-        let too_many_fields = Fields::from(fields.clone());
-
-        let parse = |fields: Fields, as_struct: bool| {
-            _parse_structs(row, StructMode::ListOnly, fields, as_struct)
-        };
-
+    #[rstest]
+    fn test_struct_decoding_list_length(#[values(false, true)] as_struct: bool) {
+        let fields = Fields::from(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]);
         let expected_row = StructArray::new(
-            correct_fields.clone(),
+            fields.clone(),
             vec![
-                Arc::new(array::Int32Array::from(vec![1])),
-                Arc::new(array::Int32Array::from(vec![2])),
+                Arc::new(Int32Array::from(vec![1])),
+                Arc::new(Int32Array::from(vec![2])),
             ],
             None,
         );
-        let row_field = Field::new("r", DataType::Struct(correct_fields.clone()), true);
-
-        assert_eq!(
-            parse(too_few_fields.clone(), true).unwrap_err().to_string(),
-            "Json error: found extra columns for 1 fields".to_string()
-        );
-        assert_eq!(
-            parse(too_few_fields, false).unwrap_err().to_string(),
-            "Json error: found extra columns for 1 fields".to_string()
-        );
-        assert_eq!(
-            parse(correct_fields.clone(), true).unwrap(),
+        let expected = if as_struct {
+            let row_field = Field::new("r", DataType::Struct(fields.clone()), true);
             RecordBatch::try_new(
                 Arc::new(Schema::new(vec![row_field])),
-                vec![Arc::new(expected_row.clone())]
+                vec![Arc::new(expected_row)],
             )
             .unwrap()
-        );
-        assert_eq!(
-            parse(correct_fields, false).unwrap(),
+        } else {
             RecordBatch::from(expected_row)
+        };
+
+        let actual = _parse_structs("[1, 2]", StructMode::ListOnly, fields, as_struct).unwrap();
+        assert_eq!(actual, expected);
+    }
+
+    #[rstest]
+    #[case::too_few_fields(&["a"], "Json error: found extra columns for 1 fields")]
+    #[case::too_many_fields(&["a", "b", "c"], "Json error: found 2 columns for 3 fields")]
+    fn test_struct_decoding_list_length_mismatch(
+        #[case] field_names: &[&str],
+        #[case] expected: &str,
+        #[values(false, true)] as_struct: bool,
+    ) {
+        let fields = Fields::from_iter(
+            field_names
+                .iter()
+                .map(|name| Field::new(*name, DataType::Int32, true)),
         );
-        assert_eq!(
-            parse(too_many_fields.clone(), true)
-                .unwrap_err()
-                .to_string(),
-            "Json error: found 2 columns for 3 fields".to_string()
-        );
-        assert_eq!(
-            parse(too_many_fields, false).unwrap_err().to_string(),
-            "Json error: found 2 columns for 3 fields".to_string()
-        );
+        let err = _parse_structs("[1, 2]", StructMode::ListOnly, fields, as_struct).unwrap_err();
+        assert_eq!(err.to_string(), expected);
     }
 
     #[test]
@@ -3653,99 +3566,88 @@ mod tests {
         );
     }
 
-    // Test cases:
-    // [] -> RecordBatch row with no entries.  Schema = [('a', Int32)] -> Error
-    // [] -> RecordBatch row with no entries. Schema = [('r', [('a', Int32)])] -> Error
-    // [] -> StructArray row with no entries. Fields [('a', Int32')] -> Error
-    // [[]] -> RecordBatch row with empty struct entry. Schema = [('r', [('a', Int32)])] -> Error
-    #[test]
-    fn test_struct_decoding_empty_list() {
-        let int_field = Field::new("a", DataType::Int32, true);
-        let struct_field = Field::new(
+    #[rstest]
+    #[case::struct_missing_struct_field(
+        "[]",
+        true,
+        Field::new(
             "r",
-            DataType::Struct(Fields::from(vec![int_field.clone()])),
+            DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int32, true)])),
             true,
-        );
-
-        let parse = |row: &str, as_struct: bool, field: Field| {
-            _parse_structs(
-                row,
-                StructMode::ListOnly,
-                Fields::from(vec![field]),
-                as_struct,
-            )
-        };
-
-        // Missing fields
-        assert_eq!(
-            parse("[]", true, struct_field.clone())
-                .unwrap_err()
-                .to_string(),
-            "Json error: found 0 columns for 1 fields".to_owned()
-        );
-        assert_eq!(
-            parse("[]", false, int_field.clone())
-                .unwrap_err()
-                .to_string(),
-            "Json error: found 0 columns for 1 fields".to_owned()
-        );
-        assert_eq!(
-            parse("[]", false, struct_field.clone())
-                .unwrap_err()
-                .to_string(),
-            "Json error: found 0 columns for 1 fields".to_owned()
-        );
-        assert_eq!(
-            parse("[[]]", false, struct_field.clone())
-                .unwrap_err()
-                .to_string(),
-            "Json error: whilst decoding field 'r': found 0 columns for 1 fields".to_owned()
-        );
+        ),
+        "Json error: found 0 columns for 1 fields"
+    )]
+    #[case::batch_missing_primitive_field(
+        "[]",
+        false,
+        Field::new("a", DataType::Int32, true),
+        "Json error: found 0 columns for 1 fields"
+    )]
+    #[case::batch_missing_struct_field(
+        "[]",
+        false,
+        Field::new(
+            "r",
+            DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int32, true)])),
+            true,
+        ),
+        "Json error: found 0 columns for 1 fields"
+    )]
+    #[case::batch_empty_struct_field(
+        "[[]]",
+        false,
+        Field::new(
+            "r",
+            DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int32, true)])),
+            true,
+        ),
+        "Json error: whilst decoding field 'r': found 0 columns for 1 fields"
+    )]
+    fn test_struct_decoding_empty_list(
+        #[case] row: &str,
+        #[case] as_struct: bool,
+        #[case] field: Field,
+        #[case] expected: &str,
+    ) {
+        let err = _parse_structs(
+            row,
+            StructMode::ListOnly,
+            Fields::from(vec![field]),
+            as_struct,
+        )
+        .unwrap_err();
+        assert_eq!(err.to_string(), expected);
     }
 
-    #[test]
-    fn test_decode_list_struct_with_wrong_types() {
-        let int_field = Field::new("a", DataType::Int32, true);
-        let struct_field = Field::new(
+    #[rstest]
+    #[case::primitive_field(
+        r#"["a"]"#,
+        Field::new("a", DataType::Int32, true),
+        "Json error: whilst decoding field 'a': failed to parse \"a\" as Int32"
+    )]
+    #[case::nested_struct(
+        r#"[["a"]]"#,
+        Field::new(
             "r",
-            DataType::Struct(Fields::from(vec![int_field.clone()])),
+            DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int32, true)])),
             true,
-        );
-
-        let parse = |row: &str, as_struct: bool, field: Field| {
-            _parse_structs(
-                row,
-                StructMode::ListOnly,
-                Fields::from(vec![field]),
-                as_struct,
-            )
-        };
-
-        // Wrong values
-        assert_eq!(
-            parse(r#"[["a"]]"#, false, struct_field.clone())
-                .unwrap_err()
-                .to_string(),
-            "Json error: whilst decoding field 'r': whilst decoding field 'a': failed to parse \"a\" as Int32".to_owned()
-        );
-        assert_eq!(
-            parse(r#"[["a"]]"#, true, struct_field.clone())
-                .unwrap_err()
-                .to_string(),
-            "Json error: whilst decoding field 'r': whilst decoding field 'a': failed to parse \"a\" as Int32".to_owned()
-        );
-        assert_eq!(
-            parse(r#"["a"]"#, true, int_field.clone())
-                .unwrap_err()
-                .to_string(),
-            "Json error: whilst decoding field 'a': failed to parse \"a\" as Int32".to_owned()
-        );
-        assert_eq!(
-            parse(r#"["a"]"#, false, int_field.clone())
-                .unwrap_err()
-                .to_string(),
-            "Json error: whilst decoding field 'a': failed to parse \"a\" as Int32".to_owned()
-        );
+        ),
+        "Json error: whilst decoding field 'r': whilst decoding field 'a': failed to parse \"a\" as Int32"
+    )]
+    fn test_decode_list_struct_with_wrong_types(
+        #[case] row: &str,
+        #[case] field: Field,
+        #[case] expected: &str,
+        #[values(false, true)] as_struct: bool,
+    ) {
+        let err = _parse_structs(
+            row,
+            StructMode::ListOnly,
+            Fields::from(vec![field]),
+            as_struct,
+        )
+        .unwrap_err();
+        assert_eq!(err.to_string(), expected);
     }
 
     #[test]
@@ -4201,50 +4103,48 @@ mod tests {
         assert_eq!(values.value(2), "y");
     }
 
-    #[test]
-    fn test_read_run_end_encoded_nullability() {
-        for field_nullable in [false, true] {
-            for values_nullable in [false, true] {
-                let ree_type = DataType::RunEndEncoded(
-                    Arc::new(Field::new(
-                        Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
-                        DataType::Int32,
-                        false,
-                    )),
-                    Arc::new(Field::new(
-                        Field::REE_VALUES_FIELD_DEFAULT_NAME,
-                        DataType::Utf8,
-                        values_nullable,
-                    )),
-                );
-                let schema = Arc::new(Schema::new(vec![Field::new("a", ree_type, field_nullable)]));
+    #[rstest]
+    #[case::explicit_null(
+        r#"{"a": "x"}
+        {"a": null}
+        {"a": "y"}"#
+    )]
+    #[case::missing_field(
+        r#"{"a": "x"}
+        {}
+        {"a": "y"}"#
+    )]
+    fn test_read_run_end_encoded_nullability(
+        #[case] buf: &str,
+        #[values(false, true)] field_nullable: bool,
+        #[values(false, true)] values_nullable: bool,
+    ) {
+        let ree_type = DataType::RunEndEncoded(
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                values_nullable,
+            )),
+        );
+        let schema = Arc::new(Schema::new(vec![Field::new("a", ree_type, field_nullable)]));
+        let mut decoder = ReaderBuilder::new(schema).build_decoder().unwrap();
+        let result = decoder.decode(buf.as_bytes()).and_then(|_| decoder.flush());
 
-                for buf in [
-                    r#"{"a": "x"}
-                    {"a": null}
-                    {"a": "y"}"#,
-                    r#"{"a": "x"}
-                    {}
-                    {"a": "y"}"#,
-                ] {
-                    let mut decoder = ReaderBuilder::new(schema.clone()).build_decoder().unwrap();
-                    let result = decoder.decode(buf.as_bytes()).and_then(|_| decoder.flush());
-
-                    if field_nullable && values_nullable {
-                        result.expect("REE field and values are both nullable");
-                    } else {
-                        let err = result.expect_err(
-                            "REE nulls require both the field and values to be nullable",
-                        );
-                        assert!(
-                            err.to_string().contains(
-                                "Encountered nulls in non-nullable values of RunEndEncoded"
-                            ),
-                            "unexpected error: {err}"
-                        );
-                    }
-                }
-            }
+        if field_nullable && values_nullable {
+            result.expect("REE field and values are both nullable");
+        } else {
+            let err =
+                result.expect_err("REE nulls require both the field and values to be nullable");
+            assert!(
+                err.to_string()
+                    .contains("Encountered nulls in non-nullable values of RunEndEncoded"),
+                "unexpected error: {err}"
+            );
         }
     }
 

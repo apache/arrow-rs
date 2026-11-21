@@ -846,6 +846,7 @@ fn parse_hex(b: u8) -> Result<u8, ArrowError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     /// Helper method to create a `TapeDecoder` with sensible defaults
     fn tape_decoder() -> TapeDecoder {
@@ -1013,92 +1014,65 @@ mod tests {
         assert_eq!(tape.get_string(6), "a\u{20000}b"); // surrounded by ASCII
     }
 
-    #[test]
-    fn test_invalid() {
-        // Test invalid
+    #[rstest]
+    #[case::invalid_value(
+        b"hello",
+        "Json error: Encountered unexpected 'h' whilst parsing value"
+    )]
+    #[case::missing_value(
+        b"{\"hello\": }",
+        "Json error: Encountered unexpected '}' whilst parsing value"
+    )]
+    #[case::invalid_literal(
+        b"{\"hello\": [ false, tru ]}",
+        "Json error: Encountered unexpected ' ' whilst parsing literal"
+    )]
+    #[case::incomplete_unicode_escape(
+        b"{\"hello\": \"\\ud8\"}",
+        "Json error: Encountered unexpected '\"' whilst unicode escape"
+    )]
+    #[case::missing_surrogate_pair(
+        b"{\"hello\": \"\\ud83d\"}",
+        "Json error: Encountered unexpected '\"' whilst parsing surrogate pair escape"
+    )]
+    fn test_invalid_decode(#[case] input: &[u8], #[case] expected: &str) {
         let mut decoder = tape_decoder();
-        let err = decoder.decode(b"hello").unwrap_err().to_string();
-        assert_eq!(
-            err,
-            "Json error: Encountered unexpected 'h' whilst parsing value"
-        );
+        let err = decoder.decode(input).unwrap_err().to_string();
+        assert_eq!(err, expected);
+    }
 
+    #[rstest]
+    #[case::string(b"{\"he", "Json error: Truncated record whilst reading string")]
+    #[case::value(b"{\"hello\" : ", "Json error: Truncated record whilst reading value")]
+    #[case::list(b"{\"hello\" : [", "Json error: Truncated record whilst reading list")]
+    #[case::true_literal(
+        b"{\"hello\" : tru",
+        "Json error: Truncated record whilst reading true"
+    )]
+    #[case::null_literal(b"{\"hello\" : nu", "Json error: Truncated record whilst reading null")]
+    fn test_truncated_record(#[case] input: &[u8], #[case] expected: &str) {
         let mut decoder = tape_decoder();
-        let err = decoder.decode(b"{\"hello\": }").unwrap_err().to_string();
-        assert_eq!(
-            err,
-            "Json error: Encountered unexpected '}' whilst parsing value"
-        );
-
-        let mut decoder = tape_decoder();
-        let err = decoder
-            .decode(b"{\"hello\": [ false, tru ]}")
-            .unwrap_err()
-            .to_string();
-        assert_eq!(
-            err,
-            "Json error: Encountered unexpected ' ' whilst parsing literal"
-        );
-
-        let mut decoder = tape_decoder();
-        let err = decoder
-            .decode(b"{\"hello\": \"\\ud8\"}")
-            .unwrap_err()
-            .to_string();
-        assert_eq!(
-            err,
-            "Json error: Encountered unexpected '\"' whilst unicode escape"
-        );
-
-        // Missing surrogate pair
-        let mut decoder = tape_decoder();
-        let err = decoder
-            .decode(b"{\"hello\": \"\\ud83d\"}")
-            .unwrap_err()
-            .to_string();
-        assert_eq!(
-            err,
-            "Json error: Encountered unexpected '\"' whilst parsing surrogate pair escape"
-        );
-
-        // Test truncation
-        let mut decoder = tape_decoder();
-        decoder.decode(b"{\"he").unwrap();
+        decoder.decode(input).unwrap();
         assert!(decoder.has_partial_row());
         assert_eq!(decoder.num_buffered_rows(), 1);
         let err = decoder.finish().unwrap_err().to_string();
-        assert_eq!(err, "Json error: Truncated record whilst reading string");
+        assert_eq!(err, expected);
+    }
 
+    #[rstest]
+    #[case::invalid_byte(
+        b"{\"hello\" : \"world\xFF\"}",
+        "Json error: Encountered non-UTF-8 data"
+    )]
+    #[case::truncated_sequence(
+        b"{\"\xe2\" : \"\x96\xa1\"}",
+        "Json error: Encountered truncated UTF-8 sequence"
+    )]
+    fn test_invalid_utf8(#[case] input: &[u8], #[case] expected: &str) {
         let mut decoder = tape_decoder();
-        decoder.decode(b"{\"hello\" : ").unwrap();
+        decoder.decode(input).unwrap();
         let err = decoder.finish().unwrap_err().to_string();
-        assert_eq!(err, "Json error: Truncated record whilst reading value");
-
-        let mut decoder = tape_decoder();
-        decoder.decode(b"{\"hello\" : [").unwrap();
-        let err = decoder.finish().unwrap_err().to_string();
-        assert_eq!(err, "Json error: Truncated record whilst reading list");
-
-        let mut decoder = tape_decoder();
-        decoder.decode(b"{\"hello\" : tru").unwrap();
-        let err = decoder.finish().unwrap_err().to_string();
-        assert_eq!(err, "Json error: Truncated record whilst reading true");
-
-        let mut decoder = tape_decoder();
-        decoder.decode(b"{\"hello\" : nu").unwrap();
-        let err = decoder.finish().unwrap_err().to_string();
-        assert_eq!(err, "Json error: Truncated record whilst reading null");
-
-        // Test invalid UTF-8
-        let mut decoder = tape_decoder();
-        decoder.decode(b"{\"hello\" : \"world\xFF\"}").unwrap();
-        let err = decoder.finish().unwrap_err().to_string();
-        assert_eq!(err, "Json error: Encountered non-UTF-8 data");
-
-        let mut decoder = tape_decoder();
-        decoder.decode(b"{\"\xe2\" : \"\x96\xa1\"}").unwrap();
-        let err = decoder.finish().unwrap_err().to_string();
-        assert_eq!(err, "Json error: Encountered truncated UTF-8 sequence");
+        assert_eq!(err, expected);
     }
 
     #[test]

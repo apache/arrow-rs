@@ -190,6 +190,7 @@ mod tests {
         RecordBatchWriter, builder::FixedSizeBinaryBuilder, types::BinaryViewType,
     };
     use arrow_schema::{DataType, Field, Fields, Schema};
+    use rstest::rstest;
     use serde_json::Value::{Bool, Number as VNumber, String as VString};
     use std::io::Cursor;
     use std::sync::Arc;
@@ -217,8 +218,22 @@ mod tests {
         assert_eq!(None, f32::NAN.into_json_value());
     }
 
-    #[test]
-    fn test_json_roundtrip_structs() {
+    #[rstest]
+    #[case::object_only(
+        StructMode::ObjectOnly,
+        r#"{"c1":{"c11":1,"c12":{"c121":"e"}},"c2":"a"}
+{"c1":{"c12":{"c121":"f"}},"c2":"b"}
+{"c1":{"c11":5,"c12":{"c121":"g"}},"c2":"c"}
+"#
+    )]
+    #[case::list_only(
+        StructMode::ListOnly,
+        r#"[[1,["e"]],"a"]
+[[null,["f"]],"b"]
+[[5,["g"]],"c"]
+"#
+    )]
+    fn test_json_roundtrip_structs(#[case] struct_mode: StructMode, #[case] input: &str) {
         let schema = Arc::new(Schema::new(vec![
             Field::new(
                 "c1",
@@ -235,47 +250,20 @@ mod tests {
             Field::new("c2", DataType::Utf8, false),
         ]));
 
-        {
-            let object_input = r#"{"c1":{"c11":1,"c12":{"c121":"e"}},"c2":"a"}
-{"c1":{"c12":{"c121":"f"}},"c2":"b"}
-{"c1":{"c11":5,"c12":{"c121":"g"}},"c2":"c"}
-"#
-            .as_bytes();
-            let object_reader = ReaderBuilder::new(schema.clone())
-                .with_struct_mode(StructMode::ObjectOnly)
-                .build(object_input)
-                .unwrap();
+        let input = input.as_bytes();
+        let reader = ReaderBuilder::new(schema)
+            .with_struct_mode(struct_mode)
+            .build(input)
+            .unwrap();
 
-            let mut object_output: Vec<u8> = Vec::new();
-            let mut object_writer = WriterBuilder::new()
-                .with_struct_mode(StructMode::ObjectOnly)
-                .build::<_, LineDelimited>(&mut object_output);
-            for batch_res in object_reader {
-                object_writer.write(&batch_res.unwrap()).unwrap();
-            }
-            assert_eq!(object_input, &object_output);
+        let mut output: Vec<u8> = Vec::new();
+        let mut writer = WriterBuilder::new()
+            .with_struct_mode(struct_mode)
+            .build::<_, LineDelimited>(&mut output);
+        for batch_res in reader {
+            writer.write(&batch_res.unwrap()).unwrap();
         }
-
-        {
-            let list_input = r#"[[1,["e"]],"a"]
-[[null,["f"]],"b"]
-[[5,["g"]],"c"]
-"#
-            .as_bytes();
-            let list_reader = ReaderBuilder::new(schema.clone())
-                .with_struct_mode(StructMode::ListOnly)
-                .build(list_input)
-                .unwrap();
-
-            let mut list_output: Vec<u8> = Vec::new();
-            let mut list_writer = WriterBuilder::new()
-                .with_struct_mode(StructMode::ListOnly)
-                .build::<_, LineDelimited>(&mut list_output);
-            for batch_res in list_reader {
-                list_writer.write(&batch_res.unwrap()).unwrap();
-            }
-            assert_eq!(list_input, &list_output);
-        }
+        assert_eq!(input, &output);
     }
 
     #[test]
