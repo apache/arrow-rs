@@ -15,6 +15,7 @@ use arrow_schema::DataType::*;
 use arrow_schema::{DataType, TimeUnit};
 use chrono::{FixedOffset, NaiveDate, NaiveTime};
 use half::f16;
+use rstest::rstest;
 
 /// Number of `unit`s per second; mirrors the private `time_unit_multiple` in `arrow_cast`.
 const fn time_unit_multiple(unit: &TimeUnit) -> i64 {
@@ -131,41 +132,41 @@ fn test_cast_string_to_date32_with_surrounding_whitespace() {
     assert_eq!(result.value(0), result.value(1));
 }
 
-#[test]
-fn test_cast_string_to_date32() {
-    let a0 = Arc::new(StringViewArray::from(vec![
-        Some("2018-12-25"),
-        Some("Not a valid date"),
-        None,
-    ])) as ArrayRef;
-    let a1 = Arc::new(StringArray::from(vec![
-        Some("2018-12-25"),
-        Some("Not a valid date"),
-        None,
-    ])) as ArrayRef;
-    let a2 = Arc::new(LargeStringArray::from(vec![
-        Some("2018-12-25"),
-        Some("Not a valid date"),
-        None,
-    ])) as ArrayRef;
-    for array in &[a0, a1, a2] {
-        let to_type = DataType::Date32;
-        let b = cast(array, &to_type).unwrap();
-        let c = b.as_primitive::<Date32Type>();
-        assert_eq!(17890, c.value(0));
-        assert!(c.is_null(1));
-        assert!(c.is_null(2));
+#[rstest]
+#[case::date32(Date32Type {}, "2018-12-25", 17890)]
+#[case::date64(Date64Type {}, "2020-09-08T12:00:00", 1599566400000)]
+fn test_cast_string_to_date<T: ArrowTemporalType>(
+    #[case] date_type: T,
+    #[case] valid_date: &str,
+    #[case] expected: T::Native,
+    #[values(Utf8View, Utf8, LargeUtf8)] from_type: DataType,
+) {
+    let _ = date_type;
+    let values = vec![Some(valid_date), Some("Not a valid date"), None];
+    let array: ArrayRef = match from_type {
+        Utf8View => Arc::new(StringViewArray::from(values)),
+        Utf8 => Arc::new(StringArray::from(values)),
+        LargeUtf8 => Arc::new(LargeStringArray::from(values)),
+        _ => unreachable!(),
+    };
+    let actual = cast(&array, &T::DATA_TYPE).unwrap();
+    let actual = actual.as_primitive::<T>();
+    assert_eq!(actual.value(0), expected);
+    assert!(actual.is_null(1));
+    assert!(actual.is_null(2));
 
-        let options = CastOptions {
-            safe: false,
-            format_options: FormatOptions::default(),
-        };
-        let err = cast_with_options(array, &to_type, &options).unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "Cast error: Cannot cast string 'Not a valid date' to value of Date32 type"
-        );
-    }
+    let options = CastOptions {
+        safe: false,
+        format_options: FormatOptions::default(),
+    };
+    let err = cast_with_options(&array, &T::DATA_TYPE, &options).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "Cast error: Cannot cast string 'Not a valid date' to value of {} type",
+            T::DATA_TYPE,
+        )
+    );
 }
 
 #[test]
@@ -244,205 +245,82 @@ fn test_cast_string_format_yyyymmdd_to_date32() {
     }
 }
 
-#[test]
-fn test_cast_string_to_time32second() {
-    let a0 = Arc::new(StringViewArray::from(vec![
+#[rstest]
+#[case::seconds(
+    Time32SecondType {},
+    vec![
         Some("08:08:35.091323414"),
         Some("08:08:60.091323414"), // leap second
         Some("08:08:61.091323414"), // not valid
         Some("Not a valid time"),
         None,
-    ])) as ArrayRef;
-    let a1 = Arc::new(StringArray::from(vec![
+    ],
+    vec![Some(29315), Some(29340), None, None, None],
+)]
+#[case::milliseconds(
+    Time32MillisecondType {},
+    vec![
         Some("08:08:35.091323414"),
         Some("08:08:60.091323414"), // leap second
         Some("08:08:61.091323414"), // not valid
         Some("Not a valid time"),
         None,
-    ])) as ArrayRef;
-    let a2 = Arc::new(LargeStringArray::from(vec![
+    ],
+    vec![Some(29315091), Some(29340091), None, None, None],
+)]
+#[case::microseconds(
+    Time64MicrosecondType {},
+    vec![
         Some("08:08:35.091323414"),
-        Some("08:08:60.091323414"), // leap second
-        Some("08:08:61.091323414"), // not valid
         Some("Not a valid time"),
         None,
-    ])) as ArrayRef;
-    for array in &[a0, a1, a2] {
-        let to_type = DataType::Time32(TimeUnit::Second);
-        let b = cast(array, &to_type).unwrap();
-        let c = b.as_primitive::<Time32SecondType>();
-        assert_eq!(29315, c.value(0));
-        assert_eq!(29340, c.value(1));
-        assert!(c.is_null(2));
-        assert!(c.is_null(3));
-        assert!(c.is_null(4));
+    ],
+    vec![Some(29315091323), None, None],
+)]
+#[case::nanoseconds(
+    Time64NanosecondType {},
+    vec![
+        Some("08:08:35.091323414"),
+        Some("Not a valid time"),
+        None,
+    ],
+    vec![Some(29315091323414), None, None],
+)]
+fn test_cast_string_to_time<T: ArrowTemporalType>(
+    #[case] time_type: T,
+    #[case] values: Vec<Option<&str>>,
+    #[case] expected: Vec<Option<T::Native>>,
+    #[values(Utf8View, Utf8, LargeUtf8)] from_type: DataType,
+) {
+    let _ = time_type;
+    let invalid_value = values
+        .iter()
+        .zip(&expected)
+        .find_map(|(input, output)| match (input, output) {
+            (Some(value), None) => Some(*value),
+            _ => None,
+        })
+        .expect("test input must contain an invalid time");
+    let expected_error = format!(
+        "Cast error: Cannot cast string '{invalid_value}' to value of {} type",
+        T::DATA_TYPE,
+    );
+    let array: ArrayRef = match from_type {
+        Utf8View => Arc::new(StringViewArray::from(values)),
+        Utf8 => Arc::new(StringArray::from(values)),
+        LargeUtf8 => Arc::new(LargeStringArray::from(values)),
+        _ => unreachable!(),
+    };
+    let actual = cast(&array, &T::DATA_TYPE).unwrap();
+    let expected = PrimitiveArray::<T>::from_iter(expected);
+    assert_eq!(actual.as_primitive::<T>(), &expected);
 
-        let options = CastOptions {
-            safe: false,
-            format_options: FormatOptions::default(),
-        };
-        let err = cast_with_options(array, &to_type, &options).unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "Cast error: Cannot cast string '08:08:61.091323414' to value of Time32(s) type"
-        );
-    }
-}
-
-#[test]
-fn test_cast_string_to_time32millisecond() {
-    let a0 = Arc::new(StringViewArray::from(vec![
-        Some("08:08:35.091323414"),
-        Some("08:08:60.091323414"), // leap second
-        Some("08:08:61.091323414"), // not valid
-        Some("Not a valid time"),
-        None,
-    ])) as ArrayRef;
-    let a1 = Arc::new(StringArray::from(vec![
-        Some("08:08:35.091323414"),
-        Some("08:08:60.091323414"), // leap second
-        Some("08:08:61.091323414"), // not valid
-        Some("Not a valid time"),
-        None,
-    ])) as ArrayRef;
-    let a2 = Arc::new(LargeStringArray::from(vec![
-        Some("08:08:35.091323414"),
-        Some("08:08:60.091323414"), // leap second
-        Some("08:08:61.091323414"), // not valid
-        Some("Not a valid time"),
-        None,
-    ])) as ArrayRef;
-    for array in &[a0, a1, a2] {
-        let to_type = DataType::Time32(TimeUnit::Millisecond);
-        let b = cast(array, &to_type).unwrap();
-        let c = b.as_primitive::<Time32MillisecondType>();
-        assert_eq!(29315091, c.value(0));
-        assert_eq!(29340091, c.value(1));
-        assert!(c.is_null(2));
-        assert!(c.is_null(3));
-        assert!(c.is_null(4));
-
-        let options = CastOptions {
-            safe: false,
-            format_options: FormatOptions::default(),
-        };
-        let err = cast_with_options(array, &to_type, &options).unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "Cast error: Cannot cast string '08:08:61.091323414' to value of Time32(ms) type"
-        );
-    }
-}
-
-#[test]
-fn test_cast_string_to_time64microsecond() {
-    let a0 = Arc::new(StringViewArray::from(vec![
-        Some("08:08:35.091323414"),
-        Some("Not a valid time"),
-        None,
-    ])) as ArrayRef;
-    let a1 = Arc::new(StringArray::from(vec![
-        Some("08:08:35.091323414"),
-        Some("Not a valid time"),
-        None,
-    ])) as ArrayRef;
-    let a2 = Arc::new(LargeStringArray::from(vec![
-        Some("08:08:35.091323414"),
-        Some("Not a valid time"),
-        None,
-    ])) as ArrayRef;
-    for array in &[a0, a1, a2] {
-        let to_type = DataType::Time64(TimeUnit::Microsecond);
-        let b = cast(array, &to_type).unwrap();
-        let c = b.as_primitive::<Time64MicrosecondType>();
-        assert_eq!(29315091323, c.value(0));
-        assert!(c.is_null(1));
-        assert!(c.is_null(2));
-
-        let options = CastOptions {
-            safe: false,
-            format_options: FormatOptions::default(),
-        };
-        let err = cast_with_options(array, &to_type, &options).unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "Cast error: Cannot cast string 'Not a valid time' to value of Time64(µs) type"
-        );
-    }
-}
-
-#[test]
-fn test_cast_string_to_time64nanosecond() {
-    let a0 = Arc::new(StringViewArray::from(vec![
-        Some("08:08:35.091323414"),
-        Some("Not a valid time"),
-        None,
-    ])) as ArrayRef;
-    let a1 = Arc::new(StringArray::from(vec![
-        Some("08:08:35.091323414"),
-        Some("Not a valid time"),
-        None,
-    ])) as ArrayRef;
-    let a2 = Arc::new(LargeStringArray::from(vec![
-        Some("08:08:35.091323414"),
-        Some("Not a valid time"),
-        None,
-    ])) as ArrayRef;
-    for array in &[a0, a1, a2] {
-        let to_type = DataType::Time64(TimeUnit::Nanosecond);
-        let b = cast(array, &to_type).unwrap();
-        let c = b.as_primitive::<Time64NanosecondType>();
-        assert_eq!(29315091323414, c.value(0));
-        assert!(c.is_null(1));
-        assert!(c.is_null(2));
-
-        let options = CastOptions {
-            safe: false,
-            format_options: FormatOptions::default(),
-        };
-        let err = cast_with_options(array, &to_type, &options).unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "Cast error: Cannot cast string 'Not a valid time' to value of Time64(ns) type"
-        );
-    }
-}
-
-#[test]
-fn test_cast_string_to_date64() {
-    let a0 = Arc::new(StringViewArray::from(vec![
-        Some("2020-09-08T12:00:00"),
-        Some("Not a valid date"),
-        None,
-    ])) as ArrayRef;
-    let a1 = Arc::new(StringArray::from(vec![
-        Some("2020-09-08T12:00:00"),
-        Some("Not a valid date"),
-        None,
-    ])) as ArrayRef;
-    let a2 = Arc::new(LargeStringArray::from(vec![
-        Some("2020-09-08T12:00:00"),
-        Some("Not a valid date"),
-        None,
-    ])) as ArrayRef;
-    for array in &[a0, a1, a2] {
-        let to_type = DataType::Date64;
-        let b = cast(array, &to_type).unwrap();
-        let c = b.as_primitive::<Date64Type>();
-        assert_eq!(1599566400000, c.value(0));
-        assert!(c.is_null(1));
-        assert!(c.is_null(2));
-
-        let options = CastOptions {
-            safe: false,
-            format_options: FormatOptions::default(),
-        };
-        let err = cast_with_options(array, &to_type, &options).unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "Cast error: Cannot cast string 'Not a valid date' to value of Date64 type"
-        );
-    }
+    let options = CastOptions {
+        safe: false,
+        format_options: FormatOptions::default(),
+    };
+    let err = cast_with_options(&array, &T::DATA_TYPE, &options).unwrap_err();
+    assert_eq!(err.to_string(), expected_error);
 }
 
 #[test]
@@ -571,10 +449,13 @@ fn test_cast_utf8_to_date64() {
     assert_eq!(946684800000, c.value(5));
 }
 
-#[test]
-fn test_cast_time32_second_to_int64() {
-    let array = Time32SecondArray::from(vec![1000, 2000, 3000]);
-    let array = Arc::new(array) as Arc<dyn Array>;
+#[rstest]
+#[case::seconds(Time32SecondType {})]
+#[case::milliseconds(Time32MillisecondType {})]
+fn test_cast_time32_to_int64<T: ArrowTemporalType<Native = i32>>(#[case] time_type: T) {
+    let _ = time_type;
+    let array = PrimitiveArray::<T>::from_iter_values([1000, 2000, 3000]);
+    let array = Arc::new(array) as ArrayRef;
     let to_type = DataType::Int64;
     let cast_options = CastOptions::default();
 
@@ -583,7 +464,8 @@ fn test_cast_time32_second_to_int64() {
     let result = cast_with_options(&array, &to_type, &cast_options);
     assert!(
         result.is_ok(),
-        "Failed to cast Time32(Second) to Int64: {:?}",
+        "Failed to cast {} to Int64: {:?}",
+        T::DATA_TYPE,
         result.err()
     );
 
@@ -595,74 +477,36 @@ fn test_cast_time32_second_to_int64() {
     assert_eq!(cast_array.value(2), 3000);
 }
 
-#[test]
-fn test_cast_time32_millisecond_to_int64() {
-    let array = Time32MillisecondArray::from(vec![1000, 2000, 3000]);
-    let array = Arc::new(array) as Arc<dyn Array>;
-    let to_type = DataType::Int64;
-    let cast_options = CastOptions::default();
-
-    assert!(can_cast_types(array.data_type(), &to_type));
-
-    let result = cast_with_options(&array, &to_type, &cast_options);
-    assert!(
-        result.is_ok(),
-        "Failed to cast Time32(Millisecond) to Int64: {:?}",
-        result.err()
-    );
-
-    let cast_array = result.unwrap();
-    let cast_array = cast_array.as_any().downcast_ref::<Int64Array>().unwrap();
-
-    assert_eq!(cast_array.value(0), 1000);
-    assert_eq!(cast_array.value(1), 2000);
-    assert_eq!(cast_array.value(2), 3000);
-}
-
-#[test]
-fn test_cast_time32_millisecond_to_time64_nanosecond() {
-    let array =
-        Time32MillisecondArray::from(vec![Some(1_000), Some(2_000), None, Some(43_200_000)]);
-    let b = cast(&array, &DataType::Time64(TimeUnit::Nanosecond)).unwrap();
-    let c = b.as_primitive::<Time64NanosecondType>();
-    assert_eq!(c.value(0), 1_000_000_000);
-    assert_eq!(c.value(1), 2_000_000_000);
-    assert!(c.is_null(2));
-    assert_eq!(c.value(3), 43_200_000_000_000);
-}
-
-#[test]
-fn test_cast_time32_millisecond_to_time64_microsecond() {
-    let array =
-        Time32MillisecondArray::from(vec![Some(1_000), Some(2_000), None, Some(43_200_000)]);
-    let b = cast(&array, &DataType::Time64(TimeUnit::Microsecond)).unwrap();
-    let c = b.as_primitive::<Time64MicrosecondType>();
-    assert_eq!(c.value(0), 1_000_000);
-    assert_eq!(c.value(1), 2_000_000);
-    assert!(c.is_null(2));
-    assert_eq!(c.value(3), 43_200_000_000);
-}
-
-#[test]
-fn test_cast_time32_second_to_time64_nanosecond() {
-    let array = Time32SecondArray::from(vec![Some(1), Some(60), None, Some(43_200)]);
-    let b = cast(&array, &DataType::Time64(TimeUnit::Nanosecond)).unwrap();
-    let c = b.as_primitive::<Time64NanosecondType>();
-    assert_eq!(c.value(0), 1_000_000_000);
-    assert_eq!(c.value(1), 60_000_000_000);
-    assert!(c.is_null(2));
-    assert_eq!(c.value(3), 43_200_000_000_000);
-}
-
-#[test]
-fn test_cast_time32_second_to_time64_microsecond() {
-    let array = Time32SecondArray::from(vec![Some(1), Some(60), None, Some(43_200)]);
-    let b = cast(&array, &DataType::Time64(TimeUnit::Microsecond)).unwrap();
-    let c = b.as_primitive::<Time64MicrosecondType>();
-    assert_eq!(c.value(0), 1_000_000);
-    assert_eq!(c.value(1), 60_000_000);
-    assert!(c.is_null(2));
-    assert_eq!(c.value(3), 43_200_000_000);
+#[rstest]
+#[case::milliseconds_to_nanoseconds(
+    Arc::new(Time32MillisecondArray::from(vec![Some(1_000), Some(2_000), None, Some(43_200_000)])),
+    Time64NanosecondType {},
+    [Some(1_000_000_000), Some(2_000_000_000), None, Some(43_200_000_000_000)],
+)]
+#[case::milliseconds_to_microseconds(
+    Arc::new(Time32MillisecondArray::from(vec![Some(1_000), Some(2_000), None, Some(43_200_000)])),
+    Time64MicrosecondType {},
+    [Some(1_000_000), Some(2_000_000), None, Some(43_200_000_000)],
+)]
+#[case::seconds_to_nanoseconds(
+    Arc::new(Time32SecondArray::from(vec![Some(1), Some(60), None, Some(43_200)])),
+    Time64NanosecondType {},
+    [Some(1_000_000_000), Some(60_000_000_000), None, Some(43_200_000_000_000)],
+)]
+#[case::seconds_to_microseconds(
+    Arc::new(Time32SecondArray::from(vec![Some(1), Some(60), None, Some(43_200)])),
+    Time64MicrosecondType {},
+    [Some(1_000_000), Some(60_000_000), None, Some(43_200_000_000)],
+)]
+fn test_cast_time32_to_time64<T: ArrowTemporalType<Native = i64>>(
+    #[case] array: ArrayRef,
+    #[case] time_type: T,
+    #[case] expected: [Option<i64>; 4],
+) {
+    let _ = time_type;
+    let actual = cast(&array, &T::DATA_TYPE).unwrap();
+    let expected = PrimitiveArray::<T>::from_iter(expected);
+    assert_eq!(actual.as_primitive::<T>(), &expected);
 }
 
 #[test]
@@ -775,237 +619,136 @@ fn test_cast_string_to_time32_second_to_int64() {
     assert_eq!(cast_array.value(0), 11564);
 }
 
-#[test]
-fn test_cast_integer_to_timestamp() {
-    let array = Int64Array::from(vec![Some(2), Some(10), None]);
-    let expected = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
-
-    let array = Int8Array::from(vec![Some(2), Some(10), None]);
+#[rstest]
+#[case::int8(Arc::new(Int8Array::from(vec![Some(2), Some(10), None])))]
+#[case::int16(Arc::new(Int16Array::from(vec![Some(2), Some(10), None])))]
+#[case::int32(Arc::new(Int32Array::from(vec![Some(2), Some(10), None])))]
+#[case::uint8(Arc::new(UInt8Array::from(vec![Some(2), Some(10), None])))]
+#[case::uint16(Arc::new(UInt16Array::from(vec![Some(2), Some(10), None])))]
+#[case::uint32(Arc::new(UInt32Array::from(vec![Some(2), Some(10), None])))]
+#[case::uint64(Arc::new(UInt64Array::from(vec![Some(2), Some(10), None])))]
+fn test_cast_integer_to_timestamp(#[case] array: ArrayRef) {
+    let baseline = Int64Array::from(vec![Some(2), Some(10), None]);
+    let expected = cast(&baseline, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
     let actual = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
-
-    assert_eq!(&actual, &expected);
-
-    let array = Int16Array::from(vec![Some(2), Some(10), None]);
-    let actual = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
-
-    assert_eq!(&actual, &expected);
-
-    let array = Int32Array::from(vec![Some(2), Some(10), None]);
-    let actual = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
-
-    assert_eq!(&actual, &expected);
-
-    let array = UInt8Array::from(vec![Some(2), Some(10), None]);
-    let actual = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
-
-    assert_eq!(&actual, &expected);
-
-    let array = UInt16Array::from(vec![Some(2), Some(10), None]);
-    let actual = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
-
-    assert_eq!(&actual, &expected);
-
-    let array = UInt32Array::from(vec![Some(2), Some(10), None]);
-    let actual = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
-
-    assert_eq!(&actual, &expected);
-
-    let array = UInt64Array::from(vec![Some(2), Some(10), None]);
-    let actual = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
-
     assert_eq!(&actual, &expected);
 }
 
-#[test]
-fn test_cast_timestamp_to_integer() {
+#[rstest]
+#[case::int8(DataType::Int8)]
+#[case::int16(DataType::Int16)]
+#[case::int32(DataType::Int32)]
+#[case::uint8(DataType::UInt8)]
+#[case::uint16(DataType::UInt16)]
+#[case::uint32(DataType::UInt32)]
+#[case::uint64(DataType::UInt64)]
+fn test_cast_timestamp_to_integer(#[case] to_type: DataType) {
     let array = TimestampMillisecondArray::from(vec![Some(5), Some(1), None])
         .with_timezone("UTC".to_string());
     let expected = cast(&array, &DataType::Int64).unwrap();
-
-    let actual = cast(&cast(&array, &DataType::Int8).unwrap(), &DataType::Int64).unwrap();
-    assert_eq!(&actual, &expected);
-
-    let actual = cast(&cast(&array, &DataType::Int16).unwrap(), &DataType::Int64).unwrap();
-    assert_eq!(&actual, &expected);
-
-    let actual = cast(&cast(&array, &DataType::Int32).unwrap(), &DataType::Int64).unwrap();
-    assert_eq!(&actual, &expected);
-
-    let actual = cast(&cast(&array, &DataType::UInt8).unwrap(), &DataType::Int64).unwrap();
-    assert_eq!(&actual, &expected);
-
-    let actual = cast(&cast(&array, &DataType::UInt16).unwrap(), &DataType::Int64).unwrap();
-    assert_eq!(&actual, &expected);
-
-    let actual = cast(&cast(&array, &DataType::UInt32).unwrap(), &DataType::Int64).unwrap();
-    assert_eq!(&actual, &expected);
-
-    let actual = cast(&cast(&array, &DataType::UInt64).unwrap(), &DataType::Int64).unwrap();
+    let actual = cast(&cast(&array, &to_type).unwrap(), &DataType::Int64).unwrap();
     assert_eq!(&actual, &expected);
 }
 
-#[test]
+#[rstest]
+#[case::float16(Arc::new(Float16Array::from(vec![
+    Some(f16::from_f32(2.0)),
+    Some(f16::from_f32(10.6)),
+    None,
+])))]
+#[case::float32(Arc::new(Float32Array::from(vec![Some(2.0), Some(10.6), None])))]
+#[case::float64(Arc::new(Float64Array::from(vec![Some(2.1), Some(10.2), None])))]
 #[cfg_attr(miri, ignore)] // Unsupported inline assembly
-fn test_cast_floating_to_timestamp() {
-    let array = Int64Array::from(vec![Some(2), Some(10), None]);
-    let expected = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
-
-    let array = Float16Array::from(vec![
-        Some(f16::from_f32(2.0)),
-        Some(f16::from_f32(10.6)),
-        None,
-    ]);
+fn test_cast_floating_to_timestamp(#[case] array: ArrayRef) {
+    let baseline = Int64Array::from(vec![Some(2), Some(10), None]);
+    let expected = cast(&baseline, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
     let actual = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
-
-    assert_eq!(&actual, &expected);
-
-    let array = Float32Array::from(vec![Some(2.0), Some(10.6), None]);
-    let actual = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
-
-    assert_eq!(&actual, &expected);
-
-    let array = Float64Array::from(vec![Some(2.1), Some(10.2), None]);
-    let actual = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
-
     assert_eq!(&actual, &expected);
 }
 
-#[test]
+#[rstest]
+#[case::float16(DataType::Float16)]
+#[case::float32(DataType::Float32)]
+#[case::float64(DataType::Float64)]
 #[cfg_attr(miri, ignore)] // Unsupported inline assembly
-fn test_cast_timestamp_to_floating() {
+fn test_cast_timestamp_to_floating(#[case] to_type: DataType) {
     let array = TimestampMillisecondArray::from(vec![Some(5), Some(1), None])
         .with_timezone("UTC".to_string());
     let expected = cast(&array, &DataType::Int64).unwrap();
-
-    let actual = cast(&cast(&array, &DataType::Float16).unwrap(), &DataType::Int64).unwrap();
-    assert_eq!(&actual, &expected);
-
-    let actual = cast(&cast(&array, &DataType::Float32).unwrap(), &DataType::Int64).unwrap();
-    assert_eq!(&actual, &expected);
-
-    let actual = cast(&cast(&array, &DataType::Float64).unwrap(), &DataType::Int64).unwrap();
+    let actual = cast(&cast(&array, &to_type).unwrap(), &DataType::Int64).unwrap();
     assert_eq!(&actual, &expected);
 }
 
-#[test]
-fn test_cast_decimal_to_timestamp() {
-    let array = Int64Array::from(vec![Some(2), Some(10), None]);
-    let expected = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
-
-    let array = Decimal128Array::from(vec![Some(200), Some(1000), None])
+#[rstest]
+#[case::decimal128(Arc::new(
+    Decimal128Array::from(vec![Some(200), Some(1000), None])
         .with_precision_and_scale(4, 2)
-        .unwrap();
-    let actual = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
-
-    assert_eq!(&actual, &expected);
-
-    let array = Decimal256Array::from(vec![
+        .unwrap(),
+))]
+#[case::decimal256(Arc::new(
+    Decimal256Array::from(vec![
         Some(i256::from_i128(2000)),
         Some(i256::from_i128(10000)),
         None,
     ])
     .with_precision_and_scale(5, 3)
-    .unwrap();
+    .unwrap(),
+))]
+fn test_cast_decimal_to_timestamp(#[case] array: ArrayRef) {
+    let baseline = Int64Array::from(vec![Some(2), Some(10), None]);
+    let expected = cast(&baseline, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
     let actual = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
-
     assert_eq!(&actual, &expected);
 }
 
-#[test]
-fn test_cast_timestamp_to_decimal() {
+#[rstest]
+#[case::decimal128(DataType::Decimal128(5, 2))]
+#[case::decimal256(DataType::Decimal256(10, 5))]
+fn test_cast_timestamp_to_decimal(#[case] to_type: DataType) {
     let array = TimestampMillisecondArray::from(vec![Some(5), Some(1), None])
         .with_timezone("UTC".to_string());
     let expected = cast(&array, &DataType::Int64).unwrap();
-
-    let actual = cast(
-        &cast(&array, &DataType::Decimal128(5, 2)).unwrap(),
-        &DataType::Int64,
-    )
-    .unwrap();
-    assert_eq!(&actual, &expected);
-
-    let actual = cast(
-        &cast(&array, &DataType::Decimal256(10, 5)).unwrap(),
-        &DataType::Int64,
-    )
-    .unwrap();
+    let actual = cast(&cast(&array, &to_type).unwrap(), &DataType::Int64).unwrap();
     assert_eq!(&actual, &expected);
 }
 
-#[test]
-fn test_cast_string_to_timestamp() {
-    let a0 = Arc::new(StringViewArray::from(vec![
+#[rstest]
+#[case::seconds(TimestampSecondType {}, 1599566400)]
+#[case::milliseconds(TimestampMillisecondType {}, 1599566400123)]
+#[case::microseconds(TimestampMicrosecondType {}, 1599566400123456)]
+#[case::nanoseconds(TimestampNanosecondType {}, 1599566400123456789)]
+fn test_cast_string_to_timestamp<T: ArrowTimestampType>(
+    #[case] timestamp_type: T,
+    #[case] expected: i64,
+    #[values(Utf8View, Utf8, LargeUtf8)] from_type: DataType,
+) {
+    let _ = timestamp_type;
+    let values = vec![
         Some("2020-09-08T12:00:00.123456789+00:00"),
         Some("Not a valid date"),
         None,
-    ])) as ArrayRef;
-    let a1 = Arc::new(StringArray::from(vec![
-        Some("2020-09-08T12:00:00.123456789+00:00"),
-        Some("Not a valid date"),
-        None,
-    ])) as ArrayRef;
-    let a2 = Arc::new(LargeStringArray::from(vec![
-        Some("2020-09-08T12:00:00.123456789+00:00"),
-        Some("Not a valid date"),
-        None,
-    ])) as ArrayRef;
-    for array in &[a0, a1, a2] {
-        for time_unit in &[
-            TimeUnit::Second,
-            TimeUnit::Millisecond,
-            TimeUnit::Microsecond,
-            TimeUnit::Nanosecond,
-        ] {
-            let to_type = DataType::Timestamp(*time_unit, None);
-            let b = cast(array, &to_type).unwrap();
+    ];
+    let array: ArrayRef = match from_type {
+        Utf8View => Arc::new(StringViewArray::from(values)),
+        Utf8 => Arc::new(StringArray::from(values)),
+        LargeUtf8 => Arc::new(LargeStringArray::from(values)),
+        _ => unreachable!(),
+    };
+    let b = cast(&array, &T::DATA_TYPE).unwrap();
+    let c = b.as_primitive::<T>();
+    assert_eq!(expected, c.value(0));
+    assert!(c.is_null(1));
+    assert!(c.is_null(2));
 
-            match time_unit {
-                TimeUnit::Second => {
-                    let c = b.as_primitive::<TimestampSecondType>();
-                    assert_eq!(1599566400, c.value(0));
-                    assert!(c.is_null(1));
-                    assert!(c.is_null(2));
-                }
-                TimeUnit::Millisecond => {
-                    let c = b
-                        .as_any()
-                        .downcast_ref::<TimestampMillisecondArray>()
-                        .unwrap();
-                    assert_eq!(1599566400123, c.value(0));
-                    assert!(c.is_null(1));
-                    assert!(c.is_null(2));
-                }
-                TimeUnit::Microsecond => {
-                    let c = b
-                        .as_any()
-                        .downcast_ref::<TimestampMicrosecondArray>()
-                        .unwrap();
-                    assert_eq!(1599566400123456, c.value(0));
-                    assert!(c.is_null(1));
-                    assert!(c.is_null(2));
-                }
-                TimeUnit::Nanosecond => {
-                    let c = b
-                        .as_any()
-                        .downcast_ref::<TimestampNanosecondArray>()
-                        .unwrap();
-                    assert_eq!(1599566400123456789, c.value(0));
-                    assert!(c.is_null(1));
-                    assert!(c.is_null(2));
-                }
-            }
-
-            let options = CastOptions {
-                safe: false,
-                format_options: FormatOptions::default(),
-            };
-            let err = cast_with_options(array, &to_type, &options).unwrap_err();
-            assert_eq!(
-                err.to_string(),
-                "Parser error: Error parsing timestamp from 'Not a valid date': error parsing date"
-            );
-        }
-    }
+    let options = CastOptions {
+        safe: false,
+        format_options: FormatOptions::default(),
+    };
+    let err = cast_with_options(&array, &T::DATA_TYPE, &options).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "Parser error: Error parsing timestamp from 'Not a valid date': error parsing date"
+    );
 }
 
 #[test]
@@ -1435,166 +1178,141 @@ fn test_cast_timestamp_to_date64_whole_days() {
     assert!(cast_with_options(&array, &DataType::Date64, &options).is_err());
 }
 
-#[test]
-fn test_cast_timestamp_to_time64() {
-    // test timestamp secs
-    let array = TimestampSecondArray::from(vec![Some(86405), Some(1), None])
-        .with_timezone("+01:00".to_string());
-    let b = cast(&array, &DataType::Time64(TimeUnit::Microsecond)).unwrap();
-    let c = b.as_primitive::<Time64MicrosecondType>();
-    assert_eq!(3605000000, c.value(0));
-    assert_eq!(3601000000, c.value(1));
-    assert!(c.is_null(2));
-    let b = cast(&array, &DataType::Time64(TimeUnit::Nanosecond)).unwrap();
-    let c = b.as_primitive::<Time64NanosecondType>();
-    assert_eq!(3605000000000, c.value(0));
-    assert_eq!(3601000000000, c.value(1));
-    assert!(c.is_null(2));
+#[rstest]
+#[case::seconds_to_microseconds(
+    TimestampSecondType {},
+    [86405, 1],
+    Time64MicrosecondType {},
+    [3605000000, 3601000000],
+)]
+#[case::seconds_to_nanoseconds(
+    TimestampSecondType {},
+    [86405, 1],
+    Time64NanosecondType {},
+    [3605000000000, 3601000000000],
+)]
+#[case::milliseconds_to_microseconds(
+    TimestampMillisecondType {},
+    [86405000, 1000],
+    Time64MicrosecondType {},
+    [3605000000, 3601000000],
+)]
+#[case::milliseconds_to_nanoseconds(
+    TimestampMillisecondType {},
+    [86405000, 1000],
+    Time64NanosecondType {},
+    [3605000000000, 3601000000000],
+)]
+#[case::microseconds_to_microseconds(
+    TimestampMicrosecondType {},
+    [86405000000, 1000000],
+    Time64MicrosecondType {},
+    [3605000000, 3601000000],
+)]
+#[case::microseconds_to_nanoseconds(
+    TimestampMicrosecondType {},
+    [86405000000, 1000000],
+    Time64NanosecondType {},
+    [3605000000000, 3601000000000],
+)]
+#[case::nanoseconds_to_microseconds(
+    TimestampNanosecondType {},
+    [86_405_123_456_789, -1],
+    Time64MicrosecondType {},
+    [3_605_123_456, 3_599_999_999],
+)]
+#[case::nanoseconds_to_nanoseconds(
+    TimestampNanosecondType {},
+    [86_405_123_456_789, -1],
+    Time64NanosecondType {},
+    [3_605_123_456_789, 3_599_999_999_999],
+)]
+#[case::seconds_to_seconds(
+    TimestampSecondType {},
+    [86405, 1],
+    Time32SecondType {},
+    [3605, 3601],
+)]
+#[case::seconds_to_milliseconds(
+    TimestampSecondType {},
+    [86405, 1],
+    Time32MillisecondType {},
+    [3605000, 3601000],
+)]
+#[case::milliseconds_to_seconds(
+    TimestampMillisecondType {},
+    [86405000, 1000],
+    Time32SecondType {},
+    [3605, 3601],
+)]
+#[case::milliseconds_to_milliseconds(
+    TimestampMillisecondType {},
+    [86405000, 1000],
+    Time32MillisecondType {},
+    [3605000, 3601000],
+)]
+#[case::microseconds_to_seconds(
+    TimestampMicrosecondType {},
+    [86405000000, 1000000],
+    Time32SecondType {},
+    [3605, 3601],
+)]
+#[case::microseconds_to_milliseconds(
+    TimestampMicrosecondType {},
+    [86405000000, 1000000],
+    Time32MillisecondType {},
+    [3605000, 3601000],
+)]
+#[case::nanoseconds_to_seconds(
+    TimestampNanosecondType {},
+    [86_405_123_456_789, -1],
+    Time32SecondType {},
+    [3605, 3599],
+)]
+#[case::nanoseconds_to_milliseconds(
+    TimestampNanosecondType {},
+    [86_405_123_456_789, -1],
+    Time32MillisecondType {},
+    [3_605_123, 3_599_999],
+)]
+fn test_cast_timestamp_to_time<I: ArrowTimestampType, O: ArrowTemporalType>(
+    #[case] timestamp_type: I,
+    #[case] values: [i64; 2],
+    #[case] time_type: O,
+    #[case] expected: [O::Native; 2],
+) {
+    let _ = (timestamp_type, time_type);
+    let array = PrimitiveArray::<I>::from_iter([Some(values[0]), Some(values[1]), None])
+        .with_timezone("+01:00");
+    let actual = cast(&array, &O::DATA_TYPE).unwrap();
+    let actual = actual.as_primitive::<O>();
+    assert_eq!(actual.value(0), expected[0]);
+    assert_eq!(actual.value(1), expected[1]);
+    assert!(actual.is_null(2));
+}
 
-    // test timestamp milliseconds
-    let a = TimestampMillisecondArray::from(vec![Some(86405000), Some(1000), None])
-        .with_timezone("+01:00".to_string());
-    let array = Arc::new(a) as ArrayRef;
-    let b = cast(&array, &DataType::Time64(TimeUnit::Microsecond)).unwrap();
-    let c = b.as_primitive::<Time64MicrosecondType>();
-    assert_eq!(3605000000, c.value(0));
-    assert_eq!(3601000000, c.value(1));
-    assert!(c.is_null(2));
-    let b = cast(&array, &DataType::Time64(TimeUnit::Nanosecond)).unwrap();
-    let c = b.as_primitive::<Time64NanosecondType>();
-    assert_eq!(3605000000000, c.value(0));
-    assert_eq!(3601000000000, c.value(1));
-    assert!(c.is_null(2));
+#[rstest]
+#[case::seconds(DataType::Time32(TimeUnit::Second))]
+#[case::milliseconds(DataType::Time32(TimeUnit::Millisecond))]
+#[case::microseconds(DataType::Time64(TimeUnit::Microsecond))]
+#[case::nanoseconds(DataType::Time64(TimeUnit::Nanosecond))]
+fn test_cast_timestamp_to_time_overflow(#[case] to_type: DataType) {
+    let array = TimestampSecondArray::from(vec![Some(i64::MAX)]).with_timezone("+01:00");
+    let actual = cast(&array, &to_type).unwrap();
+    assert!(actual.is_null(0));
 
-    // test timestamp microseconds
-    let a = TimestampMicrosecondArray::from(vec![Some(86405000000), Some(1000000), None])
-        .with_timezone("+01:00".to_string());
-    let array = Arc::new(a) as ArrayRef;
-    let b = cast(&array, &DataType::Time64(TimeUnit::Microsecond)).unwrap();
-    let c = b.as_primitive::<Time64MicrosecondType>();
-    assert_eq!(3605000000, c.value(0));
-    assert_eq!(3601000000, c.value(1));
-    assert!(c.is_null(2));
-    let b = cast(&array, &DataType::Time64(TimeUnit::Nanosecond)).unwrap();
-    let c = b.as_primitive::<Time64NanosecondType>();
-    assert_eq!(3605000000000, c.value(0));
-    assert_eq!(3601000000000, c.value(1));
-    assert!(c.is_null(2));
-
-    // Test fractional timestamps on both sides of the epoch.
-    let a = TimestampNanosecondArray::from(vec![Some(86_405_123_456_789), Some(-1), None])
-        .with_timezone("+01:00".to_string());
-    let array = Arc::new(a) as ArrayRef;
-    let b = cast(&array, &DataType::Time64(TimeUnit::Microsecond)).unwrap();
-    let c = b.as_primitive::<Time64MicrosecondType>();
-    assert_eq!(3_605_123_456, c.value(0));
-    assert_eq!(3_599_999_999, c.value(1));
-    assert!(c.is_null(2));
-    let b = cast(&array, &DataType::Time64(TimeUnit::Nanosecond)).unwrap();
-    let c = b.as_primitive::<Time64NanosecondType>();
-    assert_eq!(3_605_123_456_789, c.value(0));
-    assert_eq!(3_599_999_999_999, c.value(1));
-    assert!(c.is_null(2));
-
-    // test overflow, safe cast
-    let a = TimestampSecondArray::from(vec![Some(i64::MAX)]).with_timezone("+01:00".to_string());
-    let array = Arc::new(a) as ArrayRef;
-    let b = cast(&array, &DataType::Time64(TimeUnit::Microsecond)).unwrap();
-    assert!(b.is_null(0));
-    let b = cast(&array, &DataType::Time64(TimeUnit::Nanosecond)).unwrap();
-    assert!(b.is_null(0));
-    // test overflow, unsafe cast
     let options = CastOptions {
         safe: false,
         ..Default::default()
     };
-    let b = cast_with_options(&array, &DataType::Time64(TimeUnit::Microsecond), &options);
-    assert!(b.is_err());
-    let b = cast_with_options(&array, &DataType::Time64(TimeUnit::Nanosecond), &options);
-    assert!(b.is_err());
-    // Time64 only supports microseconds and nanoseconds
-    let b = cast(&array, &DataType::Time64(TimeUnit::Millisecond));
-    assert!(b.is_err());
+    assert!(cast_with_options(&array, &to_type, &options).is_err());
 }
 
 #[test]
-fn test_cast_timestamp_to_time32() {
-    // test timestamp secs
-    let a = TimestampSecondArray::from(vec![Some(86405), Some(1), None])
-        .with_timezone("+01:00".to_string());
-    let array = Arc::new(a) as ArrayRef;
-    let b = cast(&array, &DataType::Time32(TimeUnit::Second)).unwrap();
-    let c = b.as_primitive::<Time32SecondType>();
-    assert_eq!(3605, c.value(0));
-    assert_eq!(3601, c.value(1));
-    assert!(c.is_null(2));
-    let b = cast(&array, &DataType::Time32(TimeUnit::Millisecond)).unwrap();
-    let c = b.as_primitive::<Time32MillisecondType>();
-    assert_eq!(3605000, c.value(0));
-    assert_eq!(3601000, c.value(1));
-    assert!(c.is_null(2));
-
-    // test timestamp milliseconds
-    let a = TimestampMillisecondArray::from(vec![Some(86405000), Some(1000), None])
-        .with_timezone("+01:00".to_string());
-    let array = Arc::new(a) as ArrayRef;
-    let b = cast(&array, &DataType::Time32(TimeUnit::Second)).unwrap();
-    let c = b.as_primitive::<Time32SecondType>();
-    assert_eq!(3605, c.value(0));
-    assert_eq!(3601, c.value(1));
-    assert!(c.is_null(2));
-    let b = cast(&array, &DataType::Time32(TimeUnit::Millisecond)).unwrap();
-    let c = b.as_primitive::<Time32MillisecondType>();
-    assert_eq!(3605000, c.value(0));
-    assert_eq!(3601000, c.value(1));
-    assert!(c.is_null(2));
-
-    // test timestamp microseconds
-    let a = TimestampMicrosecondArray::from(vec![Some(86405000000), Some(1000000), None])
-        .with_timezone("+01:00".to_string());
-    let array = Arc::new(a) as ArrayRef;
-    let b = cast(&array, &DataType::Time32(TimeUnit::Second)).unwrap();
-    let c = b.as_primitive::<Time32SecondType>();
-    assert_eq!(3605, c.value(0));
-    assert_eq!(3601, c.value(1));
-    assert!(c.is_null(2));
-    let b = cast(&array, &DataType::Time32(TimeUnit::Millisecond)).unwrap();
-    let c = b.as_primitive::<Time32MillisecondType>();
-    assert_eq!(3605000, c.value(0));
-    assert_eq!(3601000, c.value(1));
-    assert!(c.is_null(2));
-
-    // Test fractional timestamps on both sides of the epoch.
-    let a = TimestampNanosecondArray::from(vec![Some(86_405_123_456_789), Some(-1), None])
-        .with_timezone("+01:00".to_string());
-    let array = Arc::new(a) as ArrayRef;
-    let b = cast(&array, &DataType::Time32(TimeUnit::Second)).unwrap();
-    let c = b.as_primitive::<Time32SecondType>();
-    assert_eq!(3605, c.value(0));
-    assert_eq!(3599, c.value(1));
-    assert!(c.is_null(2));
-    let b = cast(&array, &DataType::Time32(TimeUnit::Millisecond)).unwrap();
-    let c = b.as_primitive::<Time32MillisecondType>();
-    assert_eq!(3_605_123, c.value(0));
-    assert_eq!(3_599_999, c.value(1));
-    assert!(c.is_null(2));
-
-    // test overflow, safe cast
-    let a = TimestampSecondArray::from(vec![Some(i64::MAX)]).with_timezone("+01:00".to_string());
-    let array = Arc::new(a) as ArrayRef;
-    let b = cast(&array, &DataType::Time32(TimeUnit::Second)).unwrap();
-    assert!(b.is_null(0));
-    let b = cast(&array, &DataType::Time32(TimeUnit::Millisecond)).unwrap();
-    assert!(b.is_null(0));
-    // test overflow, unsafe cast
-    let options = CastOptions {
-        safe: false,
-        ..Default::default()
-    };
-    let b = cast_with_options(&array, &DataType::Time32(TimeUnit::Second), &options);
-    assert!(b.is_err());
-    let b = cast_with_options(&array, &DataType::Time32(TimeUnit::Millisecond), &options);
-    assert!(b.is_err());
+fn test_cast_timestamp_to_time64_invalid_unit() {
+    let array = TimestampSecondArray::from(vec![Some(i64::MAX)]).with_timezone("+01:00");
+    // Time64 only supports microseconds and nanoseconds.
+    assert!(cast(&array, &DataType::Time64(TimeUnit::Millisecond)).is_err());
 }
 
 // Cast Timestamp(_, None) -> Timestamp(_, Some(timezone))
@@ -1850,30 +1568,22 @@ fn test_cast_string_to_named_timezone_dst_nanos() {
 
 // A date-only string reads local midnight, which is itself skipped or
 // repeated in some zones.
-#[test]
-fn test_cast_string_to_named_timezone_dst_date_only() {
+#[rstest]
+#[case::nonexistent_midnight("America/Sao_Paulo", "2018-11-04", 1_541_300_400)]
+#[case::ambiguous_midnight("America/Havana", "2024-11-03", 1_730_610_000)]
+fn test_cast_string_to_named_timezone_dst_date_only(
+    #[case] timezone: &str,
+    #[case] date: &str,
+    #[case] expected: i64,
+) {
     let options = CastOptions {
         safe: false,
         ..Default::default()
     };
-
-    // Local midnight does not exist in Sao Paulo on 2018-11-04.
-    let to_type = DataType::Timestamp(TimeUnit::Second, Some("America/Sao_Paulo".into()));
-    let array = StringArray::from(vec!["2018-11-04"]);
+    let to_type = DataType::Timestamp(TimeUnit::Second, Some(timezone.into()));
+    let array = StringArray::from(vec![date]);
     let b = cast_with_options(&array, &to_type, &options).unwrap();
-    assert_eq!(
-        b.as_primitive::<TimestampSecondType>().value(0),
-        1_541_300_400
-    );
-
-    // Local midnight happens twice in Havana on 2024-11-03.
-    let to_type = DataType::Timestamp(TimeUnit::Second, Some("America/Havana".into()));
-    let array = StringArray::from(vec!["2024-11-03"]);
-    let b = cast_with_options(&array, &to_type, &options).unwrap();
-    assert_eq!(
-        b.as_primitive::<TimestampSecondType>().value(0),
-        1_730_610_000
-    );
+    assert_eq!(b.as_primitive::<TimestampSecondType>().value(0), expected);
 }
 
 // A timezone named by the string itself is resolved the same way, matching
@@ -2012,53 +1722,59 @@ fn test_cast_timestamp_to_fixed_offset_timezone_unaffected() {
     assert!(c.is_null(3));
 }
 
-#[test]
-fn test_cast_date64_to_timestamp() {
-    let array = Date64Array::from(vec![Some(864000000005), Some(1545696000001), None]);
-    let b = cast(&array, &DataType::Timestamp(TimeUnit::Second, None)).unwrap();
-    let c = b.as_primitive::<TimestampSecondType>();
-    assert_eq!(864000000, c.value(0));
-    assert_eq!(1545696000, c.value(1));
-    assert!(c.is_null(2));
-}
+#[rstest]
+#[case::date32_to_seconds(
+    Arc::new(Date32Array::from(vec![Some(18628), Some(18993), None])),
+    TimestampSecondType {},
+    [1609459200, 1640995200],
+)]
+#[case::date32_to_milliseconds(
+    Arc::new(Date32Array::from(vec![Some(18628), Some(18993), None])),
+    TimestampMillisecondType {},
+    [1609459200000, 1640995200000],
+)]
+#[case::date32_to_microseconds(
+    Arc::new(Date32Array::from(vec![Some(18628), Some(18993), None])),
+    TimestampMicrosecondType {},
+    [1609459200000000, 1640995200000000],
+)]
+#[case::date32_to_nanoseconds(
+    Arc::new(Date32Array::from(vec![Some(18628), Some(18993), None])),
+    TimestampNanosecondType {},
+    [1609459200000000000, 1640995200000000000],
+)]
+#[case::date64_to_seconds(
+    Arc::new(Date64Array::from(vec![Some(864000000005), Some(1545696000001), None])),
+    TimestampSecondType {},
+    [864000000, 1545696000],
+)]
+#[case::date64_to_milliseconds(
+    Arc::new(Date64Array::from(vec![Some(864000000005), Some(1545696000001), None])),
+    TimestampMillisecondType {},
+    [864000000005, 1545696000001],
+)]
+#[case::date64_to_microseconds(
+    Arc::new(Date64Array::from(vec![Some(864000000005), Some(1545696000001), None])),
+    TimestampMicrosecondType {},
+    [864000000005000, 1545696000001000],
+)]
+#[case::date64_to_nanoseconds(
+    Arc::new(Date64Array::from(vec![Some(864000000005), Some(1545696000001), None])),
+    TimestampNanosecondType {},
+    [864000000005000000, 1545696000001000000],
+)]
+fn test_cast_date_to_timestamp<T: ArrowTimestampType>(
+    #[case] array: ArrayRef,
+    #[case] timestamp_type: T,
+    #[case] expected: [i64; 2],
+) {
+    let _ = timestamp_type;
+    let actual = cast(array.as_ref(), &T::DATA_TYPE).unwrap();
+    let actual = actual.as_primitive::<T>();
 
-#[test]
-fn test_cast_date64_to_timestamp_ms() {
-    let array = Date64Array::from(vec![Some(864000000005), Some(1545696000001), None]);
-    let b = cast(&array, &DataType::Timestamp(TimeUnit::Millisecond, None)).unwrap();
-    let c = b
-        .as_any()
-        .downcast_ref::<TimestampMillisecondArray>()
-        .unwrap();
-    assert_eq!(864000000005, c.value(0));
-    assert_eq!(1545696000001, c.value(1));
-    assert!(c.is_null(2));
-}
-
-#[test]
-fn test_cast_date64_to_timestamp_us() {
-    let array = Date64Array::from(vec![Some(864000000005), Some(1545696000001), None]);
-    let b = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
-    let c = b
-        .as_any()
-        .downcast_ref::<TimestampMicrosecondArray>()
-        .unwrap();
-    assert_eq!(864000000005000, c.value(0));
-    assert_eq!(1545696000001000, c.value(1));
-    assert!(c.is_null(2));
-}
-
-#[test]
-fn test_cast_date64_to_timestamp_ns() {
-    let array = Date64Array::from(vec![Some(864000000005), Some(1545696000001), None]);
-    let b = cast(&array, &DataType::Timestamp(TimeUnit::Nanosecond, None)).unwrap();
-    let c = b
-        .as_any()
-        .downcast_ref::<TimestampNanosecondArray>()
-        .unwrap();
-    assert_eq!(864000000005000000, c.value(0));
-    assert_eq!(1545696000001000000, c.value(1));
-    assert!(c.is_null(2));
+    assert_eq!(actual.value(0), expected[0]);
+    assert_eq!(actual.value(1), expected[1]);
+    assert!(actual.is_null(2));
 }
 
 #[test]
@@ -2097,172 +1813,77 @@ fn test_cast_date32_to_timestamp_and_timestamp_with_timezone() {
     assert_eq!("2021-01-01T00:00:00", result.value(0));
 }
 
-#[test]
-fn test_cast_date32_to_timestamp_with_timezone() {
+#[rstest]
+#[case::date32_to_seconds(
+    Arc::new(Date32Array::from(vec![Some(18628), Some(18993), None])),
+    TimestampSecondType {},
+    [1609438500, 1640974500],
+    ["2021-01-01T00:00:00+05:45", "2022-01-01T00:00:00+05:45"],
+)]
+#[case::date32_to_milliseconds(
+    Arc::new(Date32Array::from(vec![Some(18628), Some(18993), None])),
+    TimestampMillisecondType {},
+    [1609438500000, 1640974500000],
+    ["2021-01-01T00:00:00+05:45", "2022-01-01T00:00:00+05:45"],
+)]
+#[case::date32_to_microseconds(
+    Arc::new(Date32Array::from(vec![Some(18628), Some(18993), None])),
+    TimestampMicrosecondType {},
+    [1609438500000000, 1640974500000000],
+    ["2021-01-01T00:00:00+05:45", "2022-01-01T00:00:00+05:45"],
+)]
+#[case::date32_to_nanoseconds(
+    Arc::new(Date32Array::from(vec![Some(18628), Some(18993), None])),
+    TimestampNanosecondType {},
+    [1609438500000000000, 1640974500000000000],
+    ["2021-01-01T00:00:00+05:45", "2022-01-01T00:00:00+05:45"],
+)]
+#[case::date64_to_seconds(
+    Arc::new(Date64Array::from(vec![Some(864000000005), Some(1545696000001), None])),
+    TimestampSecondType {},
+    [863979300, 1545675300],
+    ["1997-05-19T00:00:00+05:45", "2018-12-25T00:00:00+05:45"],
+)]
+#[case::date64_to_milliseconds(
+    Arc::new(Date64Array::from(vec![Some(864000000005), Some(1545696000001), None])),
+    TimestampMillisecondType {},
+    [863979300005, 1545675300001],
+    ["1997-05-19T00:00:00.005+05:45", "2018-12-25T00:00:00.001+05:45"],
+)]
+#[case::date64_to_microseconds(
+    Arc::new(Date64Array::from(vec![Some(864000000005), Some(1545696000001), None])),
+    TimestampMicrosecondType {},
+    [863979300005000, 1545675300001000],
+    ["1997-05-19T00:00:00.005+05:45", "2018-12-25T00:00:00.001+05:45"],
+)]
+#[case::date64_to_nanoseconds(
+    Arc::new(Date64Array::from(vec![Some(864000000005), Some(1545696000001), None])),
+    TimestampNanosecondType {},
+    [863979300005000000, 1545675300001000000],
+    ["1997-05-19T00:00:00.005+05:45", "2018-12-25T00:00:00.001+05:45"],
+)]
+fn test_cast_date_to_timestamp_with_timezone<T: ArrowTimestampType>(
+    #[case] array: ArrayRef,
+    #[case] timestamp_type: T,
+    #[case] expected: [i64; 2],
+    #[case] expected_strings: [&str; 2],
+) {
+    let _ = timestamp_type;
     let tz = "+0545"; // UTC + 0545 is Asia/Kathmandu
-    let a = Date32Array::from(vec![Some(18628), Some(18993), None]); // 2021-1-1, 2022-1-1
-    let array = Arc::new(a) as ArrayRef;
-    let b = cast(
-        &array,
-        &DataType::Timestamp(TimeUnit::Second, Some(tz.into())),
+    let actual = cast(
+        array.as_ref(),
+        &DataType::Timestamp(T::UNIT, Some(tz.into())),
     )
     .unwrap();
-    let c = b.as_primitive::<TimestampSecondType>();
-    assert_eq!(1609438500, c.value(0));
-    assert_eq!(1640974500, c.value(1));
-    assert!(c.is_null(2));
+    let actual = actual.as_primitive::<T>();
+    assert_eq!(actual.value(0), expected[0]);
+    assert_eq!(actual.value(1), expected[1]);
+    assert!(actual.is_null(2));
 
-    let string_array = cast(&c, &DataType::Utf8).unwrap();
+    let string_array = cast(actual, &DataType::Utf8).unwrap();
     let result = string_array.as_string::<i32>();
-    assert_eq!("2021-01-01T00:00:00+05:45", result.value(0));
-    assert_eq!("2022-01-01T00:00:00+05:45", result.value(1));
-}
-
-#[test]
-fn test_cast_date32_to_timestamp_with_timezone_ms() {
-    let tz = "+0545"; // UTC + 0545 is Asia/Kathmandu
-    let a = Date32Array::from(vec![Some(18628), Some(18993), None]); // 2021-1-1, 2022-1-1
-    let array = Arc::new(a) as ArrayRef;
-    let b = cast(
-        &array,
-        &DataType::Timestamp(TimeUnit::Millisecond, Some(tz.into())),
-    )
-    .unwrap();
-    let c = b.as_primitive::<TimestampMillisecondType>();
-    assert_eq!(1609438500000, c.value(0));
-    assert_eq!(1640974500000, c.value(1));
-    assert!(c.is_null(2));
-
-    let string_array = cast(&c, &DataType::Utf8).unwrap();
-    let result = string_array.as_string::<i32>();
-    assert_eq!("2021-01-01T00:00:00+05:45", result.value(0));
-    assert_eq!("2022-01-01T00:00:00+05:45", result.value(1));
-}
-
-#[test]
-fn test_cast_date32_to_timestamp_with_timezone_us() {
-    let tz = "+0545"; // UTC + 0545 is Asia/Kathmandu
-    let a = Date32Array::from(vec![Some(18628), Some(18993), None]); // 2021-1-1, 2022-1-1
-    let array = Arc::new(a) as ArrayRef;
-    let b = cast(
-        &array,
-        &DataType::Timestamp(TimeUnit::Microsecond, Some(tz.into())),
-    )
-    .unwrap();
-    let c = b.as_primitive::<TimestampMicrosecondType>();
-    assert_eq!(1609438500000000, c.value(0));
-    assert_eq!(1640974500000000, c.value(1));
-    assert!(c.is_null(2));
-
-    let string_array = cast(&c, &DataType::Utf8).unwrap();
-    let result = string_array.as_string::<i32>();
-    assert_eq!("2021-01-01T00:00:00+05:45", result.value(0));
-    assert_eq!("2022-01-01T00:00:00+05:45", result.value(1));
-}
-
-#[test]
-fn test_cast_date32_to_timestamp_with_timezone_ns() {
-    let tz = "+0545"; // UTC + 0545 is Asia/Kathmandu
-    let a = Date32Array::from(vec![Some(18628), Some(18993), None]); // 2021-1-1, 2022-1-1
-    let array = Arc::new(a) as ArrayRef;
-    let b = cast(
-        &array,
-        &DataType::Timestamp(TimeUnit::Nanosecond, Some(tz.into())),
-    )
-    .unwrap();
-    let c = b.as_primitive::<TimestampNanosecondType>();
-    assert_eq!(1609438500000000000, c.value(0));
-    assert_eq!(1640974500000000000, c.value(1));
-    assert!(c.is_null(2));
-
-    let string_array = cast(&c, &DataType::Utf8).unwrap();
-    let result = string_array.as_string::<i32>();
-    assert_eq!("2021-01-01T00:00:00+05:45", result.value(0));
-    assert_eq!("2022-01-01T00:00:00+05:45", result.value(1));
-}
-
-#[test]
-fn test_cast_date64_to_timestamp_with_timezone() {
-    let array = Date64Array::from(vec![Some(864000000005), Some(1545696000001), None]);
-    let tz = "+0545"; // UTC + 0545 is Asia/Kathmandu
-    let b = cast(
-        &array,
-        &DataType::Timestamp(TimeUnit::Second, Some(tz.into())),
-    )
-    .unwrap();
-
-    let c = b.as_primitive::<TimestampSecondType>();
-    assert_eq!(863979300, c.value(0));
-    assert_eq!(1545675300, c.value(1));
-    assert!(c.is_null(2));
-
-    let string_array = cast(&c, &DataType::Utf8).unwrap();
-    let result = string_array.as_string::<i32>();
-    assert_eq!("1997-05-19T00:00:00+05:45", result.value(0));
-    assert_eq!("2018-12-25T00:00:00+05:45", result.value(1));
-}
-
-#[test]
-fn test_cast_date64_to_timestamp_with_timezone_ms() {
-    let array = Date64Array::from(vec![Some(864000000005), Some(1545696000001), None]);
-    let tz = "+0545"; // UTC + 0545 is Asia/Kathmandu
-    let b = cast(
-        &array,
-        &DataType::Timestamp(TimeUnit::Millisecond, Some(tz.into())),
-    )
-    .unwrap();
-
-    let c = b.as_primitive::<TimestampMillisecondType>();
-    assert_eq!(863979300005, c.value(0));
-    assert_eq!(1545675300001, c.value(1));
-    assert!(c.is_null(2));
-
-    let string_array = cast(&c, &DataType::Utf8).unwrap();
-    let result = string_array.as_string::<i32>();
-    assert_eq!("1997-05-19T00:00:00.005+05:45", result.value(0));
-    assert_eq!("2018-12-25T00:00:00.001+05:45", result.value(1));
-}
-
-#[test]
-fn test_cast_date64_to_timestamp_with_timezone_us() {
-    let array = Date64Array::from(vec![Some(864000000005), Some(1545696000001), None]);
-    let tz = "+0545"; // UTC + 0545 is Asia/Kathmandu
-    let b = cast(
-        &array,
-        &DataType::Timestamp(TimeUnit::Microsecond, Some(tz.into())),
-    )
-    .unwrap();
-
-    let c = b.as_primitive::<TimestampMicrosecondType>();
-    assert_eq!(863979300005000, c.value(0));
-    assert_eq!(1545675300001000, c.value(1));
-    assert!(c.is_null(2));
-
-    let string_array = cast(&c, &DataType::Utf8).unwrap();
-    let result = string_array.as_string::<i32>();
-    assert_eq!("1997-05-19T00:00:00.005+05:45", result.value(0));
-    assert_eq!("2018-12-25T00:00:00.001+05:45", result.value(1));
-}
-
-#[test]
-fn test_cast_date64_to_timestamp_with_timezone_ns() {
-    let array = Date64Array::from(vec![Some(864000000005), Some(1545696000001), None]);
-    let tz = "+0545"; // UTC + 0545 is Asia/Kathmandu
-    let b = cast(
-        &array,
-        &DataType::Timestamp(TimeUnit::Nanosecond, Some(tz.into())),
-    )
-    .unwrap();
-
-    let c = b.as_primitive::<TimestampNanosecondType>();
-    assert_eq!(863979300005000000, c.value(0));
-    assert_eq!(1545675300001000000, c.value(1));
-    assert!(c.is_null(2));
-
-    let string_array = cast(&c, &DataType::Utf8).unwrap();
-    let result = string_array.as_string::<i32>();
-    assert_eq!("1997-05-19T00:00:00.005+05:45", result.value(0));
-    assert_eq!("2018-12-25T00:00:00.001+05:45", result.value(1));
+    assert_eq!(result.value(0), expected_strings[0]);
+    assert_eq!(result.value(1), expected_strings[1]);
 }
 
 #[test]
@@ -2281,76 +1902,47 @@ fn test_cast_timestamp_to_strings() {
     assert_cast!(array, DataType::LargeUtf8, LargeStringArray, expected);
 }
 
-#[test]
-fn test_cast_timestamp_to_strings_opt() {
+#[rstest]
+#[case::without_timezone(
+    None,
+    vec![
+        Some("1997-05-19 00:00:03.005000"),
+        Some("2018-12-25 00:00:02.001000"),
+        None,
+    ],
+)]
+#[case::with_timezone(
+    Some("+0545"),
+    vec![
+        Some("1997-05-19 05:45:03.005000"),
+        Some("2018-12-25 05:45:02.001000"),
+        None,
+    ],
+)]
+fn test_cast_timestamp_to_strings_opt(
+    #[case] timezone: Option<&str>,
+    #[case] expected: Vec<Option<&str>>,
+    #[values(Utf8View, Utf8, LargeUtf8)] to_type: DataType,
+) {
     let ts_format = "%Y-%m-%d %H:%M:%S%.6f";
-    let tz = "+0545"; // UTC + 0545 is Asia/Kathmandu
     let cast_options = CastOptions {
         safe: true,
         format_options: FormatOptions::default()
             .with_timestamp_format(Some(ts_format))
             .with_timestamp_tz_format(Some(ts_format)),
     };
-
-    // "2018-12-25T00:00:02.001", "1997-05-19T00:00:03.005", None
-    let array_without_tz =
-        TimestampMillisecondArray::from(vec![Some(864000003005), Some(1545696002001), None]);
-    let expected = vec![
-        Some("1997-05-19 00:00:03.005000"),
-        Some("2018-12-25 00:00:02.001000"),
-        None,
-    ];
-    assert_cast!(
-        array_without_tz,
-        DataType::Utf8View,
-        StringViewArray,
-        cast_options,
-        expected
-    );
-    assert_cast!(
-        array_without_tz,
-        DataType::Utf8,
-        StringArray,
-        cast_options,
-        expected
-    );
-    assert_cast!(
-        array_without_tz,
-        DataType::LargeUtf8,
-        LargeStringArray,
-        cast_options,
-        expected
-    );
-
-    let array_with_tz =
+    let array =
         TimestampMillisecondArray::from(vec![Some(864000003005), Some(1545696002001), None])
-            .with_timezone(tz.to_string());
-    let expected = vec![
-        Some("1997-05-19 05:45:03.005000"),
-        Some("2018-12-25 05:45:02.001000"),
-        None,
-    ];
-    assert_cast!(
-        array_with_tz,
-        DataType::Utf8View,
-        StringViewArray,
-        cast_options,
-        expected
-    );
-    assert_cast!(
-        array_with_tz,
-        DataType::Utf8,
-        StringArray,
-        cast_options,
-        expected
-    );
-    assert_cast!(
-        array_with_tz,
-        DataType::LargeUtf8,
-        LargeStringArray,
-        cast_options,
-        expected
-    );
+            .with_timezone_opt(timezone);
+    assert!(can_cast_types(array.data_type(), &to_type));
+    let actual = cast_with_options(&array, &to_type, &cast_options).unwrap();
+    let actual: Vec<_> = match to_type {
+        Utf8View => actual.as_string_view().iter().collect(),
+        Utf8 => actual.as_string::<i32>().iter().collect(),
+        LargeUtf8 => actual.as_string::<i64>().iter().collect(),
+        _ => unreachable!(),
+    };
+    assert_eq!(actual, expected);
 }
 
 #[test]
@@ -2392,67 +1984,24 @@ fn test_cast_outside_supported_range_for_nanoseconds() {
     );
 }
 
-#[test]
-fn test_cast_date32_to_timestamp() {
-    let a = Date32Array::from(vec![Some(18628), Some(18993), None]); // 2021-1-1, 2022-1-1
-    let array = Arc::new(a) as ArrayRef;
-    let b = cast(&array, &DataType::Timestamp(TimeUnit::Second, None)).unwrap();
-    let c = b.as_primitive::<TimestampSecondType>();
-    assert_eq!(1609459200, c.value(0));
-    assert_eq!(1640995200, c.value(1));
-    assert!(c.is_null(2));
-}
-
-#[test]
-fn test_cast_date32_to_timestamp_ms() {
-    let a = Date32Array::from(vec![Some(18628), Some(18993), None]); // 2021-1-1, 2022-1-1
-    let array = Arc::new(a) as ArrayRef;
-    let b = cast(&array, &DataType::Timestamp(TimeUnit::Millisecond, None)).unwrap();
-    let c = b
-        .as_any()
-        .downcast_ref::<TimestampMillisecondArray>()
-        .unwrap();
-    assert_eq!(1609459200000, c.value(0));
-    assert_eq!(1640995200000, c.value(1));
-    assert!(c.is_null(2));
-}
-
-#[test]
-fn test_cast_date32_to_timestamp_us() {
-    let a = Date32Array::from(vec![Some(18628), Some(18993), None]); // 2021-1-1, 2022-1-1
-    let array = Arc::new(a) as ArrayRef;
-    let b = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
-    let c = b
-        .as_any()
-        .downcast_ref::<TimestampMicrosecondArray>()
-        .unwrap();
-    assert_eq!(1609459200000000, c.value(0));
-    assert_eq!(1640995200000000, c.value(1));
-    assert!(c.is_null(2));
-}
-
-#[test]
-fn test_cast_date32_to_timestamp_ns() {
-    let a = Date32Array::from(vec![Some(18628), Some(18993), None]); // 2021-1-1, 2022-1-1
-    let array = Arc::new(a) as ArrayRef;
-    let b = cast(&array, &DataType::Timestamp(TimeUnit::Nanosecond, None)).unwrap();
-    let c = b
-        .as_any()
-        .downcast_ref::<TimestampNanosecondArray>()
-        .unwrap();
-    assert_eq!(1609459200000000000, c.value(0));
-    assert_eq!(1640995200000000000, c.value(1));
-    assert!(c.is_null(2));
-}
-
-#[test]
-fn test_cast_date32_to_timestamp_us_overflow() {
-    const MAX_DAYS_MICROS: i32 = (i64::MAX / MICROSECONDS_IN_DAY) as i32;
-    let a = Date32Array::from(vec![Some(MAX_DAYS_MICROS), Some(MAX_DAYS_MICROS + 1), None]);
+#[rstest]
+#[case::microseconds(
+    TimestampMicrosecondType {},
+    (i64::MAX / MICROSECONDS_IN_DAY) as i32,
+    MICROSECONDS_IN_DAY,
+)]
+#[case::nanoseconds(TimestampNanosecondType {}, 106_751, NANOSECONDS_IN_DAY)]
+fn test_cast_date32_to_timestamp_overflow<T: ArrowTimestampType>(
+    #[case] timestamp_type: T,
+    #[case] max_days: i32,
+    #[case] units_per_day: i64,
+) {
+    let _ = timestamp_type;
+    let a = Date32Array::from(vec![Some(max_days), Some(max_days + 1), None]);
     let array = Arc::new(a) as ArrayRef;
     let err = cast_with_options(
         &array,
-        &DataType::Timestamp(TimeUnit::Microsecond, None),
+        &T::DATA_TYPE,
         &CastOptions {
             safe: false,
             format_options: FormatOptions::default(),
@@ -2460,32 +2009,9 @@ fn test_cast_date32_to_timestamp_us_overflow() {
     );
     assert!(err.is_err());
 
-    let b = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
-    let c = b.as_primitive::<TimestampMicrosecondType>();
-    assert_eq!(MAX_DAYS_MICROS as i64 * MICROSECONDS_IN_DAY, c.value(0));
-    assert!(c.is_null(1));
-    assert!(c.is_null(2));
-}
-
-#[test]
-fn test_cast_date32_to_timestamp_ns_overflow() {
-    // 2262-04-11, 2062-04-12
-    let upper_limit = 106_751;
-    let a = Date32Array::from(vec![Some(upper_limit), Some(upper_limit + 1), None]);
-    let array = Arc::new(a) as ArrayRef;
-    let err = cast_with_options(
-        &array,
-        &DataType::Timestamp(TimeUnit::Nanosecond, None),
-        &CastOptions {
-            safe: false,
-            format_options: FormatOptions::default(),
-        },
-    );
-    assert!(err.is_err());
-
-    let b = cast(&array, &DataType::Timestamp(TimeUnit::Nanosecond, None)).unwrap();
-    let c = b.as_primitive::<TimestampNanosecondType>();
-    assert_eq!(upper_limit as i64 * NANOSECONDS_IN_DAY, c.value(0));
+    let b = cast(&array, &T::DATA_TYPE).unwrap();
+    let c = b.as_primitive::<T>();
+    assert_eq!(i64::from(max_days) * units_per_day, c.value(0));
     assert!(c.is_null(1));
     assert!(c.is_null(2));
 }
