@@ -1967,8 +1967,19 @@ where
     }
 
     fn map<S: Copy>(self, values: &[S], convert: impl Fn(S) -> T) -> Result<usize> {
-        let values: Vec<T> = values.iter().map(|v| convert(*v)).collect();
-        write_primitive(self.writer, &values, self.levels)
+        // Convert only the values that are written, not those of null slots, and write them
+        // in order without indices
+        let indices = self.levels.non_null_indices();
+        let values: Vec<T> = indices.iter().map(|&i| convert(values[i])).collect();
+        self.writer.write_batch_internal(
+            &values,
+            None,
+            self.levels.def_level_data().as_ref(),
+            self.levels.rep_level_data().as_ref(),
+            None,
+            None,
+            None,
+        )
     }
 }
 
