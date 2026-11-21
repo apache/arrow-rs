@@ -52,6 +52,7 @@ pub(crate) fn common_prefix_length(a: &[u8], b: &[u8]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     /// The definition, kept deliberately naive, to check the fast path against.
     fn naive(a: &[u8], b: &[u8]) -> usize {
@@ -74,26 +75,26 @@ mod tests {
         assert_eq!(common_prefix_length(b"abcdef", b"abc"), 3);
     }
 
-    #[test]
+    #[rstest]
     #[cfg_attr(miri, ignore)] // Takes too long
-    fn test_common_prefix_length_around_block_boundaries() {
+    fn test_common_prefix_length_around_block_boundaries(
+        #[values(31, 32, 33, 63, 64, 65, 127, 128, 129, 1024)] len: usize,
+    ) {
         // Mismatches placed on, either side of, and well past the 32-byte
         // block boundary the scan steps in.
-        for len in [31, 32, 33, 63, 64, 65, 127, 128, 129, 1024] {
-            for mismatch in 0..=len {
-                let a = vec![b'x'; len];
-                let mut b = a.clone();
-                if mismatch < len {
-                    b[mismatch] = b'y';
-                }
-                let expected = if mismatch < len { mismatch } else { len };
-                assert_eq!(
-                    common_prefix_length(&a, &b),
-                    expected,
-                    "len={len} mismatch={mismatch}"
-                );
-                assert_eq!(common_prefix_length(&a, &b), naive(&a, &b));
+        for mismatch in 0..=len {
+            let a = vec![b'x'; len];
+            let mut b = a.clone();
+            if mismatch < len {
+                b[mismatch] = b'y';
             }
+            let expected = if mismatch < len { mismatch } else { len };
+            assert_eq!(
+                common_prefix_length(&a, &b),
+                expected,
+                "len={len} mismatch={mismatch}"
+            );
+            assert_eq!(common_prefix_length(&a, &b), naive(&a, &b));
         }
     }
 

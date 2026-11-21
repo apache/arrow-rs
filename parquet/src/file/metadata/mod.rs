@@ -1850,6 +1850,7 @@ mod tests {
     use crate::file::metadata::thrift::tests::{
         read_column_chunk, read_column_chunk_with_options, read_row_group,
     };
+    use rstest::rstest;
 
     #[test]
     #[expect(deprecated)]
@@ -2424,52 +2425,54 @@ mod tests {
         assert!(!page_index.has_offset_indexes());
     }
 
-    #[test]
-    fn test_set_key_value_metadata_preserves_shared_metadata() {
-        let original = vec![KeyValue::new("original".to_string(), "value".to_string())];
-        let replacement = vec![KeyValue::new("replacement".to_string(), "new".to_string())];
-        for initial in [None, Some(original)] {
-            let file_metadata = FileMetaData::new(
-                2,
-                0,
-                Some("test writer".to_string()),
-                initial.clone(),
-                get_test_schema_descr(),
-                None,
-            );
-            #[cfg(feature = "encryption")]
-            let file_metadata = file_metadata
-                .with_encryption_algorithm(Some(EncryptionAlgorithm::AES_GCM_V1(
-                    crate::file::metadata::thrift::encryption::AesGcmV1 {
-                        aad_prefix: Some(vec![1; 8]),
-                        aad_file_unique: Some(vec![2; 8]),
-                        supply_aad_prefix: Some(true),
-                    },
-                )))
-                .with_footer_signing_key_metadata(Some(vec![3; 8]));
-            let cached = ParquetMetaDataBuilder::new(file_metadata)
-                .set_page_index(Some(Arc::new(PageIndexBuilder::new(0, 2).build())))
-                .build();
-            for values in [None, Some(vec![]), Some(replacement.clone())] {
-                let updated = cached
-                    .clone()
-                    .into_builder()
-                    .set_key_value_metadata(values.clone())
-                    .build();
-                let mut expected = cached.file_metadata().clone();
-                expected.key_value_metadata = values;
-                assert_eq!(updated.file_metadata(), &expected);
-                assert_eq!(
-                    cached.file_metadata().key_value_metadata(),
-                    initial.as_ref()
-                );
-                assert!(Arc::ptr_eq(&cached.row_groups, &updated.row_groups));
-                assert!(Arc::ptr_eq(
-                    cached.page_index().unwrap(),
-                    updated.page_index().unwrap()
-                ));
-            }
-        }
+    #[rstest]
+    #[case::clear(None)]
+    #[case::empty(Some(vec![]))]
+    #[case::replace(Some(vec![KeyValue::new("replacement".to_string(), "new".to_string())]))]
+    fn test_set_key_value_metadata_preserves_shared_metadata(
+        #[case] values: Option<Vec<KeyValue>>,
+        #[values(false, true)] has_initial_metadata: bool,
+    ) {
+        let initial = has_initial_metadata
+            .then(|| vec![KeyValue::new("original".to_string(), "value".to_string())]);
+        let file_metadata = FileMetaData::new(
+            2,
+            0,
+            Some("test writer".to_string()),
+            initial.clone(),
+            get_test_schema_descr(),
+            None,
+        );
+        #[cfg(feature = "encryption")]
+        let file_metadata = file_metadata
+            .with_encryption_algorithm(Some(EncryptionAlgorithm::AES_GCM_V1(
+                crate::file::metadata::thrift::encryption::AesGcmV1 {
+                    aad_prefix: Some(vec![1; 8]),
+                    aad_file_unique: Some(vec![2; 8]),
+                    supply_aad_prefix: Some(true),
+                },
+            )))
+            .with_footer_signing_key_metadata(Some(vec![3; 8]));
+        let cached = ParquetMetaDataBuilder::new(file_metadata)
+            .set_page_index(Some(Arc::new(PageIndexBuilder::new(0, 2).build())))
+            .build();
+        let updated = cached
+            .clone()
+            .into_builder()
+            .set_key_value_metadata(values.clone())
+            .build();
+        let mut expected = cached.file_metadata().clone();
+        expected.key_value_metadata = values;
+        assert_eq!(updated.file_metadata(), &expected);
+        assert_eq!(
+            cached.file_metadata().key_value_metadata(),
+            initial.as_ref()
+        );
+        assert!(Arc::ptr_eq(&cached.row_groups, &updated.row_groups));
+        assert!(Arc::ptr_eq(
+            cached.page_index().unwrap(),
+            updated.page_index().unwrap()
+        ));
     }
 
     #[test]

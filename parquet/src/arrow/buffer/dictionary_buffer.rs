@@ -531,6 +531,7 @@ mod tests {
     use super::*;
     use arrow::compute::cast;
     use arrow_array::StringArray;
+    use rstest::rstest;
 
     #[test]
     fn test_dictionary_buffer() {
@@ -730,43 +731,46 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_fixed_size_binary_key_overflow_boundary() {
-        for (key_type, capacity) in [(ArrowType::Int8, 128u32), (ArrowType::UInt8, 256)] {
-            for unique in [capacity, capacity + 1] {
-                let values = (0..unique)
-                    .map(|value| Some(value.to_le_bytes()))
-                    .chain([None, Some(0u32.to_le_bytes())]);
-                let values =
-                    FixedSizeBinaryArray::try_from_sparse_iter_with_size(values, 4).unwrap();
-                let result = pack_fixed_values(&key_type, &values);
-                if unique > capacity {
-                    let error = result.unwrap_err();
-                    let ParquetError::External(source) = &error else {
-                        panic!("expected an Arrow dictionary overflow error, got {error}");
-                    };
-                    assert!(
-                        matches!(
-                            source.downcast_ref::<arrow_schema::ArrowError>(),
-                            Some(arrow_schema::ArrowError::DictionaryKeyOverflowError)
-                        ),
-                        "{error}"
-                    );
-                } else {
-                    let array = result.unwrap();
-                    assert_eq!(array.len(), unique as usize + 2);
-                    assert_eq!(array.null_count(), 1);
-                    assert!(array.is_null(unique as usize));
-                    assert!(array.is_valid(unique as usize + 1));
-                    let dictionary = array.as_any_dictionary();
-                    assert_eq!(dictionary.values().len(), unique as usize);
-                    assert_eq!(
-                        dictionary.values().data_type(),
-                        &ArrowType::FixedSizeBinary(4)
-                    );
-                }
-            }
-        }
+    #[rstest]
+    #[case::int8(ArrowType::Int8, 128)]
+    #[case::uint8(ArrowType::UInt8, 256)]
+    fn test_fixed_size_binary_at_key_capacity(#[case] key_type: ArrowType, #[case] capacity: u32) {
+        let values = (0..capacity)
+            .map(|value| Some(value.to_le_bytes()))
+            .chain([None, Some(0u32.to_le_bytes())]);
+        let values = FixedSizeBinaryArray::try_from_sparse_iter_with_size(values, 4).unwrap();
+        let array = pack_fixed_values(&key_type, &values).unwrap();
+        assert_eq!(array.len(), capacity as usize + 2);
+        assert_eq!(array.null_count(), 1);
+        assert!(array.is_null(capacity as usize));
+        assert!(array.is_valid(capacity as usize + 1));
+        let dictionary = array.as_any_dictionary();
+        assert_eq!(dictionary.values().len(), capacity as usize);
+        assert_eq!(
+            dictionary.values().data_type(),
+            &ArrowType::FixedSizeBinary(4)
+        );
+    }
+
+    #[rstest]
+    #[case::int8(ArrowType::Int8, 128)]
+    #[case::uint8(ArrowType::UInt8, 256)]
+    fn test_fixed_size_binary_key_overflow(#[case] key_type: ArrowType, #[case] capacity: u32) {
+        let values = (0..capacity + 1)
+            .map(|value| Some(value.to_le_bytes()))
+            .chain([None, Some(0u32.to_le_bytes())]);
+        let values = FixedSizeBinaryArray::try_from_sparse_iter_with_size(values, 4).unwrap();
+        let error = pack_fixed_values(&key_type, &values).unwrap_err();
+        let ParquetError::External(source) = &error else {
+            panic!("expected an Arrow dictionary overflow error, got {error}");
+        };
+        assert!(
+            matches!(
+                source.downcast_ref::<arrow_schema::ArrowError>(),
+                Some(arrow_schema::ArrowError::DictionaryKeyOverflowError)
+            ),
+            "{error}"
+        );
     }
 
     /// A colliding string repeated after its initial collision must reuse its key,

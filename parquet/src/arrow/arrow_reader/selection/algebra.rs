@@ -431,6 +431,7 @@ mod tests {
     use super::*;
     use arrow_array::BooleanArray;
     use rand::{RngExt, SeedableRng, rng, rngs::StdRng};
+    use rstest::rstest;
 
     #[test]
     fn test_and() {
@@ -764,31 +765,28 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_dense_mask_and_then_mask_with_offsets() {
-        for len in [8192, 8193, 10_000] {
-            for outer_stride in [100, 20, 4] {
-                let outer_offset = 3;
-                let outer = BooleanBuffer::from_iter(
-                    (0..len + outer_offset).map(|i| (i + 1) % outer_stride != 0),
-                )
+    #[rstest]
+    fn test_dense_mask_and_then_mask_with_offsets(
+        #[values(8192, 8193, 10_000)] len: usize,
+        #[values(100, 20, 4)] outer_stride: usize,
+    ) {
+        let outer_offset = 3;
+        let outer =
+            BooleanBuffer::from_iter((0..len + outer_offset).map(|i| (i + 1) % outer_stride != 0))
                 .slice(outer_offset, len);
 
-                let inner_offset = 5;
-                let inner_len = outer.count_set_bits();
-                let inner = BooleanBuffer::from_iter(
-                    (0..inner_len + inner_offset).map(|i| (i + 2) % 97 != 0),
-                )
+        let inner_offset = 5;
+        let inner_len = outer.count_set_bits();
+        let inner =
+            BooleanBuffer::from_iter((0..inner_len + inner_offset).map(|i| (i + 2) % 97 != 0))
                 .slice(inner_offset, inner_len);
 
-                AndThenTest {
-                    outer,
-                    inner,
-                    dense_mask_expected: true,
-                }
-                .run();
-            }
+        AndThenTest {
+            outer,
+            inner,
+            dense_mask_expected: true,
         }
+        .run();
     }
 
     #[test]
@@ -982,51 +980,42 @@ mod tests {
         assert_eq!(actual, expected, "{context}");
     }
 
-    #[test]
-    fn test_mixed_mask_selector_algebra_with_offsets_and_uneven_lengths() {
-        for rows in [1, 7, 8, 63, 64, 65, 137] {
-            for (mask_len, selector_len) in [(rows, rows), (rows, 137), (137, rows)] {
-                for offset in [0, 1, 7, 63] {
-                    for mask_bits in [
-                        vec![false; mask_len],
-                        vec![true; mask_len],
-                        (0..mask_len).map(|i| i < mask_len / 2).collect(),
-                        (0..mask_len).map(|i| i % 2 == 0).collect(),
-                    ] {
-                        let buffer = BooleanBuffer::from_iter(
-                            std::iter::repeat_n(false, offset).chain(mask_bits.iter().copied()),
-                        )
-                        .slice(offset, mask_len);
-                        let mask = RowSelection::from_boolean_buffer(buffer);
-                        for selector_bits in [
-                            vec![false; selector_len],
-                            vec![true; selector_len],
-                            (0..selector_len).map(|i| i % 2 == 0).collect(),
-                            (0..selector_len).map(|i| (i / 11) % 2 == 0).collect(),
-                        ] {
-                            let selectors = RowSelection::from_filters(&[BooleanArray::from(
-                                selector_bits.clone(),
-                            )]);
-                            let context = format!(
-                                "mask_len={mask_len} selector_len={selector_len} offset={offset}"
-                            );
-                            let intersection =
-                                expected_combined(&mask_bits, &selector_bits, |a, b| a && b);
-                            let union =
-                                expected_combined(&mask_bits, &selector_bits, |a, b| a || b);
-                            for (left, right) in [(&mask, &selectors), (&selectors, &mask)] {
-                                assert_mask_eq(
-                                    left.intersection(right).as_mask().unwrap(),
-                                    &intersection,
-                                    &context,
-                                );
-                                assert_mask_eq(
-                                    left.union(right).as_mask().unwrap(),
-                                    &union,
-                                    &context,
-                                );
-                            }
-                        }
+    #[rstest]
+    fn test_mixed_mask_selector_algebra_with_offsets_and_uneven_lengths(
+        #[values(1, 7, 8, 63, 64, 65, 137)] rows: usize,
+        #[values(0, 1, 7, 63)] offset: usize,
+    ) {
+        for (mask_len, selector_len) in [(rows, rows), (rows, 137), (137, rows)] {
+            for mask_bits in [
+                vec![false; mask_len],
+                vec![true; mask_len],
+                (0..mask_len).map(|i| i < mask_len / 2).collect(),
+                (0..mask_len).map(|i| i % 2 == 0).collect(),
+            ] {
+                let buffer = BooleanBuffer::from_iter(
+                    std::iter::repeat_n(false, offset).chain(mask_bits.iter().copied()),
+                )
+                .slice(offset, mask_len);
+                let mask = RowSelection::from_boolean_buffer(buffer);
+                for selector_bits in [
+                    vec![false; selector_len],
+                    vec![true; selector_len],
+                    (0..selector_len).map(|i| i % 2 == 0).collect(),
+                    (0..selector_len).map(|i| (i / 11) % 2 == 0).collect(),
+                ] {
+                    let selectors =
+                        RowSelection::from_filters(&[BooleanArray::from(selector_bits.clone())]);
+                    let context =
+                        format!("mask_len={mask_len} selector_len={selector_len} offset={offset}");
+                    let intersection = expected_combined(&mask_bits, &selector_bits, |a, b| a && b);
+                    let union = expected_combined(&mask_bits, &selector_bits, |a, b| a || b);
+                    for (left, right) in [(&mask, &selectors), (&selectors, &mask)] {
+                        assert_mask_eq(
+                            left.intersection(right).as_mask().unwrap(),
+                            &intersection,
+                            &context,
+                        );
+                        assert_mask_eq(left.union(right).as_mask().unwrap(), &union, &context);
                     }
                 }
             }
@@ -1066,9 +1055,21 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
+    #[case::left_empty(0, 9)]
+    #[case::right_empty(9, 0)]
+    #[case::left_single_bit(1, 200)]
+    #[case::right_single_bit(200, 1)]
+    #[case::left_shorter_across_words(63, 130)]
+    #[case::right_shorter_across_words(321, 65)]
+    #[case::both_empty(0, 0)]
+    #[case::both_single_bit(1, 1)]
+    #[case::equal_63_bits(63, 63)]
+    #[case::equal_64_bits(64, 64)]
+    #[case::equal_200_bits(200, 200)]
+    #[case::equal_321_bits(321, 321)]
     #[cfg_attr(miri, ignore)] // Takes too long
-    fn test_mask_algebra_with_offsets() {
+    fn test_mask_algebra_with_offsets(#[case] l_len: usize, #[case] r_len: usize) {
         // Offsets and lengths that are not byte (or word) aligned on either side,
         // so the common prefix can start and end mid byte. Covers both the equal
         // and uneven length paths.
@@ -1079,38 +1080,23 @@ mod tests {
 
         for l_offset in [0, 1, 5, 8, 13, 64, 67] {
             for r_offset in [0, 1, 3, 8, 60, 64, 70] {
-                for (l_len, r_len) in [
-                    (0, 9),
-                    (9, 0),
-                    (1, 200),
-                    (200, 1),
-                    (63, 130),
-                    (321, 65),
-                    (0, 0),
-                    (1, 1),
-                    (63, 63),
-                    (64, 64),
-                    (200, 200),
-                    (321, 321),
-                ] {
-                    let l = base.slice(l_offset, l_len);
-                    let r = other.slice(r_offset, r_len);
-                    let l_bits: Vec<bool> = l.iter().collect();
-                    let r_bits: Vec<bool> = r.iter().collect();
-                    let context =
-                        format!("l_offset={l_offset} r_offset={r_offset} lens=({l_len},{r_len})");
+                let l = base.slice(l_offset, l_len);
+                let r = other.slice(r_offset, r_len);
+                let l_bits: Vec<bool> = l.iter().collect();
+                let r_bits: Vec<bool> = r.iter().collect();
+                let context =
+                    format!("l_offset={l_offset} r_offset={r_offset} lens=({l_len},{r_len})");
 
-                    assert_mask_eq(
-                        &intersect_masks(&l, &r),
-                        &expected_combined(&l_bits, &r_bits, |a, b| a && b),
-                        &format!("intersect {context}"),
-                    );
-                    assert_mask_eq(
-                        &union_masks(&l, &r),
-                        &expected_combined(&l_bits, &r_bits, |a, b| a || b),
-                        &format!("union {context}"),
-                    );
-                }
+                assert_mask_eq(
+                    &intersect_masks(&l, &r),
+                    &expected_combined(&l_bits, &r_bits, |a, b| a && b),
+                    &format!("intersect {context}"),
+                );
+                assert_mask_eq(
+                    &union_masks(&l, &r),
+                    &expected_combined(&l_bits, &r_bits, |a, b| a || b),
+                    &format!("union {context}"),
+                );
             }
         }
     }

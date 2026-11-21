@@ -1230,6 +1230,7 @@ impl From<Vec<u8>> for BitReader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     use crate::util::test_common::rand_gen::random_numbers;
     use rand::distr::{Distribution, StandardUniform};
@@ -1330,6 +1331,10 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_bit_reader_skip_and_count_zero_width() {
         let mut reader = BitReader::new(Bytes::new());
         assert_eq!(
             reader.skip_and_count(usize::MAX, 0, 0),
@@ -1338,62 +1343,64 @@ mod tests {
         assert_eq!(reader.skip_and_count(123, 0, 1), (0, 123));
     }
 
-    #[test]
-    fn test_bit_reader_count_unaligned() {
+    #[rstest]
+    fn test_bit_reader_count_unaligned(#[values(1, 2, 3, 4, 5, 8, 16, 32, 64)] width: usize) {
         let data = Bytes::from((0..19).map(|i| (i * 73 + 19) as u8).collect::<Vec<_>>());
-        for width in [1, 2, 3, 4, 5, 8, 16, 32, 64] {
-            for prefix in 0..=data.len() * 8 {
-                let mut reference = BitReader::new(data.clone());
-                reference.skip(prefix, 1);
-                let mut values = vec![0_u64; (data.len() * 8 - prefix) / width];
-                assert_eq!(reference.get_batch(&mut values, width), values.len());
-                for value in [0, values.first().copied().unwrap_or(0)] {
-                    for requested in [0, 1, 7, usize::MAX] {
-                        let mut reader = BitReader::new(data.clone());
-                        reader.skip(prefix, 1);
-                        let skipped = requested.min(values.len());
-                        let matching = values[..skipped].iter().filter(|&&v| v == value).count();
-                        assert_eq!(
-                            reader.skip_and_count(requested, width, value),
-                            (matching, skipped)
-                        );
-                        let mut rest = vec![0_u64; values.len() - skipped];
-                        assert_eq!(reader.get_batch(&mut rest, width), rest.len());
-                        assert_eq!(rest, values[skipped..]);
-                    }
+        for prefix in 0..=data.len() * 8 {
+            let mut reference = BitReader::new(data.clone());
+            reference.skip(prefix, 1);
+            let mut values = vec![0_u64; (data.len() * 8 - prefix) / width];
+            assert_eq!(reference.get_batch(&mut values, width), values.len());
+            for value in [0, values.first().copied().unwrap_or(0)] {
+                for requested in [0, 1, 7, usize::MAX] {
+                    let mut reader = BitReader::new(data.clone());
+                    reader.skip(prefix, 1);
+                    let skipped = requested.min(values.len());
+                    let matching = values[..skipped].iter().filter(|&&v| v == value).count();
+                    assert_eq!(
+                        reader.skip_and_count(requested, width, value),
+                        (matching, skipped)
+                    );
+                    let mut rest = vec![0_u64; values.len() - skipped];
+                    assert_eq!(reader.get_batch(&mut rest, width), rest.len());
+                    assert_eq!(rest, values[skipped..]);
                 }
             }
         }
     }
 
-    #[test]
-    fn test_bit_reader_skip_and_count_ones() {
+    #[rstest]
+    fn test_bit_reader_skip_and_count_ones(
+        #[values(0, 1, 7, 8, 31, 63, 64, 65, 151, 152)] prefix: usize,
+    ) {
         let bits: Vec<u8> = (0..152).map(|i| u8::from(i % 3 == 1)).collect();
         let mut writer = BitWriter::new(19);
         for &bit in &bits {
             writer.put_value(bit as u64, 1);
         }
         let data = Bytes::from(writer.consume());
-        for prefix in [0, 1, 7, 8, 31, 63, 64, 65, 151, 152] {
-            for requested in [0, 1, 7, 63, 64, 65, 130, usize::MAX] {
-                let mut reader = BitReader::new(data.clone());
-                let first = prefix.min(64);
-                reader.get_value::<u64>(first).unwrap();
-                if prefix > first {
-                    assert_eq!(reader.skip(prefix - first, 1), prefix - first);
-                }
-                let skipped = requested.min(bits.len() - prefix);
-                let count = bits[prefix..prefix + skipped]
-                    .iter()
-                    .map(|&b| b as usize)
-                    .sum();
-                assert_eq!(reader.skip_and_count_ones(requested), (count, skipped));
-                let mut remaining = vec![0; bits.len() - prefix - skipped];
-                assert_eq!(reader.get_batch(&mut remaining, 1), remaining.len());
-                assert_eq!(remaining, bits[prefix + skipped..]);
-                assert_eq!(reader.skip_and_count_ones(1), (0, 0));
+        for requested in [0, 1, 7, 63, 64, 65, 130, usize::MAX] {
+            let mut reader = BitReader::new(data.clone());
+            let first = prefix.min(64);
+            reader.get_value::<u64>(first).unwrap();
+            if prefix > first {
+                assert_eq!(reader.skip(prefix - first, 1), prefix - first);
             }
+            let skipped = requested.min(bits.len() - prefix);
+            let count = bits[prefix..prefix + skipped]
+                .iter()
+                .map(|&b| b as usize)
+                .sum();
+            assert_eq!(reader.skip_and_count_ones(requested), (count, skipped));
+            let mut remaining = vec![0; bits.len() - prefix - skipped];
+            assert_eq!(reader.get_batch(&mut remaining, 1), remaining.len());
+            assert_eq!(remaining, bits[prefix + skipped..]);
+            assert_eq!(reader.skip_and_count_ones(1), (0, 0));
         }
+    }
+
+    #[test]
+    fn test_bit_reader_skip_and_count_ones_empty() {
         assert_eq!(
             BitReader::new(Bytes::new()).skip_and_count_ones(usize::MAX),
             (0, 0)

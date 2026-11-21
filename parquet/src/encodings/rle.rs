@@ -750,6 +750,7 @@ impl RleDecoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     use crate::util::bit_util::ceil;
     use rand::{self, RngExt, SeedableRng, distr::StandardUniform, rng};
@@ -789,46 +790,44 @@ mod tests {
         assert_eq!(buffer, expected);
     }
 
-    #[test]
-    fn test_skip_and_count() {
-        for width in [0, 1, 2, 15, 64] {
-            let max = if width == 64 {
-                u64::MAX
-            } else {
-                (1_u64 << width) - 1
-            };
-            let values: Vec<u64> = std::iter::repeat_n(0, 1024)
-                .chain((0..128).map(|i| i & max))
-                .chain(std::iter::repeat_n(max, 2056))
-                .collect();
-            let mut encoder = RleEncoder::new(width, 1024);
-            for &value in &values {
-                encoder.put(value);
-            }
-            let data = Bytes::from(encoder.consume());
-            for value in [0, max] {
-                for prefix in [0, 1, 1023, 1024, 1027, 1152] {
-                    for requested in [0, 1, 7, 1024, usize::MAX] {
-                        let mut decoder = RleDecoder::new(width);
-                        decoder.set_data(data.clone()).unwrap();
-                        let mut read = vec![0; prefix];
-                        assert_eq!(decoder.get_batch(&mut read).unwrap(), prefix);
-                        assert_eq!(read, values[..prefix]);
-                        let skipped = requested.min(values.len() - prefix);
-                        let count = values[prefix..prefix + skipped]
-                            .iter()
-                            .filter(|&&v| v == value)
-                            .count();
-                        assert_eq!(
-                            decoder.skip_and_count(requested, value).unwrap(),
-                            (count, skipped),
-                            "width={width}, value={value}, prefix={prefix}, requested={requested}"
-                        );
-                        let mut rest = vec![0; values.len() - prefix - skipped];
-                        assert_eq!(decoder.get_batch(&mut rest).unwrap(), rest.len());
-                        assert_eq!(rest, values[prefix + skipped..]);
-                        assert_eq!(decoder.skip_and_count(1, value).unwrap(), (0, 0));
-                    }
+    #[rstest]
+    fn test_skip_and_count(#[values(0, 1, 2, 15, 64)] width: u8) {
+        let max = if width == 64 {
+            u64::MAX
+        } else {
+            (1_u64 << width) - 1
+        };
+        let values: Vec<u64> = std::iter::repeat_n(0, 1024)
+            .chain((0..128).map(|i| i & max))
+            .chain(std::iter::repeat_n(max, 2056))
+            .collect();
+        let mut encoder = RleEncoder::new(width, 1024);
+        for &value in &values {
+            encoder.put(value);
+        }
+        let data = Bytes::from(encoder.consume());
+        for value in [0, max] {
+            for prefix in [0, 1, 1023, 1024, 1027, 1152] {
+                for requested in [0, 1, 7, 1024, usize::MAX] {
+                    let mut decoder = RleDecoder::new(width);
+                    decoder.set_data(data.clone()).unwrap();
+                    let mut read = vec![0; prefix];
+                    assert_eq!(decoder.get_batch(&mut read).unwrap(), prefix);
+                    assert_eq!(read, values[..prefix]);
+                    let skipped = requested.min(values.len() - prefix);
+                    let count = values[prefix..prefix + skipped]
+                        .iter()
+                        .filter(|&&v| v == value)
+                        .count();
+                    assert_eq!(
+                        decoder.skip_and_count(requested, value).unwrap(),
+                        (count, skipped),
+                        "width={width}, value={value}, prefix={prefix}, requested={requested}"
+                    );
+                    let mut rest = vec![0; values.len() - prefix - skipped];
+                    assert_eq!(decoder.get_batch(&mut rest).unwrap(), rest.len());
+                    assert_eq!(rest, values[prefix + skipped..]);
+                    assert_eq!(decoder.skip_and_count(1, value).unwrap(), (0, 0));
                 }
             }
         }

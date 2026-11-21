@@ -257,69 +257,69 @@ mod tests {
     use crate::basic::Type;
     use crate::data_type::{FixedLenByteArray, FixedLenByteArrayType};
     use crate::encodings::rle::RleEncoder;
+    use rstest::rstest;
 
-    #[test]
-    fn test_data_page_null_counts() {
-        for (max_def_level, def_levels, rep_levels, expected_nulls) in [
-            (0, vec![0; 3], vec![0; 3], 0),
-            (1, vec![1; 3], vec![0; 3], 0),
-            (1, vec![1, 0, 1], vec![0; 3], 1),
-            (1, vec![0; 3], vec![0; 3], 3),
-            // Null parents, empty lists, null elements and repeated physical values.
-            (3, vec![0, 1, 2, 3, 3], vec![0, 0, 0, 0, 1], 3),
-            (1, vec![], vec![], 0),
-        ] {
-            let max_rep_level = i16::from(rep_levels.contains(&1));
-            let desc = Arc::new(ColumnDescriptor::new(
-                Arc::new(
-                    SchemaType::primitive_type_builder("fixed", Type::FIXED_LEN_BYTE_ARRAY)
-                        .with_length(2)
-                        .build()
-                        .unwrap(),
-                ),
-                max_def_level,
-                max_rep_level,
-                ColumnPath::from("fixed"),
-            ));
-            let num_levels = def_levels.len() as u32;
-            let num_values = num_levels - expected_nulls;
-            let values = vec![FixedLenByteArray::from(vec![1, 2]); num_values as usize];
+    #[rstest]
+    #[case::required(0, vec![0; 3], vec![0; 3], 0)]
+    #[case::optional_all_valid(1, vec![1; 3], vec![0; 3], 0)]
+    #[case::optional_mixed_nulls(1, vec![1, 0, 1], vec![0; 3], 1)]
+    #[case::optional_all_null(1, vec![0; 3], vec![0; 3], 3)]
+    // Null parents, empty lists, null elements and repeated physical values.
+    #[case::nested_repeated(3, vec![0, 1, 2, 3, 3], vec![0, 0, 0, 0, 1], 3)]
+    #[case::empty(1, vec![], vec![], 0)]
+    fn test_data_page_null_counts(
+        #[case] max_def_level: i16,
+        #[case] def_levels: Vec<i16>,
+        #[case] rep_levels: Vec<i16>,
+        #[case] expected_nulls: u32,
+        #[values(false, true)] datapage_v2: bool,
+        #[values(false, true)] dictionary: bool,
+    ) {
+        let max_rep_level = i16::from(rep_levels.contains(&1));
+        let desc = Arc::new(ColumnDescriptor::new(
+            Arc::new(
+                SchemaType::primitive_type_builder("fixed", Type::FIXED_LEN_BYTE_ARRAY)
+                    .with_length(2)
+                    .build()
+                    .unwrap(),
+            ),
+            max_def_level,
+            max_rep_level,
+            ColumnPath::from("fixed"),
+        ));
+        let num_levels = def_levels.len() as u32;
+        let num_values = num_levels - expected_nulls;
+        let values = vec![FixedLenByteArray::from(vec![1, 2]); num_values as usize];
 
-            for datapage_v2 in [false, true] {
-                for dictionary in [false, true] {
-                    let mut builder =
-                        DataPageBuilderImpl::new(desc.clone(), num_values, datapage_v2);
-                    builder.add_rep_levels(max_rep_level, &rep_levels);
-                    builder.add_def_levels(max_def_level, &def_levels);
-                    if dictionary {
-                        let mut encoder = RleEncoder::new(1, 64);
-                        for _ in 0..num_values {
-                            encoder.put(0);
-                        }
-                        let mut indices = vec![1];
-                        indices.extend(encoder.consume());
-                        builder.add_indices(indices.into());
-                    } else {
-                        builder.add_values::<FixedLenByteArrayType>(Encoding::PLAIN, &values);
-                    }
-                    match builder.consume() {
-                        Page::DataPageV2 {
-                            num_values,
-                            num_nulls,
-                            ..
-                        } => {
-                            assert!(datapage_v2);
-                            assert_eq!(num_values, num_levels);
-                            assert_eq!(num_nulls, expected_nulls);
-                        }
-                        Page::DataPage { num_values, .. } => {
-                            assert!(!datapage_v2);
-                            assert_eq!(num_values, num_levels);
-                        }
-                        Page::DictionaryPage { .. } => unreachable!(),
-                    }
-                }
+        let mut builder = DataPageBuilderImpl::new(desc, num_values, datapage_v2);
+        builder.add_rep_levels(max_rep_level, &rep_levels);
+        builder.add_def_levels(max_def_level, &def_levels);
+        if dictionary {
+            let mut encoder = RleEncoder::new(1, 64);
+            for _ in 0..num_values {
+                encoder.put(0);
             }
+            let mut indices = vec![1];
+            indices.extend(encoder.consume());
+            builder.add_indices(indices.into());
+        } else {
+            builder.add_values::<FixedLenByteArrayType>(Encoding::PLAIN, &values);
+        }
+        match builder.consume() {
+            Page::DataPageV2 {
+                num_values,
+                num_nulls,
+                ..
+            } => {
+                assert!(datapage_v2);
+                assert_eq!(num_values, num_levels);
+                assert_eq!(num_nulls, expected_nulls);
+            }
+            Page::DataPage { num_values, .. } => {
+                assert!(!datapage_v2);
+                assert_eq!(num_values, num_levels);
+            }
+            Page::DictionaryPage { .. } => unreachable!(),
         }
     }
 }
