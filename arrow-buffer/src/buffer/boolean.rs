@@ -79,6 +79,7 @@ use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, N
 ///
 /// # See Also
 /// * [`BooleanBufferBuilder`] for building [`BooleanBuffer`] instances
+/// * [`Self::set_bit_counter`] for counting the set bits in many ranges of one buffer
 /// * [`NullBuffer`] for representing null values in Arrow arrays
 ///
 /// [`NullBuffer`]: crate::NullBuffer
@@ -622,18 +623,15 @@ impl BooleanBuffer {
         BitSliceIterator::new(self.values(), self.bit_offset, self.bit_len)
     }
 
-    /// Returns a [`SetBitCounter`] that counts the set bits before positions in
-    /// this [`BooleanBuffer`]
+    /// Returns a [`SetBitCounter`] that counts the set bits in ranges of this
+    /// [`BooleanBuffer`]
     ///
     /// ```
     /// # use arrow_buffer::BooleanBuffer;
-    /// // Validity of the elements of a list with rows of 3, 0, and 2 elements
-    /// let valid = BooleanBuffer::from(&[true, false, true, true, true][..]);
-    /// let mut counter = valid.set_bit_counter();
-    /// // Count the valid elements of each row, in row order
-    /// assert_eq!(counter.count_range(0..3), 2); // row 0 holds elements 0..3
-    /// assert_eq!(counter.count_range(3..3), 0); // row 1 is empty
-    /// assert_eq!(counter.count_range(3..5), 2); // row 2 holds elements 3..5
+    /// let bits = BooleanBuffer::from(vec![true, false, true, true, false, true]);
+    /// let mut counter = bits.set_bit_counter();
+    /// assert_eq!(counter.count_range(0..2), 1);
+    /// assert_eq!(counter.count_range(2..4), 2);
     /// ```
     pub fn set_bit_counter(&self) -> SetBitCounter<'_> {
         SetBitCounter::new(self.values(), self.bit_offset, self.bit_len)

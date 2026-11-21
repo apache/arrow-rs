@@ -366,28 +366,46 @@ impl Iterator for BitIndexU32Iterator<'_> {
     }
 }
 
-/// Counts the set bits before positions in a packed bitmask, for many positions
+/// Counts the set bits in ranges of a packed bitmask
 ///
-/// When positions do not decrease from one call to the next, each 64-bit word
-/// of the bitmask is read once, and a call within the current word costs a mask
-/// and a popcount. This suits a pass over the rows of a list array, such as
-/// counting the valid elements of each row, where calling
-/// [`Buffer::count_set_bits_offset`] for each row rescans from the row's start.
+/// [`Self::count_range`] returns the number of set bits in a range, and
+/// [`Self::count_before`] the number before a position. A result depends only
+/// on the arguments, so calls can come in any order and repeat.
 ///
-/// Positions can come in any order. A call reads each word between the
-/// previous position and the new one, in either direction. When positions jump
-/// across the bitmask, such as the rows of a list view in random order, calling
-/// [`Buffer::count_set_bits_offset`] for each row reads fewer words.
+/// # Example
+/// ```
+/// # use arrow_buffer::BooleanBuffer;
+/// let bits = BooleanBuffer::from(vec![true, false, true, true, false, true]);
+/// let mut counter = bits.set_bit_counter();
+/// assert_eq!(counter.count_range(0..2), 1);
+/// assert_eq!(counter.count_range(2..4), 2);
+/// assert_eq!(counter.count_before(6), 4);
+/// // Calls can go back, and a repeated call returns the same count
+/// assert_eq!(counter.count_range(0..2), 1);
+/// ```
+///
+/// # Performance
+///
+/// The counter keeps the 64-bit word that holds the last position, and a call
+/// reads the words between that position and the new one. When positions do
+/// not decrease, as in a pass over the rows of a list, each word is read once,
+/// and a call within the current word costs a mask and a popcount. Calling
+/// [`Buffer::count_set_bits_offset`] for each range instead pays a setup cost on
+/// every call, which dominates for short ranges.
+///
+/// When positions jump across the bitmask, such as the rows of a list view in
+/// random order, a call reads every word it jumps over. Calling
+/// [`Buffer::count_set_bits_offset`] for each range is faster there.
 ///
 /// # Example: Count the valid elements of each row of a list
 /// ```
 /// # use arrow_buffer::{BooleanBuffer, OffsetBuffer};
-/// // A list with rows of 3, 0, and 2 elements, and the validity of its elements
-/// let offsets = OffsetBuffer::<i32>::from_lengths([3, 0, 2]);
-/// let valid = BooleanBuffer::from(&[true, false, true, true, true][..]);
+/// // A list with rows of 3, 0, and 3 elements, and the validity of its elements
+/// let offsets = OffsetBuffer::<i32>::from_lengths([3, 0, 3]);
+/// let valid = BooleanBuffer::from(vec![true, false, true, true, false, true]);
 ///
-/// // One counter for every row. The rows are visited in order, so each word
-/// // of `valid` is read once.
+/// // One counter for all rows. The rows are visited in order, so each word of
+/// // `valid` is read once.
 /// let mut counter = valid.set_bit_counter();
 /// // Each pair of adjacent offsets is the start and end of a row
 /// let valid_per_row: Vec<usize> = offsets
@@ -420,10 +438,10 @@ impl<'a> SetBitCounter<'a> {
     ///
     /// ```
     /// # use arrow_buffer::bit_iterator::SetBitCounter;
-    /// // Bits 3..9 are 0, 1, 1, 0, 1, 1
-    /// let mut counter = SetBitCounter::new(&[0b1011_0101, 0b0000_0001], 3, 6);
-    /// assert_eq!(counter.count_before(3), 2);
-    /// assert_eq!(counter.count_range(3..6), 2);
+    /// // Bits 3..9 of the buffer are 1, 0, 1, 1, 0, 1
+    /// let mut counter = SetBitCounter::new(&[0b0110_1000, 0b0000_0001], 3, 6);
+    /// assert_eq!(counter.count_range(2..4), 2);
+    /// assert_eq!(counter.count_before(6), 4);
     /// ```
     ///
     /// # Panics
@@ -469,11 +487,11 @@ impl<'a> SetBitCounter<'a> {
     ///
     /// ```
     /// # use arrow_buffer::BooleanBuffer;
-    /// let bits = BooleanBuffer::from(&[true, false, true, true][..]);
+    /// let bits = BooleanBuffer::from(vec![true, false, true, true, false, true]);
     /// let mut counter = bits.set_bit_counter();
     /// assert_eq!(counter.count_before(0), 0);
     /// assert_eq!(counter.count_before(3), 2);
-    /// assert_eq!(counter.count_before(4), 3);
+    /// assert_eq!(counter.count_before(6), 4);
     /// ```
     ///
     /// # Panics
@@ -502,7 +520,7 @@ impl<'a> SetBitCounter<'a> {
     ///
     /// ```
     /// # use arrow_buffer::BooleanBuffer;
-    /// let bits = BooleanBuffer::from(&[true, false, true, true][..]);
+    /// let bits = BooleanBuffer::from(vec![true, false, true, true, false, true]);
     /// let mut counter = bits.set_bit_counter();
     /// assert_eq!(counter.count_range(0..2), 1);
     /// assert_eq!(counter.count_range(2..2), 0);
