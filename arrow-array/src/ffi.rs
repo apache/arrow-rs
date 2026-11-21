@@ -1396,6 +1396,7 @@ mod tests_to_then_from_ffi {
 
 #[cfg(test)]
 mod tests_from_ffi {
+    use rstest::rstest;
     #[cfg(not(feature = "force_validate"))]
     use std::ptr::NonNull;
     use std::sync::Arc;
@@ -1715,43 +1716,41 @@ mod tests_from_ffi {
     /// short-circuited to 0 on the length alone.
     ///
     /// <https://github.com/apache/arrow-rs/issues/10910>
-    #[test]
-    fn test_zero_length_bytes_at_non_zero_offset() -> Result<()> {
+    #[rstest]
+    #[case::utf8(DataType::Utf8, Buffer::from_slice_ref([0i32, 1, 3, 5]))]
+    #[case::binary(DataType::Binary, Buffer::from_slice_ref([0i32, 1, 3, 5]))]
+    #[case::large_utf8(DataType::LargeUtf8, Buffer::from_slice_ref([0i64, 1, 3, 5]))]
+    #[case::large_binary(DataType::LargeBinary, Buffer::from_slice_ref([0i64, 1, 3, 5]))]
+    fn test_zero_length_bytes_at_non_zero_offset(
+        #[case] data_type: DataType,
+        #[case] offsets: Buffer,
+    ) -> Result<()> {
         // "x", "aa", "bb", viewed as zero elements starting at `offset`.
-        let small = Buffer::from_slice_ref([0i32, 1, 3, 5]);
-        let large = Buffer::from_slice_ref([0i64, 1, 3, 5]);
         let values = Buffer::from(b"xaabb".as_slice());
 
-        for (data_type, offsets) in [
-            (DataType::Utf8, &small),
-            (DataType::Binary, &small),
-            (DataType::LargeUtf8, &large),
-            (DataType::LargeBinary, &large),
-        ] {
-            for offset in 0..4 {
-                let data = ArrayData::try_new(
-                    data_type.clone(),
-                    0,
-                    None,
-                    offset,
-                    vec![offsets.clone(), values.clone()],
-                    vec![],
-                )?;
+        for offset in 0..4 {
+            let data = ArrayData::try_new(
+                data_type.clone(),
+                0,
+                None,
+                offset,
+                vec![offsets.clone(), values.clone()],
+                vec![],
+            )?;
 
-                let array = FFI_ArrowArray::new(&data);
-                let schema = FFI_ArrowSchema::try_from(&data_type)?;
-                let imported = unsafe { from_ffi(array, &schema) }?;
+            let array = FFI_ArrowArray::new(&data);
+            let schema = FFI_ArrowSchema::try_from(&data_type)?;
+            let imported = unsafe { from_ffi(array, &schema) }?;
 
-                // `from_ffi` builds the `ArrayData` with `new_unchecked`, so an
-                // inconsistency only surfaces once something validates it.
-                imported.validate_full()?;
-                assert_eq!(imported.len(), 0);
-                assert_eq!(imported, data);
+            // `from_ffi` builds the `ArrayData` with `new_unchecked`, so an
+            // inconsistency only surfaces once something validates it.
+            imported.validate_full()?;
+            assert_eq!(imported.len(), 0);
+            assert_eq!(imported, data);
 
-                // The values buffer is sized from the last offset of the window,
-                // not short-circuited to 0.
-                assert_eq!(imported.buffers()[1].len(), [0, 1, 3, 5][offset]);
-            }
+            // The values buffer is sized from the last offset of the window,
+            // not short-circuited to 0.
+            assert_eq!(imported.buffers()[1].len(), [0, 1, 3, 5][offset]);
         }
 
         Ok(())

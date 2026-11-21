@@ -495,6 +495,7 @@ impl GapInfo {
 mod tests {
     use super::*;
     use chrono::{NaiveDate, Offset, TimeZone};
+    use rstest::rstest;
 
     #[test]
     fn test_with_offset() {
@@ -532,8 +533,8 @@ mod tests {
         assert!(err.contains("Invalid timezone"), "{}", err);
     }
 
-    #[test]
-    fn test_gap_info_fixed_offset() {
+    #[rstest]
+    fn test_gap_info_fixed_offset(#[values("+00:00", "-05:00", "+01:00", "+09:30")] tz: &str) {
         let times = [
             NaiveDate::from_ymd_opt(2000, 1, 1)
                 .unwrap()
@@ -550,11 +551,9 @@ mod tests {
                 .unwrap(),
         ];
 
-        for tz in ["+00:00", "-05:00", "+01:00", "+09:30"] {
-            let tz: Tz = tz.parse().unwrap();
-            for t in &times {
-                assert!(GapInfo::new(t, &tz).is_none(), "{tz:?} {t}");
-            }
+        let tz: Tz = tz.parse().unwrap();
+        for t in &times {
+            assert!(GapInfo::new(t, &tz).is_none(), "{tz:?} {t}");
         }
     }
 }
