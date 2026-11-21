@@ -26,6 +26,7 @@
 //! but compatibility is not guaranteed.
 
 mod builder;
+mod canonicalize;
 mod decoder;
 mod path;
 mod utils;
