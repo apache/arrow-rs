@@ -6424,7 +6424,7 @@ mod tests {
         // position among the values that have levels, counted from the start of the values
         // array. This misses the written values of fixed size lists with null rows, of list
         // views, and of lists sliced from larger arrays, as `write` does to split a batch
-        // between row groups. A selection hashes the written values instead.
+        // between row groups (#12391). A selection hashes the written values instead.
         for (max_row_group_rows, columns) in
             [(None, 0..num_columns - 2), (Some(64), 0..num_columns - 4)]
         {
