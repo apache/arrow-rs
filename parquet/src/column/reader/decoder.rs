@@ -355,10 +355,14 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
             encoding = Encoding::RLE_DICTIONARY;
         }
 
+        // Invalidate the previous page before configuring the new one, so a
+        // failed set_data cannot be retried with stale decoder state.
+        self.current_encoding = None;
+
         let decoder = if encoding == Encoding::RLE_DICTIONARY {
             self.decoders[encoding as usize]
                 .as_mut()
-                .expect("Decoder for dict should have been set")
+                .ok_or_else(|| general_err!("missing dictionary page for column"))?
         } else {
             let slot = encoding as usize;
             if self.decoders[slot].is_none() {
@@ -377,9 +381,10 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
     }
 
     fn read(&mut self, out: &mut Self::Buffer, num_values: usize) -> Result<usize> {
+        // Unset by a failed data page; retries must error, not panic.
         let encoding = self
             .current_encoding
-            .expect("current_encoding should be set");
+            .ok_or_else(|| general_err!("the current data page failed to decode"))?;
 
         let current_decoder = self.decoders[encoding as usize]
             .as_mut()
@@ -394,9 +399,10 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
     }
 
     fn skip_values(&mut self, num_values: usize) -> Result<usize> {
+        // Unset by a failed data page; retries must error, not panic.
         let encoding = self
             .current_encoding
-            .expect("current_encoding should be set");
+            .ok_or_else(|| general_err!("the current data page failed to decode"))?;
 
         let current_decoder = self.decoders[encoding as usize]
             .as_mut()
@@ -671,8 +677,11 @@ impl RepetitionLevelDecoder for RepetitionLevelDecoderImpl {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data_type::Int32Type;
     use crate::encodings::rle::RleEncoder;
+    use crate::schema::types::{ColumnDescriptor, ColumnPath, Type as SchemaType};
     use rand::{prelude::*, rng};
+    use std::sync::Arc;
 
     #[test]
     fn fixed_len_payload_validation() {
@@ -740,6 +749,62 @@ mod tests {
             assert_eq!(actual.as_ptr(), data.as_ptr());
             assert_eq!(actual, data);
         }
+    }
+
+    /// A data page that fails to install must invalidate the previous page's
+    /// decoder state: subsequent reads and skips error instead of silently
+    /// replaying the previous page's decoder.
+    #[test]
+    fn failed_set_data_invalidates_previous_page() {
+        // Minimal descriptor for a required INT32 column.
+        let descr = {
+            let ty = SchemaType::primitive_type_builder("t", Type::INT32)
+                .build()
+                .unwrap();
+            Arc::new(ColumnDescriptor::new(
+                Arc::new(ty),
+                0,
+                0,
+                ColumnPath::new(vec![]),
+            ))
+        };
+        let mut decoder = ColumnValueDecoderImpl::<Int32Type>::new(&descr);
+
+        // A successful PLAIN page, left partially unread.
+        let plain = Bytes::from(
+            [7i32, 8]
+                .iter()
+                .flat_map(|v| v.to_le_bytes())
+                .collect::<Vec<u8>>(),
+        );
+        decoder.set_data(Encoding::PLAIN, plain, 2, None).unwrap();
+        let mut out = Vec::new();
+        assert_eq!(decoder.read(&mut out, 1).unwrap(), 1);
+        assert_eq!(out, vec![7]);
+
+        // A data page claiming dictionary encoding with no dictionary page
+        // set fails to install, and must not leave the PLAIN page reachable.
+        let err = decoder
+            .set_data(Encoding::RLE_DICTIONARY, Bytes::new(), 2, None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("missing dictionary page for column"),
+            "unexpected error: {err}"
+        );
+
+        // Reads and skips must error rather than replay the PLAIN decoder.
+        let mut out = Vec::new();
+        let err = decoder.read(&mut out, 1).unwrap_err().to_string();
+        assert!(
+            err.contains("the current data page failed to decode"),
+            "unexpected error: {err}"
+        );
+        let err = decoder.skip_values(1).unwrap_err().to_string();
+        assert!(
+            err.contains("the current data page failed to decode"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
