@@ -49,6 +49,7 @@ half = { version = "2.1", default-features = false }
 insta = { workspace = true }
 num-bigint = { version = "0.5", default-features = false, features = ["std"] }
 rand = "0.10"
+rstest = { version = "0.28.0", default-features = false }
 
 [[test]]
 name = "cast"

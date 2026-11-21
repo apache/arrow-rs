@@ -9,16 +9,20 @@ use arrow_array::builder::{
     GenericBinaryBuilder, PrimitiveBuilder, PrimitiveDictionaryBuilder, StringDictionaryBuilder,
 };
 use arrow_array::cast::AsArray;
-use arrow_array::types::{Int8Type, Int32Type, Int64Type, UInt16Type, UInt32Type};
+use arrow_array::types::{
+    BinaryViewType, ByteViewType, Int8Type, Int32Type, Int64Type, StringViewType, UInt16Type,
+    UInt32Type,
+};
 use arrow_array::{
     Array, ArrayRef, BinaryArray, BinaryViewArray, Date32Array, DictionaryArray,
-    FixedSizeBinaryArray, Int8Array, Int32Array, LargeStringArray, StringArray, StringViewArray,
-    StructArray, TimestampSecondArray,
+    FixedSizeBinaryArray, GenericByteViewArray, Int8Array, Int32Array, LargeStringArray,
+    StringArray, StringViewArray, StructArray, TimestampSecondArray,
 };
 use arrow_buffer::NullBuffer;
 use arrow_cast::display::{ArrayFormatter, FormatOptions};
 use arrow_cast::{can_cast_types, cast};
 use arrow_schema::{ArrowError, DataType, Field, TimeUnit};
+use rstest::rstest;
 #[test]
 fn test_fixed_size_binary_to_dictionary() {
     let bytes_1 = b"Hiiii".as_slice();
@@ -74,9 +78,18 @@ fn test_binary_to_dictionary() {
     assert_eq!(dict_array.values().len(), 3);
 }
 
-#[test]
-fn test_cast_string_array_to_dict_utf8_view() {
-    let array = StringArray::from(vec![Some("one"), None, Some("three"), Some("one")]);
+#[rstest]
+#[case::utf8(DataType::Utf8)]
+#[case::utf8_view(DataType::Utf8View)]
+#[case::large_utf8(DataType::LargeUtf8)]
+fn test_cast_string_array_to_dict_utf8_view(#[case] from_type: DataType) {
+    let values = vec![Some("one"), None, Some("three"), Some("one")];
+    let array: ArrayRef = match from_type {
+        DataType::Utf8 => Arc::new(StringArray::from(values)),
+        DataType::Utf8View => Arc::new(StringViewArray::from(values)),
+        DataType::LargeUtf8 => Arc::new(LargeStringArray::from(values)),
+        _ => unreachable!(),
+    };
 
     let cast_type = DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8View));
     assert!(can_cast_types(array.data_type(), &cast_type));
@@ -121,29 +134,6 @@ fn test_cast_string_array_to_dict_utf8_view_null_vs_literal_null() {
 }
 
 #[test]
-fn test_cast_string_view_array_to_dict_utf8_view() {
-    let array = StringViewArray::from(vec![Some("one"), None, Some("three"), Some("one")]);
-
-    let cast_type = DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8View));
-    assert!(can_cast_types(array.data_type(), &cast_type));
-    let cast_array = cast(&array, &cast_type).unwrap();
-    assert_eq!(cast_array.data_type(), &cast_type);
-
-    let dict_array = cast_array.as_dictionary::<UInt16Type>();
-    assert_eq!(dict_array.values().data_type(), &DataType::Utf8View);
-    assert_eq!(dict_array.values().len(), 2); // "one" and "three" deduplicated
-
-    let typed = dict_array.downcast_dict::<StringViewArray>().unwrap();
-    let actual: Vec<Option<&str>> = typed.into_iter().collect();
-    assert_eq!(actual, vec![Some("one"), None, Some("three"), Some("one")]);
-
-    let keys = dict_array.keys();
-    assert!(keys.is_null(1));
-    assert_eq!(keys.value(0), keys.value(3));
-    assert_ne!(keys.value(0), keys.value(2));
-}
-
-#[test]
 fn test_cast_string_view_slice_to_dict_utf8_view() {
     let array = StringViewArray::from(vec![
         Some("zero"),
@@ -173,60 +163,34 @@ fn test_cast_string_view_slice_to_dict_utf8_view() {
     assert_ne!(keys.value(0), keys.value(2));
 }
 
-#[test]
-fn test_cast_binary_array_to_dict_binary_view() {
-    let mut builder = GenericBinaryBuilder::<i32>::new();
-    builder.append_value(b"hello");
-    builder.append_value(b"hiiii");
-    builder.append_value(b"hiiii"); // duplicate
-    builder.append_null();
-    builder.append_value(b"rustt");
-
-    let array = builder.finish();
+#[rstest]
+#[case::binary(DataType::Binary)]
+#[case::binary_view(DataType::BinaryView)]
+fn test_cast_binary_array_to_dict_binary_view(#[case] from_type: DataType) {
+    let array: ArrayRef = match from_type {
+        DataType::Binary => {
+            let mut builder = GenericBinaryBuilder::<i32>::new();
+            builder.append_value(b"hello");
+            builder.append_value(b"hiiii");
+            builder.append_value(b"hiiii"); // duplicate
+            builder.append_null();
+            builder.append_value(b"rustt");
+            Arc::new(builder.finish())
+        }
+        DataType::BinaryView => Arc::new(BinaryViewArray::from_iter([
+            Some(b"hello".as_slice()),
+            Some(b"hiiii".as_slice()),
+            Some(b"hiiii".as_slice()), // duplicate
+            None,
+            Some(b"rustt".as_slice()),
+        ])),
+        _ => unreachable!(),
+    };
 
     let cast_type =
         DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::BinaryView));
     assert!(can_cast_types(array.data_type(), &cast_type));
     let cast_array = cast(&array, &cast_type).unwrap();
-    assert_eq!(cast_array.data_type(), &cast_type);
-
-    let dict_array = cast_array.as_dictionary::<UInt16Type>();
-    assert_eq!(dict_array.values().data_type(), &DataType::BinaryView);
-    assert_eq!(dict_array.values().len(), 3);
-
-    let typed = dict_array.downcast_dict::<BinaryViewArray>().unwrap();
-    let actual: Vec<Option<&[u8]>> = typed.into_iter().collect();
-    assert_eq!(
-        actual,
-        vec![
-            Some(b"hello".as_slice()),
-            Some(b"hiiii".as_slice()),
-            Some(b"hiiii".as_slice()),
-            None,
-            Some(b"rustt".as_slice())
-        ]
-    );
-
-    let keys = dict_array.keys();
-    assert!(keys.is_null(3));
-    assert_eq!(keys.value(1), keys.value(2));
-    assert_ne!(keys.value(0), keys.value(1));
-}
-
-#[test]
-fn test_cast_binary_view_array_to_dict_binary_view() {
-    let view = BinaryViewArray::from_iter([
-        Some(b"hello".as_slice()),
-        Some(b"hiiii".as_slice()),
-        Some(b"hiiii".as_slice()), // duplicate
-        None,
-        Some(b"rustt".as_slice()),
-    ]);
-
-    let cast_type =
-        DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::BinaryView));
-    assert!(can_cast_types(view.data_type(), &cast_type));
-    let cast_array = cast(&view, &cast_type).unwrap();
     assert_eq!(cast_array.data_type(), &cast_type);
 
     let dict_array = cast_array.as_dictionary::<UInt16Type>();
@@ -299,29 +263,6 @@ fn test_cast_string_array_to_dict_utf8_view_key_overflow_u8() {
     assert!(can_cast_types(array.data_type(), &cast_type));
     let err = cast(&array, &cast_type).unwrap_err();
     assert!(matches!(err, ArrowError::DictionaryKeyOverflowError));
-}
-
-#[test]
-fn test_cast_large_string_array_to_dict_utf8_view() {
-    let array = LargeStringArray::from(vec![Some("one"), None, Some("three"), Some("one")]);
-
-    let cast_type = DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8View));
-    assert!(can_cast_types(array.data_type(), &cast_type));
-    let cast_array = cast(&array, &cast_type).unwrap();
-    assert_eq!(cast_array.data_type(), &cast_type);
-
-    let dict_array = cast_array.as_dictionary::<UInt16Type>();
-    assert_eq!(dict_array.values().data_type(), &DataType::Utf8View);
-    assert_eq!(dict_array.values().len(), 2); // "one" and "three" deduplicated
-
-    let typed = dict_array.downcast_dict::<StringViewArray>().unwrap();
-    let actual: Vec<Option<&str>> = typed.into_iter().collect();
-    assert_eq!(actual, vec![Some("one"), None, Some("three"), Some("one")]);
-
-    let keys = dict_array.keys();
-    assert!(keys.is_null(1));
-    assert_eq!(keys.value(0), keys.value(3));
-    assert_ne!(keys.value(0), keys.value(2));
 }
 
 #[test]
@@ -487,73 +428,68 @@ fn test_cast_struct_array_to_dict_struct_key_overflow() {
     );
 }
 
-#[test]
-fn test_cast_empty_string_array_to_dict_utf8_view() {
-    let array = StringArray::from(Vec::<Option<&str>>::new());
-
-    let cast_type = DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8View));
+#[rstest]
+#[case::string(
+    Arc::new(StringArray::from(Vec::<Option<&str>>::new())) as ArrayRef,
+    DataType::Utf8View
+)]
+#[case::binary(
+    Arc::new(BinaryArray::from(Vec::<Option<&[u8]>>::new())) as ArrayRef,
+    DataType::BinaryView
+)]
+fn test_cast_empty_array_to_dict_view(#[case] array: ArrayRef, #[case] value_type: DataType) {
+    let cast_type = DataType::Dictionary(Box::new(DataType::UInt16), Box::new(value_type));
     assert!(can_cast_types(array.data_type(), &cast_type));
     let cast_array = cast(&array, &cast_type).unwrap();
     assert_eq!(cast_array.data_type(), &cast_type);
     assert_eq!(cast_array.len(), 0);
 }
 
-#[test]
-fn test_cast_empty_binary_array_to_dict_binary_view() {
-    let array = BinaryArray::from(Vec::<Option<&[u8]>>::new());
-
-    let cast_type =
-        DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::BinaryView));
-    assert!(can_cast_types(array.data_type(), &cast_type));
-    let cast_array = cast(&array, &cast_type).unwrap();
-    assert_eq!(cast_array.data_type(), &cast_type);
-    assert_eq!(cast_array.len(), 0);
-}
-
-#[test]
-fn test_cast_all_null_string_array_to_dict_utf8_view() {
-    let array = StringArray::from(vec![None::<&str>, None, None]);
-
-    let cast_type = DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8View));
-    assert!(can_cast_types(array.data_type(), &cast_type));
-    let cast_array = cast(&array, &cast_type).unwrap();
-    assert_eq!(cast_array.data_type(), &cast_type);
-    assert_eq!(cast_array.null_count(), 3);
-
-    let dict_array = cast_array.as_dictionary::<UInt16Type>();
-    assert_eq!(dict_array.values().data_type(), &DataType::Utf8View);
-    assert_eq!(dict_array.values().len(), 0);
-    assert_eq!(dict_array.keys().null_count(), 3);
-
-    let typed = dict_array.downcast_dict::<StringViewArray>().unwrap();
-    let actual: Vec<Option<&str>> = typed.into_iter().collect();
-    assert_eq!(actual, vec![None, None, None]);
-}
-
-#[test]
-fn test_cast_all_null_binary_array_to_dict_binary_view() {
-    let array = BinaryArray::from(vec![None::<&[u8]>, None, None]);
-
-    let cast_type =
-        DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::BinaryView));
+#[rstest]
+#[case::string(
+    Arc::new(StringArray::from(vec![None::<&str>, None, None])) as ArrayRef,
+    StringViewType {}
+)]
+#[case::binary(
+    Arc::new(BinaryArray::from(vec![None::<&[u8]>, None, None])) as ArrayRef,
+    BinaryViewType {}
+)]
+fn test_cast_all_null_array_to_dict_view<T: ByteViewType>(
+    #[case] array: ArrayRef,
+    #[case] value_type: T,
+) where
+    for<'a> &'a T::Native: Default,
+    T::Native: PartialEq,
+{
+    let _ = value_type;
+    let cast_type = DataType::Dictionary(Box::new(DataType::UInt16), Box::new(T::DATA_TYPE));
     assert!(can_cast_types(array.data_type(), &cast_type));
     let cast_array = cast(&array, &cast_type).unwrap();
     assert_eq!(cast_array.data_type(), &cast_type);
     assert_eq!(cast_array.null_count(), 3);
 
     let dict_array = cast_array.as_dictionary::<UInt16Type>();
-    assert_eq!(dict_array.values().data_type(), &DataType::BinaryView);
+    assert_eq!(dict_array.values().data_type(), &T::DATA_TYPE);
     assert_eq!(dict_array.values().len(), 0);
     assert_eq!(dict_array.keys().null_count(), 3);
 
-    let typed = dict_array.downcast_dict::<BinaryViewArray>().unwrap();
-    let actual: Vec<Option<&[u8]>> = typed.into_iter().collect();
+    let typed = dict_array
+        .downcast_dict::<GenericByteViewArray<T>>()
+        .unwrap();
+    let actual: Vec<Option<&T::Native>> = typed.into_iter().collect();
     assert_eq!(actual, vec![None, None, None]);
 }
 
-#[test]
-fn test_cast_utf8_dict() {
-    // FROM a dictionary with of Utf8 values
+#[rstest]
+#[case::utf8(Utf8)]
+#[case::int16(Dictionary(Box::new(Int16), Box::new(Utf8)))]
+#[case::int32(Dictionary(Box::new(Int32), Box::new(Utf8)))]
+#[case::int64(Dictionary(Box::new(Int64), Box::new(Utf8)))]
+#[case::uint8(Dictionary(Box::new(UInt8), Box::new(Utf8)))]
+#[case::uint16(Dictionary(Box::new(UInt16), Box::new(Utf8)))]
+#[case::uint32(Dictionary(Box::new(UInt32), Box::new(Utf8)))]
+#[case::uint64(Dictionary(Box::new(UInt64), Box::new(Utf8)))]
+fn test_cast_utf8_dict(#[case] cast_type: DataType) {
     let mut builder = StringDictionaryBuilder::<Int8Type>::new();
     builder.append("one").unwrap();
     builder.append_null();
@@ -561,94 +497,29 @@ fn test_cast_utf8_dict() {
     let array: ArrayRef = Arc::new(builder.finish());
 
     let expected = vec!["one", "null", "three"];
-
-    // Test casting TO StringArray
-    let cast_type = Utf8;
-    let cast_array = cast(&array, &cast_type).expect("cast to UTF-8 failed");
-    assert_eq!(cast_array.data_type(), &cast_type);
-    assert_eq!(array_to_strings(&cast_array), expected);
-
-    // Test casting TO Dictionary (with different index sizes)
-
-    let cast_type = Dictionary(Box::new(Int16), Box::new(Utf8));
-    let cast_array = cast(&array, &cast_type).expect("cast failed");
-    assert_eq!(cast_array.data_type(), &cast_type);
-    assert_eq!(array_to_strings(&cast_array), expected);
-
-    let cast_type = Dictionary(Box::new(Int32), Box::new(Utf8));
-    let cast_array = cast(&array, &cast_type).expect("cast failed");
-    assert_eq!(cast_array.data_type(), &cast_type);
-    assert_eq!(array_to_strings(&cast_array), expected);
-
-    let cast_type = Dictionary(Box::new(Int64), Box::new(Utf8));
-    let cast_array = cast(&array, &cast_type).expect("cast failed");
-    assert_eq!(cast_array.data_type(), &cast_type);
-    assert_eq!(array_to_strings(&cast_array), expected);
-
-    let cast_type = Dictionary(Box::new(UInt8), Box::new(Utf8));
-    let cast_array = cast(&array, &cast_type).expect("cast failed");
-    assert_eq!(cast_array.data_type(), &cast_type);
-    assert_eq!(array_to_strings(&cast_array), expected);
-
-    let cast_type = Dictionary(Box::new(UInt16), Box::new(Utf8));
-    let cast_array = cast(&array, &cast_type).expect("cast failed");
-    assert_eq!(cast_array.data_type(), &cast_type);
-    assert_eq!(array_to_strings(&cast_array), expected);
-
-    let cast_type = Dictionary(Box::new(UInt32), Box::new(Utf8));
-    let cast_array = cast(&array, &cast_type).expect("cast failed");
-    assert_eq!(cast_array.data_type(), &cast_type);
-    assert_eq!(array_to_strings(&cast_array), expected);
-
-    let cast_type = Dictionary(Box::new(UInt64), Box::new(Utf8));
     let cast_array = cast(&array, &cast_type).expect("cast failed");
     assert_eq!(cast_array.data_type(), &cast_type);
     assert_eq!(array_to_strings(&cast_array), expected);
 }
 
-#[test]
-fn test_cast_dict_to_dict_bad_index_value_primitive() {
-    // test converting from an array that has indexes of a type
-    // that are out of bounds for a particular other kind of
-    // index.
-
+// 200 distinct values fit Int32 dictionary keys but exceed the Int8 key range.
+#[rstest]
+#[case::primitive({
     let mut builder = PrimitiveDictionaryBuilder::<Int32Type, Int64Type>::new();
-
-    // add 200 distinct values (which can be stored by a
-    // dictionary indexed by int32, but not a dictionary indexed
-    // with int8)
     for i in 0..200 {
         builder.append(i).unwrap();
     }
-    let array: ArrayRef = Arc::new(builder.finish());
-
-    let cast_type = Dictionary(Box::new(Int8), Box::new(Utf8));
-    let res = cast(&array, &cast_type);
-    assert!(res.is_err());
-    let actual_error = format!("{res:?}");
-    let expected_error = "Could not convert 72 dictionary indexes from Int32 to Int8";
-    assert!(
-        actual_error.contains(expected_error),
-        "did not find expected error '{actual_error}' in actual error '{expected_error}'"
-    );
-}
-
-#[test]
-fn test_cast_dict_to_dict_bad_index_value_utf8() {
-    // Same test as test_cast_dict_to_dict_bad_index_value but use
-    // string values (and encode the expected behavior here);
-
+    Arc::new(builder.finish()) as ArrayRef
+})]
+#[case::utf8({
     let mut builder = StringDictionaryBuilder::<Int32Type>::new();
-
-    // add 200 distinct values (which can be stored by a
-    // dictionary indexed by int32, but not a dictionary indexed
-    // with int8)
     for i in 0..200 {
         let val = format!("val{i}");
         builder.append(&val).unwrap();
     }
-    let array = builder.finish();
-
+    Arc::new(builder.finish()) as ArrayRef
+})]
+fn test_cast_dict_to_dict_bad_index_value(#[case] array: ArrayRef) {
     let cast_type = Dictionary(Box::new(Int8), Box::new(Utf8));
     let res = cast(&array, &cast_type);
     assert!(res.is_err());
@@ -708,9 +579,10 @@ fn test_cast_nested_dictionary_to_dictionary_reuses_values() {
     assert_eq!(logical, vec![Some("x"), None, Some("y"), None, Some("x")]);
 }
 
-#[test]
-fn test_cast_primitive_dict() {
-    // FROM a dictionary with of INT32 values
+#[rstest]
+#[case::utf8(Utf8)]
+#[case::int64(Int64)]
+fn test_cast_primitive_dict(#[case] cast_type: DataType) {
     let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
     builder.append(1).unwrap();
     builder.append_null();
@@ -718,19 +590,15 @@ fn test_cast_primitive_dict() {
     let array: ArrayRef = Arc::new(builder.finish());
 
     let expected = vec!["1", "null", "3"];
-
-    // Test casting TO PrimitiveArray, different dictionary type
-    let cast_array = cast(&array, &Utf8).expect("cast to UTF-8 failed");
+    let cast_array = cast(&array, &cast_type).expect("cast failed");
     assert_eq!(array_to_strings(&cast_array), expected);
-    assert_eq!(cast_array.data_type(), &Utf8);
-
-    let cast_array = cast(&array, &Int64).expect("cast to int64 failed");
-    assert_eq!(array_to_strings(&cast_array), expected);
-    assert_eq!(cast_array.data_type(), &Int64);
+    assert_eq!(cast_array.data_type(), &cast_type);
 }
 
-#[test]
-fn test_cast_primitive_array_to_dict() {
+#[rstest]
+#[case::same_value_type(Int32)]
+#[case::narrower_value_type(Int8)]
+fn test_cast_primitive_array_to_dict(#[case] value_type: DataType) {
     let mut builder = PrimitiveBuilder::<Int32Type>::new();
     builder.append_value(1);
     builder.append_null();
@@ -738,15 +606,7 @@ fn test_cast_primitive_array_to_dict() {
     let array: ArrayRef = Arc::new(builder.finish());
 
     let expected = vec!["1", "null", "3"];
-
-    // Cast to a dictionary (same value type, Int32)
-    let cast_type = Dictionary(Box::new(UInt8), Box::new(Int32));
-    let cast_array = cast(&array, &cast_type).expect("cast failed");
-    assert_eq!(cast_array.data_type(), &cast_type);
-    assert_eq!(array_to_strings(&cast_array), expected);
-
-    // Cast to a dictionary (different value type, Int8)
-    let cast_type = Dictionary(Box::new(UInt8), Box::new(Int8));
+    let cast_type = Dictionary(Box::new(UInt8), Box::new(value_type));
     let cast_array = cast(&array, &cast_type).expect("cast failed");
     assert_eq!(cast_array.data_type(), &cast_type);
     assert_eq!(array_to_strings(&cast_array), expected);
