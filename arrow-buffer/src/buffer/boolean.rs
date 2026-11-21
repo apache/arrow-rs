@@ -3,7 +3,9 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
-use crate::bit_iterator::{BitIndexIterator, BitIndexU32Iterator, BitIterator, BitSliceIterator};
+use crate::bit_iterator::{
+    BitIndexIterator, BitIndexU32Iterator, BitIterator, BitSliceIterator, SetBitCounter,
+};
 use crate::bit_util::read_u64;
 use crate::{
     BooleanBufferBuilder, Buffer, MutableBuffer, bit_util, buffer_bin_and, buffer_bin_or,
@@ -77,6 +79,7 @@ use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, N
 ///
 /// # See Also
 /// * [`BooleanBufferBuilder`] for building [`BooleanBuffer`] instances
+/// * [`Self::set_bit_counter`] for counting the set bits in many ranges of one buffer
 /// * [`NullBuffer`] for representing null values in Arrow arrays
 ///
 /// [`NullBuffer`]: crate::NullBuffer
@@ -618,6 +621,20 @@ impl BooleanBuffer {
     /// Returns a [`BitSliceIterator`] yielding contiguous ranges of set bits
     pub fn set_slices(&self) -> BitSliceIterator<'_> {
         BitSliceIterator::new(self.values(), self.bit_offset, self.bit_len)
+    }
+
+    /// Returns a [`SetBitCounter`] that counts the set bits in ranges of this
+    /// [`BooleanBuffer`]
+    ///
+    /// ```
+    /// # use arrow_buffer::BooleanBuffer;
+    /// let bits = BooleanBuffer::from(vec![true, false, true, true, false, true]);
+    /// let mut counter = bits.set_bit_counter();
+    /// assert_eq!(counter.count_range(0..2), 1);
+    /// assert_eq!(counter.count_range(2..4), 2);
+    /// ```
+    pub fn set_bit_counter(&self) -> SetBitCounter<'_> {
+        SetBitCounter::new(self.values(), self.bit_offset, self.bit_len)
     }
 
     /// Block size for chunked fold operations in [`Self::has_true`] and [`Self::has_false`].
