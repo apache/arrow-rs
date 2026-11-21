@@ -1068,13 +1068,29 @@ impl LevelInfoBuilder {
 
     /// Like [`Self::write_leaf`], for the rows at the indices `rows`, which must be sorted
     /// and distinct
+    ///
+    /// Writes the levels of rows that are all valid or all null as a run, as
+    /// [`Self::write_leaf`] does for the array that `filter_record_batch` returns for those
+    /// rows, so that the column writer splits them into the same pages.
     fn write_leaf_rows(info: &mut ArrayLevels, rows: &[usize]) {
         match &info.logical_nulls {
             Some(nulls) if !matches!(info.def_levels, LevelData::Absent) => {
-                if nulls.null_count() == nulls.len() {
-                    // Fast path: entire leaf array is null
+                let all_null = nulls.null_count() == nulls.len();
+                let first_valid = !all_null && rows.first().is_some_and(|&r| nulls.is_valid(r));
+                let uniform = all_null || rows.iter().all(|&r| nulls.is_valid(r) == first_valid);
+                // Filtering a dictionary keeps its values, and so any nulls among them, which
+                // make `write_leaf` write levels one by one even for rows that are all valid
+                let keeps_nulls = || {
+                    info.array
+                        .as_any_dictionary_opt()
+                        .is_some_and(|dictionary| dictionary.values().logical_nulls().is_some())
+                };
+                if uniform && !first_valid {
                     info.def_levels
                         .append_run(info.max_def_level - 1, rows.len());
+                } else if uniform && !keeps_nulls() {
+                    info.def_levels.append_run(info.max_def_level, rows.len());
+                    info.non_null_indices.extend_from_slice(rows);
                 } else {
                     let max_def_level = info.max_def_level;
                     let def_levels = info

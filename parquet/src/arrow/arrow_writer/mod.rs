@@ -365,13 +365,12 @@ impl<W: Write + Send> ArrowWriter<W> {
     ///
     /// This writes the rows that [`filter_record_batch`] would return for the same
     /// selection, as [`Self::write`] would write them, but without first copying them to a
-    /// new batch. The pages of a nullable column can differ, however: the writer can split
-    /// the column into pages, and row groups by size, at different rows when the selected
-    /// rows that it writes to a row group are all valid or all null.
+    /// new batch. The pages of a nullable column can still differ when one call writes rows
+    /// to more than one row group and only some of them have nulls in that column.
     ///
-    /// A `selection` that selects no rows writes nothing. This fails as [`Self::write`]
-    /// would for the filtered batch, and, without writing any rows, if `selection` does not
-    /// span exactly `batch.num_rows()` rows.
+    /// A `selection` that selects no rows writes nothing. This fails in the same cases as
+    /// [`Self::write`] would for the filtered batch, and, without writing any rows, if
+    /// `selection` does not span exactly `batch.num_rows()` rows.
     ///
     /// [`filter_record_batch`]: arrow_select::filter::filter_record_batch
     ///
@@ -412,7 +411,10 @@ impl<W: Write + Send> ArrowWriter<W> {
             num_rows if num_rows == batch.num_rows() => self.write(batch),
             num_rows => self.write_rows(SelectedRows {
                 batch: batch.clone(),
-                selection: selection.clone().into_boolean_buffer(),
+                selection: match selection.as_mask() {
+                    Some(mask) => mask.clone(),
+                    None => selection.clone().into_boolean_buffer(),
+                },
                 num_rows,
             }),
         }
@@ -2176,19 +2178,8 @@ where
     }
 
     fn map<S: Copy>(self, values: &[S], convert: impl Fn(S) -> T) -> Result<usize> {
-        // Convert only the values that are written, not those of nulls or of rows that a
-        // selection skips, and write them in order without indices
-        let indices = self.levels.non_null_indices();
-        let values: Vec<T> = indices.iter().map(|&i| convert(values[i])).collect();
-        self.writer.write_batch_internal(
-            &values,
-            None,
-            self.levels.def_level_data().as_ref(),
-            self.levels.rep_level_data().as_ref(),
-            None,
-            None,
-            None,
-        )
+        let values: Vec<T> = values.iter().map(|v| convert(*v)).collect();
+        write_primitive(self.writer, &values, self.levels)
     }
 }
 
@@ -6313,9 +6304,9 @@ mod tests {
         let batch = selection_test_batch();
         for props in [
             WriterProperties::default(),
-            // A write batch size equal to the page row count limit keeps the pages the same
-            // whether or not the levels of a column are uniform, which can differ between
-            // the selected and the filtered rows
+            // When a call writes rows to more than one row group, the levels of a column can
+            // be uniform for its selected rows but not its filtered ones. A write batch size
+            // equal to the page row count limit keeps the pages the same either way.
             WriterProperties::builder()
                 .set_max_row_group_row_count(Some(17))
                 .set_data_page_row_count_limit(4)
@@ -6329,6 +6320,99 @@ mod tests {
                 .build(),
         ] {
             assert_selected_rows_match_filtered_rows(&batch, props);
+        }
+    }
+
+    #[test]
+    fn write_with_selection_matches_filter_and_write_pages() {
+        // More selected rows than fit in a page by default, so that pages split at different
+        // rows if the levels of selected rows are written differently from filtered ones
+        let num_rows = 42_000;
+        let selected = |row: usize| row.is_multiple_of(2);
+        let skipped_nulls = |row: usize| selected(row).then_some(row as i32);
+        let selected_nulls = |row: usize| (!selected(row)).then_some(row as i32);
+
+        let run_ends = Int32Array::from_iter_values(1..=num_rows as i32);
+        let run_values = Int32Array::from_iter((0..num_rows).map(skipped_nulls));
+        let child = Field::new("a", DataType::Int32, true);
+        let structs = StructArray::new(
+            Fields::from(vec![child]),
+            vec![Arc::new(Int32Array::from_iter(
+                (0..num_rows).map(skipped_nulls),
+            ))],
+            Some(NullBuffer::from_iter((0..num_rows).map(selected))),
+        );
+        // Selected rows refer to valid values, skipped rows to a null value
+        let dictionary = DictionaryArray::new(
+            Int8Array::from_iter_values((0..num_rows).map(|row| match selected(row) {
+                true => (row % 4) as i8,
+                false => 1,
+            })),
+            Arc::new(Int32Array::from(vec![Some(10), None, Some(20)])),
+        );
+        let list = ListArray::from_iter_primitive::<Int32Type, _, _>((0..num_rows).map(|row| {
+            selected(row).then(|| (0..row % 3).map(|v| Some(v as i32)).collect::<Vec<_>>())
+        }));
+        let columns: [(&str, ArrayRef); 8] = [
+            (
+                "skipped_nulls",
+                Arc::new(Int32Array::from_iter((0..num_rows).map(skipped_nulls))),
+            ),
+            (
+                "selected_nulls",
+                Arc::new(Int32Array::from_iter((0..num_rows).map(selected_nulls))),
+            ),
+            (
+                "mixed_nulls",
+                Arc::new(Int32Array::from_iter(
+                    (0..num_rows).map(|row| (row % 3 != 0).then_some(row as i32)),
+                )),
+            ),
+            (
+                "string",
+                Arc::new(StringArray::from_iter(
+                    (0..num_rows).map(|row| skipped_nulls(row).map(|v| v.to_string())),
+                )),
+            ),
+            (
+                "run_end_encoded",
+                Arc::new(Int32RunArray::try_new(&run_ends, &run_values).unwrap()),
+            ),
+            ("struct", Arc::new(structs)),
+            ("dictionary", Arc::new(dictionary)),
+            ("list", Arc::new(list)),
+        ];
+        let batch = RecordBatch::try_from_iter_with_nullable(
+            columns.map(|(name, column)| (name, column, true)),
+        )
+        .unwrap();
+        let mask = BooleanBuffer::from_iter((0..num_rows).map(selected));
+        let filter = BooleanArray::new(mask.clone(), None);
+        let filtered = filter_record_batch(&batch, &filter).unwrap();
+
+        for props in [
+            WriterProperties::default(),
+            WriterProperties::builder()
+                .set_data_page_row_count_limit(1000)
+                .build(),
+        ] {
+            let write = |write_rows: &dyn Fn(&mut ArrowWriter<&mut Vec<u8>>)| {
+                let mut buffer = Vec::new();
+                let mut writer =
+                    ArrowWriter::try_new(&mut buffer, batch.schema(), Some(props.clone())).unwrap();
+                write_rows(&mut writer);
+                writer.close().unwrap();
+                buffer
+            };
+            let expected = write(&|writer| writer.write(&filtered).unwrap());
+            for selection in [
+                RowSelection::from_boolean_buffer(mask.clone()),
+                RowSelection::from_filters(std::slice::from_ref(&filter)),
+            ] {
+                let actual =
+                    write(&|writer| writer.write_with_selection(&batch, &selection).unwrap());
+                assert!(actual == expected, "{props:?}");
+            }
         }
     }
 
@@ -6386,7 +6470,12 @@ mod tests {
         let err = writer
             .write_with_selection(&batch, &select_null)
             .unwrap_err();
-        assert!(err.to_string().contains("for required field 'c'"), "{err}");
+        // The index is that of the null in the batch, not among the selected rows
+        assert!(
+            err.to_string()
+                .contains("Found null at index 1 for required field 'c'"),
+            "{err}"
+        );
 
         // Under a nullable struct, a null of a required child is only invalid at a selected
         // row where the struct is valid
