@@ -13,7 +13,7 @@ use crate::{
             HeapSize, ParquetMetaData, ParquetMetaDataOptions, RowGroupMetaData,
             thrift::{
                 file_metadata_and_row_groups_from_bytes, read_column_metadata,
-                validate_column_metadata,
+                validate_column_byte_range, validate_column_metadata,
             },
         },
     },
@@ -197,6 +197,7 @@ fn row_group_from_encrypted_thrift(
             let mut prot = ThriftSliceInputProtocol::new(&decrypted_cc_buf);
             let mask = read_column_metadata(&mut prot, &mut c, i, options)?;
             validate_column_metadata(mask)?;
+            validate_column_byte_range(&c)?;
 
             columns.push(c);
         } else {
