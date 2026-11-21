@@ -29,7 +29,7 @@ use crate::column::page::{PageIterator, PageReader};
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{
-    ColumnChunkMask, PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions,
+    BloomFilters, ColumnChunkMask, PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions,
     ParquetMetaDataReader, ParquetStatisticsPolicy, RowGroupMetaData,
 };
 use crate::file::reader::{ChunkReader, SerializedPageReader};
@@ -1344,6 +1344,107 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
         let column_metadata = metadata.column(column_idx);
 
         Sbbf::read_from_column_chunk(column_metadata, &self.input.0)
+    }
+
+    /// Reads Bloom filters for the physical column chunks selected by `mask`.
+    ///
+    /// The mask is independent of this builder's projection and row-group selection.
+    /// To avoid fetching filters for row groups already pruned, include only the
+    /// remaining file row-group indices in `mask`. Select the physical leaf columns
+    /// used by predicates, which may differ from the output projection. Fetching
+    /// filters does not change either builder setting.
+    ///
+    /// See [`ParquetMetaDataReader::read_bloom_filters`] for details.
+    ///
+    /// # Example
+    ///
+    /// For a file with two flat `Int32` columns, `id` and `output`, load filters
+    /// for `id = 42` only in candidate row groups 0 and 2, while projecting `output`.
+    /// Bloom filters only prune row groups: surviving rows still need predicate
+    /// evaluation, since a positive Bloom check does not guarantee a match. Use
+    /// [`Self::with_row_filter`] to evaluate the predicate without including `id`
+    /// in the output.
+    ///
+    /// ```
+    /// # use bytes::Bytes;
+    /// # use std::sync::Arc;
+    /// # use arrow_array::{ArrayRef, RecordBatch};
+    /// # use parquet::arrow::ArrowWriter;
+    /// # use parquet::file::properties::WriterProperties;
+    /// use arrow::compute::kernels::cmp::eq;
+    /// use arrow_array::Int32Array;
+    /// use parquet::arrow::arrow_reader::{
+    ///     ArrowPredicateFn, ParquetRecordBatchReaderBuilder, RowFilter,
+    /// };
+    /// use parquet::arrow::ProjectionMask;
+    /// use parquet::file::metadata::ColumnChunkMask;
+    /// # fn main() -> parquet::errors::Result<()> {
+    /// # let properties = WriterProperties::builder()
+    /// #     .set_column_bloom_filter_enabled("id".into(), true)
+    /// #     .build();
+    /// # let schema = RecordBatch::try_from_iter([
+    /// #     ("id", Arc::new(Int32Array::from(vec![10])) as ArrayRef),
+    /// #     ("output", Arc::new(Int32Array::from(vec![110])) as ArrayRef),
+    /// # ])?.schema();
+    /// # let mut writer = ArrowWriter::try_new(Vec::new(), schema.clone(), Some(properties))?;
+    /// # for id in [10, 20, 42] {
+    /// #     let batch = RecordBatch::try_new(schema.clone(), vec![
+    /// #         Arc::new(Int32Array::from(vec![id, id + 1])),
+    /// #         Arc::new(Int32Array::from(vec![id + 100, id + 101])),
+    /// #     ])?;
+    /// #     writer.write(&batch)?;
+    /// #     writer.flush()?;
+    /// # }
+    /// # let input = Bytes::from(writer.into_inner()?);
+    /// let mut builder = ParquetRecordBatchReaderBuilder::try_new(input)?;
+    /// let candidate_row_groups = vec![0, 2]; // remaining after other pruning
+    /// let projection = ProjectionMask::leaves(builder.parquet_schema(), [1]);
+    /// builder = builder
+    ///     .with_projection(projection)
+    ///     .with_row_groups(candidate_row_groups.clone());
+    ///
+    /// // Explicitly select the predicate column, not the output column.
+    /// let mask = ColumnChunkMask::row_groups_and_columns(
+    ///     candidate_row_groups.iter().copied(),
+    ///     [0],
+    /// );
+    /// let filters = builder.get_bloom_filters(&mask)?;
+    /// # assert!(filters.get(1, 0)?.is_none());
+    /// # assert!(filters.get(2, 1)?.is_none());
+    /// # assert!(filters.get(2, 0)?.unwrap().check(&42_i32));
+    ///
+    /// let mut row_groups = Vec::new();
+    /// for row_group in candidate_row_groups {
+    ///     // Use original file indices, not positions in the candidate list.
+    ///     match filters.get(row_group, 0)? {
+    ///         Some(filter) if !filter.check(&42_i32) => {},
+    ///         _ => row_groups.push(row_group), // keep absent filters and possible matches
+    ///     }
+    /// }
+    /// # assert!(row_groups.contains(&2));
+    ///
+    /// // Evaluate the exact predicate, even though `id` is not in the output.
+    /// let predicate_projection = ProjectionMask::leaves(builder.parquet_schema(), [0]);
+    /// let predicate = ArrowPredicateFn::new(predicate_projection, |batch| {
+    ///     eq(batch.column(0), &Int32Array::new_scalar(42))
+    /// });
+    ///
+    /// // Loading filters alone does not update the reader's row-group selection.
+    /// let batches: Vec<RecordBatch> = builder
+    ///     .with_row_groups(row_groups)
+    ///     .with_row_filter(RowFilter::new(vec![Box::new(predicate)]))
+    ///     .build()?
+    ///     .collect::<Result<Vec<_>, _>>()?;
+    /// # assert_eq!(batches.iter().map(|batch| batch.num_rows()).sum::<usize>(), 1);
+    /// # assert!(batches.iter().all(|batch| batch.num_columns() == 1));
+    /// # let batch = batches.iter().find(|batch| batch.num_rows() == 1).unwrap();
+    /// # assert_eq!(batch.schema().field(0).name(), "output");
+    /// # assert_eq!(batch.column(0).as_any().downcast_ref::<Int32Array>().unwrap().value(0), 142);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn get_bloom_filters(&self, mask: &ColumnChunkMask) -> Result<BloomFilters> {
+        ParquetMetaDataReader::read_bloom_filters(&self.input.0, &self.metadata, mask)
     }
 
     /// Build a [`ParquetRecordBatchReader`]

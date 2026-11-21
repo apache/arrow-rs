@@ -9,13 +9,14 @@ use crate::bloom_filter::Sbbf;
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::FOOTER_SIZE;
+use crate::file::metadata::bloom_filter::BloomFilterBatch;
 #[cfg(feature = "arrow")]
 use crate::file::metadata::dictionary::decode_dictionary_page;
 use crate::file::metadata::page_index::{PageIndex, PageIndexProvider};
 use crate::file::metadata::parser::decode_metadata;
 use crate::file::metadata::thrift::parquet_schema_from_bytes;
 use crate::file::metadata::{
-    FooterTail, ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataPushDecoder,
+    BloomFilters, FooterTail, ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataPushDecoder,
 };
 use crate::file::reader::ChunkReader;
 use crate::schema::types::SchemaDescriptor;
@@ -51,7 +52,8 @@ use crate::arrow::async_reader::{MetadataFetch, MetadataSuffixFetch};
 ///
 /// This reader handles reading the footer as well as the non contiguous parts
 /// of the metadata (`PageIndex` and `ColumnIndex`). Bloom filters are read separately
-/// using [`Self::read_column_bloom_filter`]; footer and page index reads do not load them.
+/// using [`Self::read_column_bloom_filter`] or [`Self::read_bloom_filters`]; footer and
+/// page index reads do not load them.
 /// For caller-managed I/O and prefetched bytes, use [`crate::bloom_filter::SbbfPushDecoder`].
 ///
 /// # Example
@@ -123,7 +125,7 @@ impl From<bool> for PageIndexPolicy {
 /// Because Parquet collection cannot contain more than [`i32::MAX`] values, user provided indices
 /// outside that range will be discarded.
 ///
-/// At present this is only used to select elements of the [Page Index] for decoding.
+/// This selects [Page Index] entries or Bloom filters for decoding.
 ///
 /// # Examples
 ///
@@ -886,6 +888,43 @@ impl ParquetMetaDataReader {
     ) -> Result<Option<Sbbf>> {
         let column = metadata.column_chunk(row_group_idx, column_idx)?;
         Sbbf::read_from_column_chunk_with_fetch(column, fetch).await
+    }
+
+    /// Reads Bloom filters for the physical column chunks selected by `mask`.
+    ///
+    /// The metadata and reader must refer to the same file. Missing Bloom filter
+    /// offsets require no I/O. Any read or decoding error fails the entire operation.
+    ///
+    /// Reads exact filter ranges without spanning gaps. Filters without an advertised
+    /// length require a header read followed by a bitset read; see
+    /// [`crate::bloom_filter::SbbfPushDecoder`] for header-probe limitations.
+    pub fn read_bloom_filters<R: ChunkReader>(
+        reader: &R,
+        metadata: &ParquetMetaData,
+        mask: &ColumnChunkMask,
+    ) -> Result<BloomFilters> {
+        BloomFilterBatch::try_new(metadata, mask)?.read(reader)
+    }
+
+    /// Asynchronous version of [`Self::read_bloom_filters`], batching each request round.
+    ///
+    /// Uses [`MetadataFetch::fetch_ranges`], whose default fetches ranges sequentially.
+    /// Backends may batch or coalesce the requests.
+    #[cfg(all(feature = "async", feature = "arrow"))]
+    pub async fn read_bloom_filters_async<F: MetadataFetch + Send>(
+        mut fetch: F,
+        metadata: &ParquetMetaData,
+        mask: &ColumnChunkMask,
+    ) -> Result<BloomFilters> {
+        let mut batch = BloomFilterBatch::try_new(metadata, mask)?;
+        loop {
+            let (owners, ranges) = batch.requests()?;
+            if ranges.is_empty() {
+                return batch.finish();
+            }
+            let buffers = fetch.fetch_ranges(ranges.clone()).await?;
+            batch.push_responses(owners, ranges, buffers)?;
+        }
     }
 
     /// Reads and decodes the dictionary page of a column chunk into an Arrow array.

@@ -9,7 +9,7 @@ pub use crate::encodings::encoding::DeltaBinaryPackedEncoderOptions;
 #[cfg(feature = "encryption")]
 use crate::encryption::encrypt::FileEncryptionProperties;
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{KeyValue, SortingColumn};
+use crate::file::metadata::{ColumnChunkMask, KeyValue, SortingColumn};
 use crate::schema::types::ColumnPath;
 use std::str::FromStr;
 use std::{collections::HashMap, sync::Arc};
@@ -2066,7 +2066,6 @@ fn resolve_delta_binary_packed_encoder_options(
 /// Reference counted reader properties.
 pub type ReaderPropertiesPtr = Arc<ReaderProperties>;
 
-const DEFAULT_READ_BLOOM_FILTER: bool = false;
 const DEFAULT_READ_PAGE_STATS: bool = false;
 
 /// Configuration settings for reading parquet files.
@@ -2089,7 +2088,7 @@ const DEFAULT_READ_PAGE_STATS: bool = false;
 /// ```
 pub struct ReaderProperties {
     codec_options: CodecOptions,
-    read_bloom_filter: bool,
+    bloom_filter_mask: ColumnChunkMask,
     read_page_stats: bool,
 }
 
@@ -2104,9 +2103,9 @@ impl ReaderProperties {
         &self.codec_options
     }
 
-    /// Returns whether to read bloom filter
-    pub(crate) fn read_bloom_filter(&self) -> bool {
-        self.read_bloom_filter
+    /// Returns the physical leaf columns selected for Bloom filter loading.
+    pub(crate) fn bloom_filter_mask(&self) -> &ColumnChunkMask {
+        &self.bloom_filter_mask
     }
 
     /// Returns whether to read page level statistics
@@ -2119,7 +2118,7 @@ impl ReaderProperties {
 /// [`ReaderProperties`]
 pub struct ReaderPropertiesBuilder {
     codec_options_builder: CodecOptionsBuilder,
-    read_bloom_filter: Option<bool>,
+    bloom_filter_mask: Option<ColumnChunkMask>,
     read_page_stats: Option<bool>,
 }
 
@@ -2129,7 +2128,7 @@ impl ReaderPropertiesBuilder {
     fn with_defaults() -> Self {
         Self {
             codec_options_builder: CodecOptionsBuilder::default(),
-            read_bloom_filter: None,
+            bloom_filter_mask: None,
             read_page_stats: None,
         }
     }
@@ -2138,7 +2137,7 @@ impl ReaderPropertiesBuilder {
     pub fn build(self) -> ReaderProperties {
         ReaderProperties {
             codec_options: self.codec_options_builder.build(),
-            read_bloom_filter: self.read_bloom_filter.unwrap_or(DEFAULT_READ_BLOOM_FILTER),
+            bloom_filter_mask: self.bloom_filter_mask.unwrap_or_else(ColumnChunkMask::none),
             read_page_stats: self.read_page_stats.unwrap_or(DEFAULT_READ_PAGE_STATS),
         }
     }
@@ -2158,14 +2157,28 @@ impl ReaderPropertiesBuilder {
         self
     }
 
-    /// Enable/disable reading bloom filter
+    /// Enables or disables reading Bloom filters for all columns in each row group.
     ///
-    /// If reading bloom filter is enabled, bloom filter will be read from the file.
-    /// If reading bloom filter is disabled, bloom filter will not be read from the file.
-    ///
-    /// By default bloom filter is set to be read.
+    /// Defaults to disabled. Replaces any previous Bloom filter selection.
     pub fn set_read_bloom_filter(mut self, value: bool) -> Self {
-        self.read_bloom_filter = Some(value);
+        self.bloom_filter_mask = Some(if value {
+            ColumnChunkMask::all()
+        } else {
+            ColumnChunkMask::none()
+        });
+        self
+    }
+
+    /// Reads Bloom filters only for the specified physical leaf columns in each row group.
+    ///
+    /// Indices follow [`ColumnChunkMask::columns`]. An empty iterator disables loading.
+    /// Replaces any previous Bloom filter selection, including
+    /// [`Self::set_read_bloom_filter`].
+    pub fn set_read_bloom_filter_columns(
+        mut self,
+        columns: impl IntoIterator<Item = usize>,
+    ) -> Self {
+        self.bloom_filter_mask = Some(ColumnChunkMask::columns(columns));
         self
     }
 
@@ -2690,7 +2703,39 @@ mod tests {
             .build();
 
         assert_eq!(props.codec_options(), &codec_options);
-        assert!(!props.read_bloom_filter());
+        assert!(props.bloom_filter_mask().is_none());
+    }
+
+    #[test]
+    fn test_reader_properties_bloom_filter_selection() {
+        for enabled in [false, true] {
+            let expected = if enabled {
+                ColumnChunkMask::all()
+            } else {
+                ColumnChunkMask::none()
+            };
+            let props = ReaderProperties::builder()
+                .set_read_bloom_filter(enabled)
+                .build();
+            assert_eq!(props.bloom_filter_mask(), &expected);
+
+            let props = ReaderProperties::builder()
+                .set_read_bloom_filter(enabled)
+                .set_read_bloom_filter_columns([3, 1, 3, usize::MAX])
+                .build();
+            assert_eq!(props.bloom_filter_mask(), &ColumnChunkMask::columns([1, 3]));
+
+            let props = ReaderProperties::builder()
+                .set_read_bloom_filter_columns([1])
+                .set_read_bloom_filter(enabled)
+                .build();
+            assert_eq!(props.bloom_filter_mask(), &expected);
+        }
+        let props = ReaderProperties::builder()
+            .set_read_bloom_filter(true)
+            .set_read_bloom_filter_columns([])
+            .build();
+        assert!(props.bloom_filter_mask().is_none());
     }
 
     #[test]

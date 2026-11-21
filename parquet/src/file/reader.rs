@@ -205,8 +205,9 @@ pub trait RowGroupReader: Send + Sync {
         Ok(col_reader)
     }
 
-    /// Get bloom filter for the `i`th column chunk, if present and the reader was configured
-    /// to read bloom filters.
+    /// Get the Bloom filter for the `i`th physical leaf column, if present and selected
+    /// for loading by the reader's configuration. Returns `None` for missing or
+    /// unselected filters.
     fn get_column_bloom_filter(&self, i: usize) -> Option<&Sbbf>;
 
     /// Get an iterator over the row in this file, see [`RowIter`] for caveats.
