@@ -8,8 +8,7 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::{
-    Array, ArrayRef, BinaryViewArray, LargeStringArray, OffsetSizeTrait, StringArray,
-    StringViewArray, new_empty_array,
+    Array, ArrayRef, BinaryViewArray, OffsetSizeTrait, StringViewArray, new_empty_array,
 };
 use arrow_buffer::{ArrowNativeType, MutableBuffer};
 use arrow_schema::DataType as ArrowType;
@@ -32,18 +31,19 @@ use crate::util::bit_util::BitPacking;
 /// A macro to reduce verbosity of [`make_byte_array_dictionary_reader`]
 macro_rules! make_reader {
     (
-        ($pages:expr, $column_desc:expr, $data_type:expr, $batch_size:expr, $padding_threshold:expr) => match ($k:expr, $v:expr) {
+        ($pages:expr, $column_desc:expr, $data_type:expr, $batch_size:expr, $padding_threshold:expr, $validate_utf8:expr) => match ($k:expr, $v:expr) {
             $(($key_arrow:pat, $value_arrow:pat) => ($key_type:ty, $value_type:ty),)+
         }
     ) => {
         match ($k, $v) {
             $(
                 ($key_arrow, $value_arrow) => {
-                    let buffer_value_type = byte_array_value_type::<$value_type>(&$column_desc);
+                    let buffer_value_type = byte_array_value_type::<$value_type>($validate_utf8);
                     let mut reader = GenericRecordReader::new($column_desc, $batch_size);
                     if let Some(threshold) = $padding_threshold {
                         reader.set_padding_threshold(threshold);
                     }
+                    reader.set_validate_utf8($validate_utf8);
                     Ok(Box::new(ByteArrayDictionaryReader::<$key_type, $value_type>::try_new(
                         $pages, $data_type, buffer_value_type, reader,
                     )?))
@@ -83,10 +83,21 @@ pub fn make_byte_array_dictionary_reader(
             .clone(),
     };
 
+    // A supplied schema can read an unannotated `BYTE_ARRAY` column as a
+    // dictionary of strings, so validation follows the requested value type.
+    let validate_utf8 = matches!(
+        &data_type,
+        ArrowType::Dictionary(_, value_type)
+            if matches!(
+                value_type.as_ref(),
+                ArrowType::Utf8 | ArrowType::LargeUtf8 | ArrowType::Utf8View
+            )
+    );
+
     match &data_type {
         ArrowType::Dictionary(key_type, value_type) => {
             make_reader! {
-                (pages, column_desc, data_type, batch_size, padding_threshold) => match (key_type.as_ref(), value_type.as_ref()) {
+                (pages, column_desc, data_type, batch_size, padding_threshold, validate_utf8) => match (key_type.as_ref(), value_type.as_ref()) {
                     (ArrowType::UInt8, ArrowType::Binary | ArrowType::Utf8 | ArrowType::Utf8View | ArrowType::BinaryView | ArrowType::FixedSizeBinary(_)) => (u8, i32),
                     (ArrowType::UInt8, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (u8, i64),
                     (ArrowType::Int8, ArrowType::Binary | ArrowType::Utf8 | ArrowType::Utf8View | ArrowType::BinaryView | ArrowType::FixedSizeBinary(_)) => (i8, i32),
@@ -113,12 +124,10 @@ pub fn make_byte_array_dictionary_reader(
     }
 }
 
-/// Returns the string or binary type produced when decoding a byte array column.
-fn byte_array_value_type<V: OffsetSizeTrait>(column_desc: &ColumnDescPtr) -> ArrowType {
-    match (
-        V::IS_LARGE,
-        column_desc.converted_type() == ConvertedType::UTF8,
-    ) {
+/// Returns the type of the decoded dictionary values: a string type when they
+/// are validated as UTF-8, a binary type otherwise.
+fn byte_array_value_type<V: OffsetSizeTrait>(validate_utf8: bool) -> ArrowType {
+    match (V::IS_LARGE, validate_utf8) {
         (true, true) => ArrowType::LargeUtf8,
         (true, false) => ArrowType::LargeBinary,
         (false, true) => ArrowType::Utf8,
@@ -126,21 +135,14 @@ fn byte_array_value_type<V: OffsetSizeTrait>(column_desc: &ColumnDescPtr) -> Arr
     }
 }
 
-/// Convert dictionary values without expanding the dictionary keys.
+/// Convert dictionary values to a view type without expanding the dictionary keys.
+///
+/// The values are already validated as UTF-8 when the requested type is `Utf8View`,
+/// so the conversion only changes the layout.
 fn convert_dictionary_values(values: &ArrayRef, to_type: &ArrowType) -> Result<ArrayRef> {
     let new_values: ArrayRef = match (values.data_type(), to_type) {
-        (ArrowType::Binary, ArrowType::Utf8) => Arc::new(StringArray::try_from_binary(
-            values.as_binary::<i32>().clone(),
-        )?),
-        (ArrowType::LargeBinary, ArrowType::LargeUtf8) => Arc::new(
-            LargeStringArray::try_from_binary(values.as_binary::<i64>().clone())?,
-        ),
         (ArrowType::Utf8, ArrowType::Utf8View) => {
             Arc::new(StringViewArray::from(values.as_string::<i32>()))
-        }
-        (ArrowType::Binary, ArrowType::Utf8View) => {
-            let values = StringArray::try_from_binary(values.as_binary::<i32>().clone())?;
-            Arc::new(StringViewArray::from(&values))
         }
         (ArrowType::Binary, ArrowType::BinaryView) => {
             Arc::new(BinaryViewArray::from(values.as_binary::<i32>()))
@@ -252,8 +254,8 @@ where
         };
         let cache_converted_values = matches!(&buffer, DictionaryBuffer::Dict { .. });
 
-        // Plain-encoded pages also decode into `buffer_type` and convert, so that
-        // `convert_dictionary_values` validates UTF-8 for unannotated BINARY columns.
+        // Only view types need a conversion: the buffer already holds the
+        // requested string or binary type, validated while decoding.
         let array = match &self.buffer_type {
             Some(buffer_type) => {
                 let buffer_array =
@@ -346,8 +348,7 @@ where
 
     fn new(col: &ColumnDescPtr) -> Self {
         let validate_utf8 = col.converted_type() == ConvertedType::UTF8;
-
-        let value_type = byte_array_value_type::<V>(col);
+        let value_type = byte_array_value_type::<V>(validate_utf8);
 
         Self {
             dict: None,
@@ -358,6 +359,11 @@ where
                 .then(|| col.clone()),
             phantom: Default::default(),
         }
+    }
+
+    fn set_validate_utf8(&mut self, validate_utf8: bool) {
+        self.validate_utf8 = validate_utf8;
+        self.value_type = byte_array_value_type::<V>(validate_utf8);
     }
 
     fn set_dict(
@@ -537,10 +543,11 @@ mod tests {
     use arrow_buffer::Buffer;
 
     use crate::arrow::array_reader::test_util::{
-        byte_array_all_encodings, encode_dictionary, utf8_column,
+        byte_array_all_encodings, encode_byte_array, encode_dictionary, utf8_column,
     };
     use crate::arrow::record_reader::buffer::ValuesBuffer;
     use crate::data_type::ByteArray;
+    use crate::schema::types::{ColumnDescriptor, ColumnPath, Type as SchemaType};
 
     use super::*;
 
@@ -799,6 +806,73 @@ mod tests {
             strings.iter().collect::<Vec<_>>(),
             vec![Some("0"), Some("1"), Some("1"), Some("2"), Some("2"),]
         )
+    }
+
+    /// A column without a string annotation is validated, and its values built
+    /// as strings, when the reader asks for it through `set_validate_utf8`.
+    #[test]
+    fn test_validate_utf8_follows_requested_type() {
+        let binary_column = {
+            let t = SchemaType::primitive_type_builder("col", Type::BYTE_ARRAY)
+                .build()
+                .unwrap();
+            Arc::new(ColumnDescriptor::new(
+                Arc::new(t),
+                1,
+                0,
+                ColumnPath::new(vec![]),
+            ))
+        };
+        let valid = [ByteArray::from("hello"), ByteArray::from("world")];
+        let invalid = [ByteArray::from(vec![0xFF]), ByteArray::from("world")];
+
+        // Without the request, the annotation decides: no validation, binary values
+        let mut decoder = DictionaryDecoder::<i32, i32>::new(&binary_column);
+        let (dict, _) = encode_dictionary(&invalid);
+        decoder
+            .set_dict(dict, 2, Encoding::RLE_DICTIONARY, false)
+            .unwrap();
+        assert_eq!(
+            decoder.dict.as_ref().unwrap().data_type(),
+            &ArrowType::Binary
+        );
+
+        // With the request, valid data is built as strings
+        let mut decoder = DictionaryDecoder::<i32, i32>::new(&binary_column);
+        decoder.set_validate_utf8(true);
+        let (dict, _) = encode_dictionary(&valid);
+        decoder
+            .set_dict(dict, 2, Encoding::RLE_DICTIONARY, false)
+            .unwrap();
+        assert_eq!(decoder.dict.as_ref().unwrap().data_type(), &ArrowType::Utf8);
+
+        // and invalid data is rejected, in the dictionary page
+        let mut decoder = DictionaryDecoder::<i32, i32>::new(&binary_column);
+        decoder.set_validate_utf8(true);
+        let (dict, _) = encode_dictionary(&invalid);
+        let err = decoder
+            .set_dict(dict, 2, Encoding::RLE_DICTIONARY, false)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("encountered non UTF-8 data"),
+            "{err}"
+        );
+
+        // and in a data page that is not dictionary encoded
+        let mut decoder = DictionaryDecoder::<i32, i32>::new(&binary_column);
+        decoder.set_validate_utf8(true);
+        let (dict, _) = encode_dictionary(&valid);
+        decoder
+            .set_dict(dict, 2, Encoding::RLE_DICTIONARY, false)
+            .unwrap();
+        let page = encode_byte_array(Encoding::PLAIN, &invalid);
+        decoder.set_data(Encoding::PLAIN, page, 2, Some(2)).unwrap();
+        let mut output = DictionaryBuffer::<i32, i32>::with_capacity(0);
+        let err = decoder.read(&mut output, 2).unwrap_err();
+        assert!(
+            err.to_string().contains("encountered non UTF-8 data"),
+            "{err}"
+        );
     }
 
     #[test]
