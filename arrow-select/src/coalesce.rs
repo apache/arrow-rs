@@ -222,6 +222,8 @@ pub struct BatchCoalescer {
     has_non_specialized_filter_columns: bool,
     /// True if the schema contains a variable-width byte-array column.
     has_byte_array_columns: bool,
+    /// True if every column supports efficient dense indexed copying.
+    supports_dense_indexed_copy: bool,
     /// True if some column uses the byte-view indexed-copy path.
     has_byte_view_columns: bool,
     /// Buffered row count. Always less than `batch_size`
@@ -251,6 +253,17 @@ impl BatchCoalescer {
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary
             )
         });
+        let supports_dense_indexed_copy = has_byte_array_columns
+            && schema.fields().iter().all(|field| {
+                field.data_type().is_primitive()
+                    || matches!(
+                        field.data_type(),
+                        DataType::Utf8
+                            | DataType::LargeUtf8
+                            | DataType::Binary
+                            | DataType::LargeBinary
+                    )
+            });
         let has_byte_view_columns = schema
             .fields()
             .iter()
@@ -267,6 +280,7 @@ impl BatchCoalescer {
             in_progress_arrays,
             has_non_specialized_filter_columns,
             has_byte_array_columns,
+            supports_dense_indexed_copy,
             has_byte_view_columns,
             // We will for sure store at least one completed batch
             completed: VecDeque::with_capacity(1),
@@ -428,12 +442,13 @@ impl BatchCoalescer {
         }
 
         // Direct indexed copying is a fast path for non-null UInt32 selections
-        // that are sparse enough for every column (with a stricter ByteView
+        // that are sparse or use only primitive and byte-array columns (with a stricter ByteView
         // threshold). It is only equivalent to `push_batch(take(...))` when the
         // materialized batch would not trigger the configured large-batch bypass.
         let exceeds_byte_view_threshold = self.has_byte_view_columns
             && !should_use_byte_view_indexed_copy(batch.num_rows(), indices.len());
-        let indexed_copy_allowed = should_use_indexed_copy(batch.num_rows(), indices.len())
+        let indexed_copy_allowed = (should_use_indexed_copy(batch.num_rows(), indices.len())
+            || self.supports_dense_indexed_copy)
             && !exceeds_byte_view_threshold;
 
         let fast_path_allowed = self
@@ -3438,6 +3453,18 @@ mod tests {
         coalescer.push_batch_with_indices(batch, &indices).unwrap();
         coalescer.finish_buffered_batch().unwrap();
         assert!(coalescer.next_completed_batch().is_none());
+    }
+
+    #[test]
+    fn test_push_batch_with_indices_sparse_byte_schema_matches_take() {
+        let strings = StringArray::from_iter_values((0..2048).map(|v| v.to_string()));
+        let batch = RecordBatch::try_from_iter([("s", Arc::new(strings) as ArrayRef)]).unwrap();
+        let indices = UInt32Array::from(vec![2047, 0]);
+        let expected = take_record_batch(&batch, &indices).unwrap();
+        let mut coalescer = BatchCoalescer::new(batch.schema(), 257);
+        coalescer.push_batch_with_indices(batch, &indices).unwrap();
+        coalescer.finish_buffered_batch().unwrap();
+        assert_eq!(expected, coalescer.next_completed_batch().unwrap());
     }
 
     #[test]
