@@ -1501,6 +1501,7 @@ mod test {
     use bytes::Bytes;
     use futures::executor::block_on;
     use futures::{Stream, StreamExt, TryStreamExt, stream};
+    use rstest::rstest;
     use serde_json::{Value, json};
     use std::collections::HashMap;
     use std::fs::File;
@@ -2972,24 +2973,28 @@ mod test {
         );
     }
 
-    #[test]
-    fn test_two_messages_same_schema_id() {
+    #[rstest]
+    #[case::id32(FingerprintAlgorithm::Id, Fingerprint::Id(100), |value| make_message_id(100, value))]
+    #[case::id64(FingerprintAlgorithm::Id64, Fingerprint::Id64(100), |value| make_message_id64(100, value))]
+    fn test_two_messages_same_schema_id(
+        #[case] algorithm: FingerprintAlgorithm,
+        #[case] fingerprint: Fingerprint,
+        #[case] make_message: fn(i64) -> Vec<u8>,
+    ) {
         let writer_schema = make_value_schema(PrimitiveType::Int);
         let reader_schema = writer_schema.clone();
-        let id = 100u32;
-        // Set up store with None fingerprint algorithm and register schema by id
-        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::Id);
+        let mut store = SchemaStore::new_with_type(algorithm);
         let _ = store
-            .set(Fingerprint::Id(id), writer_schema.clone())
+            .set(fingerprint, writer_schema.clone())
             .expect("set id schema");
-        let msg1 = make_message_id(id, 21);
-        let msg2 = make_message_id(id, 22);
+        let msg1 = make_message(21);
+        let msg2 = make_message(22);
         let input = [msg1.clone(), msg2.clone()].concat();
         let mut decoder = ReaderBuilder::new()
             .with_batch_size(8)
             .with_reader_schema(reader_schema)
             .with_writer_schema_store(store)
-            .with_active_fingerprint(Fingerprint::Id(id))
+            .with_active_fingerprint(fingerprint)
             .build_decoder()
             .unwrap();
         let _ = decoder.decode(&input).unwrap();
@@ -3048,38 +3053,6 @@ mod test {
         let res = decoder.handle_prefix(buf).unwrap();
         assert_eq!(res, Some(0));
         assert!(decoder.pending_schema.is_none());
-    }
-
-    #[test]
-    fn test_two_messages_same_schema_id64() {
-        let writer_schema = make_value_schema(PrimitiveType::Int);
-        let reader_schema = writer_schema.clone();
-        let id = 100u64;
-        // Set up store with None fingerprint algorithm and register schema by id
-        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::Id64);
-        let _ = store
-            .set(Fingerprint::Id64(id), writer_schema.clone())
-            .expect("set id schema");
-        let msg1 = make_message_id64(id, 21);
-        let msg2 = make_message_id64(id, 22);
-        let input = [msg1.clone(), msg2.clone()].concat();
-        let mut decoder = ReaderBuilder::new()
-            .with_batch_size(8)
-            .with_reader_schema(reader_schema)
-            .with_writer_schema_store(store)
-            .with_active_fingerprint(Fingerprint::Id64(id))
-            .build_decoder()
-            .unwrap();
-        let _ = decoder.decode(&input).unwrap();
-        let batch = decoder.flush().unwrap().expect("batch");
-        assert_eq!(batch.num_rows(), 2);
-        let col = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .unwrap();
-        assert_eq!(col.value(0), 21);
-        assert_eq!(col.value(1), 22);
     }
 
     #[test]

@@ -1445,6 +1445,7 @@ impl ReaderBuilder {
 mod tests {
     use super::*;
 
+    use rstest::rstest;
     use std::io::{Cursor, Seek, SeekFrom, Write};
     use tempfile::NamedTempFile;
 
@@ -1651,24 +1652,27 @@ mod tests {
         assert_eq!(batch.schema().metadata(), &metadata);
     }
 
-    #[test]
-    fn test_csv_reader_with_decimal() {
+    #[rstest]
+    #[case::decimal128_256(Decimal128Type {}, 38, Decimal256Type {}, 76)]
+    #[case::decimal32_64(Decimal32Type {}, 9, Decimal64Type {}, 16)]
+    fn test_csv_reader_with_decimal<Lat: DecimalType, Lng: DecimalType>(
+        #[case] lat_type: Lat,
+        #[case] lat_precision: u8,
+        #[case] lng_type: Lng,
+        #[case] lng_precision: u8,
+    ) {
+        let _ = (lat_type, lng_type);
         let schema = Arc::new(Schema::new(vec![
             Field::new("city", DataType::Utf8, false),
-            Field::new("lat", DataType::Decimal128(38, 6), false),
-            Field::new("lng", DataType::Decimal256(76, 6), false),
+            Field::new("lat", Lat::TYPE_CONSTRUCTOR(lat_precision, 6), false),
+            Field::new("lng", Lng::TYPE_CONSTRUCTOR(lng_precision, 6), false),
         ]));
 
         let file = File::open("test/data/decimal_test.csv").unwrap();
 
         let mut csv = ReaderBuilder::new(schema).build(file).unwrap();
         let batch = csv.next().unwrap().unwrap();
-        // access data from a primitive array
-        let lat = batch
-            .column(1)
-            .as_any()
-            .downcast_ref::<Decimal128Array>()
-            .unwrap();
+        let lat = batch.column(1).as_primitive::<Lat>();
 
         assert_eq!("57.653484", lat.value_as_string(0));
         assert_eq!("53.002666", lat.value_as_string(1));
@@ -1681,11 +1685,7 @@ mod tests {
         assert_eq!("123.000000", lat.value_as_string(8));
         assert_eq!("-50.760000", lat.value_as_string(9));
 
-        let lng = batch
-            .column(2)
-            .as_any()
-            .downcast_ref::<Decimal256Array>()
-            .unwrap();
+        let lng = batch.column(2).as_primitive::<Lng>();
 
         assert_eq!("-3.335724", lng.value_as_string(0));
         assert_eq!("-2.179404", lng.value_as_string(1));
@@ -1752,54 +1752,6 @@ mod tests {
             let err = csv.next().unwrap().unwrap_err().to_string();
             assert!(err.contains(expected), "{data:?}: {err}");
         }
-    }
-
-    #[test]
-    fn test_csv_reader_with_decimal_3264() {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("city", DataType::Utf8, false),
-            Field::new("lat", DataType::Decimal32(9, 6), false),
-            Field::new("lng", DataType::Decimal64(16, 6), false),
-        ]));
-
-        let file = File::open("test/data/decimal_test.csv").unwrap();
-
-        let mut csv = ReaderBuilder::new(schema).build(file).unwrap();
-        let batch = csv.next().unwrap().unwrap();
-        // access data from a primitive array
-        let lat = batch
-            .column(1)
-            .as_any()
-            .downcast_ref::<Decimal32Array>()
-            .unwrap();
-
-        assert_eq!("57.653484", lat.value_as_string(0));
-        assert_eq!("53.002666", lat.value_as_string(1));
-        assert_eq!("52.412811", lat.value_as_string(2));
-        assert_eq!("51.481583", lat.value_as_string(3));
-        assert_eq!("12.123457", lat.value_as_string(4));
-        assert_eq!("50.760000", lat.value_as_string(5));
-        assert_eq!("0.123000", lat.value_as_string(6));
-        assert_eq!("123.000000", lat.value_as_string(7));
-        assert_eq!("123.000000", lat.value_as_string(8));
-        assert_eq!("-50.760000", lat.value_as_string(9));
-
-        let lng = batch
-            .column(2)
-            .as_any()
-            .downcast_ref::<Decimal64Array>()
-            .unwrap();
-
-        assert_eq!("-3.335724", lng.value_as_string(0));
-        assert_eq!("-2.179404", lng.value_as_string(1));
-        assert_eq!("-1.778197", lng.value_as_string(2));
-        assert_eq!("-3.179090", lng.value_as_string(3));
-        assert_eq!("-3.179090", lng.value_as_string(4));
-        assert_eq!("0.290472", lng.value_as_string(5));
-        assert_eq!("0.290472", lng.value_as_string(6));
-        assert_eq!("0.290472", lng.value_as_string(7));
-        assert_eq!("0.290472", lng.value_as_string(8));
-        assert_eq!("0.290472", lng.value_as_string(9));
     }
 
     #[test]
@@ -2837,26 +2789,38 @@ mod tests {
         assert_eq!(None, Float64Type::parse("12.34.56"));
     }
 
-    #[test]
-    fn test_non_std_quote() {
+    #[rstest]
+    #[case::quote(
+        |builder: ReaderBuilder| builder.with_quote(b'~'),
+        |index| format!("~id{index}~,~value{index}~\r\n"),
+        "value5"
+    )]
+    #[case::escape(
+        |builder: ReaderBuilder| builder.with_escape(b'\\'),
+        |index| format!("\"id{index}\",\"value\\\"{index}\"\r\n"),
+        "value\"5"
+    )]
+    #[case::terminator(
+        |builder: ReaderBuilder| builder.with_terminator(b'\n'),
+        |index| format!("\"id{index}\",\"value{index}\"\n"),
+        "value5"
+    )]
+    fn test_non_std_format(
+        #[case] configure: fn(ReaderBuilder) -> ReaderBuilder,
+        #[case] make_row: fn(usize) -> String,
+        #[case] expected_value: &str,
+    ) {
         let schema = Schema::new(vec![
             Field::new("text1", DataType::Utf8, false),
             Field::new("text2", DataType::Utf8, false),
         ]);
-        let builder = ReaderBuilder::new(Arc::new(schema))
-            .with_header(false)
-            .with_quote(b'~'); // default is ", change to ~
+        let builder = configure(ReaderBuilder::new(Arc::new(schema)).with_header(false));
 
-        let mut csv_text = Vec::new();
-        let mut csv_writer = std::io::Cursor::new(&mut csv_text);
+        let mut csv_text = String::new();
         for index in 0..10 {
-            let text1 = format!("id{index:}");
-            let text2 = format!("value{index:}");
-            csv_writer
-                .write_fmt(format_args!("~{text1}~,~{text2}~\r\n"))
-                .unwrap();
+            csv_text.push_str(&make_row(index));
         }
-        let mut csv_reader = std::io::Cursor::new(&csv_text);
+        let mut csv_reader = std::io::Cursor::new(csv_text.as_bytes());
         let mut reader = builder.build(&mut csv_reader).unwrap();
         let batch = reader.next().unwrap().unwrap();
         let col0 = batch.column(0);
@@ -2866,71 +2830,7 @@ mod tests {
         let col1 = batch.column(1);
         assert_eq!(col1.len(), 10);
         let col1_arr = col1.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(col1_arr.value(5), "value5");
-    }
-
-    #[test]
-    fn test_non_std_escape() {
-        let schema = Schema::new(vec![
-            Field::new("text1", DataType::Utf8, false),
-            Field::new("text2", DataType::Utf8, false),
-        ]);
-        let builder = ReaderBuilder::new(Arc::new(schema))
-            .with_header(false)
-            .with_escape(b'\\'); // default is None, change to \
-
-        let mut csv_text = Vec::new();
-        let mut csv_writer = std::io::Cursor::new(&mut csv_text);
-        for index in 0..10 {
-            let text1 = format!("id{index:}");
-            let text2 = format!("value\\\"{index:}");
-            csv_writer
-                .write_fmt(format_args!("\"{text1}\",\"{text2}\"\r\n"))
-                .unwrap();
-        }
-        let mut csv_reader = std::io::Cursor::new(&csv_text);
-        let mut reader = builder.build(&mut csv_reader).unwrap();
-        let batch = reader.next().unwrap().unwrap();
-        let col0 = batch.column(0);
-        assert_eq!(col0.len(), 10);
-        let col0_arr = col0.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(col0_arr.value(0), "id0");
-        let col1 = batch.column(1);
-        assert_eq!(col1.len(), 10);
-        let col1_arr = col1.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(col1_arr.value(5), "value\"5");
-    }
-
-    #[test]
-    fn test_non_std_terminator() {
-        let schema = Schema::new(vec![
-            Field::new("text1", DataType::Utf8, false),
-            Field::new("text2", DataType::Utf8, false),
-        ]);
-        let builder = ReaderBuilder::new(Arc::new(schema))
-            .with_header(false)
-            .with_terminator(b'\n'); // default is CRLF, change to LF
-
-        let mut csv_text = Vec::new();
-        let mut csv_writer = std::io::Cursor::new(&mut csv_text);
-        for index in 0..10 {
-            let text1 = format!("id{index:}");
-            let text2 = format!("value{index:}");
-            csv_writer
-                .write_fmt(format_args!("\"{text1}\",\"{text2}\"\n"))
-                .unwrap();
-        }
-        let mut csv_reader = std::io::Cursor::new(&csv_text);
-        let mut reader = builder.build(&mut csv_reader).unwrap();
-        let batch = reader.next().unwrap().unwrap();
-        let col0 = batch.column(0);
-        assert_eq!(col0.len(), 10);
-        let col0_arr = col0.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(col0_arr.value(0), "id0");
-        let col1 = batch.column(1);
-        assert_eq!(col1.len(), 10);
-        let col1_arr = col1.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(col1_arr.value(5), "value5");
+        assert_eq!(col1_arr.value(5), expected_value);
     }
 
     #[test]
@@ -3191,21 +3091,6 @@ mod tests {
     }
 
     #[test]
-    fn test_truncated_row_count_counts_padded_rows() {
-        let data = "name,age,city\nAlice,25,Rome\nBob,30\n";
-
-        let mut reader = ReaderBuilder::new(truncated_row_count_schema())
-            .with_header(true)
-            .with_truncated_rows(true)
-            .build(Cursor::new(data))
-            .unwrap();
-
-        let batches = reader.by_ref().collect::<Result<Vec<_>, _>>().unwrap();
-        assert_eq!(batches[0].num_rows(), 2);
-        assert_eq!(reader.truncated_row_count(), 1);
-    }
-
-    #[test]
     fn test_truncated_row_count_ignores_empty_trailing_field() {
         // "Carol,35," has all three fields, the last one just happens to be empty, so it
         // parses to the same null as a padded row would. The count must not be inferred
@@ -3225,10 +3110,13 @@ mod tests {
         assert_eq!(reader.truncated_row_count(), 0);
     }
 
-    #[test]
-    fn test_truncated_row_count_clean_file() {
-        let data = "name,age,city\nAlice,25,Rome\nBob,30,Milan\n";
-
+    #[rstest]
+    #[case::counts_padded_rows("name,age,city\nAlice,25,Rome\nBob,30\n", 1)]
+    #[case::clean_file("name,age,city\nAlice,25,Rome\nBob,30,Milan\n", 0)]
+    // The header is one field short of the schema, so skipping it pads it. Skipped
+    // rows never reach a batch and must not be counted
+    #[case::excludes_skipped_rows("name,age\nAlice,25,Rome\nBob,30,Milan\n", 0)]
+    fn test_truncated_row_count(#[case] data: &str, #[case] expected_truncated_row_count: usize) {
         let mut reader = ReaderBuilder::new(truncated_row_count_schema())
             .with_header(true)
             .with_truncated_rows(true)
@@ -3237,7 +3125,7 @@ mod tests {
 
         let batches = reader.by_ref().collect::<Result<Vec<_>, _>>().unwrap();
         assert_eq!(batches[0].num_rows(), 2);
-        assert_eq!(reader.truncated_row_count(), 0);
+        assert_eq!(reader.truncated_row_count(), expected_truncated_row_count);
     }
 
     #[test]
@@ -3283,23 +3171,6 @@ mod tests {
     }
 
     #[test]
-    fn test_truncated_row_count_excludes_skipped_rows() {
-        // The header is one field short of the schema, so skipping it pads it. Skipped
-        // rows never reach a batch and must not be counted
-        let data = "name,age\nAlice,25,Rome\nBob,30,Milan\n";
-
-        let mut reader = ReaderBuilder::new(truncated_row_count_schema())
-            .with_header(true)
-            .with_truncated_rows(true)
-            .build(Cursor::new(data))
-            .unwrap();
-
-        let batches = reader.by_ref().collect::<Result<Vec<_>, _>>().unwrap();
-        assert_eq!(batches[0].num_rows(), 2);
-        assert_eq!(reader.truncated_row_count(), 0);
-    }
-
-    #[test]
     fn test_truncated_row_count_on_decoder() {
         let data = "1,2\n3\n";
         let schema = Arc::new(Schema::new(vec![
@@ -3340,50 +3211,44 @@ mod tests {
         });
     }
 
-    #[test]
+    #[rstest]
     #[cfg_attr(miri, ignore)] // Takes too long
-    fn test_buffered() {
-        let tests = [
-            ("test/data/uk_cities.csv", false, 37),
-            ("test/data/various_types.csv", true, 10),
-            ("test/data/decimal_test.csv", false, 10),
-        ];
+    #[case::uk_cities("test/data/uk_cities.csv", false, 37)]
+    #[case::various_types("test/data/various_types.csv", true, 10)]
+    #[case::decimals("test/data/decimal_test.csv", false, 10)]
+    fn test_buffered(
+        #[case] path: &str,
+        #[case] has_header: bool,
+        #[case] expected_rows: usize,
+        #[values(1, 4)] batch_size: usize,
+        #[values(1, 3, 7, 100)] capacity: usize,
+    ) {
+        let (schema, _) = Format::default()
+            .infer_schema(File::open(path).unwrap(), None)
+            .unwrap();
+        let schema = Arc::new(schema);
 
-        for (path, has_header, expected_rows) in tests {
-            let (schema, _) = Format::default()
-                .infer_schema(File::open(path).unwrap(), None)
-                .unwrap();
-            let schema = Arc::new(schema);
+        let reader = ReaderBuilder::new(schema.clone())
+            .with_batch_size(batch_size)
+            .with_header(has_header)
+            .build(File::open(path).unwrap())
+            .unwrap();
 
-            for batch_size in [1, 4] {
-                for capacity in [1, 3, 7, 100] {
-                    let reader = ReaderBuilder::new(schema.clone())
-                        .with_batch_size(batch_size)
-                        .with_header(has_header)
-                        .build(File::open(path).unwrap())
-                        .unwrap();
+        let expected = reader.collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(
+            expected.iter().map(|x| x.num_rows()).sum::<usize>(),
+            expected_rows
+        );
 
-                    let expected = reader.collect::<Result<Vec<_>, _>>().unwrap();
+        let buffered = std::io::BufReader::with_capacity(capacity, File::open(path).unwrap());
+        let reader = ReaderBuilder::new(schema)
+            .with_batch_size(batch_size)
+            .with_header(has_header)
+            .build_buffered(buffered)
+            .unwrap();
 
-                    assert_eq!(
-                        expected.iter().map(|x| x.num_rows()).sum::<usize>(),
-                        expected_rows
-                    );
-
-                    let buffered =
-                        std::io::BufReader::with_capacity(capacity, File::open(path).unwrap());
-
-                    let reader = ReaderBuilder::new(schema.clone())
-                        .with_batch_size(batch_size)
-                        .with_header(has_header)
-                        .build_buffered(buffered)
-                        .unwrap();
-
-                    let actual = reader.collect::<Result<Vec<_>, _>>().unwrap();
-                    assert_eq!(expected, actual)
-                }
-            }
-        }
+        let actual = reader.collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(expected, actual);
     }
 
     fn err_test(csv: &[u8], expected: &str) {

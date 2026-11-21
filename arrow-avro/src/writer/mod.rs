@@ -799,6 +799,7 @@ mod tests {
     use arrow_schema::{IntervalUnit, UnionMode};
     use bytes::BytesMut;
     use half::f16;
+    use rstest::rstest;
     use serde_json::{Value, json};
     use std::collections::HashMap;
     use std::collections::HashSet;
@@ -1102,52 +1103,35 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_stream_writer_with_id_fingerprint_rt() -> Result<(), AvroError> {
+    #[rstest]
+    #[case::id32(
+        FingerprintStrategy::Id(42),
+        FingerprintAlgorithm::Id,
+        Fingerprint::Id(42)
+    )]
+    #[case::id64(
+        FingerprintStrategy::Id64(42),
+        FingerprintAlgorithm::Id64,
+        Fingerprint::Id64(42)
+    )]
+    fn test_stream_writer_with_id_fingerprint_rt(
+        #[case] strategy: FingerprintStrategy,
+        #[case] algorithm: FingerprintAlgorithm,
+        #[case] fingerprint: Fingerprint,
+    ) -> Result<(), AvroError> {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
             vec![Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef],
         )?;
-        let schema_id: u32 = 42;
         let mut writer = WriterBuilder::new(schema.clone())
-            .with_fingerprint_strategy(FingerprintStrategy::Id(schema_id))
+            .with_fingerprint_strategy(strategy)
             .build::<_, AvroSoeFormat>(Vec::new())?;
         writer.write(&batch)?;
         let encoded = writer.into_inner();
-        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::Id);
+        let mut store = SchemaStore::new_with_type(algorithm);
         let avro_schema = AvroSchema::try_from(&schema)?;
-        let _ = store.set(Fingerprint::Id(schema_id), avro_schema)?;
-        let mut decoder = ReaderBuilder::new()
-            .with_writer_schema_store(store)
-            .build_decoder()?;
-        let _ = decoder.decode(&encoded)?;
-        let decoded = decoder
-            .flush()?
-            .expect("expected at least one batch from decoder");
-        assert_eq!(decoded.num_columns(), 1);
-        assert_eq!(decoded.num_rows(), 3);
-        let col = decoded.column(0).as_primitive::<Int32Type>();
-        assert_eq!(col, &Int32Array::from(vec![1, 2, 3]));
-        Ok(())
-    }
-
-    #[test]
-    fn test_stream_writer_with_id64_fingerprint_rt() -> Result<(), AvroError> {
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-        let batch = RecordBatch::try_new(
-            Arc::new(schema.clone()),
-            vec![Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef],
-        )?;
-        let schema_id: u64 = 42;
-        let mut writer = WriterBuilder::new(schema.clone())
-            .with_fingerprint_strategy(FingerprintStrategy::Id64(schema_id))
-            .build::<_, AvroSoeFormat>(Vec::new())?;
-        writer.write(&batch)?;
-        let encoded = writer.into_inner();
-        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::Id64);
-        let avro_schema = AvroSchema::try_from(&schema)?;
-        let _ = store.set(Fingerprint::Id64(schema_id), avro_schema)?;
+        let _ = store.set(fingerprint, avro_schema)?;
         let mut decoder = ReaderBuilder::new()
             .with_writer_schema_store(store)
             .build_decoder()?;

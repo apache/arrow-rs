@@ -2852,6 +2852,7 @@ mod tests {
     use crate::schema::{Attributes, ComplexType, Field, PrimitiveType, Record, Schema, TypeName};
     use arrow_array::cast::AsArray;
     use indexmap::IndexMap;
+    use rstest::rstest;
     use std::collections::HashMap;
 
     fn encode_avro_int(value: i32) -> Vec<u8> {
@@ -3743,77 +3744,52 @@ mod tests {
         assert_eq!(dec.value_as_string(1), "-1.23");
     }
 
-    #[test]
-    fn test_decimal_decoding_fixed32_from_32byte_fixed_storage() {
-        let dt = avro_from_codec(Codec::Decimal(5, Some(2), Some(32)));
-        let mut decoder = Decoder::try_new(&dt).unwrap();
-        let row1 = [
+    #[rstest]
+    #[case::fixed_32_bytes(
+        32,
+        &[
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x30, 0x39,
-        ];
-        let row2 = [
+        ],
+        &[
             0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
             0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
             0xFF, 0xFF, 0xFF, 0x85,
-        ];
-        let mut data = Vec::new();
-        data.extend_from_slice(&row1);
-        data.extend_from_slice(&row2);
-        let mut cursor = AvroCursor::new(&data);
-        decoder.decode(&mut cursor).unwrap();
-        decoder.decode(&mut cursor).unwrap();
-        let arr = decoder.flush(None).unwrap();
-        #[cfg(feature = "small_decimals")]
-        {
-            let dec = arr.as_any().downcast_ref::<Decimal32Array>().unwrap();
-            assert_eq!(dec.len(), 2);
-            assert_eq!(dec.value_as_string(0), "123.45");
-            assert_eq!(dec.value_as_string(1), "-1.23");
-        }
-        #[cfg(not(feature = "small_decimals"))]
-        {
-            let dec = arr.as_any().downcast_ref::<Decimal128Array>().unwrap();
-            assert_eq!(dec.len(), 2);
-            assert_eq!(dec.value_as_string(0), "123.45");
-            assert_eq!(dec.value_as_string(1), "-1.23");
-        }
-    }
-
-    #[test]
-    fn test_decimal_decoding_fixed32_from_16byte_fixed_storage() {
-        let dt = avro_from_codec(Codec::Decimal(5, Some(2), Some(16)));
-        let mut decoder = Decoder::try_new(&dt).unwrap();
-        let row1 = [
+        ]
+    )]
+    #[case::fixed_16_bytes(
+        16,
+        &[
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x30, 0x39,
-        ];
-        let row2 = [
+        ],
+        &[
             0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
             0xFF, 0x85,
-        ];
+        ]
+    )]
+    fn test_decimal_decoding_narrow_from_fixed_storage(
+        #[case] width: usize,
+        #[case] row1: &[u8],
+        #[case] row2: &[u8],
+    ) {
+        let dt = avro_from_codec(Codec::Decimal(5, Some(2), Some(width)));
+        let mut decoder = Decoder::try_new(&dt).unwrap();
         let mut data = Vec::new();
-        data.extend_from_slice(&row1);
-        data.extend_from_slice(&row2);
+        data.extend_from_slice(row1);
+        data.extend_from_slice(row2);
         let mut cursor = AvroCursor::new(&data);
         decoder.decode(&mut cursor).unwrap();
         decoder.decode(&mut cursor).unwrap();
-
         let arr = decoder.flush(None).unwrap();
         #[cfg(feature = "small_decimals")]
-        {
-            let dec = arr.as_any().downcast_ref::<Decimal32Array>().unwrap();
-            assert_eq!(dec.len(), 2);
-            assert_eq!(dec.value_as_string(0), "123.45");
-            assert_eq!(dec.value_as_string(1), "-1.23");
-        }
+        let dec = arr.as_any().downcast_ref::<Decimal32Array>().unwrap();
         #[cfg(not(feature = "small_decimals"))]
-        {
-            let dec = arr.as_any().downcast_ref::<Decimal128Array>().unwrap();
-            assert_eq!(dec.len(), 2);
-            assert_eq!(dec.value_as_string(0), "123.45");
-            assert_eq!(dec.value_as_string(1), "-1.23");
-        }
+        let dec = arr.as_any().downcast_ref::<Decimal128Array>().unwrap();
+        assert_eq!(dec.len(), 2);
+        assert_eq!(dec.value_as_string(0), "123.45");
+        assert_eq!(dec.value_as_string(1), "-1.23");
     }
 
     #[test]
@@ -4082,89 +4058,31 @@ mod tests {
         assert_eq!(array.len(), 0);
     }
 
-    #[test]
     #[cfg(feature = "avro_custom_types")]
-    fn test_duration_seconds_decoding() {
-        let avro_type = AvroDataType::new(Codec::DurationSeconds, Default::default(), None);
+    #[rstest]
+    #[case::seconds(Codec::DurationSeconds, DurationSecondType {}, [0, -1, 2])]
+    #[case::milliseconds(Codec::DurationMillis, DurationMillisecondType {}, [1, 0, -2])]
+    #[case::microseconds(Codec::DurationMicros, DurationMicrosecondType {}, [5, -6, 7])]
+    #[case::nanoseconds(Codec::DurationNanos, DurationNanosecondType {}, [8, 9, -10])]
+    fn test_duration_decoding<T: ArrowPrimitiveType<Native = i64>>(
+        #[case] codec: Codec,
+        #[case] duration_type: T,
+        #[case] values: [i64; 3],
+    ) {
+        let _ = duration_type;
+        let avro_type = AvroDataType::new(codec, Default::default(), None);
         let mut decoder = Decoder::try_new(&avro_type).unwrap();
         let mut data = Vec::new();
-        // Three values: 0, -1, 2
-        data.extend_from_slice(&encode_avro_long(0));
-        data.extend_from_slice(&encode_avro_long(-1));
-        data.extend_from_slice(&encode_avro_long(2));
-        let mut cursor = AvroCursor::new(&data);
-        decoder.decode(&mut cursor).unwrap();
-        decoder.decode(&mut cursor).unwrap();
-        decoder.decode(&mut cursor).unwrap();
-        let array = decoder.flush(None).unwrap();
-        let dur = array
-            .as_any()
-            .downcast_ref::<DurationSecondArray>()
-            .unwrap();
-        assert_eq!(dur.values(), &[0, -1, 2]);
-    }
-
-    #[test]
-    #[cfg(feature = "avro_custom_types")]
-    fn test_duration_milliseconds_decoding() {
-        let avro_type = AvroDataType::new(Codec::DurationMillis, Default::default(), None);
-        let mut decoder = Decoder::try_new(&avro_type).unwrap();
-        let mut data = Vec::new();
-        for v in [1i64, 0, -2] {
-            data.extend_from_slice(&encode_avro_long(v));
+        for value in values {
+            data.extend_from_slice(&encode_avro_long(value));
         }
         let mut cursor = AvroCursor::new(&data);
-        for _ in 0..3 {
+        for _ in 0..values.len() {
             decoder.decode(&mut cursor).unwrap();
         }
         let array = decoder.flush(None).unwrap();
-        let dur = array
-            .as_any()
-            .downcast_ref::<DurationMillisecondArray>()
-            .unwrap();
-        assert_eq!(dur.values(), &[1, 0, -2]);
-    }
-
-    #[test]
-    #[cfg(feature = "avro_custom_types")]
-    fn test_duration_microseconds_decoding() {
-        let avro_type = AvroDataType::new(Codec::DurationMicros, Default::default(), None);
-        let mut decoder = Decoder::try_new(&avro_type).unwrap();
-        let mut data = Vec::new();
-        for v in [5i64, -6, 7] {
-            data.extend_from_slice(&encode_avro_long(v));
-        }
-        let mut cursor = AvroCursor::new(&data);
-        for _ in 0..3 {
-            decoder.decode(&mut cursor).unwrap();
-        }
-        let array = decoder.flush(None).unwrap();
-        let dur = array
-            .as_any()
-            .downcast_ref::<DurationMicrosecondArray>()
-            .unwrap();
-        assert_eq!(dur.values(), &[5, -6, 7]);
-    }
-
-    #[test]
-    #[cfg(feature = "avro_custom_types")]
-    fn test_duration_nanoseconds_decoding() {
-        let avro_type = AvroDataType::new(Codec::DurationNanos, Default::default(), None);
-        let mut decoder = Decoder::try_new(&avro_type).unwrap();
-        let mut data = Vec::new();
-        for v in [8i64, 9, -10] {
-            data.extend_from_slice(&encode_avro_long(v));
-        }
-        let mut cursor = AvroCursor::new(&data);
-        for _ in 0..3 {
-            decoder.decode(&mut cursor).unwrap();
-        }
-        let array = decoder.flush(None).unwrap();
-        let dur = array
-            .as_any()
-            .downcast_ref::<DurationNanosecondArray>()
-            .unwrap();
-        assert_eq!(dur.values(), &[8, 9, -10]);
+        let dur = array.as_primitive::<T>();
+        assert_eq!(dur.values(), &values);
     }
 
     #[test]
@@ -5758,9 +5676,12 @@ mod tests {
         assert_eq!(a.values(), &[1, 2, 3]);
     }
 
-    #[test]
-    fn test_timestamp_nanos_decoding_offset_zero() {
-        let avro_type = avro_from_codec(Codec::TimestampNanos(Some(Tz::OffsetZero)));
+    #[rstest]
+    #[case::offset_zero(Some(Tz::OffsetZero), Some("+00:00"))]
+    #[case::utc(Some(Tz::Utc), Some("UTC"))]
+    #[case::local(None, None)]
+    fn test_timestamp_nanos_decoding(#[case] timezone: Option<Tz>, #[case] tz_deref: Option<&str>) {
+        let avro_type = avro_from_codec(Codec::TimestampNanos(timezone));
         let mut decoder = Decoder::try_new(&avro_type).expect("create TimestampNanos decoder");
         let mut data = Vec::new();
         for v in [0_i64, 1_i64, -1_i64, 1_234_567_890_i64] {
@@ -5778,61 +5699,9 @@ mod tests {
         assert_eq!(ts.values(), &[0, 1, -1, 1_234_567_890]);
         match ts.data_type() {
             DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, tz) => {
-                assert_eq!(tz.as_deref(), Some("+00:00"));
+                assert_eq!(tz.as_deref(), tz_deref);
             }
-            other => panic!("expected Timestamp(Nanosecond, Some(\"+00:00\")), got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_timestamp_nanos_decoding_utc() {
-        let avro_type = avro_from_codec(Codec::TimestampNanos(Some(Tz::Utc)));
-        let mut decoder = Decoder::try_new(&avro_type).expect("create TimestampNanos decoder");
-        let mut data = Vec::new();
-        for v in [0_i64, 1_i64, -1_i64, 1_234_567_890_i64] {
-            data.extend_from_slice(&encode_avro_long(v));
-        }
-        let mut cur = AvroCursor::new(&data);
-        for _ in 0..4 {
-            decoder.decode(&mut cur).expect("decode nanos ts");
-        }
-        let array = decoder.flush(None).expect("flush nanos ts");
-        let ts = array
-            .as_any()
-            .downcast_ref::<TimestampNanosecondArray>()
-            .expect("TimestampNanosecondArray");
-        assert_eq!(ts.values(), &[0, 1, -1, 1_234_567_890]);
-        match ts.data_type() {
-            DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, tz) => {
-                assert_eq!(tz.as_deref(), Some("UTC"));
-            }
-            other => panic!("expected Timestamp(Nanosecond, Some(\"UTC\")), got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_timestamp_nanos_decoding_local() {
-        let avro_type = avro_from_codec(Codec::TimestampNanos(None));
-        let mut decoder = Decoder::try_new(&avro_type).expect("create TimestampNanos decoder");
-        let mut data = Vec::new();
-        for v in [10_i64, 20_i64, -30_i64] {
-            data.extend_from_slice(&encode_avro_long(v));
-        }
-        let mut cur = AvroCursor::new(&data);
-        for _ in 0..3 {
-            decoder.decode(&mut cur).expect("decode nanos ts");
-        }
-        let array = decoder.flush(None).expect("flush nanos ts");
-        let ts = array
-            .as_any()
-            .downcast_ref::<TimestampNanosecondArray>()
-            .expect("TimestampNanosecondArray");
-        assert_eq!(ts.values(), &[10, 20, -30]);
-        match ts.data_type() {
-            DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, tz) => {
-                assert_eq!(tz.as_deref(), None);
-            }
-            other => panic!("expected Timestamp(Nanosecond, None), got {other:?}"),
+            other => panic!("expected Timestamp(Nanosecond, {tz_deref:?}), got {other:?}"),
         }
     }
 

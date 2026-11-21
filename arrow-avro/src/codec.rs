@@ -2401,6 +2401,7 @@ mod tests {
         Fixed, PrimitiveType, Record, Schema, Type, TypeName,
     };
     use indexmap::IndexMap;
+    use rstest::rstest;
     use serde_json::{self, Value};
 
     fn create_schema_with_logical_type(
@@ -2464,49 +2465,19 @@ mod tests {
         assert!(matches!(result.codec, Codec::TimeMicros));
     }
 
-    #[test]
-    fn test_timestamp_millis_logical_type() {
-        for tz in [Tz::OffsetZero, Tz::Utc] {
-            let schema = create_schema_with_logical_type(PrimitiveType::Long, "timestamp-millis");
-
-            let mut maker = Maker::new(false, false, tz);
-            let result = maker.make_data_type(&schema, None, None).unwrap();
-
-            let Codec::TimestampMillis(Some(actual_tz)) = result.codec else {
-                panic!("Expected TimestampMillis codec");
-            };
-            assert_eq!(actual_tz, tz);
-        }
-    }
-
-    #[test]
-    fn test_timestamp_micros_logical_type() {
-        for tz in [Tz::OffsetZero, Tz::Utc] {
-            let schema = create_schema_with_logical_type(PrimitiveType::Long, "timestamp-micros");
-
-            let mut maker = Maker::new(false, false, tz);
-            let result = maker.make_data_type(&schema, None, None).unwrap();
-
-            let Codec::TimestampMicros(Some(actual_tz)) = result.codec else {
-                panic!("Expected TimestampMicros codec");
-            };
-            assert_eq!(actual_tz, tz);
-        }
-    }
-
-    #[test]
-    fn test_timestamp_nanos_logical_type() {
-        for tz in [Tz::OffsetZero, Tz::Utc] {
-            let schema = create_schema_with_logical_type(PrimitiveType::Long, "timestamp-nanos");
-
-            let mut maker = Maker::new(false, false, tz);
-            let result = maker.make_data_type(&schema, None, None).unwrap();
-
-            let Codec::TimestampNanos(Some(actual_tz)) = result.codec else {
-                panic!("Expected TimestampNanos codec");
-            };
-            assert_eq!(actual_tz, tz);
-        }
+    #[rstest]
+    #[case::milliseconds("timestamp-millis", Codec::TimestampMillis)]
+    #[case::microseconds("timestamp-micros", Codec::TimestampMicros)]
+    #[case::nanoseconds("timestamp-nanos", Codec::TimestampNanos)]
+    fn test_timestamp_logical_type(
+        #[case] logical_type: &'static str,
+        #[case] expected_codec: fn(Option<Tz>) -> Codec,
+        #[values(Tz::OffsetZero, Tz::Utc)] tz: Tz,
+    ) {
+        let schema = create_schema_with_logical_type(PrimitiveType::Long, logical_type);
+        let mut maker = Maker::new(false, false, tz);
+        let result = maker.make_data_type(&schema, None, None).unwrap();
+        assert_eq!(result.codec, expected_codec(Some(tz)));
     }
 
     #[test]
