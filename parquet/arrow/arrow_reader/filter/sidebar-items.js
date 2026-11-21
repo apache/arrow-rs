@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["can_fuse_projection","evaluate_predicate","narrow_batch"],"struct":["ArrowPredicateFn","FusedPredicate","RowFilter"],"trait":["ArrowPredicate"]};

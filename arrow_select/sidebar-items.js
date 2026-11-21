@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["coalesce","concat","dictionary","filter","interleave","merge","nullif","take","union_extract","window","zip"]};

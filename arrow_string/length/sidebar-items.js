@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["bit_length","bit_length_impl","length","length_impl"]};

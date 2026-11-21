@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ShreddedPathStep"],"fn":["follow_list_like_index","follow_shredded_path_element","requested_field_is_shredded","shredded_get_path","try_perfect_shredding","variant_get"],"struct":["GetOptions"]};

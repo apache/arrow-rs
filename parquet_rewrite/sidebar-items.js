@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["BloomFilterPositionArgs","CompressionArgs","EnabledStatisticsArgs","EncodingArgs","WriterVersionArgs"],"fn":["compression_from_args","main"],"struct":["Args"]};

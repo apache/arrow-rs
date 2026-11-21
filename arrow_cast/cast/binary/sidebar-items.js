@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["cast_binary_to_fixed_size_binary","cast_byte_container","cast_fixed_size_binary_to_binary","cast_fixed_size_binary_to_binary_view","cast_numeric_to_binary","cast_view_to_byte"]};
