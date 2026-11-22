@@ -23,9 +23,9 @@ use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use arrow_array::*;
-use arrow_buffer::{
-    ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, ScalarBuffer,
-};
+#[cfg(test)]
+use arrow_buffer::ArrowNativeType;
+use arrow_buffer::{BooleanBuffer, Buffer, MutableBuffer, NullBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder, UnsafeFlag};
 use arrow_schema::*;
 
@@ -992,11 +992,43 @@ fn get_dictionary_values(
 
 /// Read the data for a given block
 fn read_block<R: Read + Seek>(mut reader: R, block: &Block) -> Result<Buffer, ArrowError> {
-    reader.seek(SeekFrom::Start(block.offset() as u64))?;
-    let body_len = block.bodyLength().to_usize().unwrap();
-    let metadata_len = block.metaDataLength().to_usize().unwrap();
-    let total_len = body_len.checked_add(metadata_len).unwrap();
+    let body_len = usize::try_from(block.bodyLength()).map_err(|_| {
+        ArrowError::IpcError(format!(
+            "Invalid IPC block bodyLength: {}",
+            block.bodyLength()
+        ))
+    })?;
+    let metadata_len = usize::try_from(block.metaDataLength()).map_err(|_| {
+        ArrowError::IpcError(format!(
+            "Invalid IPC block metaDataLength: {}",
+            block.metaDataLength()
+        ))
+    })?;
+    let Some(total_len) = body_len.checked_add(metadata_len) else {
+        return Err(ArrowError::IpcError(format!(
+            "IPC block length overflow: bodyLength ({body_len}) + metaDataLength ({metadata_len})"
+        )));
+    };
 
+    let offset = u64::try_from(block.offset()).map_err(|_| {
+        ArrowError::IpcError(format!("Invalid IPC block offset: {}", block.offset()))
+    })?;
+    let Some(end) = offset.checked_add(total_len as u64) else {
+        return Err(ArrowError::IpcError(format!(
+            "IPC block offset overflow: offset ({offset}) + length ({total_len})"
+        )));
+    };
+
+    // `end <= file_len` is the gate for the allocation below. Seeking here only
+    // measures the file; nothing is reserved until the block is known to fit.
+    let file_len = reader.seek(SeekFrom::End(0))?;
+    if end > file_len {
+        return Err(ArrowError::IpcError(format!(
+            "IPC block extends past the end of the file: offset {offset} plus length {total_len} is past file length {file_len}"
+        )));
+    }
+
+    reader.seek(SeekFrom::Start(offset))?;
     let mut buf = MutableBuffer::try_from_len_zeroed(total_len)
         .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
     reader.read_exact(&mut buf)?;
@@ -4539,6 +4571,81 @@ mod tests {
         stream.extend_from_slice(metadata);
         stream.resize(stream.len() + body_bytes, 0xAB);
         stream
+    }
+
+    /// A footer block length is untrusted. Declaring a body far past the file used to
+    /// reserve that many bytes and abort; it must be [`ArrowError::IpcError`] instead.
+    #[test]
+    fn test_file_reader_rejects_block_extending_past_file() {
+        let batch = RecordBatch::try_from_iter([(
+            "a",
+            Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+        )])
+        .unwrap();
+
+        let mut file = Vec::new();
+        {
+            let mut writer =
+                crate::writer::FileWriter::try_new(&mut file, &batch.schema()).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+
+        let mut reader = FileReader::try_new(Cursor::new(file.clone()), None).unwrap();
+        assert_eq!(reader.next().unwrap().unwrap(), batch);
+        assert!(reader.next().is_none());
+
+        let mut negative = file.clone();
+        corrupt_record_batch_body_length(&mut negative, -1);
+        let mut reader = FileReader::try_new(Cursor::new(negative), None).unwrap();
+        let err = reader
+            .next()
+            .expect("the corrupted block is still a batch")
+            .expect_err("a negative bodyLength must not be accepted");
+        assert!(
+            matches!(err, ArrowError::IpcError(_)),
+            "expected IpcError for a negative bodyLength, got {err}"
+        );
+
+        // Issue #10921: bodyLength 0x280000000240 (~44 TiB) on a ~1 KiB file.
+        let declared = 0x280000000240;
+        corrupt_record_batch_body_length(&mut file, declared);
+
+        let mut reader = FileReader::try_new(Cursor::new(file), None).unwrap();
+        let err = reader
+            .next()
+            .expect("the corrupted block is still a batch")
+            .expect_err("a block past the end of the file must not be accepted");
+        assert!(
+            matches!(err, ArrowError::IpcError(_)),
+            "expected IpcError, got {err}"
+        );
+        assert!(
+            err.to_string().contains("extends past the end of the file"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// Replace the first record-batch block's `bodyLength` in `file`.
+    fn corrupt_record_batch_body_length(file: &mut [u8], body_length: i64) {
+        let footer_len = read_footer_length(file[file.len() - 10..].try_into().unwrap()).unwrap();
+        let footer_start = file.len() - 10 - footer_len;
+        let footer = root_as_footer(&file[footer_start..file.len() - 10]).unwrap();
+        let block = footer.recordBatches().unwrap().get(0);
+        let original = block.0;
+        let footer_bytes = &file[footer_start..file.len() - 10];
+        let relative = footer_bytes
+            .windows(original.len())
+            .position(|window| window == original)
+            .expect("record batch block is stored in the footer");
+        let body_at = footer_start + relative + 16;
+        file[body_at..body_at + 8].copy_from_slice(&body_length.to_le_bytes());
+
+        let footer = root_as_footer(&file[footer_start..file.len() - 10]).unwrap();
+        assert_eq!(
+            footer.recordBatches().unwrap().get(0).bodyLength(),
+            body_length
+        );
     }
 
     /// A message body length is read from the stream before any of the bytes it describes,
