@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Provide SQL's CONTAINS, STARTS_WITH, ENDS_WITH operators for Arrow's binary arrays
 
@@ -66,6 +53,17 @@ pub(crate) fn binary_apply<'a, T: BinaryArrayType<'a> + 'a>(
     r_v: Option<&'a dyn AnyDictionaryArray>,
 ) -> Result<BooleanArray, ArrowError> {
     let l_len = l_v.map_or_else(|| l.len(), |l| l.len());
+    // A valid dictionary without values can only contain null keys.
+    if l_v.is_some_and(|dict| dict.values().is_empty())
+        || r_v.is_some_and(|dict| dict.values().is_empty())
+    {
+        let len = if l_s {
+            r_v.map_or_else(|| r.len(), |r| r.len())
+        } else {
+            l_len
+        };
+        return Ok(BooleanArray::new_null(len));
+    }
     if r_s {
         let idx = match r_v {
             Some(dict) if dict.null_count() != 0 => return Ok(BooleanArray::new_null(l_len)),

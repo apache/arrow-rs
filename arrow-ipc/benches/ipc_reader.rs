@@ -1,25 +1,15 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use arrow_array::builder::{Date32Builder, Decimal128Builder, Int32Builder};
-use arrow_array::{FixedSizeBinaryArray, RecordBatch, builder::StringBuilder};
+use arrow_array::builder::{
+    Date32Builder, Decimal128Builder, Int32Builder, ListBuilder, StringDictionaryBuilder,
+};
+use arrow_array::types::Int32Type;
+use arrow_array::{ArrayRef, FixedSizeBinaryArray, RecordBatch, builder::StringBuilder};
 use arrow_buffer::Buffer;
 use arrow_ipc::convert::try_fb_to_schema;
-use arrow_ipc::reader::{FileDecoder, FileReader, StreamReader, read_footer_length};
+use arrow_ipc::reader::{FileDecoder, FileReader, StreamDecoder, StreamReader, read_footer_length};
 use arrow_ipc::writer::{FileWriter, IpcWriteOptions, StreamWriter};
 use arrow_ipc::{Block, CompressionType, root_as_footer};
 use arrow_schema::{DataType, Field, Schema};
@@ -59,6 +49,33 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
+    group.bench_function("StreamDecoder/read_10", |b| {
+        let buffer = Buffer::from_vec(ipc_stream(IpcWriteOptions::default()));
+        b.iter(move || {
+            let mut decoder = StreamDecoder::new();
+            let mut buffer = buffer.clone();
+            for _ in 0..10 {
+                decoder.decode(&mut buffer).unwrap().unwrap();
+            }
+            assert!(decoder.decode(&mut buffer).unwrap().is_none());
+            decoder.finish().unwrap();
+        })
+    });
+
+    group.bench_function("StreamDecoder/no_validation/read_10", |b| {
+        let buffer = Buffer::from_vec(ipc_stream(IpcWriteOptions::default()));
+        b.iter(move || {
+            // safety: we created a valid IPC stream
+            let mut decoder = unsafe { StreamDecoder::new().with_skip_validation(true) };
+            let mut buffer = buffer.clone();
+            for _ in 0..10 {
+                decoder.decode(&mut buffer).unwrap().unwrap();
+            }
+            assert!(decoder.decode(&mut buffer).unwrap().is_none());
+            decoder.finish().unwrap();
+        })
+    });
+
     group.bench_function("StreamReader/read_10/zstd", |b| {
         let buffer = ipc_stream(
             IpcWriteOptions::default()
@@ -90,6 +107,34 @@ fn criterion_benchmark(c: &mut Criterion) {
             assert!(reader.next().is_none());
         })
     });
+
+    for (rows, threads) in [(256, 1), (8192, 1), (256, 16), (8192, 16)] {
+        group.bench_function(
+            format!("StreamReader/read_10/lz4/rows={rows}/threads={threads}"),
+            |b| {
+                let buffer = ipc_stream_with_rows(
+                    rows,
+                    IpcWriteOptions::default()
+                        .try_with_compression(Some(CompressionType::LZ4_FRAME))
+                        .unwrap(),
+                );
+                b.iter(|| {
+                    std::thread::scope(|s| {
+                        for _ in 0..threads {
+                            s.spawn(|| {
+                                let mut reader =
+                                    StreamReader::try_new(buffer.as_slice(), None).unwrap();
+                                for _ in 0..10 {
+                                    reader.next().unwrap().unwrap();
+                                }
+                                assert!(reader.next().is_none());
+                            });
+                        }
+                    })
+                })
+            },
+        );
+    }
 
     group.bench_function("StreamReader/no_validation/read_10/zstd", |b| {
         let buffer = ipc_stream(
@@ -185,11 +230,62 @@ fn criterion_benchmark(c: &mut Criterion) {
             }
         })
     });
+
+    let num_columns = 1000;
+    for num_distinct in [4, 4096] {
+        for (layout, list) in [("flat", false), ("list", true)] {
+            let buffer = dictionary_ipc_stream(num_columns, num_distinct, list);
+            let name = format!(
+                "StreamReader/dictionaries/{num_columns}_columns/{num_distinct}_distinct/{layout}"
+            );
+            group.bench_function(name, |b| {
+                b.iter(|| {
+                    let mut reader = StreamReader::try_new(buffer.as_slice(), None).unwrap();
+                    reader.next().unwrap().unwrap();
+                    assert!(reader.next().is_none());
+                })
+            });
+        }
+    }
+}
+
+/// Return an IPC stream with one record batch of `num_columns` string dictionary columns. Each
+/// column holds the same 4096 values with `num_distinct` distinct values, either directly or, with
+/// `list`, grouped into lists of 4.
+fn dictionary_ipc_stream(num_columns: usize, num_distinct: usize, list: bool) -> Vec<u8> {
+    let values: Vec<String> = (0..4096)
+        .map(|i| format!("value_{}", i % num_distinct))
+        .collect();
+    let column: ArrayRef = if list {
+        let mut builder = ListBuilder::new(StringDictionaryBuilder::<Int32Type>::new());
+        for chunk in values.chunks(4) {
+            builder.append_value(chunk.iter().map(Some));
+        }
+        Arc::new(builder.finish())
+    } else {
+        let mut builder = StringDictionaryBuilder::<Int32Type>::new();
+        builder.extend(values.iter().map(Some));
+        Arc::new(builder.finish())
+    };
+    let batch = RecordBatch::try_from_iter(
+        (0..num_columns).map(|i| (format!("c{i}"), Arc::clone(&column))),
+    )
+    .unwrap();
+    let mut buffer = Vec::new();
+    let mut writer = StreamWriter::try_new(&mut buffer, batch.schema().as_ref()).unwrap();
+    writer.write(&batch).unwrap();
+    writer.finish().unwrap();
+    buffer
 }
 
 /// Return an IPC stream with 10 record batches
 fn ipc_stream(options: IpcWriteOptions) -> Vec<u8> {
-    let batch = create_batch(8192, true);
+    ipc_stream_with_rows(8192, options)
+}
+
+/// Return an IPC stream with 10 record batches of `rows` rows each
+fn ipc_stream_with_rows(rows: usize, options: IpcWriteOptions) -> Vec<u8> {
+    let batch = create_batch(rows, true);
     let mut buffer = Vec::with_capacity(2 * 1024 * 1024);
     let mut writer =
         StreamWriter::try_new_with_options(&mut buffer, batch.schema().as_ref(), options).unwrap();

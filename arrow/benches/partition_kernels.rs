@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 #[macro_use]
 extern crate criterion;
@@ -25,18 +12,8 @@ use arrow::{
 };
 use arrow_ord::partition::partition;
 use criterion::Criterion;
-use rand::distr::{Distribution, StandardUniform};
 use std::hint;
 use std::sync::Arc;
-
-fn create_array<T: ArrowPrimitiveType>(size: usize, with_nulls: bool) -> ArrayRef
-where
-    StandardUniform: Distribution<T::Native>,
-{
-    let null_density = if with_nulls { 0.5 } else { 0.0 };
-    let array = create_primitive_array::<T>(size, null_density);
-    Arc::new(array)
-}
 
 fn bench_partition(sorted_columns: &[ArrayRef]) {
     hint::black_box(partition(sorted_columns).unwrap().ranges());
@@ -60,14 +37,16 @@ fn create_sorted_low_cardinality_data(length: usize) -> Vec<ArrayRef> {
 }
 
 fn create_sorted_float_data(pow: u32, with_nulls: bool) -> Vec<ArrayRef> {
+    let size = 2u64.pow(pow) as usize;
+    let null_density = if with_nulls { 0.5 } else { 0.0 };
     lexsort(
         &[
             SortColumn {
-                values: create_array::<Float64Type>(2u64.pow(pow) as usize, with_nulls),
+                values: Arc::new(create_primitive_array::<Float64Type>(size, null_density)),
                 options: None,
             },
             SortColumn {
-                values: create_array::<Float64Type>(2u64.pow(pow) as usize, with_nulls),
+                values: Arc::new(create_primitive_array::<Float64Type>(size, null_density)),
                 options: None,
             },
         ],
@@ -77,14 +56,16 @@ fn create_sorted_float_data(pow: u32, with_nulls: bool) -> Vec<ArrayRef> {
 }
 
 fn create_sorted_data(pow: u32, with_nulls: bool) -> Vec<ArrayRef> {
+    let size = 2u64.pow(pow) as usize;
+    let null_density = if with_nulls { 0.5 } else { 0.0 };
     lexsort(
         &[
             SortColumn {
-                values: create_array::<UInt8Type>(2u64.pow(pow) as usize, with_nulls),
+                values: Arc::new(create_primitive_array::<UInt8Type>(size, null_density)),
                 options: None,
             },
             SortColumn {
-                values: create_array::<UInt8Type>(2u64.pow(pow) as usize, with_nulls),
+                values: Arc::new(create_primitive_array::<UInt8Type>(size, null_density)),
                 options: None,
             },
         ],

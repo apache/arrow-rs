@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Pass Arrow objects from and to PyArrow, using Arrow's
 //! [C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html)
@@ -90,7 +77,7 @@ use arrow_array::{
 };
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaRef};
-use pyo3::exceptions::{PyTypeError, PyValueError};
+use pyo3::exceptions::{PyMemoryError, PyTypeError, PyValueError};
 use pyo3::ffi::Py_uintptr_t;
 use pyo3::prelude::*;
 use pyo3::sync::PyOnceLock;
@@ -403,7 +390,11 @@ impl<T: FromPyArrow> FromPyArrow for Vec<T> {
     );
 
     fn from_pyarrow_bound(value: &Bound<PyAny>) -> PyResult<Self> {
-        let mut v = Vec::with_capacity(value.len().unwrap_or(0));
+        let mut v = Vec::new();
+        if let Ok(len) = value.len() {
+            v.try_reserve(len)
+                .map_err(|e| PyMemoryError::new_err(e.to_string()))?;
+        }
         for item in value.try_iter()? {
             v.push(T::from_pyarrow_bound(&item?)?);
         }

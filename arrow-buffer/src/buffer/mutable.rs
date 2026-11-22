@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::alloc::Layout;
 use std::mem;
@@ -258,6 +245,12 @@ impl MutableBuffer {
     pub fn new_null(len: usize) -> Self {
         let num_bytes = bit_util::ceil(len, 8);
         MutableBuffer::from_len_zeroed(num_bytes)
+    }
+
+    /// Fallible version of [`MutableBuffer::new_null`].
+    pub fn try_new_null(len: usize) -> Result<Self, MutableBufferError> {
+        let num_bytes = bit_util::ceil(len, 8);
+        MutableBuffer::try_from_len_zeroed(num_bytes)
     }
 
     /// Set the bits in the range of `[0, end)` to 0 (if `val` is false), or 1 (if `val`
@@ -686,6 +679,20 @@ impl MutableBuffer {
             std::ptr::copy_nonoverlapping(src, dst, additional);
         }
         self.len += additional;
+    }
+
+    /// Fallible version of [`MutableBuffer::push`].
+    #[inline]
+    pub fn try_push<T: ToByteSlice>(&mut self, item: T) -> Result<(), MutableBufferError> {
+        let additional = std::mem::size_of::<T>();
+        self.try_reserve(additional)?;
+        unsafe {
+            let src = item.to_byte_slice().as_ptr();
+            let dst = self.data.as_ptr().add(self.len);
+            std::ptr::copy_nonoverlapping(src, dst, additional);
+        }
+        self.len += additional;
+        Ok(())
     }
 
     /// Extends the buffer with a new item, without checking for sufficient capacity
@@ -1382,6 +1389,28 @@ mod tests {
         buf.push(1_u64);
         assert_eq!(9, buf.len());
         assert_eq!(&[1u8, 1u8, 0, 0, 0, 0, 0, 0, 0], buf.as_slice());
+    }
+
+    #[test]
+    fn mutable_try_push_matches_push() {
+        let mut fallible = MutableBuffer::new(0);
+        fallible.try_push(1_u8).unwrap();
+        fallible.try_push(1_u64).unwrap();
+
+        let mut infallible = MutableBuffer::new(0);
+        infallible.push(1_u8);
+        infallible.push(1_u64);
+
+        assert_eq!(fallible.as_slice(), infallible.as_slice());
+        assert_eq!(fallible.len(), infallible.len());
+        assert_eq!(fallible.capacity(), infallible.capacity());
+    }
+
+    #[test]
+    fn mutable_try_new_null() {
+        let buffer = MutableBuffer::try_new_null(9).unwrap();
+        assert_eq!(buffer.len(), 2);
+        assert_eq!(buffer.as_slice(), &[0, 0]);
     }
 
     #[test]

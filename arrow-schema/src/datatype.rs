@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -836,9 +823,11 @@ impl DataType {
             (DataType::Struct(f1), DataType::Struct(f2)) => f1.contains(f2),
             (DataType::Union(f1, s1), DataType::Union(f2, s2)) => {
                 s1 == s2
-                    && f1
-                        .iter()
-                        .all(|f1| f2.iter().any(|f2| f1.0 == f2.0 && f1.1.contains(f2.1)))
+                    && f2.iter().all(|(other_id, other_field)| {
+                        f1.iter().any(|(self_id, self_field)| {
+                            self_id == other_id && self_field.contains(other_field)
+                        })
+                    })
             }
             (DataType::Dictionary(k1, v1), DataType::Dictionary(k2, v2)) => {
                 k1.contains(k2) && v1.contains(v2)
@@ -912,6 +901,67 @@ pub const DECIMAL_DEFAULT_SCALE: i8 = 10;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_union_contains_subset() {
+        for mode in [UnionMode::Sparse, UnionMode::Dense] {
+            let number = Field::new("number", DataType::Int32, false);
+            let text = Field::new("text", DataType::Utf8, false);
+            let superset = DataType::Union(
+                UnionFields::try_new([0, 1], [number.clone(), text.clone()]).unwrap(),
+                mode,
+            );
+            let subset =
+                DataType::Union(UnionFields::try_new([0], [number.clone()]).unwrap(), mode);
+            let reordered =
+                DataType::Union(UnionFields::try_new([1, 0], [text, number]).unwrap(), mode);
+            let empty = DataType::Union(UnionFields::empty(), mode);
+
+            assert!(superset.contains(&subset));
+            assert!(!subset.contains(&superset));
+            assert!(superset.contains(&superset));
+            assert!(superset.contains(&reordered));
+            assert!(reordered.contains(&superset));
+            assert!(superset.contains(&empty));
+            assert!(!empty.contains(&superset));
+            assert!(empty.contains(&empty));
+        }
+    }
+
+    #[test]
+    fn test_union_contains_field_compatibility() {
+        for mode in [UnionMode::Sparse, UnionMode::Dense] {
+            let field = Field::new("number", DataType::Int32, false);
+            let union = DataType::Union(UnionFields::try_new([0], [field.clone()]).unwrap(), mode);
+            let nullable = DataType::Union(
+                UnionFields::try_new([0], [field.clone().with_nullable(true)]).unwrap(),
+                mode,
+            );
+            assert!(nullable.contains(&union));
+            assert!(!union.contains(&nullable));
+
+            let different_id =
+                DataType::Union(UnionFields::try_new([1], [field.clone()]).unwrap(), mode);
+            assert!(!union.contains(&different_id));
+            assert!(!different_id.contains(&union));
+
+            let different_type = DataType::Union(
+                UnionFields::try_new([0], [field.clone().with_data_type(DataType::Utf8)]).unwrap(),
+                mode,
+            );
+            assert!(!union.contains(&different_type));
+            assert!(!different_type.contains(&union));
+
+            let other_mode = match mode {
+                UnionMode::Sparse => UnionMode::Dense,
+                UnionMode::Dense => UnionMode::Sparse,
+            };
+            let different_mode =
+                DataType::Union(UnionFields::try_new([0], [field]).unwrap(), other_mode);
+            assert!(!union.contains(&different_mode));
+            assert!(!different_mode.contains(&union));
+        }
+    }
 
     #[test]
     #[cfg(feature = "serde")]

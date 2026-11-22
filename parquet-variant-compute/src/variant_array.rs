@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`VariantArray`] implementation
 
@@ -39,6 +26,7 @@ use arrow_schema::{ArrowError, DataType, Field, FieldRef, TimeUnit};
 use chrono::{DateTime, NaiveTime};
 use parquet_variant::{
     Uuid, Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16, VariantDecimalType as _,
+    VariantType,
 };
 
 use std::borrow::Cow;
@@ -101,70 +89,6 @@ pub(crate) fn validate_binary_array(array: &dyn Array, field_name: &str) -> Resu
             "VariantArray '{field_name}' field must be Binary, LargeBinary, or BinaryView, got {}",
             array.data_type()
         ))),
-    }
-}
-
-/// Validates that a metadata array has binary-like logical values.
-fn validate_metadata_array(array: &dyn Array) -> Result<()> {
-    let is_binary = |data_type: &DataType| {
-        matches!(
-            data_type,
-            DataType::Binary | DataType::LargeBinary | DataType::BinaryView
-        )
-    };
-    match array.data_type() {
-        data_type if is_binary(data_type) => Ok(()),
-        DataType::Dictionary(_, values) if is_binary(values) => Ok(()),
-        DataType::RunEndEncoded(_, values) if is_binary(values.data_type()) => Ok(()),
-        _ => Err(ArrowError::InvalidArgumentError(format!(
-            "VariantArray 'metadata' field must be Binary, LargeBinary, BinaryView, or a Dictionary or RunEndEncoded array of one of those types, got {}",
-            array.data_type()
-        ))),
-    }
-}
-
-/// Arrow Variant [`ExtensionType`].
-///
-/// Represents the canonical Arrow Extension Type for storing variants.
-/// See [`VariantArray`] for more examples of using this extension type.
-pub struct VariantType;
-
-impl ExtensionType for VariantType {
-    const NAME: &'static str = "arrow.parquet.variant";
-
-    // Variants extension metadata is an empty string
-    // <https://github.com/apache/arrow/blob/d803afcc43f5d132506318fd9e162d33b2c3d4cd/docs/source/format/CanonicalExtensions.rst?plain=1#L473>
-    type Metadata = &'static str;
-
-    fn metadata(&self) -> &Self::Metadata {
-        &""
-    }
-
-    fn serialize_metadata(&self) -> Option<String> {
-        Some(String::new())
-    }
-
-    fn deserialize_metadata(_metadata: Option<&str>) -> Result<Self::Metadata> {
-        Ok("")
-    }
-
-    fn supports_data_type(&self, data_type: &DataType) -> Result<()> {
-        if matches!(data_type, DataType::Struct(_)) {
-            Ok(())
-        } else {
-            Err(ArrowError::InvalidArgumentError(format!(
-                "VariantType only supports StructArray, got {data_type}"
-            )))
-        }
-    }
-
-    fn try_new(data_type: &DataType, _metadata: Self::Metadata) -> Result<Self> {
-        Self.supports_data_type(data_type)?;
-        Ok(Self)
-    }
-
-    fn validate(data_type: &DataType, _metadata: Self::Metadata) -> Result<()> {
-        Self.supports_data_type(data_type)
     }
 }
 
@@ -331,39 +255,26 @@ impl VariantArray {
     /// - A new instance of `VariantArray`.
     ///
     /// # Errors:
-    /// - If the `StructArray` does not contain the required fields
+    /// - If the data type is not valid [`VariantType`] storage
+    /// - If `typed_value` contains a type that cannot be shredded
     ///
     /// # Requirements of the `StructArray`
     ///
-    /// 1. A required field named `metadata` which is binary, large_binary, or
-    ///    binary_view, optionally dictionary or run-end-encoded
-    ///
-    /// 2. A required field named `value` that is binary, large_binary, or
-    ///    binary_view
-    ///
-    /// 3. An optional field named `typed_value` which can be any primitive type
-    ///    or be a list, large_list, fixed_size_list, list_view or struct. Fixed-size lists are
-    ///    normalized to variable-length lists on read.
+    /// See [`VariantType`] for the required fields. `typed_value` can be any
+    /// primitive type or be a list, large_list, fixed_size_list, list_view or
+    /// struct. Fixed-size lists are normalized to variable-length lists on read.
     ///
     pub fn try_new(inner: &dyn Array) -> Result<Self> {
+        // Before canonicalizing, which would report a non-Variant struct's fields as illegal
+        // shredded types
+        VariantType.supports_data_type(inner.data_type())?;
+
         // Canonicalize shredded typed_value fields (e.g. decimal narrowing)
         let inner = canonicalize_shredded_types(inner)?;
-
-        let Some(inner) = inner.as_struct_opt() else {
-            return Err(ArrowError::InvalidArgumentError(
-                "Invalid VariantArray: requires StructArray as input".to_string(),
-            ));
-        };
-
-        // Note the specification allows for any order so we must search by name
-
-        // Ensure the StructArray has a metadata field with binary-like logical values
-        let Some(metadata_col) = inner.column_by_name("metadata") else {
-            return Err(ArrowError::InvalidArgumentError(
-                "Invalid VariantArray: StructArray must contain a 'metadata' field".to_string(),
-            ));
-        };
-        validate_metadata_array(metadata_col.as_ref())?;
+        let inner = inner.as_struct();
+        let metadata_col = inner
+            .column_by_name("metadata")
+            .expect("checked by VariantType");
 
         let shredding_state = ShreddingState::try_from(inner)?;
 
@@ -1370,33 +1281,25 @@ mod test {
     use arrow::array::{
         BinaryArray, BinaryDictionaryBuilder, BinaryRunBuilder, BinaryViewArray, Decimal32Array,
         Decimal64Array, Decimal128Array, FixedSizeBinaryArray, FixedSizeListArray, Int8Array,
-        Int32Array, Int64Array, LargeBinaryArray, LargeListArray, LargeListViewArray, ListArray,
-        ListViewArray, StringArray, Time64MicrosecondArray,
+        Int64Array, LargeBinaryArray, LargeListArray, LargeListViewArray, ListArray, ListViewArray,
+        StringArray, Time64MicrosecondArray, UInt8Array,
     };
     use arrow::buffer::{OffsetBuffer, ScalarBuffer};
     use arrow_schema::{Field, Fields};
     use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, ShortString};
 
     #[test]
-    fn invalid_not_a_struct_array() {
-        let array = make_binary_view_array();
-        // Should fail because the input is not a StructArray
-        let err = VariantArray::try_new(&array);
+    fn invalid_storage_checked_before_canonicalizing() {
+        // `UInt8` is also an illegal shredded type, but the storage error must win
+        let array = StructArrayAssembler::new()
+            .with_field("metadata", make_binary_view_array(), false)
+            .with_field("value", Arc::new(UInt8Array::from(vec![1])), true)
+            .build()
+            .unwrap();
+        let err = VariantArray::try_new(&array).unwrap_err();
         assert_eq!(
-            err.unwrap_err().to_string(),
-            "Invalid argument error: Invalid VariantArray: requires StructArray as input"
-        );
-    }
-
-    #[test]
-    fn invalid_missing_metadata() {
-        let fields = Fields::from(vec![Field::new("value", DataType::BinaryView, true)]);
-        let array = StructArray::new(fields, vec![make_binary_view_array()], None);
-        // Should fail because the StructArray does not contain a 'metadata' field
-        let err = VariantArray::try_new(&array);
-        assert_eq!(
-            err.unwrap_err().to_string(),
-            "Invalid argument error: Invalid VariantArray: StructArray must contain a 'metadata' field"
+            err.to_string(),
+            "Invalid argument error: VariantType 'value' field must be Binary, LargeBinary, or BinaryView, got UInt8"
         );
     }
 
@@ -1423,33 +1326,6 @@ mod test {
         assert_eq!(variant_array.value(0), Variant::from(1i64));
         assert_eq!(variant_array.value(1), Variant::Null);
         assert_eq!(variant_array.value(2), Variant::from(3i64));
-
-        // With no `typed_value` either, there is nothing to read, so `value` stays required.
-        let fields = Fields::from(vec![Field::new("metadata", DataType::BinaryView, false)]);
-        let metadata_only = StructArray::new(fields, vec![make_binary_view_array()], None);
-        let err = VariantArray::try_new(&metadata_only);
-        assert_eq!(
-            err.unwrap_err().to_string(),
-            "Invalid argument error: Invalid VariantArray: StructArray must contain a 'value' field"
-        );
-    }
-
-    #[test]
-    fn invalid_metadata_field_type() {
-        let fields = Fields::from(vec![
-            Field::new("metadata", DataType::Int32, true), // not supported
-            Field::new("value", DataType::BinaryView, true),
-        ]);
-        let array = StructArray::new(
-            fields,
-            vec![make_int32_array(), make_binary_view_array()],
-            None,
-        );
-        let err = VariantArray::try_new(&array);
-        assert_eq!(
-            err.unwrap_err().to_string(),
-            "Invalid argument error: VariantArray 'metadata' field must be Binary, LargeBinary, BinaryView, or a Dictionary or RunEndEncoded array of one of those types, got Int32"
-        );
     }
 
     #[test]
@@ -1516,30 +1392,8 @@ mod test {
         }
     }
 
-    #[test]
-    fn invalid_value_field_type() {
-        let fields = Fields::from(vec![
-            Field::new("metadata", DataType::BinaryView, true),
-            Field::new("value", DataType::Int32, true),
-        ]);
-        let array = StructArray::new(
-            fields,
-            vec![make_binary_view_array(), make_int32_array()],
-            None,
-        );
-        let err = VariantArray::try_new(&array);
-        assert_eq!(
-            err.unwrap_err().to_string(),
-            "Invalid argument error: VariantArray 'value' field must be Binary, LargeBinary, or BinaryView, got Int32"
-        );
-    }
-
     fn make_binary_view_array() -> ArrayRef {
         Arc::new(BinaryViewArray::from(vec![b"test" as &[u8]]))
-    }
-
-    fn make_int32_array() -> ArrayRef {
-        Arc::new(Int32Array::from(vec![1]))
     }
 
     fn make_variant_struct_with_typed_value(typed_value: ArrayRef) -> StructArray {

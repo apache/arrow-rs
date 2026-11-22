@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Encryption support for Thrift serialization
 
@@ -24,7 +11,10 @@ use crate::{
         column_crypto_metadata::ColumnCryptoMetaData,
         metadata::{
             HeapSize, ParquetMetaData, ParquetMetaDataOptions, RowGroupMetaData,
-            thrift::{parquet_metadata_from_bytes, read_column_metadata, validate_column_metadata},
+            thrift::{
+                file_metadata_and_row_groups_from_bytes, read_column_metadata,
+                validate_column_metadata,
+            },
         },
     },
     parquet_thrift::{
@@ -292,15 +282,8 @@ pub(crate) fn parquet_metadata_with_encryption(
         }
     }
 
-    let parquet_meta = parquet_metadata_from_bytes(buf, options)
+    let (mut file_metadata, row_groups) = file_metadata_and_row_groups_from_bytes(buf, options)
         .map_err(|e| general_err!("Could not parse metadata: {}", e))?;
-
-    let ParquetMetaData {
-        mut file_metadata,
-        row_groups,
-        page_index: _,
-        file_decryptor: _,
-    } = parquet_meta;
 
     // Take the encryption algorithm and footer signing key metadata as they are no longer
     // needed after this.

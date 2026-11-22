@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::array::print_long_array;
 use crate::builder::{BooleanBufferBuilder, PrimitiveBuilder};
@@ -1719,26 +1706,27 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
     /// Validates values in this array can be properly interpreted
     /// with the specified precision.
     pub fn validate_decimal_precision(&self, precision: u8) -> Result<(), ArrowError> {
-        if precision < self.scale() as u8 {
+        if self.scale() > 0 && precision < self.scale() as u8 {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Decimal precision {precision} is less than scale {}",
                 self.scale()
             )));
         }
-        (0..self.len()).try_for_each(|idx| {
-            if self.is_valid(idx) {
-                let decimal = unsafe { self.value_unchecked(idx) };
-                T::validate_decimal_precision(decimal, precision, self.scale())
-            } else {
-                Ok(())
+        // A null slot can hold any value, so read the validity bit only for a value that
+        // doesn't fit
+        for (idx, &value) in self.values().iter().enumerate() {
+            if !T::is_valid_decimal_precision(value, precision) && self.is_valid(idx) {
+                return T::validate_decimal_precision(value, precision, self.scale());
             }
-        })
+        }
+        Ok(())
     }
 
     /// Validates the Decimal Array, if the value of slot is overflow for the specified precision, and
     /// will be casted to Null
     pub fn null_if_overflow_precision(&self, precision: u8) -> Self {
         self.unary_opt::<_, T>(|v| T::is_valid_decimal_precision(v, precision).then_some(v))
+            .with_data_type(self.data_type().clone())
     }
 
     /// Returns [`Self::value`] formatted as a string
@@ -2630,6 +2618,86 @@ mod tests {
     }
 
     #[test]
+    fn test_decimal_validate_precision_with_negative_scale() {
+        fn check<T: DecimalType>()
+        where
+            T::Native: From<i32>,
+        {
+            for scale in [i8::MIN, -2, -1, 0, 2] {
+                let array = PrimitiveArray::<T>::from_iter(
+                    [Some(-99), Some(0), Some(1), Some(99), None]
+                        .into_iter()
+                        .map(|v| v.map(T::Native::from)),
+                )
+                .with_precision_and_scale(2, scale)
+                .unwrap();
+                array.validate_decimal_precision(2).unwrap();
+
+                for value in [-100, 100] {
+                    let array = PrimitiveArray::<T>::from_iter_values([T::Native::from(value)])
+                        .with_precision_and_scale(3, scale)
+                        .unwrap();
+                    assert!(array.validate_decimal_precision(2).is_err());
+                }
+            }
+
+            let array = PrimitiveArray::<T>::from_iter_values([T::Native::from(100)])
+                .with_precision_and_scale(3, -2)
+                .unwrap();
+            assert_eq!(
+                array.validate_decimal_precision(2).unwrap_err().to_string(),
+                format!(
+                    "Invalid argument error: 10000 is too large to store in a {} of precision 2. Max is 9900",
+                    T::PREFIX
+                )
+            );
+
+            let array = PrimitiveArray::<T>::from_iter_values([T::Native::from(0)])
+                .with_precision_and_scale(2, 2)
+                .unwrap();
+            assert_eq!(
+                array.validate_decimal_precision(1).unwrap_err().to_string(),
+                "Invalid argument error: Decimal precision 1 is less than scale 2"
+            );
+        }
+
+        check::<Decimal32Type>();
+        check::<Decimal64Type>();
+        check::<Decimal128Type>();
+        check::<Decimal256Type>();
+    }
+
+    #[test]
+    fn test_decimal_validate_precision_ignores_null_slots() {
+        fn check<T: DecimalType>()
+        where
+            T::Native: From<i32>,
+        {
+            // Rows 1 and 3 are null and hold values that don't fit precision 3
+            let values = [1, -1000, 2, -2000, 3, 1000, 4].map(T::Native::from);
+            let nulls = NullBuffer::from(&[true, false, true, false, true, true, true]);
+            let array = PrimitiveArray::<T>::new(values.into_iter().collect(), Some(nulls))
+                .with_precision_and_scale(4, 0)
+                .unwrap();
+            let too_large = format!(
+                "Invalid argument error: 1000 is too large to store in a {} of precision 3. Max is 999",
+                T::PREFIX
+            );
+            for array in [array.clone(), array.slice(2, 5)] {
+                let error = array.validate_decimal_precision(3).unwrap_err();
+                assert_eq!(error.to_string(), too_large);
+            }
+            array.slice(0, 5).validate_decimal_precision(3).unwrap();
+            array.slice(1, 3).validate_decimal_precision(3).unwrap();
+        }
+
+        check::<Decimal32Type>();
+        check::<Decimal64Type>();
+        check::<Decimal128Type>();
+        check::<Decimal256Type>();
+    }
+
+    #[test]
     fn test_decimal_from_iter_values() {
         let array = Decimal128Array::from_iter_values(vec![-100, 0, 101]);
         assert_eq!(array.len(), 3);
@@ -2758,6 +2826,29 @@ mod tests {
         let result = array.null_if_overflow_precision(5);
         let expected = Decimal128Array::from(vec![None, Some(123), None, None]);
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_null_if_overflow_precision_keeps_data_type() {
+        let array = Decimal32Array::from(vec![99])
+            .with_precision_and_scale(2, 1)
+            .unwrap();
+        assert_eq!(array.null_if_overflow_precision(2), array);
+
+        let array = Decimal64Array::from(vec![99])
+            .with_precision_and_scale(2, 1)
+            .unwrap();
+        assert_eq!(array.null_if_overflow_precision(2), array);
+
+        let array = Decimal128Array::from(vec![99])
+            .with_precision_and_scale(2, 1)
+            .unwrap();
+        assert_eq!(array.null_if_overflow_precision(2), array);
+
+        let array = Decimal256Array::from(vec![i256::from(99)])
+            .with_precision_and_scale(2, 1)
+            .unwrap();
+        assert_eq!(array.null_if_overflow_precision(2), array);
     }
 
     #[test]

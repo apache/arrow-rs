@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Cast support for numeric and boolean arrays.
 
@@ -196,5 +183,58 @@ where
         num_traits::cast::cast(1)
     } else {
         Some(O::default())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow_array::types::*;
+    use half::f16;
+
+    /// Checks the fast-path classification against `num_cast` for every pair of
+    /// numeric types. `num_cast` fails only on values outside the target's range,
+    /// so each type's extremes decide, plus NaN for floats.
+    #[test]
+    fn test_is_infallible_numeric_cast() {
+        macro_rules! check {
+            ($from:ty => $values:expr, [$($to:ty),*]) => {$(
+                let infallible = is_infallible_numeric_cast(
+                    <<$from as ArrowPrimitiveType>::Native as NumericNative>::KIND,
+                    <<$to as ArrowPrimitiveType>::Native as NumericNative>::KIND,
+                );
+                let succeeds = $values
+                    .iter()
+                    .all(|&v| num_cast::<_, <$to as ArrowPrimitiveType>::Native>(v).is_some());
+                assert_eq!(
+                    infallible,
+                    succeeds,
+                    "{} to {}",
+                    <$from as ArrowPrimitiveType>::DATA_TYPE,
+                    <$to as ArrowPrimitiveType>::DATA_TYPE
+                );
+            )*};
+        }
+        macro_rules! check_all {
+            ($($from:ty => $values:expr),* $(,)?) => {$(
+                check!($from => $values, [
+                    UInt8Type, UInt16Type, UInt32Type, UInt64Type, Int8Type, Int16Type,
+                    Int32Type, Int64Type, Float16Type, Float32Type, Float64Type
+                ]);
+            )*};
+        }
+        check_all! {
+            UInt8Type => [u8::MIN, u8::MAX],
+            UInt16Type => [u16::MIN, u16::MAX],
+            UInt32Type => [u32::MIN, u32::MAX],
+            UInt64Type => [u64::MIN, u64::MAX],
+            Int8Type => [i8::MIN, i8::MAX],
+            Int16Type => [i16::MIN, i16::MAX],
+            Int32Type => [i32::MIN, i32::MAX],
+            Int64Type => [i64::MIN, i64::MAX],
+            Float16Type => [f16::MIN, f16::MAX, f16::NAN],
+            Float32Type => [f32::MIN, f32::MAX, f32::NAN],
+            Float64Type => [f64::MIN, f64::MAX, f64::NAN],
+        }
     }
 }
