@@ -1009,6 +1009,12 @@ fn check_filter_len(filter: &FilterPredicate, source_len: usize) -> Result<(), A
 ///
 /// [`StringViewArray`]: arrow_array::StringViewArray
 trait InProgressArray: std::fmt::Debug + Send + Sync {
+    /// Returns true if this implementation supports dense indexed copying.
+    #[expect(dead_code)]
+    fn supports_dense_indexed_copy(&self) -> bool {
+        false
+    }
+
     /// Set the source array.
     ///
     /// Calls to [`Self::copy_rows`] will copy rows from this array into the
