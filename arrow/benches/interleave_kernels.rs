@@ -207,6 +207,27 @@ fn add_benchmark(c: &mut Criterion) {
             &[&dict, &sparse_dict],
         );
     }
+
+    let shared_values: ArrayRef = Arc::new(create_string_array_with_len::<i32>(10, 0.0, 20));
+    let shared_dictionary = DictionaryArray::<Int32Type>::new(
+        Int32Array::from_iter_values((0..1024).map(|i| i % 10)),
+        shared_values,
+    );
+    let shared_a = shared_dictionary.slice(0, shared_dictionary.len());
+    let shared_b = shared_dictionary.slice(0, shared_dictionary.len());
+    let distinct_values: ArrayRef = Arc::new(create_string_array_with_len::<i32>(10, 0.0, 20));
+    let distinct_dictionary = DictionaryArray::<Int32Type>::new(
+        Int32Array::from_iter_values((0..1024).map(|i| i % 10)),
+        distinct_values,
+    );
+    let values: [&dyn Array; 3] = [&shared_a, &shared_b, &distinct_dictionary];
+    let indices: Vec<_> = (0..2040)
+        .map(|i| (i % 2, i % 1024))
+        .chain((0..8).map(|i| (2, i)))
+        .collect();
+    c.bench_function("interleave dict_shared_distinct_tail 2048", |b| {
+        b.iter(|| hint::black_box(interleave(&values, &indices).unwrap()))
+    });
 }
 
 // Alternate sources so parent rows cannot coalesce, while each selected list
