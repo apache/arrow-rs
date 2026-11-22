@@ -202,9 +202,7 @@ impl<K> FixedSizeBinaryDictionaryBuilder<K>
 where
     K: ArrowDictionaryKeyType,
 {
-    fn get_or_insert_key(&mut self, value: impl AsRef<[u8]>) -> Result<K::Native, ArrowError> {
-        let value_bytes: &[u8] = value.as_ref();
-
+    fn get_or_insert_key(&mut self, value_bytes: &[u8]) -> Result<K::Native, ArrowError> {
         let state = &self.state;
         let storage = &mut self.values_builder;
         let hash = state.hash_one(value_bytes);
@@ -218,7 +216,7 @@ where
             )
             .or_insert_with(|| {
                 let idx = storage.len();
-                let _ = storage.append_value(value);
+                let _ = storage.append_value(value_bytes);
                 idx
             })
             .get();
@@ -234,7 +232,8 @@ where
     ///
     /// Returns an error if the new index would overflow the key type.
     pub fn append(&mut self, value: impl AsRef<[u8]>) -> Result<K::Native, ArrowError> {
-        if value.as_ref().len() != self.byte_width as usize {
+        let value = value.as_ref();
+        if value.len() != self.byte_width as usize {
             Err(ArrowError::InvalidArgumentError(format!(
                 "Invalid input length passed to FixedSizeBinaryBuilder. Expected {} got {}",
                 self.byte_width,
@@ -256,7 +255,8 @@ where
         value: impl AsRef<[u8]>,
         count: usize,
     ) -> Result<K::Native, ArrowError> {
-        if value.as_ref().len() != self.byte_width as usize {
+        let value = value.as_ref();
+        if value.len() != self.byte_width as usize {
             Err(ArrowError::InvalidArgumentError(format!(
                 "Invalid input length passed to FixedSizeBinaryBuilder. Expected {} got {}",
                 self.byte_width,
