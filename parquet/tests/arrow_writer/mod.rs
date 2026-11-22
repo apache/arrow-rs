@@ -4,6 +4,7 @@
 
 //! Tests for [`ArrowWriter`]
 
+mod cdc;
 mod layout;
 mod roundtrip;
 mod roundtrip_helpers;

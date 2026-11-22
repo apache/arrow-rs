@@ -1120,6 +1120,7 @@ impl ArrowColumnWriter {
             levels.def_level_data().as_ref(),
             levels.rep_level_data().as_ref(),
             levels.array(),
+            Some(levels.non_null_indices()),
         )?;
 
         let num_chunks = chunks.len();

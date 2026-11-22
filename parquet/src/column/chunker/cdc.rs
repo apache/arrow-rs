@@ -267,6 +267,7 @@ impl ContentDefinedChunker {
         def_levels: LevelDataRef<'_>,
         rep_levels: LevelDataRef<'_>,
         num_levels: usize,
+        non_null_indices: Option<&[usize]>,
         mut roll_value: F,
     ) -> Vec<CdcChunk>
     where
@@ -382,7 +383,15 @@ impl ContentDefinedChunker {
                 self.roll_level(def_level);
                 self.roll_level(rep_level);
                 if def_level == self.max_def_level {
-                    roll_value(self, leaf_offset);
+                    // Hash the value actually written. `leaf_offset` counts
+                    // leaf slots in level order, which does not match the leaf
+                    // array for sliced lists, null-row child slots, or list
+                    // views; `non_null_indices` gives the leaf position of
+                    // each written value.
+                    let index = non_null_indices
+                        .map(|indices| indices[value_offset])
+                        .unwrap_or(leaf_offset);
+                    roll_value(self, index);
                 }
 
                 // Check boundary before incrementing value_offset so that
@@ -433,6 +442,7 @@ impl ContentDefinedChunker {
         def_levels: LevelDataRef<'_>,
         rep_levels: LevelDataRef<'_>,
         array: &dyn arrow_array::Array,
+        non_null_indices: Option<&[usize]>,
     ) -> Result<Vec<CdcChunk>> {
         use arrow_array::cast::AsArray;
         use arrow_schema::DataType;
@@ -451,31 +461,55 @@ impl ContentDefinedChunker {
                 let data = array.to_data();
                 let buffer = data.buffers()[0].as_slice();
                 let values = &buffer[data.offset() * $N..];
-                self.calculate(def_levels, rep_levels, num_levels, |c, i| {
-                    let offset = i * $N;
-                    let slice = &values[offset..offset + $N];
-                    c.roll_fixed::<$N>(slice.try_into().unwrap());
-                })
+                self.calculate(
+                    def_levels,
+                    rep_levels,
+                    num_levels,
+                    non_null_indices,
+                    |c, i| {
+                        let offset = i * $N;
+                        let slice = &values[offset..offset + $N];
+                        c.roll_fixed::<$N>(slice.try_into().unwrap());
+                    },
+                )
             }};
         }
 
         macro_rules! binary_like {
             ($a:expr) => {{
                 let a = $a;
-                self.calculate(def_levels, rep_levels, num_levels, |c, i| {
-                    c.roll(a.value(i).as_ref());
-                })
+                self.calculate(
+                    def_levels,
+                    rep_levels,
+                    num_levels,
+                    non_null_indices,
+                    |c, i| {
+                        c.roll(a.value(i).as_ref());
+                    },
+                )
             }};
         }
 
         let dtype = array.data_type();
         let chunks = match dtype {
-            DataType::Null => self.calculate(def_levels, rep_levels, num_levels, |_, _| {}),
+            DataType::Null => self.calculate(
+                def_levels,
+                rep_levels,
+                num_levels,
+                non_null_indices,
+                |_, _| {},
+            ),
             DataType::Boolean => {
                 let a = array.as_boolean();
-                self.calculate(def_levels, rep_levels, num_levels, |c, i| {
-                    c.roll_fixed(&[a.value(i) as u8]);
-                })
+                self.calculate(
+                    def_levels,
+                    rep_levels,
+                    num_levels,
+                    non_null_indices,
+                    |c, i| {
+                        c.roll_fixed(&[a.value(i) as u8]);
+                    },
+                )
             }
             DataType::Int8 | DataType::UInt8 => fixed_width!(1),
             DataType::Int16 | DataType::UInt16 | DataType::Float16 => fixed_width!(2),
@@ -507,7 +541,7 @@ impl ContentDefinedChunker {
             DataType::Utf8View => binary_like!(array.as_string_view()),
             DataType::Dictionary(_, _) => {
                 let dict = array.as_any_dictionary();
-                self.get_arrow_chunks(def_levels, rep_levels, dict.keys())?
+                self.get_arrow_chunks(def_levels, rep_levels, dict.keys(), non_null_indices)?
             }
             _ => {
                 return Err(ParquetError::General(format!(
@@ -616,6 +650,7 @@ mod tests {
             LevelDataRef::Absent,
             LevelDataRef::Absent,
             num_values,
+            None,
             |c, i| {
                 c.roll_fixed::<4>(&(i as i32).to_le_bytes());
             },
@@ -642,6 +677,7 @@ mod tests {
             LevelDataRef::Absent,
             LevelDataRef::Absent,
             num_values,
+            None,
             |c, i| {
                 c.roll_fixed::<4>(&(i as i32).to_le_bytes());
             },
@@ -675,10 +711,12 @@ mod tests {
         };
 
         let mut chunker1 = ContentDefinedChunker::new(&make_desc(0, 0), &options).unwrap();
-        let chunks1 = chunker1.calculate(LevelDataRef::Absent, LevelDataRef::Absent, 200, roll);
+        let chunks1 =
+            chunker1.calculate(LevelDataRef::Absent, LevelDataRef::Absent, 200, None, roll);
 
         let mut chunker2 = ContentDefinedChunker::new(&make_desc(0, 0), &options).unwrap();
-        let chunks2 = chunker2.calculate(LevelDataRef::Absent, LevelDataRef::Absent, 200, roll);
+        let chunks2 =
+            chunker2.calculate(LevelDataRef::Absent, LevelDataRef::Absent, 200, None, roll);
 
         assert_eq!(chunks1.len(), chunks2.len());
         for (a, b) in chunks1.iter().zip(chunks2.iter()) {
@@ -708,6 +746,7 @@ mod tests {
             LevelDataRef::Materialized(&def_levels),
             LevelDataRef::Absent,
             num_levels,
+            None,
             |c, i| {
                 c.roll_fixed::<4>(&(i as i32).to_le_bytes());
             },
@@ -2307,13 +2346,13 @@ mod arrow_tests {
         let array: Int32Array = (0..n).map(|i| test_hash(0, i as u64) as i32).collect();
         let mut chunker = super::ContentDefinedChunker::new(&desc, &options).unwrap();
         let chunks = chunker
-            .get_arrow_chunks(LevelDataRef::Absent, LevelDataRef::Absent, &array)
+            .get_arrow_chunks(LevelDataRef::Absent, LevelDataRef::Absent, &array, None)
             .unwrap();
 
         let sliced = array.slice(offset, n - offset);
         let mut chunker2 = super::ContentDefinedChunker::new(&desc, &options).unwrap();
         let chunks2 = chunker2
-            .get_arrow_chunks(LevelDataRef::Absent, LevelDataRef::Absent, &sliced)
+            .get_arrow_chunks(LevelDataRef::Absent, LevelDataRef::Absent, &sliced, None)
             .unwrap();
 
         let values: Vec<usize> = chunks.iter().map(|c| c.num_values).collect();

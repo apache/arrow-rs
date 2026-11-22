@@ -1279,8 +1279,10 @@ impl ArrayLevels {
         // When nni is empty (all-null chunk), start=0, end=0 → zero-length
         // array slice; write_batch_internal will process only the def/rep
         // levels and write no values.
-        let start = nni.first().copied().unwrap_or(0);
-        let end = nni.last().map_or(0, |&i| i + 1);
+        // Indices are in level order, not sorted: list views can list leaf
+        // slots backwards or repeat them, so span the full range.
+        let start = nni.iter().min().copied().unwrap_or(0);
+        let end = nni.iter().max().map_or(0, |&i| i + 1);
         // Shift indices to be relative to the sliced array.
         let non_null_indices = nni.iter().map(|&idx| idx - start).collect();
         // Slice the array to the computed range.
