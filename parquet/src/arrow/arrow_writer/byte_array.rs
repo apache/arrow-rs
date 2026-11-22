@@ -1125,6 +1125,7 @@ fn update_dictionary_statistics<'a, K, V>(
 }
 
 /// Folds the `min` and `max` of a batch into the encoder's statistics
+#[inline(always)]
 fn update_min_max(encoder: &mut ByteArrayEncoder, min: &[u8], max: &[u8]) {
     // Compare before copying: `write_gather` runs once per mini-batch, and a byte-budgeted
     // mini-batch of large values can hold a single value, so an unconditional copy here
