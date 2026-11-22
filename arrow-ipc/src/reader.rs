@@ -991,7 +991,10 @@ fn get_dictionary_values(
 }
 
 /// Read the data for a given block
-fn read_block<R: Read + Seek>(mut reader: R, block: &Block) -> Result<Buffer, ArrowError> {
+///
+/// `file_len` is the length of the file in bytes, measured once when the
+/// reader is built. It is passed in so reading a block never seeks.
+fn read_block<R: Read + Seek>(mut reader: R, block: &Block, file_len: u64) -> Result<Buffer, ArrowError> {
     let body_len = usize::try_from(block.bodyLength()).map_err(|_| {
         ArrowError::IpcError(format!(
             "Invalid IPC block bodyLength: {}",
@@ -1019,9 +1022,8 @@ fn read_block<R: Read + Seek>(mut reader: R, block: &Block) -> Result<Buffer, Ar
         )));
     };
 
-    // `end <= file_len` is the gate for the allocation below. Seeking here only
-    // measures the file; nothing is reserved until the block is known to fit.
-    let file_len = reader.seek(SeekFrom::End(0))?;
+    // `end <= file_len` is the gate for the allocation below. Nothing is
+    // reserved until the block is known to fit.
     if end > file_len {
         return Err(ArrowError::IpcError(format!(
             "IPC block extends past the end of the file: offset {offset} plus length {total_len} is past file length {file_len}"
@@ -1349,6 +1351,8 @@ impl FileReaderBuilder {
     /// Build [`FileReader`] with given reader.
     pub fn build<R: Read + Seek>(self, mut reader: R) -> Result<FileReader<R>, ArrowError> {
         // Space for ARROW_MAGIC (6 bytes) and length (4 bytes)
+        // The file length is measured once here and passed to every block read.
+        let file_len = reader.seek(SeekFrom::End(0))?;
         let mut buffer = [0; 10];
         reader.seek(SeekFrom::End(-10))?;
         reader.read_exact(&mut buffer)?;
@@ -1411,7 +1415,7 @@ impl FileReaderBuilder {
         // Create an array of optional dictionary value arrays, one per field.
         if let Some(dictionaries) = footer.dictionaries() {
             for block in dictionaries {
-                let buf = read_block(&mut reader, block)?;
+                let buf = read_block(&mut reader, block, file_len)?;
                 decoder.read_dictionary(block, &buf)?;
             }
         }
@@ -1421,6 +1425,7 @@ impl FileReaderBuilder {
             blocks: blocks.iter().copied().collect(),
             current_block: 0,
             total_blocks,
+            file_len,
             decoder,
             schema: projected_schema,
             custom_metadata,
@@ -1492,6 +1497,9 @@ pub struct FileReader<R> {
 
     /// The total number of blocks, which may contain record batches and other types
     total_blocks: usize,
+
+    /// Length of the file in bytes, measured once when the reader is built
+    file_len: u64,
 
     /// User defined metadata
     custom_metadata: HashMap<String, String>,
@@ -1572,7 +1580,7 @@ impl<R: Read + Seek> FileReader<R> {
         self.current_block += 1;
 
         // read length
-        let buffer = read_block(&mut self.reader, block)?;
+        let buffer = read_block(&mut self.reader, block, self.file_len)?;
         self.decoder.read_record_batch(block, &buffer)
     }
 
