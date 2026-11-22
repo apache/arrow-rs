@@ -558,6 +558,7 @@ mod tests {
     use super::*;
     use arrow_array::builder::BinaryDictionaryBuilder;
     use arrow_array::types::{ArrowDictionaryKeyType, Int8Type, Int32Type, Int64Type};
+    use rstest::rstest;
     use std::iter::zip;
 
     fn convert_binary_iterator_to_binary_dictionary<
@@ -1581,164 +1582,73 @@ mod tests {
         ]
     );
 
-    #[test]
+    #[rstest]
+    #[case::like(like)]
+    #[case::ilike(ilike)]
+    #[case::nlike(nlike)]
+    #[case::nilike(nilike)]
     #[cfg_attr(miri, ignore)] // Takes too long
-    fn string_null_like_pattern() {
-        // Different patterns have different execution code paths
-        for pattern in &[
-            "",           // can execute as equality check
-            "_",          // can execute as length check
-            "%",          // can execute as starts_with("") or non-null check
-            "a%",         // can execute as starts_with("a")
-            "%a",         // can execute as ends_with("")
-            "a%b",        // can execute as starts_with("a") && ends_with("b")
-            "%a%",        // can_execute as contains("a")
-            "%a%b_c_d%e", // can_execute as regular expression
-        ] {
-            // These tests focus on the null handling, but are case-insensitive
-            for like_f in [like, ilike, nlike, nilike] {
-                let a = Scalar::new(StringArray::new_null(1));
-                let b = StringArray::new_scalar(pattern);
-                let r = like_f(&a, &b).unwrap();
-                assert_eq!(r.len(), 1, "With pattern {pattern}");
-                assert_eq!(r.null_count(), 1, "With pattern {pattern}");
-                assert!(r.is_null(0), "With pattern {pattern}");
-
-                let a = Scalar::new(StringArray::new_null(1));
-                let b = StringArray::from_iter_values([pattern]);
-                let r = like_f(&a, &b).unwrap();
-                assert_eq!(r.len(), 1, "With pattern {pattern}");
-                assert_eq!(r.null_count(), 1, "With pattern {pattern}");
-                assert!(r.is_null(0), "With pattern {pattern}");
-
-                let a = StringArray::new_null(1);
-                let b = StringArray::from_iter_values([pattern]);
-                let r = like_f(&a, &b).unwrap();
-                assert_eq!(r.len(), 1, "With pattern {pattern}");
-                assert_eq!(r.null_count(), 1, "With pattern {pattern}");
-                assert!(r.is_null(0), "With pattern {pattern}");
-
-                let a = StringArray::new_null(1);
-                let b = StringArray::new_scalar(pattern);
-                let r = like_f(&a, &b).unwrap();
-                assert_eq!(r.len(), 1, "With pattern {pattern}");
-                assert_eq!(r.null_count(), 1, "With pattern {pattern}");
-                assert!(r.is_null(0), "With pattern {pattern}");
-            }
-        }
+    fn like_with_null_value<A: Array>(
+        #[case] like_fn: fn(&dyn Datum, &dyn Datum) -> Result<BooleanArray, ArrowError>,
+        #[values(StringArray::from, StringViewArray::from)] make_array: fn(
+            Vec<Option<&'static str>>,
+        ) -> A,
+        #[values(false, true)] value_is_scalar: bool,
+        #[values(false, true)] pattern_is_scalar: bool,
+        // Equality, length, all-match, prefix, suffix, prefix/suffix, contains, and regex paths.
+        #[values("", "_", "%", "a%", "%a", "a%b", "%a%", "%a%b_c_d%e")] pattern: &'static str,
+    ) {
+        let value = make_array(vec![None]);
+        let pattern = make_array(vec![Some(pattern)]);
+        let value_scalar = Scalar::new(&value);
+        let pattern_scalar = Scalar::new(&pattern);
+        let value: &dyn Datum = if value_is_scalar {
+            &value_scalar
+        } else {
+            &value
+        };
+        let pattern: &dyn Datum = if pattern_is_scalar {
+            &pattern_scalar
+        } else {
+            &pattern
+        };
+        let result = like_fn(value, pattern).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result.null_count(), 1);
+        assert!(result.is_null(0));
     }
 
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn string_view_null_like_pattern() {
-        // Different patterns have different execution code paths
-        for pattern in &[
-            "",           // can execute as equality check
-            "_",          // can execute as length check
-            "%",          // can execute as starts_with("") or non-null check
-            "a%",         // can execute as starts_with("a")
-            "%a",         // can execute as ends_with("")
-            "a%b",        // can execute as starts_with("a") && ends_with("b")
-            "%a%",        // can_execute as contains("a")
-            "%a%b_c_d%e", // can_execute as regular expression
-        ] {
-            // These tests focus on the null handling, but are case-insensitive
-            for like_f in [like, ilike, nlike, nilike] {
-                let a = Scalar::new(StringViewArray::new_null(1));
-                let b = StringViewArray::new_scalar(pattern);
-                let r = like_f(&a, &b).unwrap();
-                assert_eq!(r.len(), 1, "With pattern {pattern}");
-                assert_eq!(r.null_count(), 1, "With pattern {pattern}");
-                assert!(r.is_null(0), "With pattern {pattern}");
-
-                let a = Scalar::new(StringViewArray::new_null(1));
-                let b = StringViewArray::from_iter_values([pattern]);
-                let r = like_f(&a, &b).unwrap();
-                assert_eq!(r.len(), 1, "With pattern {pattern}");
-                assert_eq!(r.null_count(), 1, "With pattern {pattern}");
-                assert!(r.is_null(0), "With pattern {pattern}");
-
-                let a = StringViewArray::new_null(1);
-                let b = StringViewArray::from_iter_values([pattern]);
-                let r = like_f(&a, &b).unwrap();
-                assert_eq!(r.len(), 1, "With pattern {pattern}");
-                assert_eq!(r.null_count(), 1, "With pattern {pattern}");
-                assert!(r.is_null(0), "With pattern {pattern}");
-
-                let a = StringViewArray::new_null(1);
-                let b = StringViewArray::new_scalar(pattern);
-                let r = like_f(&a, &b).unwrap();
-                assert_eq!(r.len(), 1, "With pattern {pattern}");
-                assert_eq!(r.null_count(), 1, "With pattern {pattern}");
-                assert!(r.is_null(0), "With pattern {pattern}");
-            }
-        }
-    }
-
-    #[test]
-    fn string_like_scalar_null() {
-        for like_f in [like, ilike, nlike, nilike] {
-            let a = StringArray::new_scalar("a");
-            let b = Scalar::new(StringArray::new_null(1));
-            let r = like_f(&a, &b).unwrap();
-            assert_eq!(r.len(), 1);
-            assert_eq!(r.null_count(), 1);
-            assert!(r.is_null(0));
-
-            let a = StringArray::from_iter_values(["a"]);
-            let b = Scalar::new(StringArray::new_null(1));
-            let r = like_f(&a, &b).unwrap();
-            assert_eq!(r.len(), 1);
-            assert_eq!(r.null_count(), 1);
-            assert!(r.is_null(0));
-
-            let a = StringArray::from_iter_values(["a"]);
-            let b = StringArray::new_null(1);
-            let r = like_f(&a, &b).unwrap();
-            assert_eq!(r.len(), 1);
-            assert_eq!(r.null_count(), 1);
-            assert!(r.is_null(0));
-
-            let a = StringArray::new_scalar("a");
-            let b = StringArray::new_null(1);
-            let r = like_f(&a, &b).unwrap();
-            assert_eq!(r.len(), 1);
-            assert_eq!(r.null_count(), 1);
-            assert!(r.is_null(0));
-        }
-    }
-
-    #[test]
-    fn string_view_like_scalar_null() {
-        for like_f in [like, ilike, nlike, nilike] {
-            let a = StringViewArray::new_scalar("a");
-            let b = Scalar::new(StringViewArray::new_null(1));
-            let r = like_f(&a, &b).unwrap();
-            assert_eq!(r.len(), 1);
-            assert_eq!(r.null_count(), 1);
-            assert!(r.is_null(0));
-
-            let a = StringViewArray::from_iter_values(["a"]);
-            let b = Scalar::new(StringViewArray::new_null(1));
-            let r = like_f(&a, &b).unwrap();
-            assert_eq!(r.len(), 1);
-            assert_eq!(r.null_count(), 1);
-            assert!(r.is_null(0));
-
-            let a = StringViewArray::from_iter_values(["a"]);
-            let b = StringViewArray::new_null(1);
-            let r = like_f(&a, &b).unwrap();
-            assert_eq!(r.len(), 1);
-            assert_eq!(r.null_count(), 1);
-            assert!(r.is_null(0));
-
-            let a = StringViewArray::new_scalar("a");
-            let b = StringViewArray::new_null(1);
-            let r = like_f(&a, &b).unwrap();
-            assert_eq!(r.len(), 1);
-            assert_eq!(r.null_count(), 1);
-            assert!(r.is_null(0));
-        }
+    #[rstest]
+    #[case::like(like)]
+    #[case::ilike(ilike)]
+    #[case::nlike(nlike)]
+    #[case::nilike(nilike)]
+    fn like_with_null_pattern<A: Array>(
+        #[case] like_fn: fn(&dyn Datum, &dyn Datum) -> Result<BooleanArray, ArrowError>,
+        #[values(StringArray::from, StringViewArray::from)] make_array: fn(
+            Vec<Option<&'static str>>,
+        ) -> A,
+        #[values(false, true)] value_is_scalar: bool,
+        #[values(false, true)] pattern_is_scalar: bool,
+    ) {
+        let value = make_array(vec![Some("a")]);
+        let pattern = make_array(vec![None]);
+        let value_scalar = Scalar::new(&value);
+        let pattern_scalar = Scalar::new(&pattern);
+        let value: &dyn Datum = if value_is_scalar {
+            &value_scalar
+        } else {
+            &value
+        };
+        let pattern: &dyn Datum = if pattern_is_scalar {
+            &pattern_scalar
+        } else {
+            &pattern
+        };
+        let result = like_fn(value, pattern).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result.null_count(), 1);
+        assert!(result.is_null(0));
     }
 
     #[test]
@@ -1910,9 +1820,11 @@ mod tests {
         assert_eq!(res, BooleanArray::from(vec![true, false, true]));
     }
 
-    #[test]
+    #[rstest]
     #[cfg_attr(miri, ignore)] // Takes too long
-    fn like_escape() {
+    fn like_escape(
+        #[values(DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View)] string_type: DataType,
+    ) {
         // (value, pattern, expected)
         let test_cases = vec![
             // Empty pattern
@@ -2120,34 +2032,32 @@ mod tests {
             let unexpected = BooleanArray::from(vec![!expected]);
             let expected = BooleanArray::from(vec![expected]);
 
-            for string_type in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
-                for ((value_datum, value_type), (pattern_datum, pattern_type)) in zip(
-                    make_datums(value, &string_type),
-                    make_datums(pattern, &string_type),
-                ) {
-                    let value_datum = value_datum.as_ref();
-                    let pattern_datum = pattern_datum.as_ref();
-                    assert_eq!(
-                        like(value_datum, pattern_datum).unwrap(),
-                        expected,
-                        "{value_type:?} «{value}» like {pattern_type:?} «{pattern}»"
-                    );
-                    assert_eq!(
-                        ilike(value_datum, pattern_datum).unwrap(),
-                        expected,
-                        "{value_type:?} «{value}» ilike {pattern_type:?} «{pattern}»"
-                    );
-                    assert_eq!(
-                        nlike(value_datum, pattern_datum).unwrap(),
-                        unexpected,
-                        "{value_type:?} «{value}» nlike {pattern_type:?} «{pattern}»"
-                    );
-                    assert_eq!(
-                        nilike(value_datum, pattern_datum).unwrap(),
-                        unexpected,
-                        "{value_type:?} «{value}» nilike {pattern_type:?} «{pattern}»"
-                    );
-                }
+            for ((value_datum, value_type), (pattern_datum, pattern_type)) in zip(
+                make_datums(value, &string_type),
+                make_datums(pattern, &string_type),
+            ) {
+                let value_datum = value_datum.as_ref();
+                let pattern_datum = pattern_datum.as_ref();
+                assert_eq!(
+                    like(value_datum, pattern_datum).unwrap(),
+                    expected,
+                    "{value_type:?} «{value}» like {pattern_type:?} «{pattern}»"
+                );
+                assert_eq!(
+                    ilike(value_datum, pattern_datum).unwrap(),
+                    expected,
+                    "{value_type:?} «{value}» ilike {pattern_type:?} «{pattern}»"
+                );
+                assert_eq!(
+                    nlike(value_datum, pattern_datum).unwrap(),
+                    unexpected,
+                    "{value_type:?} «{value}» nlike {pattern_type:?} «{pattern}»"
+                );
+                assert_eq!(
+                    nilike(value_datum, pattern_datum).unwrap(),
+                    unexpected,
+                    "{value_type:?} «{value}» nilike {pattern_type:?} «{pattern}»"
+                );
             }
         }
     }

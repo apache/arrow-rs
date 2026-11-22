@@ -190,9 +190,10 @@ pub fn bit_length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
 mod tests {
     use super::*;
     use arrow_array::builder::{Int32Builder, MapBuilder, StringBuilder};
-    use arrow_buffer::{Buffer, ScalarBuffer};
+    use arrow_buffer::Buffer;
     use arrow_data::ArrayData;
     use arrow_schema::Field;
+    use rstest::rstest;
 
     fn length_cases_string() -> Vec<(Vec<&'static str>, usize, Vec<i32>)> {
         // a large array
@@ -235,49 +236,26 @@ mod tests {
         }};
     }
 
-    #[test]
-    fn length_test_string() {
-        length_cases_string()
-            .into_iter()
-            .for_each(|(input, len, expected)| {
-                let array = StringArray::from(input);
-                let result = length(&array).unwrap();
-                assert_eq!(len, result.len());
-                let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
-                expected.iter().enumerate().for_each(|(i, value)| {
-                    assert_eq!(*value, result.value(i));
-                });
-            })
-    }
-
-    #[test]
-    fn length_test_large_string() {
-        length_cases_string()
-            .into_iter()
-            .for_each(|(input, len, expected)| {
-                let array = LargeStringArray::from(input);
-                let result = length(&array).unwrap();
-                assert_eq!(len, result.len());
-                let result = result.as_any().downcast_ref::<Int64Array>().unwrap();
-                expected.iter().enumerate().for_each(|(i, value)| {
-                    assert_eq!(*value as i64, result.value(i));
-                });
-            })
-    }
-
-    #[test]
-    fn length_test_string_view() {
-        length_cases_string()
-            .into_iter()
-            .for_each(|(input, len, expected)| {
-                let array = StringViewArray::from(input);
-                let result = length(&array).unwrap();
-                assert_eq!(len, result.len());
-                let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
-                expected.iter().enumerate().for_each(|(i, value)| {
-                    assert_eq!(*value, result.value(i));
-                });
-            })
+    #[rstest]
+    #[case::utf8(StringArray::from, Int32Type {})]
+    #[case::large_utf8(LargeStringArray::from, Int64Type {})]
+    #[case::utf8_view(StringViewArray::from, Int32Type {})]
+    fn length_test_string<A: Array, T: ArrowPrimitiveType>(
+        #[case] make_array: fn(Vec<&'static str>) -> A,
+        #[case] length_type: T,
+    ) where
+        T::Native: From<i32>,
+    {
+        let _ = length_type;
+        for (input, len, expected) in length_cases_string() {
+            let array = make_array(input);
+            let result = length(&array).unwrap();
+            assert_eq!(len, result.len());
+            let result = result.as_primitive::<T>();
+            for (i, value) in expected.into_iter().enumerate() {
+                assert_eq!(T::Native::from(value), result.value(i));
+            }
+        }
     }
 
     #[test]
@@ -366,39 +344,26 @@ mod tests {
         )]
     }
 
-    #[test]
-    fn length_null_string() {
-        length_null_cases_string()
-            .into_iter()
-            .for_each(|(input, len, expected)| {
-                let array = StringArray::from(input);
-                let result = length(&array).unwrap();
-                assert_eq!(len, result.len());
-                let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
-
-                let expected: Int32Array = expected.into();
-                assert_eq!(&expected, result);
-            })
-    }
-
-    #[test]
-    fn length_null_large_string() {
-        length_null_cases_string()
-            .into_iter()
-            .for_each(|(input, len, expected)| {
-                let array = LargeStringArray::from(input);
-                let result = length(&array).unwrap();
-                assert_eq!(len, result.len());
-                let result = result.as_any().downcast_ref::<Int64Array>().unwrap();
-
-                // convert to i64
-                let expected: Int64Array = expected
-                    .iter()
-                    .map(|e| e.map(|e| e as i64))
-                    .collect::<Vec<_>>()
-                    .into();
-                assert_eq!(&expected, result);
-            })
+    #[rstest]
+    #[case::utf8(StringArray::from, Int32Type {})]
+    #[case::large_utf8(LargeStringArray::from, Int64Type {})]
+    fn length_null_string<A: Array, T: ArrowPrimitiveType>(
+        #[case] make_array: fn(Vec<OptionStr>) -> A,
+        #[case] length_type: T,
+    ) where
+        T::Native: From<i32>,
+    {
+        let _ = length_type;
+        for (input, len, expected) in length_null_cases_string() {
+            let array = make_array(input);
+            let result = length(&array).unwrap();
+            assert_eq!(len, result.len());
+            let result = result.as_primitive::<T>();
+            let expected = PrimitiveArray::<T>::from_iter(
+                expected.into_iter().map(|value| value.map(T::Native::from)),
+            );
+            assert_eq!(&expected, result);
+        }
     }
 
     #[test]
@@ -469,66 +434,63 @@ mod tests {
         );
     }
 
-    #[test]
-    fn length_test_list_view() {
-        // Create a ListViewArray with values [0, 1, 2], [3, 4, 5], [6, 7]
+    #[rstest]
+    #[case::list_view(Int32Type {})]
+    #[case::large_list_view(Int64Type {})]
+    fn length_test_list_view<T: ArrowPrimitiveType>(#[case] length_type: T)
+    where
+        T::Native: OffsetSizeTrait + From<i32>,
+    {
+        let _ = length_type;
         let field = Arc::new(Field::new_list_field(DataType::Int32, true));
         let values = Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7]);
-        let offsets = ScalarBuffer::from(vec![0i32, 3, 6]);
-        let sizes = ScalarBuffer::from(vec![3i32, 3, 2]);
-        let list_array = ListViewArray::new(field, offsets, sizes, Arc::new(values), None);
-
-        let result = length(&list_array).unwrap();
-        let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
-        let expected: Int32Array = vec![3, 3, 2].into();
-        assert_eq!(&expected, result);
-    }
-
-    #[test]
-    fn length_test_large_list_view() {
-        // Create a LargeListViewArray with values [0, 1, 2], [3, 4, 5], [6, 7]
-        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
-        let values = Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7]);
-        let offsets = ScalarBuffer::from(vec![0i64, 3, 6]);
-        let sizes = ScalarBuffer::from(vec![3i64, 3, 2]);
-        let list_array = LargeListViewArray::new(field, offsets, sizes, Arc::new(values), None);
-
-        let result = length(&list_array).unwrap();
-        let result = result.as_any().downcast_ref::<Int64Array>().unwrap();
-        let expected: Int64Array = vec![3i64, 3, 2].into();
-        assert_eq!(&expected, result);
-    }
-
-    #[test]
-    fn length_null_list_view() {
-        // Create a ListViewArray with nulls: [], null, [1, 2, 3, 4], [0]
-        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
-        let values = Int32Array::from(vec![1, 2, 3, 4, 0]);
-        let offsets = ScalarBuffer::from(vec![0i32, 0, 0, 4]);
-        let sizes = ScalarBuffer::from(vec![0i32, 0, 4, 1]);
-        let nulls = NullBuffer::from(vec![true, false, true, true]);
-        let list_array = ListViewArray::new(field, offsets, sizes, Arc::new(values), Some(nulls));
-
-        let result = length(&list_array).unwrap();
-        let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
-        let expected: Int32Array = vec![Some(0), None, Some(4), Some(1)].into();
-        assert_eq!(&expected, result);
-    }
-
-    #[test]
-    fn length_null_large_list_view() {
-        // Create a LargeListViewArray with nulls: [], null, [1.0, 2.0, 3.0], [0.1]
-        let field = Arc::new(Field::new_list_field(DataType::Float32, true));
-        let values = Float32Array::from(vec![1.0, 2.0, 3.0, 0.1]);
-        let offsets = ScalarBuffer::from(vec![0i64, 0, 0, 3]);
-        let sizes = ScalarBuffer::from(vec![0i64, 0, 3, 1]);
-        let nulls = NullBuffer::from(vec![true, false, true, true]);
+        let offsets = [0, 3, 6].map(T::Native::from).to_vec().into();
+        let sizes = [3, 3, 2].map(T::Native::from).to_vec().into();
         let list_array =
-            LargeListViewArray::new(field, offsets, sizes, Arc::new(values), Some(nulls));
-
+            GenericListViewArray::<T::Native>::new(field, offsets, sizes, Arc::new(values), None);
         let result = length(&list_array).unwrap();
-        let result = result.as_any().downcast_ref::<Int64Array>().unwrap();
-        let expected: Int64Array = vec![Some(0i64), None, Some(3), Some(1)].into();
+        let result = result.as_primitive::<T>();
+        let expected = PrimitiveArray::<T>::from_iter_values([3, 3, 2].map(T::Native::from));
+        assert_eq!(&expected, result);
+    }
+
+    #[rstest]
+    #[case::list_view(
+        Int32Type {},
+        Arc::new(Int32Array::from(vec![1, 2, 3, 4, 0])),
+        vec![0, 0, 0, 4],
+        vec![0, 0, 4, 1],
+        vec![Some(0), None, Some(4), Some(1)],
+    )]
+    #[case::large_list_view(
+        Int64Type {},
+        Arc::new(Float32Array::from(vec![1.0, 2.0, 3.0, 0.1])),
+        vec![0, 0, 0, 3],
+        vec![0, 0, 3, 1],
+        vec![Some(0), None, Some(3), Some(1)],
+    )]
+    fn length_null_list_view<T: ArrowPrimitiveType>(
+        #[case] length_type: T,
+        #[case] values: ArrayRef,
+        #[case] offsets: Vec<T::Native>,
+        #[case] sizes: Vec<T::Native>,
+        #[case] expected: Vec<Option<T::Native>>,
+    ) where
+        T::Native: OffsetSizeTrait,
+    {
+        let _ = length_type;
+        let field = Arc::new(Field::new_list_field(values.data_type().clone(), true));
+        let nulls = NullBuffer::from(vec![true, false, true, true]);
+        let list_array = GenericListViewArray::<T::Native>::new(
+            field,
+            offsets.into(),
+            sizes.into(),
+            values,
+            Some(nulls),
+        );
+        let result = length(&list_array).unwrap();
+        let result = result.as_primitive::<T>();
+        let expected = PrimitiveArray::<T>::from_iter(expected);
         assert_eq!(&expected, result);
     }
 
@@ -578,65 +540,28 @@ mod tests {
         ]
     }
 
-    #[test]
-    fn bit_length_test_string() {
-        bit_length_cases()
-            .into_iter()
-            .for_each(|(input, len, expected)| {
-                let array = StringArray::from(input);
-                let result = bit_length(&array).unwrap();
-                assert_eq!(len, result.len());
-                let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
-                expected.iter().enumerate().for_each(|(i, value)| {
-                    assert_eq!(*value, result.value(i));
-                });
-            })
+    #[rstest]
+    #[case::utf8(StringArray::from, Int32Type {})]
+    #[case::large_utf8(LargeStringArray::from, Int64Type {})]
+    #[case::utf8_view(StringViewArray::from, Int32Type {})]
+    fn bit_length_test_string<A: Array, T: ArrowPrimitiveType>(
+        #[case] make_array: fn(Vec<&'static str>) -> A,
+        #[case] length_type: T,
+    ) where
+        T::Native: From<i32>,
+    {
+        let _ = length_type;
+        for (input, len, expected) in bit_length_cases() {
+            let array = make_array(input);
+            let result = bit_length(&array).unwrap();
+            assert_eq!(len, result.len());
+            let result = result.as_primitive::<T>();
+            for (i, value) in expected.into_iter().enumerate() {
+                assert_eq!(T::Native::from(value), result.value(i));
+            }
+        }
     }
 
-    #[test]
-    fn bit_length_test_large_string() {
-        bit_length_cases()
-            .into_iter()
-            .for_each(|(input, len, expected)| {
-                let array = LargeStringArray::from(input);
-                let result = bit_length(&array).unwrap();
-                assert_eq!(len, result.len());
-                let result = result.as_any().downcast_ref::<Int64Array>().unwrap();
-                expected.iter().enumerate().for_each(|(i, value)| {
-                    assert_eq!(*value as i64, result.value(i));
-                });
-            })
-    }
-
-    #[test]
-    fn bit_length_test_utf8view() {
-        bit_length_cases()
-            .into_iter()
-            .for_each(|(input, len, expected)| {
-                let string_array = StringViewArray::from(input);
-                let result = bit_length(&string_array).unwrap();
-                assert_eq!(len, result.len());
-                let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
-                expected.iter().enumerate().for_each(|(i, value)| {
-                    assert_eq!(*value, result.value(i));
-                });
-            })
-    }
-
-    #[test]
-    fn bit_length_null_utf8view() {
-        bit_length_null_cases()
-            .into_iter()
-            .for_each(|(input, len, expected)| {
-                let array = StringArray::from(input);
-                let result = bit_length(&array).unwrap();
-                assert_eq!(len, result.len());
-                let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
-
-                let expected: Int32Array = expected.into();
-                assert_eq!(&expected, result);
-            })
-    }
     #[test]
     fn bit_length_binary() {
         let value: Vec<&[u8]> = vec![b"one", &[0xff, 0xf8], b"three"];
@@ -689,39 +614,27 @@ mod tests {
         )]
     }
 
-    #[test]
-    fn bit_length_null_string() {
-        bit_length_null_cases()
-            .into_iter()
-            .for_each(|(input, len, expected)| {
-                let array = StringArray::from(input);
-                let result = bit_length(&array).unwrap();
-                assert_eq!(len, result.len());
-                let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
-
-                let expected: Int32Array = expected.into();
-                assert_eq!(&expected, result);
-            })
-    }
-
-    #[test]
-    fn bit_length_null_large_string() {
-        bit_length_null_cases()
-            .into_iter()
-            .for_each(|(input, len, expected)| {
-                let array = LargeStringArray::from(input);
-                let result = bit_length(&array).unwrap();
-                assert_eq!(len, result.len());
-                let result = result.as_any().downcast_ref::<Int64Array>().unwrap();
-
-                // convert to i64
-                let expected: Int64Array = expected
-                    .iter()
-                    .map(|e| e.map(|e| e as i64))
-                    .collect::<Vec<_>>()
-                    .into();
-                assert_eq!(&expected, result);
-            })
+    #[rstest]
+    #[case::utf8(StringArray::from, Int32Type {})]
+    #[case::large_utf8(LargeStringArray::from, Int64Type {})]
+    #[case::utf8_view(StringViewArray::from, Int32Type {})]
+    fn bit_length_null_string<A: Array, T: ArrowPrimitiveType>(
+        #[case] make_array: fn(Vec<OptionStr>) -> A,
+        #[case] length_type: T,
+    ) where
+        T::Native: From<i32>,
+    {
+        let _ = length_type;
+        for (input, len, expected) in bit_length_null_cases() {
+            let array = make_array(input);
+            let result = bit_length(&array).unwrap();
+            assert_eq!(len, result.len());
+            let result = result.as_primitive::<T>();
+            let expected = PrimitiveArray::<T>::from_iter(
+                expected.into_iter().map(|value| value.map(T::Native::from)),
+            );
+            assert_eq!(&expected, result);
+        }
     }
 
     #[test]

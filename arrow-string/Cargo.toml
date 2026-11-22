@@ -32,5 +32,8 @@ regex-syntax = { version = "0.8.0", default-features = false, features = ["unico
 num-traits = { version = "0.2.19", default-features = false, features = ["std"] }
 memchr = "2.7.4"
 
+[dev-dependencies]
+rstest = { version = "0.28.0", default-features = false }
+
 [lints]
 workspace = true

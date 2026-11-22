@@ -475,6 +475,7 @@ mod tests {
     use super::*;
     use arrow_buffer::BooleanBuffer;
     use arrow_buffer::Buffer;
+    use rstest::rstest;
 
     /// A helper macro to generate test cases.
     /// # Arguments
@@ -1258,8 +1259,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn out_of_range_start_and_length_match_the_64_bit_arms() {
+    #[rstest]
+    fn out_of_range_start_and_length_match_the_64_bit_arms(
+        #[values(1 << 31, (1 << 31) + 5, 1 << 32, i64::MAX)] start: i64,
+        #[values(None, Some(1 << 31), Some(u64::MAX))] length: Option<u64>,
+    ) {
         // use 64 bit offset versions as expected behaviour for extreme start & length values
         // which should saturate and not wrap
         let values = vec![Some("hello"), Some("world"), None];
@@ -1269,48 +1273,37 @@ mod tests {
         let large_binary =
             LargeBinaryArray::from_iter(values.iter().map(|v| v.map(|s| s.as_bytes())));
 
-        // starts and lengths that do not survive a cast to i32
-        let starts: [i64; 4] = [1 << 31, (1 << 31) + 5, 1 << 32, i64::MAX];
-        let lengths: [Option<u64>; 3] = [None, Some(1 << 31), Some(u64::MAX)];
-
-        for start in starts {
-            for length in lengths {
-                let narrow = substring(&utf8, start, length).unwrap();
-                let wide = substring(&large, start, length).unwrap();
-                assert_eq!(
-                    narrow.as_string::<i32>().iter().collect::<Vec<_>>(),
-                    wide.as_string::<i64>().iter().collect::<Vec<_>>(),
-                    "Utf8 and LargeUtf8 disagree at start {start}, length {length:?}"
-                );
-
-                let narrow = substring(&binary, start, length).unwrap();
-                let wide = substring(&large_binary, start, length).unwrap();
-                assert_eq!(
-                    narrow.as_binary::<i32>().iter().collect::<Vec<_>>(),
-                    wide.as_binary::<i64>().iter().collect::<Vec<_>>(),
-                    "Binary and LargeBinary disagree at start {start}, length {length:?}"
-                );
-            }
-        }
-
-        // and the answer itself is the sensible one: skipping more characters
-        // than the value holds leaves nothing behind.
-        let out = substring(&utf8, 1 << 31, None).unwrap();
+        let narrow = substring(&utf8, start, length).unwrap();
+        let wide = substring(&large, start, length).unwrap();
         assert_eq!(
-            out.as_string::<i32>().iter().collect::<Vec<_>>(),
-            vec![Some(""), Some(""), None]
+            narrow.as_string::<i32>().iter().collect::<Vec<_>>(),
+            wide.as_string::<i64>().iter().collect::<Vec<_>>(),
+            "Utf8 and LargeUtf8 disagree at start {start}, length {length:?}"
         );
 
-        // starts that already fit are untouched
-        let out = substring(&utf8, 3, None).unwrap();
+        let narrow = substring(&binary, start, length).unwrap();
+        let wide = substring(&large_binary, start, length).unwrap();
         assert_eq!(
-            out.as_string::<i32>().iter().collect::<Vec<_>>(),
-            vec![Some("lo"), Some("ld"), None]
+            narrow.as_binary::<i32>().iter().collect::<Vec<_>>(),
+            wide.as_binary::<i64>().iter().collect::<Vec<_>>(),
+            "Binary and LargeBinary disagree at start {start}, length {length:?}"
         );
     }
 
-    #[test]
-    fn view_lengths_beyond_i64_max_match_the_64_bit_arms() {
+    #[rstest]
+    #[case::beyond_i32_max(1 << 31, vec![Some(""), Some(""), None])]
+    #[case::within_i32_range(3, vec![Some("lo"), Some("ld"), None])]
+    fn substring_start_saturates(#[case] start: i64, #[case] expected: Vec<Option<&str>>) {
+        let utf8 = StringArray::from(vec![Some("hello"), Some("world"), None]);
+        let out = substring(&utf8, start, None).unwrap();
+        assert_eq!(out.as_string::<i32>().iter().collect::<Vec<_>>(), expected);
+    }
+
+    #[rstest]
+    fn view_lengths_beyond_i64_max_match_the_64_bit_arms(
+        #[values(0, 1, 3, -2, 100)] start: i64,
+        #[values(Some(i64::MAX as u64 + 1), Some(u64::MAX))] length: Option<u64>,
+    ) {
         // a length that does not fit in an i64 must saturate, not wrap to a
         // negative length that puts the end before the start
         let values = vec![
@@ -1325,24 +1318,20 @@ mod tests {
         let binary_view =
             BinaryViewArray::from_iter(values.iter().map(|v| v.map(|s| s.as_bytes())));
 
-        for start in [0, 1, 3, -2, 100] {
-            for length in [Some(i64::MAX as u64 + 1), Some(u64::MAX)] {
-                let expected = substring(&large, start, length).unwrap();
-                let actual = substring(&view, start, length).unwrap();
-                assert_eq!(
-                    expected.as_string::<i64>().iter().collect::<Vec<_>>(),
-                    actual.as_string_view().iter().collect::<Vec<_>>(),
-                    "LargeUtf8 and Utf8View disagree at start {start}, length {length:?}"
-                );
+        let expected = substring(&large, start, length).unwrap();
+        let actual = substring(&view, start, length).unwrap();
+        assert_eq!(
+            expected.as_string::<i64>().iter().collect::<Vec<_>>(),
+            actual.as_string_view().iter().collect::<Vec<_>>(),
+            "LargeUtf8 and Utf8View disagree at start {start}, length {length:?}"
+        );
 
-                let expected = substring(&large_binary, start, length).unwrap();
-                let actual = substring(&binary_view, start, length).unwrap();
-                assert_eq!(
-                    expected.as_binary::<i64>().iter().collect::<Vec<_>>(),
-                    actual.as_binary_view().iter().collect::<Vec<_>>(),
-                    "LargeBinary and BinaryView disagree at start {start}, length {length:?}"
-                );
-            }
-        }
+        let expected = substring(&large_binary, start, length).unwrap();
+        let actual = substring(&binary_view, start, length).unwrap();
+        assert_eq!(
+            expected.as_binary::<i64>().iter().collect::<Vec<_>>(),
+            actual.as_binary_view().iter().collect::<Vec<_>>(),
+            "LargeBinary and BinaryView disagree at start {start}, length {length:?}"
+        );
     }
 }
