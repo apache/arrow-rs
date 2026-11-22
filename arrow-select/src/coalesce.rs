@@ -2089,7 +2089,7 @@ mod tests {
                 DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
                 true,
             ),
-            (DataType::Boolean, false),
+            (DataType::Boolean, true),
             (DataType::Utf8, false),
             (DataType::FixedSizeBinary(4), false),
             (DataType::new_list(DataType::Int32, true), false),
