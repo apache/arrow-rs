@@ -4,7 +4,7 @@
 
 //! Contains writer which writes arrow data into parquet data.
 
-use crate::column::chunker::{CdcChunk, ContentDefinedChunker};
+use crate::column::chunker::ContentDefinedChunker;
 
 use bytes::Bytes;
 use std::io::Write;
@@ -14,12 +14,15 @@ use std::sync::{Arc, Mutex};
 use std::vec::IntoIter;
 
 use arrow_array::cast::AsArray;
-use arrow_array::{ArrayRef, Int32Array, RecordBatch, RecordBatchWriter, new_empty_array};
+use arrow_array::{
+    ArrayRef, BooleanArray, Int32Array, RecordBatch, RecordBatchWriter, new_empty_array,
+};
 use arrow_array::{PrimitiveArray, types::*};
 use arrow_buffer::BooleanBuffer;
 use arrow_schema::{
     ArrowError, DataType as ArrowDataType, Field, FieldRef, IntervalUnit, SchemaRef, TimeUnit,
 };
+use arrow_select::filter::filter_record_batch;
 
 use super::schema::{
     add_encoded_arrow_schema_to_metadata, decimal_length_from_precision, validate_map_key_type,
@@ -368,6 +371,9 @@ impl<W: Write + Send> ArrowWriter<W> {
     /// new batch. The pages of a nullable column can still differ when one call writes rows
     /// to more than one row group and only some of them have nulls in that column.
     ///
+    /// With content-defined chunking enabled, this writes a filtered copy of `batch` with
+    /// [`Self::write`].
+    ///
     /// A `selection` that selects no rows writes nothing. This fails in the same cases as
     /// [`Self::write`] would for the filtered batch, and, without writing any rows, if
     /// `selection` does not span exactly `batch.num_rows()` rows.
@@ -406,15 +412,20 @@ impl<W: Write + Send> ArrowWriter<W> {
         selection: &RowSelection,
     ) -> Result<()> {
         check_selection_len(selection, batch.num_rows())?;
+        let mask = || match selection.as_mask() {
+            Some(mask) => mask.clone(),
+            None => selection.clone().into_boolean_buffer(),
+        };
         match selection.row_count() {
             0 => Ok(()),
             num_rows if num_rows == batch.num_rows() => self.write(batch),
+            _ if self.cdc_chunkers.is_some() => {
+                let filter = BooleanArray::new(mask(), None);
+                self.write(&filter_record_batch(batch, &filter)?)
+            }
             num_rows => self.write_rows(SelectedRows {
                 batch: batch.clone(),
-                selection: match selection.as_mask() {
-                    Some(mask) => mask.clone(),
-                    None => selection.clone().into_boolean_buffer(),
-                },
+                selection: mask(),
                 num_rows,
             }),
         }
@@ -679,9 +690,12 @@ impl RowsToWrite for SelectedRows {
         writer: &mut ArrowRowGroupWriter,
         chunkers: Option<&mut [ContentDefinedChunker]>,
     ) -> Result<()> {
+        // `ArrowWriter::write_with_selection` writes a filtered copy instead with
+        // content-defined chunking
+        debug_assert!(chunkers.is_none());
         let mut rows = Vec::with_capacity(self.num_rows);
         rows.extend(self.selection.set_indices());
-        writer.write_selected(&self.batch, &rows, chunkers)
+        writer.write_selected(&self.batch, &rows)
     }
 }
 
@@ -1280,28 +1294,7 @@ impl ArrowColumnWriter {
             levels.rep_level_data().as_ref(),
             levels.array(),
         )?;
-        self.write_chunks(levels, &chunks)
-    }
 
-    /// Like [`Self::write_with_chunker`], for the levels of selected rows, whose
-    /// `non_null_indices` skip the values of unselected rows
-    fn write_selected_with_chunker(
-        &mut self,
-        levels: &ArrayLevels,
-        chunker: &mut ContentDefinedChunker,
-    ) -> Result<()> {
-        levels.validate()?;
-        let chunks = chunker.get_arrow_chunks_at_indices(
-            levels.def_level_data().as_ref(),
-            levels.rep_level_data().as_ref(),
-            levels.array(),
-            levels.non_null_indices(),
-        )?;
-        self.write_chunks(levels, &chunks)
-    }
-
-    /// Writes the `chunks` of `levels`, with a page break after each chunk except the last
-    fn write_chunks(&mut self, levels: &ArrayLevels, chunks: &[CdcChunk]) -> Result<()> {
         let num_chunks = chunks.len();
         for (i, chunk) in chunks.iter().enumerate() {
             let chunk_levels = levels.slice_for_chunk(chunk);
@@ -1564,13 +1557,8 @@ impl ArrowRowGroupWriter {
     }
 
     /// Writes the rows of `batch` at the indices `rows`, which must be sorted and distinct
-    fn write_selected(
-        &mut self,
-        batch: &RecordBatch,
-        rows: &[usize],
-        mut chunkers: Option<&mut [ContentDefinedChunker]>,
-    ) -> Result<()> {
-        self.validate_batch_shape(batch, chunkers.as_ref().map(|c| c.len()))?;
+    fn write_selected(&mut self, batch: &RecordBatch, rows: &[usize]) -> Result<()> {
+        self.validate_batch_shape(batch, None)?;
         self.buffered_rows += rows.len();
 
         for (column_idx, field) in self.schema_plan.fields.iter().enumerate() {
@@ -1581,14 +1569,7 @@ impl ArrowRowGroupWriter {
             )?;
             self.validate_leaf_count(field, leaves.len())?;
             for (offset, leaf) in leaves.into_iter().enumerate() {
-                let leaf_idx = field.leaf_range.start + offset;
-                let writer = &mut self.writers[leaf_idx];
-                match chunkers.as_deref_mut() {
-                    Some(chunkers) => {
-                        writer.write_selected_with_chunker(&leaf, &mut chunkers[leaf_idx])?
-                    }
-                    None => writer.write(&ArrowLeafColumn(leaf))?,
-                }
+                self.writers[field.leaf_range.start + offset].write(&ArrowLeafColumn(leaf))?;
             }
         }
         Ok(())
@@ -6419,26 +6400,16 @@ mod tests {
     #[test]
     fn write_with_selection_matches_filter_and_write_with_cdc() {
         let batch = selection_test_batch();
-        let num_columns = batch.num_columns();
-        // Without a selection, content-defined chunking hashes the values of a list by their
-        // position among the values that have levels, counted from the start of the values
-        // array. This misses the written values of fixed size lists with null rows, of list
-        // views, and of lists sliced from larger arrays, as `write` does to split a batch
-        // between row groups (#12391). A selection hashes the written values instead.
-        for (max_row_group_rows, columns) in
-            [(None, 0..num_columns - 2), (Some(64), 0..num_columns - 4)]
-        {
-            let props = WriterProperties::builder()
-                .set_content_defined_chunking(Some(CdcOptions {
-                    min_chunk_size: 16,
-                    max_chunk_size: 128,
-                    norm_level: 0,
-                }))
-                .set_max_row_group_row_count(max_row_group_rows)
-                .build();
-            let batch = batch.project(&columns.collect::<Vec<_>>()).unwrap();
-            assert_selected_rows_match_filtered_rows(&batch, props);
-        }
+        // Leave out the list view column, which `write` cannot chunk (#12391)
+        let columns: Vec<usize> = (0..batch.num_columns() - 1).collect();
+        let props = WriterProperties::builder()
+            .set_content_defined_chunking(Some(CdcOptions {
+                min_chunk_size: 16,
+                max_chunk_size: 128,
+                norm_level: 0,
+            }))
+            .build();
+        assert_selected_rows_match_filtered_rows(&batch.project(&columns).unwrap(), props);
     }
 
     #[test]

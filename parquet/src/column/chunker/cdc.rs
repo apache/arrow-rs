@@ -434,6 +434,9 @@ impl ContentDefinedChunker {
         rep_levels: LevelDataRef<'_>,
         array: &dyn arrow_array::Array,
     ) -> Result<Vec<CdcChunk>> {
+        use arrow_array::cast::AsArray;
+        use arrow_schema::DataType;
+
         // For nested (list) data, null list entries can own non-zero child
         // ranges in the leaf array, so `array.len()` may exceed the number of
         // levels.  Always drive the loop by the level count; fall back to the
@@ -442,45 +445,6 @@ impl ContentDefinedChunker {
             (0, 0) => array.len(),
             (d, r) => d.max(r),
         };
-        self.get_arrow_chunks_impl(def_levels, rep_levels, num_levels, array, |i| i)
-    }
-
-    /// Like [`Self::get_arrow_chunks`], for levels that only cover some slots of `array`:
-    /// the `n`th non-null value is read from `array` at `value_indices[n]`.
-    #[cfg(feature = "arrow")]
-    pub(crate) fn get_arrow_chunks_at_indices(
-        &mut self,
-        def_levels: LevelDataRef<'_>,
-        rep_levels: LevelDataRef<'_>,
-        array: &dyn arrow_array::Array,
-        value_indices: &[usize],
-    ) -> Result<Vec<CdcChunk>> {
-        let num_levels = match (def_levels.len(), rep_levels.len()) {
-            (0, 0) => value_indices.len(),
-            (d, r) => d.max(r),
-        };
-        // `calculate` reads each non-null value exactly once, in order
-        let mut value_indices = value_indices.iter();
-        self.get_arrow_chunks_impl(def_levels, rep_levels, num_levels, array, move |_| {
-            *value_indices
-                .next()
-                .expect("one index for each non-null value")
-        })
-    }
-
-    /// Computes the chunks of `num_levels` levels, reading the value that
-    /// [`Self::calculate`] asks for at `i` from `array` at `value_index(i)`.
-    #[cfg(feature = "arrow")]
-    fn get_arrow_chunks_impl(
-        &mut self,
-        def_levels: LevelDataRef<'_>,
-        rep_levels: LevelDataRef<'_>,
-        num_levels: usize,
-        array: &dyn arrow_array::Array,
-        mut value_index: impl FnMut(usize) -> usize,
-    ) -> Result<Vec<CdcChunk>> {
-        use arrow_array::cast::AsArray;
-        use arrow_schema::DataType;
 
         macro_rules! fixed_width {
             ($N:literal) => {{
@@ -488,7 +452,7 @@ impl ContentDefinedChunker {
                 let buffer = data.buffers()[0].as_slice();
                 let values = &buffer[data.offset() * $N..];
                 self.calculate(def_levels, rep_levels, num_levels, |c, i| {
-                    let offset = value_index(i) * $N;
+                    let offset = i * $N;
                     let slice = &values[offset..offset + $N];
                     c.roll_fixed::<$N>(slice.try_into().unwrap());
                 })
@@ -499,7 +463,7 @@ impl ContentDefinedChunker {
             ($a:expr) => {{
                 let a = $a;
                 self.calculate(def_levels, rep_levels, num_levels, |c, i| {
-                    c.roll(a.value(value_index(i)).as_ref());
+                    c.roll(a.value(i).as_ref());
                 })
             }};
         }
@@ -510,7 +474,7 @@ impl ContentDefinedChunker {
             DataType::Boolean => {
                 let a = array.as_boolean();
                 self.calculate(def_levels, rep_levels, num_levels, |c, i| {
-                    c.roll_fixed(&[a.value(value_index(i)) as u8]);
+                    c.roll_fixed(&[a.value(i) as u8]);
                 })
             }
             DataType::Int8 | DataType::UInt8 => fixed_width!(1),
@@ -543,13 +507,7 @@ impl ContentDefinedChunker {
             DataType::Utf8View => binary_like!(array.as_string_view()),
             DataType::Dictionary(_, _) => {
                 let dict = array.as_any_dictionary();
-                self.get_arrow_chunks_impl(
-                    def_levels,
-                    rep_levels,
-                    num_levels,
-                    dict.keys(),
-                    value_index,
-                )?
+                self.get_arrow_chunks(def_levels, rep_levels, dict.keys())?
             }
             _ => {
                 return Err(ParquetError::General(format!(
