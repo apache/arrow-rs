@@ -1322,6 +1322,14 @@ impl FileReaderBuilder {
         reader.read_exact(&mut buffer)?;
 
         let footer_len = read_footer_length(buffer)?;
+        // The footer follows the 10-byte trailer, so it must fit in the rest
+        // of the file. Reject an impossible length before allocating for it.
+        let file_len = reader.stream_position()?;
+        if footer_len as u64 > file_len.saturating_sub(10) {
+            return Err(ArrowError::ParseError(format!(
+                "Footer extends past file end: footer={footer_len} file={file_len}"
+            )));
+        }
 
         // read footer
         let mut footer_data = vec![0; footer_len];
@@ -2292,6 +2300,17 @@ mod tests {
             err.to_string(),
             "Parser error: Dictionary batch is missing its data"
         );
+    }
+
+    /// A footer length larger than the file cannot be real. It must be
+    /// refused before the footer buffer is allocated.
+    #[test]
+    fn test_footer_length_is_bounded_by_file_size() {
+        let mut input = i32::MAX.to_le_bytes().to_vec();
+        input.extend(crate::ARROW_MAGIC);
+        let error = FileReader::try_new(Cursor::new(input), None)
+            .expect_err("an impossible footer length is refused");
+        assert!(error.to_string().contains("Footer extends past file end"));
     }
 
     #[test]
