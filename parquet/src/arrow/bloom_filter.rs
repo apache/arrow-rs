@@ -11,8 +11,12 @@ use arrow_array::{Array, BooleanArray, RunArray, downcast_run_array};
 use arrow_buffer::{ArrowNativeType, BooleanBuffer};
 use arrow_schema::{DataType, Field};
 
-use crate::arrow::arrow_writer::{
-    FixedLenByteArrayVisitor, PrimitiveVisitor, visit_fixed_len_byte_array, visit_i32, visit_i64,
+use crate::arrow::arrow_writer::ArrowPhysicalBridge;
+use crate::arrow::arrow_writer::fixed_len_byte_array::{
+    FixedLenByteArrayStorage, FixedLenByteArrayVisitor, visit_fixed_len_byte_array,
+};
+use crate::arrow::arrow_writer::numeric::{
+    Int32Storage, Int64Storage, PrimitiveVisitor, visit_i32, visit_i64,
 };
 use crate::arrow::schema::arrow_to_parquet_type;
 use crate::basic::{ConvertedType, LogicalType, TimeUnit, Type as PhysicalType};
@@ -152,8 +156,8 @@ impl<'a> ArrowSbbf<'a> {
         // column of this physical type, so the conversions below accept them
         let sbbf = self.sbbf;
         let found = match self.physical_type {
-            PhysicalType::INT32 => visit_i32(array, CheckPrimitive { sbbf })?,
-            PhysicalType::INT64 => visit_i64(array, CheckPrimitive { sbbf })?,
+            PhysicalType::INT32 => visit_i32(Int32Storage::bind(array)?, CheckPrimitive { sbbf })?,
+            PhysicalType::INT64 => visit_i64(Int64Storage::bind(array)?, CheckPrimitive { sbbf })?,
             PhysicalType::FLOAT => {
                 CheckPrimitive { sbbf }.slice(array.as_primitive::<Float32Type>().values())?
             }
@@ -173,7 +177,7 @@ impl<'a> ArrowSbbf<'a> {
                     len: array.len(),
                     type_length: self.type_length,
                 };
-                visit_fixed_len_byte_array(array, visitor)?
+                visit_fixed_len_byte_array(FixedLenByteArrayStorage::bind(array)?, visitor)?
             }
             PhysicalType::INT96 => unreachable!("ArrowWriter does not write INT96 columns"),
         };
@@ -318,11 +322,15 @@ impl<T: AsBytes> PrimitiveVisitor<T> for CheckPrimitive<'_> {
         Ok(values.iter().map(|v| self.sbbf.check(v)).collect())
     }
 
-    fn map<S: Copy>(self, values: &[S], convert: impl Fn(S) -> T) -> Result<BooleanBuffer> {
+    fn map<S: Copy>(self, values: &[S], convert: impl Fn(S) -> T + Copy) -> Result<BooleanBuffer> {
         Ok(values
             .iter()
             .map(|v| self.sbbf.check(&convert(*v)))
             .collect())
+    }
+
+    fn nulls(self, len: usize) -> Result<BooleanBuffer> {
+        Ok(BooleanBuffer::new_unset(len))
     }
 }
 
@@ -342,7 +350,11 @@ impl FixedLenByteArrayVisitor for CheckFixedLenByteArray<'_> {
         self.type_length
     }
 
-    fn values(self, length: usize, fill: impl Fn(usize, &mut [u8])) -> Result<BooleanBuffer> {
+    fn values(
+        self,
+        length: usize,
+        fill: impl Fn(usize, &mut [u8]) + Copy,
+    ) -> Result<BooleanBuffer> {
         // `ArrowSbbf::try_new` checked that the Arrow type is stored in values
         // of the column's length
         debug_assert_eq!(length, self.type_length);
