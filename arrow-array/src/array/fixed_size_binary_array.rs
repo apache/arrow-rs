@@ -98,6 +98,9 @@ impl FixedSizeBinaryArray {
     /// Create a new [`FixedSizeBinaryArray`] with `value_length` bytes per element, panicking on
     /// failure
     ///
+    /// If `values.len()` is not an exact multiple of `value_length`, trailing bytes beyond
+    /// `(values.len() / value_length) * value_length` are truncated.
+    ///
     /// # Panics
     ///
     /// Panics if [`Self::try_new`] returns an error
@@ -145,6 +148,10 @@ impl FixedSizeBinaryArray {
     /// Creating an array with `value_length == 0` will try to get the length from the null
     /// buffer. If no null buffer is provided, the resulting array will have length zero.
     /// You can use [`Self::try_new_with_len`] to provide the length
+    ///
+    /// If `values.len()` is not an exact multiple of `value_length`, trailing bytes beyond
+    /// `(values.len() / value_length) * value_length` are truncated so the stored values buffer
+    /// always has length `len * value_length`.
     ///
     /// # Errors
     ///
@@ -195,6 +202,10 @@ impl FixedSizeBinaryArray {
     ///
     /// This is useful when the length cannot be determined from the provided values (in case of `value_length == 0`) or nulls (`nulls.is_none()`).
     ///
+    /// If `values` contains trailing bytes beyond `len * value_length` (while still satisfying
+    /// `values.len() / value_length == len`), they are truncated so the stored values buffer always
+    /// has length `len * value_length`.
+    ///
     /// # Errors
     ///
     /// * `value_length < 0`
@@ -239,11 +250,10 @@ impl FixedSizeBinaryArray {
             ));
         }
 
-        let required_len = len.checked_mul(value_size).ok_or_else(|| {
-            ArrowError::InvalidArgumentError(format!(
-                "FixedSizeBinaryArray error: value size {value_size} * len {len} exceeds usize"
-            ))
-        })?;
+        // Guaranteed not to overflow: either `value_size == 0` or `values.len() / value_size == len` above.
+        let required_len = len
+            .checked_mul(value_size)
+            .expect("length bounded by values buffer check");
         let value_data = if values.len() > required_len {
             values.slice_with_length(0, required_len)
         } else {
