@@ -4,10 +4,9 @@
 
 use crate::builder::{ArrayBuilder, FixedSizeBinaryBuilder, PrimitiveBuilder};
 use crate::types::ArrowDictionaryKeyType;
-use crate::{Array, ArrayRef, DictionaryArray, PrimitiveArray};
+use crate::{ArrayRef, DictionaryArray, PrimitiveArray};
 use arrow_buffer::ArrowNativeType;
-use arrow_schema::DataType::FixedSizeBinary;
-use arrow_schema::{ArrowError, DataType};
+use arrow_schema::ArrowError;
 use hashbrown::HashTable;
 use num_traits::NumCast;
 use std::any::Any;
@@ -296,19 +295,9 @@ where
         let values = self.values_builder.finish();
         let keys = self.keys_builder.finish();
 
-        let data_type = DataType::Dictionary(
-            Box::new(K::DATA_TYPE),
-            Box::new(FixedSizeBinary(self.byte_width)),
-        );
-
-        let builder = keys
-            .into_data()
-            .into_builder()
-            .data_type(data_type)
-            .child_data(vec![values.into_data()]);
-
-        // SAFETY: builder is constructed from valid key/value arrays produced by the builder
-        DictionaryArray::from(unsafe { builder.build_unchecked() })
+        // SAFETY: keys and values were produced by this builder; the builder
+        // only appends keys that index into the values it has built so far.
+        unsafe { DictionaryArray::new_unchecked(keys, Arc::new(values)) }
     }
 
     /// Builds the `DictionaryArray` without resetting the builder.
@@ -316,19 +305,9 @@ where
         let values = self.values_builder.finish_cloned();
         let keys = self.keys_builder.finish_cloned();
 
-        let data_type = DataType::Dictionary(
-            Box::new(K::DATA_TYPE),
-            Box::new(FixedSizeBinary(self.byte_width)),
-        );
-
-        let builder = keys
-            .into_data()
-            .into_builder()
-            .data_type(data_type)
-            .child_data(vec![values.into_data()]);
-
-        // SAFETY: builder is constructed from valid key/value arrays produced by the builder
-        DictionaryArray::from(unsafe { builder.build_unchecked() })
+        // SAFETY: keys and values were produced by this builder; the builder
+        // only appends keys that index into the values it has built so far.
+        unsafe { DictionaryArray::new_unchecked(keys, Arc::new(values)) }
     }
 
     /// Builds the `DictionaryArray` without resetting the values builder or
@@ -352,19 +331,9 @@ where
         let values = self.values_builder.finish_cloned();
         let keys = self.keys_builder.finish();
 
-        let data_type = DataType::Dictionary(
-            Box::new(K::DATA_TYPE),
-            Box::new(FixedSizeBinary(self.byte_width)),
-        );
-
-        let builder = keys
-            .into_data()
-            .into_builder()
-            .data_type(data_type)
-            .child_data(vec![values.into_data()]);
-
-        // SAFETY: builder is constructed from valid key/value arrays produced by the builder
-        DictionaryArray::from(unsafe { builder.build_unchecked() })
+        // SAFETY: keys and values were produced by this builder; the builder
+        // only appends keys that index into the values it has built so far.
+        unsafe { DictionaryArray::new_unchecked(keys, Arc::new(values)) }
     }
 }
 
