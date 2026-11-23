@@ -4,8 +4,6 @@
 
 use crate::builder::ArrayBuilder;
 use crate::{ArrayRef, NullArray};
-use arrow_data::ArrayData;
-use arrow_schema::DataType;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -72,22 +70,12 @@ impl NullBuilder {
 
     /// Builds the [NullArray] and reset this builder.
     pub fn finish(&mut self) -> NullArray {
-        let len = std::mem::take(&mut self.len);
-        let builder = ArrayData::new_null(&DataType::Null, len).into_builder();
-
-        // SAFETY: ArrayData::new_null produces valid null array data, so all builder invariants hold
-        let array_data = unsafe { builder.build_unchecked() };
-        NullArray::from(array_data)
+        NullArray::new(std::mem::take(&mut self.len))
     }
 
     /// Builds the [NullArray] without resetting the builder.
     pub fn finish_cloned(&self) -> NullArray {
-        let len = self.len();
-        let builder = ArrayData::new_null(&DataType::Null, len).into_builder();
-
-        // SAFETY: ArrayData::new_null produces valid null array data, so all builder invariants hold
-        let array_data = unsafe { builder.build_unchecked() };
-        NullArray::from(array_data)
+        NullArray::new(self.len)
     }
 }
 

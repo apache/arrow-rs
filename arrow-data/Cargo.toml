@@ -22,7 +22,7 @@ bench = false
 # force_validate runs full data validation for all arrays that are created
 # this is not enabled by default as it is too computationally expensive
 # but is run as part of our CI checks
-force_validate = []
+force_validate = ["arrow-buffer/force_validate"]
 # Enable ffi support
 ffi = ["arrow-schema/ffi"]
 # Enable memory tracking support

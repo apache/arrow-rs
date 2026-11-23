@@ -813,7 +813,7 @@ fn err(b: u8, ctx: &str) -> ArrowError {
 fn char_from_surrogate_pair(low: u16, high: u16) -> Result<char, ArrowError> {
     match (low, high) {
         (0xDC00..=0xDFFF, 0xD800..=0xDBFF) => {
-            let n = (((high - 0xD800) as u32) << 10) | ((low - 0xDC00) as u32 + 0x1_0000);
+            let n = (((high - 0xD800) as u32) << 10) + ((low - 0xDC00) as u32 + 0x1_0000);
             char::from_u32(n)
                 .ok_or_else(|| ArrowError::JsonError(format!("Invalid UTF-16 surrogate pair {n}")))
         }
@@ -985,6 +985,32 @@ mod tests {
         decoder.clear();
         assert!(!decoder.has_partial_row());
         assert_eq!(decoder.num_buffered_rows(), 0);
+    }
+
+    #[test]
+    fn test_surrogate_pairs() {
+        let mut decoder = tape_decoder();
+        decoder
+            .decode(
+                br#"{"v": [
+                    "\ud800\udc00",
+                    "\ud83d\ude00",
+                    "\ud840\udc00",
+                    "\udbff\udfff",
+                    "\uD840\uDC00",
+                    "a\ud840\udc00b"
+                ]}"#,
+            )
+            .unwrap();
+        let tape = decoder.finish().unwrap();
+
+        // String 0 is the key "v"
+        assert_eq!(tape.get_string(1), "\u{10000}"); // lowest supplementary
+        assert_eq!(tape.get_string(2), "\u{1F600}"); // emoji
+        assert_eq!(tape.get_string(3), "\u{20000}");
+        assert_eq!(tape.get_string(4), "\u{10FFFF}");
+        assert_eq!(tape.get_string(5), "\u{20000}"); // uppercase hex
+        assert_eq!(tape.get_string(6), "a\u{20000}b"); // surrounded by ASCII
     }
 
     #[test]
