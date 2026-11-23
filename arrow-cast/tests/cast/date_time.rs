@@ -2723,3 +2723,66 @@ fn test_cast_temporal_scaling_boundaries() {
     check::<Date64Type, TimestampMicrosecondType>(MICROSECONDS / MILLISECONDS);
     check::<Date64Type, TimestampNanosecondType>(NANOSECONDS / MILLISECONDS);
 }
+
+#[test]
+fn test_cast_timestamp_and_duration_to_coarser_unit() {
+    // Truncates toward zero, as `/` does, and keeps nulls
+    let edges = [
+        i64::MIN,
+        i64::MIN + 1,
+        -1_000_000_001,
+        -1_000_000_000,
+        -999_999_999,
+        -1001,
+        -1000,
+        -999,
+        -1,
+        0,
+        1,
+        999,
+        1000,
+        1001,
+        999_999_999,
+        1_000_000_000,
+        1_000_000_001,
+        i64::MAX - 1,
+        i64::MAX,
+    ];
+    let values: Int64Array = edges
+        .into_iter()
+        .map(Some)
+        .chain([None])
+        .cycle()
+        .take(70)
+        .collect();
+    let units = [
+        TimeUnit::Second,
+        TimeUnit::Millisecond,
+        TimeUnit::Microsecond,
+        TimeUnit::Nanosecond,
+    ];
+    let tz = Some("+05:45".into());
+    for array in [values.clone(), values.slice(3, 60)] {
+        for (i, from) in units.into_iter().enumerate() {
+            for (j, to) in units.into_iter().enumerate().take(i) {
+                let ratio = 1000_i64.pow((i - j) as u32);
+                for (from_type, to_type) in [
+                    (Timestamp(from, None), Timestamp(to, None)),
+                    (Timestamp(from, tz.clone()), Timestamp(to, tz.clone())),
+                    (Duration(from), Duration(to)),
+                ] {
+                    let input = cast(&array, &from_type).unwrap();
+                    let output = cast(&input, &to_type).unwrap();
+                    assert_eq!(output.data_type(), &to_type);
+                    let output = cast(&output, &Int64).unwrap();
+                    let expected: Int64Array = array.iter().map(|v| v.map(|v| v / ratio)).collect();
+                    assert_eq!(
+                        output.as_primitive::<Int64Type>(),
+                        &expected,
+                        "{from_type} to {to_type}"
+                    );
+                }
+            }
+        }
+    }
+}

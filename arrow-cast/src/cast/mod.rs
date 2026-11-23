@@ -1768,10 +1768,7 @@ pub fn cast_with_options(
             // we either divide or multiply, depending on size of each unit
             // units are never the same when the types are the same
             let converted = match from_size.cmp(&to_size) {
-                Ordering::Greater => {
-                    let divisor = from_size / to_size;
-                    time_array.unary::<_, Int64Type>(|o| o / divisor)
-                }
+                Ordering::Greater => div_by_unit_ratio(time_array, from_size / to_size),
                 Ordering::Equal => time_array.clone(),
                 Ordering::Less => {
                     let mul = to_size / from_size;
@@ -1964,10 +1961,7 @@ pub fn cast_with_options(
             // we either divide or multiply, depending on size of each unit
             // units are never the same when the types are the same
             let converted = match from_size.cmp(&to_size) {
-                Ordering::Greater => {
-                    let divisor = from_size / to_size;
-                    time_array.unary::<_, Int64Type>(|o| o / divisor)
-                }
+                Ordering::Greater => div_by_unit_ratio(time_array, from_size / to_size),
                 Ordering::Equal => time_array.clone(),
                 Ordering::Less => {
                     let mul = to_size / from_size;
@@ -2023,6 +2017,17 @@ pub fn cast_with_options(
 /// Number of `T` units in one day
 const fn units_per_day<T: ArrowTimestampType>() -> i64 {
     SECONDS_IN_DAY * time_unit_multiple(&T::UNIT)
+}
+
+/// Divides every value of `array` by `ratio`, the ratio of a finer time unit to a coarser one
+fn div_by_unit_ratio(array: &Int64Array, ratio: i64) -> Int64Array {
+    // A constant divisor lets the compiler replace each division with a multiply and shifts
+    match ratio {
+        MILLISECONDS => array.unary(|o| o / MILLISECONDS),
+        MICROSECONDS => array.unary(|o| o / MICROSECONDS),
+        NANOSECONDS => array.unary(|o| o / NANOSECONDS),
+        _ => array.unary(|o| o / ratio),
+    }
 }
 
 /// Get the time unit as a multiple of a second
