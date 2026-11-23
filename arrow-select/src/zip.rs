@@ -1105,6 +1105,7 @@ mod test {
     use arrow_schema::{IntervalUnit, TimeUnit};
     use rand::rngs::StdRng;
     use rand::{RngExt, SeedableRng};
+    use rstest::rstest;
 
     #[test]
     fn test_count_true_runs() {
