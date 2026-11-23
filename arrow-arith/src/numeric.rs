@@ -1420,8 +1420,9 @@ where
 /// Divides the scaled values of a decimal array by a scalar with a precomputed divisor
 trait ScalarDivisor: Sized {
     /// Returns `l * mul / divisor` for [`Op::Div`] or `l * mul % divisor` for [`Op::Rem`] for
-    /// every valid slot of `l`. Returns `None` for another op, or when `l * mul` overflows for
-    /// any slot, null or not. `mul` is positive, and `divisor` is neither 0 nor -1
+    /// every valid slot of `l`. Returns `None` for another op, or when it can't rule out that
+    /// `l * mul` overflows for a slot it divides. `mul` is positive, and `divisor` is neither 0
+    /// nor -1
     fn div_rem_scaled<T: ArrowPrimitiveType<Native = Self>>(
         op: Op,
         l: &PrimitiveArray<T>,
@@ -1430,49 +1431,23 @@ trait ScalarDivisor: Sized {
     ) -> Option<PrimitiveArray<T>>;
 }
 
-/// Returns true if every value is between `lo` and `hi`. Each chunk is checked without
-/// branching, and the scan stops after the first chunk that fails
-fn all_between<N: PartialOrd + Copy>(values: &[N], lo: N, hi: N) -> bool {
-    values
-        .chunks(64)
-        .all(|chunk| chunk.iter().fold(true, |ok, &v| ok & (v >= lo) & (v <= hi)))
-}
-
-/// Divides `$l` by `$d`, a `$divisor`, as `divisor_op!` does, and evaluates to the result.
+/// Divides every slot of `$l` by `$d`, a `$divisor`, with `unary`, and evaluates to the result.
 /// `$scaled` is the dividend computed from the slot `$n`, and `$out` the result computed from
 /// the quotient or remainder `$q`
 macro_rules! div_rem_unary {
     (
         $op:expr,
         $l:expr,
-        $max_nulls:expr,
         $d:expr,
         $divisor:ident,
         [$($variant:ident),+],
         |$n:ident| $scaled:expr,
         |$q:ident| $out:expr
     ) => {{
-        let divisor = $d;
-        if $l.null_count() > $max_nulls {
-            // Calling the enum's `wrapping_div_rem`, which matches on the variant, keeps this to
-            // one `try_unary` per op
-            let Ok(array) = match $op {
-                Op::Div => $l.try_unary::<_, _, Infallible>(move |$n| {
-                    let $q = divisor.wrapping_div_rem($scaled).0;
-                    Ok($out)
-                }),
-                Op::Rem => $l.try_unary::<_, _, Infallible>(move |$n| {
-                    let $q = divisor.wrapping_div_rem($scaled).1;
-                    Ok($out)
-                }),
-                _ => return None,
-            };
-            return Some(array);
-        }
         // Match on the variant once, outside the loop, and move it into the closure, so the loop
         // doesn't branch on the variant. The `Op::Div` and `Op::Rem` arms after the variants
         // cover variants that arrow-buffer may add later
-        let array = match ($op, divisor) {
+        let array = match ($op, $d) {
             $(
                 (Op::Div, $divisor::$variant(d)) => $l.unary(move |$n| {
                     let $q = d.wrapping_div_rem($scaled).0;
@@ -1497,11 +1472,13 @@ macro_rules! div_rem_unary {
     }};
 }
 
-/// Implements [`ScalarDivisor`] for `$t` with `$divisor`, dividing every slot with `unary`
-/// unless the array has more than `$max_nulls` nulls, as `divisor_op!` does.
+/// Implements [`ScalarDivisor`] for `$t` with `$divisor`. An array with at most `$max_nulls`
+/// nulls divides every slot with `unary`, and one with more divides only its valid values with
+/// `try_unary`, as `divisor_op!` does.
 ///
-/// With `narrow`, a batch whose scaled values fit in `$narrow` divides in it with
-/// `$narrow_divisor`, which is faster. `$as_narrow` converts a value of `$t` that fits
+/// With `narrow`, scaled values that fit in `$narrow` divide in it with `$narrow_divisor`,
+/// which is faster: each value on the `try_unary` route, and the whole array on the `unary`
+/// route when every slot fits. `$as_narrow` converts a value of `$t` that fits
 macro_rules! impl_scalar_divisor {
     (
         $t:ty,
@@ -1518,22 +1495,59 @@ macro_rules! impl_scalar_divisor {
                 divisor: Self,
             ) -> Option<PrimitiveArray<T>> {
                 let $len = l.len();
-                let max_nulls = $max_nulls;
-                // The scans include null slots, because `unary` divides those as well
                 $(
-                    // When `divisor`, `mul` and every scaled value fit in `$narrow`, so do the
-                    // quotient and remainder. They are the same as in `$t`, because `divisor`
-                    // isn't -1
+                    // When `divisor` and a scaled value fit in `$narrow`, so do the quotient and
+                    // remainder. They are the same as in `$t`, because `divisor` isn't -1
                     let (min, max) = (<$t>::from(<$narrow>::MIN), <$t>::from(<$narrow>::MAX));
-                    let fits = |v: $t| min <= v && v <= max;
-                    let (lo, hi) = (min.wrapping_div(mul), max.wrapping_div(mul));
-                    if fits(divisor) && fits(mul) && all_between(l.values(), lo, hi) {
+                    let fits = move |v: $t| min <= v && v <= max;
+                )?
+                if l.null_count() > $max_nulls {
+                    // Checks each valid value, because a scan would read every null slot. A
+                    // value that overflows when scaled stops the loop, and the caller's general
+                    // kernel divides the array from the start
+                    let wide = $divisor::new(divisor)?;
+                    $(
+                        let narrow = fits(divisor)
+                            .then(|| $narrow_divisor::new($as_narrow(divisor)))
+                            .flatten();
+                    )?
+                    let div_rem = move |n: $t| -> Result<($t, $t), ()> {
+                        let scaled = n.checked_mul(mul).ok_or(())?;
+                        $(
+                            if let Some(d) = narrow.filter(|_| fits(scaled)) {
+                                // `fits` makes `$as_narrow` exact
+                                let (q, r) = d.wrapping_div_rem($as_narrow(scaled));
+                                return Ok((<$t>::from(q), <$t>::from(r)));
+                            }
+                        )?
+                        Ok(wide.wrapping_div_rem(scaled))
+                    };
+                    let array = match op {
+                        Op::Div => l.try_unary(move |n| div_rem(n).map(|(q, _)| q)),
+                        Op::Rem => l.try_unary(move |n| div_rem(n).map(|(_, r)| r)),
+                        _ => return None,
+                    };
+                    return array.ok();
+                }
+                // ORs `v ^ (v >> sign)` over every slot, null or not, because `unary` divides
+                // null slots as well. Every `v` is then between `-magnitude - 1` and `magnitude`,
+                // so `magnitude < bound` puts every `v` between `-bound` and `bound`, and
+                // `bound * mul` doesn't overflow for `bound = MAX / mul`. An OR needs no
+                // comparison per value, but can exceed the largest value by up to 2x, so an
+                // array close to the bound takes the slower route
+                let sign = (size_of::<$t>() * 8 - 1) as u8;
+                let magnitude = l
+                    .values()
+                    .iter()
+                    .fold(Self::ZERO, |acc, &v| acc | (v ^ (v >> sign)));
+                $(
+                    let bound = max.wrapping_div(mul);
+                    if fits(divisor) && fits(mul) && magnitude < bound {
                         // The checks above make `$as_narrow` exact
                         let m = $as_narrow(mul);
                         return div_rem_unary!(
                             op,
                             l,
-                            max_nulls,
                             $narrow_divisor::new($as_narrow(divisor))?,
                             $narrow_divisor,
                             [$($narrow_variant),+],
@@ -1543,14 +1557,13 @@ macro_rules! impl_scalar_divisor {
                     }
                 )?
                 // A multiplier of 1 can't overflow
-                let (lo, hi) = (<$t>::MIN.wrapping_div(mul), <$t>::MAX.wrapping_div(mul));
-                if !mul.is_eq(Self::ONE) && !all_between(l.values(), lo, hi) {
+                let bound = <$t>::MAX.wrapping_div(mul);
+                if !mul.is_eq(Self::ONE) && magnitude >= bound {
                     return None;
                 }
                 div_rem_unary!(
                     op,
                     l,
-                    max_nulls,
                     $divisor::new(divisor)?,
                     $divisor,
                     [$($variant),+],
@@ -3358,9 +3371,10 @@ mod tests {
     #[test]
     fn test_decimal_div_rem_by_scalar_bounds() {
         // Values on each side of the bounds where scaling overflows and, given `narrow`, where
-        // the scaled value fits in the next narrower type. Each value follows 64 small ones, so
-        // it is in the second chunk of a scan of the values. The arrays with nulls are null
-        // only at that value, half null, and more than half null
+        // the scaled value fits in the next narrower type. Each value follows 64 small ones, in
+        // arrays that are null only at that value, half null, more than half null, and valid.
+        // It is also alone with 0 and -1, which set no bits in the magnitude that `unary`
+        // checks against the bounds, so the check sees the value's own bits
         fn check<T: DecimalType>(narrow: &[T::Native]) {
             let one = T::Native::ONE;
             let (max, min) = (T::Native::MAX_TOTAL_ORDER, T::Native::MIN_TOTAL_ORDER);
@@ -3399,11 +3413,19 @@ mod tests {
                         PrimitiveArray::<T>::new(a.values().clone(), Some(nulls.clone()))
                             .with_data_type(a.data_type().clone())
                     };
+                    let alone = PrimitiveArray::<T>::from_iter_values([
+                        T::Native::ZERO,
+                        one.neg_wrapping(),
+                        v,
+                    ])
+                    .with_precision_and_scale(T::MAX_PRECISION, s1)
+                    .unwrap();
                     let arrays = [
                         with_nulls(&value_null),
                         with_nulls(&half_null),
                         with_nulls(&mostly_null),
                         a,
+                        alone,
                     ];
                     for a in &arrays {
                         for &divisor in &divisors {
