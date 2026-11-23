@@ -11,6 +11,8 @@ const LENGTH_NO_COMPRESSED_DATA: i64 = -1;
 const LENGTH_OF_PREFIX_DATA: i64 = 8;
 const DEFAULT_ZSTD_COMPRESSION_LEVEL: i32 = 3;
 
+const LZ4_UNCOMPRESSED_BLOCK: u32 = 0x8000_0000;
+
 /// LZ4 frame block sizes representable by the frame header. See the [LZ4 frame format] for the
 /// block size codes; `lz4_flex`'s 8 MiB option sets a reserved bit, which the decoder rejects.
 ///
@@ -455,7 +457,6 @@ fn decompress_lz4_blocks(
     const CONTENT_SIZE: u8 = 0b0000_1000;
     const CONTENT_CHECKSUM: u8 = 0b0000_0100;
     const DICTIONARY_ID: u8 = 0b0000_0001;
-    const UNCOMPRESSED_BLOCK: u32 = 0x8000_0000;
 
     if input.len() < 7 || u32::from_le_bytes(input[0..4].try_into().ok()?) != MAGIC {
         return None;
@@ -489,7 +490,6 @@ fn decompress_lz4_blocks(
         at,
         decompressed_size,
         block_max,
-        UNCOMPRESSED_BLOCK,
     ))
 }
 
@@ -499,7 +499,6 @@ fn decode_independent_blocks(
     mut at: usize,
     decompressed_size: usize,
     block_max: usize,
-    uncompressed_block: u32,
 ) -> Result<Vec<u8>, ArrowError> {
     let corrupt = |detail: &str| ArrowError::IpcError(format!("Corrupt lz4 frame: {detail}"));
     let exceeds = || {
@@ -519,7 +518,7 @@ fn decode_independent_blocks(
         if word == 0 {
             break;
         }
-        let len = (word & !uncompressed_block) as usize;
+        let len = (word & !LZ4_UNCOMPRESSED_BLOCK) as usize;
         let block = input
             .get(at..at + len)
             .ok_or_else(|| corrupt("a block runs past its end"))?;
@@ -535,7 +534,7 @@ fn decode_independent_blocks(
         }
         let dst = &mut output[written..written + room];
 
-        if word & uncompressed_block != 0 {
+        if word & LZ4_UNCOMPRESSED_BLOCK != 0 {
             dst.get_mut(..len)
                 .ok_or_else(exceeds)?
                 .copy_from_slice(block);
