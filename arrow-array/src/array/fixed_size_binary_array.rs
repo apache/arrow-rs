@@ -239,9 +239,11 @@ impl FixedSizeBinaryArray {
             ));
         }
 
+        // Strip trailing bytes beyond `len * value_size`, matching
+        // `From<ArrayData>`, so `value_data` never exposes them.
         Ok(Self {
             data_type,
-            value_data: values,
+            value_data: values.slice_with_length(0, len * value_size),
             value_size,
             nulls,
             len,
@@ -1335,6 +1337,26 @@ mod tests {
             err.to_string(),
             "Invalid argument error: Incorrect length of values buffer for FixedSizeBinaryArray, expected 3 got 5"
         );
+    }
+
+    #[test]
+    fn test_try_new_trailing_bytes_are_stripped() {
+        // Regression test for https://github.com/apache/arrow-rs/issues/12409
+        let array = FixedSizeBinaryArray::new(3, Buffer::from_vec(vec![0_u8; 10]), None);
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.value_data().len(), 9);
+        assert_eq!(array.values().len(), 9);
+        let (_, values, _) = array.into_parts();
+        assert_eq!(values.len(), 9);
+    }
+
+    #[test]
+    fn test_try_new_with_len_trailing_bytes_are_stripped() {
+        let buffer = Buffer::from_vec(vec![0_u8; 10]);
+        let array = FixedSizeBinaryArray::try_new_with_len(3, buffer, None, 3).unwrap();
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.value_data().len(), 9);
+        assert_eq!(array.values().len(), 9);
     }
 
     #[test]
