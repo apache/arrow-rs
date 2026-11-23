@@ -1685,19 +1685,17 @@ pub fn cast_with_options(
                 .unary::<_, Time64NanosecondType>(|x| x as i64 * (NANOSECONDS / MILLISECONDS)),
         )),
 
-        (Time64(TimeUnit::Microsecond), Time32(TimeUnit::Second)) => {
-            cast_time64_to_time32::<Time64MicrosecondType, Time32SecondType>(
-                array,
-                MICROSECONDS,
-                cast_options,
-            )
-        }
+        (Time64(TimeUnit::Microsecond), Time32(TimeUnit::Second)) => cast_time64_to_time32::<
+            Time64MicrosecondType,
+            Time32SecondType,
+            MICROSECONDS,
+        >(array, cast_options),
         (Time64(TimeUnit::Microsecond), Time32(TimeUnit::Millisecond)) => {
-            cast_time64_to_time32::<Time64MicrosecondType, Time32MillisecondType>(
-                array,
-                MICROSECONDS / MILLISECONDS,
-                cast_options,
-            )
+            cast_time64_to_time32::<
+                Time64MicrosecondType,
+                Time32MillisecondType,
+                { MICROSECONDS / MILLISECONDS },
+            >(array, cast_options)
         }
         (Time64(TimeUnit::Microsecond), Time64(TimeUnit::Nanosecond)) => {
             let array = array.as_primitive::<Time64MicrosecondType>();
@@ -1713,19 +1711,17 @@ pub fn cast_with_options(
             Ok(Arc::new(result))
         }
 
-        (Time64(TimeUnit::Nanosecond), Time32(TimeUnit::Second)) => {
-            cast_time64_to_time32::<Time64NanosecondType, Time32SecondType>(
-                array,
-                NANOSECONDS,
-                cast_options,
-            )
-        }
+        (Time64(TimeUnit::Nanosecond), Time32(TimeUnit::Second)) => cast_time64_to_time32::<
+            Time64NanosecondType,
+            Time32SecondType,
+            NANOSECONDS,
+        >(array, cast_options),
         (Time64(TimeUnit::Nanosecond), Time32(TimeUnit::Millisecond)) => {
-            cast_time64_to_time32::<Time64NanosecondType, Time32MillisecondType>(
-                array,
-                NANOSECONDS / MILLISECONDS,
-                cast_options,
-            )
+            cast_time64_to_time32::<
+                Time64NanosecondType,
+                Time32MillisecondType,
+                { NANOSECONDS / MILLISECONDS },
+            >(array, cast_options)
         }
         (Time64(TimeUnit::Nanosecond), Time64(TimeUnit::Microsecond)) => Ok(Arc::new(
             array
@@ -2047,9 +2043,10 @@ const fn time_unit_multiple(unit: &TimeUnit) -> i64 {
     }
 }
 
-fn cast_time64_to_time32<FROM, TO>(
+/// `DIVISOR` is a const parameter so that each division is by a constant, which the compiler
+/// replaces with a multiply and shifts even when the loops aren't inlined into this function
+fn cast_time64_to_time32<FROM, TO, const DIVISOR: i64>(
     array: &dyn Array,
-    divisor: i64,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError>
 where
@@ -2058,10 +2055,10 @@ where
 {
     let array = array.as_primitive::<FROM>();
     let result = if cast_options.safe {
-        array.unary_opt::<_, TO>(|value| i32::try_from(value / divisor).ok())
+        array.unary_opt::<_, TO>(|value| i32::try_from(value / DIVISOR).ok())
     } else {
         array.try_unary::<_, TO, _>(|value| {
-            let value = value / divisor;
+            let value = value / DIVISOR;
             i32::try_from(value).map_err(|_| {
                 ArrowError::CastError(format!(
                     "Can't cast value {value:?} to type {}",

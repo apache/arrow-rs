@@ -13,8 +13,11 @@ use rand::{RngExt, SeedableRng};
 
 const SIZE: usize = 8192;
 
-fn benchmark<T: ArrowTimestampType>(c: &mut Criterion, unit: &str, units_per_second: i64) {
-    // Timestamps spread over roughly 63 years either side of the epoch.
+/// Returns `SIZE` values spread over roughly 63 years either side of zero, without nulls and
+/// with a fifth of them null
+fn arrays<T: ArrowPrimitiveType<Native = i64>>(
+    units_per_second: i64,
+) -> (PrimitiveArray<T>, PrimitiveArray<T>) {
     let mut rng = StdRng::seed_from_u64(42);
     let range = -2_000_000_000 * units_per_second..2_000_000_000 * units_per_second;
     let values: Vec<i64> = (0..SIZE).map(|_| rng.random_range(range.clone())).collect();
@@ -24,7 +27,11 @@ fn benchmark<T: ArrowTimestampType>(c: &mut Criterion, unit: &str, units_per_sec
             .enumerate()
             .map(|(i, &v)| (i % 5 != 0).then_some(v)),
     );
-    let no_nulls = PrimitiveArray::<T>::new(values.into(), None);
+    (PrimitiveArray::<T>::new(values.into(), None), mixed_nulls)
+}
+
+fn benchmark<T: ArrowTimestampType>(c: &mut Criterion, unit: &str, units_per_second: i64) {
+    let (no_nulls, mixed_nulls) = arrays::<T>(units_per_second);
     // Timezone-aware casts go through Chrono and serve as a control.
     let zoned = no_nulls.clone().with_timezone("+05:45");
     let inputs = [
@@ -32,39 +39,28 @@ fn benchmark<T: ArrowTimestampType>(c: &mut Criterion, unit: &str, units_per_sec
         ("mixed_nulls", &mixed_nulls),
         ("timezone_control", &zoned),
     ];
-    let mut targets = vec![
-        ("date32".to_string(), DataType::Date32),
-        ("time32_s".to_string(), DataType::Time32(TimeUnit::Second)),
-        (
-            "time32_ms".to_string(),
-            DataType::Time32(TimeUnit::Millisecond),
-        ),
-        (
-            "time64_us".to_string(),
-            DataType::Time64(TimeUnit::Microsecond),
-        ),
-        (
-            "time64_ns".to_string(),
-            DataType::Time64(TimeUnit::Nanosecond),
-        ),
+    let targets = [
+        ("date32", DataType::Date32),
+        ("time32_s", DataType::Time32(TimeUnit::Second)),
+        ("time32_ms", DataType::Time32(TimeUnit::Millisecond)),
+        ("time64_us", DataType::Time64(TimeUnit::Microsecond)),
+        ("time64_ns", DataType::Time64(TimeUnit::Nanosecond)),
     ];
-    // Casts to a coarser unit divide each value, and casts to a finer unit multiply it
-    for (to_unit, to) in other_units(T::UNIT) {
-        targets.push((
-            format!("timestamp_{to_unit}"),
-            DataType::Timestamp(to, None),
-        ));
-    }
     let mut group = c.benchmark_group(format!("timestamp_{unit}"));
     group.throughput(Throughput::Elements(SIZE as u64));
     for (name, target) in &targets {
         for (input, array) in inputs {
-            // A cast to a timestamp without a time zone doesn't adjust, so it isn't a control
-            if input == "timezone_control" && matches!(target, DataType::Timestamp(_, _)) {
-                continue;
-            }
             group.bench_function(format!("{name}/{input}"), |b| {
                 b.iter(|| black_box(cast(black_box(array), target).unwrap()))
+            });
+        }
+    }
+    // Casts to a coarser unit divide each value, and casts to a finer unit multiply it
+    for (to_unit, to) in other_units(T::UNIT) {
+        let target = DataType::Timestamp(to, None);
+        for (input, array) in [("no_nulls", &no_nulls), ("mixed_nulls", &mixed_nulls)] {
+            group.bench_function(format!("timestamp_{to_unit}/{input}"), |b| {
+                b.iter(|| black_box(cast(black_box(array), &target).unwrap()))
             });
         }
     }
@@ -89,17 +85,7 @@ fn duration_benchmark<T: ArrowPrimitiveType<Native = i64>>(
     from: TimeUnit,
     units_per_second: i64,
 ) {
-    // Durations of up to roughly 63 years either way
-    let mut rng = StdRng::seed_from_u64(42);
-    let range = -2_000_000_000 * units_per_second..2_000_000_000 * units_per_second;
-    let values: Vec<i64> = (0..SIZE).map(|_| rng.random_range(range.clone())).collect();
-    let mixed_nulls = PrimitiveArray::<T>::from_iter(
-        values
-            .iter()
-            .enumerate()
-            .map(|(i, &v)| (i % 5 != 0).then_some(v)),
-    );
-    let no_nulls = PrimitiveArray::<T>::new(values.into(), None);
+    let (no_nulls, mixed_nulls) = arrays::<T>(units_per_second);
     let mut group = c.benchmark_group(format!("duration_{unit}"));
     group.throughput(Throughput::Elements(SIZE as u64));
     for (to_unit, to) in other_units(from) {

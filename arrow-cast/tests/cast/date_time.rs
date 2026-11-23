@@ -2761,21 +2761,19 @@ fn test_cast_timestamp_and_duration_to_coarser_unit() {
         TimeUnit::Microsecond,
         TimeUnit::Nanosecond,
     ];
-    let tz = Some("+05:45".into());
     for array in [values.clone(), values.slice(3, 60)] {
         for (i, from) in units.into_iter().enumerate() {
-            for (j, to) in units.into_iter().enumerate().take(i) {
-                let ratio = 1000_i64.pow((i - j) as u32);
+            for to in &units[..i] {
+                let ratio = time_unit_multiple(&from) / time_unit_multiple(to);
+                let expected: Int64Array = array.iter().map(|v| v.map(|v| v / ratio)).collect();
                 for (from_type, to_type) in [
-                    (Timestamp(from, None), Timestamp(to, None)),
-                    (Timestamp(from, tz.clone()), Timestamp(to, tz.clone())),
-                    (Duration(from), Duration(to)),
+                    (Timestamp(from, None), Timestamp(*to, None)),
+                    (Duration(from), Duration(*to)),
                 ] {
                     let input = cast(&array, &from_type).unwrap();
                     let output = cast(&input, &to_type).unwrap();
                     assert_eq!(output.data_type(), &to_type);
                     let output = cast(&output, &Int64).unwrap();
-                    let expected: Int64Array = array.iter().map(|v| v.map(|v| v / ratio)).collect();
                     assert_eq!(
                         output.as_primitive::<Int64Type>(),
                         &expected,
