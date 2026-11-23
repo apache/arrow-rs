@@ -68,17 +68,21 @@ impl Field {
     ///
     /// Can only generate writers for basic structs, for example:
     ///
+    /// ```ignore
     /// struct Record {
     ///   a_bool: bool,
-    ///   maybe_a_bool: `Option<bool>`
+    ///   maybe_a_bool: Option<bool>
     /// }
+    /// ```
     ///
     /// but not
     ///
+    /// ```ignore
     /// struct UnsupportedNestedRecord {
     ///   a_property: bool,
     ///   nested_record: Record
     /// }
+    /// ```
     ///
     /// because this parsing logic is not sophisticated enough for definition
     /// levels beyond 2.
@@ -227,16 +231,20 @@ impl Field {
     ///
     /// Can only generate writers for basic structs, for example:
     ///
+    /// ```ignore
     /// struct Record {
     ///   a_bool: bool
     /// }
+    /// ```
     ///
     /// but not
     ///
+    /// ```ignore
     /// struct UnsupportedNestedRecord {
     ///   a_property: bool,
     ///   nested_record: Record
     /// }
+    /// ```
     ///
     /// because this parsing logic is not sophisticated enough for definition
     /// levels beyond 2.
