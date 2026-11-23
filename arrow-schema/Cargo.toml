@@ -42,7 +42,7 @@ all-features = true
 criterion = { workspace = true, default-features = false }
 insta = { workspace = true, default-features = true }
 postcard = { version = "1.0.10", default-features = false, features = ["use-std"] }
-rstest = { version = "0.28.0", default-features = false }
+rstest = { workspace = true }
 serde_json = "1.0"
 
 [[bench]]

@@ -1735,16 +1735,16 @@ mod tests {
     #[case::u8_single(&[10_u8])]
     #[case::u16_multiple(&[1_u16, 2, 3])]
     #[case::u16_single(&[10_u16])]
-    fn test_different_size_repeat_slice<T>(#[case] data: &[T])
-    where
+    fn test_different_size_repeat_slice<T>(
+        #[case] data: &[T],
+        #[values(1, 2, 3, 4, 5, 6, 7, 8, 9)] exponent: u32,
+    ) where
         T: ArrowNativeType + PartialEq + std::fmt::Debug,
     {
-        for item in 1..=9 {
-            let base_repeat_count = 2_usize.pow(item);
-            test_repeat_count(base_repeat_count - 1, data);
-            test_repeat_count(base_repeat_count, data);
-            test_repeat_count(base_repeat_count + 1, data);
-        }
+        let base_repeat_count = 2_usize.pow(exponent);
+        test_repeat_count(base_repeat_count - 1, data);
+        test_repeat_count(base_repeat_count, data);
+        test_repeat_count(base_repeat_count + 1, data);
     }
 
     #[test]

@@ -534,26 +534,30 @@ mod tests {
     }
 
     #[rstest]
-    fn test_gap_info_fixed_offset(#[values("+00:00", "-05:00", "+01:00", "+09:30")] tz: &str) {
-        let times = [
-            NaiveDate::from_ymd_opt(2000, 1, 1)
-                .unwrap()
-                .and_hms_opt(0, 0, 0)
-                .unwrap(),
-            // Times that are in a DST gap for some named timezones
-            NaiveDate::from_ymd_opt(2021, 3, 14)
-                .unwrap()
-                .and_hms_opt(2, 30, 0)
-                .unwrap(),
-            NaiveDate::from_ymd_opt(2021, 3, 28)
-                .unwrap()
-                .and_hms_opt(1, 30, 0)
-                .unwrap(),
-        ];
-
+    #[case::ordinary_time(
+        NaiveDate::from_ymd_opt(2000, 1, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+    )]
+    // These readings fall in DST gaps in some named zones, but not in fixed offsets.
+    #[case::us_dst_gap_time(
+        NaiveDate::from_ymd_opt(2021, 3, 14)
+            .unwrap()
+            .and_hms_opt(2, 30, 0)
+            .unwrap()
+    )]
+    #[case::european_dst_gap_time(
+        NaiveDate::from_ymd_opt(2021, 3, 28)
+            .unwrap()
+            .and_hms_opt(1, 30, 0)
+            .unwrap()
+    )]
+    fn test_gap_info_fixed_offset(
+        #[case] time: NaiveDateTime,
+        #[values("+00:00", "-05:00", "+01:00", "+09:30")] tz: &str,
+    ) {
         let tz: Tz = tz.parse().unwrap();
-        for t in &times {
-            assert!(GapInfo::new(t, &tz).is_none(), "{tz:?} {t}");
-        }
+        assert!(GapInfo::new(&time, &tz).is_none(), "{tz:?} {time}");
     }
 }

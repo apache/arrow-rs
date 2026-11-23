@@ -345,6 +345,7 @@ dependencies = [
 name = "arrow-data"
 version = "60.2.0"
 dependencies = [
+ "arrow-array",
  "arrow-buffer",
  "arrow-schema",
  "half",

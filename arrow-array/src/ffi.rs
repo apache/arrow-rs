@@ -1724,34 +1724,33 @@ mod tests_from_ffi {
     fn test_zero_length_bytes_at_non_zero_offset(
         #[case] data_type: DataType,
         #[case] offsets: Buffer,
+        #[values(0, 1, 2, 3)] offset: usize,
     ) -> Result<()> {
         // "x", "aa", "bb", viewed as zero elements starting at `offset`.
         let values = Buffer::from(b"xaabb".as_slice());
 
-        for offset in 0..4 {
-            let data = ArrayData::try_new(
-                data_type.clone(),
-                0,
-                None,
-                offset,
-                vec![offsets.clone(), values.clone()],
-                vec![],
-            )?;
+        let data = ArrayData::try_new(
+            data_type.clone(),
+            0,
+            None,
+            offset,
+            vec![offsets, values],
+            vec![],
+        )?;
 
-            let array = FFI_ArrowArray::new(&data);
-            let schema = FFI_ArrowSchema::try_from(&data_type)?;
-            let imported = unsafe { from_ffi(array, &schema) }?;
+        let array = FFI_ArrowArray::new(&data);
+        let schema = FFI_ArrowSchema::try_from(&data_type)?;
+        let imported = unsafe { from_ffi(array, &schema) }?;
 
-            // `from_ffi` builds the `ArrayData` with `new_unchecked`, so an
-            // inconsistency only surfaces once something validates it.
-            imported.validate_full()?;
-            assert_eq!(imported.len(), 0);
-            assert_eq!(imported, data);
+        // `from_ffi` builds the `ArrayData` with `new_unchecked`, so an
+        // inconsistency only surfaces once something validates it.
+        imported.validate_full()?;
+        assert_eq!(imported.len(), 0);
+        assert_eq!(imported, data);
 
-            // The values buffer is sized from the last offset of the window,
-            // not short-circuited to 0.
-            assert_eq!(imported.buffers()[1].len(), [0, 1, 3, 5][offset]);
-        }
+        // The values buffer is sized from the last offset of the window,
+        // not short-circuited to 0.
+        assert_eq!(imported.buffers()[1].len(), [0, 1, 3, 5][offset]);
 
         Ok(())
     }
