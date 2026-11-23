@@ -103,14 +103,6 @@ impl ColumnWriter<'_> {
         downcast_writer!(self, typed, typed.add_data_page())
     }
 
-    /// Sets a pre-computed distinct count on this column writer.
-    ///
-    /// See [`GenericColumnWriter::set_distinct_count_override`] for details.
-    #[cfg(feature = "arrow")]
-    pub(crate) fn set_distinct_count_override(&mut self, count: u64) {
-        downcast_writer!(self, typed, typed.set_distinct_count_override(count))
-    }
-
     /// Close this [`ColumnWriter`], returning the metadata for the column chunk.
     pub fn close(self) -> Result<ColumnCloseResult> {
         downcast_writer!(self, typed, typed.close())
@@ -460,9 +452,9 @@ pub struct GenericColumnWriter<'a, E: ColumnValueEncoder> {
     // Metrics per column writer
     column_metrics: ColumnMetrics<E::T>,
 
-    /// Pre-computed distinct count to write into column chunk statistics.
-    /// When set, takes precedence over `column_metrics.column_distinct_count`.
-    distinct_count_override: Option<u64>,
+    /// The distinct count the encoder computed, which takes precedence over
+    /// `column_metrics.column_distinct_count`
+    computed_distinct_count: Option<u64>,
 
     /// The order of encodings within the generated metadata does not impact its meaning,
     /// but we use a BTreeSet so that the output is deterministic
@@ -539,7 +531,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             data_pages: VecDeque::new(),
             page_metrics,
             column_metrics,
-            distinct_count_override: None,
+            computed_distinct_count: None,
             column_index_builder,
             offset_index_builder,
             encodings,
@@ -548,16 +540,6 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             data_page_boundary_descending: true,
             last_non_null_data_page_min_max: None,
         }
-    }
-
-    /// Sets a pre-computed distinct count to write into column chunk statistics.
-    ///
-    /// When set, this value is written as `distinct_count` in the row group statistics
-    /// footer. It takes precedence over any `distinct_count` passed through
-    /// [`Self::write_batch_with_statistics`].
-    #[cfg(feature = "arrow")]
-    pub(crate) fn set_distinct_count_override(&mut self, count: u64) {
-        self.distinct_count_override = Some(count);
     }
 
     #[expect(clippy::too_many_arguments)]
@@ -801,6 +783,9 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     /// Finalizes writes and closes the column writer.
     /// Returns total bytes written, total rows written and column chunk metadata.
     pub fn close(mut self) -> Result<ColumnCloseResult> {
+        // Before the dictionary page is written, so a chunk that kept its dictionary is
+        // counted from it without hashing its values
+        self.computed_distinct_count = self.encoder.flush_distinct_count();
         if self.page_metrics.num_buffered_values > 0 {
             self.add_data_page()?;
         }
@@ -1698,7 +1683,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             let backwards_compatible_min_max = self.descr.sort_order().is_signed();
 
             let distinct_count = self
-                .distinct_count_override
+                .computed_distinct_count
                 .or(self.column_metrics.column_distinct_count);
             let statistics = ValueStatistics::<E::T>::new(
                 self.column_metrics.min_column_value.clone(),
@@ -5767,6 +5752,19 @@ mod tests {
     }
 
     /// Returns column writer.
+    #[test]
+    fn test_column_writer_counts_distinct_values() {
+        let props = WriterProperties::builder()
+            .set_write_row_group_number_distinct_values(true)
+            .build();
+        let mut writer =
+            get_test_column_writer::<Int32Type>(get_test_page_writer(), 0, 0, Arc::new(props));
+        writer.write_batch(&[1, 2, 3, 2, 1], None, None).unwrap();
+
+        let statistics = writer.close().unwrap().metadata.statistics().cloned();
+        assert_eq!(statistics.unwrap().distinct_count_opt(), Some(3));
+    }
+
     fn get_test_column_writer<'a, T: DataType>(
         page_writer: Box<dyn PageWriter + 'a>,
         max_def_level: i16,

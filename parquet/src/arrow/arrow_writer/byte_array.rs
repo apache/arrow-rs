@@ -5,7 +5,7 @@
 use crate::basic::Encoding;
 use crate::bloom_filter::Sbbf;
 use crate::column::writer::encoder::{
-    ColumnValueEncoder, DataPageValues, DictionaryPage, create_bloom_filter,
+    ColumnValueEncoder, DataPageValues, DictionaryPage, DistinctValues, create_bloom_filter,
 };
 use crate::column::writer::{compare_greater_byte_array_decimals, is_decimal_descr};
 use crate::data_type::{AsBytes, ByteArray, Int32Type};
@@ -755,6 +755,7 @@ pub struct ByteArrayEncoder {
     max_value: Option<ByteArray>,
     bloom_filter: Option<Sbbf>,
     bloom_filter_target_fpp: f64,
+    distinct_values: Option<DistinctValues>,
     geo_stats_accumulator: Option<Box<dyn GeoStatsAccumulator>>,
     is_decimal: bool,
 }
@@ -762,6 +763,14 @@ pub struct ByteArrayEncoder {
 impl ColumnValueEncoder for ByteArrayEncoder {
     type T = ByteArray;
     type Values = dyn Array;
+    fn flush_distinct_count(&mut self) -> Option<u64> {
+        let dictionary_len = self
+            .dict_encoder
+            .as_ref()
+            .map(|encoder| encoder.interner.num_unique_values());
+        self.distinct_values.take()?.count(dictionary_len)
+    }
+
     fn flush_bloom_filter(&mut self) -> Option<Sbbf> {
         let mut sbbf = self.bloom_filter.take()?;
         sbbf.fold_to_target_fpp(self.bloom_filter_target_fpp);
@@ -788,11 +797,16 @@ impl ColumnValueEncoder for ByteArrayEncoder {
 
         let is_decimal = is_decimal_descr(descr.get_basic_info());
 
+        let distinct_values = (props.write_row_group_number_distinct_values()
+            && statistics_enabled != EnabledStatistics::None)
+            .then(DistinctValues::default);
+
         Ok(Self {
             fallback,
             statistics_enabled,
             bloom_filter,
             bloom_filter_target_fpp,
+            distinct_values,
             dict_encoder: dictionary,
             min_value: None,
             max_value: None,
@@ -977,6 +991,11 @@ impl ColumnValueEncoder for ByteArrayEncoder {
                         bloom_filter.insert(value);
                     }
                 }
+                if let Some(distinct_values) = &mut self.distinct_values {
+                    for value in encoder.interner.iter() {
+                        distinct_values.insert(value);
+                    }
+                }
 
                 Ok(Some(encoder.flush_dict_page()))
             }
@@ -1017,6 +1036,11 @@ where
             if let Some(bloom_filter) = &mut encoder.bloom_filter {
                 for &idx in indices {
                     bloom_filter.insert(values.value(idx).as_ref());
+                }
+            }
+            if let Some(distinct_values) = &mut encoder.distinct_values {
+                for &idx in indices {
+                    distinct_values.insert(values.value(idx).as_ref());
                 }
             }
             encoder.fallback.encode(values, indices);
