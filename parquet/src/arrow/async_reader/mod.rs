@@ -29,9 +29,7 @@ use crate::arrow::arrow_reader::{
 
 use crate::bloom_filter::Sbbf;
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{
-    BloomFilters, ColumnChunkMask, ParquetMetaData, ParquetMetaDataReader,
-};
+use crate::file::metadata::{ColumnChunkMask, ParquetMetaData, ParquetMetaDataReader, SbbfSet};
 
 mod metadata;
 pub use metadata::*;
@@ -585,21 +583,15 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     /// Reads Bloom filters for the physical column chunks selected by `mask`.
     ///
     /// The mask is independent of this builder's projection and row-group selection.
-    /// To avoid fetching filters for row groups already pruned, include only the
-    /// remaining file row-group indices in `mask`. Select the physical leaf columns
-    /// used by predicates, which may differ from the output projection. Fetching
-    /// filters does not change either builder setting.
+    /// Fetching filters does not change either setting.
     ///
     /// Uses [`AsyncFileReader::get_byte_ranges`], whose default fetches sequentially.
-    /// See [`ParquetMetaDataReader::read_bloom_filters_async`] for details.
+    /// See [`ParquetMetaDataReader::read_bloom_filters_async`] for the selection and
+    /// batching contract and its [performance tips](ParquetMetaDataReader#performance-tips).
     ///
-    /// See [`ParquetRecordBatchReaderBuilder::get_bloom_filters`] for an example of
-    /// pruning row groups independently of the output projection. The same mask and
-    /// predicate logic applies here; await this method and consume the built stream
-    /// asynchronously.
-    ///
-    /// [`ParquetRecordBatchReaderBuilder::get_bloom_filters`]: crate::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::get_bloom_filters
-    pub async fn get_bloom_filters(&mut self, mask: &ColumnChunkMask) -> Result<BloomFilters> {
+    /// See [`ParquetMetaDataReader::read_bloom_filters`] for an example of loading
+    /// and looking up filters.
+    pub async fn get_bloom_filters(&mut self, mask: &ColumnChunkMask) -> Result<SbbfSet> {
         ParquetMetaDataReader::read_bloom_filters_async(&mut self.input.0, &self.metadata, mask)
             .await
     }

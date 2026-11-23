@@ -81,7 +81,8 @@ use crate::{
     data_type::private::ParquetValueType, file::page_index::offset_index::OffsetIndexMetaData,
 };
 
-pub use bloom_filter::BloomFilters;
+pub(crate) use bloom_filter::SbbfBatch;
+pub use bloom_filter::SbbfSet;
 pub use footer_tail::FooterTail;
 pub use options::{ParquetMetaDataOptions, ParquetStatisticsPolicy};
 pub use push_decoder::ParquetMetaDataPushDecoder;

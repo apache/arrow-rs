@@ -16,39 +16,39 @@ use bytes::Bytes;
 use std::ops::Range;
 
 /// Sparse decoded Bloom filters keyed by row group and physical leaf column.
+///
+/// Load a set using [`ParquetMetaDataReader::read_bloom_filters`], which also
+/// provides an example, or its asynchronous counterpart when enabled.
+/// Use [`Self::get`] with original file coordinates to look up a filter; selection
+/// does not renumber row groups or columns.
+///
+/// [`ParquetMetaDataReader::read_bloom_filters`]: crate::file::metadata::ParquetMetaDataReader::read_bloom_filters
 #[derive(Debug, Clone)]
-pub struct BloomFilters {
+pub struct SbbfSet {
     entries: ColumnChunkEntries<Sbbf>,
 }
 
-impl BloomFilters {
+impl SbbfSet {
     /// Looks up a decoded filter by row group and physical leaf column.
     ///
     /// Returns `Ok(None)` for unselected chunks or chunks without a Bloom filter
-    /// offset, and an error for out-of-bounds coordinates.
+    /// offset, and an error for out-of-bounds coordinates. To check whether the file contains
+    /// a filter for the chunk, consult [`ColumnChunkMetaData::bloom_filter_offset`].
+    /// A `None` offset indicates a missing filter.
     pub fn get(&self, row_group_idx: usize, column_idx: usize) -> Result<Option<&Sbbf>> {
         self.entries.get(row_group_idx, column_idx)
     }
-
-    // A standalone row group uses local row coordinate 0, regardless of its file ordinal.
-    pub(crate) fn read_row_group<R: ChunkReader>(
-        reader: &R,
-        metadata: &RowGroupMetaData,
-        column_mask: &ColumnChunkMask,
-    ) -> Result<Self> {
-        BloomFilterBatch::try_new_row_group(metadata, column_mask)?.read(reader)
-    }
 }
 
-pub(super) struct BloomFilterBatch {
+pub(crate) struct SbbfBatch {
     num_row_groups: usize,
     num_columns: usize,
     entries: Vec<(ColumnChunkKey, Option<Sbbf>)>,
     decoders: Vec<(usize, Option<SbbfPushDecoder>)>,
 }
 
-impl BloomFilterBatch {
-    pub(super) fn try_new(metadata: &ParquetMetaData, mask: &ColumnChunkMask) -> Result<Self> {
+impl SbbfBatch {
+    pub(crate) fn try_new(metadata: &ParquetMetaData, mask: &ColumnChunkMask) -> Result<Self> {
         let num_row_groups = metadata.num_row_groups();
         let num_columns = metadata.file_metadata().schema_descr().num_columns();
         let columns = mask
@@ -57,7 +57,7 @@ impl BloomFilterBatch {
         Self::try_from_columns(num_row_groups, num_columns, columns)
     }
 
-    fn try_new_row_group(
+    pub(crate) fn try_new_row_group(
         metadata: &RowGroupMetaData,
         column_mask: &ColumnChunkMask,
     ) -> Result<Self> {
@@ -90,7 +90,7 @@ impl BloomFilterBatch {
         })
     }
 
-    pub(super) fn read<R: ChunkReader>(mut self, reader: &R) -> Result<BloomFilters> {
+    pub(crate) fn read<R: ChunkReader>(mut self, reader: &R) -> Result<SbbfSet> {
         loop {
             let (owners, ranges) = self.requests()?;
             if ranges.is_empty() {
@@ -166,7 +166,7 @@ impl BloomFilterBatch {
         Ok(())
     }
 
-    pub(super) fn finish(self) -> Result<BloomFilters> {
+    pub(super) fn finish(self) -> Result<SbbfSet> {
         let entries = self
             .entries
             .into_iter()
@@ -179,7 +179,7 @@ impl BloomFilterBatch {
                 Ok((key, filter))
             })
             .collect::<Result<Vec<_>>>()?;
-        Ok(BloomFilters {
+        Ok(SbbfSet {
             entries: ColumnChunkEntries::try_from_sorted_entries(
                 self.num_row_groups,
                 self.num_columns,
@@ -228,8 +228,10 @@ mod tests {
             .build()
             .unwrap();
         let bytes = Bytes::from(bytes);
-        let filters =
-            BloomFilters::read_row_group(&bytes, &metadata, &ColumnChunkMask::all()).unwrap();
+        let filters = SbbfBatch::try_new_row_group(&metadata, &ColumnChunkMask::all())
+            .unwrap()
+            .read(&bytes)
+            .unwrap();
         assert_eq!(filters.entries.iter().count(), 1);
         assert!(filters.get(0, 1).unwrap().unwrap().check(&42_i32));
         assert!(filters.get(0, 0).unwrap().is_none());
@@ -238,7 +240,10 @@ mod tests {
 
         // No filter bytes are needed when loading is disabled or only absent columns are selected.
         for mask in [ColumnChunkMask::none(), ColumnChunkMask::columns([0, 2])] {
-            let filters = BloomFilters::read_row_group(&Bytes::new(), &metadata, &mask).unwrap();
+            let filters = SbbfBatch::try_new_row_group(&metadata, &mask)
+                .unwrap()
+                .read(&Bytes::new())
+                .unwrap();
             assert_eq!(filters.entries.iter().count(), 0);
             assert!(filters.get(0, 1).unwrap().is_none());
             assert!(filters.get(0, 3).is_err());
@@ -247,7 +252,7 @@ mod tests {
 
     #[test]
     fn batch_finish_rejects_undecoded_filter() {
-        let batch = BloomFilterBatch {
+        let batch = SbbfBatch {
             num_row_groups: 1,
             num_columns: 1,
             entries: vec![(ColumnChunkKey::try_new(0, 0).unwrap(), None)],

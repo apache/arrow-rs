@@ -29,6 +29,7 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
 struct RecordingReader {
+    bytes: Option<Bytes>,
     responses: Mutex<VecDeque<Result<Bytes>>>,
     requests: Mutex<Vec<Range<u64>>>,
 }
@@ -37,7 +38,14 @@ impl RecordingReader {
     fn new(responses: impl IntoIterator<Item = Bytes>) -> Self {
         Self {
             responses: Mutex::new(responses.into_iter().map(Ok).collect()),
-            requests: Mutex::default(),
+            ..Default::default()
+        }
+    }
+
+    fn from_bytes(bytes: Bytes) -> Self {
+        Self {
+            bytes: Some(bytes),
+            ..Default::default()
         }
     }
 
@@ -53,7 +61,10 @@ impl RecordingReader {
     }
 
     fn read(&self, range: Range<u64>) -> Result<Bytes> {
-        self.requests.lock().unwrap().push(range);
+        self.requests.lock().unwrap().push(range.clone());
+        if let Some(bytes) = &self.bytes {
+            return bytes.get_bytes(range.start, (range.end - range.start) as usize);
+        }
         self.responses
             .lock()
             .unwrap()

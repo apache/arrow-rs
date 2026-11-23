@@ -9,14 +9,14 @@ use crate::bloom_filter::Sbbf;
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::FOOTER_SIZE;
-use crate::file::metadata::bloom_filter::BloomFilterBatch;
+use crate::file::metadata::bloom_filter::SbbfBatch;
 #[cfg(feature = "arrow")]
 use crate::file::metadata::dictionary::decode_dictionary_page;
 use crate::file::metadata::page_index::{PageIndex, PageIndexProvider};
 use crate::file::metadata::parser::decode_metadata;
 use crate::file::metadata::thrift::parquet_schema_from_bytes;
 use crate::file::metadata::{
-    BloomFilters, FooterTail, ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataPushDecoder,
+    FooterTail, ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataPushDecoder, SbbfSet,
 };
 use crate::file::reader::ChunkReader;
 use crate::schema::types::SchemaDescriptor;
@@ -55,6 +55,17 @@ use crate::arrow::async_reader::{MetadataFetch, MetadataSuffixFetch};
 /// using [`Self::read_column_bloom_filter`] or [`Self::read_bloom_filters`]; footer and
 /// page index reads do not load them.
 /// For caller-managed I/O and prefetched bytes, use [`crate::bloom_filter::SbbfPushDecoder`].
+///
+/// # Performance tips
+///
+/// Bloom filters require additional I/O outside the footer. Read them after other
+/// pruning has narrowed the candidate row groups, selecting only the physical leaf
+/// columns used by predicates. These columns may differ from the output projection.
+/// Use [`ColumnChunkMask`] to select the remaining file row-group indices and columns
+/// when calling [`Self::read_bloom_filters`].
+///
+/// A negative Bloom check can exclude a row group; an absent filter or a positive
+/// check cannot. Surviving rows still require evaluation of the exact predicate.
 ///
 /// # Example
 /// ```no_run
@@ -835,9 +846,7 @@ impl ParquetMetaDataReader {
     /// Returns `Ok(None)` without I/O if the column chunk has no Bloom filter.
     /// The filter is returned separately without modifying or reloading metadata.
     ///
-    /// Bloom filters are stored outside the footer and require additional I/O when
-    /// present. Prefer reading them after other pruning has narrowed the row groups
-    /// and columns of interest. Footer and page-index reads do not load them.
+    /// See the [performance tips](Self#performance-tips) for when to load filters.
     ///
     /// # Example
     ///
@@ -892,18 +901,53 @@ impl ParquetMetaDataReader {
 
     /// Reads Bloom filters for the physical column chunks selected by `mask`.
     ///
-    /// The metadata and reader must refer to the same file. Missing Bloom filter
-    /// offsets require no I/O. Any read or decoding error fails the entire operation.
+    /// The metadata and reader must refer to the same file. The mask uses original
+    /// file row-group indices and physical Parquet leaf indices, not Arrow field
+    /// indices. Returned filters retain these coordinates. Unselected chunks and
+    /// chunks without a Bloom filter offset return `Ok(None)` from [`SbbfSet::get`]
+    /// and require no I/O, including when no selected chunks have filters.
+    /// Any read or decoding error fails the entire operation. Metadata is neither
+    /// modified nor reloaded.
     ///
-    /// Reads exact filter ranges without spanning gaps. Filters without an advertised
+    /// See the [performance tips](Self#performance-tips) for selecting filters.
+    ///
+    /// Requests exact filter ranges without spanning gaps. Filters without an advertised
     /// length require a header read followed by a bitset read; see
     /// [`crate::bloom_filter::SbbfPushDecoder`] for header-probe limitations.
+    ///
+    /// # Example
+    ///
+    /// Given a reader and metadata for the same file, load filters for candidate
+    /// row groups 0 and 2. The predicate is `id = 42`, where `id` is an `Int32`
+    /// column at physical leaf index 0:
+    ///
+    /// ```no_run
+    /// use parquet::file::metadata::{ColumnChunkMask, ParquetMetaDataReader};
+    /// # use parquet::file::metadata::ParquetMetaData;
+    /// # use parquet::file::reader::ChunkReader;
+    /// # fn example(reader: &impl ChunkReader, metadata: &ParquetMetaData) -> parquet::errors::Result<()> {
+    /// let candidate_row_groups = [0, 2];
+    /// let mask = ColumnChunkMask::row_groups_and_columns(candidate_row_groups, [0]);
+    /// let filters = ParquetMetaDataReader::read_bloom_filters(reader, metadata, &mask)?;
+    ///
+    /// let mut row_groups = Vec::new();
+    /// for row_group in candidate_row_groups {
+    ///     // Look up by original file index, not position in the candidate list.
+    ///     match filters.get(row_group, 0)? {
+    ///         Some(filter) if !filter.check(&42_i32) => {},
+    ///         _ => row_groups.push(row_group), // keep absent filters and possible matches
+    ///     }
+    /// }
+    /// // Surviving rows still require evaluation of id = 42.
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn read_bloom_filters<R: ChunkReader>(
         reader: &R,
         metadata: &ParquetMetaData,
         mask: &ColumnChunkMask,
-    ) -> Result<BloomFilters> {
-        BloomFilterBatch::try_new(metadata, mask)?.read(reader)
+    ) -> Result<SbbfSet> {
+        SbbfBatch::try_new(metadata, mask)?.read(reader)
     }
 
     /// Asynchronous version of [`Self::read_bloom_filters`], batching each request round.
@@ -915,8 +959,8 @@ impl ParquetMetaDataReader {
         mut fetch: F,
         metadata: &ParquetMetaData,
         mask: &ColumnChunkMask,
-    ) -> Result<BloomFilters> {
-        let mut batch = BloomFilterBatch::try_new(metadata, mask)?;
+    ) -> Result<SbbfSet> {
+        let mut batch = SbbfBatch::try_new(metadata, mask)?;
         loop {
             let (owners, ranges) = batch.requests()?;
             if ranges.is_empty() {
