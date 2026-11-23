@@ -21,7 +21,9 @@ use std::ffi::c_void;
 ///     FFI_ArrowArray::new(array)
 /// }
 /// ```
+// With `-Zsanitizer=cfi`, use the C struct name so callbacks match the C and C++ type ids.
 #[repr(C)]
+#[cfg_attr(arrow_cfi, cfi_encoding = "10ArrowArray")]
 #[derive(Debug)]
 pub struct FFI_ArrowArray {
     // Fields are intentionally private so safety guarantees can be upheld via

@@ -12,6 +12,7 @@ license = "Apache-2.0 AND MIT"
 keywords = { workspace = true }
 include = [
     "benches/*.rs",
+    "build.rs",
     "src/**/*.rs",
     "Cargo.toml",
     "LICENSE.txt",
