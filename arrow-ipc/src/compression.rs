@@ -11,6 +11,7 @@ const LENGTH_NO_COMPRESSED_DATA: i64 = -1;
 const LENGTH_OF_PREFIX_DATA: i64 = 8;
 const DEFAULT_ZSTD_COMPRESSION_LEVEL: i32 = 3;
 
+#[cfg(feature = "lz4")]
 const LZ4_UNCOMPRESSED_BLOCK: u32 = 0x8000_0000;
 
 /// LZ4 frame block sizes representable by the frame header. See the [LZ4 frame format] for the
