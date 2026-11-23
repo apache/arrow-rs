@@ -239,12 +239,19 @@ impl FixedSizeBinaryArray {
             ));
         }
 
+        let required_len = len * value_size;
+        let value_data = if values.len() > required_len {
+            values.slice_with_length(0, required_len)
+        } else {
+            values
+        };
+
         Ok(Self {
             data_type,
-            value_data: values,
-            value_size,
+            value_data,
             nulls,
             len,
+            value_size,
         })
     }
 
@@ -1345,5 +1352,21 @@ mod tests {
             err.to_string(),
             "Invalid argument error: Buffer cannot have non-zero length if the value length is zero"
         );
+    }
+
+    #[test]
+    fn test_try_new_strips_trailing_bytes() {
+        let buffer = Buffer::from_vec(vec![1_u8, 2, 3, 4, 5, 6, 7, 8, 9, 99]);
+
+        let arr = FixedSizeBinaryArray::new(3, buffer.clone(), None);
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr.value_data(), &[1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        assert_eq!(arr.values().len(), 9);
+
+        let arr_with_len = FixedSizeBinaryArray::try_new_with_len(3, buffer, None, 3).unwrap();
+        assert_eq!(arr_with_len.value_data(), &[1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        assert_eq!(arr_with_len.values().len(), 9);
+        assert_eq!(arr_with_len.to_data().buffers()[0].len(), 9);
+        assert_eq!(arr_with_len.into_parts().1.len(), 9);
     }
 }
