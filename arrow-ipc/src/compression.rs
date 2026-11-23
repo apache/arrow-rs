@@ -528,26 +528,31 @@ fn decode_independent_blocks(
         // to at most the advertised size, so this is every byte the next block can legitimately
         // need. Growing to it leaves the output at the size the blocks actually reach, and keeps
         // a bogus advertised length from sizing the allocation.
-        let room = block_max.min(decompressed_size - written);
+        let remaining = decompressed_size - written;
+        let room = block_max.min(remaining);
         if output.len() < written + room {
             output.resize(written + room, 0);
         }
         let dst = &mut output[written..written + room];
 
         if word & LZ4_UNCOMPRESSED_BLOCK != 0 {
-            dst.get_mut(..len)
-                .ok_or_else(exceeds)?
-                .copy_from_slice(block);
+            let dst = match dst.get_mut(..len) {
+                Some(dst) => dst,
+                // The block does not fit. Which promise it breaks depends on which limit `room`
+                // was capped by: the advertised size, or the frame's own declared block maximum.
+                None if len > remaining => return Err(exceeds()),
+                None => return Err(corrupt("a block exceeds the declared block maximum")),
+            };
+            dst.copy_from_slice(block);
             written += len;
         } else {
-            written += lz4_flex::block::decompress_into(block, dst).map_err(|e| {
-                // `room` ran out at the advertised size rather than at the block maximum, so the
-                // frame holds more than the IPC prefix said it would.
-                if room == decompressed_size - written {
+            written += lz4_flex::block::decompress_into(block, dst).map_err(|e| match e {
+                // The output ran out, and `room` was capped by the advertised size rather than by
+                // the block maximum, so the frame holds more than the IPC prefix said it would.
+                lz4_flex::block::DecompressError::OutputTooSmall { .. } if room == remaining => {
                     exceeds()
-                } else {
-                    ArrowError::ExternalError(Box::new(e))
                 }
+                e => ArrowError::ExternalError(Box::new(e)),
             })?;
         }
     }
