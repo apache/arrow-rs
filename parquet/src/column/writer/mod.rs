@@ -1867,7 +1867,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
 fn update_min<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T, min: &mut Option<T>) {
     match min {
-        None => *min = Some(val.clone()),
+        None => *min = Some(val.clone_detached()),
         Some(min) => {
             let basic_type_info = descr.get_basic_info();
             let is_min_nan = is_nan(basic_type_info, min);
@@ -1876,7 +1876,7 @@ fn update_min<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T, min: &mut 
                 // current min is not NaN, but incoming is NaN: skip
                 (false, true) => {}
                 // current min is NaN, but incoming is not: assign val to min
-                (true, false) => *min = val.clone(),
+                (true, false) => *min = val.clone_detached(),
                 // both NaN or non-NaN, safe to call update_stat()
                 _ => {
                     update_stat::<T, _>(val, min, |cur| compare_greater(basic_type_info, cur, val))
@@ -1888,7 +1888,7 @@ fn update_min<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T, min: &mut 
 
 fn update_max<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T, max: &mut Option<T>) {
     match max {
-        None => *max = Some(val.clone()),
+        None => *max = Some(val.clone_detached()),
         Some(max) => {
             let basic_type_info = descr.get_basic_info();
             let is_max_nan = is_nan(basic_type_info, max);
@@ -1897,7 +1897,7 @@ fn update_max<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T, max: &mut 
                 // current max is not NaN, but incoming is NaN: skip
                 (false, true) => {}
                 // current max is NaN, but incoming is not: assign val to max
-                (true, false) => *max = val.clone(),
+                (true, false) => *max = val.clone_detached(),
                 // both NaN or non-NaN, safe to call update_stat()
                 _ => {
                     update_stat::<T, _>(val, max, |cur| compare_greater(basic_type_info, val, cur))
@@ -1934,7 +1934,7 @@ where
     F: Fn(&T) -> bool,
 {
     if should_update(cur) {
-        *cur = val.clone();
+        *cur = val.clone_detached();
     }
 }
 
@@ -6372,5 +6372,122 @@ mod tests {
                 .with_expected_def_levels(&expected_def_levels)
                 .run();
         }
+    }
+
+    #[test]
+    fn test_fixed_len_byte_array_stats_do_not_pin_shared_buffer() {
+        let mut buf = crate::file::writer::TrackedWrite::new(Vec::new());
+        let page_writer = Box::new(SerializedPageWriter::new(&mut buf));
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_dictionary_enabled(false)
+                .set_statistics_enabled(EnabledStatistics::Chunk)
+                .build(),
+        );
+        let descr = Arc::new(ColumnDescriptor::new(
+            Arc::new(
+                SchemaType::primitive_type_builder("dec", Type::FIXED_LEN_BYTE_ARRAY)
+                    .with_length(16)
+                    .with_repetition(crate::basic::Repetition::REQUIRED)
+                    .build()
+                    .unwrap(),
+            ),
+            0,
+            0,
+            ColumnPath::new(vec!["dec".to_string()]),
+        ));
+        let mut writer = get_typed_column_writer::<FixedLenByteArrayType>(get_column_writer(
+            descr,
+            props,
+            page_writer,
+        ));
+
+        // Simulate ArrowWriter's chunk_contiguous_vec: all values are zero-copy slices
+        // of one shared arena Bytes buffer, plus one extra probe slice to observe whether
+        // the backing allocation is still retained after the written batch is dropped.
+        let count = 1024usize;
+        let chunk_size = 16usize;
+        let mut raw = vec![0u8; (count + 1) * chunk_size];
+        for i in 0..count {
+            let offset = i * chunk_size;
+            raw[offset..offset + 8].copy_from_slice(&(i as u64).to_be_bytes());
+        }
+        let mut arena = Bytes::from(raw);
+        let mut values = Vec::with_capacity(count);
+        for _ in 0..count {
+            values.push(FixedLenByteArray::from(ByteArray::from(
+                arena.split_to(chunk_size),
+            )));
+        }
+        let probe = arena;
+
+        // Write values and drop the batch while the column chunk remains open.
+        writer.write_batch(&values, None, None).unwrap();
+        drop(values);
+
+        // `probe` must now be the sole remaining reference to the shared arena buffer;
+        // column/page min/max statistics must hold detached copies of the min/max bytes.
+        assert!(
+            probe.try_into_mut().is_ok(),
+            "statistics still pin the shared per-write Bytes arena after the batch was dropped"
+        );
+
+        let metadata = writer.close().unwrap();
+        let stats = metadata
+            .metadata
+            .statistics()
+            .expect("expected chunk statistics");
+        let mut expected_min = [0u8; 16];
+        expected_min[..8].copy_from_slice(&0u64.to_be_bytes());
+        let mut expected_max = [0u8; 16];
+        expected_max[..8].copy_from_slice(&((count - 1) as u64).to_be_bytes());
+        assert_eq!(stats.min_bytes_opt(), Some(expected_min.as_slice()));
+        assert_eq!(stats.max_bytes_opt(), Some(expected_max.as_slice()));
+    }
+
+    #[test]
+    fn test_byte_array_stats_do_not_pin_shared_buffer() {
+        let mut buf = crate::file::writer::TrackedWrite::new(Vec::new());
+        let page_writer = Box::new(SerializedPageWriter::new(&mut buf));
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_dictionary_enabled(false)
+                .set_statistics_enabled(EnabledStatistics::Page)
+                .build(),
+        );
+        let mut writer = get_test_column_writer::<ByteArrayType>(page_writer, 0, 0, props);
+
+        let count = 512usize;
+        let elem_len = 8usize;
+        let mut raw = vec![0u8; (count + 1) * elem_len];
+        for i in 0..count {
+            let offset = i * elem_len;
+            raw[offset..offset + 8].copy_from_slice(&(i as u64).to_be_bytes());
+        }
+        let mut arena = Bytes::from(raw);
+        let mut values = Vec::with_capacity(count);
+        for _ in 0..count {
+            values.push(ByteArray::from(arena.split_to(elem_len)));
+        }
+        let probe = arena;
+
+        writer.write_batch(&values, None, None).unwrap();
+        drop(values);
+
+        assert!(
+            probe.try_into_mut().is_ok(),
+            "ByteArray statistics still pin the shared per-write Bytes arena after the batch was dropped"
+        );
+
+        let metadata = writer.close().unwrap();
+        let stats = metadata
+            .metadata
+            .statistics()
+            .expect("expected chunk statistics");
+        assert_eq!(stats.min_bytes_opt(), Some(0u64.to_be_bytes().as_slice()));
+        assert_eq!(
+            stats.max_bytes_opt(),
+            Some(((count - 1) as u64).to_be_bytes().as_slice())
+        );
     }
 }

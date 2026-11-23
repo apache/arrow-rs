@@ -714,6 +714,14 @@ pub(crate) mod private {
     {
         const PHYSICAL_TYPE: Type;
 
+        /// Returns a clone of `self` that does not retain references to any larger
+        /// shared backing buffer (e.g. a per-write arena for `ByteArray` /
+        /// `FixedLenByteArray`).
+        #[inline]
+        fn clone_detached(&self) -> Self {
+            self.clone()
+        }
+
         /// Encode the value directly from a higher level encoder
         fn encode<W: std::io::Write>(
             values: &[Self],
@@ -1035,6 +1043,13 @@ pub(crate) mod private {
         const PHYSICAL_TYPE: Type = Type::BYTE_ARRAY;
 
         #[inline]
+        fn clone_detached(&self) -> Self {
+            Self {
+                data: self.data.as_ref().map(|d| Bytes::copy_from_slice(d)),
+            }
+        }
+
+        #[inline]
         fn encode<W: std::io::Write>(
             values: &[Self],
             writer: &mut W,
@@ -1133,6 +1148,11 @@ pub(crate) mod private {
 
     impl ParquetValueType for super::FixedLenByteArray {
         const PHYSICAL_TYPE: Type = Type::FIXED_LEN_BYTE_ARRAY;
+
+        #[inline]
+        fn clone_detached(&self) -> Self {
+            Self(self.0.clone_detached())
+        }
 
         #[inline]
         fn encode<W: std::io::Write>(
