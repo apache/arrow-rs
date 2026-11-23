@@ -293,7 +293,7 @@ fn take_impl<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
             let arrays  = array
                 .columns()
                 .iter()
-                .map(|a| take_impl::<_, VALIDATE_INDICES>(a.as_ref(), indices))
+                .map(|a| take_masked_child::<_, VALIDATE_INDICES>(a.as_ref(), indices))
                 .collect::<Result<Vec<ArrayRef>, _>>()?;
             let fields: Vec<(FieldRef, ArrayRef)> =
                 fields.iter().cloned().zip(arrays).collect();
@@ -470,10 +470,13 @@ fn union_null_type_id(fields: &UnionFields) -> Result<i8, ArrowError> {
 /// be represented by a descendant that is marked nullable. A field marked
 /// nullable is not sufficient if its nested type cannot store a null.
 fn field_can_represent_take_null(field: &FieldRef) -> bool {
-    if !field.is_nullable() {
-        return false;
-    }
-    match field.data_type() {
+    field.is_nullable() && data_type_can_represent_take_null(field.data_type())
+}
+
+/// Whether an array of `data_type` can physically store a newly introduced
+/// null, whatever the nullability of the field that holds it.
+fn data_type_can_represent_take_null(data_type: &DataType) -> bool {
+    match data_type {
         DataType::RunEndEncoded(_, values) => field_can_represent_take_null(values),
         DataType::Union(fields, _) => fields
             .iter()
@@ -508,6 +511,26 @@ fn take_sparse_union_child<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES
                 .nulls(None)
                 .build()?,
         ));
+    }
+
+    take_impl::<_, VALIDATE_INDICES>(values, &indices_without_nulls(indices))
+}
+
+/// Takes a child of a struct or fixed-size list for `indices`.
+///
+/// The parent marks the rows of null take indices null in its own validity, so
+/// the child's values at those rows are unspecified. A child that cannot store
+/// a null is taken with dummy indices there instead, unless it is empty and
+/// has no value to use as a dummy.
+fn take_masked_child<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
+    values: &dyn Array,
+    indices: &PrimitiveArray<IndexType>,
+) -> Result<ArrayRef, ArrowError> {
+    if indices.null_count() == 0
+        || data_type_can_represent_take_null(values.data_type())
+        || values.is_empty()
+    {
+        return take_impl::<_, VALIDATE_INDICES>(values, indices);
     }
 
     take_impl::<_, VALIDATE_INDICES>(values, &indices_without_nulls(indices))
@@ -1234,7 +1257,7 @@ fn take_fixed_size_list<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: b
         )?
     } else {
         let list_indices = take_value_indices_from_fixed_size_list(values, indices, length)?;
-        take_impl::<UInt32Type, VALIDATE_INDICES>(child.as_ref(), &list_indices)?
+        take_masked_child::<UInt32Type, VALIDATE_INDICES>(child.as_ref(), &list_indices)?
     };
 
     FixedSizeListArray::try_new_with_length(
@@ -3361,6 +3384,72 @@ mod tests {
             error.to_string(),
             "Compute error: Cannot take null indices from a RunEndEncoded array with a non-nullable values field"
         );
+    }
+
+    #[test]
+    fn test_take_null_indices_masked_by_parent() {
+        // Neither child can store a null, but a struct or fixed-size list masks
+        // the rows of null indices with its own validity.
+        let ree: ArrayRef = Arc::new(unsafe {
+            RunArray::<Int32Type>::new_unchecked(
+                DataType::RunEndEncoded(
+                    Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                    Arc::new(Field::new("values", DataType::Int32, false)),
+                ),
+                RunEndBuffer::new(vec![1_i32, 2].into(), 0, 2),
+                Arc::new(Int32Array::from(vec![10, 20])),
+            )
+        });
+        let union_fields =
+            UnionFields::try_new(vec![0], vec![Field::new("a", DataType::Int32, false)]).unwrap();
+        let union: ArrayRef = Arc::new(
+            UnionArray::try_new(
+                union_fields,
+                ScalarBuffer::from(vec![0_i8, 0]),
+                None,
+                vec![Arc::new(Int32Array::from(vec![30, 40]))],
+            )
+            .unwrap(),
+        );
+        let parents = |child: &ArrayRef| -> [ArrayRef; 2] {
+            let field = Arc::new(Field::new("c", child.data_type().clone(), false));
+            [
+                Arc::new(StructArray::new(
+                    Fields::from(vec![field.clone()]),
+                    vec![child.clone()],
+                    None,
+                )),
+                Arc::new(FixedSizeListArray::new(field, 1, child.clone(), None)),
+            ]
+        };
+
+        let indices = Int32Array::from(vec![Some(1), None]);
+        for child in [&ree, &union] {
+            for parent in parents(child) {
+                let taken = take(&parent, &indices, None).unwrap();
+                taken.to_data().validate_full().unwrap();
+                assert_eq!(taken.nulls(), Some(&NullBuffer::from(vec![true, false])));
+                assert_eq!(&taken.slice(0, 1), &parent.slice(1, 1));
+            }
+        }
+
+        // An empty child has no value to take for the masked rows
+        let no_fields = UnionFields::try_new(vec![], Vec::<Field>::new()).unwrap();
+        let no_field_union: ArrayRef = Arc::new(
+            UnionArray::try_new(no_fields, ScalarBuffer::<i8>::from(vec![]), None, vec![]).unwrap(),
+        );
+        let ree_error = "Compute error: Cannot take null indices from a RunEndEncoded array with a non-nullable values field";
+        let union_error = "Compute error: Cannot take null indices from a union with no field that can represent nulls";
+        for (child, expected) in [
+            (ree.slice(0, 0), ree_error),
+            (union.slice(0, 0), union_error),
+            (no_field_union, union_error),
+        ] {
+            for parent in parents(&child) {
+                let error = take(&parent, &Int32Array::from(vec![None]), None).unwrap_err();
+                assert_eq!(error.to_string(), expected);
+            }
+        }
     }
 
     #[test]

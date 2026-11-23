@@ -466,6 +466,12 @@ impl Iterator for BitChunkIterator<'_> {
     }
 
     #[inline]
+    fn nth(&mut self, n: usize) -> Option<u64> {
+        self.index = self.index.saturating_add(n).min(self.chunk_len);
+        self.next()
+    }
+
+    #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
         (
             self.chunk_len - self.index,
@@ -609,6 +615,30 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn test_bit_chunk_iterator_nth() {
+        let input: Vec<u8> = (0..26_u8).map(|i| i.wrapping_mul(13)).collect();
+        let buffer = Buffer::from(input);
+        for offset in [0, 3] {
+            let chunks = buffer.bit_chunks(offset, 192);
+            let all: Vec<u64> = chunks.iter().collect();
+            // From every position, skip to every chunk and one past the end
+            for start in 0..=all.len() {
+                for n in 0..=all.len() + 1 {
+                    let mut iter = chunks.iter();
+                    iter.by_ref().take(start).for_each(drop);
+                    assert_eq!(iter.nth(n), all.get(start + n).copied());
+                    assert_eq!(iter.len(), all.len().saturating_sub(start + n + 1));
+                    assert_eq!(iter.next(), all.get(start + n + 1).copied());
+                }
+            }
+            let mut iter = chunks.iter();
+            iter.next();
+            assert_eq!(iter.nth(usize::MAX), None);
+            assert_eq!(iter.len(), 0);
         }
     }
 

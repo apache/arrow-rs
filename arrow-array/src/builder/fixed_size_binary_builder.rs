@@ -64,13 +64,14 @@ impl FixedSizeBinaryBuilder {
     /// distinct value element.
     #[inline]
     pub fn append_value(&mut self, value: impl AsRef<[u8]>) -> Result<(), ArrowError> {
-        if value.as_ref().len() != self.value_length as usize {
+        let value = value.as_ref();
+        if value.len() != self.value_length as usize {
             Err(ArrowError::InvalidArgumentError(
                 "Byte slice does not have the same length as FixedSizeBinaryBuilder value lengths"
                     .to_string(),
             ))
         } else {
-            self.values_builder.extend_from_slice(value.as_ref());
+            self.values_builder.extend_from_slice(value);
             self.null_buffer_builder.append_non_null();
             Ok(())
         }
