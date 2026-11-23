@@ -711,6 +711,10 @@ unsafe impl<T: ArrowDictionaryKeyType> Array for DictionaryArray<T> {
         Arc::new(self.slice(offset, length))
     }
 
+    fn to_arc(&self) -> ArrayRef {
+        Arc::new(self.clone())
+    }
+
     fn len(&self) -> usize {
         self.keys.len()
     }
@@ -874,6 +878,10 @@ unsafe impl<K: ArrowDictionaryKeyType, V: Sync> Array for TypedDictionaryArray<'
 
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
         Arc::new(self.dictionary.slice(offset, length))
+    }
+
+    fn to_arc(&self) -> ArrayRef {
+        Arc::new(self.dictionary.clone())
     }
 
     fn len(&self) -> usize {

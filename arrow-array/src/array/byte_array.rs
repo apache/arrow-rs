@@ -498,6 +498,10 @@ unsafe impl<T: ByteArrayType> Array for GenericByteArray<T> {
         Arc::new(self.slice(offset, length))
     }
 
+    fn to_arc(&self) -> ArrayRef {
+        Arc::new(self.clone())
+    }
+
     fn len(&self) -> usize {
         self.value_offsets.len() - 1
     }

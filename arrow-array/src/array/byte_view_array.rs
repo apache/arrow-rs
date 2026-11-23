@@ -894,6 +894,10 @@ unsafe impl<T: ByteViewType + ?Sized> Array for GenericByteViewArray<T> {
         Arc::new(self.slice(offset, length))
     }
 
+    fn to_arc(&self) -> ArrayRef {
+        Arc::new(self.clone())
+    }
+
     fn len(&self) -> usize {
         self.views.len()
     }

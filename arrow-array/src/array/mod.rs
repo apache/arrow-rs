@@ -149,6 +149,28 @@ pub unsafe trait Array: std::fmt::Debug + Send + Sync {
     /// Panics if `offset + length > self.len()`
     fn slice(&self, offset: usize, length: usize) -> ArrayRef;
 
+    /// Returns an [`ArrayRef`] with the same contents as `self`, sharing its buffers.
+    ///
+    /// The default implementation is `self.slice(0, self.len())`. The arrow-rs array types
+    /// implement this as a shallow clone, which avoids the null-count recomputation and child
+    /// re-slicing of [`Self::slice`].
+    ///
+    /// # Example:
+    ///
+    /// ```
+    /// use arrow_array::{Array, ArrayRef, Int32Array};
+    ///
+    /// fn to_array_ref(array: &dyn Array) -> ArrayRef {
+    ///     array.to_arc()
+    /// }
+    ///
+    /// let array = Int32Array::from(vec![1, 2, 3]);
+    /// assert_eq!(to_array_ref(&array).as_ref(), &array);
+    /// ```
+    fn to_arc(&self) -> ArrayRef {
+        self.slice(0, self.len())
+    }
+
     /// Returns the length (i.e., number of elements) of this array.
     ///
     /// # Example:
@@ -454,6 +476,10 @@ unsafe impl Array for ArrayRef {
         self.as_ref().slice(offset, length)
     }
 
+    fn to_arc(&self) -> ArrayRef {
+        Arc::clone(self)
+    }
+
     fn len(&self) -> usize {
         self.as_ref().len()
     }
@@ -536,6 +562,10 @@ unsafe impl<T: Array> Array for &T {
 
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
         T::slice(self, offset, length)
+    }
+
+    fn to_arc(&self) -> ArrayRef {
+        T::to_arc(self)
     }
 
     fn len(&self) -> usize {
@@ -1429,6 +1459,34 @@ mod tests {
         let arr: ArrayRef = Arc::new(arr);
         assert!(compute_my_thing(&arr));
         assert!(compute_my_thing(arr.as_ref()));
+    }
+
+    #[test]
+    fn test_to_arc() {
+        // Array equality ignores offsets, so compare them separately.
+        fn check(array: &dyn Array) {
+            let expected = array.slice(0, array.len());
+            let actual = array.to_arc();
+            assert_eq!(actual.as_ref(), expected.as_ref());
+            assert_eq!(actual.offset(), array.offset());
+        }
+
+        let primitive = Int32Array::from(vec![Some(1), None, Some(3), Some(4)]);
+        let dict: DictionaryArray<Int32Type> =
+            vec![Some("a"), None, Some("b")].into_iter().collect();
+        let run_ends = Int32Array::from(vec![2, 3, 5]);
+        let run = RunArray::try_new(&run_ends, &primitive.slice(0, 3)).unwrap();
+
+        // Non-zero values and null buffer offsets: the clone must keep both slices intact.
+        check(&primitive.slice(1, 2));
+        // The typed wrappers' `slice` returns the inner untyped array, so `to_arc` must as well.
+        check(&dict.downcast_dict::<StringArray>().unwrap());
+        check(&run.downcast::<Int32Array>().unwrap());
+
+        // `ArrayRef` must reuse its `Arc` (not allocate), and `&T` must forward to `T`.
+        let array_ref: ArrayRef = Arc::new(primitive.clone());
+        assert!(Arc::ptr_eq(&array_ref.to_arc(), &array_ref));
+        assert_eq!(Array::to_arc(&&primitive).as_ref(), &primitive);
     }
 
     #[test]

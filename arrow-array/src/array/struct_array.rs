@@ -492,6 +492,10 @@ unsafe impl Array for StructArray {
         Arc::new(self.slice(offset, length))
     }
 
+    fn to_arc(&self) -> ArrayRef {
+        Arc::new(self.clone())
+    }
+
     fn len(&self) -> usize {
         self.len
     }

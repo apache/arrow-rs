@@ -630,7 +630,7 @@ pub fn cast_with_options(
     let from_type = array.data_type();
     // clone array if types are the same
     if from_type == to_type {
-        return Ok(make_array(array.to_data()));
+        return Ok(array.to_arc());
     }
     match (from_type, to_type) {
         (Null, _) => Ok(new_null_array(to_type, array.len())),
@@ -643,7 +643,7 @@ pub fn cast_with_options(
             ))),
         },
         (_, RunEndEncoded(index_type, value_type)) => {
-            let array_ref = make_array(array.to_data());
+            let array_ref = array.to_arc();
             match index_type.data_type() {
                 Int16 => cast_to_run_end_encoded::<Int16Type>(
                     &array_ref,

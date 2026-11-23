@@ -478,6 +478,10 @@ unsafe impl<OffsetSize: OffsetSizeTrait> Array for GenericListViewArray<OffsetSi
         Arc::new(self.slice(offset, length))
     }
 
+    fn to_arc(&self) -> ArrayRef {
+        Arc::new(self.clone())
+    }
+
     fn len(&self) -> usize {
         self.sizes().len()
     }

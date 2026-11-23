@@ -5,7 +5,7 @@
 use crate::array::{get_offsets_from_buffer, print_long_array};
 use crate::builder::MapFieldNames;
 use crate::iterator::MapArrayIter;
-use crate::{Array, ArrayAccessor, ArrayRef, ListArray, StringArray, StructArray, make_array};
+use crate::{Array, ArrayAccessor, ArrayRef, ListArray, StringArray, StructArray};
 use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, OffsetBuffer, ToByteSlice};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields};
@@ -445,7 +445,7 @@ impl MapArray {
 
         let entry_struct = StructArray::from(vec![
             (keys_field, Arc::new(keys_data) as ArrayRef),
-            (values_field, make_array(values.to_data())),
+            (values_field, values.to_arc()),
         ]);
 
         let map_data_type = DataType::Map(
@@ -572,6 +572,10 @@ unsafe impl Array for MapArray {
         Arc::new(self.slice(offset, length))
     }
 
+    fn to_arc(&self) -> ArrayRef {
+        Arc::new(self.clone())
+    }
+
     fn len(&self) -> usize {
         self.value_offsets.len() - 1
     }
@@ -669,7 +673,7 @@ mod tests {
     use crate::builder::{Int32Builder, MapBuilder, StringBuilder};
     use crate::cast::AsArray;
     use crate::types::UInt32Type;
-    use crate::{Int32Array, UInt32Array};
+    use crate::{Int32Array, UInt32Array, make_array};
     use arrow_schema::Fields;
 
     use super::*;
