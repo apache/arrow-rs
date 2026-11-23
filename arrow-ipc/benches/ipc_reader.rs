@@ -156,6 +156,82 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
+    group.bench_function("StreamReader/no_validation/read_10/lz4", |b| {
+        let buffer = ipc_stream(
+            IpcWriteOptions::default()
+                .try_with_compression(Some(CompressionType::LZ4_FRAME))
+                .unwrap(),
+        );
+        b.iter(move || {
+            let projection = None;
+            let mut reader = StreamReader::try_new(buffer.as_slice(), projection).unwrap();
+            unsafe {
+                // safety: we created a valid IPC file
+                reader = reader.with_skip_validation(true);
+            }
+            for _ in 0..10 {
+                reader.next().unwrap().unwrap();
+            }
+            assert!(reader.next().is_none());
+        })
+    });
+
+    // A message holds one compressed buffer per field node plus its validity and offsets, so the
+    // per-buffer cost of decompression is what a wide relation pays most of, and the four-column
+    // shape above barely shows it. 200 columns of 4096 rows keeps every buffer small; 20 columns
+    // of 131072 rows makes each values buffer half a megabyte.
+    //
+    // For lz4 the declared maximum block size is set explicitly rather than left to the writer's
+    // default, because it is what a frame costs a streaming decoder to open, whatever the buffer
+    // behind it holds: 4 MiB is what Arrow C++ and Comet declare.
+    for (cols, rows) in [(200, 4096), (20, 131072)] {
+        let batch = create_wide_batch(cols, rows);
+        let shape = format!("wide_{cols}x{rows}");
+
+        for block_size in [64 * 1024, 4 * 1024 * 1024] {
+            let name = format!(
+                "StreamReader/read_10/{shape}/lz4_{}kib_blocks",
+                block_size / 1024
+            );
+            group.bench_function(&name, |b| {
+                let buffer = ipc_stream_of(
+                    &batch,
+                    IpcWriteOptions::default()
+                        .try_with_compression(Some(CompressionType::LZ4_FRAME))
+                        .unwrap()
+                        .try_with_lz4_block_size(Some(block_size))
+                        .unwrap(),
+                );
+                b.iter(move || {
+                    let projection = None;
+                    let mut reader = StreamReader::try_new(buffer.as_slice(), projection).unwrap();
+                    for _ in 0..10 {
+                        reader.next().unwrap().unwrap();
+                    }
+                    assert!(reader.next().is_none());
+                })
+            });
+        }
+
+        let name = format!("StreamReader/read_10/{shape}/zstd");
+        group.bench_function(&name, |b| {
+            let buffer = ipc_stream_of(
+                &batch,
+                IpcWriteOptions::default()
+                    .try_with_compression(Some(CompressionType::ZSTD))
+                    .unwrap(),
+            );
+            b.iter(move || {
+                let projection = None;
+                let mut reader = StreamReader::try_new(buffer.as_slice(), projection).unwrap();
+                for _ in 0..10 {
+                    reader.next().unwrap().unwrap();
+                }
+                assert!(reader.next().is_none());
+            })
+        });
+    }
+
     // --- Create IPC File ---
     group.bench_function("FileReader/read_10", |b| {
         let buffer = ipc_file();
@@ -296,6 +372,18 @@ fn ipc_stream_with_rows(rows: usize, options: IpcWriteOptions) -> Vec<u8> {
     buffer
 }
 
+/// Return an IPC stream with 10 copies of `batch`
+fn ipc_stream_of(batch: &RecordBatch, options: IpcWriteOptions) -> Vec<u8> {
+    let mut buffer = Vec::with_capacity(2 * 1024 * 1024);
+    let mut writer =
+        StreamWriter::try_new_with_options(&mut buffer, batch.schema().as_ref(), options).unwrap();
+    for _ in 0..10 {
+        writer.write(batch).unwrap();
+    }
+    writer.finish().unwrap();
+    buffer
+}
+
 /// Return an IPC file with 10 record batches
 fn ipc_file() -> Vec<u8> {
     let batch = create_batch(8192, true);
@@ -415,6 +503,30 @@ fn create_batch(num_rows: usize, allow_nulls: bool) -> RecordBatch {
         ],
     )
     .unwrap()
+}
+
+/// A batch of `num_cols` nullable Int32 columns of `num_rows` rows, so that a message carries
+/// many compressed buffers rather than a few large ones.
+fn create_wide_batch(num_cols: usize, num_rows: usize) -> RecordBatch {
+    let schema = Arc::new(Schema::new(
+        (0..num_cols)
+            .map(|i| Field::new(format!("c{i}"), DataType::Int32, true))
+            .collect::<Vec<_>>(),
+    ));
+    let columns = (0..num_cols)
+        .map(|col| {
+            let mut b = Int32Builder::with_capacity(num_rows);
+            for row in 0..num_rows {
+                if row % 10 == 0 {
+                    b.append_null();
+                } else {
+                    b.append_value((row * (col + 1)) as i32);
+                }
+            }
+            Arc::new(b.finish()) as _
+        })
+        .collect::<Vec<_>>();
+    RecordBatch::try_new(schema, columns).unwrap()
 }
 
 fn config() -> Criterion {
