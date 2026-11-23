@@ -56,6 +56,10 @@ impl NullBuffer {
     ///
     /// `buffer` must contain `null_count` `0` bits
     pub unsafe fn new_unchecked(buffer: BooleanBuffer, null_count: usize) -> Self {
+        if cfg!(feature = "force_validate") {
+            let expected = buffer.len() - buffer.count_set_bits();
+            assert_eq!(null_count, expected, "null_count does not match buffer");
+        }
         Self { buffer, null_count }
     }
 
@@ -539,5 +543,13 @@ mod tests {
             assert!((count..2 * count).all(|i| expanded.is_null(i)));
             assert!((2 * count..3 * count).all(|i| expanded.is_valid(i)));
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "null_count does not match buffer")]
+    #[cfg(feature = "force_validate")]
+    fn new_unchecked_wrong_null_count_force_validate() {
+        let buffer = BooleanBuffer::from(vec![true, false, true]);
+        unsafe { NullBuffer::new_unchecked(buffer, 0) };
     }
 }
