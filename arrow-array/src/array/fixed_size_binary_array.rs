@@ -239,7 +239,11 @@ impl FixedSizeBinaryArray {
             ));
         }
 
-        let required_len = len * value_size;
+        let required_len = len.checked_mul(value_size).ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "FixedSizeBinaryArray error: value size {value_size} * len {len} exceeds usize"
+            ))
+        })?;
         let value_data = if values.len() > required_len {
             values.slice_with_length(0, required_len)
         } else {
