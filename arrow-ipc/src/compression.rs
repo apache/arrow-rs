@@ -418,6 +418,152 @@ fn compress_lz4(
 
 #[cfg(feature = "lz4")]
 fn decompress_lz4(input: &[u8], decompressed_size: usize) -> Result<Vec<u8>, ArrowError> {
+    match decompress_lz4_blocks(input, decompressed_size) {
+        Some(result) => result,
+        // A frame this does not take apart itself: linked blocks, a block or content checksum,
+        // or a dictionary. Independent blocks with no checksums are what every Arrow writer
+        // produces, so the rest take the streaming decoder rather than more parsing here.
+        None => decompress_lz4_streaming(input, decompressed_size),
+    }
+}
+
+/// Decodes a frame of independent blocks straight into its output buffer.
+///
+/// `lz4_flex`'s `FrameDecoder` is a streaming decoder: it holds source and destination buffers
+/// sized from the frame's *declared* maximum block size, and zero-fills the destination up to
+/// that maximum before each block, whatever the block actually holds. The format lets a writer
+/// declare 4 MiB blocks for a buffer of any size, so a decoder can cost megabytes of `memset`
+/// before decompressing a few KiB -- and an IPC message decodes one buffer after another, each
+/// with a decoder of its own.
+///
+/// None of that is needed here: the blocks decompress one after another straight into the output,
+/// with no scratch buffer and nothing zeroed beyond the output itself. Returns `None` for a frame
+/// outside the shape it handles, which the caller sends to the streaming decoder.
+///
+/// Like the streaming path, this never sizes the output from `decompressed_size` alone: that
+/// length comes from the IPC prefix, which is untrusted, so the output starts at no more than
+/// `MAX_PREALLOC_BYTES` and grows only as the blocks fill it.
+#[cfg(feature = "lz4")]
+fn decompress_lz4_blocks(
+    input: &[u8],
+    decompressed_size: usize,
+) -> Option<Result<Vec<u8>, ArrowError>> {
+    const MAGIC: u32 = 0x184D2204;
+    const VERSION: u8 = 0b01;
+    const INDEPENDENT_BLOCKS: u8 = 0b0010_0000;
+    const BLOCK_CHECKSUM: u8 = 0b0001_0000;
+    const CONTENT_SIZE: u8 = 0b0000_1000;
+    const CONTENT_CHECKSUM: u8 = 0b0000_0100;
+    const DICTIONARY_ID: u8 = 0b0000_0001;
+    const UNCOMPRESSED_BLOCK: u32 = 0x8000_0000;
+
+    if input.len() < 7 || u32::from_le_bytes(input[0..4].try_into().ok()?) != MAGIC {
+        return None;
+    }
+    let flg = input[4];
+    if flg >> 6 != VERSION
+        || flg & INDEPENDENT_BLOCKS == 0
+        || flg & (BLOCK_CHECKSUM | CONTENT_CHECKSUM | DICTIONARY_ID) != 0
+    {
+        return None;
+    }
+    // Magic, FLG, BD, the content size when the frame carries one, then the header checksum. The
+    // checksum is left to the blocks and to the caller's length check: a header corrupt enough to
+    // matter cannot also describe blocks that decode to exactly the expected size.
+    let at = 6 + if flg & CONTENT_SIZE != 0 { 8 } else { 0 } + 1;
+    if input.len() < at {
+        return None;
+    }
+    // The maximum size a single block of this frame may decompress to. A block size the format
+    // does not define goes to the streaming decoder along with the other shapes declined above.
+    let block_max = match (input[5] >> 4) & 0b111 {
+        4 => 64 * 1024,
+        5 => 256 * 1024,
+        6 => 1024 * 1024,
+        7 => 4 * 1024 * 1024,
+        _ => return None,
+    };
+
+    Some(decode_independent_blocks(
+        input,
+        at,
+        decompressed_size,
+        block_max,
+        UNCOMPRESSED_BLOCK,
+    ))
+}
+
+#[cfg(feature = "lz4")]
+fn decode_independent_blocks(
+    input: &[u8],
+    mut at: usize,
+    decompressed_size: usize,
+    block_max: usize,
+    uncompressed_block: u32,
+) -> Result<Vec<u8>, ArrowError> {
+    let corrupt = |detail: &str| ArrowError::IpcError(format!("Corrupt lz4 frame: {detail}"));
+    let exceeds = || {
+        ArrowError::IpcError(format!(
+            "LZ4 decompressed buffer exceeds advertised size of {decompressed_size}"
+        ))
+    };
+    let mut output = vec![0u8; decompressed_size.min(crate::reader::MAX_PREALLOC_BYTES)];
+    let mut written = 0usize;
+
+    loop {
+        let header = input
+            .get(at..at + 4)
+            .ok_or_else(|| corrupt("it ends before its end mark"))?;
+        let word = u32::from_le_bytes(header.try_into().unwrap());
+        at += 4;
+        if word == 0 {
+            break;
+        }
+        let len = (word & !uncompressed_block) as usize;
+        let block = input
+            .get(at..at + len)
+            .ok_or_else(|| corrupt("a block runs past its end"))?;
+        at += len;
+
+        // A block decompresses to at most the frame's declared maximum, and the frame as a whole
+        // to at most the advertised size, so this is every byte the next block can legitimately
+        // need. Growing to it leaves the output at the size the blocks actually reach, and keeps
+        // a bogus advertised length from sizing the allocation.
+        let room = block_max.min(decompressed_size - written);
+        if output.len() < written + room {
+            output.resize(written + room, 0);
+        }
+        let dst = &mut output[written..written + room];
+
+        if word & uncompressed_block != 0 {
+            dst.get_mut(..len)
+                .ok_or_else(exceeds)?
+                .copy_from_slice(block);
+            written += len;
+        } else {
+            written += lz4_flex::block::decompress_into(block, dst).map_err(|e| {
+                // `room` ran out at the advertised size rather than at the block maximum, so the
+                // frame holds more than the IPC prefix said it would.
+                if room == decompressed_size - written {
+                    exceeds()
+                } else {
+                    ArrowError::ExternalError(Box::new(e))
+                }
+            })?;
+        }
+    }
+
+    output.truncate(written);
+    Ok(output)
+}
+
+/// The streaming decoder, for the frames [`decompress_lz4_blocks`] declines.
+///
+/// A decoder of its own each time, as before: these frames are rare in IPC, and `FrameDecoder`
+/// sizes its buffers for the frame it is handed and asserts as much, so one cannot be carried
+/// from a linked frame to an independent one.
+#[cfg(feature = "lz4")]
+fn decompress_lz4_streaming(input: &[u8], decompressed_size: usize) -> Result<Vec<u8>, ArrowError> {
     use std::io::Read;
     let mut output = Vec::with_capacity(decompressed_size.min(crate::reader::MAX_PREALLOC_BYTES));
     let mut decoder = lz4_flex::frame::FrameDecoder::new(input);
@@ -534,6 +680,75 @@ fn read_uncompressed_size(buffer: &[u8]) -> Result<i64, ArrowError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    #[cfg(feature = "lz4")]
+    fn test_lz4_decompression_handles_every_frame_shape() {
+        // The shapes the direct block decode takes, and the ones it leaves to the streaming
+        // decoder: linked blocks, and a content checksum. All must decode to what went in.
+        use lz4_flex::frame::{BlockMode, FrameEncoder, FrameInfo};
+        use std::io::Write;
+
+        let codec = super::CompressionCodec::Lz4Frame;
+        let mut context = super::DecompressionContext::new();
+
+        // Incompressible, so the encoder stores blocks as they are, and long enough to cross
+        // more than one block at the smallest block size.
+        let noisy: Vec<u8> = (0..300_000u32)
+            .map(|i| (i.wrapping_mul(2654435761) >> 13) as u8)
+            .collect();
+        let runs: Vec<u8> = (0..300_000).map(|i| ((i / 1000) % 7) as u8).collect();
+
+        for payload in [&noisy, &runs] {
+            for (linked, checksum) in [(false, false), (true, false), (false, true), (true, true)] {
+                let mut info = FrameInfo::new();
+                info.block_mode = if linked {
+                    BlockMode::Linked
+                } else {
+                    BlockMode::Independent
+                };
+                info.content_checksum = checksum;
+                let mut encoder = FrameEncoder::with_frame_info(info, Vec::new());
+                encoder.write_all(payload).unwrap();
+                let frame = encoder.finish().unwrap();
+
+                let result = codec
+                    .decompress(frame.as_slice(), payload.len(), &mut context)
+                    .unwrap();
+                assert_eq!(
+                    payload.as_slice(),
+                    result.as_slice(),
+                    "linked={linked} checksum={checksum}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "lz4")]
+    fn test_lz4_decompression_rejects_a_truncated_frame() {
+        let codec = super::CompressionCodec::Lz4Frame;
+        let mut context = super::DecompressionContext::new();
+        let input = vec![3u8; 50_000];
+        let mut compressed = Vec::new();
+        codec
+            .compress(&input, &mut compressed, &mut Default::default())
+            .unwrap();
+
+        for cut in [8, compressed.len() / 2, compressed.len() - 1] {
+            assert!(
+                codec
+                    .decompress(&compressed[..cut], input.len(), &mut context)
+                    .is_err(),
+                "a frame cut at {cut} decoded"
+            );
+        }
+        // And a whole frame still decodes afterwards.
+        let result = codec
+            .decompress(compressed.as_slice(), input.len(), &mut context)
+            .unwrap();
+        assert_eq!(input.as_slice(), result.as_slice());
+    }
+
     #[test]
     #[cfg(feature = "lz4")]
     fn test_lz4_compression() {
