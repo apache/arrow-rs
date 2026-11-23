@@ -2021,11 +2021,12 @@ const fn units_per_day<T: ArrowTimestampType>() -> i64 {
 
 /// Divides every value of `array` by `ratio`, the ratio of a finer time unit to a coarser one
 fn div_by_unit_ratio(array: &Int64Array, ratio: i64) -> Int64Array {
-    // A constant divisor lets the compiler replace each division with a multiply and shifts
+    // A constant divisor lets the compiler replace each division with a multiply and shifts.
+    // The ratio of two time units is always one of these three
     match ratio {
-        MILLISECONDS => array.unary(|o| o / MILLISECONDS),
-        MICROSECONDS => array.unary(|o| o / MICROSECONDS),
-        NANOSECONDS => array.unary(|o| o / NANOSECONDS),
+        1_000 => array.unary(|o| o / 1_000),
+        1_000_000 => array.unary(|o| o / 1_000_000),
+        1_000_000_000 => array.unary(|o| o / 1_000_000_000),
         _ => array.unary(|o| o / ratio),
     }
 }
