@@ -622,7 +622,9 @@ mod tests {
     use arrow_buffer::{IntervalDayTime, NullBuffer, OffsetBuffer, ScalarBuffer, i256};
     use arrow_schema::{ArrowError, DataType, Field, Fields, UnionFields};
     use half::f16;
+    use rstest::rstest;
     use std::cmp::Ordering;
+    use std::marker::PhantomData;
     use std::sync::Arc;
 
     #[test]
@@ -772,56 +774,22 @@ mod tests {
         assert_eq!(Ordering::Less, cmp(2, 1));
     }
 
-    #[test]
-    fn test_decimali32() {
-        let array = vec![Some(5_i32), Some(2_i32), Some(3_i32)]
+    #[rstest]
+    #[case::decimal32(Decimal32Type {}, 8)]
+    #[case::decimal64(Decimal64Type {}, 16)]
+    #[case::decimal128(Decimal128Type {}, 23)]
+    #[case::decimal256(Decimal256Type {}, 53)]
+    fn test_decimal<T: DecimalType>(#[case] decimal_type: T, #[case] precision: u8)
+    where
+        T::Native: From<i32>,
+    {
+        let _ = decimal_type;
+        let array = [Some(5), Some(2), Some(3)]
             .into_iter()
-            .collect::<Decimal32Array>()
-            .with_precision_and_scale(8, 6)
+            .map(|value| value.map(T::Native::from))
+            .collect::<PrimitiveArray<T>>()
+            .with_precision_and_scale(precision, 6)
             .unwrap();
-
-        let cmp = make_comparator(&array, &array, SortOptions::default()).unwrap();
-        assert_eq!(Ordering::Less, cmp(1, 0));
-        assert_eq!(Ordering::Greater, cmp(0, 2));
-    }
-
-    #[test]
-    fn test_decimali64() {
-        let array = vec![Some(5_i64), Some(2_i64), Some(3_i64)]
-            .into_iter()
-            .collect::<Decimal64Array>()
-            .with_precision_and_scale(16, 6)
-            .unwrap();
-
-        let cmp = make_comparator(&array, &array, SortOptions::default()).unwrap();
-        assert_eq!(Ordering::Less, cmp(1, 0));
-        assert_eq!(Ordering::Greater, cmp(0, 2));
-    }
-
-    #[test]
-    fn test_decimali128() {
-        let array = vec![Some(5_i128), Some(2_i128), Some(3_i128)]
-            .into_iter()
-            .collect::<Decimal128Array>()
-            .with_precision_and_scale(23, 6)
-            .unwrap();
-
-        let cmp = make_comparator(&array, &array, SortOptions::default()).unwrap();
-        assert_eq!(Ordering::Less, cmp(1, 0));
-        assert_eq!(Ordering::Greater, cmp(0, 2));
-    }
-
-    #[test]
-    fn test_decimali256() {
-        let array = vec![
-            Some(i256::from_i128(5_i128)),
-            Some(i256::from_i128(2_i128)),
-            Some(i256::from_i128(3_i128)),
-        ]
-        .into_iter()
-        .collect::<Decimal256Array>()
-        .with_precision_and_scale(53, 6)
-        .unwrap();
 
         let cmp = make_comparator(&array, &array, SortOptions::default()).unwrap();
         assert_eq!(Ordering::Less, cmp(1, 0));
@@ -854,8 +822,19 @@ mod tests {
         assert_eq!(Ordering::Greater, cmp(1, 3));
     }
 
-    #[test]
-    fn dict_fixed_size_binary_fast_path_derefs_values_both_directions() {
+    #[rstest]
+    #[case::ascending(
+        SortOptions::default(),
+        [Ordering::Greater, Ordering::Less]
+    )]
+    #[case::descending(
+        SortOptions { descending: true, nulls_first: true },
+        [Ordering::Less, Ordering::Greater]
+    )]
+    fn dict_fixed_size_binary_fast_path_derefs_values_both_directions(
+        #[case] options: SortOptions,
+        #[case] expected: [Ordering; 2],
+    ) {
         let shared_keys = || Int32Array::from(vec![0_i32, 1]);
         let left_values =
             FixedSizeBinaryArray::try_from_iter([b"zz".as_ref(), b"aa".as_ref()].into_iter())
@@ -866,24 +845,32 @@ mod tests {
         let left = DictionaryArray::<Int32Type>::new(shared_keys(), Arc::new(left_values));
         let right = DictionaryArray::<Int32Type>::new(shared_keys(), Arc::new(right_values));
 
-        let ascending = make_comparator(&left, &right, SortOptions::default()).unwrap();
-        assert_eq!(ascending(0, 0), Ordering::Greater);
-        assert_eq!(ascending(1, 1), Ordering::Less);
-
-        let descending = make_comparator(
-            &left,
-            &right,
-            SortOptions {
-                descending: true,
-                nulls_first: true,
-            },
-        )
-        .unwrap();
-        assert_eq!(descending(0, 0), Ordering::Less);
-        assert_eq!(descending(1, 1), Ordering::Greater);
+        let cmp = make_comparator(&left, &right, options).unwrap();
+        assert_eq!(cmp(0, 0), expected[0]);
+        assert_eq!(cmp(1, 1), expected[1]);
     }
 
-    fn dict_bytes_fast_path_derefs_values_both_directions_impl<T: ByteArrayType>() {
+    #[rstest]
+    #[case::ascending(
+        SortOptions::default(),
+        [Ordering::Greater, Ordering::Less]
+    )]
+    #[case::descending(
+        SortOptions { descending: true, nulls_first: true },
+        [Ordering::Less, Ordering::Greater]
+    )]
+    fn dict_bytes_fast_path_derefs_values_both_directions<T: ByteArrayType>(
+        #[case] options: SortOptions,
+        #[case] expected: [Ordering; 2],
+        #[values(
+            PhantomData::<Utf8Type>,
+            PhantomData::<LargeUtf8Type>,
+            PhantomData::<BinaryType>,
+            PhantomData::<LargeBinaryType>
+        )]
+        byte_type: PhantomData<T>,
+    ) {
+        let _ = byte_type;
         let shared_keys = || Int32Array::from(vec![0_i32, 1]);
         let left_values =
             GenericByteArray::<T>::new(OffsetBuffer::from_lengths([1, 1]), b"za".into(), None);
@@ -892,29 +879,9 @@ mod tests {
         let left = DictionaryArray::<Int32Type>::new(shared_keys(), Arc::new(left_values));
         let right = DictionaryArray::<Int32Type>::new(shared_keys(), Arc::new(right_values));
 
-        let ascending = make_comparator(&left, &right, SortOptions::default()).unwrap();
-        assert_eq!(ascending(0, 0), Ordering::Greater);
-        assert_eq!(ascending(1, 1), Ordering::Less);
-
-        let descending = make_comparator(
-            &left,
-            &right,
-            SortOptions {
-                descending: true,
-                nulls_first: true,
-            },
-        )
-        .unwrap();
-        assert_eq!(descending(0, 0), Ordering::Less);
-        assert_eq!(descending(1, 1), Ordering::Greater);
-    }
-
-    #[test]
-    fn dict_bytes_fast_path_derefs_values_both_directions() {
-        dict_bytes_fast_path_derefs_values_both_directions_impl::<Utf8Type>();
-        dict_bytes_fast_path_derefs_values_both_directions_impl::<LargeUtf8Type>();
-        dict_bytes_fast_path_derefs_values_both_directions_impl::<BinaryType>();
-        dict_bytes_fast_path_derefs_values_both_directions_impl::<LargeBinaryType>();
+        let cmp = make_comparator(&left, &right, options).unwrap();
+        assert_eq!(cmp(0, 0), expected[0]);
+        assert_eq!(cmp(1, 1), expected[1]);
     }
 
     fn dict_bytes_handles_key_and_value_nulls_impl<T: ByteArrayType>() {
@@ -951,7 +918,31 @@ mod tests {
         dict_bytes_handles_key_and_value_nulls_impl::<LargeBinaryType>();
     }
 
-    fn dict_bytes_sort_options_with_nulls_impl<T: ByteArrayType>() {
+    #[rstest]
+    #[case::ascending_nulls_last(
+        SortOptions { descending: false, nulls_first: false },
+        [Ordering::Less, Ordering::Greater, Ordering::Less, Ordering::Equal]
+    )]
+    #[case::descending_nulls_first(
+        SortOptions { descending: true, nulls_first: true },
+        [Ordering::Greater, Ordering::Less, Ordering::Greater, Ordering::Equal]
+    )]
+    #[case::descending_nulls_last(
+        SortOptions { descending: true, nulls_first: false },
+        [Ordering::Greater, Ordering::Greater, Ordering::Less, Ordering::Equal]
+    )]
+    fn dict_bytes_sort_options_with_nulls<T: ByteArrayType>(
+        #[case] options: SortOptions,
+        #[case] expected: [Ordering; 4],
+        #[values(
+            PhantomData::<Utf8Type>,
+            PhantomData::<LargeUtf8Type>,
+            PhantomData::<BinaryType>,
+            PhantomData::<LargeBinaryType>
+        )]
+        byte_type: PhantomData<T>,
+    ) {
+        let _ = byte_type;
         // row 1 is null on both sides (null key on left, null value on right)
         let null_row_on_left = Int32Array::from(vec![Some(0_i32), None, Some(1)]);
         let left_values = GenericByteArray::<T>::new(
@@ -970,44 +961,11 @@ mod tests {
         let right =
             DictionaryArray::<Int32Type>::new(keys_pointing_at_null, Arc::new(right_values));
 
-        let asc_nulls_last = SortOptions {
-            descending: false,
-            nulls_first: false,
-        };
-        let desc_nulls_first = SortOptions {
-            descending: true,
-            nulls_first: true,
-        };
-        let desc_nulls_last = SortOptions {
-            descending: true,
-            nulls_first: false,
-        };
-
-        let cmp = make_comparator(&left, &right, asc_nulls_last).unwrap();
-        assert_eq!(cmp(0, 0), Ordering::Less); // apple < cherry
-        assert_eq!(cmp(1, 0), Ordering::Greater); // null > cherry (nulls last)
-        assert_eq!(cmp(0, 1), Ordering::Less); // apple < null (nulls last)
-        assert_eq!(cmp(1, 1), Ordering::Equal);
-
-        let cmp = make_comparator(&left, &right, desc_nulls_first).unwrap();
-        assert_eq!(cmp(0, 0), Ordering::Greater); // apple vs cherry reversed
-        assert_eq!(cmp(1, 0), Ordering::Less); // null < cherry (nulls first, unaffected by desc)
-        assert_eq!(cmp(0, 1), Ordering::Greater); // apple > null (nulls first)
-        assert_eq!(cmp(1, 1), Ordering::Equal);
-
-        let cmp = make_comparator(&left, &right, desc_nulls_last).unwrap();
-        assert_eq!(cmp(0, 0), Ordering::Greater); // apple vs cherry reversed
-        assert_eq!(cmp(1, 0), Ordering::Greater); // null > cherry (nulls last)
-        assert_eq!(cmp(0, 1), Ordering::Less); // apple < null (nulls last)
-        assert_eq!(cmp(1, 1), Ordering::Equal);
-    }
-
-    #[test]
-    fn dict_bytes_sort_options_with_nulls() {
-        dict_bytes_sort_options_with_nulls_impl::<Utf8Type>();
-        dict_bytes_sort_options_with_nulls_impl::<LargeUtf8Type>();
-        dict_bytes_sort_options_with_nulls_impl::<BinaryType>();
-        dict_bytes_sort_options_with_nulls_impl::<LargeBinaryType>();
+        let cmp = make_comparator(&left, &right, options).unwrap();
+        assert_eq!(cmp(0, 0), expected[0]); // value vs value
+        assert_eq!(cmp(1, 0), expected[1]); // null key vs value
+        assert_eq!(cmp(0, 1), expected[2]); // value vs null value
+        assert_eq!(cmp(1, 1), expected[3]); // null key vs null value
     }
 
     fn dict_bytes_fast_path_panics_on_out_of_bounds_row_impl<T: ByteArrayType>() {
@@ -1058,8 +1016,23 @@ mod tests {
         cmp(2, 0);
     }
 
-    #[test]
-    fn dict_fixed_size_binary_sort_options_with_nulls() {
+    #[rstest]
+    #[case::ascending_nulls_last(
+        SortOptions { descending: false, nulls_first: false },
+        [Ordering::Less, Ordering::Greater, Ordering::Less, Ordering::Equal]
+    )]
+    #[case::descending_nulls_first(
+        SortOptions { descending: true, nulls_first: true },
+        [Ordering::Greater, Ordering::Less, Ordering::Greater, Ordering::Equal]
+    )]
+    #[case::descending_nulls_last(
+        SortOptions { descending: true, nulls_first: false },
+        [Ordering::Greater, Ordering::Greater, Ordering::Less, Ordering::Equal]
+    )]
+    fn dict_fixed_size_binary_sort_options_with_nulls(
+        #[case] options: SortOptions,
+        #[case] expected: [Ordering; 4],
+    ) {
         let null_row_on_left = Int32Array::from(vec![Some(0_i32), None, Some(1)]);
         let left_values =
             FixedSizeBinaryArray::try_from_iter([b"aa".as_ref(), b"bb".as_ref()].into_iter())
@@ -1075,85 +1048,57 @@ mod tests {
         let right =
             DictionaryArray::<Int32Type>::new(keys_pointing_at_null, Arc::new(right_values));
 
-        let asc_nulls_last = SortOptions {
-            descending: false,
-            nulls_first: false,
-        };
-        let desc_nulls_first = SortOptions {
-            descending: true,
-            nulls_first: true,
-        };
-        let desc_nulls_last = SortOptions {
-            descending: true,
-            nulls_first: false,
-        };
-
-        let cmp = make_comparator(&left, &right, asc_nulls_last).unwrap();
-        assert_eq!(cmp(0, 0), Ordering::Less); // "aa" < "cc"
-        assert_eq!(cmp(1, 0), Ordering::Greater); // null > "cc" (nulls last)
-        assert_eq!(cmp(0, 1), Ordering::Less); // "aa" < null (nulls last)
-        assert_eq!(cmp(1, 1), Ordering::Equal);
-
-        let cmp = make_comparator(&left, &right, desc_nulls_first).unwrap();
-        assert_eq!(cmp(0, 0), Ordering::Greater); // "aa" vs "cc" reversed
-        assert_eq!(cmp(1, 0), Ordering::Less); // null < "cc" (nulls first)
-        assert_eq!(cmp(0, 1), Ordering::Greater); // "aa" > null (nulls first)
-        assert_eq!(cmp(1, 1), Ordering::Equal);
-
-        let cmp = make_comparator(&left, &right, desc_nulls_last).unwrap();
-        assert_eq!(cmp(0, 0), Ordering::Greater); // "aa" vs "cc" reversed
-        assert_eq!(cmp(1, 0), Ordering::Greater); // null > "cc" (nulls last)
-        assert_eq!(cmp(0, 1), Ordering::Less); // "aa" < null (nulls last)
-        assert_eq!(cmp(1, 1), Ordering::Equal);
+        let cmp = make_comparator(&left, &right, options).unwrap();
+        assert_eq!(cmp(0, 0), expected[0]); // value vs value
+        assert_eq!(cmp(1, 0), expected[1]); // null key vs value
+        assert_eq!(cmp(0, 1), expected[2]); // value vs null value
+        assert_eq!(cmp(1, 1), expected[3]); // null key vs null value
     }
 
-    #[test]
-    fn test_primitive_dict() {
-        let values = Int32Array::from(vec![1_i32, 0, 2, 5]);
+    #[rstest]
+    #[case::int32(
+        Int32Array::from(vec![1_i32, 0, 2, 5]),
+        Int32Array::from(vec![2_i32, 3, 4, 5])
+    )]
+    #[case::float32(
+        Float32Array::from(vec![1.0, 0.5, 2.1, 5.5]),
+        Float32Array::from(vec![1.2, 3.2, 4.0, 5.5])
+    )]
+    #[case::timestamp_seconds(
+        TimestampSecondArray::from(vec![1, 0, 2, 5]),
+        TimestampSecondArray::from(vec![2, 3, 4, 5])
+    )]
+    #[case::duration_seconds(
+        DurationSecondArray::from(vec![1, 0, 2, 5]),
+        DurationSecondArray::from(vec![2, 3, 4, 5])
+    )]
+    #[case::decimal128(
+        Decimal128Array::from(vec![1, 0, 2, 5]),
+        Decimal128Array::from(vec![2, 3, 4, 5])
+    )]
+    #[case::decimal256(
+        Decimal256Array::from(vec![
+            i256::from_i128(1),
+            i256::from_i128(0),
+            i256::from_i128(2),
+            i256::from_i128(5),
+        ]),
+        Decimal256Array::from(vec![
+            i256::from_i128(2),
+            i256::from_i128(3),
+            i256::from_i128(4),
+            i256::from_i128(5),
+        ])
+    )]
+    fn test_primitive_dict<T: ArrowPrimitiveType>(
+        #[case] left_values: PrimitiveArray<T>,
+        #[case] right_values: PrimitiveArray<T>,
+    ) {
         let keys = Int8Array::from_iter_values([0, 0, 1, 3]);
-        let array1 = DictionaryArray::new(keys, Arc::new(values));
+        let array1 = DictionaryArray::try_new(keys, Arc::new(left_values)).unwrap();
 
-        let values = Int32Array::from(vec![2_i32, 3, 4, 5]);
         let keys = Int8Array::from_iter_values([0, 1, 1, 3]);
-        let array2 = DictionaryArray::new(keys, Arc::new(values));
-
-        let cmp = make_comparator(&array1, &array2, SortOptions::default()).unwrap();
-
-        assert_eq!(Ordering::Less, cmp(0, 0));
-        assert_eq!(Ordering::Less, cmp(0, 3));
-        assert_eq!(Ordering::Equal, cmp(3, 3));
-        assert_eq!(Ordering::Greater, cmp(3, 1));
-        assert_eq!(Ordering::Greater, cmp(3, 2));
-    }
-
-    #[test]
-    fn test_float_dict() {
-        let values = Float32Array::from(vec![1.0, 0.5, 2.1, 5.5]);
-        let keys = Int8Array::from_iter_values([0, 0, 1, 3]);
-        let array1 = DictionaryArray::try_new(keys, Arc::new(values)).unwrap();
-
-        let values = Float32Array::from(vec![1.2, 3.2, 4.0, 5.5]);
-        let keys = Int8Array::from_iter_values([0, 1, 1, 3]);
-        let array2 = DictionaryArray::new(keys, Arc::new(values));
-
-        let cmp = make_comparator(&array1, &array2, SortOptions::default()).unwrap();
-
-        assert_eq!(Ordering::Less, cmp(0, 0));
-        assert_eq!(Ordering::Less, cmp(0, 3));
-        assert_eq!(Ordering::Equal, cmp(3, 3));
-        assert_eq!(Ordering::Greater, cmp(3, 1));
-        assert_eq!(Ordering::Greater, cmp(3, 2));
-    }
-
-    #[test]
-    fn test_timestamp_dict() {
-        let values = TimestampSecondArray::from(vec![1, 0, 2, 5]);
-        let keys = Int8Array::from_iter_values([0, 0, 1, 3]);
-        let array1 = DictionaryArray::new(keys, Arc::new(values));
-
-        let values = TimestampSecondArray::from(vec![2, 3, 4, 5]);
-        let keys = Int8Array::from_iter_values([0, 1, 1, 3]);
-        let array2 = DictionaryArray::new(keys, Arc::new(values));
+        let array2 = DictionaryArray::new(keys, Arc::new(right_values));
 
         let cmp = make_comparator(&array1, &array2, SortOptions::default()).unwrap();
 
@@ -1188,74 +1133,7 @@ mod tests {
     }
 
     #[test]
-    fn test_duration_dict() {
-        let values = DurationSecondArray::from(vec![1, 0, 2, 5]);
-        let keys = Int8Array::from_iter_values([0, 0, 1, 3]);
-        let array1 = DictionaryArray::new(keys, Arc::new(values));
-
-        let values = DurationSecondArray::from(vec![2, 3, 4, 5]);
-        let keys = Int8Array::from_iter_values([0, 1, 1, 3]);
-        let array2 = DictionaryArray::new(keys, Arc::new(values));
-
-        let cmp = make_comparator(&array1, &array2, SortOptions::default()).unwrap();
-
-        assert_eq!(Ordering::Less, cmp(0, 0));
-        assert_eq!(Ordering::Less, cmp(0, 3));
-        assert_eq!(Ordering::Equal, cmp(3, 3));
-        assert_eq!(Ordering::Greater, cmp(3, 1));
-        assert_eq!(Ordering::Greater, cmp(3, 2));
-    }
-
-    #[test]
-    fn test_decimal_dict() {
-        let values = Decimal128Array::from(vec![1, 0, 2, 5]);
-        let keys = Int8Array::from_iter_values([0, 0, 1, 3]);
-        let array1 = DictionaryArray::new(keys, Arc::new(values));
-
-        let values = Decimal128Array::from(vec![2, 3, 4, 5]);
-        let keys = Int8Array::from_iter_values([0, 1, 1, 3]);
-        let array2 = DictionaryArray::new(keys, Arc::new(values));
-
-        let cmp = make_comparator(&array1, &array2, SortOptions::default()).unwrap();
-
-        assert_eq!(Ordering::Less, cmp(0, 0));
-        assert_eq!(Ordering::Less, cmp(0, 3));
-        assert_eq!(Ordering::Equal, cmp(3, 3));
-        assert_eq!(Ordering::Greater, cmp(3, 1));
-        assert_eq!(Ordering::Greater, cmp(3, 2));
-    }
-
-    #[test]
-    fn test_decimal256_dict() {
-        let values = Decimal256Array::from(vec![
-            i256::from_i128(1),
-            i256::from_i128(0),
-            i256::from_i128(2),
-            i256::from_i128(5),
-        ]);
-        let keys = Int8Array::from_iter_values([0, 0, 1, 3]);
-        let array1 = DictionaryArray::new(keys, Arc::new(values));
-
-        let values = Decimal256Array::from(vec![
-            i256::from_i128(2),
-            i256::from_i128(3),
-            i256::from_i128(4),
-            i256::from_i128(5),
-        ]);
-        let keys = Int8Array::from_iter_values([0, 1, 1, 3]);
-        let array2 = DictionaryArray::new(keys, Arc::new(values));
-
-        let cmp = make_comparator(&array1, &array2, SortOptions::default()).unwrap();
-
-        assert_eq!(Ordering::Less, cmp(0, 0));
-        assert_eq!(Ordering::Less, cmp(0, 3));
-        assert_eq!(Ordering::Equal, cmp(3, 3));
-        assert_eq!(Ordering::Greater, cmp(3, 1));
-        assert_eq!(Ordering::Greater, cmp(3, 2));
-    }
-
-    #[test]
-    fn test_decimal_different_scale_errors() {
+    fn test_decimal128_different_scale_errors() {
         // https://github.com/apache/arrow-rs/issues/10863
         let a = Decimal128Array::from(vec![100])
             .with_precision_and_scale(10, 2)
@@ -1274,39 +1152,40 @@ mod tests {
 
         // the same check applies behind nested types
         let keys = Int8Array::from_iter_values([0]);
-        let dict_a = DictionaryArray::new(keys.clone(), Arc::new(a.clone()));
+        let dict_a = DictionaryArray::new(keys.clone(), Arc::new(a));
         let dict_b = DictionaryArray::new(keys, Arc::new(b));
         assert!(make_comparator(&dict_a, &dict_b, SortOptions::default()).is_err());
+    }
 
-        // precision does not affect the ordering, so it need not match
-        let c = Decimal128Array::from(vec![100])
-            .with_precision_and_scale(12, 2)
-            .unwrap();
-        let cmp = make_comparator(&a, &c, SortOptions::default()).unwrap();
-        assert_eq!(Ordering::Equal, cmp(0, 0));
-
-        // every decimal width is checked
-        let a = Decimal32Array::from(vec![1])
-            .with_precision_and_scale(5, 1)
-            .unwrap();
-        let b = Decimal32Array::from(vec![1])
-            .with_precision_and_scale(5, 2)
-            .unwrap();
-        assert!(make_comparator(&a, &b, SortOptions::default()).is_err());
-
-        let a = Decimal64Array::from(vec![1])
-            .with_precision_and_scale(10, 1)
-            .unwrap();
-        let b = Decimal64Array::from(vec![1])
+    #[test]
+    fn test_decimal_different_precision() {
+        // Precision does not affect the ordering, so it need not match.
+        let a = Decimal128Array::from(vec![100])
             .with_precision_and_scale(10, 2)
             .unwrap();
-        assert!(make_comparator(&a, &b, SortOptions::default()).is_err());
-
-        let a = Decimal256Array::from(vec![i256::from_i128(1)])
-            .with_precision_and_scale(40, 1)
+        let b = Decimal128Array::from(vec![100])
+            .with_precision_and_scale(12, 2)
             .unwrap();
-        let b = Decimal256Array::from(vec![i256::from_i128(1)])
-            .with_precision_and_scale(40, 2)
+        let cmp = make_comparator(&a, &b, SortOptions::default()).unwrap();
+        assert_eq!(Ordering::Equal, cmp(0, 0));
+    }
+
+    #[rstest]
+    #[case::decimal32(Decimal32Type {}, 5)]
+    #[case::decimal64(Decimal64Type {}, 10)]
+    #[case::decimal256(Decimal256Type {}, 40)]
+    fn test_decimal_different_scale_errors<T: DecimalType>(
+        #[case] decimal_type: T,
+        #[case] precision: u8,
+    ) where
+        T::Native: From<i32>,
+    {
+        let _ = decimal_type;
+        let a = PrimitiveArray::<T>::from_iter_values([T::Native::from(1)])
+            .with_precision_and_scale(precision, 1)
+            .unwrap();
+        let b = PrimitiveArray::<T>::from_iter_values([T::Native::from(1)])
+            .with_precision_and_scale(precision, 2)
             .unwrap();
         assert!(make_comparator(&a, &b, SortOptions::default()).is_err());
     }
@@ -1341,8 +1220,52 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_lists() {
+    #[rstest]
+    #[case::ascending_nulls_first(
+        SortOptions { descending: false, nulls_first: true },
+        &[
+            (0, 0, Ordering::Equal),
+            (0, 1, Ordering::Less),
+            (0, 2, Ordering::Less),
+            (1, 2, Ordering::Less),
+            (1, 3, Ordering::Greater),
+            (2, 0, Ordering::Less),
+        ]
+    )]
+    #[case::descending_nulls_first(
+        SortOptions { descending: true, nulls_first: true },
+        &[
+            (0, 0, Ordering::Equal),
+            (0, 1, Ordering::Less),
+            (0, 2, Ordering::Less),
+            (1, 2, Ordering::Greater),
+            (1, 3, Ordering::Greater),
+            (2, 0, Ordering::Greater),
+        ]
+    )]
+    #[case::descending_nulls_last(
+        SortOptions { descending: true, nulls_first: false },
+        &[
+            (0, 0, Ordering::Equal),
+            (0, 1, Ordering::Greater),
+            (0, 2, Ordering::Greater),
+            (1, 2, Ordering::Greater),
+            (1, 3, Ordering::Less),
+            (2, 0, Ordering::Greater),
+        ]
+    )]
+    #[case::ascending_nulls_last(
+        SortOptions { descending: false, nulls_first: false },
+        &[
+            (0, 0, Ordering::Equal),
+            (0, 1, Ordering::Greater),
+            (0, 2, Ordering::Greater),
+            (1, 2, Ordering::Less),
+            (1, 3, Ordering::Less),
+            (2, 0, Ordering::Less),
+        ]
+    )]
+    fn test_lists(#[case] options: SortOptions, #[case] comparisons: &[(usize, usize, Ordering)]) {
         let mut a = ListBuilder::new(ListBuilder::new(Int32Builder::new()));
         a.extend([
             Some(vec![Some(vec![Some(1), Some(2), None]), Some(vec![None])]),
@@ -1368,77 +1291,7 @@ mod tests {
         ]);
         let b = b.finish();
 
-        // Ascending with nulls first.
-        assert_cmp_cases(
-            &a,
-            &b,
-            SortOptions {
-                descending: false,
-                nulls_first: true,
-            },
-            &[
-                (0, 0, Ordering::Equal),
-                (0, 1, Ordering::Less),
-                (0, 2, Ordering::Less),
-                (1, 2, Ordering::Less),
-                (1, 3, Ordering::Greater),
-                (2, 0, Ordering::Less),
-            ],
-        );
-
-        // Descending with nulls first.
-        assert_cmp_cases(
-            &a,
-            &b,
-            SortOptions {
-                descending: true,
-                nulls_first: true,
-            },
-            &[
-                (0, 0, Ordering::Equal),
-                (0, 1, Ordering::Less),
-                (0, 2, Ordering::Less),
-                (1, 2, Ordering::Greater),
-                (1, 3, Ordering::Greater),
-                (2, 0, Ordering::Greater),
-            ],
-        );
-
-        // Descending with nulls last.
-        assert_cmp_cases(
-            &a,
-            &b,
-            SortOptions {
-                descending: true,
-                nulls_first: false,
-            },
-            &[
-                (0, 0, Ordering::Equal),
-                (0, 1, Ordering::Greater),
-                (0, 2, Ordering::Greater),
-                (1, 2, Ordering::Greater),
-                (1, 3, Ordering::Less),
-                (2, 0, Ordering::Greater),
-            ],
-        );
-
-        // Ascending with nulls last.
-        assert_cmp_cases(
-            &a,
-            &b,
-            SortOptions {
-                descending: false,
-                nulls_first: false,
-            },
-            &[
-                (0, 0, Ordering::Equal),
-                (0, 1, Ordering::Greater),
-                (0, 2, Ordering::Greater),
-                (1, 2, Ordering::Less),
-                (1, 3, Ordering::Less),
-                (2, 0, Ordering::Less),
-            ],
-        );
+        assert_cmp_cases(&a, &b, options, comparisons);
     }
 
     fn list_view_array<O: OffsetSizeTrait>(
@@ -1461,7 +1314,50 @@ mod tests {
         GenericListViewArray::new(field, offsets, sizes, Arc::new(values), nulls)
     }
 
-    fn test_list_view_comparisons<O: OffsetSizeTrait>() {
+    #[rstest]
+    #[case::ascending_nulls_first(
+        SortOptions { descending: false, nulls_first: true },
+        &[
+            (0, 2, Ordering::Less),    // [1,2] < [2,3]
+            (1, 2, Ordering::Greater), // [3,4] > [2,3]
+            (3, 0, Ordering::Less),    // [] < [1,2]
+            (4, 0, Ordering::Less),    // null < [1,2]
+        ]
+    )]
+    #[case::ascending_nulls_last(
+        SortOptions { descending: false, nulls_first: false },
+        &[
+            (0, 2, Ordering::Less),
+            (1, 2, Ordering::Greater),
+            (3, 0, Ordering::Less),
+            (4, 0, Ordering::Greater), // null last
+        ]
+    )]
+    #[case::descending_nulls_first(
+        SortOptions { descending: true, nulls_first: true },
+        &[
+            (0, 2, Ordering::Greater),
+            (1, 2, Ordering::Less),
+            (3, 0, Ordering::Greater),
+            (4, 0, Ordering::Less),
+        ]
+    )]
+    #[case::descending_nulls_last(
+        SortOptions { descending: true, nulls_first: false },
+        &[
+            (0, 2, Ordering::Greater),
+            (1, 2, Ordering::Less),
+            (3, 0, Ordering::Greater),
+            (4, 0, Ordering::Greater),
+        ]
+    )]
+    fn test_list_view_comparisons<O: OffsetSizeTrait>(
+        #[case] options: SortOptions,
+        #[case] comparisons: &[(usize, usize, Ordering)],
+        #[values(0_i32, 0_i64)] offset_type: O,
+    ) {
+        let _ = offset_type;
+        // Non-monotonic offsets, an empty list, and a null list.
         let array = list_view_array::<O>(
             vec![1, 2, 3, 4, 5],
             &[0, 2, 1, 0, 3],
@@ -1469,83 +1365,59 @@ mod tests {
             Some(&[true, true, true, true, false]),
         );
 
-        // Ascending with nulls first (non-monotonic offsets and empty list).
-        assert_cmp_cases(
-            &array,
-            &array,
-            SortOptions {
-                descending: false,
-                nulls_first: true,
-            },
-            &[
-                (0, 2, Ordering::Less),    // [1,2] < [2,3]
-                (1, 2, Ordering::Greater), // [3,4] > [2,3]
-                (3, 0, Ordering::Less),    // [] < [1,2]
-                (4, 0, Ordering::Less),    // null < [1,2]
-            ],
-        );
-
-        // Ascending with nulls last.
-        assert_cmp_cases(
-            &array,
-            &array,
-            SortOptions {
-                descending: false,
-                nulls_first: false,
-            },
-            &[
-                (0, 2, Ordering::Less),
-                (1, 2, Ordering::Greater),
-                (3, 0, Ordering::Less),
-                (4, 0, Ordering::Greater), // null last
-            ],
-        );
-
-        // Descending with nulls first.
-        assert_cmp_cases(
-            &array,
-            &array,
-            SortOptions {
-                descending: true,
-                nulls_first: true,
-            },
-            &[
-                (0, 2, Ordering::Greater),
-                (1, 2, Ordering::Less),
-                (3, 0, Ordering::Greater),
-                (4, 0, Ordering::Less),
-            ],
-        );
-
-        // Descending with nulls last.
-        assert_cmp_cases(
-            &array,
-            &array,
-            SortOptions {
-                descending: true,
-                nulls_first: false,
-            },
-            &[
-                (0, 2, Ordering::Greater),
-                (1, 2, Ordering::Less),
-                (3, 0, Ordering::Greater),
-                (4, 0, Ordering::Greater),
-            ],
-        );
+        assert_cmp_cases(&array, &array, options, comparisons);
     }
 
-    #[test]
-    fn test_list_view() {
-        test_list_view_comparisons::<i32>();
-    }
-
-    #[test]
-    fn test_large_list_view() {
-        test_list_view_comparisons::<i64>();
-    }
-
-    #[test]
-    fn test_struct() {
+    #[rstest]
+    #[case::ascending_nulls_first(
+        SortOptions { descending: false, nulls_first: true },
+        [
+            Ordering::Less,
+            Ordering::Greater,
+            Ordering::Greater,
+            Ordering::Less,
+            Ordering::Less,
+            Ordering::Equal,
+            Ordering::Less,
+        ]
+    )]
+    #[case::descending_nulls_first(
+        SortOptions { descending: true, nulls_first: true },
+        [
+            Ordering::Greater,
+            Ordering::Greater,
+            Ordering::Greater,
+            Ordering::Less,
+            Ordering::Less,
+            Ordering::Equal,
+            Ordering::Less,
+        ]
+    )]
+    #[case::descending_nulls_last(
+        SortOptions { descending: true, nulls_first: false },
+        [
+            Ordering::Greater,
+            Ordering::Less,
+            Ordering::Less,
+            Ordering::Greater,
+            Ordering::Greater,
+            Ordering::Equal,
+            Ordering::Greater,
+        ]
+    )]
+    #[case::ascending_nulls_last(
+        SortOptions { descending: false, nulls_first: false },
+        [
+            Ordering::Less,
+            Ordering::Less,
+            Ordering::Less,
+            Ordering::Greater,
+            Ordering::Greater,
+            Ordering::Equal,
+            Ordering::Greater,
+        ]
+    )]
+    fn test_struct(#[case] options: SortOptions, #[case] expected: [Ordering; 7]) {
         let fields = Fields::from(vec![
             Field::new("a", DataType::Int32, true),
             Field::new_list("b", Field::new_list_field(DataType::Int32, true), true),
@@ -1568,61 +1440,49 @@ mod tests {
         let values = vec![Arc::new(a) as _, Arc::new(b) as _];
         let s2 = StructArray::new(fields.clone(), values, None);
 
-        let opts = SortOptions {
-            descending: false,
-            nulls_first: true,
-        };
-        let cmp = make_comparator(&s1, &s2, opts).unwrap();
-        assert_eq!(cmp(0, 1), Ordering::Less); // (1, [1, 2]) cmp (2, None)
-        assert_eq!(cmp(0, 0), Ordering::Greater); // (1, [1, 2]) cmp (None, None)
-        assert_eq!(cmp(1, 1), Ordering::Greater); // (2, [None]) cmp (2, None)
-        assert_eq!(cmp(2, 2), Ordering::Less); // (None, None) cmp (None, [])
-        assert_eq!(cmp(3, 0), Ordering::Less); // None cmp (None, [])
-        assert_eq!(cmp(2, 0), Ordering::Equal); // (None, None) cmp (None, None)
-        assert_eq!(cmp(3, 0), Ordering::Less); // None cmp (None, None)
-
-        let opts = SortOptions {
-            descending: true,
-            nulls_first: true,
-        };
-        let cmp = make_comparator(&s1, &s2, opts).unwrap();
-        assert_eq!(cmp(0, 1), Ordering::Greater); // (1, [1, 2]) cmp (2, None)
-        assert_eq!(cmp(0, 0), Ordering::Greater); // (1, [1, 2]) cmp (None, None)
-        assert_eq!(cmp(1, 1), Ordering::Greater); // (2, [None]) cmp (2, None)
-        assert_eq!(cmp(2, 2), Ordering::Less); // (None, None) cmp (None, [])
-        assert_eq!(cmp(3, 0), Ordering::Less); // None cmp (None, [])
-        assert_eq!(cmp(2, 0), Ordering::Equal); // (None, None) cmp (None, None)
-        assert_eq!(cmp(3, 0), Ordering::Less); // None cmp (None, None)
-
-        let opts = SortOptions {
-            descending: true,
-            nulls_first: false,
-        };
-        let cmp = make_comparator(&s1, &s2, opts).unwrap();
-        assert_eq!(cmp(0, 1), Ordering::Greater); // (1, [1, 2]) cmp (2, None)
-        assert_eq!(cmp(0, 0), Ordering::Less); // (1, [1, 2]) cmp (None, None)
-        assert_eq!(cmp(1, 1), Ordering::Less); // (2, [None]) cmp (2, None)
-        assert_eq!(cmp(2, 2), Ordering::Greater); // (None, None) cmp (None, [])
-        assert_eq!(cmp(3, 0), Ordering::Greater); // None cmp (None, [])
-        assert_eq!(cmp(2, 0), Ordering::Equal); // (None, None) cmp (None, None)
-        assert_eq!(cmp(3, 0), Ordering::Greater); // None cmp (None, None)
-
-        let opts = SortOptions {
-            descending: false,
-            nulls_first: false,
-        };
-        let cmp = make_comparator(&s1, &s2, opts).unwrap();
-        assert_eq!(cmp(0, 1), Ordering::Less); // (1, [1, 2]) cmp (2, None)
-        assert_eq!(cmp(0, 0), Ordering::Less); // (1, [1, 2]) cmp (None, None)
-        assert_eq!(cmp(1, 1), Ordering::Less); // (2, [None]) cmp (2, None)
-        assert_eq!(cmp(2, 2), Ordering::Greater); // (None, None) cmp (None, [])
-        assert_eq!(cmp(3, 0), Ordering::Greater); // None cmp (None, [])
-        assert_eq!(cmp(2, 0), Ordering::Equal); // (None, None) cmp (None, None)
-        assert_eq!(cmp(3, 0), Ordering::Greater); // None cmp (None, None)
+        let cmp = make_comparator(&s1, &s2, options).unwrap();
+        assert_eq!(cmp(0, 1), expected[0]); // (1, [1, 2]) cmp (2, None)
+        assert_eq!(cmp(0, 0), expected[1]); // (1, [1, 2]) cmp (None, None)
+        assert_eq!(cmp(1, 1), expected[2]); // (2, [None]) cmp (2, None)
+        assert_eq!(cmp(2, 2), expected[3]); // (None, None) cmp (None, [])
+        assert_eq!(cmp(3, 0), expected[4]); // None cmp (None, None)
+        assert_eq!(cmp(2, 0), expected[5]); // (None, None) cmp (None, None)
+        assert_eq!(cmp(3, 0), expected[6]); // None cmp (None, None)
     }
 
-    #[test]
-    fn test_map() {
+    #[rstest]
+    #[case::ascending_nulls_first(
+        SortOptions { descending: false, nulls_first: true },
+        &[
+            (0, 0, Ordering::Greater),
+            (1, 1, Ordering::Greater),
+            (0, 1, Ordering::Less),
+            (2, 2, Ordering::Less),
+            (3, 3, Ordering::Greater),
+            (3, 0, Ordering::Greater),
+            (2, 0, Ordering::Less),
+        ]
+    )]
+    #[case::descending_nulls_first(
+        SortOptions { descending: true, nulls_first: true },
+        &[
+            (0, 0, Ordering::Less),
+            (1, 1, Ordering::Less),
+            (0, 1, Ordering::Greater),
+            (3, 3, Ordering::Greater),
+            (2, 2, Ordering::Greater),
+        ]
+    )]
+    #[case::ascending_nulls_last(
+        SortOptions { descending: false, nulls_first: false },
+        &[
+            (0, 0, Ordering::Greater),
+            (1, 1, Ordering::Greater),
+            (3, 3, Ordering::Less),
+            (2, 2, Ordering::Less),
+        ]
+    )]
+    fn test_map(#[case] options: SortOptions, #[case] comparisons: &[(usize, usize, Ordering)]) {
         // Create first map array demonstrating key priority over values:
         // [{"a": 100, "b": 1}, {"b": 999, "c": 1}, {}, {"x": 1}]
         let string_builder = StringBuilder::new();
@@ -1683,64 +1543,14 @@ mod tests {
 
         let map2 = map2_builder.finish();
 
-        let opts = SortOptions {
-            descending: false,
-            nulls_first: true,
-        };
-        let cmp = make_comparator(&map1, &map2, opts).unwrap();
-
-        // Test that keys have priority over values:
-        // {"a": 100, "b": 1} vs {"a": 1, "c": 999}
-        // First entries match (a:100 vs a:1), but 100 > 1, so Greater
-        assert_eq!(cmp(0, 0), Ordering::Greater);
-
-        // {"b": 999, "c": 1} vs {"b": 1, "d": 999}
-        // First entries match (b:999 vs b:1), but 999 > 1, so Greater
-        assert_eq!(cmp(1, 1), Ordering::Greater);
-
-        // Key comparison: "a" < "b", so {"a": 100, "b": 1} < {"b": 999, "c": 1}
-        assert_eq!(cmp(0, 1), Ordering::Less);
-
-        // Empty map vs non-empty
-        assert_eq!(cmp(2, 2), Ordering::Less); // {} < {"a": 1}
-
-        // Non-null vs null
-        assert_eq!(cmp(3, 3), Ordering::Greater); // {"x": 1} > None
-
-        // Key priority test: "x" > "a", regardless of values
-        assert_eq!(cmp(3, 0), Ordering::Greater); // {"x": 1} > {"a": 1, "c": 999}
-
-        // Empty vs non-empty
-        assert_eq!(cmp(2, 0), Ordering::Less); // {} < {"a": 1, "c": 999}
-
-        let opts = SortOptions {
-            descending: true,
-            nulls_first: true,
-        };
-        let cmp = make_comparator(&map1, &map2, opts).unwrap();
-
-        // With descending=true, value comparison is reversed
-        assert_eq!(cmp(0, 0), Ordering::Less); // {"a": 100, "b": 1} vs {"a": 1, "c": 999} (reversed)
-        assert_eq!(cmp(1, 1), Ordering::Less); // {"b": 999, "c": 1} vs {"b": 1, "d": 999} (reversed)
-        assert_eq!(cmp(0, 1), Ordering::Greater); // {"a": 100, "b": 1} vs {"b": 999, "c": 1} (key order reversed)
-        assert_eq!(cmp(3, 3), Ordering::Greater); // {"x": 1} > None
-        assert_eq!(cmp(2, 2), Ordering::Greater); // {} > {"a": 1} (reversed)
-
-        let opts = SortOptions {
-            descending: false,
-            nulls_first: false,
-        };
-        let cmp = make_comparator(&map1, &map2, opts).unwrap();
-
-        // Same key priority behavior with nulls_first=false
-        assert_eq!(cmp(0, 0), Ordering::Greater); // {"a": 100, "b": 1} vs {"a": 1, "c": 999}
-        assert_eq!(cmp(1, 1), Ordering::Greater); // {"b": 999, "c": 1} vs {"b": 1, "d": 999}
-        assert_eq!(cmp(3, 3), Ordering::Less); // {"x": 1} < None (nulls last)
-        assert_eq!(cmp(2, 2), Ordering::Less); // {} < {"a": 1}
+        assert_cmp_cases(&map1, &map2, options, comparisons);
     }
 
-    #[test]
-    fn test_map_vs_list_consistency() {
+    #[rstest]
+    fn test_map_vs_list_consistency(
+        #[values(false, true)] descending: bool,
+        #[values(true, false)] nulls_first: bool,
+    ) {
         // Create map arrays and convert them to list arrays to verify comparison consistency
         // Map arrays: [{"a": 1, "b": 2}, {"x": 10}, {}, {"c": 3}]
         let string_builder = StringBuilder::new();
@@ -1800,45 +1610,50 @@ mod tests {
         let list1: ListArray = map1.clone().into();
         let list2: ListArray = map2.clone().into();
 
-        let test_cases = [
-            SortOptions {
-                descending: false,
-                nulls_first: true,
-            },
-            SortOptions {
-                descending: true,
-                nulls_first: true,
-            },
-            SortOptions {
-                descending: false,
-                nulls_first: false,
-            },
-            SortOptions {
-                descending: true,
-                nulls_first: false,
-            },
-        ];
+        let opts = SortOptions {
+            descending,
+            nulls_first,
+        };
+        let map_cmp = make_comparator(&map1, &map2, opts).unwrap();
+        let list_cmp = make_comparator(&list1, &list2, opts).unwrap();
 
-        for opts in test_cases {
-            let map_cmp = make_comparator(&map1, &map2, opts).unwrap();
-            let list_cmp = make_comparator(&list1, &list2, opts).unwrap();
-
-            // Test all possible index combinations
-            for i in 0..map1.len() {
-                for j in 0..map2.len() {
-                    let map_result = map_cmp(i, j);
-                    let list_result = list_cmp(i, j);
-                    assert_eq!(
-                        map_result, list_result,
-                        "Map comparison and List comparison should be equal for indices ({i}, {j}) with opts {opts:?}. Map: {map_result:?}, List: {list_result:?}"
-                    );
-                }
+        // Test all possible index combinations
+        for i in 0..map1.len() {
+            for j in 0..map2.len() {
+                let map_result = map_cmp(i, j);
+                let list_result = list_cmp(i, j);
+                assert_eq!(
+                    map_result, list_result,
+                    "Map comparison and List comparison should be equal for indices ({i}, {j}) with opts {opts:?}. Map: {map_result:?}, List: {list_result:?}"
+                );
             }
         }
     }
 
-    #[test]
-    fn test_dense_union() {
+    #[rstest]
+    #[case::ascending(
+        SortOptions { descending: false, nulls_first: true },
+        &[
+            (0, 0, Ordering::Less), // 1 < 2
+            (0, 1, Ordering::Less), // type_id 0 < 1
+            (1, 1, Ordering::Greater), // "b" > "a"
+            (2, 0, Ordering::Equal), // 2 == 2
+            (3, 1, Ordering::Equal), // "a" == "a"
+            (1, 3, Ordering::Less), // "b" < "c"
+        ]
+    )]
+    #[case::descending(
+        SortOptions { descending: true, nulls_first: true },
+        &[
+            (0, 0, Ordering::Greater), // 1 > 2 (reversed)
+            (0, 1, Ordering::Greater), // type_id 0 < 1, reversed to Greater
+            (1, 1, Ordering::Less), // "b" < "a" (reversed)
+        ]
+    )]
+    fn test_dense_union(
+        #[case] options: SortOptions,
+        #[case] comparisons: &[(usize, usize, Ordering)],
+    ) {
         // create a dense union array with Int32 (type_id = 0) and Utf8 (type_id=1)
         // the values are: [1, "b", 2, "a", 3]
         //  type_ids are: [0,  1,  0,  1,  0]
@@ -1874,49 +1689,7 @@ mod tests {
         let array2 =
             UnionArray::try_new(union_fields, type_ids2, Some(offsets2), children2).unwrap();
 
-        let opts = SortOptions {
-            descending: false,
-            nulls_first: true,
-        };
-
-        // comparing
-        // [1, "b", 2, "a", 3]
-        // [2, "a", 1, "c"]
-        let cmp = make_comparator(&array1, &array2, opts).unwrap();
-
-        // array1[0] = (type_id=0, value=1)
-        // array2[0] = (type_id=0, value=2)
-        assert_eq!(cmp(0, 0), Ordering::Less); // 1 < 2
-
-        // array1[0] = (type_id=0, value=1)
-        // array2[1] = (type_id=1, value="a")
-        assert_eq!(cmp(0, 1), Ordering::Less); // type_id 0 < 1
-
-        // array1[1] = (type_id=1, value="b")
-        // array2[1] = (type_id=1, value="a")
-        assert_eq!(cmp(1, 1), Ordering::Greater); // "b" > "a"
-
-        // array1[2] = (type_id=0, value=2)
-        // array2[0] = (type_id=0, value=2)
-        assert_eq!(cmp(2, 0), Ordering::Equal); // 2 == 2
-
-        // array1[3] = (type_id=1, value="a")
-        // array2[1] = (type_id=1, value="a")
-        assert_eq!(cmp(3, 1), Ordering::Equal); // "a" == "a"
-
-        // array1[1] = (type_id=1, value="b")
-        // array2[3] = (type_id=1, value="c")
-        assert_eq!(cmp(1, 3), Ordering::Less); // "b" < "c"
-
-        let opts_desc = SortOptions {
-            descending: true,
-            nulls_first: true,
-        };
-        let cmp_desc = make_comparator(&array1, &array2, opts_desc).unwrap();
-
-        assert_eq!(cmp_desc(0, 0), Ordering::Greater); // 1 > 2 (reversed)
-        assert_eq!(cmp_desc(0, 1), Ordering::Greater); // type_id 0 < 1, reversed to Greater
-        assert_eq!(cmp_desc(1, 1), Ordering::Less); // "b" < "a" (reversed)
+        assert_cmp_cases(&array1, &array2, options, comparisons);
     }
 
     #[test]
