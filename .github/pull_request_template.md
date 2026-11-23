@@ -48,6 +48,10 @@ covered by existing tests, if so identify these tests)?
 If this PR claims a performance improvement, please include evidence such as
 benchmark results.
 
+If new benchmarks are needed, add them as the first commit of this PR so the
+benchmark runner can use that commit as the baseline. See the performance
+guidance in CONTRIBUTING.md.
+
 DO NOT simply paste a list of commands ran to verify the code; this is what our
 CI is for and it pollutes the PR. ONLY explain if testing was included with this
 PR, or why it wasn't.

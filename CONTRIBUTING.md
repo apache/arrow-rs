@@ -336,15 +336,13 @@ If your PR proposes a performance improvement, include a summary of the benchmar
 
 A benchmark that improves is not enough on its own. State which part of the change produces the gain, for example by removing it and rerunning. Cover both well-predicted input (constant lengths, all valid) and poorly predicted input (random), because branchless code wins on the second and can lose on the first. Name the inputs that get slower and say whether real workloads are likely to hit them.
 
-If you need to add new benchmarks to cover your change, add them in a separate PR first (for example, [#9729]) or as the first commit of your PR. Either way, the automated benchmark runner can compare the change against a revision that already has the benchmarks. For a first commit, pass its SHA as the baseline:
+If you need to add new benchmarks to cover your change, add them as the first commit of the same PR. This lets reviewers see the benchmark and implementation together without requiring a separate benchmark PR. The automated benchmark runner can compare the implementation against the first commit by passing its SHA as the baseline:
 
 ```yaml
 run benchmark <bench>
 baseline:
   ref: <benchmark commit SHA>
 ```
-
-[#9729]: https://github.com/apache/arrow-rs/pull/9729
 
 ## AI Generated Submissions
 
