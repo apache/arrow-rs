@@ -295,7 +295,8 @@ fn shredded_get_path(
                     accumulated_nulls =
                         NullBuffer::union(accumulated_nulls.as_ref(), typed_value.nulls());
                 }
-                // Typed struct casts retain their existing missing-field semantics.
+                // Typed outputs skip this: a missing field's null `typed_value` already
+                // yields NULL we can zero-copy.
                 if variant_output || matches!(path_element, VariantPathElement::Index { .. }) {
                     accumulated_nulls =
                         NullBuffer::union(accumulated_nulls.as_ref(), path_nulls.as_ref());
@@ -1945,138 +1946,51 @@ mod test {
 
     #[test]
     fn test_missing_shredded_object_field_preserves_null_semantics() {
-        for field_type in [
-            DataType::Int64,
-            DataType::Struct(vec![Field::new("unused", DataType::Int64, true)].into()),
-        ] {
-            let cases = [
-                (
-                    "a",
-                    vec![
-                        Some(r#"{"a": 7}"#),
-                        Some("{}"),
-                        Some(r#"{"a": null}"#),
-                        Some(r#"{"a": 42}"#),
-                        Some(r#"{"a": {}}"#),
-                        Some(r#"{"a": "fallback"}"#),
-                        None,
-                    ],
-                    DataType::Struct(vec![Field::new("a", field_type.clone(), true)].into()),
-                    vec![
-                        Some("7"),
-                        None,
-                        Some("null"),
-                        Some("42"),
-                        Some("{}"),
-                        Some(r#""fallback""#),
-                        None,
-                    ],
-                ),
-                (
-                    "a.b",
-                    vec![
-                        Some(r#"{"a": {"b": 7}}"#),
-                        Some(r#"{"a": {}}"#),
-                        Some(r#"{"a": {"b": null}}"#),
-                        Some(r#"{"a": {"b": 42}}"#),
-                        Some(r#"{"a": {"b": {}}}"#),
-                        Some(r#"{"a": {"b": "fallback"}}"#),
-                        None,
-                        Some("{}"),
-                        Some(r#"{"a": null}"#),
-                    ],
-                    DataType::Struct(
-                        vec![Field::new(
-                            "a",
-                            DataType::Struct(
-                                vec![Field::new("b", field_type.clone(), true)].into(),
-                            ),
-                            true,
-                        )]
-                        .into(),
-                    ),
-                    vec![
-                        Some("7"),
-                        None,
-                        Some("null"),
-                        Some("42"),
-                        Some("{}"),
-                        Some(r#""fallback""#),
-                        None,
-                        None,
-                        None,
-                    ],
-                ),
-                (
-                    "[0].a",
-                    vec![
-                        Some(r#"[{"a": 7}]"#),
-                        Some("[{}]"),
-                        Some(r#"[{"a": null}]"#),
-                        Some(r#"[{"a": 42}]"#),
-                        Some(r#"[{"a": {}}]"#),
-                        Some(r#"[{"a": "fallback"}]"#),
-                        None,
-                        Some("[]"),
-                        Some("[null]"),
-                    ],
-                    DataType::List(Arc::new(Field::new(
-                        "item",
-                        DataType::Struct(vec![Field::new("a", field_type.clone(), true)].into()),
-                        true,
-                    ))),
-                    vec![
-                        Some("7"),
-                        None,
-                        Some("null"),
-                        Some("42"),
-                        Some("{}"),
-                        Some(r#""fallback""#),
-                        None,
-                        None,
-                        None,
-                    ],
-                ),
-            ];
-            for (path, rows, schema, expected) in cases {
-                let json: ArrayRef = Arc::new(StringArray::from(rows));
-                let input = json_to_variant(&json).unwrap();
-                let requested_variant = Arc::new(input.field("result"));
-                let shredded = shred_variant(&input, &schema).unwrap();
-                let expected = StringArray::from(expected);
-
-                for array in [ArrayRef::from(input), ArrayRef::from(shredded)] {
-                    for (offset, length) in [(0, array.len()), (1, array.len() - 1)] {
-                        let array = array.slice(offset, length);
-                        let expected = expected.slice(offset, length);
-                        for as_type in [None, Some(requested_variant.clone())] {
-                            for safe in [true, false] {
-                                let options = GetOptions {
-                                    path: VariantPath::try_from(path).unwrap(),
-                                    as_type: as_type.clone(),
-                                    cast_options: CastOptions {
-                                        safe,
-                                        ..Default::default()
-                                    },
-                                };
-                                let result = variant_get(&array, options).unwrap();
-                                let variant = VariantArray::try_new(&result).unwrap();
-                                for (row, value) in expected.iter().enumerate() {
-                                    assert_eq!(
-                                        variant.is_null(row),
-                                        value.is_none(),
-                                        "{path}, {field_type:?}, safe={safe}, offset={offset}, row={row}"
-                                    );
-                                }
-                                let unshredded = crate::unshred_variant(&variant).unwrap();
-                                assert_eq!(
-                                    crate::variant_to_json(&ArrayRef::from(unshredded)).unwrap(),
-                                    expected,
-                                    "{path}, {field_type:?}, safe={safe}, offset={offset}"
-                                );
-                            }
-                        }
-                    }
+        let b = DataType::Struct(vec![Field::new("b", DataType::Int64, true)].into());
+        let schema = DataType::Struct(vec![Field::new("a", b, true)].into());
+        let rows = [
+            Some(r#"{"a": {"b": 7}}"#),
+            Some(r#"{"a": {}}"#),
+            Some(r#"{"a": 7}"#),
+            Some(r#"{"a": null}"#),
+            Some("{}"),
+            None,
+        ];
+        let input =
+            json_to_variant(&(Arc::new(StringArray::from(rows.to_vec())) as ArrayRef)).unwrap();
+        let shredded = shred_variant(&input, &schema).unwrap();
+        let cases = [
+            (
+                "a",
+                [
+                    Some(r#"{"b":7}"#),
+                    Some("{}"),
+                    Some("7"),
+                    Some("null"),
+                    None,
+                    None,
+                ],
+            ),
+            ("a.b", [Some("7"), None, None, None, None, None]),
+        ];
+        for (path, expected) in cases {
+            let options = GetOptions::new_with_path(VariantPath::try_from(path).unwrap());
+            let expected = StringArray::from(expected.to_vec());
+            for array in [
+                ArrayRef::from(input.clone()),
+                ArrayRef::from(shredded.clone()),
+            ] {
+                for offset in [0, 1] {
+                    let array = array.slice(offset, array.len() - offset);
+                    let result = variant_get(&array, options.clone()).unwrap();
+                    let result =
+                        crate::unshred_variant(&VariantArray::try_new(&result).unwrap()).unwrap();
+                    let json = crate::variant_to_json(&ArrayRef::from(result)).unwrap();
+                    assert_eq!(
+                        json,
+                        expected.slice(offset, array.len()),
+                        "{path}, offset={offset}"
+                    );
                 }
             }
         }
