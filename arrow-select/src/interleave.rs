@@ -283,7 +283,11 @@ fn interleave_dictionaries<K: ArrowDictionaryKeyType>(
 
     match strategy {
         DictionaryInterleaveStrategy::SharedDictionary => {
-            interleave_shared_dictionary(&dictionaries, indices, dictionaries[0].values())
+            // SAFETY: the strategy is selected only after verifying that every dictionary's
+            // values array is pointer-equal to `dictionaries[0].values()`.
+            unsafe {
+                interleave_shared_dictionary(&dictionaries, indices, dictionaries[0].values())
+            }
         }
         DictionaryInterleaveStrategy::MergeDictionaries => {
             interleave_merged_dictionaries(&dictionaries, indices)
@@ -352,7 +356,11 @@ fn interleave_merged_dictionaries<K: ArrowDictionaryKeyType>(
 }
 
 /// Interleaves dictionary keys without copying their shared values array.
-fn interleave_shared_dictionary<K: ArrowDictionaryKeyType>(
+///
+/// # Safety
+///
+/// Every dictionary's values array must be pointer-equal to `shared_values`.
+unsafe fn interleave_shared_dictionary<K: ArrowDictionaryKeyType>(
     dictionaries: &[&DictionaryArray<K>],
     indices: &[(usize, usize)],
     shared_values: &ArrayRef,
