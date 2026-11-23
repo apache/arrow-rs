@@ -69,112 +69,44 @@ pub fn shift(array: &dyn Array, offset: i64) -> Result<ArrayRef, ArrowError> {
 mod tests {
     use super::*;
     use arrow_array::{Float64Array, Int32Array, Int32DictionaryArray};
+    use rstest::rstest;
 
-    #[test]
-    fn test_shift_neg() {
+    #[rstest]
+    #[case::negative(-1, vec![None, Some(4), None])]
+    #[case::positive(1, vec![None, Some(1), None])]
+    #[case::zero(0, vec![Some(1), None, Some(4)])]
+    #[case::positive_boundary(3, vec![None, None, None])]
+    #[case::negative_boundary(-3, vec![None, None, None])]
+    #[case::minimum_offset(i64::MIN, vec![None, None, None])]
+    #[case::positive_beyond_length(1000, vec![None, None, None])]
+    #[case::negative_beyond_length(-1000, vec![None, None, None])]
+    fn test_shift_int32(#[case] offset: i64, #[case] expected: Vec<Option<i32>>) {
         let a: Int32Array = vec![Some(1), None, Some(4)].into();
-        let res = shift(&a, -1).unwrap();
-        let expected: Int32Array = vec![None, Some(4), None].into();
+        let res = shift(&a, offset).unwrap();
+        let expected = Int32Array::from(expected);
         assert_eq!(res.as_ref(), &expected);
     }
 
-    #[test]
-    fn test_shift_pos() {
-        let a: Int32Array = vec![Some(1), None, Some(4)].into();
-        let res = shift(&a, 1).unwrap();
-        let expected: Int32Array = vec![None, Some(1), None].into();
-        assert_eq!(res.as_ref(), &expected);
-    }
-
-    #[test]
-    fn test_shift_neg_float64() {
+    #[rstest]
+    #[case::negative(-1, vec![None, Some(4.), None])]
+    #[case::positive(1, vec![None, Some(1.), None])]
+    fn test_shift_float64(#[case] offset: i64, #[case] expected: Vec<Option<f64>>) {
         let a: Float64Array = vec![Some(1.), None, Some(4.)].into();
-        let res = shift(&a, -1).unwrap();
-        let expected: Float64Array = vec![None, Some(4.), None].into();
+        let res = shift(&a, offset).unwrap();
+        let expected = Float64Array::from(expected);
         assert_eq!(res.as_ref(), &expected);
     }
 
-    #[test]
-    fn test_shift_pos_float64() {
-        let a: Float64Array = vec![Some(1.), None, Some(4.)].into();
-        let res = shift(&a, 1).unwrap();
-        let expected: Float64Array = vec![None, Some(1.), None].into();
-        assert_eq!(res.as_ref(), &expected);
-    }
-
-    #[test]
-    fn test_shift_neg_int32_dict() {
+    #[rstest]
+    #[case::negative(-1, [None, Some("beta"), Some("alpha"), None])]
+    #[case::positive(1, [None, Some("alpha"), None, Some("beta")])]
+    fn test_shift_int32_dict(#[case] offset: i64, #[case] expected: [Option<&str>; 4]) {
         let a: Int32DictionaryArray = [Some("alpha"), None, Some("beta"), Some("alpha")]
             .iter()
             .copied()
             .collect();
-        let res = shift(&a, -1).unwrap();
-        let expected: Int32DictionaryArray = [None, Some("beta"), Some("alpha"), None]
-            .iter()
-            .copied()
-            .collect();
-        assert_eq!(res.as_ref(), &expected);
-    }
-
-    #[test]
-    fn test_shift_pos_int32_dict() {
-        let a: Int32DictionaryArray = [Some("alpha"), None, Some("beta"), Some("alpha")]
-            .iter()
-            .copied()
-            .collect();
-        let res = shift(&a, 1).unwrap();
-        let expected: Int32DictionaryArray = [None, Some("alpha"), None, Some("beta")]
-            .iter()
-            .copied()
-            .collect();
-        assert_eq!(res.as_ref(), &expected);
-    }
-
-    #[test]
-    fn test_shift_nil() {
-        let a: Int32Array = vec![Some(1), None, Some(4)].into();
-        let res = shift(&a, 0).unwrap();
-        let expected: Int32Array = vec![Some(1), None, Some(4)].into();
-        assert_eq!(res.as_ref(), &expected);
-    }
-
-    #[test]
-    fn test_shift_boundary_pos() {
-        let a: Int32Array = vec![Some(1), None, Some(4)].into();
-        let res = shift(&a, 3).unwrap();
-        let expected: Int32Array = vec![None, None, None].into();
-        assert_eq!(res.as_ref(), &expected);
-    }
-
-    #[test]
-    fn test_shift_boundary_neg() {
-        let a: Int32Array = vec![Some(1), None, Some(4)].into();
-        let res = shift(&a, -3).unwrap();
-        let expected: Int32Array = vec![None, None, None].into();
-        assert_eq!(res.as_ref(), &expected);
-    }
-
-    #[test]
-    fn test_shift_boundary_neg_min() {
-        let a: Int32Array = vec![Some(1), None, Some(4)].into();
-        let res = shift(&a, i64::MIN).unwrap();
-        let expected: Int32Array = vec![None, None, None].into();
-        assert_eq!(res.as_ref(), &expected);
-    }
-
-    #[test]
-    fn test_shift_large_pos() {
-        let a: Int32Array = vec![Some(1), None, Some(4)].into();
-        let res = shift(&a, 1000).unwrap();
-        let expected: Int32Array = vec![None, None, None].into();
-        assert_eq!(res.as_ref(), &expected);
-    }
-
-    #[test]
-    fn test_shift_large_neg() {
-        let a: Int32Array = vec![Some(1), None, Some(4)].into();
-        let res = shift(&a, -1000).unwrap();
-        let expected: Int32Array = vec![None, None, None].into();
+        let res = shift(&a, offset).unwrap();
+        let expected: Int32DictionaryArray = expected.iter().copied().collect();
         assert_eq!(res.as_ref(), &expected);
     }
 }

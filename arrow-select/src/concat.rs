@@ -715,56 +715,46 @@ mod tests {
         MapBuilder, StringBuilder, StringDictionaryBuilder,
     };
     use arrow_schema::{Field, Schema};
+    use rstest::rstest;
     use std::fmt::Debug;
 
-    #[test]
-    fn test_dict_overflow_9366() {
-        use arrow_schema::DataType;
-
+    #[rstest]
+    #[case::uint8(UInt8Type {}, 128, 256)]
+    #[case::int8(Int8Type {}, 64, 128)]
+    fn test_dict_key_capacity_boundary_9366<K: ArrowDictionaryKeyType>(
+        #[case] key_type: K,
+        #[case] batch_len: usize,
+        #[case] expected_len: usize,
+    ) {
+        let _ = key_type;
         let schema = Arc::new(Schema::new(vec![Field::new(
             "a",
             DataType::Dictionary(
-                Box::new(DataType::UInt8),
+                Box::new(K::DATA_TYPE),
                 Box::new(DataType::FixedSizeBinary(8)),
             ),
             false,
         )]));
         let make = |vals: std::ops::Range<u64>| {
             let dict = FixedSizeBinaryArray::try_from_iter(vals.map(|i| i.to_le_bytes())).unwrap();
-            let keys = UInt8Array::from_iter_values(0..128);
+            let keys = PrimitiveArray::<K>::from_iter_values(
+                (0..batch_len).map(|i| K::Native::from_usize(i).unwrap()),
+            );
             let arr = DictionaryArray::try_new(keys, Arc::new(dict)).unwrap();
             RecordBatch::try_new(schema.clone(), vec![Arc::new(arr)]).unwrap()
         };
-        // 256 distinct values fit in u8 keys (0..=255): concat must succeed.
-        let out = concat_batches(&schema, &[make(0..128), make(128..256)]).unwrap();
-        assert_eq!(out.num_rows(), 256);
-        let dict = out.column(0).as_dictionary::<UInt8Type>();
-        assert_eq!(dict.values().len(), 256);
-    }
-
-    #[test]
-    fn test_dict_overflow_i8_9366() {
-        use arrow_schema::DataType;
-
-        // Same boundary for a signed key type: i8 holds 128 keys (0..=127).
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "a",
-            DataType::Dictionary(
-                Box::new(DataType::Int8),
-                Box::new(DataType::FixedSizeBinary(8)),
-            ),
-            false,
-        )]));
-        let make = |vals: std::ops::Range<u64>| {
-            let dict = FixedSizeBinaryArray::try_from_iter(vals.map(|i| i.to_le_bytes())).unwrap();
-            let keys = Int8Array::from_iter_values(0..64);
-            let arr = DictionaryArray::try_new(keys, Arc::new(dict)).unwrap();
-            RecordBatch::try_new(schema.clone(), vec![Arc::new(arr)]).unwrap()
-        };
-        let out = concat_batches(&schema, &[make(0..64), make(64..128)]).unwrap();
-        assert_eq!(out.num_rows(), 128);
-        let dict = out.column(0).as_dictionary::<Int8Type>();
-        assert_eq!(dict.values().len(), 128);
+        // All nonnegative keys fit: 256 distinct values for u8, 128 for i8.
+        let out = concat_batches(
+            &schema,
+            &[
+                make(0..batch_len as u64),
+                make(batch_len as u64..expected_len as u64),
+            ],
+        )
+        .unwrap();
+        assert_eq!(out.num_rows(), expected_len);
+        let dict = out.column(0).as_dictionary::<K>();
+        assert_eq!(dict.values().len(), expected_len);
     }
 
     #[test]
@@ -818,87 +808,53 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_concat_10_incompatible_datatypes_should_include_all_of_them() {
-        let re = concat(&[
-            &PrimitiveArray::<Int64Type>::from(vec![Some(-1), Some(2), None]),
-            // 2 string to make sure we only mention unique types
-            &StringArray::from(vec![Some("hello"), Some("bar"), Some("world")]),
-            &StringArray::from(vec![Some("hey"), Some(""), Some("you")]),
-            // Another type to make sure we are showing all the incompatible types
-            &PrimitiveArray::<Int32Type>::from(vec![Some(-1), Some(2), None]),
-            &PrimitiveArray::<Int8Type>::from(vec![Some(-1), Some(2), None]),
-            &PrimitiveArray::<Int16Type>::from(vec![Some(-1), Some(2), None]),
-            &PrimitiveArray::<UInt8Type>::from(vec![Some(1), Some(2), None]),
-            &PrimitiveArray::<UInt16Type>::from(vec![Some(1), Some(2), None]),
-            &PrimitiveArray::<UInt32Type>::from(vec![Some(1), Some(2), None]),
-            // Non unique
-            &PrimitiveArray::<UInt16Type>::from(vec![Some(1), Some(2), None]),
-            &PrimitiveArray::<UInt64Type>::from(vec![Some(1), Some(2), None]),
-            &PrimitiveArray::<Float32Type>::from(vec![Some(1.0), Some(2.0), None]),
-        ]);
-
-        assert_eq!(
-            re.unwrap_err().to_string(),
-            "Invalid argument error: It is not possible to concatenate arrays of different data types (Int64, Utf8, Int32, Int8, Int16, UInt8, UInt16, UInt32, UInt64, Float32)."
-        );
-    }
-
-    #[test]
-    fn test_concat_11_incompatible_datatypes_should_only_include_10() {
-        let re = concat(&[
-            &PrimitiveArray::<Int64Type>::from(vec![Some(-1), Some(2), None]),
-            // 2 string to make sure we only mention unique types
-            &StringArray::from(vec![Some("hello"), Some("bar"), Some("world")]),
-            &StringArray::from(vec![Some("hey"), Some(""), Some("you")]),
-            // Another type to make sure we are showing all the incompatible types
-            &PrimitiveArray::<Int32Type>::from(vec![Some(-1), Some(2), None]),
-            &PrimitiveArray::<Int8Type>::from(vec![Some(-1), Some(2), None]),
-            &PrimitiveArray::<Int16Type>::from(vec![Some(-1), Some(2), None]),
-            &PrimitiveArray::<UInt8Type>::from(vec![Some(1), Some(2), None]),
-            &PrimitiveArray::<UInt16Type>::from(vec![Some(1), Some(2), None]),
-            &PrimitiveArray::<UInt32Type>::from(vec![Some(1), Some(2), None]),
-            // Non unique
-            &PrimitiveArray::<UInt16Type>::from(vec![Some(1), Some(2), None]),
-            &PrimitiveArray::<UInt64Type>::from(vec![Some(1), Some(2), None]),
-            &PrimitiveArray::<Float32Type>::from(vec![Some(1.0), Some(2.0), None]),
-            &PrimitiveArray::<Float64Type>::from(vec![Some(1.0), Some(2.0), None]),
-        ]);
-
-        assert_eq!(
-            re.unwrap_err().to_string(),
-            "Invalid argument error: It is not possible to concatenate arrays of different data types (Int64, Utf8, Int32, Int8, Int16, UInt8, UInt16, UInt32, UInt64, Float32, ...)."
-        );
-    }
-
-    #[test]
+    #[rstest]
+    #[case::ten_types(
+        vec![],
+        "Invalid argument error: It is not possible to concatenate arrays of different data types (Int64, Utf8, Int32, Int8, Int16, UInt8, UInt16, UInt32, UInt64, Float32).",
+    )]
+    #[case::eleven_types(
+        vec![Arc::new(Float64Array::from(vec![Some(1.0), Some(2.0), None])) as ArrayRef],
+        "Invalid argument error: It is not possible to concatenate arrays of different data types (Int64, Utf8, Int32, Int8, Int16, UInt8, UInt16, UInt32, UInt64, Float32, ...).",
+    )]
     #[cfg_attr(miri, ignore)] // Unsupported inline assembly
-    fn test_concat_13_incompatible_datatypes_should_not_include_all_of_them() {
-        let re = concat(&[
-            &PrimitiveArray::<Int64Type>::from(vec![Some(-1), Some(2), None]),
+    #[case::thirteen_types(
+        vec![
+            Arc::new(Float64Array::from(vec![Some(1.0), Some(2.0), None])) as ArrayRef,
+            Arc::new(Float16Array::new_null(3)),
+            Arc::new(BooleanArray::from(vec![Some(true), Some(false), None])),
+        ],
+        "Invalid argument error: It is not possible to concatenate arrays of different data types (Int64, Utf8, Int32, Int8, Int16, UInt8, UInt16, UInt32, UInt64, Float32, ...).",
+    )]
+    fn test_concat_incompatible_datatypes_display_limit(
+        #[case] additional_arrays: Vec<ArrayRef>,
+        #[case] expected_error: &str,
+    ) {
+        let mut arrays: Vec<ArrayRef> = vec![
+            Arc::new(Int64Array::from(vec![Some(-1), Some(2), None])),
             // 2 string to make sure we only mention unique types
-            &StringArray::from(vec![Some("hello"), Some("bar"), Some("world")]),
-            &StringArray::from(vec![Some("hey"), Some(""), Some("you")]),
+            Arc::new(StringArray::from(vec![
+                Some("hello"),
+                Some("bar"),
+                Some("world"),
+            ])),
+            Arc::new(StringArray::from(vec![Some("hey"), Some(""), Some("you")])),
             // Another type to make sure we are showing all the incompatible types
-            &PrimitiveArray::<Int32Type>::from(vec![Some(-1), Some(2), None]),
-            &PrimitiveArray::<Int8Type>::from(vec![Some(-1), Some(2), None]),
-            &PrimitiveArray::<Int16Type>::from(vec![Some(-1), Some(2), None]),
-            &PrimitiveArray::<UInt8Type>::from(vec![Some(1), Some(2), None]),
-            &PrimitiveArray::<UInt16Type>::from(vec![Some(1), Some(2), None]),
-            &PrimitiveArray::<UInt32Type>::from(vec![Some(1), Some(2), None]),
+            Arc::new(Int32Array::from(vec![Some(-1), Some(2), None])),
+            Arc::new(Int8Array::from(vec![Some(-1), Some(2), None])),
+            Arc::new(Int16Array::from(vec![Some(-1), Some(2), None])),
+            Arc::new(UInt8Array::from(vec![Some(1), Some(2), None])),
+            Arc::new(UInt16Array::from(vec![Some(1), Some(2), None])),
+            Arc::new(UInt32Array::from(vec![Some(1), Some(2), None])),
             // Non unique
-            &PrimitiveArray::<UInt16Type>::from(vec![Some(1), Some(2), None]),
-            &PrimitiveArray::<UInt64Type>::from(vec![Some(1), Some(2), None]),
-            &PrimitiveArray::<Float32Type>::from(vec![Some(1.0), Some(2.0), None]),
-            &PrimitiveArray::<Float64Type>::from(vec![Some(1.0), Some(2.0), None]),
-            &PrimitiveArray::<Float16Type>::new_null(3),
-            &BooleanArray::from(vec![Some(true), Some(false), None]),
-        ]);
-
-        assert_eq!(
-            re.unwrap_err().to_string(),
-            "Invalid argument error: It is not possible to concatenate arrays of different data types (Int64, Utf8, Int32, Int8, Int16, UInt8, UInt16, UInt32, UInt64, Float32, ...)."
-        );
+            Arc::new(UInt16Array::from(vec![Some(1), Some(2), None])),
+            Arc::new(UInt64Array::from(vec![Some(1), Some(2), None])),
+            Arc::new(Float32Array::from(vec![Some(1.0), Some(2.0), None])),
+        ];
+        arrays.extend(additional_arrays);
+        let arrays: Vec<&dyn Array> = arrays.iter().map(|array| array.as_ref()).collect();
+        let err = concat(&arrays).unwrap_err();
+        assert_eq!(err.to_string(), expected_error);
     }
 
     #[test]
@@ -1451,28 +1407,23 @@ mod tests {
         assert_eq!(arr.null_count(), 10);
     }
 
-    #[test]
-    fn test_string_array_slices() {
-        let input_1 = StringArray::from(vec!["hello", "A", "B", "C"]);
-        let input_2 = StringArray::from(vec!["world", "D", "E", "Z"]);
-
+    #[rstest]
+    #[case::without_nulls(
+        StringArray::from(vec!["hello", "A", "B", "C"]),
+        StringArray::from(vec!["world", "D", "E", "Z"]),
+        StringArray::from(vec!["A", "B", "C", "D", "E"])
+    )]
+    #[case::with_nulls(
+        StringArray::from(vec![Some("hello"), None, Some("A"), Some("C")]),
+        StringArray::from(vec![None, Some("world"), Some("D"), None]),
+        StringArray::from(vec![None, Some("A"), Some("C"), Some("world"), Some("D")])
+    )]
+    fn test_string_array_slices(
+        #[case] input_1: StringArray,
+        #[case] input_2: StringArray,
+        #[case] expected_output: StringArray,
+    ) {
         let arr = concat(&[&input_1.slice(1, 3), &input_2.slice(1, 2)]).unwrap();
-
-        let expected_output = StringArray::from(vec!["A", "B", "C", "D", "E"]);
-
-        let actual_output = arr.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(actual_output, &expected_output);
-    }
-
-    #[test]
-    fn test_string_array_with_null_slices() {
-        let input_1 = StringArray::from(vec![Some("hello"), None, Some("A"), Some("C")]);
-        let input_2 = StringArray::from(vec![None, Some("world"), Some("D"), None]);
-
-        let arr = concat(&[&input_1.slice(1, 3), &input_2.slice(1, 2)]).unwrap();
-
-        let expected_output =
-            StringArray::from(vec![None, Some("A"), Some("C"), Some("world"), Some("D")]);
 
         let actual_output = arr.as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(actual_output, &expected_output);
@@ -2026,38 +1977,59 @@ mod tests {
         );
     }
 
-    // Test the simple case of concatenating two RunArrays
-    #[test]
-    fn test_concat_run_array() {
-        // Create simple run arrays
-        let run_ends1 = Int32Array::from(vec![2, 4]);
-        let values1 = Int32Array::from(vec![10, 20]);
-        let array1 = RunArray::try_new(&run_ends1, &values1).unwrap();
+    #[rstest]
+    #[case::two_arrays(
+        vec![(vec![2, 4], vec![10, 20]), (vec![1, 4], vec![30, 40])],
+        8,
+        vec![2, 4, 5, 8],
+        vec![10, 20, 30, 40]
+    )]
+    #[case::single_array(
+        vec![(vec![2, 4], vec![10, 20])],
+        4,
+        vec![2, 4],
+        vec![10, 20]
+    )]
+    #[case::three_arrays(
+        vec![
+            (vec![2, 4], vec![10, 20]),
+            (vec![1, 4], vec![30, 40]),
+            (vec![1, 4], vec![50, 60]),
+        ],
+        12,
+        vec![2, 4, 5, 8, 9, 12],
+        vec![10, 20, 30, 40, 50, 60]
+    )]
+    #[case::matching_boundary_values(
+        vec![(vec![2, 4, 7], vec![10, 20, 30]), (vec![3, 5], vec![30, 40])],
+        12,
+        vec![2, 4, 7, 10, 12],
+        vec![10, 20, 30, 30, 40]
+    )]
+    fn test_concat_run_array(
+        #[case] inputs: Vec<(Vec<i32>, Vec<i32>)>,
+        #[case] expected_len: usize,
+        #[case] expected_run_ends: Vec<i32>,
+        #[case] expected_values: Vec<i32>,
+    ) {
+        let arrays: Vec<RunArray<Int32Type>> = inputs
+            .into_iter()
+            .map(|(run_ends, values)| {
+                RunArray::try_new(&Int32Array::from(run_ends), &Int32Array::from(values)).unwrap()
+            })
+            .collect();
+        let arrays: Vec<&dyn Array> = arrays.iter().map(|array| array as &dyn Array).collect();
+        let result = concat(&arrays).unwrap();
+        let result = result.as_run::<Int32Type>();
 
-        let run_ends2 = Int32Array::from(vec![1, 4]);
-        let values2 = Int32Array::from(vec![30, 40]);
-        let array2 = RunArray::try_new(&run_ends2, &values2).unwrap();
+        assert_eq!(result.len(), expected_len);
+        let run_ends = result.run_ends().values();
+        assert_eq!(run_ends.len(), expected_run_ends.len());
+        assert_eq!(run_ends, expected_run_ends.as_slice());
 
-        // Concatenate the arrays - this should now work properly
-        let result = concat(&[&array1, &array2]).unwrap();
-        let result_run_array: &arrow_array::RunArray<Int32Type> = result.as_run();
-
-        // Check that the result has the correct length
-        assert_eq!(result_run_array.len(), 8); // 4 + 4
-
-        // Check the run ends
-        let run_ends = result_run_array.run_ends().values();
-        assert_eq!(run_ends.len(), 4);
-        assert_eq!(&[2, 4, 5, 8], run_ends);
-
-        // Check the values
-        let values = result_run_array
-            .values()
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .unwrap();
-        assert_eq!(values.len(), 4);
-        assert_eq!(&[10, 20, 30, 40], values.values());
+        let values = result.values().as_primitive::<Int32Type>();
+        assert_eq!(values.len(), expected_values.len());
+        assert_eq!(values.values().as_ref(), expected_values.as_slice());
     }
 
     #[test]
@@ -2119,41 +2091,6 @@ mod tests {
     }
 
     #[test]
-    fn test_concat_run_array_matching_first_last_value() {
-        // Create a run array with run ends [2, 4, 7] and values [10, 20, 30]
-        let run_ends1 = Int32Array::from(vec![2, 4, 7]);
-        let values1 = Int32Array::from(vec![10, 20, 30]);
-        let array1 = RunArray::try_new(&run_ends1, &values1).unwrap();
-
-        // Create another run array with run ends [3, 5] and values [30, 40]
-        let run_ends2 = Int32Array::from(vec![3, 5]);
-        let values2 = Int32Array::from(vec![30, 40]);
-        let array2 = RunArray::try_new(&run_ends2, &values2).unwrap();
-
-        // Concatenate the two arrays
-        let result = concat(&[&array1, &array2]).unwrap();
-        let result_run_array: &arrow_array::RunArray<Int32Type> = result.as_run();
-
-        // The result should have length 12 (7 + 5)
-        assert_eq!(result_run_array.len(), 12);
-
-        // Check that the run ends are correct
-        let run_ends = result_run_array.run_ends().values();
-        assert_eq!(&[2, 4, 7, 10, 12], run_ends);
-
-        // Check that the values are correct
-        assert_eq!(
-            &[10, 20, 30, 30, 40],
-            result_run_array
-                .values()
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
-                .values()
-        );
-    }
-
-    #[test]
     fn test_concat_run_array_with_nulls() {
         // Create values array with nulls
         let values1 = Int32Array::from(vec![Some(10), None, Some(30)]);
@@ -2192,70 +2129,6 @@ mod tests {
         assert_eq!(actual.len(), expected.len());
         assert_eq!(actual.null_count(), expected.null_count());
         assert_eq!(actual.values(), expected.values());
-    }
-
-    #[test]
-    fn test_concat_run_array_single() {
-        // Create a run array with run ends [2, 4] and values [10, 20]
-        let run_ends1 = Int32Array::from(vec![2, 4]);
-        let values1 = Int32Array::from(vec![10, 20]);
-        let array1 = RunArray::try_new(&run_ends1, &values1).unwrap();
-
-        // Concatenate the single array
-        let result = concat(&[&array1]).unwrap();
-        let result_run_array: &arrow_array::RunArray<Int32Type> = result.as_run();
-
-        // The result should have length 4
-        assert_eq!(result_run_array.len(), 4);
-
-        // Check that the run ends are correct
-        let run_ends = result_run_array.run_ends().values();
-        assert_eq!(&[2, 4], run_ends);
-
-        // Check that the values are correct
-        assert_eq!(
-            &[10, 20],
-            result_run_array
-                .values()
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
-                .values()
-        );
-    }
-
-    #[test]
-    fn test_concat_run_array_with_3_arrays() {
-        let run_ends1 = Int32Array::from(vec![2, 4]);
-        let values1 = Int32Array::from(vec![10, 20]);
-        let array1 = RunArray::try_new(&run_ends1, &values1).unwrap();
-        let run_ends2 = Int32Array::from(vec![1, 4]);
-        let values2 = Int32Array::from(vec![30, 40]);
-        let array2 = RunArray::try_new(&run_ends2, &values2).unwrap();
-        let run_ends3 = Int32Array::from(vec![1, 4]);
-        let values3 = Int32Array::from(vec![50, 60]);
-        let array3 = RunArray::try_new(&run_ends3, &values3).unwrap();
-
-        // Concatenate the arrays
-        let result = concat(&[&array1, &array2, &array3]).unwrap();
-        let result_run_array: &arrow_array::RunArray<Int32Type> = result.as_run();
-
-        // Check that the result has the correct length
-        assert_eq!(result_run_array.len(), 12); // 4 + 4 + 4
-
-        // Check the run ends
-        let run_ends = result_run_array.run_ends().values();
-        assert_eq!(run_ends.len(), 6);
-        assert_eq!(&[2, 4, 5, 8, 9, 12], run_ends);
-
-        // Check the values
-        let values = result_run_array
-            .values()
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .unwrap();
-        assert_eq!(values.len(), 6);
-        assert_eq!(&[10, 20, 30, 40, 50, 60], values.values());
     }
 
     #[test]

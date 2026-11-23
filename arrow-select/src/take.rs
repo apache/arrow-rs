@@ -1771,6 +1771,7 @@ mod tests {
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
     use arrow_schema::{Field, Fields, Schema, TimeUnit, UnionFields};
     use num_traits::ToPrimitive;
+    use rstest::rstest;
 
     fn test_take_decimal_arrays(
         data: Vec<Option<i128>>,
@@ -1997,168 +1998,126 @@ mod tests {
         .unwrap();
     }
 
-    #[test]
-    fn test_take_primitive() {
+    #[rstest]
+    #[case::int8(
+        Int8Type {},
+        vec![Some(0), None, Some(2), Some(3), None],
+        vec![Some(3), None, None, Some(3), Some(2)]
+    )]
+    #[case::int16(
+        Int16Type {},
+        vec![Some(0), None, Some(2), Some(3), None],
+        vec![Some(3), None, None, Some(3), Some(2)]
+    )]
+    #[case::int32(
+        Int32Type {},
+        vec![Some(0), None, Some(2), Some(3), None],
+        vec![Some(3), None, None, Some(3), Some(2)]
+    )]
+    #[case::int64_positive(
+        Int64Type {},
+        vec![Some(0), None, Some(2), Some(3), None],
+        vec![Some(3), None, None, Some(3), Some(2)]
+    )]
+    #[case::uint8(
+        UInt8Type {},
+        vec![Some(0), None, Some(2), Some(3), None],
+        vec![Some(3), None, None, Some(3), Some(2)]
+    )]
+    #[case::uint16(
+        UInt16Type {},
+        vec![Some(0), None, Some(2), Some(3), None],
+        vec![Some(3), None, None, Some(3), Some(2)]
+    )]
+    #[case::uint32(
+        UInt32Type {},
+        vec![Some(0), None, Some(2), Some(3), None],
+        vec![Some(3), None, None, Some(3), Some(2)]
+    )]
+    #[case::int64_negative(
+        Int64Type {},
+        vec![Some(0), None, Some(2), Some(-15), None],
+        vec![Some(-15), None, None, Some(-15), Some(2)]
+    )]
+    #[case::interval_year_month(
+        IntervalYearMonthType {},
+        vec![Some(0), None, Some(2), Some(-15), None],
+        vec![Some(-15), None, None, Some(-15), Some(2)]
+    )]
+    #[case::interval_day_time(
+        IntervalDayTimeType {},
+        vec![
+            Some(IntervalDayTime::new(0, 0)),
+            None,
+            Some(IntervalDayTime::new(2, 0)),
+            Some(IntervalDayTime::new(-15, 0)),
+            None,
+        ],
+        vec![
+            Some(IntervalDayTime::new(-15, 0)),
+            None,
+            None,
+            Some(IntervalDayTime::new(-15, 0)),
+            Some(IntervalDayTime::new(2, 0)),
+        ]
+    )]
+    #[case::interval_month_day_nano(
+        IntervalMonthDayNanoType {},
+        vec![
+            Some(IntervalMonthDayNano::new(0, 0, 0)),
+            None,
+            Some(IntervalMonthDayNano::new(2, 0, 0)),
+            Some(IntervalMonthDayNano::new(-15, 0, 0)),
+            None,
+        ],
+        vec![
+            Some(IntervalMonthDayNano::new(-15, 0, 0)),
+            None,
+            None,
+            Some(IntervalMonthDayNano::new(-15, 0, 0)),
+            Some(IntervalMonthDayNano::new(2, 0, 0)),
+        ]
+    )]
+    #[case::duration_second(
+        DurationSecondType {},
+        vec![Some(0), None, Some(2), Some(-15), None],
+        vec![Some(-15), None, None, Some(-15), Some(2)]
+    )]
+    #[case::duration_millisecond(
+        DurationMillisecondType {},
+        vec![Some(0), None, Some(2), Some(-15), None],
+        vec![Some(-15), None, None, Some(-15), Some(2)]
+    )]
+    #[case::duration_microsecond(
+        DurationMicrosecondType {},
+        vec![Some(0), None, Some(2), Some(-15), None],
+        vec![Some(-15), None, None, Some(-15), Some(2)]
+    )]
+    #[case::duration_nanosecond(
+        DurationNanosecondType {},
+        vec![Some(0), None, Some(2), Some(-15), None],
+        vec![Some(-15), None, None, Some(-15), Some(2)]
+    )]
+    #[case::float32(
+        Float32Type {},
+        vec![Some(0.0), None, Some(2.21), Some(-3.1), None],
+        vec![Some(-3.1), None, None, Some(-3.1), Some(2.21)]
+    )]
+    #[case::float64(
+        Float64Type {},
+        vec![Some(0.0), None, Some(2.21), Some(-3.1), None],
+        vec![Some(-3.1), None, None, Some(-3.1), Some(2.21)]
+    )]
+    fn test_take_primitive<T: ArrowPrimitiveType>(
+        #[case] value_type: T,
+        #[case] data: Vec<Option<T::Native>>,
+        #[case] expected: Vec<Option<T::Native>>,
+    ) where
+        PrimitiveArray<T>: From<Vec<Option<T::Native>>>,
+    {
+        let _ = value_type;
         let index = UInt32Array::from(vec![Some(3), None, Some(1), Some(3), Some(2)]);
-
-        // int8
-        test_take_primitive_arrays::<Int8Type>(
-            vec![Some(0), None, Some(2), Some(3), None],
-            &index,
-            None,
-            vec![Some(3), None, None, Some(3), Some(2)],
-        )
-        .unwrap();
-
-        // int16
-        test_take_primitive_arrays::<Int16Type>(
-            vec![Some(0), None, Some(2), Some(3), None],
-            &index,
-            None,
-            vec![Some(3), None, None, Some(3), Some(2)],
-        )
-        .unwrap();
-
-        // int32
-        test_take_primitive_arrays::<Int32Type>(
-            vec![Some(0), None, Some(2), Some(3), None],
-            &index,
-            None,
-            vec![Some(3), None, None, Some(3), Some(2)],
-        )
-        .unwrap();
-
-        // int64
-        test_take_primitive_arrays::<Int64Type>(
-            vec![Some(0), None, Some(2), Some(3), None],
-            &index,
-            None,
-            vec![Some(3), None, None, Some(3), Some(2)],
-        )
-        .unwrap();
-
-        // uint8
-        test_take_primitive_arrays::<UInt8Type>(
-            vec![Some(0), None, Some(2), Some(3), None],
-            &index,
-            None,
-            vec![Some(3), None, None, Some(3), Some(2)],
-        )
-        .unwrap();
-
-        // uint16
-        test_take_primitive_arrays::<UInt16Type>(
-            vec![Some(0), None, Some(2), Some(3), None],
-            &index,
-            None,
-            vec![Some(3), None, None, Some(3), Some(2)],
-        )
-        .unwrap();
-
-        // uint32
-        test_take_primitive_arrays::<UInt32Type>(
-            vec![Some(0), None, Some(2), Some(3), None],
-            &index,
-            None,
-            vec![Some(3), None, None, Some(3), Some(2)],
-        )
-        .unwrap();
-
-        // int64
-        test_take_primitive_arrays::<Int64Type>(
-            vec![Some(0), None, Some(2), Some(-15), None],
-            &index,
-            None,
-            vec![Some(-15), None, None, Some(-15), Some(2)],
-        )
-        .unwrap();
-
-        // interval_year_month
-        test_take_primitive_arrays::<IntervalYearMonthType>(
-            vec![Some(0), None, Some(2), Some(-15), None],
-            &index,
-            None,
-            vec![Some(-15), None, None, Some(-15), Some(2)],
-        )
-        .unwrap();
-
-        // interval_day_time
-        let v1 = IntervalDayTime::new(0, 0);
-        let v2 = IntervalDayTime::new(2, 0);
-        let v3 = IntervalDayTime::new(-15, 0);
-        test_take_primitive_arrays::<IntervalDayTimeType>(
-            vec![Some(v1), None, Some(v2), Some(v3), None],
-            &index,
-            None,
-            vec![Some(v3), None, None, Some(v3), Some(v2)],
-        )
-        .unwrap();
-
-        // interval_month_day_nano
-        let v1 = IntervalMonthDayNano::new(0, 0, 0);
-        let v2 = IntervalMonthDayNano::new(2, 0, 0);
-        let v3 = IntervalMonthDayNano::new(-15, 0, 0);
-        test_take_primitive_arrays::<IntervalMonthDayNanoType>(
-            vec![Some(v1), None, Some(v2), Some(v3), None],
-            &index,
-            None,
-            vec![Some(v3), None, None, Some(v3), Some(v2)],
-        )
-        .unwrap();
-
-        // duration_second
-        test_take_primitive_arrays::<DurationSecondType>(
-            vec![Some(0), None, Some(2), Some(-15), None],
-            &index,
-            None,
-            vec![Some(-15), None, None, Some(-15), Some(2)],
-        )
-        .unwrap();
-
-        // duration_millisecond
-        test_take_primitive_arrays::<DurationMillisecondType>(
-            vec![Some(0), None, Some(2), Some(-15), None],
-            &index,
-            None,
-            vec![Some(-15), None, None, Some(-15), Some(2)],
-        )
-        .unwrap();
-
-        // duration_microsecond
-        test_take_primitive_arrays::<DurationMicrosecondType>(
-            vec![Some(0), None, Some(2), Some(-15), None],
-            &index,
-            None,
-            vec![Some(-15), None, None, Some(-15), Some(2)],
-        )
-        .unwrap();
-
-        // duration_nanosecond
-        test_take_primitive_arrays::<DurationNanosecondType>(
-            vec![Some(0), None, Some(2), Some(-15), None],
-            &index,
-            None,
-            vec![Some(-15), None, None, Some(-15), Some(2)],
-        )
-        .unwrap();
-
-        // float32
-        test_take_primitive_arrays::<Float32Type>(
-            vec![Some(0.0), None, Some(2.21), Some(-3.1), None],
-            &index,
-            None,
-            vec![Some(-3.1), None, None, Some(-3.1), Some(2.21)],
-        )
-        .unwrap();
-
-        // float64
-        test_take_primitive_arrays::<Float64Type>(
-            vec![Some(0.0), None, Some(2.21), Some(-3.1), None],
-            &index,
-            None,
-            vec![Some(-3.1), None, None, Some(-3.1), Some(2.21)],
-        )
-        .unwrap();
+        test_take_primitive_arrays::<T>(data, &index, None, expected).unwrap();
     }
 
     #[test]
@@ -2179,78 +2138,65 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_take_impl_primitive_with_int64_indices() {
-        let index = Int64Array::from(vec![Some(3), None, Some(1), Some(3), Some(2)]);
-
-        // int16
-        test_take_impl_primitive_arrays::<Int16Type, Int64Type>(
-            vec![Some(0), None, Some(2), Some(3), None],
-            &index,
-            None,
-            vec![Some(3), None, None, Some(3), Some(2)],
-        );
-
-        // int64
-        test_take_impl_primitive_arrays::<Int64Type, Int64Type>(
-            vec![Some(0), None, Some(2), Some(-15), None],
-            &index,
-            None,
-            vec![Some(-15), None, None, Some(-15), Some(2)],
-        );
-
-        // uint64
-        test_take_impl_primitive_arrays::<UInt64Type, Int64Type>(
-            vec![Some(0), None, Some(2), Some(3), None],
-            &index,
-            None,
-            vec![Some(3), None, None, Some(3), Some(2)],
-        );
-
-        // duration_millisecond
-        test_take_impl_primitive_arrays::<DurationMillisecondType, Int64Type>(
-            vec![Some(0), None, Some(2), Some(-15), None],
-            &index,
-            None,
-            vec![Some(-15), None, None, Some(-15), Some(2)],
-        );
-
-        // float32
-        test_take_impl_primitive_arrays::<Float32Type, Int64Type>(
-            vec![Some(0.0), None, Some(2.21), Some(-3.1), None],
-            &index,
-            None,
-            vec![Some(-3.1), None, None, Some(-3.1), Some(2.21)],
-        );
-    }
-
-    #[test]
-    fn test_take_impl_primitive_with_uint8_indices() {
-        let index = UInt8Array::from(vec![Some(3), None, Some(1), Some(3), Some(2)]);
-
-        // int16
-        test_take_impl_primitive_arrays::<Int16Type, UInt8Type>(
-            vec![Some(0), None, Some(2), Some(3), None],
-            &index,
-            None,
-            vec![Some(3), None, None, Some(3), Some(2)],
-        );
-
-        // duration_millisecond
-        test_take_impl_primitive_arrays::<DurationMillisecondType, UInt8Type>(
-            vec![Some(0), None, Some(2), Some(-15), None],
-            &index,
-            None,
-            vec![Some(-15), None, None, Some(-15), Some(2)],
-        );
-
-        // float32
-        test_take_impl_primitive_arrays::<Float32Type, UInt8Type>(
-            vec![Some(0.0), None, Some(2.21), Some(-3.1), None],
-            &index,
-            None,
-            vec![Some(-3.1), None, None, Some(-3.1), Some(2.21)],
-        );
+    #[rstest]
+    #[case::int16_int64_indices(
+        Int16Type {},
+        vec![Some(0), None, Some(2), Some(3), None],
+        Int64Array::from(vec![Some(3), None, Some(1), Some(3), Some(2)]),
+        vec![Some(3), None, None, Some(3), Some(2)]
+    )]
+    #[case::int64_int64_indices(
+        Int64Type {},
+        vec![Some(0), None, Some(2), Some(-15), None],
+        Int64Array::from(vec![Some(3), None, Some(1), Some(3), Some(2)]),
+        vec![Some(-15), None, None, Some(-15), Some(2)]
+    )]
+    #[case::uint64_int64_indices(
+        UInt64Type {},
+        vec![Some(0), None, Some(2), Some(3), None],
+        Int64Array::from(vec![Some(3), None, Some(1), Some(3), Some(2)]),
+        vec![Some(3), None, None, Some(3), Some(2)]
+    )]
+    #[case::duration_millisecond_int64_indices(
+        DurationMillisecondType {},
+        vec![Some(0), None, Some(2), Some(-15), None],
+        Int64Array::from(vec![Some(3), None, Some(1), Some(3), Some(2)]),
+        vec![Some(-15), None, None, Some(-15), Some(2)]
+    )]
+    #[case::float32_int64_indices(
+        Float32Type {},
+        vec![Some(0.0), None, Some(2.21), Some(-3.1), None],
+        Int64Array::from(vec![Some(3), None, Some(1), Some(3), Some(2)]),
+        vec![Some(-3.1), None, None, Some(-3.1), Some(2.21)]
+    )]
+    #[case::int16_uint8_indices(
+        Int16Type {},
+        vec![Some(0), None, Some(2), Some(3), None],
+        UInt8Array::from(vec![Some(3), None, Some(1), Some(3), Some(2)]),
+        vec![Some(3), None, None, Some(3), Some(2)]
+    )]
+    #[case::duration_millisecond_uint8_indices(
+        DurationMillisecondType {},
+        vec![Some(0), None, Some(2), Some(-15), None],
+        UInt8Array::from(vec![Some(3), None, Some(1), Some(3), Some(2)]),
+        vec![Some(-15), None, None, Some(-15), Some(2)]
+    )]
+    #[case::float32_uint8_indices(
+        Float32Type {},
+        vec![Some(0.0), None, Some(2.21), Some(-3.1), None],
+        UInt8Array::from(vec![Some(3), None, Some(1), Some(3), Some(2)]),
+        vec![Some(-3.1), None, None, Some(-3.1), Some(2.21)]
+    )]
+    fn test_take_impl_primitive<T: ArrowPrimitiveType, I: ArrowPrimitiveType>(
+        #[case] value_type: T,
+        #[case] data: Vec<Option<T::Native>>,
+        #[case] index: PrimitiveArray<I>,
+        #[case] expected: Vec<Option<T::Native>>,
+    ) where
+        PrimitiveArray<T>: From<Vec<Option<T::Native>>>,
+    {
+        let _ = value_type;
+        test_take_impl_primitive_arrays::<T, I>(data, &index, None, expected);
     }
 
     #[test]
@@ -2935,53 +2881,39 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_take_fixed_size_binary_with_nulls_indices() {
-        let fsb = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
-            [
-                Some(vec![0x01, 0x01, 0x01, 0x01]),
-                Some(vec![0x02, 0x02, 0x02, 0x02]),
-                Some(vec![0x03, 0x03, 0x03, 0x03]),
-                Some(vec![0x04, 0x04, 0x04, 0x04]),
-            ]
-            .into_iter(),
-            4,
-        )
-        .unwrap();
+    /// The [`take_fixed_size_binary`] kernel has optimized implementations for commonly-used
+    /// value lengths. Width 4 exercises an optimized path, while width 5 exercises the
+    /// dynamic-length fallback, so both code paths are tested.
+    #[rstest]
+    #[case::optimized_width(
+        4,
+        [
+            Some(vec![0x01, 0x01, 0x01, 0x01]),
+            Some(vec![0x02, 0x02, 0x02, 0x02]),
+            Some(vec![0x03, 0x03, 0x03, 0x03]),
+            Some(vec![0x04, 0x04, 0x04, 0x04]),
+        ]
+    )]
+    #[case::fallback_width(
+        5,
+        [
+            Some(vec![0x01, 0x01, 0x01, 0x01, 0x01]),
+            Some(vec![0x02, 0x02, 0x02, 0x02, 0x01]),
+            Some(vec![0x03, 0x03, 0x03, 0x03, 0x01]),
+            Some(vec![0x04, 0x04, 0x04, 0x04, 0x01]),
+        ]
+    )]
+    fn test_take_fixed_size_binary_with_nulls_indices(
+        #[case] size: i32,
+        #[case] values: [Option<Vec<u8>>; 4],
+    ) {
+        let fsb =
+            FixedSizeBinaryArray::try_from_sparse_iter_with_size(values.into_iter(), size).unwrap();
 
         // The two middle indices are null -> Should be null in the output.
         let indices = UInt32Array::from(vec![Some(0), None, None, Some(3)]);
 
-        let result = take_fixed_size_binary::<_, true>(&fsb, &indices, 4).unwrap();
-        assert_eq!(result.len(), 4);
-        assert_eq!(result.null_count(), 2);
-        assert_eq!(
-            result.nulls().unwrap().iter().collect::<Vec<_>>(),
-            vec![true, false, false, true]
-        );
-    }
-
-    /// The [`take_fixed_size_binary`] kernel contains optimizations that provide a faster
-    /// implementation for commonly-used value lengths. This test uses a value length that is not
-    /// optimized to test both code paths.
-    #[test]
-    fn test_take_fixed_size_binary_with_nulls_indices_not_optimized_length() {
-        let fsb = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
-            [
-                Some(vec![0x01, 0x01, 0x01, 0x01, 0x01]),
-                Some(vec![0x02, 0x02, 0x02, 0x02, 0x01]),
-                Some(vec![0x03, 0x03, 0x03, 0x03, 0x01]),
-                Some(vec![0x04, 0x04, 0x04, 0x04, 0x01]),
-            ]
-            .into_iter(),
-            5,
-        )
-        .unwrap();
-
-        // The two middle indices are null -> Should be null in the output.
-        let indices = UInt32Array::from(vec![Some(0), None, None, Some(3)]);
-
-        let result = take_fixed_size_binary::<_, true>(&fsb, &indices, 5).unwrap();
+        let result = take_fixed_size_binary::<_, true>(&fsb, &indices, size).unwrap();
         assert_eq!(result.len(), 4);
         assert_eq!(result.null_count(), 2);
         assert_eq!(
@@ -4350,22 +4282,20 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_take_record_batch_non_nullable_column() {
-        let indices = [
-            UInt32Array::from(vec![2, 0, 2]),
-            // A validity buffer with no nulls
-            UInt32Array::new(vec![2, 0].into(), Some(NullBuffer::new_valid(2))),
-        ];
+    #[rstest]
+    #[case::without_validity_buffer(UInt32Array::from(vec![2, 0, 2]))]
+    #[case::all_valid_buffer(UInt32Array::new(
+        vec![2, 0].into(),
+        Some(NullBuffer::new_valid(2)),
+    ))]
+    fn test_take_record_batch_non_nullable_column(#[case] indices: UInt32Array) {
         for column in non_nullable_columns() {
             let batch = batch_with_non_nullable(column);
-            for indices in &indices {
-                let taken = take_record_batch(&batch, indices).unwrap();
+            let taken = take_record_batch(&batch, &indices).unwrap();
 
-                assert_eq!(taken.schema(), batch.schema());
-                for (taken, column) in taken.columns().iter().zip(batch.columns()) {
-                    assert_eq!(taken, &take(column, indices, None).unwrap());
-                }
+            assert_eq!(taken.schema(), batch.schema());
+            for (taken, column) in taken.columns().iter().zip(batch.columns()) {
+                assert_eq!(taken, &take(column, &indices, None).unwrap());
             }
         }
     }
@@ -4453,29 +4383,24 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_take_record_batch_out_of_bounds() {
-        let indices: [ArrayRef; 5] = [
-            // One past the end
-            Arc::new(UInt32Array::from(vec![0, 3])),
-            Arc::new(UInt32Array::from(vec![None, Some(3)])),
-            Arc::new(Int32Array::from(vec![-1])),
-            Arc::new(Int8Array::from(vec![i8::MAX])),
-            Arc::new(UInt64Array::from(vec![u64::MAX])),
-        ];
+    #[rstest]
+    #[case::one_past_end(Arc::new(UInt32Array::from(vec![0, 3])))]
+    #[case::null_and_one_past_end(Arc::new(UInt32Array::from(vec![None, Some(3)])))]
+    #[case::negative(Arc::new(Int32Array::from(vec![-1])))]
+    #[case::int8_max(Arc::new(Int8Array::from(vec![i8::MAX])))]
+    #[case::uint64_max(Arc::new(UInt64Array::from(vec![u64::MAX])))]
+    fn test_take_record_batch_out_of_bounds(#[case] indices: ArrayRef) {
         let first: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3]));
         let mut columns = vec![first];
         columns.extend(zero_width_columns(3));
         for first in columns {
             let batch = batch_with_first_column(first);
-            for indices in &indices {
-                let err = take_record_batch(&batch, indices).unwrap_err();
-                assert!(
-                    err.to_string().contains("Array index out of bounds"),
-                    "{}: {err}",
-                    batch.column(0).data_type()
-                );
-            }
+            let err = take_record_batch(&batch, &indices).unwrap_err();
+            assert!(
+                err.to_string().contains("Array index out of bounds"),
+                "{}: {err}",
+                batch.column(0).data_type()
+            );
         }
     }
 

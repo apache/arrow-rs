@@ -1313,6 +1313,7 @@ mod tests {
     use rand::distr::{Alphanumeric, StandardUniform};
     use rand::prelude::*;
     use rand::rng;
+    use rstest::rstest;
 
     #[test]
     fn test_filter_nulls_all() {
@@ -1328,49 +1329,45 @@ mod tests {
         assert_eq!(predicate.filter_nulls(Some(&nulls)), None);
     }
 
-    #[test]
-    fn test_filter_nulls_selection() {
+    #[rstest]
+    #[case::empty(vec![])]
+    #[case::single_row_prefix(vec![true])]
+    #[case::two_row_prefix(vec![true, true])]
+    #[case::all_rows(vec![true; 6])]
+    #[case::no_rows(vec![false; 6])]
+    #[case::sparse(vec![true, false, false, false, false, false])]
+    #[case::dense(vec![true, true, true, true, true, false])]
+    fn test_filter_nulls_selection(
+        #[case] filter: Vec<bool>,
+        #[values(0, 3, 9)] offset: usize,
+        #[values(false, true)] optimize: bool,
+    ) {
         // Cover full and partial prefixes, empty selections, and both general
         // iteration strategies, with and without materializing the selection.
-        let filters = [
-            vec![],
-            vec![true],
-            vec![true, true],
-            vec![true; 6],
-            vec![false; 6],
-            vec![true, false, false, false, false, false],
-            vec![true, true, true, true, true, false],
-        ];
-        for offset in [0, 3, 9] {
-            let mut validity = vec![false; offset];
-            validity.extend([true, false, true, false, true, false]);
-            let nulls = NullBuffer::from(validity).slice(offset, 6);
-            for filter in &filters {
-                let expected: NullBuffer = filter
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, selected)| **selected)
-                    .map(|(i, _)| nulls.is_valid(i))
-                    .collect();
-                let expected = (expected.null_count() != 0).then_some(expected);
-                let filter = BooleanArray::from(filter.clone());
-                for optimize in [false, true] {
-                    let builder = FilterBuilder::new(&filter);
-                    let predicate = if optimize {
-                        builder.optimize()
-                    } else {
-                        builder
-                    }
-                    .build();
-                    assert_eq!(predicate.filter_nulls(Some(&nulls)), expected);
-                    assert_eq!(predicate.filter_nulls(None), None);
-                    assert_eq!(
-                        predicate.filter_nulls(Some(&NullBuffer::new_valid(6))),
-                        None
-                    );
-                }
-            }
+        let mut validity = vec![false; offset];
+        validity.extend([true, false, true, false, true, false]);
+        let nulls = NullBuffer::from(validity).slice(offset, 6);
+        let expected: NullBuffer = filter
+            .iter()
+            .enumerate()
+            .filter(|(_, selected)| **selected)
+            .map(|(i, _)| nulls.is_valid(i))
+            .collect();
+        let expected = (expected.null_count() != 0).then_some(expected);
+        let filter = BooleanArray::from(filter);
+        let builder = FilterBuilder::new(&filter);
+        let predicate = if optimize {
+            builder.optimize()
+        } else {
+            builder
         }
+        .build();
+        assert_eq!(predicate.filter_nulls(Some(&nulls)), expected);
+        assert_eq!(predicate.filter_nulls(None), None);
+        assert_eq!(
+            predicate.filter_nulls(Some(&NullBuffer::new_valid(6))),
+            None
+        );
     }
 
     #[test]
@@ -1947,115 +1944,102 @@ mod tests {
     /// produce the same output. Both are called directly rather than through
     /// [`filter_bits`], whose dispatch depends on the filter density, so both
     /// get coverage on every input
-    #[test]
-    fn test_filter_bits() {
-        let mut rng = StdRng::seed_from_u64(42);
+    #[rstest]
+    fn test_filter_bits(
+        // Partial words, exact word multiples, and carries across flushed words.
+        #[values(0, 1, 7, 63, 64, 65, 127, 128, 200, 1024, 4099)] len: usize,
+        // Empty, sparse, balanced, dense, and full masks.
+        #[values(0.0, 0.01, 0.5, 0.9, 1.0)] density: f64,
+        // Value-buffer bit offsets, including non-byte-aligned starts.
+        #[values(0, 3, 8, 67)] offset: usize,
+        // Filter-buffer bit offsets also exercise unaligned mask reads.
+        #[values(0, 5)] filter_offset: usize,
+    ) {
+        // Each parameter combination has reproducible data, independent of test order.
+        let seed = 0x2a
+            ^ (len as u64).rotate_left(8)
+            ^ density.to_bits().rotate_left(16)
+            ^ (offset as u64).rotate_left(32)
+            ^ (filter_offset as u64).rotate_left(48);
+        let mut rng = StdRng::seed_from_u64(seed);
 
-        // Lengths exercising partial words, exact word multiples, and the
-        // carry logic across flushed words
-        let lens = [0, 1, 7, 63, 64, 65, 127, 128, 200, 1024, 4099];
-        // Densities covering empty, sparse, balanced, dense and full masks
-        let densities = [0.0, 0.01, 0.5, 0.9, 1.0];
-        // Bit offsets of the value buffer, including non byte-aligned ones
-        let offsets = [0, 3, 8, 67];
-        // Bit offsets of the filter, so the mask words are read unaligned too
-        let filter_offsets = [0, 5];
+        let values: BooleanBuffer = (0..len + offset).map(|_| rng.random_bool(0.5)).collect();
+        let values = values.slice(offset, len);
+        let filter: BooleanArray = (0..len + filter_offset)
+            .map(|_| Some(rng.random_bool(density)))
+            .collect();
+        let filter = filter.slice(filter_offset, len);
 
-        for len in lens {
-            for density in densities {
-                for offset in offsets {
-                    for filter_offset in filter_offsets {
-                        let values: BooleanBuffer =
-                            (0..len + offset).map(|_| rng.random_bool(0.5)).collect();
-                        let values = values.slice(offset, len);
-                        let filter: BooleanArray = (0..len + filter_offset)
-                            .map(|_| Some(rng.random_bool(density)))
-                            .collect();
-                        let filter = filter.slice(filter_offset, len);
+        let expected: BooleanBuffer = values
+            .iter()
+            .zip(filter.values().iter())
+            .filter_map(|(value, keep)| keep.then_some(value))
+            .collect();
 
-                        let expected: BooleanBuffer = values
-                            .iter()
-                            .zip(filter.values().iter())
-                            .filter_map(|(value, keep)| keep.then_some(value))
-                            .collect();
+        // Lazy and precomputed strategies dispatch differently
+        let predicates = [
+            FilterBuilder::new(&filter).build(),
+            FilterBuilder::new(&filter).optimize().build(),
+        ];
+        for predicate in &predicates {
+            let case = format!(
+                "{:?}: len={len} density={density} offset={offset} filter_offset={filter_offset}",
+                predicate.strategy
+            );
 
-                        // Lazy and precomputed strategies dispatch differently
-                        let predicates = [
-                            FilterBuilder::new(&filter).build(),
-                            FilterBuilder::new(&filter).optimize().build(),
-                        ];
-                        for predicate in &predicates {
-                            let case = format!(
-                                "{:?}: len={len} density={density} offset={offset} filter_offset={filter_offset}",
-                                predicate.strategy
-                            );
+            let compressed = filter_bits_compress(&values, predicate);
+            let compressed = BooleanBuffer::new(compressed, 0, predicate.count);
+            assert_eq!(compressed, expected, "compress {case}");
 
-                            let compressed = filter_bits_compress(&values, predicate);
-                            let compressed = BooleanBuffer::new(compressed, 0, predicate.count);
-                            assert_eq!(compressed, expected, "compress {case}");
-
-                            // `filter_bits` is never reached with the `All` /
-                            // `None` strategies, they are short-circuited by
-                            // the callers
-                            if matches!(
-                                predicate.strategy,
-                                IterationStrategy::All | IterationStrategy::None
-                            ) {
-                                continue;
-                            }
-
-                            let strategy = filter_bits_strategy(&values, predicate);
-                            let strategy = BooleanBuffer::new(strategy, 0, predicate.count);
-                            assert_eq!(strategy, expected, "strategy {case}");
-
-                            // Also cover the dispatch between the two pathways
-                            let dispatched = filter_bits(&values, predicate);
-                            let dispatched = BooleanBuffer::new(dispatched, 0, predicate.count);
-                            assert_eq!(dispatched, expected, "dispatch {case}");
-                        }
-                    }
-                }
+            // `filter_bits` is never reached with the `All` /
+            // `None` strategies, they are short-circuited by
+            // the callers
+            if matches!(
+                predicate.strategy,
+                IterationStrategy::All | IterationStrategy::None
+            ) {
+                continue;
             }
+
+            let strategy = filter_bits_strategy(&values, predicate);
+            let strategy = BooleanBuffer::new(strategy, 0, predicate.count);
+            assert_eq!(strategy, expected, "strategy {case}");
+
+            // Also cover the dispatch between the two pathways
+            let dispatched = filter_bits(&values, predicate);
+            let dispatched = BooleanBuffer::new(dispatched, 0, predicate.count);
+            assert_eq!(dispatched, expected, "dispatch {case}");
         }
     }
 
-    #[test]
-    fn test_slice_iterator_bits() {
-        let filter_values = (0..64).map(|i| i == 1).collect::<Vec<bool>>();
+    #[rstest]
+    #[case::single_set_bit(
+        (0..64).map(|i| i == 1).collect(),
+        vec![(1, 2)],
+        1
+    )]
+    #[case::single_unset_bit(
+        (0..64).map(|i| i != 1).collect(),
+        vec![(0, 1), (2, 64)],
+        64 - 1
+    )]
+    #[case::across_words(
+        (0..130).map(|i| i % 62 != 0).collect(),
+        vec![(1, 62), (63, 124), (125, 130)],
+        61 + 61 + 5
+    )]
+    fn test_slice_iterator(
+        #[case] filter_values: Vec<bool>,
+        #[case] expected_chunks: Vec<(usize, usize)>,
+        #[case] expected_count: usize,
+    ) {
         let filter = BooleanArray::from(filter_values);
         let filter_count = filter.true_count();
-
         let iter = SlicesIterator::new(&filter);
         let chunks = iter.collect::<Vec<_>>();
 
-        assert_eq!(chunks, vec![(1, 2)]);
-        assert_eq!(filter_count, 1);
-    }
-
-    #[test]
-    fn test_slice_iterator_bits1() {
-        let filter_values = (0..64).map(|i| i != 1).collect::<Vec<bool>>();
-        let filter = BooleanArray::from(filter_values);
-        let filter_count = filter.true_count();
-
-        let iter = SlicesIterator::new(&filter);
-        let chunks = iter.collect::<Vec<_>>();
-
-        assert_eq!(chunks, vec![(0, 1), (2, 64)]);
-        assert_eq!(filter_count, 64 - 1);
-    }
-
-    #[test]
-    fn test_slice_iterator_chunk_and_bits() {
-        let filter_values = (0..130).map(|i| i % 62 != 0).collect::<Vec<bool>>();
-        let filter = BooleanArray::from(filter_values);
-        let filter_count = filter.true_count();
-
-        let iter = SlicesIterator::new(&filter);
-        let chunks = iter.collect::<Vec<_>>();
-
-        assert_eq!(chunks, vec![(1, 62), (63, 124), (125, 130)]);
-        assert_eq!(filter_count, 61 + 61 + 5);
+        assert_eq!(chunks, expected_chunks);
+        assert_eq!(filter_count, expected_count);
     }
 
     #[test]

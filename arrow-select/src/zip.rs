@@ -1105,6 +1105,7 @@ mod test {
     use arrow_schema::{IntervalUnit, TimeUnit};
     use rand::rngs::StdRng;
     use rand::{RngExt, SeedableRng};
+    use rstest::rstest;
 
     #[test]
     fn test_count_true_runs() {
@@ -1257,55 +1258,43 @@ mod test {
         assert_eq!(actual, &expected);
     }
 
-    #[test]
-    fn test_zip_kernel_scalar_falsy_1() {
-        let a = Int32Array::from(vec![Some(5), None, Some(7), None, Some(1)]);
-
-        let fallback = Scalar::new(Int32Array::from_value(42, 1));
-
-        let mask = BooleanArray::from(vec![true, true, false, false, true]);
-        let out = zip(&mask, &a, &fallback).unwrap();
+    #[rstest]
+    #[case::falsy_scalar_mask_ends_with_true(
+        false,
+        vec![true, true, false, false, true],
+        vec![Some(5), None, Some(42), Some(42), Some(1)],
+    )]
+    #[case::falsy_scalar_mask_ends_with_false(
+        false,
+        vec![false, false, true, true, false],
+        vec![Some(42), Some(42), Some(7), None, Some(42)],
+    )]
+    #[case::truthy_scalar_mask_ends_with_true(
+        true,
+        vec![true, true, false, false, true],
+        vec![Some(42), Some(42), Some(7), None, Some(42)],
+    )]
+    #[case::truthy_scalar_mask_ends_with_false(
+        true,
+        vec![false, false, true, true, false],
+        vec![Some(5), None, Some(42), Some(42), Some(1)],
+    )]
+    fn test_zip_kernel_scalar_and_array(
+        #[case] scalar_is_truthy: bool,
+        #[case] mask: Vec<bool>,
+        #[case] expected: Vec<Option<i32>>,
+    ) {
+        let array = Int32Array::from(vec![Some(5), None, Some(7), None, Some(1)]);
+        let scalar = Scalar::new(Int32Array::from_value(42, 1));
+        let (truthy, falsy): (&dyn Datum, &dyn Datum) = if scalar_is_truthy {
+            (&scalar, &array)
+        } else {
+            (&array, &scalar)
+        };
+        let mask = BooleanArray::from(mask);
+        let out = zip(&mask, truthy, falsy).unwrap();
         let actual = out.as_any().downcast_ref::<Int32Array>().unwrap();
-        let expected = Int32Array::from(vec![Some(5), None, Some(42), Some(42), Some(1)]);
-        assert_eq!(actual, &expected);
-    }
-
-    #[test]
-    fn test_zip_kernel_scalar_falsy_2() {
-        let a = Int32Array::from(vec![Some(5), None, Some(7), None, Some(1)]);
-
-        let fallback = Scalar::new(Int32Array::from_value(42, 1));
-
-        let mask = BooleanArray::from(vec![false, false, true, true, false]);
-        let out = zip(&mask, &a, &fallback).unwrap();
-        let actual = out.as_any().downcast_ref::<Int32Array>().unwrap();
-        let expected = Int32Array::from(vec![Some(42), Some(42), Some(7), None, Some(42)]);
-        assert_eq!(actual, &expected);
-    }
-
-    #[test]
-    fn test_zip_kernel_scalar_truthy_1() {
-        let a = Int32Array::from(vec![Some(5), None, Some(7), None, Some(1)]);
-
-        let fallback = Scalar::new(Int32Array::from_value(42, 1));
-
-        let mask = BooleanArray::from(vec![true, true, false, false, true]);
-        let out = zip(&mask, &fallback, &a).unwrap();
-        let actual = out.as_any().downcast_ref::<Int32Array>().unwrap();
-        let expected = Int32Array::from(vec![Some(42), Some(42), Some(7), None, Some(42)]);
-        assert_eq!(actual, &expected);
-    }
-
-    #[test]
-    fn test_zip_kernel_scalar_truthy_2() {
-        let a = Int32Array::from(vec![Some(5), None, Some(7), None, Some(1)]);
-
-        let fallback = Scalar::new(Int32Array::from_value(42, 1));
-
-        let mask = BooleanArray::from(vec![false, false, true, true, false]);
-        let out = zip(&mask, &fallback, &a).unwrap();
-        let actual = out.as_any().downcast_ref::<Int32Array>().unwrap();
-        let expected = Int32Array::from(vec![Some(5), None, Some(42), Some(42), Some(1)]);
+        let expected = Int32Array::from(expected);
         assert_eq!(actual, &expected);
     }
 
