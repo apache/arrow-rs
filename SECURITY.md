@@ -65,6 +65,13 @@ Include in your report:
 - Affected crates and versions.
 - Potential impact.
 
+## Supported Versions
+
+We provide security fix support for only the latest three major release lines;
+for example, if the latest version is 60.x, we would also backport any security
+fixes to 59.x and 58.x. We recommend keeping up to date with the latest versions
+of the `arrow-rs` crates.
+
 [Apache Arrow Security Model]: https://arrow.apache.org/docs/dev/format/Security.html
 [`ArrayData::validate_full`]: https://docs.rs/arrow/latest/arrow/array/struct.ArrayData.html#method.validate_full
 [ASF security reporting process]: https://www.apache.org/security/#reporting-a-vulnerability
