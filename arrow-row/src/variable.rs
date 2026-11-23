@@ -9,7 +9,7 @@ use arrow_buffer::bit_util::ceil;
 use arrow_buffer::{
     ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer, OffsetBuffer, ScalarBuffer,
 };
-use arrow_data::MAX_INLINE_VIEW_LEN;
+use arrow_data::{ByteView, MAX_INLINE_VIEW_LEN};
 use arrow_schema::{ArrowError, SortOptions};
 use builder::make_view;
 
@@ -259,10 +259,41 @@ pub fn decode_blocks(row: &[u8], options: SortOptions, mut f: impl FnMut(&[u8]))
 }
 
 /// Returns the number of bytes of encoded data
+#[inline]
 fn decoded_len(row: &[u8], options: SortOptions) -> usize {
+    let (non_empty_sentinel, continuation) = match options.descending {
+        true => (!NON_EMPTY_SENTINEL, !BLOCK_CONTINUATION),
+        false => (NON_EMPTY_SENTINEL, BLOCK_CONTINUATION),
+    };
+
+    if row[0] != non_empty_sentinel {
+        return 0;
+    }
+
+    let block_len = |sentinel: u8| match options.descending {
+        true => !sentinel as usize,
+        false => sentinel as usize,
+    };
+
+    let mut idx = 1;
     let mut len = 0;
-    decode_blocks(row, options, |block| len += block.len());
-    len
+    for _ in 0..MINI_BLOCK_COUNT {
+        let sentinel = row[idx + MINI_BLOCK_SIZE];
+        if sentinel != continuation {
+            return len + block_len(sentinel);
+        }
+        len += MINI_BLOCK_SIZE;
+        idx += MINI_BLOCK_SIZE + 1;
+    }
+
+    loop {
+        let sentinel = row[idx + BLOCK_SIZE];
+        if sentinel != continuation {
+            return len + block_len(sentinel);
+        }
+        len += BLOCK_SIZE;
+        idx += BLOCK_SIZE + 1;
+    }
 }
 
 /// Decodes a binary array from `rows` with the provided `options`
@@ -301,10 +332,17 @@ pub fn decode_binary<I: OffsetSizeTrait>(
     })
 }
 
-fn decode_binary_view_inner<const VALIDATE_UTF8: bool>(
+// Keep specializations out-of-line so the dispatcher does not merge ascending
+// and descending loops into a single oversized stack frame.
+#[inline(never)]
+fn decode_binary_view_inner<const VALIDATE_UTF8: bool, const DESCENDING: bool>(
     rows: &mut [&[u8]],
     options: SortOptions,
 ) -> Result<BinaryViewArray, ArrowError> {
+    let options = SortOptions {
+        descending: DESCENDING,
+        ..options
+    };
     let len = rows.len();
     let inline_str_max_len = MAX_INLINE_VIEW_LEN as usize;
 
@@ -338,34 +376,36 @@ fn decode_binary_view_inner<const VALIDATE_UTF8: bool>(
         Vec::new()
     };
 
-    let null_sentinel = null_sentinel(options);
+    let non_empty_sentinel = match DESCENDING {
+        true => !NON_EMPTY_SENTINEL,
+        false => NON_EMPTY_SENTINEL,
+    };
     let mut views = vec![0_u128; len];
-    for (i, row) in rows.iter_mut().enumerate() {
+    for (view, row) in views.iter_mut().zip(rows.iter_mut()) {
+        // Both null and empty string views are represented as `0_u128`.
+        if row[0] != non_empty_sentinel {
+            *row = &row[1..];
+            continue;
+        }
         let start_offset = values.len();
         let offset = decode_blocks(row, options, |b| values.extend_from_slice(b));
-        // Measure string length via change in values buffer. This way we can
-        // overwrite short strings in the values buffer as we inline those to
-        // views.
         let decoded_len = values.len() - start_offset;
-        if row[0] == null_sentinel {
-            debug_assert_eq!(offset, 1);
-            debug_assert_eq!(start_offset, values.len());
+
+        let val = &mut values[start_offset..];
+        if DESCENDING {
+            val.iter_mut().for_each(|o| *o = !*o);
+        }
+
+        if decoded_len <= inline_str_max_len {
+            *view = make_view(val, 0, 0);
+            if VALIDATE_UTF8 {
+                view_utf8_validation_buffer.extend_from_slice(val);
+            }
+            values.truncate(start_offset);
         } else {
-            // Safety: we just appended the data to the end of the buffer
-            let val = unsafe { values.get_unchecked_mut(start_offset..) };
-
-            if options.descending {
-                val.iter_mut().for_each(|o| *o = !*o);
-            }
-
-            views[i] = make_view(val, 0, start_offset as u32);
-
-            if decoded_len <= inline_str_max_len {
-                if VALIDATE_UTF8 {
-                    view_utf8_validation_buffer.extend_from_slice(val);
-                }
-                values.truncate(start_offset);
-            }
+            *view = ByteView::new(decoded_len as u32, &val[..4])
+                .with_offset(start_offset as u32)
+                .as_u128();
         }
         *row = &row[offset..];
     }
@@ -388,7 +428,11 @@ pub fn decode_binary_view(
     rows: &mut [&[u8]],
     options: SortOptions,
 ) -> Result<BinaryViewArray, ArrowError> {
-    decode_binary_view_inner::<false>(rows, options)
+    if options.descending {
+        decode_binary_view_inner::<false, true>(rows, options)
+    } else {
+        decode_binary_view_inner::<false, false>(rows, options)
+    }
 }
 
 /// Decodes a string array from `rows` with the provided `options`
@@ -427,10 +471,11 @@ pub unsafe fn decode_string_view(
     options: SortOptions,
     validate_utf8: bool,
 ) -> Result<StringViewArray, ArrowError> {
-    let view = if validate_utf8 {
-        decode_binary_view_inner::<true>(rows, options)?
-    } else {
-        decode_binary_view_inner::<false>(rows, options)?
+    let view = match (validate_utf8, options.descending) {
+        (false, false) => decode_binary_view_inner::<false, false>(rows, options)?,
+        (false, true) => decode_binary_view_inner::<false, true>(rows, options)?,
+        (true, false) => decode_binary_view_inner::<true, false>(rows, options)?,
+        (true, true) => decode_binary_view_inner::<true, true>(rows, options)?,
     };
     Ok(unsafe { view.to_string_view_unchecked() })
 }
