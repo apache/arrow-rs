@@ -142,6 +142,7 @@ mod tests {
     use arrow_schema::{Field, Fields, UnionFields, UnionMode};
     use rand::prelude::StdRng;
     use rand::{RngExt, SeedableRng};
+    use rstest::rstest;
     use std::sync::Arc;
 
     #[test]
@@ -356,91 +357,17 @@ mod tests {
         assert_eq!(r, vec![None, Some("a"), None]);
     }
 
-    #[test]
-    fn test_nullif_int_large_left_offset() {
-        let a = Int32Array::from(vec![
-            Some(-1), // 0
-            Some(-1),
-            Some(-1),
-            Some(-1),
-            Some(-1),
-            Some(-1),
-            Some(-1),
-            Some(-1),
-            Some(-1), // 8
-            Some(-1),
-            Some(-1),
-            Some(-1),
-            Some(-1),
-            Some(-1),
-            Some(-1),
-            Some(-1),
-            None,     // 16
-            Some(15), // 17
-            Some(8),
-            Some(1),
-            Some(9),
-        ]);
-        let a = a.slice(17, 3); // Some(15), Some(8), Some(1)
+    #[rstest]
+    #[case::large_left_offset(17, 2)]
+    #[case::large_right_offset(1, 18)]
+    fn test_nullif_int_large_offset(#[case] value_offset: usize, #[case] mask_offset: usize) {
+        let mut values = vec![Some(-1); value_offset - 1];
+        values.extend([None, Some(15), Some(8), Some(1), Some(9)]);
+        let a = Int32Array::from(values).slice(value_offset, 3); // Some(15), Some(8), Some(1)
 
-        let comp = BooleanArray::from(vec![
-            Some(false),
-            Some(false),
-            Some(false),
-            None,
-            Some(true),
-            Some(false),
-            None,
-        ]);
-        let comp = comp.slice(2, 3); // Some(false), None, Some(true)
-        let res = nullif(&a, &comp).unwrap();
-        let res = res.as_primitive::<Int32Type>();
-
-        let expected = Int32Array::from(vec![
-            Some(15), // False => keep it
-            Some(8),  // None => keep it
-            None,     // true => None
-        ]);
-        assert_eq!(&expected, res)
-    }
-
-    #[test]
-    fn test_nullif_int_large_right_offset() {
-        let a = Int32Array::from(vec![
-            None,     // 0
-            Some(15), // 1
-            Some(8),
-            Some(1),
-            Some(9),
-        ]);
-        let a = a.slice(1, 3); // Some(15), Some(8), Some(1)
-
-        let comp = BooleanArray::from(vec![
-            Some(false), // 0
-            Some(false),
-            Some(false),
-            Some(false),
-            Some(false),
-            Some(false),
-            Some(false),
-            Some(false),
-            Some(false), // 8
-            Some(false),
-            Some(false),
-            Some(false),
-            Some(false),
-            Some(false),
-            Some(false),
-            Some(false),
-            Some(false), // 16
-            Some(false), // 17
-            Some(false), // 18
-            None,
-            Some(true),
-            Some(false),
-            None,
-        ]);
-        let comp = comp.slice(18, 3); // Some(false), None, Some(true)
+        let mut mask = vec![Some(false); mask_offset + 1];
+        mask.extend([None, Some(true), Some(false), None]);
+        let comp = BooleanArray::from(mask).slice(mask_offset, 3); // Some(false), None, Some(true)
         let res = nullif(&a, &comp).unwrap();
         let res = res.as_primitive::<Int32Type>();
 

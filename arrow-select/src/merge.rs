@@ -383,6 +383,7 @@ mod tests {
         StringArray, UInt64Array,
     };
     use arrow_schema::ArrowError::InvalidArgumentError;
+    use rstest::rstest;
     use std::sync::Arc;
 
     #[derive(PartialEq, Eq, Copy, Clone)]
@@ -503,50 +504,30 @@ mod tests {
         assert_eq!(merged.value(3), "A");
     }
 
-    #[test]
-    fn test_merge_scalar_and_array() {
-        let truthy = Scalar::new(StringArray::from(vec![Some("A")]));
-        let falsy = StringArray::from(vec![Some("B"), Some("C")]);
-
-        let mask = BooleanArray::from(vec![true, false, false, true]);
-
-        let merged = merge(&mask, &truthy, &falsy).unwrap();
+    #[rstest]
+    #[case::scalar_truthy(true, vec![true, false, false, true], vec!["A", "B", "C", "A"])]
+    #[case::scalar_falsy(false, vec![true, false, false, true, false, false], vec!["B", "A", "A", "C", "A", "A"])]
+    fn test_merge_scalar_and_array(
+        #[case] scalar_is_truthy: bool,
+        #[case] mask: Vec<bool>,
+        #[case] expected: Vec<&str>,
+    ) {
+        let scalar = Scalar::new(StringArray::from(vec![Some("A")]));
+        let array = StringArray::from(vec![Some("B"), Some("C")]);
+        let (truthy, falsy): (&dyn Datum, &dyn Datum) = if scalar_is_truthy {
+            (&scalar, &array)
+        } else {
+            (&array, &scalar)
+        };
+        let mask = BooleanArray::from(mask);
+        let merged = merge(&mask, truthy, falsy).unwrap();
         let merged = merged.as_string::<i32>();
 
         assert_eq!(merged.len(), mask.len());
-        assert!(merged.is_valid(0));
-        assert_eq!(merged.value(0), "A");
-        assert!(merged.is_valid(1));
-        assert_eq!(merged.value(1), "B");
-        assert!(merged.is_valid(2));
-        assert_eq!(merged.value(2), "C");
-        assert!(merged.is_valid(3));
-        assert_eq!(merged.value(3), "A");
-    }
-
-    #[test]
-    fn test_merge_array_and_scalar() {
-        let truthy = StringArray::from(vec![Some("B"), Some("C")]);
-        let falsy = Scalar::new(StringArray::from(vec![Some("A")]));
-
-        let mask = BooleanArray::from(vec![true, false, false, true, false, false]);
-
-        let merged = merge(&mask, &truthy, &falsy).unwrap();
-        let merged = merged.as_string::<i32>();
-
-        assert_eq!(merged.len(), mask.len());
-        assert!(merged.is_valid(0));
-        assert_eq!(merged.value(0), "B");
-        assert!(merged.is_valid(1));
-        assert_eq!(merged.value(1), "A");
-        assert!(merged.is_valid(2));
-        assert_eq!(merged.value(2), "A");
-        assert!(merged.is_valid(3));
-        assert_eq!(merged.value(3), "C");
-        assert!(merged.is_valid(4));
-        assert_eq!(merged.value(4), "A");
-        assert!(merged.is_valid(5));
-        assert_eq!(merged.value(5), "A");
+        for (i, expected) in expected.into_iter().enumerate() {
+            assert!(merged.is_valid(i));
+            assert_eq!(merged.value(i), expected);
+        }
     }
 
     #[test]

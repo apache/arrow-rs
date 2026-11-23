@@ -1005,44 +1005,45 @@ mod tests {
     use crate::take::take;
     use arrow_array::types::BinaryViewType;
     use arrow_array::{BinaryViewArray, BooleanArray, UInt32Array};
+    use rstest::rstest;
 
-    #[test]
-    fn test_buffer_source() {
+    #[rstest]
+    #[case::growth_to_max(&[
+        (1000, 8192),
+        (1000, 16384),
+        (1000, 32768),
+        (1000, 65536),
+        (1000, 131072),
+        (1000, 262144),
+        (1000, 524288),
+        (1000, 1024 * 1024),
+        // Clamped to max size.
+        (1000, 1024 * 1024),
+        // Can override with a larger size request.
+        (10_000_000, 10_000_000),
+    ])]
+    #[case::small_minimum(&[
+        (5_600, 8 * 1024),
+        (5_600, 16 * 1024),
+        (5_600, 32 * 1024),
+    ])]
+    #[case::large_minimum(&[
+        (500_000, 512 * 1024),
+        (500_000, 1024 * 1024),
+        // Clamped to max size.
+        (500_000, 1024 * 1024),
+        // Can override with a larger size request.
+        (2_000_000, 2_000_000),
+    ])]
+    fn test_buffer_source(#[case] requests: &[(usize, usize)]) {
         let mut source = BufferSource::new();
-        assert_eq!(source.next_buffer(1000).capacity(), 8192);
-        assert_eq!(source.next_buffer(1000).capacity(), 16384);
-        assert_eq!(source.next_buffer(1000).capacity(), 32768);
-        assert_eq!(source.next_buffer(1000).capacity(), 65536);
-        assert_eq!(source.next_buffer(1000).capacity(), 131072);
-        assert_eq!(source.next_buffer(1000).capacity(), 262144);
-        assert_eq!(source.next_buffer(1000).capacity(), 524288);
-        assert_eq!(source.next_buffer(1000).capacity(), 1024 * 1024);
-        // clamped to max size
-        assert_eq!(source.next_buffer(1000).capacity(), 1024 * 1024);
-        // Can override with larger size request
-        assert_eq!(source.next_buffer(10_000_000).capacity(), 10_000_000);
-    }
-
-    #[test]
-    fn test_buffer_source_with_min_small() {
-        let mut source = BufferSource::new();
-        // First buffer should be 8kb
-        assert_eq!(source.next_buffer(5_600).capacity(), 8 * 1024);
-        // then 16kb
-        assert_eq!(source.next_buffer(5_600).capacity(), 16 * 1024);
-        // then 32kb
-        assert_eq!(source.next_buffer(5_600).capacity(), 32 * 1024);
-    }
-
-    #[test]
-    fn test_buffer_source_with_min_large() {
-        let mut source = BufferSource::new();
-        assert_eq!(source.next_buffer(500_000).capacity(), 512 * 1024);
-        assert_eq!(source.next_buffer(500_000).capacity(), 1024 * 1024);
-        // clamped to max size
-        assert_eq!(source.next_buffer(500_000).capacity(), 1024 * 1024);
-        // Can override with larger size request
-        assert_eq!(source.next_buffer(2_000_000).capacity(), 2_000_000);
+        for (step, &(min_size, expected_capacity)) in requests.iter().enumerate() {
+            assert_eq!(
+                source.next_buffer(min_size).capacity(),
+                expected_capacity,
+                "step={step}, min_size={min_size}"
+            );
+        }
     }
 
     #[test]

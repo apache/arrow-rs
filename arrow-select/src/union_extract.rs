@@ -427,6 +427,7 @@ mod tests {
     use arrow_array::{Array, Int32Array, NullArray, StringArray, UnionArray, new_null_array};
     use arrow_buffer::{BooleanBuffer, ScalarBuffer};
     use arrow_schema::{ArrowError, DataType, Field, UnionFields, UnionMode};
+    use rstest::rstest;
     use std::sync::Arc;
 
     #[test]
@@ -601,22 +602,25 @@ mod tests {
         assert_eq!(extracted.into_data(), expected.into_data());
     }
 
-    #[test]
-    fn sparse_1_2_empty() {
+    #[rstest]
+    #[case::sparse_empty_target(UnionMode::Sparse, 0)]
+    #[case::dense_empty_target(UnionMode::Dense, 0)]
+    #[case::dense_nonempty_target(UnionMode::Dense, 1)]
+    fn empty_union_with_fields(#[case] mode: UnionMode, #[case] target_len: usize) {
+        let offsets = (mode == UnionMode::Dense).then(|| ScalarBuffer::from(vec![]));
         let union = UnionArray::try_new(
-            // multiple fields
             str1_int3(),
-            ScalarBuffer::from(vec![]), //empty union
-            None,                       // sparse
+            ScalarBuffer::from(vec![]),
+            offsets,
             vec![
-                Arc::new(StringArray::new_null(0)),
+                Arc::new(StringArray::new_null(target_len)),
                 Arc::new(Int32Array::new_null(0)),
             ],
         )
         .unwrap();
 
         let expected = StringArray::new_null(0);
-        let extracted = union_extract(&union, "str").unwrap(); //target type is not Null
+        let extracted = union_extract(&union, "str").unwrap();
 
         assert_eq!(extracted.into_data(), expected.into_data());
     }
@@ -668,41 +672,41 @@ mod tests {
         assert_eq!(extracted.into_data(), expected.into_data());
     }
 
-    #[test]
-    fn sparse_2_all_types_match() {
+    #[rstest]
+    #[case::all_match(
+        vec![3, 3],
+        Int32Array::from(vec![1, 4]),
+        Int32Array::from(vec![1, 4])
+    )]
+    #[case::none_match(
+        vec![1, 1, 1, 1],
+        Int32Array::from(vec![None, Some(4), None, Some(8)]),
+        Int32Array::new_null(4)
+    )]
+    #[case::some_match_with_nulls(
+        vec![3, 3, 1, 1],
+        Int32Array::from(vec![None, Some(4), None, Some(8)]),
+        Int32Array::from(vec![None, Some(4), None, None])
+    )]
+    #[case::some_match_without_nulls(
+        vec![1, 3, 3],
+        Int32Array::from(vec![2, 4, 8]),
+        Int32Array::from(vec![None, Some(4), Some(8)])
+    )]
+    fn sparse_extract_int32(
+        #[case] type_ids: Vec<i8>,
+        #[case] values: Int32Array,
+        #[case] expected: Int32Array,
+    ) {
+        let sibling = StringArray::new_null(type_ids.len());
         let union = UnionArray::try_new(
-            //multiple fields
             str1_int3(),
-            ScalarBuffer::from(vec![3, 3]), // all types match
-            None,                           //sparse
-            vec![
-                Arc::new(StringArray::new_null(2)),
-                Arc::new(Int32Array::from(vec![1, 4])), // not null
-            ],
+            ScalarBuffer::from(type_ids),
+            None,
+            vec![Arc::new(sibling), Arc::new(values)],
         )
         .unwrap();
 
-        let expected = Int32Array::from(vec![1, 4]);
-        let extracted = union_extract(&union, "int").unwrap();
-
-        assert_eq!(extracted.into_data(), expected.into_data());
-    }
-
-    #[test]
-    fn sparse_3_1_none_match_target_can_contain_null_mask() {
-        let union = UnionArray::try_new(
-            //multiple fields
-            str1_int3(),
-            ScalarBuffer::from(vec![1, 1, 1, 1]), // none match
-            None,                                 // sparse
-            vec![
-                Arc::new(StringArray::new_null(4)),
-                Arc::new(Int32Array::from(vec![None, Some(4), None, Some(8)])), // target is not null
-            ],
-        )
-        .unwrap();
-
-        let expected = Int32Array::new_null(4);
         let extracted = union_extract(&union, "int").unwrap();
 
         assert_eq!(extracted.into_data(), expected.into_data());
@@ -752,46 +756,6 @@ mod tests {
     }
 
     #[test]
-    fn sparse_4_1_1_target_with_nulls() {
-        let union = UnionArray::try_new(
-            //multiple fields
-            str1_int3(),
-            ScalarBuffer::from(vec![3, 3, 1, 1]), // multiple selected types
-            None,                                 // sparse
-            vec![
-                Arc::new(StringArray::new_null(4)),
-                Arc::new(Int32Array::from(vec![None, Some(4), None, Some(8)])), // target with nulls
-            ],
-        )
-        .unwrap();
-
-        let expected = Int32Array::from(vec![None, Some(4), None, None]);
-        let extracted = union_extract(&union, "int").unwrap();
-
-        assert_eq!(extracted.into_data(), expected.into_data());
-    }
-
-    #[test]
-    fn sparse_4_1_2_target_without_nulls() {
-        let union = UnionArray::try_new(
-            //multiple fields
-            str1_int3(),
-            ScalarBuffer::from(vec![1, 3, 3]), // multiple selected types
-            None,                              // sparse
-            vec![
-                Arc::new(StringArray::new_null(3)),
-                Arc::new(Int32Array::from(vec![2, 4, 8])), // target without nulls
-            ],
-        )
-        .unwrap();
-
-        let expected = Int32Array::from(vec![None, Some(4), Some(8)]);
-        let extracted = union_extract(&union, "int").unwrap();
-
-        assert_eq!(extracted.into_data(), expected.into_data());
-    }
-
-    #[test]
     fn sparse_4_2_some_match_target_cant_contain_null_mask() {
         let target_fields = str1();
         let target_type = DataType::Union(target_fields.clone(), UnionMode::Sparse);
@@ -829,44 +793,6 @@ mod tests {
     }
 
     #[test]
-    fn dense_1_1_both_empty() {
-        let union = UnionArray::try_new(
-            str1_int3(),
-            ScalarBuffer::from(vec![]),       //empty union
-            Some(ScalarBuffer::from(vec![])), // dense
-            vec![
-                Arc::new(StringArray::new_null(0)), //empty target
-                Arc::new(Int32Array::new_null(0)),
-            ],
-        )
-        .unwrap();
-
-        let expected = StringArray::new_null(0);
-        let extracted = union_extract(&union, "str").unwrap();
-
-        assert_eq!(extracted.into_data(), expected.into_data());
-    }
-
-    #[test]
-    fn dense_1_2_empty_union_target_non_empty() {
-        let union = UnionArray::try_new(
-            str1_int3(),
-            ScalarBuffer::from(vec![]),       //empty union
-            Some(ScalarBuffer::from(vec![])), // dense
-            vec![
-                Arc::new(StringArray::new_null(1)), //non empty target
-                Arc::new(Int32Array::new_null(0)),
-            ],
-        )
-        .unwrap();
-
-        let expected = StringArray::new_null(0);
-        let extracted = union_extract(&union, "str").unwrap();
-
-        assert_eq!(extracted.into_data(), expected.into_data());
-    }
-
-    #[test]
     fn dense_2_non_empty_union_target_empty() {
         let union = UnionArray::try_new(
             str1_int3(),
@@ -885,15 +811,18 @@ mod tests {
         assert_eq!(extracted.into_data(), expected.into_data());
     }
 
-    #[test]
-    fn dense_3_1_null_target_smaller_len() {
+    #[rstest]
+    #[case::smaller_target(1, 2)]
+    #[case::equal_target(2, 2)]
+    #[case::larger_target(3, 3)]
+    fn dense_null_target(#[case] target_len: usize, #[case] sibling_len: usize) {
         let union = UnionArray::try_new(
             str1_int3(),
-            ScalarBuffer::from(vec![3, 3]),       //non empty union
-            Some(ScalarBuffer::from(vec![0, 0])), //dense
+            ScalarBuffer::from(vec![3, 3]),
+            Some(ScalarBuffer::from(vec![0, 0])),
             vec![
-                Arc::new(StringArray::new_null(1)), //smaller target
-                Arc::new(Int32Array::new_null(2)),
+                Arc::new(StringArray::new_null(target_len)),
+                Arc::new(Int32Array::new_null(sibling_len)),
             ],
         )
         .unwrap();
@@ -904,230 +833,82 @@ mod tests {
         assert_eq!(extracted.into_data(), expected.into_data());
     }
 
-    #[test]
-    fn dense_3_2_null_target_equal_len() {
+    #[rstest]
+    #[case::sequential_equal_len(vec!["a1", "b2"], vec![0, 1], vec!["a1", "b2"])]
+    #[case::sequential_larger_target(vec!["a1", "b2", "c3"], vec![0, 1], vec!["a1", "b2"])]
+    #[case::non_sequential(vec!["a1", "b2", "c3"], vec![0, 2], vec!["a1", "c3"])]
+    fn dense_single_type(
+        #[case] values: Vec<&str>,
+        #[case] offsets: Vec<i32>,
+        #[case] expected: Vec<&str>,
+    ) {
         let union = UnionArray::try_new(
-            str1_int3(),
-            ScalarBuffer::from(vec![3, 3]),       //non empty union
-            Some(ScalarBuffer::from(vec![0, 0])), //dense
-            vec![
-                Arc::new(StringArray::new_null(2)), //equal len
-                Arc::new(Int32Array::new_null(2)),
-            ],
-        )
-        .unwrap();
-
-        let expected = StringArray::new_null(2);
-        let extracted = union_extract(&union, "str").unwrap();
-
-        assert_eq!(extracted.into_data(), expected.into_data());
-    }
-
-    #[test]
-    fn dense_3_3_null_target_bigger_len() {
-        let union = UnionArray::try_new(
-            str1_int3(),
-            ScalarBuffer::from(vec![3, 3]),       //non empty union
-            Some(ScalarBuffer::from(vec![0, 0])), //dense
-            vec![
-                Arc::new(StringArray::new_null(3)), //bigger len
-                Arc::new(Int32Array::new_null(3)),
-            ],
-        )
-        .unwrap();
-
-        let expected = StringArray::new_null(2);
-        let extracted = union_extract(&union, "str").unwrap();
-
-        assert_eq!(extracted.into_data(), expected.into_data());
-    }
-
-    #[test]
-    fn dense_4_1a_single_type_sequential_offsets_equal_len() {
-        let union = UnionArray::try_new(
-            // single field
             str1(),
-            ScalarBuffer::from(vec![1, 1]),       //non empty union
-            Some(ScalarBuffer::from(vec![0, 1])), //sequential
-            vec![
-                Arc::new(StringArray::from(vec!["a1", "b2"])), //equal len, non null
-            ],
+            ScalarBuffer::from(vec![1, 1]),
+            Some(ScalarBuffer::from(offsets)),
+            vec![Arc::new(StringArray::from(values))],
         )
         .unwrap();
 
-        let expected = StringArray::from(vec!["a1", "b2"]);
+        let expected = StringArray::from(expected);
         let extracted = union_extract(&union, "str").unwrap();
 
         assert_eq!(extracted.into_data(), expected.into_data());
     }
 
-    #[test]
-    fn dense_4_2a_single_type_sequential_offsets_bigger() {
+    #[rstest]
+    #[case::empty_sibling_sequential_equal_len(
+        vec!["a", "b"], vec![0, 1], 0, vec!["a", "b"]
+    )]
+    #[case::empty_sibling_sequential_larger_target(
+        vec!["a", "b", "c"], vec![0, 1], 0, vec!["a", "b"]
+    )]
+    #[case::empty_sibling_non_sequential(
+        vec!["a", "b", "c"], vec![0, 2], 0, vec!["a", "c"]
+    )]
+    #[case::nonempty_sibling_sequential_equal_len(
+        vec!["a1", "b2"], vec![0, 1], 2, vec!["a1", "b2"]
+    )]
+    #[case::nonempty_sibling_sequential_larger_target(
+        vec!["a1", "b2", "b3"], vec![0, 1], 2, vec!["a1", "b2"]
+    )]
+    #[case::nonempty_sibling_non_sequential(
+        vec!["a1", "b2", "b3"], vec![0, 2], 2, vec!["a1", "b3"]
+    )]
+    fn dense_all_types_match_with_sibling(
+        #[case] values: Vec<&str>,
+        #[case] offsets: Vec<i32>,
+        #[case] sibling_len: usize,
+        #[case] expected: Vec<&str>,
+    ) {
         let union = UnionArray::try_new(
-            // single field
-            str1(),
-            ScalarBuffer::from(vec![1, 1]),       //non empty union
-            Some(ScalarBuffer::from(vec![0, 1])), //sequential
-            vec![
-                Arc::new(StringArray::from(vec!["a1", "b2", "c3"])), //equal len, non null
-            ],
-        )
-        .unwrap();
-
-        let expected = StringArray::from(vec!["a1", "b2"]);
-        let extracted = union_extract(&union, "str").unwrap();
-
-        assert_eq!(extracted.into_data(), expected.into_data());
-    }
-
-    #[test]
-    fn dense_4_3a_single_type_non_sequential() {
-        let union = UnionArray::try_new(
-            // single field
-            str1(),
-            ScalarBuffer::from(vec![1, 1]),       //non empty union
-            Some(ScalarBuffer::from(vec![0, 2])), //non sequential
-            vec![
-                Arc::new(StringArray::from(vec!["a1", "b2", "c3"])), //equal len, non null
-            ],
-        )
-        .unwrap();
-
-        let expected = StringArray::from(vec!["a1", "c3"]);
-        let extracted = union_extract(&union, "str").unwrap();
-
-        assert_eq!(extracted.into_data(), expected.into_data());
-    }
-
-    #[test]
-    fn dense_4_1b_empty_siblings_sequential_equal_len() {
-        let union = UnionArray::try_new(
-            // multiple fields
             str1_int3(),
-            ScalarBuffer::from(vec![1, 1]),       //non empty union
-            Some(ScalarBuffer::from(vec![0, 1])), //sequential
+            ScalarBuffer::from(vec![1, 1]),
+            Some(ScalarBuffer::from(offsets)),
             vec![
-                Arc::new(StringArray::from(vec!["a", "b"])), //equal len, non null
-                Arc::new(Int32Array::new_null(0)),           //empty sibling
+                Arc::new(StringArray::from(values)),
+                Arc::new(Int32Array::new_null(sibling_len)),
             ],
         )
         .unwrap();
 
-        let expected = StringArray::from(vec!["a", "b"]);
+        let expected = StringArray::from(expected);
         let extracted = union_extract(&union, "str").unwrap();
 
         assert_eq!(extracted.into_data(), expected.into_data());
     }
 
-    #[test]
-    fn dense_4_2b_empty_siblings_sequential_bigger_len() {
+    #[rstest]
+    #[case::smaller_target(vec!["a1", "b2", "c3"])]
+    #[case::equal_target(vec!["a1", "b2", "c3", "d4", "e5"])]
+    #[case::larger_target(vec!["a1", "b2", "c3", "d4", "e5", "f6"])]
+    fn dense_no_types_match(#[case] values: Vec<&str>) {
         let union = UnionArray::try_new(
-            // multiple fields
             str1_int3(),
-            ScalarBuffer::from(vec![1, 1]),       //non empty union
-            Some(ScalarBuffer::from(vec![0, 1])), //sequential
+            ScalarBuffer::from(vec![3, 3, 3, 3, 3]),
+            Some(ScalarBuffer::from(vec![0, 0, 0, 1, 1])),
             vec![
-                Arc::new(StringArray::from(vec!["a", "b", "c"])), //bigger len, non null
-                Arc::new(Int32Array::new_null(0)),                //empty sibling
-            ],
-        )
-        .unwrap();
-
-        let expected = StringArray::from(vec!["a", "b"]);
-        let extracted = union_extract(&union, "str").unwrap();
-
-        assert_eq!(extracted.into_data(), expected.into_data());
-    }
-
-    #[test]
-    fn dense_4_3b_empty_sibling_non_sequential() {
-        let union = UnionArray::try_new(
-            // multiple fields
-            str1_int3(),
-            ScalarBuffer::from(vec![1, 1]),       //non empty union
-            Some(ScalarBuffer::from(vec![0, 2])), //non sequential
-            vec![
-                Arc::new(StringArray::from(vec!["a", "b", "c"])), //non null
-                Arc::new(Int32Array::new_null(0)),                //empty sibling
-            ],
-        )
-        .unwrap();
-
-        let expected = StringArray::from(vec!["a", "c"]);
-        let extracted = union_extract(&union, "str").unwrap();
-
-        assert_eq!(extracted.into_data(), expected.into_data());
-    }
-
-    #[test]
-    fn dense_4_1c_all_types_match_sequential_equal_len() {
-        let union = UnionArray::try_new(
-            // multiple fields
-            str1_int3(),
-            ScalarBuffer::from(vec![1, 1]),       //all types match
-            Some(ScalarBuffer::from(vec![0, 1])), //sequential
-            vec![
-                Arc::new(StringArray::from(vec!["a1", "b2"])), //equal len
-                Arc::new(Int32Array::new_null(2)),             //non empty sibling
-            ],
-        )
-        .unwrap();
-
-        let expected = StringArray::from(vec!["a1", "b2"]);
-        let extracted = union_extract(&union, "str").unwrap();
-
-        assert_eq!(extracted.into_data(), expected.into_data());
-    }
-
-    #[test]
-    fn dense_4_2c_all_types_match_sequential_bigger_len() {
-        let union = UnionArray::try_new(
-            // multiple fields
-            str1_int3(),
-            ScalarBuffer::from(vec![1, 1]),       //all types match
-            Some(ScalarBuffer::from(vec![0, 1])), //sequential
-            vec![
-                Arc::new(StringArray::from(vec!["a1", "b2", "b3"])), //bigger len
-                Arc::new(Int32Array::new_null(2)),                   //non empty sibling
-            ],
-        )
-        .unwrap();
-
-        let expected = StringArray::from(vec!["a1", "b2"]);
-        let extracted = union_extract(&union, "str").unwrap();
-
-        assert_eq!(extracted.into_data(), expected.into_data());
-    }
-
-    #[test]
-    fn dense_4_3c_all_types_match_non_sequential() {
-        let union = UnionArray::try_new(
-            // multiple fields
-            str1_int3(),
-            ScalarBuffer::from(vec![1, 1]),       //all types match
-            Some(ScalarBuffer::from(vec![0, 2])), //non sequential
-            vec![
-                Arc::new(StringArray::from(vec!["a1", "b2", "b3"])),
-                Arc::new(Int32Array::new_null(2)), //non empty sibling
-            ],
-        )
-        .unwrap();
-
-        let expected = StringArray::from(vec!["a1", "b3"]);
-        let extracted = union_extract(&union, "str").unwrap();
-
-        assert_eq!(extracted.into_data(), expected.into_data());
-    }
-
-    #[test]
-    fn dense_5_1a_none_match_less_len() {
-        let union = UnionArray::try_new(
-            // multiple fields
-            str1_int3(),
-            ScalarBuffer::from(vec![3, 3, 3, 3, 3]), //none matches
-            Some(ScalarBuffer::from(vec![0, 0, 0, 1, 1])), // dense
-            vec![
-                Arc::new(StringArray::from(vec!["a1", "b2", "c3"])), // less len
+                Arc::new(StringArray::from(values)),
                 Arc::new(Int32Array::from(vec![1, 2])),
             ],
         )
@@ -1171,46 +952,6 @@ mod tests {
     }
 
     #[test]
-    fn dense_5_2_none_match_equal_len() {
-        let union = UnionArray::try_new(
-            // multiple fields
-            str1_int3(),
-            ScalarBuffer::from(vec![3, 3, 3, 3, 3]), //none matches
-            Some(ScalarBuffer::from(vec![0, 0, 0, 1, 1])), // dense
-            vec![
-                Arc::new(StringArray::from(vec!["a1", "b2", "c3", "d4", "e5"])), // equal len
-                Arc::new(Int32Array::from(vec![1, 2])),
-            ],
-        )
-        .unwrap();
-
-        let expected = StringArray::new_null(5);
-        let extracted = union_extract(&union, "str").unwrap();
-
-        assert_eq!(extracted.into_data(), expected.into_data());
-    }
-
-    #[test]
-    fn dense_5_3_none_match_greater_len() {
-        let union = UnionArray::try_new(
-            // multiple fields
-            str1_int3(),
-            ScalarBuffer::from(vec![3, 3, 3, 3, 3]), //none matches
-            Some(ScalarBuffer::from(vec![0, 0, 0, 1, 1])), // dense
-            vec![
-                Arc::new(StringArray::from(vec!["a1", "b2", "c3", "d4", "e5", "f6"])), // greater len
-                Arc::new(Int32Array::from(vec![1, 2])),                                //non null
-            ],
-        )
-        .unwrap();
-
-        let expected = StringArray::new_null(5);
-        let extracted = union_extract(&union, "str").unwrap();
-
-        assert_eq!(extracted.into_data(), expected.into_data());
-    }
-
-    #[test]
     fn dense_6_some_matches() {
         let union = UnionArray::try_new(
             // multiple fields
@@ -1230,28 +971,15 @@ mod tests {
         assert_eq!(extracted.into_data(), expected.into_data());
     }
 
-    #[test]
-    fn empty_sparse_union() {
+    #[rstest]
+    #[case::sparse(UnionMode::Sparse)]
+    #[case::dense(UnionMode::Dense)]
+    fn empty_union(#[case] mode: UnionMode) {
+        let offsets = (mode == UnionMode::Dense).then(|| ScalarBuffer::from(vec![]));
         let union = UnionArray::try_new(
             UnionFields::empty(),
             ScalarBuffer::from(vec![]),
-            None,
-            vec![],
-        )
-        .unwrap();
-
-        assert_eq!(
-            union_extract(&union, "a").unwrap_err().to_string(),
-            ArrowError::InvalidArgumentError("field a not found on union".into()).to_string()
-        );
-    }
-
-    #[test]
-    fn empty_dense_union() {
-        let union = UnionArray::try_new(
-            UnionFields::empty(),
-            ScalarBuffer::from(vec![]),
-            Some(ScalarBuffer::from(vec![])),
+            offsets,
             vec![],
         )
         .unwrap();

@@ -1102,15 +1102,16 @@ mod tests {
     use crate::take::take_record_batch;
     use arrow_array::builder::StringViewBuilder;
     use arrow_array::cast::AsArray;
-    use arrow_array::types::{Int32Type, UInt8Type};
+    use arrow_array::types::{BinaryViewType, ByteViewType, Int32Type, StringViewType, UInt8Type};
     use arrow_array::{
-        BinaryViewArray, DictionaryArray, FixedSizeBinaryArray, Int32Array, Int64Array,
-        RecordBatchOptions, StringArray, StringViewArray, TimestampNanosecondArray, UInt8Array,
-        UInt32Array, UInt64Array, make_array, record_batch,
+        BinaryViewArray, DictionaryArray, FixedSizeBinaryArray, GenericByteViewArray, Int32Array,
+        Int64Array, RecordBatchOptions, StringArray, StringViewArray, TimestampNanosecondArray,
+        UInt8Array, UInt32Array, UInt64Array, make_array, record_batch,
     };
     use arrow_buffer::BooleanBufferBuilder;
     use arrow_schema::{DataType, Field, Schema};
     use rand::{RngExt, SeedableRng};
+    use rstest::rstest;
     use std::ops::Range;
 
     #[test]
@@ -1210,47 +1211,20 @@ mod tests {
         assert!(!should_use_byte_view_indexed_copy(8192, 819));
     }
 
-    #[test]
-    fn test_single_large_batch_greater_than_target() {
-        // test a single large batch
+    #[rstest]
+    #[case::greater_than_target(1000, vec![1000, 1000, 1000, 1000, 96])]
+    #[case::smaller_than_target(8192, vec![4096])]
+    #[case::equal_to_target(4096, vec![4096])]
+    #[case::equally_divisible_in_target(1024, vec![1024, 1024, 1024, 1024])]
+    fn test_single_large_batch(
+        #[case] batch_size: usize,
+        #[case] expected_output_sizes: Vec<usize>,
+    ) {
         let batch = uint32_batch(0..4096);
-        Test::new("coalesce_single_large_batch_greater_than_target")
+        Test::new(format!("coalesce_single_large_batch_{batch_size}"))
             .with_batch(batch)
-            .with_batch_size(1000)
-            .with_expected_output_sizes(vec![1000, 1000, 1000, 1000, 96])
-            .run();
-    }
-
-    #[test]
-    fn test_single_large_batch_smaller_than_target() {
-        // test a single large batch
-        let batch = uint32_batch(0..4096);
-        Test::new("coalesce_single_large_batch_smaller_than_target")
-            .with_batch(batch)
-            .with_batch_size(8192)
-            .with_expected_output_sizes(vec![4096])
-            .run();
-    }
-
-    #[test]
-    fn test_single_large_batch_equal_to_target() {
-        // test a single large batch
-        let batch = uint32_batch(0..4096);
-        Test::new("coalesce_single_large_batch_equal_to_target")
-            .with_batch(batch)
-            .with_batch_size(4096)
-            .with_expected_output_sizes(vec![4096])
-            .run();
-    }
-
-    #[test]
-    fn test_single_large_batch_equally_divisible_in_target() {
-        // test a single large batch
-        let batch = uint32_batch(0..4096);
-        Test::new("coalesce_single_large_batch_equally_divisible_in_target")
-            .with_batch(batch)
-            .with_batch_size(1024)
-            .with_expected_output_sizes(vec![1024, 1024, 1024, 1024])
+            .with_batch_size(batch_size)
+            .with_expected_output_sizes(expected_output_sizes)
             .run();
     }
 
@@ -1264,99 +1238,32 @@ mod tests {
             .run();
     }
 
-    /// Coalesce multiple batches, 80k rows, with a 0.1% selectivity filter
-    #[test]
+    #[rstest]
+    #[case::selectivity_001(8000, 0.001, 15, vec![15, 15, 15, 13])]
+    #[case::selectivity_01(8000, 0.01, 128, vec![128, 128, 128, 128, 128, 128, 15])]
+    #[case::selectivity_10(8000, 0.1, 1024, vec![1024, 1024, 1024, 1024, 1024, 1024, 1024, 840])]
+    #[case::selectivity_90(800, 0.90, 1024, vec![1024, 1024, 1024, 1024, 1024, 1024, 1024, 13])]
     #[cfg_attr(miri, ignore)] // Takes too long
-    fn test_coalesce_filtered_001() {
+    fn test_coalesce_filtered(
+        #[case] num_rows: usize,
+        #[case] selectivity: f64,
+        #[case] batch_size: usize,
+        #[case] expected_output_sizes: Vec<usize>,
+    ) {
         let mut filter_builder = RandomFilterBuilder {
-            num_rows: 8000,
-            selectivity: 0.001,
+            num_rows,
+            selectivity,
             seed: 0,
         };
 
-        // add 10 batches of 8000 rows each
-        // 80k rows, selecting 0.1% means 80 rows
-        // not exactly 80 as the rows are random;
-        let mut test = Test::new("coalesce_filtered_001");
+        let mut test = Test::new(format!("coalesce_filtered_{selectivity}"));
         for _ in 0..10 {
             test = test
-                .with_batch(multi_column_batch(0..8000))
+                .with_batch(multi_column_batch(0..num_rows as i32))
                 .with_filter(filter_builder.next_filter())
         }
-        test.with_batch_size(15)
-            .with_expected_output_sizes(vec![15, 15, 15, 13])
-            .run();
-    }
-
-    /// Coalesce multiple batches, 80k rows, with a 1% selectivity filter
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn test_coalesce_filtered_01() {
-        let mut filter_builder = RandomFilterBuilder {
-            num_rows: 8000,
-            selectivity: 0.01,
-            seed: 0,
-        };
-
-        // add 10 batches of 8000 rows each
-        // 80k rows, selecting 1% means 800 rows
-        // not exactly 800 as the rows are random;
-        let mut test = Test::new("coalesce_filtered_01");
-        for _ in 0..10 {
-            test = test
-                .with_batch(multi_column_batch(0..8000))
-                .with_filter(filter_builder.next_filter())
-        }
-        test.with_batch_size(128)
-            .with_expected_output_sizes(vec![128, 128, 128, 128, 128, 128, 15])
-            .run();
-    }
-
-    /// Coalesce multiple batches, 80k rows, with a 10% selectivity filter
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn test_coalesce_filtered_10() {
-        let mut filter_builder = RandomFilterBuilder {
-            num_rows: 8000,
-            selectivity: 0.1,
-            seed: 0,
-        };
-
-        // add 10 batches of 8000 rows each
-        // 80k rows, selecting 10% means 8000 rows
-        // not exactly 800 as the rows are random;
-        let mut test = Test::new("coalesce_filtered_10");
-        for _ in 0..10 {
-            test = test
-                .with_batch(multi_column_batch(0..8000))
-                .with_filter(filter_builder.next_filter())
-        }
-        test.with_batch_size(1024)
-            .with_expected_output_sizes(vec![1024, 1024, 1024, 1024, 1024, 1024, 1024, 840])
-            .run();
-    }
-
-    /// Coalesce multiple batches, 8k rows, with a 90% selectivity filter
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn test_coalesce_filtered_90() {
-        let mut filter_builder = RandomFilterBuilder {
-            num_rows: 800,
-            selectivity: 0.90,
-            seed: 0,
-        };
-
-        // add 10 batches of 800 rows each
-        // 8k rows, selecting 99% means 7200 rows
-        // not exactly 7200 as the rows are random;
-        let mut test = Test::new("coalesce_filtered_90");
-        for _ in 0..10 {
-            test = test
-                .with_batch(multi_column_batch(0..800))
-                .with_filter(filter_builder.next_filter())
-        }
-        test.with_batch_size(1024)
-            .with_expected_output_sizes(vec![1024, 1024, 1024, 1024, 1024, 1024, 1024, 13])
+        test.with_batch_size(batch_size)
+            .with_expected_output_sizes(expected_output_sizes)
             .run();
     }
 
@@ -1801,17 +1708,21 @@ mod tests {
             .run();
     }
 
-    #[test]
-    fn test_binary_view_filtered_inline() {
-        let values: Vec<Option<&[u8]>> = vec![Some(b"foo"), None, Some(b"barbaz")];
-
-        let binary_view =
-            BinaryViewArray::from_iter(std::iter::repeat(values.iter()).flatten().take(1000));
-        let batch =
-            RecordBatch::try_from_iter(vec![("c0", Arc::new(binary_view) as ArrayRef)]).unwrap();
+    #[rstest]
+    #[case::binary(BinaryViewType {}, vec![Some(b"foo".as_slice()), None, Some(b"barbaz".as_slice())])]
+    #[case::string(StringViewType {}, vec![Some("foo"), None, Some("barbaz")])]
+    fn test_view_filtered_inline<T: ByteViewType>(
+        #[case] view_type: T,
+        #[case] values: Vec<Option<&T::Native>>,
+    ) {
+        let _ = view_type;
+        let view = GenericByteViewArray::<T>::from_iter(
+            std::iter::repeat(values.iter()).flatten().take(1000),
+        );
+        let batch = RecordBatch::try_from_iter(vec![("c0", Arc::new(view) as ArrayRef)]).unwrap();
         let filter = sparse_filter(1000);
 
-        Test::new("coalesce_binary_view_filtered_inline")
+        Test::new(format!("test_view_filtered_inline_{}", T::PREFIX))
             .with_batch(batch.clone())
             .with_filter(filter.clone())
             .with_batch(batch)
@@ -1821,46 +1732,30 @@ mod tests {
             .run();
     }
 
-    #[test]
-    fn test_string_view_filtered_inline() {
-        let values: Vec<Option<&str>> = vec![Some("foo"), None, Some("barbaz")];
-
-        let string_view =
-            StringViewArray::from_iter(std::iter::repeat(values.iter()).flatten().take(1000));
-        let batch =
-            RecordBatch::try_from_iter(vec![("c0", Arc::new(string_view) as ArrayRef)]).unwrap();
-        let filter = sparse_filter(1000);
-
-        Test::new("coalesce_string_view_filtered_inline")
-            .with_batch(batch.clone())
-            .with_filter(filter.clone())
-            .with_batch(batch)
-            .with_filter(filter)
-            .with_batch_size(300)
-            .with_expected_output_sizes(vec![250])
-            .run();
-    }
-
-    #[test]
-    fn test_mixed_inline_binary_view_filtered() {
+    #[rstest]
+    #[case::binary(BinaryViewType {}, vec![Some(b"foo".as_slice()), None, Some(b"barbaz".as_slice())], "b")]
+    #[case::string(StringViewType {}, vec![Some("foo"), None, Some("barbaz")], "s")]
+    fn test_mixed_inline_view_filtered<T: ByteViewType>(
+        #[case] view_type: T,
+        #[case] values: Vec<Option<&T::Native>>,
+        #[case] column_name: &str,
+    ) {
+        let _ = view_type;
         let int_values =
             Int32Array::from_iter((0..1000).map(|v| if v % 5 == 0 { None } else { Some(v) }));
         let float_values = arrow_array::Float64Array::from_iter((0..1000).map(|v| Some(v as f64)));
-        let binary_values: Vec<Option<&[u8]>> = vec![Some(b"foo"), None, Some(b"barbaz")];
-        let binary_view = BinaryViewArray::from_iter(
-            std::iter::repeat(binary_values.iter()).flatten().take(1000),
+        let view = GenericByteViewArray::<T>::from_iter(
+            std::iter::repeat(values.iter()).flatten().take(1000),
         );
-
         let batch = RecordBatch::try_from_iter(vec![
             ("i", Arc::new(int_values) as ArrayRef),
             ("f", Arc::new(float_values) as ArrayRef),
-            ("b", Arc::new(binary_view) as ArrayRef),
+            (column_name, Arc::new(view) as ArrayRef),
         ])
         .unwrap();
-
         let filter = sparse_filter(1000);
 
-        Test::new("coalesce_mixed_inline_binary_view_filtered")
+        Test::new(format!("test_mixed_inline_view_filtered_{}", T::PREFIX))
             .with_batch(batch.clone())
             .with_filter(filter.clone())
             .with_batch(batch)
@@ -1870,65 +1765,21 @@ mod tests {
             .run();
     }
 
-    #[test]
-    fn test_mixed_inline_string_view_filtered() {
-        let int_values =
-            Int32Array::from_iter((0..1000).map(|v| if v % 5 == 0 { None } else { Some(v) }));
-        let float_values = arrow_array::Float64Array::from_iter((0..1000).map(|v| Some(v as f64)));
-        let string_values: Vec<Option<&str>> = vec![Some("foo"), None, Some("barbaz")];
-        let string_view = StringViewArray::from_iter(
-            std::iter::repeat(string_values.iter()).flatten().take(1000),
+    #[rstest]
+    #[case::binary(BinaryViewType {}, vec![Some(b"foo".as_slice()), None, Some(b"barbaz".as_slice())])]
+    #[case::string(StringViewType {}, vec![Some("foo"), None, Some("barbaz")])]
+    fn test_inline_view_sparse<T: ByteViewType>(
+        #[case] view_type: T,
+        #[case] values: Vec<Option<&T::Native>>,
+    ) {
+        let _ = view_type;
+        let view = GenericByteViewArray::<T>::from_iter(
+            std::iter::repeat(values.iter()).flatten().take(1000),
         );
-
-        let batch = RecordBatch::try_from_iter(vec![
-            ("i", Arc::new(int_values) as ArrayRef),
-            ("f", Arc::new(float_values) as ArrayRef),
-            ("s", Arc::new(string_view) as ArrayRef),
-        ])
-        .unwrap();
-
-        let filter = sparse_filter(1000);
-
-        Test::new("coalesce_mixed_inline_string_view_filtered")
-            .with_batch(batch.clone())
-            .with_filter(filter.clone())
-            .with_batch(batch)
-            .with_filter(filter)
-            .with_batch_size(300)
-            .with_expected_output_sizes(vec![250])
-            .run();
-    }
-
-    #[test]
-    fn test_inline_binary_view_sparse() {
-        // All-inline binary views (<=12 bytes) + 5% selectivity
-        let values: Vec<Option<&[u8]>> = vec![Some(b"foo"), None, Some(b"barbaz")];
-        let binary_view =
-            BinaryViewArray::from_iter(std::iter::repeat(values.iter()).flatten().take(1000));
-        let batch =
-            RecordBatch::try_from_iter(vec![("c0", Arc::new(binary_view) as ArrayRef)]).unwrap();
+        let batch = RecordBatch::try_from_iter(vec![("c0", Arc::new(view) as ArrayRef)]).unwrap();
         let filter = very_sparse_filter(1000);
 
-        Test::new("inline_binary_view_sparse")
-            .with_batch(batch.clone())
-            .with_filter(filter.clone())
-            .with_batch(batch)
-            .with_filter(filter)
-            .with_batch_size(1024)
-            .with_expected_output_sizes(vec![100])
-            .run();
-    }
-
-    #[test]
-    fn test_inline_string_view_sparse() {
-        let values: Vec<Option<&str>> = vec![Some("foo"), None, Some("barbaz")];
-        let string_view =
-            StringViewArray::from_iter(std::iter::repeat(values.iter()).flatten().take(1000));
-        let batch =
-            RecordBatch::try_from_iter(vec![("c0", Arc::new(string_view) as ArrayRef)]).unwrap();
-        let filter = very_sparse_filter(1000);
-
-        Test::new("inline_string_view_sparse")
+        Test::new(format!("test_inline_view_sparse_{}", T::PREFIX))
             .with_batch(batch.clone())
             .with_filter(filter.clone())
             .with_batch(batch)
@@ -3157,63 +3008,44 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_push_batch_schema_mismatch_fewer_columns() {
-        // Coalescer expects 0 columns, batch has 1
-        let empty_schema = Arc::new(Schema::empty());
-        let mut coalescer = BatchCoalescer::new(empty_schema, 100);
-        let batch = uint32_batch(0..5);
-        let result = coalescer.push_batch(batch);
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(
-            err.contains("Batch has 1 columns but BatchCoalescer expects 0"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn test_push_batch_schema_mismatch_more_columns() {
-        // Coalescer expects 2 columns, batch has 1
-        let schema = Arc::new(Schema::new(vec![
+    #[rstest]
+    #[case::one_column_expected_zero(
+        Schema::empty(),
+        uint32_batch(0..5),
+        "Batch has 1 columns but BatchCoalescer expects 0"
+    )]
+    #[case::one_column_expected_two(
+        Schema::new(vec![
             Field::new("c0", DataType::UInt32, false),
             Field::new("c1", DataType::UInt32, false),
-        ]));
-        let mut coalescer = BatchCoalescer::new(schema, 100);
-        let batch = uint32_batch(0..5);
-        let result = coalescer.push_batch(batch);
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(
-            err.contains("Batch has 1 columns but BatchCoalescer expects 2"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn test_push_batch_schema_mismatch_two_vs_zero() {
-        // Coalescer expects 0 columns, batch has 2
-        let empty_schema = Arc::new(Schema::empty());
-        let mut coalescer = BatchCoalescer::new(empty_schema, 100);
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("c0", DataType::UInt32, false),
-            Field::new("c1", DataType::UInt32, false),
-        ]));
-        let batch = RecordBatch::try_new(
-            schema,
+        ]),
+        uint32_batch(0..5),
+        "Batch has 1 columns but BatchCoalescer expects 2"
+    )]
+    #[case::two_columns_expected_zero(
+        Schema::empty(),
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("c0", DataType::UInt32, false),
+                Field::new("c1", DataType::UInt32, false),
+            ])),
             vec![
                 Arc::new(UInt32Array::from(vec![1, 2, 3])),
                 Arc::new(UInt32Array::from(vec![4, 5, 6])),
             ],
-        )
-        .unwrap();
+        ).unwrap(),
+        "Batch has 2 columns but BatchCoalescer expects 0"
+    )]
+    fn test_push_batch_schema_mismatch(
+        #[case] schema: Schema,
+        #[case] batch: RecordBatch,
+        #[case] expected_error: &str,
+    ) {
+        let mut coalescer = BatchCoalescer::new(Arc::new(schema), 100);
         let result = coalescer.push_batch(batch);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(
-            err.contains("Batch has 2 columns but BatchCoalescer expects 0"),
-            "unexpected error: {err}"
-        );
+        assert!(err.contains(expected_error), "unexpected error: {err}");
     }
 
     #[test]

@@ -1002,6 +1002,7 @@ mod tests {
     use arrow_array::types::{Decimal128Type, Int8Type, TimestampMicrosecondType};
     use arrow_buffer::ScalarBuffer;
     use arrow_schema::{Field, Schema, TimeUnit};
+    use rstest::rstest;
 
     #[test]
     fn test_primitive() {
@@ -1716,122 +1717,61 @@ mod tests {
         assert_eq!(array.as_ref(), &expected)
     }
 
-    #[test]
-    fn test_interleave_views() {
-        let values = StringArray::from_iter_values([
-            "hello",
-            "world_long_string_not_inlined",
-            "foo",
-            "bar",
-            "baz",
-        ]);
-        let view_a = StringViewArray::from(&values);
-
-        let values = StringArray::from_iter_values([
-            "test",
-            "data",
-            "more_long_string_not_inlined",
-            "views",
-            "here",
-        ]);
-        let view_b = StringViewArray::from(&values);
-
-        let indices = &[
-            (0, 2), // "foo"
-            (1, 0), // "test"
-            (0, 4), // "baz"
-            (1, 3), // "views"
-            (0, 1), // "world_long_string_not_inlined"
-        ];
+    #[rstest]
+    #[case::without_nulls(
+        StringArray::from_iter_values([
+            "hello", "world_long_string_not_inlined", "foo", "bar", "baz",
+        ]),
+        StringArray::from_iter_values([
+            "test", "data", "more_long_string_not_inlined", "views", "here",
+        ]),
+        [(0, 2), (1, 0), (0, 4), (1, 3), (0, 1)],
+        [Some("foo"), Some("test"), Some("baz"), Some("views"), Some("world_long_string_not_inlined")],
+        Some(2)
+    )]
+    #[case::with_nulls(
+        StringArray::from_iter([
+            Some("hello"), None, Some("foo_long_string_not_inlined"), Some("bar"), None,
+        ]),
+        StringArray::from_iter([
+            Some("test"), Some("data_long_string_not_inlined"), None, None, Some("here"),
+        ]),
+        [(0, 1), (1, 2), (0, 2), (1, 3), (0, 4)],
+        [None, None, Some("foo_long_string_not_inlined"), None, None],
+        None
+    )]
+    fn test_interleave_views(
+        #[case] values_a: StringArray,
+        #[case] values_b: StringArray,
+        #[case] indices: [(usize, usize); 5],
+        #[case] expected: [Option<&str>; 5],
+        #[case] expected_fallback_buffers: Option<usize>,
+    ) {
+        let view_a = StringViewArray::from(&values_a);
+        let view_b = StringViewArray::from(&values_b);
 
         // Test specialized implementation
-        let values = interleave(&[&view_a, &view_b], indices).unwrap();
+        let values = interleave(&[&view_a, &view_b], &indices).unwrap();
         let result = values.as_string_view();
         assert_eq!(result.data_buffers().len(), 1);
 
-        let fallback = interleave_fallback(&[&view_a, &view_b], indices).unwrap();
+        let fallback = interleave_fallback(&[&view_a, &view_b], &indices).unwrap();
         let fallback_result = fallback.as_string_view();
-        // note that fallback_result has 2 buffers, but only one long enough string to warrant a buffer
-        assert_eq!(fallback_result.data_buffers().len(), 2);
+        if let Some(expected_buffers) = expected_fallback_buffers {
+            // The fallback keeps both buffers, although selected long strings use only one.
+            assert_eq!(fallback_result.data_buffers().len(), expected_buffers);
+        }
 
         // Convert to strings for easier assertion
         let collected: Vec<_> = result.iter().map(|x| x.map(|s| s.to_string())).collect();
-
         let fallback_collected: Vec<_> = fallback_result
             .iter()
             .map(|x| x.map(|s| s.to_string()))
             .collect();
-
         assert_eq!(&collected, &fallback_collected);
 
-        assert_eq!(
-            &collected,
-            &[
-                Some("foo".to_string()),
-                Some("test".to_string()),
-                Some("baz".to_string()),
-                Some("views".to_string()),
-                Some("world_long_string_not_inlined".to_string()),
-            ]
-        );
-    }
-
-    #[test]
-    fn test_interleave_views_with_nulls() {
-        let values = StringArray::from_iter([
-            Some("hello"),
-            None,
-            Some("foo_long_string_not_inlined"),
-            Some("bar"),
-            None,
-        ]);
-        let view_a = StringViewArray::from(&values);
-
-        let values = StringArray::from_iter([
-            Some("test"),
-            Some("data_long_string_not_inlined"),
-            None,
-            None,
-            Some("here"),
-        ]);
-        let view_b = StringViewArray::from(&values);
-
-        let indices = &[
-            (0, 1), // null
-            (1, 2), // null
-            (0, 2), // "foo_long_string_not_inlined"
-            (1, 3), // null
-            (0, 4), // null
-        ];
-
-        // Test specialized implementation
-        let values = interleave(&[&view_a, &view_b], indices).unwrap();
-        let result = values.as_string_view();
-        assert_eq!(result.data_buffers().len(), 1);
-
-        let fallback = interleave_fallback(&[&view_a, &view_b], indices).unwrap();
-        let fallback_result = fallback.as_string_view();
-
-        // Convert to strings for easier assertion
-        let collected: Vec<_> = result.iter().map(|x| x.map(|s| s.to_string())).collect();
-
-        let fallback_collected: Vec<_> = fallback_result
-            .iter()
-            .map(|x| x.map(|s| s.to_string()))
-            .collect();
-
-        assert_eq!(&collected, &fallback_collected);
-
-        assert_eq!(
-            &collected,
-            &[
-                None,
-                None,
-                Some("foo_long_string_not_inlined".to_string()),
-                None,
-                None,
-            ]
-        );
+        let expected = expected.map(|value| value.map(str::to_string));
+        assert_eq!(&collected, &expected);
     }
 
     #[test]
