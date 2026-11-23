@@ -2044,10 +2044,59 @@ mod test {
         make_array(data).slice(offset, len)
     }
 
-    #[test]
-    fn test_zip_primitive_with_scalar_matches_general_path() {
-        let mut rng = StdRng::seed_from_u64(0x5ca1_ab1e_0dd5_f00d);
-        let data_types = [
+    #[derive(Debug, Clone, Copy)]
+    enum MaskShape {
+        Random,
+        AllTrue,
+        AllFalse,
+        // Alternate true/false runs of 100 positions, without nulls.
+        Runs,
+        // Random true/false values with a 20% chance of null at each position.
+        Nullable,
+    }
+
+    fn random_mask(rng: &mut StdRng, shape: MaskShape, len: usize) -> BooleanArray {
+        let offset = rng.random_range(0..9);
+        let mask_bits: Vec<Option<bool>> = (0..len + offset)
+            .map(|i| match shape {
+                MaskShape::Random => Some(rng.random_bool(0.5)),
+                MaskShape::AllTrue => Some(true),
+                MaskShape::AllFalse => Some(false),
+                MaskShape::Runs => Some(i / 100 % 2 == 0),
+                MaskShape::Nullable => rng.random_bool(0.8).then(|| rng.random_bool(0.5)),
+            })
+            .collect();
+        BooleanArray::from(mask_bits).slice(offset, len)
+    }
+
+    fn assert_zip_primitive_scalar_matches_general_path(
+        mask: &BooleanArray,
+        array: &ArrayRef,
+        scalar: &ArrayRef,
+        scalar_is_truthy: bool,
+        context: &str,
+    ) {
+        let scalar_datum = Scalar::new(Arc::clone(scalar));
+        let (truthy, falsy): (&dyn Datum, &dyn Datum) = if scalar_is_truthy {
+            (&scalar_datum, array)
+        } else {
+            (array, &scalar_datum)
+        };
+        let actual = zip(mask, truthy, falsy).unwrap();
+        let expected = zip_impl(
+            mask,
+            &truthy.get().0.to_data(),
+            scalar_is_truthy,
+            &falsy.get().0.to_data(),
+            !scalar_is_truthy,
+        )
+        .unwrap();
+        assert_eq!(&actual, &expected, "{context}");
+    }
+
+    #[rstest]
+    fn test_zip_primitive_with_scalar_matches_general_path(
+        #[values(
             DataType::Int8,
             DataType::Int16,
             DataType::Float32,
@@ -2055,61 +2104,59 @@ mod test {
             DataType::Timestamp(TimeUnit::Millisecond, Some("+01:00".into())),
             DataType::Decimal128(38, 2),
             DataType::Interval(IntervalUnit::MonthDayNano),
-            DataType::Decimal256(76, 3),
-        ];
-        for data_type in &data_types {
-            for len in [0, 1, 63, 64, 65, 130, 1000] {
-                for mask_shape in 0..5 {
-                    let mask_offset = rng.random_range(0..9);
-                    let mask_bits: Vec<Option<bool>> = (0..len + mask_offset)
-                        .map(|i| match mask_shape {
-                            0 => Some(rng.random_bool(0.5)),
-                            1 => Some(true),
-                            2 => Some(false),
-                            3 => Some(i / 100 % 2 == 0),
-                            _ => rng.random_bool(0.8).then(|| rng.random_bool(0.5)),
-                        })
-                        .collect();
-                    let mask = BooleanArray::from(mask_bits).slice(mask_offset, len);
+            DataType::Decimal256(76, 3)
+        )]
+        data_type: DataType,
+        #[values(0, 1, 63, 64, 65, 130, 1000)] len: usize,
+        #[values(
+            MaskShape::Random,
+            MaskShape::AllTrue,
+            MaskShape::AllFalse,
+            MaskShape::Runs,
+            MaskShape::Nullable
+        )]
+        mask_shape: MaskShape,
+    ) {
+        let type_id: u64 = match &data_type {
+            DataType::Int8 => 0,
+            DataType::Int16 => 1,
+            DataType::Float32 => 2,
+            DataType::Int64 => 3,
+            DataType::Timestamp(_, _) => 4,
+            DataType::Decimal128(_, _) => 5,
+            DataType::Interval(_) => 6,
+            DataType::Decimal256(_, _) => 7,
+            _ => unreachable!(),
+        };
+        // Each parameter combination has its own reproducible random sequence.
+        let seed =
+            0x5ca1_ab1e_0dd5_f00d ^ (type_id << 32) ^ ((len as u64) << 8) ^ mask_shape as u64;
+        let mut rng = StdRng::seed_from_u64(seed);
+        let mask = random_mask(&mut rng, mask_shape, len);
 
-                    for array_nulls in [0.0, 0.3] {
-                        let array_offset = rng.random_range(0..5);
-                        let array =
-                            random_primitive(&mut rng, data_type, len, array_offset, array_nulls);
-                        for scalar_null in [false, true] {
-                            let scalar = random_primitive(
-                                &mut rng,
-                                data_type,
-                                1,
-                                1,
-                                if scalar_null { 1.0 } else { 0.0 },
-                            );
-                            for scalar_is_truthy in [false, true] {
-                                let scalar_datum = Scalar::new(Arc::clone(&scalar));
-                                let (truthy, falsy): (&dyn Datum, &dyn Datum) = if scalar_is_truthy
-                                {
-                                    (&scalar_datum, &array)
-                                } else {
-                                    (&array, &scalar_datum)
-                                };
-                                let actual = zip(&mask, truthy, falsy).unwrap();
-                                let expected = zip_impl(
-                                    &mask,
-                                    &truthy.get().0.to_data(),
-                                    scalar_is_truthy,
-                                    &falsy.get().0.to_data(),
-                                    !scalar_is_truthy,
-                                )
-                                .unwrap();
-                                assert_eq!(
-                                    &actual, &expected,
-                                    "{data_type} len {len} mask shape {mask_shape} array nulls \
-                                     {array_nulls} scalar null {scalar_null} scalar truthy \
-                                     {scalar_is_truthy}"
-                                );
-                            }
-                        }
-                    }
+        for array_nulls in [0.0, 0.3] {
+            let array_offset = rng.random_range(0..5);
+            let array = random_primitive(&mut rng, &data_type, len, array_offset, array_nulls);
+            for scalar_null in [false, true] {
+                let scalar = random_primitive(
+                    &mut rng,
+                    &data_type,
+                    1,
+                    1,
+                    if scalar_null { 1.0 } else { 0.0 },
+                );
+                for scalar_is_truthy in [false, true] {
+                    assert_zip_primitive_scalar_matches_general_path(
+                        &mask,
+                        &array,
+                        &scalar,
+                        scalar_is_truthy,
+                        &format!(
+                            "{data_type} len {len} mask shape {mask_shape:?} array nulls \
+                             {array_nulls} scalar null {scalar_null} scalar truthy \
+                             {scalar_is_truthy}"
+                        ),
+                    );
                 }
             }
         }
