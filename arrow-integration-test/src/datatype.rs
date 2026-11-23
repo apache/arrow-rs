@@ -7,9 +7,18 @@ use arrow::error::{ArrowError, Result};
 use std::sync::Arc;
 
 /// Read a JSON number as an integer of type `T`.
-fn json_int<T: TryFrom<i64>>(what: &str, value: &serde_json::Value) -> Result<T> {
+pub(crate) fn json_int<T: TryFrom<i64>>(what: &str, value: &serde_json::Value) -> Result<T> {
     let int = value
         .as_i64()
+        .ok_or_else(|| ArrowError::ParseError(format!("Expecting {what} to be an integer")))?;
+    T::try_from(int)
+        .map_err(|_| ArrowError::ParseError(format!("{what} is out of range for its type: {int}")))
+}
+
+/// Read a JSON number as an unsigned integer of type `T`.
+pub(crate) fn json_uint<T: TryFrom<u64>>(what: &str, value: &serde_json::Value) -> Result<T> {
+    let int = value
+        .as_u64()
         .ok_or_else(|| ArrowError::ParseError(format!("Expecting {what} to be an integer")))?;
     T::try_from(int)
         .map_err(|_| ArrowError::ParseError(format!("{what} is out of range for its type: {int}")))

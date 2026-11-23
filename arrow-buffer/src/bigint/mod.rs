@@ -16,7 +16,7 @@ use std::num::ParseIntError;
 use std::ops::{BitAnd, BitOr, BitXor, Neg, Not, Shl, Shr};
 use std::str::FromStr;
 
-mod div;
+pub(crate) mod div;
 
 /// An opaque error similar to [`std::num::ParseIntError`]
 #[derive(Debug)]
@@ -332,9 +332,7 @@ impl i256 {
     /// Computes the absolute value of this i256
     #[inline]
     pub const fn wrapping_abs(self) -> Self {
-        // -1 if negative, otherwise 0
-        let sa = self.high >> 127;
-        let sa = Self::from_parts(sa as u128, sa);
+        let sa = self.sign_mask();
 
         // Inverted if negative
         Self::from_parts(self.low ^ sa.low, self.high ^ sa.high).wrapping_sub(sa)
@@ -416,6 +414,13 @@ impl i256 {
     /// Const helper to check equality of two `i256` instances
     const fn is_eq(&self, other: Self) -> bool {
         (self.high == other.high) && (self.low == other.low)
+    }
+
+    /// Returns -1 if `self` is negative, otherwise 0
+    #[inline]
+    pub(crate) const fn sign_mask(self) -> Self {
+        let s = self.high >> 127;
+        Self::from_parts(s as u128, s)
     }
 
     /// Performs checked multiplication
@@ -509,7 +514,7 @@ impl i256 {
     }
 
     /// Interpret this [`i256`] as 4 `u64` digits, least significant first
-    fn as_digits(self) -> [u64; 4] {
+    pub(crate) fn as_digits(self) -> [u64; 4] {
         [
             self.low as u64,
             (self.low >> 64) as u64,
@@ -519,7 +524,7 @@ impl i256 {
     }
 
     /// Interpret 4 `u64` digits, least significant first, as a [`i256`]
-    fn from_digits(digits: [u64; 4]) -> Self {
+    pub(crate) fn from_digits(digits: [u64; 4]) -> Self {
         Self::from_parts(
             digits[0] as u128 | ((digits[1] as u128) << 64),
             digits[2] as i128 | ((digits[3] as i128) << 64),
@@ -910,7 +915,7 @@ const fn split_array<const N: usize, const M: usize>(vals: [u8; N]) -> ([u8; M],
 ///
 /// This mirrors the x86 mulx instruction but for 128-bit types
 #[inline]
-const fn mulx(a: u128, b: u128) -> (u128, u128) {
+pub(crate) const fn mulx(a: u128, b: u128) -> (u128, u128) {
     const fn split(a: u128) -> (u128, u128) {
         (a & (u64::MAX as u128), a >> 64)
     }
@@ -1163,6 +1168,17 @@ impl ToPrimitive for i256 {
             Self::ONE => Some(1f64),
             n => Some(Self::i256_to_f64(n)),
         }
+    }
+
+    fn to_f32(&self) -> Option<f32> {
+        // `u128 as f32` rounds once; a magnitude of 2^128 or more overflows `f32` to infinity.
+        let (low, high) = self.wrapping_abs().to_parts();
+        let magnitude = if high == 0 { low as f32 } else { f32::INFINITY };
+        Some(if *self < i256::ZERO {
+            -magnitude
+        } else {
+            magnitude
+        })
     }
 
     fn to_u64(&self) -> Option<u64> {
@@ -2000,6 +2016,41 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn test_i256_to_f32_midpoint_rounding() {
+        // One above a binary32 midpoint: rounding via `f64` first picks the wrong `f32`.
+        let integer = (1_i128 << 53) + (1 << 29) + 1;
+        assert_eq!(
+            i256::from_i128(integer).to_f32().unwrap().to_bits(),
+            (integer as f32).to_bits()
+        );
+
+        let two = i256::from(2);
+        // The tie sits 2^(e-24) above 2^e. Start at e = 24 (below it the tie is not an integer)
+        // and stop at 254 (2^255 overflows `i256`). Past 2^128 the result is infinity.
+        for exponent in 24..=254 {
+            let midpoint = two.wrapping_pow(exponent) + two.wrapping_pow(exponent - 24);
+            for delta in -2_i64..=2 {
+                for value in [
+                    midpoint + i256::from(delta),
+                    -(midpoint + i256::from(delta)),
+                ] {
+                    let expected: f32 = value.to_string().parse().unwrap();
+                    assert_eq!(
+                        value.to_f32().unwrap().to_bits(),
+                        expected.to_bits(),
+                        "i256 {value} should round to nearest"
+                    );
+                }
+            }
+        }
+
+        for value in [i256::MIN, i256::MAX, i256::MINUS_ONE, i256::ZERO, i256::ONE] {
+            let expected: f32 = value.to_string().parse().unwrap();
+            assert_eq!(value.to_f32().unwrap().to_bits(), expected.to_bits());
         }
     }
 

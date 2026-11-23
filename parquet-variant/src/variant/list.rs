@@ -327,7 +327,9 @@ impl<'m, 'v> VariantList<'m, 'v> {
     fn get_offset(&self, index: usize) -> Result<u32, ArrowError> {
         let byte_range = self.header.first_offset_byte() as _..self.first_value_byte as _;
         let offset_bytes = slice_from_slice(self.value, byte_range)?;
-        self.header.offset_size.unpack_u32(offset_bytes, index)
+        self.header
+            .offset_size
+            .unpack_u32_at_offset(offset_bytes, 0, index)
     }
 }
 

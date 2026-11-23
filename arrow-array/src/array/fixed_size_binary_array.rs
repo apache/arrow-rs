@@ -406,7 +406,11 @@ impl FixedSizeBinaryArray {
     ///
     /// # Errors
     ///
-    /// Returns error if argument has length zero, or sizes of nested slices don't match.
+    /// Returns an error for:
+    /// - Empty input
+    /// - Mismatched lengths
+    /// - Overflow
+    /// - Allocation failure
     #[deprecated(
         since = "28.0.0",
         note = "This function will fail if the iterator produces only None values; prefer `try_from_sparse_iter_with_size`"
@@ -421,14 +425,17 @@ impl FixedSizeBinaryArray {
         let mut byte = 0;
 
         let iter_size_hint = iter.size_hint().0;
-        let mut null_buf = MutableBuffer::new(bit_util::ceil(iter_size_hint, 8));
-        let mut buffer = MutableBuffer::new(0);
+        let mut null_buf = MutableBuffer::try_with_capacity(bit_util::ceil(iter_size_hint, 8))
+            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+        let mut buffer = MutableBuffer::default();
 
         let mut prepend = 0;
         iter.try_for_each(|item| -> Result<(), ArrowError> {
             // extend null bitmask by one byte per each 8 items
             if byte == 0 {
-                null_buf.push(0u8);
+                null_buf
+                    .try_push(0u8)
+                    .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
                 byte = 8;
             }
             byte -= 1;
@@ -562,7 +569,7 @@ impl FixedSizeBinaryArray {
             // extend null bitmask by one byte per each 8 items
             if byte == 0 {
                 null_buf
-                    .try_extend_from_slice(&[0u8])
+                    .try_push(0u8)
                     .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
                 byte = 8;
             }

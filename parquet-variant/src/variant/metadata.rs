@@ -341,7 +341,7 @@ impl<'m> VariantMetadata<'m> {
     fn get_offset(&self, i: usize) -> Result<u32, ArrowError> {
         let offset_byte_range = self.header.first_offset_byte() as _..self.first_value_byte as _;
         let bytes = slice_from_slice(self.bytes, offset_byte_range)?;
-        self.header.offset_size.unpack_u32(bytes, i)
+        self.header.offset_size.unpack_u32_at_offset(bytes, 0, i)
     }
 
     /// Returns the total size, in bytes, of the metadata.
@@ -441,7 +441,7 @@ impl<'m> VariantMetadata<'m> {
         let cmp = |i| {
             Some(
                 offset_size
-                    .unpack_u32(offsets, i)
+                    .unpack_u32_at_offset(offsets, 0, i)
                     .ok()?
                     .cmp(&field_name_offset),
             )
@@ -449,7 +449,9 @@ impl<'m> VariantMetadata<'m> {
         let field_id = try_binary_search_range_by(0..self.len(), cmp)?.ok()?;
 
         // Verify that this entry has exactly `field_name`'s bytes; see "Correctness" above.
-        let entry_end = offset_size.unpack_u32(offsets, field_id + 1).ok()?;
+        let entry_end = offset_size
+            .unpack_u32_at_offset(offsets, 0, field_id + 1)
+            .ok()?;
         let entry_len = entry_end.checked_sub(field_name_offset)?;
         (entry_len as usize == field_name.len()).then_some(field_id as u32)
     }

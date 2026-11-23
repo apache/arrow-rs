@@ -7,8 +7,7 @@ use crate::builder::ArrayBuilder;
 use crate::{ArrayRef, FixedSizeBinaryArray};
 use arrow_buffer::Buffer;
 use arrow_buffer::NullBufferBuilder;
-use arrow_data::ArrayData;
-use arrow_schema::{ArrowError, DataType};
+use arrow_schema::ArrowError;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -65,13 +64,14 @@ impl FixedSizeBinaryBuilder {
     /// distinct value element.
     #[inline]
     pub fn append_value(&mut self, value: impl AsRef<[u8]>) -> Result<(), ArrowError> {
-        if self.value_length != value.as_ref().len() as i32 {
+        let value = value.as_ref();
+        if value.len() != self.value_length as usize {
             Err(ArrowError::InvalidArgumentError(
                 "Byte slice does not have the same length as FixedSizeBinaryBuilder value lengths"
                     .to_string(),
             ))
         } else {
-            self.values_builder.extend_from_slice(value.as_ref());
+            self.values_builder.extend_from_slice(value);
             self.null_buffer_builder.append_non_null();
             Ok(())
         }
@@ -118,26 +118,27 @@ impl FixedSizeBinaryBuilder {
     /// Builds the [`FixedSizeBinaryArray`] and reset this builder.
     pub fn finish(&mut self) -> FixedSizeBinaryArray {
         let array_length = self.len();
-        let array_data_builder = ArrayData::builder(DataType::FixedSizeBinary(self.value_length))
-            .add_buffer(std::mem::take(&mut self.values_builder).into())
-            .nulls(self.null_buffer_builder.finish())
-            .len(array_length);
-        // SAFETY: value_length >= 0, values.len() == len * value_length, and nulls.len() == len — all guaranteed by the builder
-        let array_data = unsafe { array_data_builder.build_unchecked() };
-        FixedSizeBinaryArray::from(array_data)
+        let values = std::mem::take(&mut self.values_builder).into();
+        let nulls = self.null_buffer_builder.finish();
+
+        // SAFETY: value_length >= 0, values.len() == len * value_length,
+        // and nulls.len() == len are all guaranteed by the builder.
+        unsafe {
+            FixedSizeBinaryArray::new_unchecked(self.value_length, values, nulls, array_length)
+        }
     }
 
     /// Builds the [`FixedSizeBinaryArray`] without resetting the builder.
     pub fn finish_cloned(&self) -> FixedSizeBinaryArray {
         let array_length = self.len();
-        let values_buffer = Buffer::from_slice_ref(self.values_builder.as_slice());
-        let array_data_builder = ArrayData::builder(DataType::FixedSizeBinary(self.value_length))
-            .add_buffer(values_buffer)
-            .nulls(self.null_buffer_builder.finish_cloned())
-            .len(array_length);
-        // SAFETY: value_length >= 0, values.len() == len * value_length, and nulls.len() == len — all guaranteed by the builder
-        let array_data = unsafe { array_data_builder.build_unchecked() };
-        FixedSizeBinaryArray::from(array_data)
+        let values = Buffer::from_slice_ref(self.values_builder.as_slice());
+        let nulls = self.null_buffer_builder.finish_cloned();
+
+        // SAFETY: value_length >= 0, values.len() == len * value_length,
+        // and nulls.len() == len are all guaranteed by the builder.
+        unsafe {
+            FixedSizeBinaryArray::new_unchecked(self.value_length, values, nulls, array_length)
+        }
     }
 
     /// Returns the current null buffer as a slice
@@ -146,7 +147,7 @@ impl FixedSizeBinaryBuilder {
     }
     ///  Returns the total memory capacity in bytes currently
     pub fn capacity(&self) -> usize {
-        self.values_builder.capacity() + self.null_buffer_builder.allocated_size() + 4 // i32 
+        self.values_builder.capacity() + self.null_buffer_builder.allocated_size() + 4 // i32
     }
 }
 
@@ -187,6 +188,16 @@ mod tests {
     use super::*;
 
     use crate::Array;
+    use arrow_schema::DataType;
+
+    #[test]
+    fn test_finish_materialized_without_nulls() {
+        let mut builder = FixedSizeBinaryBuilder::new(1);
+        builder.append_nulls(0);
+        builder.append_value(b"a").unwrap();
+        assert!(builder.finish_cloned().nulls().is_none());
+        assert!(builder.finish().nulls().is_none());
+    }
 
     #[test]
     fn test_fixed_size_binary_builder() {
