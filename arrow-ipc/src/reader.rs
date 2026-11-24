@@ -199,9 +199,15 @@ impl RecordBatchDecoder<'_> {
 
                 let value_offsets = match mode {
                     UnionMode::Dense => {
+                        let offsets_len =
+                            len.checked_mul(std::mem::size_of::<i32>()).ok_or_else(|| {
+                                ArrowError::IpcError(format!(
+                                    "Union of length {len} overflows the size of its offsets buffer"
+                                ))
+                            })?;
                         let offsets = self
                             .next_buffer()?
-                            .try_slice_with_length(0, len * 4)
+                            .try_slice_with_length(0, offsets_len)
                             .map_err(|e| ArrowError::IpcError(e.to_string()))?;
                         // The offsets are the second buffer of a dense union
                         Some(self.create_scalar_buffer::<i32>(offsets, data_type, 1)?)
@@ -3722,22 +3728,28 @@ mod tests {
         const OFFSET_RANGE: usize = 128;
 
         // (array, minimum required alignment in bytes)
-        // Fixed-width: alignment == element byte width.
-        // Variable-width (e.g. StringArray): the offsets buffer drives alignment (Int32 → 4).
+        // Fixed-width: alignment == alignment of the native element type.
+        // Variable-width (e.g. StringArray): the offsets buffer drives alignment (Int32 → i32).
         let cases: Vec<(ArrayRef, usize)> = vec![
-            (Arc::new(Int32Array::from_iter(0i32..100)) as _, 4),
-            (Arc::new(Int64Array::from_iter(0i64..100)) as _, 8),
+            (
+                Arc::new(Int32Array::from_iter(0i32..100)) as _,
+                std::mem::align_of::<i32>(),
+            ),
+            (
+                Arc::new(Int64Array::from_iter(0i64..100)) as _,
+                std::mem::align_of::<i64>(),
+            ),
             (
                 Arc::new(StringArray::from_iter_values(
                     (0..100).map(|i| i.to_string()),
                 )) as _,
-                4,
+                std::mem::align_of::<i32>(),
             ),
             (
                 Arc::new(LargeStringArray::from_iter_values(
                     (0..100).map(|i| i.to_string()),
                 )) as _,
-                8,
+                std::mem::align_of::<i64>(),
             ),
         ];
 

@@ -531,10 +531,12 @@ mod tests {
         (batch, stream)
     }
 
-    /// Returns a copy of `stream` whose first byte sits `offset` bytes past a 64-byte boundary.
+    /// Returns a copy of `stream` whose first byte sits `offset` bytes past an allocation
+    /// boundary.
     ///
-    /// `MutableBuffer` always allocates at a 64-byte aligned address, so `offset` alone
-    /// determines the alignment of the result, and of every message body sliced out of it.
+    /// `MutableBuffer` allocates at an address aligned to at least 32 bytes on every target,
+    /// so `offset` alone determines the alignment of the result, and of every message body
+    /// sliced out of it.
     fn offset_stream(stream: &[u8], offset: usize) -> Buffer {
         let mut storage = MutableBuffer::with_capacity(stream.len() + offset);
         storage.extend_zeros(offset);
@@ -577,8 +579,8 @@ mod tests {
                         .with_skip_validation(skip_validation)
                 };
                 let result = decoder.decode(&mut buffer);
-                // The Float64 child needs 8 byte alignment
-                if offset % 8 == 0 {
+                // The Float64 child has the strictest alignment of the union's buffers
+                if offset % std::mem::align_of::<f64>() == 0 {
                     assert_eq!(result.unwrap().unwrap(), input, "{case}");
                 } else {
                     let err = result.unwrap_err().to_string();
