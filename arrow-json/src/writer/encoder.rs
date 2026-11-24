@@ -455,10 +455,6 @@ pub fn make_encoder<'a>(
         }
         d => match d.is_temporal() {
             true => {
-                // Note: the implementation of Encoder for ArrayFormatter assumes it does not produce
-                // characters that would need to be escaped within a JSON string, e.g. `'"'`.
-                // If support for user-provided format specifications is added, this assumption
-                // may need to be revisited
                 let fops = FormatOptions::new().with_display_error(true)
                 .with_date_format(options.date_format.as_deref())
                 .with_datetime_format(options.datetime_format.as_deref())
@@ -772,21 +768,26 @@ impl<R: RunEndIndexType> Encoder for RunEndEncodedEncoder<'_, R> {
 /// A newtype wrapper around [`ArrayFormatter`] to keep our usage of it private and not implement `Encoder` for the public type
 struct JsonArrayFormatter<'a> {
     formatter: ArrayFormatter<'a>,
+    buffer: String,
 }
 
 impl<'a> JsonArrayFormatter<'a> {
     fn new(formatter: ArrayFormatter<'a>) -> Self {
-        Self { formatter }
+        Self {
+            formatter,
+            buffer: String::new(),
+        }
     }
 }
 
 impl Encoder for JsonArrayFormatter<'_> {
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
-        out.push(b'"');
-        // Should be infallible
-        // Note: We are making an assumption that the formatter does not produce characters that require escaping
-        let _ = write!(out, "{}", self.formatter.value(idx));
-        out.push(b'"')
+        self.buffer.clear();
+        let _ = std::fmt::Write::write_fmt(
+            &mut self.buffer,
+            format_args!("{}", self.formatter.value(idx)),
+        );
+        encode_string(&self.buffer, out);
     }
 }
 
