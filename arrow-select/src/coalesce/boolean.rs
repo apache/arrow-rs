@@ -295,11 +295,11 @@ mod tests {
         in_progress.set_source(Some(Arc::clone(&source) as ArrayRef));
         in_progress.copy_rows(0, 2).unwrap();
         let first = in_progress.finish().unwrap();
-        assert_eq!(first.as_boolean(), &source.slice(0, 2));
+        assert_eq!(first.as_boolean(), &source.as_ref().slice(0, 2));
 
         in_progress.copy_rows(2, 2).unwrap();
         let second = in_progress.finish().unwrap();
-        assert_eq!(second.as_boolean(), &source.slice(2, 2));
+        assert_eq!(second.as_boolean(), &source.as_ref().slice(2, 2));
         assert_eq!(in_progress.finish().unwrap().len(), 0);
     }
 

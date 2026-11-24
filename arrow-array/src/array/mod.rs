@@ -572,6 +572,96 @@ unsafe impl Array for ArrayRef {
     }
 }
 
+// Ergonomics: allow passing e.g. `&Arc<Int32Array>` to methods that expect `&dyn Array`
+unsafe impl<T: Array + 'static> Array for Arc<T> {
+    fn as_any(&self) -> &dyn Any {
+        T::as_any(self)
+    }
+
+    fn into_any_arc(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
+        T::into_any_arc(Arc::clone(&*self))
+    }
+
+    fn to_arc(&self) -> ArrayRef {
+        Arc::clone(self) as ArrayRef
+    }
+
+    fn to_data(&self) -> ArrayData {
+        T::to_data(self)
+    }
+
+    fn into_data(self) -> ArrayData {
+        self.to_data()
+    }
+
+    fn data_type(&self) -> &DataType {
+        T::data_type(self)
+    }
+
+    fn slice(&self, offset: usize, length: usize) -> ArrayRef {
+        T::slice(self, offset, length)
+    }
+
+    fn len(&self) -> usize {
+        T::len(self)
+    }
+
+    fn is_empty(&self) -> bool {
+        T::is_empty(self)
+    }
+
+    fn shrink_to_fit(&mut self) {
+        if let Some(slf) = Arc::get_mut(self) {
+            slf.shrink_to_fit();
+        }
+    }
+
+    fn offset(&self) -> usize {
+        T::offset(self)
+    }
+
+    fn nulls(&self) -> Option<&NullBuffer> {
+        T::nulls(self)
+    }
+
+    fn logical_nulls(&self) -> Option<NullBuffer> {
+        T::logical_nulls(self)
+    }
+
+    fn is_null(&self, index: usize) -> bool {
+        T::is_null(self, index)
+    }
+
+    fn is_valid(&self, index: usize) -> bool {
+        T::is_valid(self, index)
+    }
+
+    fn null_count(&self) -> usize {
+        T::null_count(self)
+    }
+
+    fn logical_null_count(&self) -> usize {
+        T::logical_null_count(self)
+    }
+
+    fn is_nullable(&self) -> bool {
+        T::is_nullable(self)
+    }
+
+    fn get_buffer_memory_size(&self) -> usize {
+        T::get_buffer_memory_size(self)
+    }
+
+    fn get_array_memory_size(&self) -> usize {
+        T::get_array_memory_size(self)
+    }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        T::claim(self, pool)
+    }
+}
+
 unsafe impl<T: Array> Array for &T {
     fn as_any(&self) -> &dyn Any {
         T::as_any(self)
@@ -1489,8 +1579,12 @@ mod tests {
         // works well!
         assert!(compute_my_thing(&arr));
 
+        // Should also work when wrapped as an Arc of the concrete array
+        let arr = Arc::new(arr);
+        assert!(compute_my_thing(&arr));
+
         // Should also work when wrapped as an ArrayRef
-        let arr: ArrayRef = Arc::new(arr);
+        let arr: ArrayRef = arr;
         assert!(compute_my_thing(&arr));
         assert!(compute_my_thing(arr.as_ref()));
     }
@@ -1515,9 +1609,15 @@ mod tests {
         check(&dict.downcast_dict::<StringArray>().unwrap());
         check(&run.slice(1, 3).downcast::<Int32Array>().unwrap());
 
-        let array_ref: ArrayRef = Arc::new(primitive.clone());
+        let arc = Arc::new(primitive.clone());
+        let dyn_ref: &dyn Array = &arc;
+        let shared = dyn_ref.to_arc();
+        assert!(std::ptr::addr_eq(Arc::as_ptr(&shared), Arc::as_ptr(&arc)));
+
+        let array_ref: ArrayRef = arc;
         let dyn_ref: &dyn Array = &array_ref;
         assert!(Arc::ptr_eq(&dyn_ref.to_arc(), &array_ref));
+
         let dyn_ref: &dyn Array = &&primitive;
         assert_eq!(dyn_ref.to_arc().as_ref(), &primitive);
     }
