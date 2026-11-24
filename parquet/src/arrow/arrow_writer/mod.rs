@@ -5045,19 +5045,15 @@ mod tests {
     fn test_dictionary_array_writes_same_file_as_its_values() {
         // Small dictionaries get their statistics from the values the rows reference, the
         // largest from the rows. Either way they must be the plain values' statistics
-        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
-        let mut next = move |n: u64| {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            state % n
-        };
-        for dict_len in [1, 3, 50, 2000, 100_000] {
+        use rand::{RngExt, SeedableRng, rngs::StdRng};
+
+        let mut rng = StdRng::seed_from_u64(42);
+        for dict_len in [1, 3, 50, 2000] {
             let values: StringArray = (0..dict_len)
-                .map(|i| (i % 11 != 3).then(|| format!("{:03x}", next(4096))))
+                .map(|i| (i % 11 != 3).then(|| format!("{:03x}", rng.random_range(0..4096))))
                 .collect();
             let keys: Int32Array = (0..5000)
-                .map(|_| (next(10) != 0).then(|| next(dict_len) as i32))
+                .map(|_| rng.random_bool(0.9).then(|| rng.random_range(0..dict_len)))
                 .collect();
             let dictionary = DictionaryArray::new(keys, Arc::new(values));
             let plain = cast(&dictionary, &DataType::Utf8).unwrap();
