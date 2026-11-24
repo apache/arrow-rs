@@ -332,4 +332,21 @@ mod tests {
         let mut builder = FixedSizeBinaryBuilder::with_capacity(3, 5);
         builder.append_array(&other_array).unwrap();
     }
+
+    #[test]
+    fn test_fixed_size_binary_builder_append_array_trailing_bytes() {
+        let trailing = FixedSizeBinaryArray::new(3, vec![1_u8, 2, 3, 4, 5, 6, 99].into(), None);
+        assert_eq!(trailing.len(), 2);
+
+        let mut builder = FixedSizeBinaryBuilder::with_capacity(3, 3);
+        builder.append_array(&trailing).unwrap();
+        builder.append_value([7, 8, 9]).unwrap();
+        let array = builder.finish();
+
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.value(0), &[1, 2, 3]);
+        assert_eq!(array.value(1), &[4, 5, 6]);
+        assert_eq!(array.value(2), &[7, 8, 9]);
+        assert_eq!(array.value_data(), &[1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    }
 }

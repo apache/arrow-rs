@@ -485,6 +485,17 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
+    // Validating an object or list also validates all of its children, so a child of a fully
+    // validated parent is marked validated instead of being validated again.
+    fn inherit_validation(mut self, parent_validated: bool) -> Self {
+        match &mut self {
+            Variant::List(list) => list.validated = parent_validated,
+            Variant::Object(obj) => obj.validated = parent_validated,
+            _ => {}
+        }
+        self
+    }
+
     /// Converts this variant to `()` if it is null.
     ///
     /// Returns `Some(())` for null variants,
@@ -1844,6 +1855,31 @@ impl std::fmt::Debug for Variant<'_, '_> {
 mod tests {
 
     use super::*;
+    use crate::VariantBuilder;
+
+    #[test]
+    fn test_children_inherit_full_validation() {
+        let mut builder = VariantBuilder::new();
+        let mut object = builder.new_object();
+        object.new_object("o").finish();
+        let mut list = object.new_list("l");
+        list.new_list().finish();
+        list.finish();
+        object.finish();
+        let (metadata, value) = builder.finish();
+
+        for (variant, validated) in [
+            (Variant::new(&metadata, &value), false),
+            (Variant::try_new(&metadata, &value).unwrap(), true),
+        ] {
+            let object = variant.as_object().unwrap();
+            let fields: Vec<_> = object.iter().map(|(_, v)| v.is_fully_validated()).collect();
+            assert_eq!(fields, [validated, validated]);
+            let list = object.get("l").unwrap();
+            let element = list.as_list().unwrap().get(0).unwrap();
+            assert_eq!(element.is_fully_validated(), validated);
+        }
+    }
 
     #[test]
     fn test_empty_variant_will_fail() {
