@@ -125,13 +125,15 @@ impl MetadataBuilder for ReadOnlyMetadataBuilder<'_> {
     fn field_name(&self, field_id: usize) -> &str {
         &self.metadata[field_id]
     }
-    // Byte order is `str` order, so the comparison needs no UTF-8 validation.
+    /// Compares the field names of two field ids, which must be less than
+    /// [`Self::num_field_names`]. Panics if a field id is out of bounds.
     fn cmp_field_names(&self, field_a_id: u32, field_b_id: u32) -> Ordering {
         let view = self.metadata.view();
         let name = |id: u32| {
             view.entry(id as _)
                 .expect("Invalid metadata dictionary entry")
         };
+        // Byte order is `str` order, so the comparison needs no UTF-8 validation.
         name(field_a_id).cmp(name(field_b_id))
     }
     fn num_field_names(&self) -> usize {

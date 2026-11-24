@@ -162,7 +162,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         metadata: VariantMetadata<'m>,
         value: &'v [u8],
     ) -> Result<Self, ArrowError> {
-        VariantObjectView::try_new(metadata.view(), value)?.into_object(metadata)
+        VariantObjectView::try_new(metadata.view(), value)?.try_into_object(metadata)
     }
 
     // Promotes a view by validating just the last field offset.

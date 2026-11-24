@@ -118,9 +118,10 @@ impl<'m> VariantMetadataView<'m> {
         Ok(None)
     }
 
-    /// Checks the first and last offsets, and returns the bounded [`VariantMetadata`].
+    /// Attempts to interpret this view as an [unvalidated](VariantMetadata#validation)
+    /// [`VariantMetadata`], which checks the first and last offsets.
     #[inline]
-    pub fn into_metadata(self) -> Result<VariantMetadata<'m>, ArrowError> {
+    pub fn try_into_metadata(self) -> Result<VariantMetadata<'m>, ArrowError> {
         VariantMetadata::try_from_view(self)
     }
 
@@ -144,25 +145,17 @@ impl<'m> VariantMetadataView<'m> {
 
 /// A variant value of which only the header byte has been read.
 ///
-/// Building a view parses one header and nothing else. Each accessor reads and bounds-checks only
-/// the bytes it needs, so malformed input produces an error, never a panic. A view does not check
-/// UTF-8, sort order, or any offset it does not read. Field names are compared as bytes, which
-/// orders them exactly as `str` does.
+/// Views such as [`VariantView`], [`VariantMetadataView`], [`VariantObjectView`] and
+/// [`VariantListView`] do the minimum parsing work needed, and defer as much validation as possible
+/// to when a value is accessed. Each accessor bounds-checks only the bytes that it reads, and returns
+/// an error on malformed input instead of panicking. Field names are compared as bytes, which orders
+/// them as `str` does, so a search does not check UTF-8. This is more efficient when reading a few
+/// values out of a variant, such as a path, without validating the entire object.
 ///
-/// Use a view to read a few values out of a variant, such as one path per row of a column, without
-/// paying for checks that the access does not use.
-///
-/// # Views and validation
-///
-/// The views [`VariantView`], [`VariantMetadataView`], [`VariantObjectView`] and
-/// [`VariantListView`] are the weakest state of a variant. The [`Variant`], [`VariantMetadata`],
-/// [`VariantObject`] and [`VariantList`] types are the stronger states:
-///
-/// - [`VariantView::to_variant`], [`VariantMetadataView::into_metadata`],
-///   [`VariantObjectView::into_object`] and [`VariantListView::into_list`] check the first and
-///   last offsets, which bound the encoding. Unvalidated instances of the stronger types guarantee
-///   those checks.
-/// - The `with_full_validation` methods of the stronger types check everything else.
+/// For cases that need to validate the entire variant, use [`Variant`], [`VariantMetadata`],
+/// [`VariantObject`] and [`VariantList`], which do much more validation during construction and
+/// offer `with_full_validation` methods for additional checks. [`Self::try_to_variant`] and the
+/// `try_into_*` methods of the other views convert a view to these types.
 ///
 /// # Example
 ///
@@ -180,7 +173,7 @@ impl<'m> VariantMetadataView<'m> {
 /// let view = VariantView::try_new(VariantMetadataView::try_new(&metadata)?, &value)?;
 /// let scores = view.get_field(b"scores")?.expect("the field exists");
 /// let found = scores.get_index(1)?.expect("the element exists");
-/// assert_eq!(found.to_variant()?, Variant::Int8(9));
+/// assert_eq!(found.try_to_variant()?, Variant::Int8(9));
 /// assert!(view.get_field(b"missing")?.is_none());
 /// # Ok(())
 /// # }
@@ -258,9 +251,11 @@ impl<'m, 'v> VariantView<'m, 'v> {
     ///
     /// Only an object or a list reads the metadata dictionary, so only they check its bounds.
     #[inline]
-    pub fn to_variant(&self) -> Result<Variant<'m, 'v>, ArrowError> {
+    pub fn try_to_variant(&self) -> Result<Variant<'m, 'v>, ArrowError> {
         let metadata = match self.basic_type() {
-            VariantBasicType::Object | VariantBasicType::Array => self.metadata.into_metadata()?,
+            VariantBasicType::Object | VariantBasicType::Array => {
+                self.metadata.try_into_metadata()?
+            }
             VariantBasicType::Primitive | VariantBasicType::ShortString => EMPTY_VARIANT_METADATA,
         };
         Variant::try_new_with_metadata_and_shallow_validation(metadata, self.value)
@@ -367,10 +362,10 @@ impl<'m, 'v> VariantObjectView<'m, 'v> {
         Ok(end as _)
     }
 
-    /// Checks the last field offset, and returns the bounded [`VariantObject`] that uses
-    /// `metadata`, the promoted form of this view's metadata dictionary.
+    /// Attempts to interpret this view and `metadata` as an [unvalidated](VariantObject#validation)
+    /// [`VariantObject`], which checks the last field offset.
     #[inline]
-    pub fn into_object(
+    pub fn try_into_object(
         self,
         metadata: VariantMetadata<'m>,
     ) -> Result<VariantObject<'m, 'v>, ArrowError> {
@@ -501,10 +496,10 @@ impl<'m, 'v> VariantListView<'m, 'v> {
         Ok(end as _)
     }
 
-    /// Checks the first and last offsets, and returns the bounded [`VariantList`] that uses
-    /// `metadata`, the promoted form of this view's metadata dictionary.
+    /// Attempts to interpret this view and `metadata` as an [unvalidated](VariantList#validation)
+    /// [`VariantList`], which checks the first and last offsets.
     #[inline]
-    pub fn into_list(
+    pub fn try_into_list(
         self,
         metadata: VariantMetadata<'m>,
     ) -> Result<VariantList<'m, 'v>, ArrowError> {
@@ -575,7 +570,10 @@ mod tests {
         assert!(view.entry(view.len()).is_err());
         assert!(view.entry_str(view.len()).is_err());
         // Promotion gives the unvalidated form.
-        assert_eq!(view.into_metadata().unwrap(), VariantMetadata::new(bytes));
+        assert_eq!(
+            view.try_into_metadata().unwrap(),
+            VariantMetadata::new(bytes)
+        );
     }
 
     #[test]
@@ -629,12 +627,12 @@ mod tests {
             let field_id = object_view.field_id(i).unwrap();
             assert_eq!(root.metadata().entry_str(field_id as _).unwrap(), name);
             assert_eq!(
-                object_view.field(i).unwrap().to_variant().unwrap(),
+                object_view.field(i).unwrap().try_to_variant().unwrap(),
                 object.field(i).unwrap()
             );
             assert_eq!(object_view.find(name.as_bytes()).unwrap(), Some(i));
             let found = object_view.get(name.as_bytes()).unwrap().unwrap();
-            assert_eq!(found.to_variant().unwrap(), object.get(name).unwrap());
+            assert_eq!(found.try_to_variant().unwrap(), object.get(name).unwrap());
         }
 
         assert_eq!(object_view.find(b"missing").unwrap(), None);
@@ -644,8 +642,8 @@ mod tests {
         assert!(object_view.field_name(object.len()).is_err());
 
         assert_eq!(object_view.byte_len().unwrap(), value.len());
-        let metadata = root.metadata().into_metadata().unwrap();
-        assert_eq!(&object_view.into_object(metadata).unwrap(), object);
+        let metadata = root.metadata().try_into_metadata().unwrap();
+        assert_eq!(&object_view.try_into_object(metadata).unwrap(), object);
     }
 
     #[test]
@@ -661,12 +659,12 @@ mod tests {
         assert!(!list_view.is_empty());
         for i in 0..list.len() {
             let found = list_view.get(i).unwrap().unwrap();
-            assert_eq!(found.to_variant().unwrap(), list.get(i).unwrap());
+            assert_eq!(found.try_to_variant().unwrap(), list.get(i).unwrap());
         }
         assert!(list_view.get(list.len()).unwrap().is_none());
 
-        let metadata = element.metadata().into_metadata().unwrap();
-        assert_eq!(&list_view.into_list(metadata).unwrap(), list);
+        let metadata = element.metadata().try_into_metadata().unwrap();
+        assert_eq!(&list_view.try_into_list(metadata).unwrap(), list);
     }
 
     #[test]
@@ -698,14 +696,14 @@ mod tests {
         // Malformed input may declare more children than its bytes can hold.
         const MAX_CHILDREN: usize = 64;
 
-        let _ = value.to_variant();
+        let _ = value.try_to_variant();
         let metadata = value.metadata();
         for id in 0..metadata.len().min(MAX_CHILDREN) {
             let _ = metadata.entry(id);
             let _ = metadata.entry_str(id);
         }
         let _ = metadata.find(b"k");
-        let _ = metadata.into_metadata();
+        let _ = metadata.try_into_metadata();
 
         if let Ok(Some(object)) = value.as_object() {
             let _ = object.byte_len();
@@ -718,8 +716,8 @@ mod tests {
                     walk(field);
                 }
             }
-            if let Ok(metadata) = metadata.into_metadata() {
-                let _ = object.into_object(metadata);
+            if let Ok(metadata) = metadata.try_into_metadata() {
+                let _ = object.try_into_object(metadata);
             }
         }
         if let Ok(Some(list)) = value.as_list() {
@@ -729,8 +727,8 @@ mod tests {
                     walk(element);
                 }
             }
-            if let Ok(metadata) = metadata.into_metadata() {
-                let _ = list.into_list(metadata);
+            if let Ok(metadata) = metadata.try_into_metadata() {
+                let _ = list.try_into_list(metadata);
             }
         }
     }

@@ -159,7 +159,7 @@ impl<'m, 'v> VariantList<'m, 'v> {
         metadata: VariantMetadata<'m>,
         value: &'v [u8],
     ) -> Result<Self, ArrowError> {
-        VariantListView::try_new(metadata.view(), value)?.into_list(metadata)
+        VariantListView::try_new(metadata.view(), value)?.try_into_list(metadata)
     }
 
     // Promotes a view by validating just the first and last offset, ignoring the other offsets

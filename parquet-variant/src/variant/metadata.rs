@@ -206,7 +206,7 @@ impl<'m> VariantMetadata<'m> {
 
     // The actual constructor, which performs only basic (constant-const) validation.
     pub(crate) fn try_new_with_shallow_validation(bytes: &'m [u8]) -> Result<Self, ArrowError> {
-        VariantMetadataView::try_new(bytes)?.into_metadata()
+        VariantMetadataView::try_new(bytes)?.try_into_metadata()
     }
 
     // Promotes a view by validating just the first and last offset, ignoring the other offsets

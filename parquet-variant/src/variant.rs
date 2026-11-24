@@ -208,6 +208,9 @@ impl Deref for ShortString<'_> {
 /// knows the underlying bytes were already validated previously, or if the caller intends to
 /// perform a small number of (fallible) accesses to a large variant value.
 ///
+/// A [`VariantView`] reads only the bytes that each access uses, which makes it cheaper than an
+/// _unvalidated_ instance for reading a few values, such as one path per row of a column.
+///
 /// A _validated_ variant value guarantees that the associated [metadata] and all nested [object]
 /// and [array] values are _valid_. Primitive variant subtypes are always _valid_ by construction.
 ///
