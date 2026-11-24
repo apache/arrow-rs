@@ -22,7 +22,7 @@
 //!
 //! Encodings can be set for all columns with `--encoding`, and for individual
 //! leaf columns, by their dot-separated path, with `--column-encoding`:
-//! ```
+//! ```text
 //! parquet-rewrite -i XYZ.parquet -o XYZ2.parquet --dictionary-enabled false \
 //!     --encoding plain --column-encoding price=alp --column-encoding a.b=delta-binary-packed
 //! ```
