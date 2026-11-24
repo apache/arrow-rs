@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow_buffer::{BooleanBufferBuilder, Buffer};
 
@@ -79,6 +66,9 @@ pub struct GenericRecordReader<V, CV> {
     /// copied, and item-level nulls are padded. The companion `compact_bitmap`
     /// has the same compact length and becomes the leaf null bitmap.
     padding_threshold: Option<i16>,
+    /// Kept here because [`Self::set_page_reader`] creates a new values decoder for
+    /// every column chunk.
+    validate_utf8: bool,
     /// Compact bitmap accumulated during selective padding. Each bit
     /// corresponds to an item-level entry (def >= threshold): set when the
     /// value is real (def >= max_def), unset for item-level nulls. Used both
@@ -114,13 +104,15 @@ where
             values_written: 0,
             padding_threshold: None,
             compact_bitmap: None,
+            validate_utf8: false,
         }
     }
 
     /// Set the current page reader.
     pub fn set_page_reader(&mut self, page_reader: Box<dyn PageReader>) -> Result<()> {
         let descr = &self.column_desc;
-        let values_decoder = CV::new(descr);
+        let mut values_decoder = CV::new(descr);
+        values_decoder.set_validate_utf8(self.validate_utf8);
 
         let def_level_decoder = (descr.max_def_level() != 0).then(|| {
             DefinitionLevelBufferDecoder::new(descr.max_def_level(), packed_null_mask(descr))
@@ -228,6 +220,11 @@ where
     /// skipping list-level padding entries (def < threshold).
     pub fn set_padding_threshold(&mut self, threshold: i16) {
         self.padding_threshold = Some(threshold);
+    }
+
+    /// Validate decoded values as UTF-8 even if the column is not annotated as a string.
+    pub fn set_validate_utf8(&mut self, validate_utf8: bool) {
+        self.validate_utf8 = validate_utf8;
     }
 
     /// Returns the number of values in the values buffer.

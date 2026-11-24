@@ -1,20 +1,7 @@
 <!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+  SPDX-License-Identifier: Apache-2.0
+  SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+  SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # Security Policy
@@ -77,6 +64,13 @@ Include in your report:
 - A clear description and minimal reproducer.
 - Affected crates and versions.
 - Potential impact.
+
+## Supported Versions
+
+We provide security fix support for only the latest three major release lines;
+for example, if the latest version is 60.x, we would also backport any security
+fixes to 59.x and 58.x. We recommend keeping up to date with the latest versions
+of the `arrow-rs` crates.
 
 [Apache Arrow Security Model]: https://arrow.apache.org/docs/dev/format/Security.html
 [`ArrayData::validate_full`]: https://docs.rs/arrow/latest/arrow/array/struct.ArrayData.html#method.validate_full

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::decoder::{OffsetSizeBytes, map_bytes_to_offsets};
 use crate::utils::{
@@ -373,7 +360,9 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     fn get_offset(&self, i: usize) -> Result<u32, ArrowError> {
         let byte_range = self.first_field_offset_byte as _..self.first_value_byte as _;
         let field_offsets = slice_from_slice(self.value, byte_range)?;
-        self.header.field_offset_size.unpack_u32(field_offsets, i)
+        self.header
+            .field_offset_size
+            .unpack_u32_at_offset(field_offsets, 0, i)
     }
 
     /// Get a field's name by index in `0..self.len()`
@@ -392,7 +381,10 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     fn try_field_name(&self, i: usize) -> Result<&'m str, ArrowError> {
         let byte_range = self.header.field_ids_start_byte() as _..self.first_field_offset_byte as _;
         let field_id_bytes = slice_from_slice(self.value, byte_range)?;
-        let field_id = self.header.field_id_size.unpack_u32(field_id_bytes, i)?;
+        let field_id = self
+            .header
+            .field_id_size
+            .unpack_u32_at_offset(field_id_bytes, 0, i)?;
         self.metadata.get(field_id as _)
     }
 

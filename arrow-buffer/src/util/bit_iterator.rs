@@ -1,24 +1,14 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Types for iterating over packed bitmasks
 
-use crate::bit_chunk_iterator::{UnalignedBitChunk, UnalignedBitChunkIterator};
+use crate::bit_chunk_iterator::{
+    BitChunkIterator, BitChunks, UnalignedBitChunk, UnalignedBitChunkIterator,
+};
 use crate::bit_util::{ceil, get_bit_raw};
+use std::ops::Range;
 
 /// Iterator over the bits within a packed bitmask
 ///
@@ -373,6 +363,184 @@ impl Iterator for BitIndexU32Iterator<'_> {
             self.chunk_offset += 64;
             self.curr = next_chunk;
         }
+    }
+}
+
+/// Counts the set bits in ranges of a packed bitmask
+///
+/// [`Self::count_range`] returns the number of set bits in a range, and
+/// [`Self::count_before`] the number before a position. A result depends only
+/// on the arguments, so calls can come in any order and repeat.
+///
+/// # Example
+/// ```
+/// # use arrow_buffer::BooleanBuffer;
+/// let bits = BooleanBuffer::from(vec![true, false, true, true, false, true]);
+/// let mut counter = bits.set_bit_counter();
+/// assert_eq!(counter.count_range(0..2), 1);
+/// assert_eq!(counter.count_range(2..4), 2);
+/// assert_eq!(counter.count_before(6), 4);
+/// // Calls can go back, and a repeated call returns the same count
+/// assert_eq!(counter.count_range(0..2), 1);
+/// ```
+///
+/// # Performance
+///
+/// The counter keeps the 64-bit word that holds the last position, and a call
+/// reads the words between that position and the new one. When positions do
+/// not decrease, as in a pass over the rows of a list, each word is read once,
+/// and a call within the current word costs a mask and a popcount. Calling
+/// [`Buffer::count_set_bits_offset`] for each range instead pays a setup cost on
+/// every call, which dominates for short ranges.
+///
+/// When positions jump across the bitmask, such as the rows of a list view in
+/// random order, a call reads every word it jumps over. Calling
+/// [`Buffer::count_set_bits_offset`] for each range is faster there.
+///
+/// # Example: Count the valid elements of each row of a list
+/// ```
+/// # use arrow_buffer::{BooleanBuffer, OffsetBuffer};
+/// // A list with rows of 3, 0, and 3 elements, and the validity of its elements
+/// let offsets = OffsetBuffer::<i32>::from_lengths([3, 0, 3]);
+/// let valid = BooleanBuffer::from(vec![true, false, true, true, false, true]);
+///
+/// // One counter for all rows. The rows are visited in order, so each word of
+/// // `valid` is read once.
+/// let mut counter = valid.set_bit_counter();
+/// // Each pair of adjacent offsets is the start and end of a row
+/// let valid_per_row: Vec<usize> = offsets
+///     .windows(2)
+///     .map(|w| counter.count_range(w[0] as usize..w[1] as usize))
+///     .collect();
+/// assert_eq!(valid_per_row, [2, 0, 2]);
+/// ```
+///
+/// [`Buffer::count_set_bits_offset`]: crate::Buffer::count_set_bits_offset
+#[derive(Debug)]
+pub struct SetBitCounter<'a> {
+    chunks: BitChunks<'a>,
+    /// Yields the words after `word`
+    iter: BitChunkIterator<'a>,
+    /// The bitmask's final partial word, zero padded
+    remainder: u64,
+    /// The word containing the most recent position
+    word: u64,
+    /// Position of the first bit of `word`
+    word_start: usize,
+    /// Set bits before `word_start`
+    count_before_word: usize,
+    len: usize,
+}
+
+impl<'a> SetBitCounter<'a> {
+    /// Create a new [`SetBitCounter`] from the provided `buffer`,
+    /// and `offset` and `len` in bits
+    ///
+    /// ```
+    /// # use arrow_buffer::bit_iterator::SetBitCounter;
+    /// // Bits 3..9 of the buffer are 1, 0, 1, 1, 0, 1
+    /// let mut counter = SetBitCounter::new(&[0b0110_1000, 0b0000_0001], 3, 6);
+    /// assert_eq!(counter.count_range(2..4), 2);
+    /// assert_eq!(counter.count_before(6), 4);
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `buffer` is too short for the provided offset and length
+    pub fn new(buffer: &'a [u8], offset: usize, len: usize) -> Self {
+        let chunks = BitChunks::new(buffer, offset, len);
+        let mut counter = Self {
+            iter: chunks.iter(),
+            remainder: chunks.remainder_bits(),
+            chunks,
+            word: 0,
+            word_start: 0,
+            count_before_word: 0,
+            len,
+        };
+        counter.word = counter.next_word();
+        counter
+    }
+
+    #[inline]
+    fn next_word(&mut self) -> u64 {
+        self.iter.next().unwrap_or(self.remainder)
+    }
+
+    // Cold and out of line because callers that pass positions in order never
+    // call it, and inlining would copy it into every caller of the inlined
+    // `count_before`.
+    #[cold]
+    fn step_back(&mut self, end: usize) {
+        while end < self.word_start {
+            self.word_start -= 64;
+            // A word before the current one is never the remainder
+            self.word = self.chunks.chunk(self.word_start / 64);
+            self.count_before_word -= self.word.count_ones() as usize;
+        }
+        // Leave `iter` after `word`
+        self.iter = self.chunks.iter();
+        self.iter.nth(self.word_start / 64);
+    }
+
+    /// Returns the number of set bits before position `end`
+    ///
+    /// ```
+    /// # use arrow_buffer::BooleanBuffer;
+    /// let bits = BooleanBuffer::from(vec![true, false, true, true, false, true]);
+    /// let mut counter = bits.set_bit_counter();
+    /// assert_eq!(counter.count_before(0), 0);
+    /// assert_eq!(counter.count_before(3), 2);
+    /// assert_eq!(counter.count_before(6), 4);
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `end` is greater than the length of the bitmask
+    #[inline]
+    pub fn count_before(&mut self, end: usize) -> usize {
+        assert!(
+            end <= self.len,
+            "position {end} out of bounds for length {}",
+            self.len
+        );
+        if end < self.word_start {
+            self.step_back(end);
+        }
+        while end - self.word_start >= 64 {
+            self.count_before_word += self.word.count_ones() as usize;
+            self.word = self.next_word();
+            self.word_start += 64;
+        }
+        let mask = (1u64 << (end - self.word_start)) - 1;
+        self.count_before_word + (self.word & mask).count_ones() as usize
+    }
+
+    /// Returns the number of set bits in `range`
+    ///
+    /// ```
+    /// # use arrow_buffer::BooleanBuffer;
+    /// let bits = BooleanBuffer::from(vec![true, false, true, true, false, true]);
+    /// let mut counter = bits.set_bit_counter();
+    /// assert_eq!(counter.count_range(0..2), 1);
+    /// assert_eq!(counter.count_range(2..2), 0);
+    /// assert_eq!(counter.count_range(2..4), 2);
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `range.start` is greater than `range.end`, or if `range.end`
+    /// is greater than the length of the bitmask
+    #[inline]
+    pub fn count_range(&mut self, range: Range<usize>) -> usize {
+        assert!(
+            range.start <= range.end,
+            "range start {} is greater than end {}",
+            range.start,
+            range.end
+        );
+        let before = self.count_before(range.start);
+        self.count_before(range.end) - before
     }
 }
 
@@ -1001,5 +1169,160 @@ mod tests {
                 }
             },
         );
+    }
+
+    /// Sliced buffers covering empty, sub-word, exact-word, and multi-word
+    /// lengths at byte-aligned and unaligned offsets, with their bits.
+    fn set_bit_counter_cases() -> Vec<(BooleanBuffer, Vec<bool>)> {
+        let mut rng = StdRng::seed_from_u64(42);
+        let mut cases = vec![];
+        for len in [0, 1, 63, 64, 65, 127, 128, 129, 300] {
+            for offset in [0, 1, 7, 8, 63, 64, 67] {
+                for density in [0.0, 0.5, 1.0] {
+                    let bits = (0..offset + len)
+                        .map(|_| rng.random_bool(density))
+                        .collect::<Vec<_>>();
+                    let buffer = BooleanBuffer::from(bits.as_slice()).slice(offset, len);
+                    cases.push((buffer, bits[offset..].to_vec()));
+                }
+            }
+        }
+        cases
+    }
+
+    fn count_set(bits: &[bool]) -> usize {
+        bits.iter().filter(|&&b| b).count()
+    }
+
+    #[test]
+    fn test_set_bit_counter_every_position() {
+        for (buffer, bits) in set_bit_counter_cases() {
+            let mut counter = buffer.set_bit_counter();
+            for end in 0..=bits.len() {
+                assert_eq!(
+                    counter.count_before(end),
+                    count_set(&bits[..end]),
+                    "offset {} len {} end {end}",
+                    buffer.offset(),
+                    buffer.len()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_set_bit_counter_every_position_reversed() {
+        for (buffer, bits) in set_bit_counter_cases() {
+            let mut counter = buffer.set_bit_counter();
+            for end in (0..=bits.len()).rev() {
+                assert_eq!(
+                    counter.count_before(end),
+                    count_set(&bits[..end]),
+                    "offset {} len {} end {end}",
+                    buffer.offset(),
+                    buffer.len()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_set_bit_counter_shuffled_ranges() {
+        let mut rng = StdRng::seed_from_u64(42);
+        for (buffer, bits) in set_bit_counter_cases() {
+            let len = bits.len();
+            let mut counter = buffer.set_bit_counter();
+            for _ in 0..100 {
+                let start = rng.random_range(0..=len);
+                let end = rng.random_range(start..=len);
+                assert_eq!(
+                    counter.count_range(start..end),
+                    count_set(&bits[start..end]),
+                    "offset {} len {len} range {start}..{end}",
+                    buffer.offset()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_set_bit_counter_ranges() {
+        for (buffer, bits) in set_bit_counter_cases() {
+            let len = bits.len();
+            // Empty, contiguous, and gapped ranges, some spanning several words.
+            let ranges = [
+                (0, 0),
+                (0, len / 3),
+                (len / 3, len / 3),
+                (len / 3, len / 2),
+                (len / 2 + 1, len - len / 4),
+                (len, len),
+            ];
+            let mut counter = buffer.set_bit_counter();
+            for (start, end) in ranges {
+                let (start, end) = (start.min(len), end.min(len));
+                assert_eq!(
+                    counter.count_range(start..end),
+                    count_set(&bits[start..end]),
+                    "offset {} len {len} range {start}..{end}",
+                    buffer.offset()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_set_bit_counter_decreasing_positions() {
+        let bits = (0..300).map(|i| i % 3 != 0).collect::<Vec<_>>();
+        let buffer = BooleanBuffer::from(bits.as_slice()).slice(5, 290);
+        let bits = &bits[5..];
+        let mut counter = buffer.set_bit_counter();
+        // Back to an earlier word, back within the current word, then forward.
+        for end in [290, 130, 10, 129, 128, 70, 64, 0, 200, 290] {
+            assert_eq!(
+                counter.count_before(end),
+                count_set(&bits[..end]),
+                "end {end}"
+            );
+        }
+        assert_eq!(counter.count_range(10..20), count_set(&bits[10..20]));
+    }
+
+    #[test]
+    fn test_set_bit_counter_new() {
+        // Bits 3..9 of 0b1011_0101, 0b0000_0001 are 0, 1, 1, 0, 1, 1.
+        let mut counter = SetBitCounter::new(&[0b1011_0101, 0b0000_0001], 3, 6);
+        assert_eq!(counter.count_before(0), 0);
+        assert_eq!(counter.count_before(3), 2);
+        assert_eq!(counter.count_before(6), 4);
+    }
+
+    #[test]
+    #[should_panic(expected = "position 4 out of bounds for length 3")]
+    fn test_set_bit_counter_out_of_bounds() {
+        let buffer = BooleanBuffer::from(&[true, false, true][..]);
+        buffer.set_bit_counter().count_before(4);
+    }
+
+    #[test]
+    #[should_panic(expected = "position 1 out of bounds for length 0")]
+    fn test_set_bit_counter_empty_out_of_bounds() {
+        BooleanBuffer::new_unset(0)
+            .set_bit_counter()
+            .count_before(1);
+    }
+
+    #[test]
+    #[should_panic(expected = "range start 3 is greater than end 2")]
+    #[expect(clippy::reversed_empty_ranges)]
+    fn test_set_bit_counter_reversed_range() {
+        let buffer = BooleanBuffer::new_set(10);
+        buffer.set_bit_counter().count_range(3..2);
+    }
+
+    #[test]
+    #[should_panic(expected = "offset + len out of bounds")]
+    fn test_set_bit_counter_new_buffer_too_short() {
+        SetBitCounter::new(&[0xFF], 3, 6);
     }
 }

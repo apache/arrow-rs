@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Tests that the ArrowWriter correctly lays out values into multiple pages
 
@@ -83,8 +70,7 @@ fn do_test(test: LayoutTest) {
 fn assert_layout(file_reader: &Bytes, meta: &ParquetMetaData, layout: &Layout) {
     assert_eq!(meta.row_groups().len(), layout.row_groups.len());
 
-    for rg_idx in 0..meta.num_row_groups() {
-        let row_group = meta.row_group(rg_idx);
+    for (rg_idx, row_group) in meta.row_groups().iter().enumerate() {
         let row_group_layout = &layout.row_groups[rg_idx];
         let rg_page_index = meta.page_index_for_row_group(rg_idx);
 

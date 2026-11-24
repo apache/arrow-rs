@@ -1,25 +1,12 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use arrow_array::RecordBatch;
 use arrow_array::builder::{
     Date32Builder, Decimal128Builder, Int32Builder, StringBuilder, StringDictionaryBuilder,
 };
 use arrow_array::types::UInt32Type;
+use arrow_array::{FixedSizeBinaryArray, RecordBatch};
 use arrow_ipc::CompressionType;
 use arrow_ipc::writer::{
     DictionaryHandling, FileWriter, IpcWriteOptions, StreamEncoder, StreamWriter,
@@ -62,6 +49,52 @@ fn criterion_benchmark(c: &mut Criterion) {
             writer.finish().unwrap();
         })
     });
+
+    group.bench_function("StreamWriter/write_10/lz4", |b| {
+        let batch = create_batch(8192, true);
+        let mut buffer = Vec::with_capacity(2 * 1024 * 1024);
+        b.iter(move || {
+            buffer.clear();
+            let options = IpcWriteOptions::default()
+                .try_with_compression(Some(CompressionType::LZ4_FRAME))
+                .unwrap();
+            let mut writer =
+                StreamWriter::try_new_with_options(&mut buffer, batch.schema().as_ref(), options)
+                    .unwrap();
+            for _ in 0..10 {
+                writer.write(&batch).unwrap();
+            }
+            writer.finish().unwrap();
+        })
+    });
+
+    for (rows, threads) in [(8192, 1), (65536, 1), (8192, 16), (65536, 16)] {
+        group.bench_function(
+            format!("StreamEncoder/encode_10/lz4/rows={rows}/threads={threads}"),
+            |b| {
+                let batch = create_batch(rows, true);
+                b.iter(|| {
+                    std::thread::scope(|s| {
+                        for _ in 0..threads {
+                            s.spawn(|| {
+                                let options = IpcWriteOptions::default()
+                                    .try_with_compression(Some(CompressionType::LZ4_FRAME))
+                                    .unwrap();
+                                let mut encoder = StreamEncoder::try_new_with_options(
+                                    batch.schema().as_ref(),
+                                    options,
+                                )
+                                .unwrap();
+                                for _ in 0..10 {
+                                    black_box(encoder.encode(&batch).unwrap());
+                                }
+                            });
+                        }
+                    })
+                })
+            },
+        );
+    }
 
     group.bench_function("StreamEncoder/encode_10", |b| {
         let batch = create_batch(8192, true);
@@ -250,6 +283,7 @@ fn create_batch(num_rows: usize, allow_nulls: bool) -> RecordBatch {
         Field::new("c1", DataType::Utf8, true),
         Field::new("c2", DataType::Date32, true),
         Field::new("c3", DataType::Decimal128(11, 2), true),
+        Field::new("c4", DataType::FixedSizeBinary(16), false),
     ]));
     let mut a = Int32Builder::new();
     let mut b = StringBuilder::new();
@@ -257,6 +291,7 @@ fn create_batch(num_rows: usize, allow_nulls: bool) -> RecordBatch {
     let mut d = Decimal128Builder::new()
         .with_precision_and_scale(11, 2)
         .unwrap();
+    let fixed_value = [0xa5; 16];
     for i in 0..num_rows {
         a.append_value(i as i32);
         c.append_value(i as i32);
@@ -271,9 +306,17 @@ fn create_batch(num_rows: usize, allow_nulls: bool) -> RecordBatch {
     let b = b.finish();
     let c = c.finish();
     let d = d.finish();
+    let e =
+        FixedSizeBinaryArray::try_from_iter((0..num_rows).map(|_| fixed_value.as_slice())).unwrap();
     RecordBatch::try_new(
         schema.clone(),
-        vec![Arc::new(a), Arc::new(b), Arc::new(c), Arc::new(d)],
+        vec![
+            Arc::new(a),
+            Arc::new(b),
+            Arc::new(c),
+            Arc::new(d),
+            Arc::new(e),
+        ],
     )
     .unwrap()
 }

@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+labelPRBasedOnFilePath:
+  development-process:
+    - ".github/**/*"
+    - ".config/**/*"
+    - "dev/**/*"
+
+  arrow-core:
+    - "arrow/**/*"
+    - "arrow-array/**/*"
+    - "arrow-buffer/**/*"
+    - "arrow-data/**/*"
+    - "arrow-integration-test/**/*"
+    - "arrow-integration-testing/**/*"
+    - "arrow-schema/**/*"
+
+  arrow-kernels:
+    - "arrow-arith/**/*"
+    - "arrow-cast/**/*"
+    - "arrow-select/**/*"
+    - "arrow-string/**/*"
+    - "arrow-ord/**/*"
+    - "arrow-cmp/**/*"
+
+  arrow-avro:
+    - "arrow-avro/**/*"
+
+  arrow-flight:
+    - "arrow-flight/**/*"
+
+  parquet:
+    - "parquet/**/*"
+    - "parquet_derive/**/*"
+    - "parquet_derive_test/**/*"
+    - "parquet-geospatial/**/*"
+
+  parquet-variant:
+    - "parquet-variant/**/*"
+    - "parquet-variant-compute/**/*"
+    - "parquet-variant-json/**/*"
+
+  arrow-csv:
+    - "arrow-csv/**/*"
+
+  arrow-ipc:
+    - "arrow-ipc/**/*"
+
+  arrow-json:
+    - "arrow-json/**/*"
+
+  arrow-pyarrow:
+    - "arrow-pyarrow/**/*"
+    - "arrow-pyarrow-testing/**/*"
+    - "arrow-pyarrow-integration-testing/**/*"
+
+  arrow-row:
+    - "arrow-row/**/*"

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! This module is the bridge between a Parquet file's thrift encoded metadata
 //! and this crate's [Parquet metadata API]. It contains objects and functions used
@@ -42,9 +29,9 @@ use crate::{
     errors::{ParquetError, Result},
     file::{
         metadata::{
-            ColumnChunkMetaData, ColumnChunkMetaDataBuilder, KeyValue, LevelHistogram,
-            PageEncodingStats, ParquetMetaData, ParquetMetaDataOptions, ParquetPageEncodingStats,
-            RowGroupMetaData, RowGroupMetaDataBuilder, SortingColumn,
+            ColumnChunkMetaData, ColumnChunkMetaDataBuilder, FileMetaData, KeyValue,
+            LevelHistogram, PageEncodingStats, ParquetMetaData, ParquetMetaDataOptions,
+            ParquetPageEncodingStats, RowGroupMetaData, RowGroupMetaDataBuilder, SortingColumn,
         },
         statistics::ValueStatistics,
     },
@@ -757,6 +744,14 @@ pub(crate) fn parquet_metadata_from_bytes(
     buf: &[u8],
     options: Option<&ParquetMetaDataOptions>,
 ) -> Result<ParquetMetaData> {
+    let (file_metadata, row_groups) = file_metadata_and_row_groups_from_bytes(buf, options)?;
+    Ok(ParquetMetaData::new(file_metadata, row_groups))
+}
+
+pub(crate) fn file_metadata_and_row_groups_from_bytes(
+    buf: &[u8],
+    options: Option<&ParquetMetaDataOptions>,
+) -> Result<(FileMetaData, Vec<RowGroupMetaData>)> {
     let mut prot = ThriftSliceInputProtocol::new(buf);
 
     // begin reading the file metadata
@@ -899,7 +894,7 @@ pub(crate) fn parquet_metadata_from_bytes(
     });
 
     #[cfg(not(feature = "encryption"))]
-    let fmd = crate::file::metadata::FileMetaData::new(
+    let fmd = FileMetaData::new(
         version,
         num_rows,
         created_by,
@@ -908,7 +903,7 @@ pub(crate) fn parquet_metadata_from_bytes(
         column_orders,
     );
     #[cfg(feature = "encryption")]
-    let fmd = crate::file::metadata::FileMetaData::new(
+    let fmd = FileMetaData::new(
         version,
         num_rows,
         created_by,
@@ -919,7 +914,7 @@ pub(crate) fn parquet_metadata_from_bytes(
     .with_encryption_algorithm(encryption_algorithm)
     .with_footer_signing_key_metadata(footer_signing_key_metadata.map(|v| v.to_vec()));
 
-    Ok(ParquetMetaData::new(fmd, row_groups))
+    Ok((fmd, row_groups))
 }
 
 /// Ensure [`RowGroupMetaData::ordinal`] is usable after decode without
@@ -1402,7 +1397,7 @@ pub(super) fn serialize_column_meta_data<W: Write>(
 
 // temp struct used for writing
 pub(super) struct FileMeta<'a> {
-    pub(super) file_metadata: &'a crate::file::metadata::FileMetaData,
+    pub(super) file_metadata: &'a FileMetaData,
     pub(super) row_groups: &'a Vec<RowGroupMetaData>,
     // If true, then write the `path_in_schema` field in the ColumnMetaData struct.
     pub(super) write_path_in_schema: bool,
@@ -2096,6 +2091,21 @@ pub(crate) mod tests {
         assert_eq!(
             roundtrip_rg_ordinals(&[None, Some(1), Some(2)]),
             vec![None, Some(1), Some(2)],
+        );
+    }
+
+    #[test]
+    fn metadata_schema_huge_child_count_is_rejected() {
+        // File version 1, one schema element named "r" with i32::MAX children.
+        let data = [
+            0x15, 0x02, 0x19, 0x1c, 0x48, 0x01, 0x72, 0x15, 0xfe, 0xff, 0xff, 0xff, 0x0f, 0x00,
+        ];
+        let err = super::parquet_metadata_from_bytes(&data, None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("Schema children count 2147483647 exceeds remaining schema elements 0"),
+            "{err}"
         );
     }
 

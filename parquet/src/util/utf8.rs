@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`check_valid_utf8`] validation function
 use crate::errors::{ParquetError, Result};
@@ -53,5 +40,19 @@ pub fn check_valid_utf8(val: &[u8]) -> Result<()> {
     match std::str::from_utf8(val) {
         Ok(_) => Ok(()),
         Err(e) => Err(general_err!("encountered non UTF-8 data: {}", e)),
+    }
+}
+
+/// Check that `value` does not start in the middle of a UTF-8 character.
+///
+/// [`check_valid_utf8`] over values stored back to back misses a character
+/// split across two of them, so each value's start must be checked as well.
+#[inline(always)]
+pub(crate) fn check_utf8_value_start(value: &[u8]) -> Result<()> {
+    match value.first() {
+        // A continuation byte has the form 0b10xxxxxx, bit majic from `str::is_char_boundary`
+        // see https://github.com/rust-lang/rust/blob/1.100.0/library/core/src/num/mod.rs#L1232-L1235
+        Some(&b) if (b as i8) < -0x40 => Err(general_err!("encountered non UTF-8 data")),
+        _ => Ok(()),
     }
 }
