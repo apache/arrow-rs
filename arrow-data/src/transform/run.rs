@@ -253,19 +253,19 @@ mod tests {
     use super::*;
     use crate::transform::MutableArrayData;
     use crate::{ArrayData, ArrayDataBuilder};
-    use arrow_array::types::{Int16Type, Int32Type, Int64Type, RunEndIndexType};
     use arrow_buffer::Buffer;
     use arrow_schema::{DataType, Field};
     use rstest::rstest;
     use std::sync::Arc;
 
-    fn create_run_array_data<T: RunEndIndexType>(
-        run_ends: Vec<T::Native>,
+    fn create_run_array_data<T: ArrowNativeType>(
+        run_ends: Vec<T>,
         values: ArrayData,
+        run_end_type: DataType,
     ) -> ArrayData {
         let run_ends_field = Arc::new(Field::new(
             Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
-            T::DATA_TYPE,
+            run_end_type.clone(),
             false,
         ));
         let values_field = Arc::new(Field::new(
@@ -282,8 +282,8 @@ mod tests {
         };
 
         let run_ends_buffer = Buffer::from_vec(run_ends);
-        let run_ends_data = ArrayDataBuilder::new(T::DATA_TYPE)
-            .len(run_ends_buffer.len() / std::mem::size_of::<T::Native>())
+        let run_ends_data = ArrayDataBuilder::new(run_end_type)
+            .len(run_ends_buffer.len() / std::mem::size_of::<T>())
             .add_buffer(run_ends_buffer)
             .build()
             .unwrap();
@@ -351,7 +351,7 @@ mod tests {
         let values = create_int32_array_data(vec![42]);
 
         // Create REE array with Int32 run ends
-        let ree_array = create_run_array_data::<Int32Type>(vec![5_i32], values);
+        let ree_array = create_run_array_data::<i32>(vec![5_i32], values, DataType::Int32);
 
         let mut mutable = MutableArrayData::new(vec![&ree_array], true, 10);
 
@@ -395,16 +395,15 @@ mod tests {
     }
 
     #[rstest]
-    #[case::int16(Int16Type {}, [5_i16], [5_i16, 8])]
-    #[case::int64(Int64Type {}, [5_i64], [5_i64, 8])]
-    fn test_extend_nulls_after_values<T: RunEndIndexType>(
-        #[case] run_end_type: T,
-        #[case] run_ends: [T::Native; 1],
-        #[case] expected: [T::Native; 2],
+    #[case::int16(DataType::Int16, [5_i16], [5_i16, 8])]
+    #[case::int64(DataType::Int64, [5_i64], [5_i64, 8])]
+    fn test_extend_nulls_after_values<T: ArrowNativeType>(
+        #[case] run_end_type: DataType,
+        #[case] run_ends: [T; 1],
+        #[case] expected: [T; 2],
     ) {
-        let _ = run_end_type;
         let values = create_int32_array_data(vec![42]);
-        let ree_array = create_run_array_data::<T>(run_ends.to_vec(), values);
+        let ree_array = create_run_array_data::<T>(run_ends.to_vec(), values, run_end_type);
         let mut mutable = MutableArrayData::new(vec![&ree_array], true, 10);
 
         mutable.try_extend(0, 0, 5).unwrap();
@@ -413,7 +412,7 @@ mod tests {
         let result = mutable.freeze();
         let run_ends = &result.child_data()[0];
         assert_eq!(run_ends.len(), 2);
-        assert_eq!(run_ends.buffers()[0].typed_data::<T::Native>(), &expected);
+        assert_eq!(run_ends.buffers()[0].typed_data::<T>(), &expected);
     }
 
     #[test]
@@ -422,7 +421,7 @@ mod tests {
         let values = create_int32_array_data(vec![10, 20]);
 
         // Array: [10, 10, 20, 20, 20] (run_ends = [2, 5])
-        let ree_array = create_run_array_data::<Int32Type>(vec![2_i32, 5], values);
+        let ree_array = create_run_array_data::<i32>(vec![2_i32, 5], values, DataType::Int32);
 
         let mut mutable = MutableArrayData::new(vec![&ree_array], false, 10);
 
@@ -442,7 +441,7 @@ mod tests {
     #[test]
     fn test_extend_empty() {
         let values = create_int32_array_data(vec![]);
-        let ree_array = create_run_array_data::<Int32Type>(vec![], values);
+        let ree_array = create_run_array_data::<i32>(vec![], values, DataType::Int32);
 
         let mut mutable = MutableArrayData::new(vec![&ree_array], false, 10);
         mutable.try_extend(0, 0, 0).unwrap();
@@ -484,7 +483,7 @@ mod tests {
         let values = create_string_dict_array_data(vec!["hello", "world"], dict_values);
 
         // Create REE array: [hello, hello, world, world, world] (run_ends = [2, 5])
-        let ree_array = create_run_array_data::<Int32Type>(vec![2_i32, 5], values);
+        let ree_array = create_run_array_data::<i32>(vec![2_i32, 5], values, DataType::Int32);
 
         let mut mutable = MutableArrayData::new(vec![&ree_array], false, 10);
 
@@ -506,16 +505,15 @@ mod tests {
     }
 
     #[rstest]
-    #[case::int16(5_i16, i16::MAX, Int16Type {})]
-    #[case::int32(10_i32, i32::MAX, Int32Type {})]
-    fn test_extend_nulls_run_end_overflow<T: RunEndIndexType>(
-        #[case] initial_run_end: T::Native,
-        #[case] null_count: T::Native,
-        #[case] run_end_type: T,
+    #[case::int16(5_i16, i16::MAX, DataType::Int16)]
+    #[case::int32(10_i32, i32::MAX, DataType::Int32)]
+    fn test_extend_nulls_run_end_overflow<T: ArrowNativeType>(
+        #[case] initial_run_end: T,
+        #[case] null_count: T,
+        #[case] run_end_type: DataType,
     ) {
-        let _ = run_end_type;
         let values = create_int32_array_data(vec![42]);
-        let ree_array = create_run_array_data::<T>(vec![initial_run_end], values);
+        let ree_array = create_run_array_data::<T>(vec![initial_run_end], values, run_end_type);
         let mut mutable = MutableArrayData::new(vec![&ree_array], true, 10);
 
         // Extend the original data first to initialize state
@@ -523,7 +521,7 @@ mod tests {
             .try_extend(0, 0, initial_run_end.as_usize())
             .unwrap();
 
-        // The null count fits in T::Native, but adding it to the existing run end overflows.
+        // The null count fits in T, but adding it to the existing run end overflows.
         let err = mutable.try_extend_nulls(null_count.as_usize()).unwrap_err();
         assert!(
             err.to_string().contains("run end overflow"),
@@ -532,21 +530,21 @@ mod tests {
     }
 
     #[rstest]
-    #[case::int16(20_i16, i16::MAX - 5, Int16Type {})]
-    #[case::int32(100_i32, i32::MAX - 50, Int32Type {})]
-    fn test_build_extend_overflow<T: RunEndIndexType>(
-        #[case] src_value: T::Native,
-        #[case] dest_value: T::Native,
-        #[case] run_end_type: T,
+    #[case::int16(20_i16, i16::MAX - 5, DataType::Int16)]
+    #[case::int32(100_i32, i32::MAX - 50, DataType::Int32)]
+    fn test_build_extend_overflow<T: ArrowNativeType>(
+        #[case] src_value: T,
+        #[case] dest_value: T,
+        #[case] run_end_type: DataType,
     ) {
-        let _ = run_end_type;
         // Create a source array with small run that will cause overflow when added
         let values = create_int32_array_data(vec![10]);
-        let source_array = create_run_array_data::<T>(vec![src_value], values);
+        let source_array =
+            create_run_array_data::<T>(vec![src_value], values, run_end_type.clone());
 
         // Create a destination array with run end close to max
         let dest_values = create_int32_array_data(vec![42]);
-        let dest_array = create_run_array_data::<T>(vec![dest_value], dest_values);
+        let dest_array = create_run_array_data::<T>(vec![dest_value], dest_values, run_end_type);
 
         let mut mutable = MutableArrayData::new(vec![&source_array, &dest_array], false, 10);
 
@@ -564,7 +562,7 @@ mod tests {
     #[test]
     fn test_extend_nulls_length_overflow() {
         let values = create_int32_array_data(vec![10]);
-        let array = create_run_array_data::<Int16Type>(vec![100_i16], values);
+        let array = create_run_array_data::<i16>(vec![100_i16], values, DataType::Int16);
 
         let mut mutable = MutableArrayData::new(vec![&array], true, 10);
         let err = mutable.try_extend_nulls(i16::MAX as usize + 1).unwrap_err();

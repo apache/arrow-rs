@@ -41,7 +41,6 @@ num-traits = { version = "0.2.19", default-features = false, features = ["std"] 
 half = { version = "2.1", default-features = false }
 
 [dev-dependencies]
-arrow-array = { workspace = true }
 rstest = { workspace = true }
 
 [build-dependencies]
