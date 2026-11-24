@@ -320,8 +320,9 @@ mod tests {
     use super::*;
     use crate::writer::{IpcWriteOptions, StreamWriter};
     use arrow_array::{
-        DictionaryArray, Int32Array, Int64Array, RecordBatch, RunArray, StringArray,
-        types::Int32Type,
+        Array, DictionaryArray, Int32Array, Int64Array, RecordBatch, RunArray, StringArray,
+        builder::UnionBuilder,
+        types::{Float64Type, Int32Type},
     };
     use arrow_schema::{DataType, Field, Schema};
 
@@ -504,6 +505,90 @@ mod tests {
             "decoded batch holds {held} bytes, more than the {} byte stream it came from",
             stream.len()
         );
+    }
+
+    /// Writes a stream holding a single batch with one union column of the given mode
+    fn union_stream(mut builder: UnionBuilder) -> (RecordBatch, Vec<u8>) {
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Float64Type>("b", 2.5).unwrap();
+        builder.append_null::<Int32Type>("a").unwrap();
+        builder.append::<Float64Type>("b", 4.5).unwrap();
+        builder.append::<Int32Type>("a", 5).unwrap();
+        let union = builder.build().unwrap();
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "union",
+            union.data_type().clone(),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(union)]).unwrap();
+
+        let mut stream = Vec::new();
+        let mut writer = StreamWriter::try_new(&mut stream, &schema).unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+        drop(writer);
+        (batch, stream)
+    }
+
+    /// Returns a copy of `stream` whose first byte sits `offset` bytes past a 64-byte boundary.
+    ///
+    /// `MutableBuffer` always allocates at a 64-byte aligned address, so `offset` alone
+    /// determines the alignment of the result, and of every message body sliced out of it.
+    fn offset_stream(stream: &[u8], offset: usize) -> Buffer {
+        let mut storage = MutableBuffer::with_capacity(stream.len() + offset);
+        storage.extend_zeros(offset);
+        storage.extend_from_slice(stream);
+        Buffer::from(storage).slice(offset)
+    }
+
+    /// The decoder is zero-copy over its input, so the alignment of the decoded buffers is
+    /// that of the caller's `Buffer`. By default any misaligned buffer must be copied to an
+    /// aligned allocation rather than rejected.
+    #[test]
+    fn test_unaligned_union() {
+        for builder in [UnionBuilder::new_dense, UnionBuilder::new_sparse] {
+            let (input, stream) = union_stream(builder());
+            for offset in 0..16 {
+                let mut buffer = offset_stream(&stream, offset);
+                let mut decoder = StreamDecoder::new();
+                let output = decoder.decode(&mut buffer).unwrap().unwrap();
+                assert_eq!(output, input, "offset={offset}");
+                output.column(0).to_data().validate_full().unwrap();
+                assert!(decoder.decode(&mut buffer).unwrap().is_none());
+                decoder.finish().unwrap();
+            }
+        }
+    }
+
+    /// With `require_alignment` a misaligned buffer is an error, never a panic, whether or
+    /// not the data is validated.
+    #[test]
+    fn test_unaligned_union_with_require_alignment() {
+        for builder in [UnionBuilder::new_dense, UnionBuilder::new_sparse] {
+            let (input, stream) = union_stream(builder());
+            for (offset, skip_validation) in (0..16).flat_map(|o| [(o, false), (o, true)]) {
+                let case = format!("offset={offset} skip_validation={skip_validation}");
+                let mut buffer = offset_stream(&stream, offset);
+                // SAFETY: the stream was written from a valid batch
+                let mut decoder = unsafe {
+                    StreamDecoder::new()
+                        .with_require_alignment(true)
+                        .with_skip_validation(skip_validation)
+                };
+                let result = decoder.decode(&mut buffer);
+                // The Float64 child needs 8 byte alignment
+                if offset % 8 == 0 {
+                    assert_eq!(result.unwrap().unwrap(), input, "{case}");
+                } else {
+                    let err = result.unwrap_err().to_string();
+                    assert!(
+                        err.contains("Misaligned buffers"),
+                        "{case}: unexpected error: {err}"
+                    );
+                }
+            }
+        }
     }
 
     /// A declared length is untrusted, so reserving it up front is bounded: an implausible

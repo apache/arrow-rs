@@ -658,7 +658,6 @@ fn test_misaligned_large_string() {
 }
 
 #[test]
-#[should_panic(expected = "Memory pointer is not aligned with the specified scalar type")]
 fn test_misaligned_dense_union() {
     let union_fields = UnionFields::try_new(
         [0i8, 1],
@@ -675,7 +674,7 @@ fn test_misaligned_dense_union() {
         Arc::new(Float64Array::from(vec![3.0])),
     ];
     let union_array = UnionArray::try_new(union_fields, type_ids, Some(offsets), children).unwrap();
-    decode_misaligned(
+    let err = decode_misaligned(
         RecordBatch::try_new(
             Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new(
                 "u",
@@ -687,7 +686,15 @@ fn test_misaligned_dense_union() {
         .unwrap(),
         1,
     )
-    .unwrap();
+    .unwrap_err();
+
+    // The misaligned buffer is the dense union's offsets
+    let err = err.to_string();
+    assert!(
+        err.contains("Misaligned buffers[1] in array of type Union(")
+            && err.contains("offset from expected alignment of 4 by 1"),
+        "unexpected error: {err}"
+    );
 }
 
 /// Encodes input as a FlightData stream, and then decodes it using
