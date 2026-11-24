@@ -101,6 +101,11 @@ impl FixedSizeBinaryBuilder {
             ));
         }
         let buffer = array.value_data();
+        // Copy only the bytes belonging to the array's values, so trailing
+        // bytes in an unchecked array cannot corrupt the builder.
+        let buffer = buffer
+            .get(..array.len() * array.value_size())
+            .unwrap_or(buffer);
         self.values_builder.extend_from_slice(buffer);
         if let Some(validity) = array.nulls() {
             self.null_buffer_builder.append_buffer(validity);
@@ -321,6 +326,23 @@ mod tests {
         assert_eq!(b"hello", array.value(3));
         assert!(array.is_null(4));
         assert_eq!(b"arrow", array.value(5));
+    }
+
+    #[test]
+    fn test_fixed_size_binary_builder_append_array_unchecked_trailing_bytes() {
+        // An unchecked array carrying trailing bytes must not pollute the builder.
+        let trailing = unsafe {
+            FixedSizeBinaryArray::new_unchecked(3, Buffer::from_vec(vec![0_u8; 10]), None, 3)
+        };
+        assert_eq!(trailing.value_data().len(), 10);
+
+        let mut builder = FixedSizeBinaryBuilder::with_capacity(3, 3);
+        builder.append_array(&trailing).unwrap();
+        assert_eq!(builder.values_slice().len(), 9);
+
+        let array = builder.finish();
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.value_data().len(), 9);
     }
 
     #[test]
