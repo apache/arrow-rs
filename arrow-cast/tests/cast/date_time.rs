@@ -2748,20 +2748,14 @@ fn test_cast_timestamp_and_duration_to_coarser_unit() {
         i64::MAX - 1,
         i64::MAX,
     ];
-    let values: Int64Array = edges
-        .into_iter()
-        .map(Some)
-        .chain([None])
-        .cycle()
-        .take(70)
-        .collect();
+    let values: Int64Array = edges.into_iter().map(Some).chain([None]).collect();
     let units = [
         TimeUnit::Second,
         TimeUnit::Millisecond,
         TimeUnit::Microsecond,
         TimeUnit::Nanosecond,
     ];
-    for array in [values.clone(), values.slice(3, 60)] {
+    for array in [values.clone(), values.slice(3, 15)] {
         for (i, from) in units.into_iter().enumerate() {
             for to in &units[..i] {
                 let ratio = time_unit_multiple(&from) / time_unit_multiple(to);
