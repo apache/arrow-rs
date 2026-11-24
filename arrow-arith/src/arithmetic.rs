@@ -17,13 +17,19 @@ use arrow_schema::*;
 use std::cmp::min;
 use std::sync::Arc;
 
+/// The largest `n` for which `10^n` fits in an `i256`.
+const MAX_I256_POW10: i16 = 76;
+
 /// Returns the precision and scale of the result of a multiplication of two decimal types,
 /// and the divisor for fixed point multiplication.
+///
+/// The divisor is `None` when it does not fit in an `i256`. A product of two `i128` values is
+/// below `10^77 / 2`, so every product then rounds to zero.
 fn get_fixed_point_info(
     left: (u8, i8),
     right: (u8, i8),
     required_scale: i8,
-) -> Result<(u8, i8, i256), ArrowError> {
+) -> Result<(u8, i8, Option<i256>), ArrowError> {
     let product_scale = left.1 + right.1;
     let precision = min(left.0 + right.0 + 1, DECIMAL128_MAX_PRECISION);
 
@@ -33,7 +39,9 @@ fn get_fixed_point_info(
         )));
     }
 
-    let divisor = i256::from_i128(10).pow_wrapping((product_scale - required_scale) as u32);
+    let exponent = i16::from(product_scale) - i16::from(required_scale);
+    let divisor =
+        (exponent <= MAX_I256_POW10).then(|| i256::from_i128(10).pow_wrapping(exponent as u32));
 
     Ok((precision, product_scale, divisor))
 }
@@ -46,6 +54,7 @@ fn get_fixed_point_info(
 /// will be rounded to the required scale.
 ///
 /// If the required scale is greater than the product scale, an error is returned.
+/// If it is more than 76 below the product scale, every product rounds to zero.
 ///
 /// This doesn't detect overflow. Once overflowing, the result will wrap around.
 ///
@@ -80,6 +89,7 @@ pub fn multiply_fixed_point_dyn(
 /// will be rounded to the required scale.
 ///
 /// If the required scale is greater than the product scale, an error is returned.
+/// If it is more than 76 below the product scale, every product rounds to zero.
 ///
 /// It is implemented for compatibility with precision loss `multiply` function provided by
 /// other data processing engines. For multiplication with precision loss detection, use
@@ -99,6 +109,11 @@ pub fn multiply_fixed_point_checked(
         return try_binary::<_, _, _, Decimal128Type>(left, right, |a, b| a.mul_checked(b))?
             .with_precision_and_scale(precision, required_scale);
     }
+
+    let Some(divisor) = divisor else {
+        return try_binary::<_, _, _, Decimal128Type>(left, right, |_, _| Ok(0))?
+            .with_precision_and_scale(precision, required_scale);
+    };
 
     let round = divide_and_round(divisor);
     let product = try_binary::<_, _, _, Decimal128Type>(left, right, |a, b| {
@@ -122,6 +137,7 @@ pub fn multiply_fixed_point_checked(
 /// will be rounded to the required scale.
 ///
 /// If the required scale is greater than the product scale, an error is returned.
+/// If it is more than 76 below the product scale, every product rounds to zero.
 ///
 /// This doesn't detect overflow. Once overflowing, the result will wrap around.
 /// For an overflow-checking variant, use `multiply_fixed_point_checked` instead.
@@ -144,6 +160,10 @@ pub fn multiply_fixed_point(
         return binary(left, right, |a, b| a.mul_wrapping(b))?
             .with_precision_and_scale(precision, required_scale);
     }
+
+    let Some(divisor) = divisor else {
+        return binary(left, right, |_, _| 0)?.with_precision_and_scale(precision, required_scale);
+    };
 
     let round = divide_and_round(divisor);
     let product = binary::<_, _, _, Decimal128Type>(left, right, |a, b| {
@@ -371,5 +391,46 @@ mod tests {
             assert_eq!(multiply_fixed_point(&a, &b, 0).unwrap(), expected);
             assert_eq!(multiply_fixed_point_checked(&a, &b, 0).unwrap(), expected);
         }
+    }
+
+    #[test]
+    fn test_decimal_multiply_fixed_point_required_scale_far_below_product_scale() {
+        let a = Decimal128Array::from(vec![Some(0), Some(5), Some(5), Some(i128::MAX), None])
+            .with_precision_and_scale(38, 0)
+            .unwrap();
+        let b = Decimal128Array::from(vec![Some(0), Some(5), Some(-5), Some(i128::MAX), Some(1)])
+            .with_precision_and_scale(38, 0)
+            .unwrap();
+
+        // 10^76 is the largest power of ten that fits in an i256. Beyond it every product is zero.
+        let at_limit = Decimal128Array::from(vec![Some(0), Some(0), Some(0), Some(3), None])
+            .with_precision_and_scale(38, -76)
+            .unwrap();
+        assert_eq!(multiply_fixed_point(&a, &b, -76).unwrap(), at_limit);
+        assert_eq!(multiply_fixed_point_checked(&a, &b, -76).unwrap(), at_limit);
+
+        for required_scale in [-77, -100, -128] {
+            let expected = Decimal128Array::from(vec![Some(0), Some(0), Some(0), Some(0), None])
+                .with_precision_and_scale(38, required_scale)
+                .unwrap();
+            assert_eq!(
+                multiply_fixed_point(&a, &b, required_scale).unwrap(),
+                expected
+            );
+            assert_eq!(
+                multiply_fixed_point_checked(&a, &b, required_scale).unwrap(),
+                expected
+            );
+        }
+
+        // The exponent 76 - -90 does not fit in an i8
+        let c = Decimal128Array::from(vec![Some(i128::MIN), None])
+            .with_precision_and_scale(38, 38)
+            .unwrap();
+        let expected = Decimal128Array::from(vec![Some(0), None])
+            .with_precision_and_scale(38, -90)
+            .unwrap();
+        assert_eq!(multiply_fixed_point(&c, &c, -90).unwrap(), expected);
+        assert_eq!(multiply_fixed_point_checked(&c, &c, -90).unwrap(), expected);
     }
 }
