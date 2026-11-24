@@ -112,7 +112,7 @@ pub struct VariantList<'m, 'v> {
     header: VariantListHeader,
     num_elements: u32,
     first_value_byte: u32,
-    validated: bool,
+    pub(super) validated: bool,
 }
 
 // We don't want this to grow because it could increase the size of `Variant` and hurt performance.
@@ -294,6 +294,7 @@ impl<'m, 'v> VariantList<'m, 'v> {
         let value_bytes =
             slice_from_slice_at_offset(self.value, self.first_value_byte as _, byte_range)?;
         Variant::try_new_with_metadata_and_shallow_validation(self.metadata.clone(), value_bytes)
+            .map(|child| child.inherit_validation(self.validated))
     }
 
     /// Iterates over the values of this list. When working with [unvalidated] input, consider
