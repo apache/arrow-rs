@@ -162,8 +162,22 @@ impl VariantToJson for Variant<'_, '_> {
             Variant::Int16(i) => write!(buffer, "{i}")?,
             Variant::Int32(i) => write!(buffer, "{i}")?,
             Variant::Int64(i) => write!(buffer, "{i}")?,
-            Variant::Float(f) => write!(buffer, "{}", ryu::Buffer::new().format(*f))?,
-            Variant::Double(f) => write!(buffer, "{}", ryu::Buffer::new().format(*f))?,
+            Variant::Float(f) => {
+                if !f.is_finite() {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "Invalid float value".to_string(),
+                    ));
+                }
+                write!(buffer, "{}", ryu::Buffer::new().format_finite(*f))?
+            }
+            Variant::Double(f) => {
+                if !f.is_finite() {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "Invalid double value".to_string(),
+                    ));
+                }
+                write!(buffer, "{}", ryu::Buffer::new().format_finite(*f))?
+            }
             Variant::Decimal4(decimal) => write!(buffer, "{decimal}")?,
             Variant::Decimal8(decimal) => write!(buffer, "{decimal}")?,
             Variant::Decimal16(decimal) => write!(buffer, "{decimal}")?,
@@ -1349,6 +1363,60 @@ mod tests {
         let normal_double = Variant::Double(std::f64::consts::E);
         let normal_double_result = normal_double.to_json_value()?;
         assert!(matches!(normal_double_result, Value::Number(_)));
+
+        // Non-finite floats must also fail in to_json and to_json_string
+        for (variant, expected_msg) in [
+            (Variant::Float(f32::NAN), "Invalid float value"),
+            (Variant::Float(f32::INFINITY), "Invalid float value"),
+            (Variant::Float(f32::NEG_INFINITY), "Invalid float value"),
+            (Variant::Double(f64::NAN), "Invalid double value"),
+            (Variant::Double(f64::INFINITY), "Invalid double value"),
+            (Variant::Double(f64::NEG_INFINITY), "Invalid double value"),
+        ] {
+            let err = variant.to_json_string().unwrap_err();
+            assert!(
+                err.to_string().contains(expected_msg),
+                "unexpected error for {variant:?}: {err}"
+            );
+            let mut buf = Vec::new();
+            let write_err = variant.to_json(&mut buf).unwrap_err();
+            assert!(
+                write_err.to_string().contains(expected_msg),
+                "unexpected write error for {variant:?}: {write_err}"
+            );
+        }
+
+        let mut obj_builder = parquet_variant::VariantBuilder::new();
+        {
+            let mut obj = obj_builder.new_object();
+            obj.insert("score", f64::NAN);
+            obj.finish();
+        }
+        let (obj_meta, obj_val) = obj_builder.finish();
+        let obj_variant = Variant::try_new(&obj_meta, &obj_val)?;
+        assert!(
+            obj_variant
+                .to_json_string()
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid double value")
+        );
+
+        let mut list_builder = parquet_variant::VariantBuilder::new();
+        {
+            let mut list = list_builder.new_list();
+            list.append_value(f32::INFINITY);
+            list.finish();
+        }
+        let (list_meta, list_val) = list_builder.finish();
+        let list_variant = Variant::try_new(&list_meta, &list_val)?;
+        assert!(
+            list_variant
+                .to_json_string()
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid float value")
+        );
 
         Ok(())
     }
