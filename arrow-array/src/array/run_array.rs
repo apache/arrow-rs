@@ -542,6 +542,10 @@ unsafe impl<T: RunEndIndexType> Array for RunArray<T> {
         self
     }
 
+    fn to_arc(&self) -> ArrayRef {
+        Arc::new(self.clone())
+    }
+
     fn to_data(&self) -> ArrayData {
         self.clone().into()
     }
@@ -556,10 +560,6 @@ unsafe impl<T: RunEndIndexType> Array for RunArray<T> {
 
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
         Arc::new(self.slice(offset, length))
-    }
-
-    fn to_arc(&self) -> ArrayRef {
-        Arc::new(self.clone())
     }
 
     fn len(&self) -> usize {
@@ -812,6 +812,10 @@ unsafe impl<R: RunEndIndexType, V: Sync> Array for TypedRunArray<'_, R, V> {
         self.run_array
     }
 
+    fn to_arc(&self) -> ArrayRef {
+        Arc::new(self.run_array.clone())
+    }
+
     fn to_data(&self) -> ArrayData {
         self.run_array.to_data()
     }
@@ -826,10 +830,6 @@ unsafe impl<R: RunEndIndexType, V: Sync> Array for TypedRunArray<'_, R, V> {
 
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
         Arc::new(self.run_array.slice(offset, length))
-    }
-
-    fn to_arc(&self) -> ArrayRef {
-        Arc::new(self.run_array.clone())
     }
 
     fn len(&self) -> usize {

@@ -109,6 +109,35 @@ pub unsafe trait Array: std::fmt::Debug + Send + Sync {
     /// ```
     fn as_any(&self) -> &dyn Any;
 
+    /// Returns an [`ArrayRef`] with the same contents as `self`, sharing its buffers.
+    ///
+    /// If `self` is or wraps an `ArrayRef`, this only bumps the reference count, as if by
+    /// [`Arc::clone`]. The concrete arrow-rs array types all construct a new [`Arc`] from a shallow
+    /// clone of the array, which avoids the null-count recomputation and child re-slicing of
+    /// [`Self::slice`].
+    ///
+    /// The default implementation is `self.slice(0, self.len())`.
+    ///
+    /// # Example:
+    ///
+    /// ```
+    /// # use arrow_array::{Array, ArrayRef, Int32Array};
+    /// # use std::sync::Arc;
+    /// #
+    /// fn to_array_ref(array: &dyn Array) -> ArrayRef {
+    ///     array.to_arc()
+    /// }
+    ///
+    /// let array = Int32Array::from(vec![1, 2, 3]);
+    /// assert_eq!(to_array_ref(&array).as_ref(), &array);
+    ///
+    /// let array: ArrayRef = Arc::new(array);
+    /// assert!(Arc::ptr_eq(&to_array_ref(&array), &array));
+    /// ```
+    fn to_arc(&self) -> ArrayRef {
+        self.slice(0, self.len())
+    }
+
     /// Returns the underlying data of this array
     fn to_data(&self) -> ArrayData;
 
@@ -148,35 +177,6 @@ pub unsafe trait Array: std::fmt::Debug + Send + Sync {
     /// # Panics
     /// Panics if `offset + length > self.len()`
     fn slice(&self, offset: usize, length: usize) -> ArrayRef;
-
-    /// Returns an [`ArrayRef`] with the same contents as `self`, sharing its buffers.
-    ///
-    /// If `self` is an `ArrayRef`, this only bumps the reference count, as if by
-    /// [`Arc::clone`]. The concrete arrow-rs array types all construct a new [`Arc`] from a shallow
-    /// clone of the array, which avoids the null-count recomputation and child re-slicing of
-    /// [`Self::slice`].
-    ///
-    /// The default implementation is `self.slice(0, self.len())`.
-    ///
-    /// # Example:
-    ///
-    /// ```
-    /// # use arrow_array::{Array, ArrayRef, Int32Array};
-    /// # use std::sync::Arc;
-    /// #
-    /// fn to_array_ref(array: &dyn Array) -> ArrayRef {
-    ///     array.to_arc()
-    /// }
-    ///
-    /// let array = Int32Array::from(vec![1, 2, 3]);
-    /// assert_eq!(to_array_ref(&array).as_ref(), &array);
-    ///
-    /// let array: ArrayRef = Arc::new(array);
-    /// assert!(Arc::ptr_eq(&to_array_ref(&array), &array));
-    /// ```
-    fn to_arc(&self) -> ArrayRef {
-        self.slice(0, self.len())
-    }
 
     /// Returns the length (i.e., number of elements) of this array.
     ///
@@ -467,6 +467,10 @@ unsafe impl Array for ArrayRef {
         self.as_ref().as_any()
     }
 
+    fn to_arc(&self) -> ArrayRef {
+        Arc::clone(self)
+    }
+
     fn to_data(&self) -> ArrayData {
         self.as_ref().to_data()
     }
@@ -481,10 +485,6 @@ unsafe impl Array for ArrayRef {
 
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
         self.as_ref().slice(offset, length)
-    }
-
-    fn to_arc(&self) -> ArrayRef {
-        Arc::clone(self)
     }
 
     fn len(&self) -> usize {
@@ -555,6 +555,10 @@ unsafe impl<T: Array> Array for &T {
         T::as_any(self)
     }
 
+    fn to_arc(&self) -> ArrayRef {
+        T::to_arc(self)
+    }
+
     fn to_data(&self) -> ArrayData {
         T::to_data(self)
     }
@@ -569,10 +573,6 @@ unsafe impl<T: Array> Array for &T {
 
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
         T::slice(self, offset, length)
-    }
-
-    fn to_arc(&self) -> ArrayRef {
-        T::to_arc(self)
     }
 
     fn len(&self) -> usize {
