@@ -474,6 +474,7 @@ fn boolean_rank(array: &BooleanArray, options: SortOptions) -> Vec<u32> {
 mod tests {
     use super::*;
     use arrow_array::*;
+    use rstest::rstest;
 
     fn assert_same_rank(left: &dyn Array, right: &dyn Array) {
         for descending in [false, true] {
@@ -490,37 +491,28 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_primitive() {
-        let descending = SortOptions {
-            descending: true,
-            nulls_first: true,
-        };
-
-        let nulls_last = SortOptions {
-            descending: false,
-            nulls_first: false,
-        };
-
-        let nulls_last_descending = SortOptions {
-            descending: true,
-            nulls_first: false,
-        };
-
+    #[rstest]
+    #[case::default(None, &[3, 3, 1, 5, 5, 6])]
+    #[case::descending_nulls_first(
+        Some(SortOptions { descending: true, nulls_first: true }),
+        &[6, 6, 1, 4, 4, 2]
+    )]
+    #[case::ascending_nulls_last(
+        Some(SortOptions { descending: false, nulls_first: false }),
+        &[2, 2, 6, 4, 4, 5]
+    )]
+    #[case::descending_nulls_last(
+        Some(SortOptions { descending: true, nulls_first: false }),
+        &[5, 5, 6, 3, 3, 1]
+    )]
+    fn test_primitive(#[case] options: Option<SortOptions>, #[case] expected: &[u32]) {
         let a = Int32Array::from(vec![Some(1), Some(1), None, Some(3), Some(3), Some(4)]);
-        let res = rank(&a, None).unwrap();
-        assert_eq!(res, &[3, 3, 1, 5, 5, 6]);
+        let res = rank(&a, options).unwrap();
+        assert_eq!(res, expected);
+    }
 
-        let res = rank(&a, Some(descending)).unwrap();
-        assert_eq!(res, &[6, 6, 1, 4, 4, 2]);
-
-        let res = rank(&a, Some(nulls_last)).unwrap();
-        assert_eq!(res, &[2, 2, 6, 4, 4, 5]);
-
-        let res = rank(&a, Some(nulls_last_descending)).unwrap();
-        assert_eq!(res, &[5, 5, 6, 3, 3, 1]);
-
-        // Test with non-zero null values
+    #[test]
+    fn test_primitive_nonzero_null_values() {
         let nulls = NullBuffer::from(vec![true, true, false, true, false, false]);
         let a = Int32Array::new(vec![1, 4, 3, 4, 5, 5].into(), Some(nulls));
         let res = rank(&a, None).unwrap();
@@ -535,130 +527,101 @@ mod tests {
         assert_eq!(get_boolean_rank_index(false, false), 0);
     }
 
-    #[test]
-    fn test_nullable_booleans() {
-        let descending = SortOptions {
-            descending: true,
-            nulls_first: true,
-        };
-
-        let nulls_last = SortOptions {
-            descending: false,
-            nulls_first: false,
-        };
-
-        let nulls_last_descending = SortOptions {
-            descending: true,
-            nulls_first: false,
-        };
-
+    #[rstest]
+    #[case::default(None, &[5, 5, 1, 3, 3])]
+    #[case::descending_nulls_first(
+        Some(SortOptions { descending: true, nulls_first: true }),
+        &[3, 3, 1, 5, 5]
+    )]
+    #[case::ascending_nulls_last(
+        Some(SortOptions { descending: false, nulls_first: false }),
+        &[4, 4, 5, 2, 2]
+    )]
+    #[case::descending_nulls_last(
+        Some(SortOptions { descending: true, nulls_first: false }),
+        &[2, 2, 5, 4, 4]
+    )]
+    fn test_nullable_booleans(#[case] options: Option<SortOptions>, #[case] expected: &[u32]) {
         let a = BooleanArray::from(vec![Some(true), Some(true), None, Some(false), Some(false)]);
-        let res = rank(&a, None).unwrap();
-        assert_eq!(res, &[5, 5, 1, 3, 3]);
+        let res = rank(&a, options).unwrap();
+        assert_eq!(res, expected);
+    }
 
-        let res = rank(&a, Some(descending)).unwrap();
-        assert_eq!(res, &[3, 3, 1, 5, 5]);
-
-        let res = rank(&a, Some(nulls_last)).unwrap();
-        assert_eq!(res, &[4, 4, 5, 2, 2]);
-
-        let res = rank(&a, Some(nulls_last_descending)).unwrap();
-        assert_eq!(res, &[2, 2, 5, 4, 4]);
-
-        // Test with non-zero null values
+    #[test]
+    fn test_booleans_nonzero_null_values() {
         let nulls = NullBuffer::from(vec![true, true, false, true, true]);
         let a = BooleanArray::new(vec![true, true, true, false, false].into(), Some(nulls));
         let res = rank(&a, None).unwrap();
         assert_eq!(res, &[5, 5, 1, 3, 3]);
     }
 
-    #[test]
-    fn test_booleans() {
-        let descending = SortOptions {
-            descending: true,
-            nulls_first: true,
-        };
-
-        let nulls_last = SortOptions {
-            descending: false,
-            nulls_first: false,
-        };
-
-        let nulls_last_descending = SortOptions {
-            descending: true,
-            nulls_first: false,
-        };
-
+    #[rstest]
+    #[case::default(None, &[5, 3, 3, 3, 5])]
+    #[case::descending_nulls_first(
+        Some(SortOptions { descending: true, nulls_first: true }),
+        &[2, 5, 5, 5, 2]
+    )]
+    #[case::ascending_nulls_last(
+        Some(SortOptions { descending: false, nulls_first: false }),
+        &[5, 3, 3, 3, 5]
+    )]
+    #[case::descending_nulls_last(
+        Some(SortOptions { descending: true, nulls_first: false }),
+        &[2, 5, 5, 5, 2]
+    )]
+    fn test_booleans(#[case] options: Option<SortOptions>, #[case] expected: &[u32]) {
         let a = BooleanArray::from(vec![true, false, false, false, true]);
-        let res = rank(&a, None).unwrap();
-        assert_eq!(res, &[5, 3, 3, 3, 5]);
-
-        let res = rank(&a, Some(descending)).unwrap();
-        assert_eq!(res, &[2, 5, 5, 5, 2]);
-
-        let res = rank(&a, Some(nulls_last)).unwrap();
-        assert_eq!(res, &[5, 3, 3, 3, 5]);
-
-        let res = rank(&a, Some(nulls_last_descending)).unwrap();
-        assert_eq!(res, &[2, 5, 5, 5, 2]);
+        let res = rank(&a, options).unwrap();
+        assert_eq!(res, expected);
     }
 
-    #[test]
-    fn test_bytes() {
-        let v = vec!["foo", "fo", "bar", "bar"];
-        let values = StringArray::from(v.clone());
+    #[rstest]
+    #[case::utf8(StringArray::from)]
+    #[case::large_utf8(LargeStringArray::from)]
+    #[case::utf8_view(StringViewArray::from)]
+    fn test_string_rank<A: Array>(#[case] make_array: fn(Vec<&'static str>) -> A) {
+        let values = make_array(vec!["foo", "fo", "bar", "bar"]);
         let res = rank(&values, None).unwrap();
         assert_eq!(res, &[4, 3, 2, 2]);
+    }
 
-        let values = LargeStringArray::from(v.clone());
-        let res = rank(&values, None).unwrap();
-        assert_eq!(res, &[4, 3, 2, 2]);
-
-        let values = StringViewArray::from(v);
-        let res = rank(&values, None).unwrap();
-        assert_eq!(res, &[4, 3, 2, 2]);
-
-        let v: Vec<&[u8]> = vec![&[1, 2], &[0], &[1, 2, 3], &[1, 2]];
-        let values = LargeBinaryArray::from(v.clone());
-        let res = rank(&values, None).unwrap();
-        assert_eq!(res, &[3, 1, 4, 3]);
-
-        let values = BinaryArray::from(v.clone());
-        let res = rank(&values, None).unwrap();
-        assert_eq!(res, &[3, 1, 4, 3]);
-
-        let values = BinaryViewArray::from_iter_values(v);
+    #[rstest]
+    #[case::binary(BinaryArray::from)]
+    #[case::large_binary(LargeBinaryArray::from)]
+    #[case::binary_view(BinaryViewArray::from_iter_values)]
+    fn test_binary_rank<A: Array>(#[case] make_array: fn(Vec<&'static [u8]>) -> A) {
+        let values = make_array(vec![&[1, 2], &[0], &[1, 2, 3], &[1, 2]]);
         let res = rank(&values, None).unwrap();
         assert_eq!(res, &[3, 1, 4, 3]);
     }
 
-    #[test]
-    fn test_inline_byte_views() {
-        let string_values = vec![
+    #[rstest]
+    #[case::string_view({
+        let values = vec![
             Some(""),
             Some("short"),
             None,
             Some("0123456789qa"), // exactly the 12-byte inline limit
             Some("short"),
         ];
-        let string_view = StringViewArray::from(string_values.clone());
-        let string = StringArray::from(string_values);
-
-        assert!(string_view.data_buffers().is_empty());
-        assert_same_rank(&string_view, &string);
-
-        let binary_values: Vec<Option<&[u8]>> = vec![
+        (StringViewArray::from(values.clone()), StringArray::from(values))
+    })]
+    #[case::binary_view({
+        let values: Vec<Option<&[u8]>> = vec![
             Some(b""),
             Some(b"short"),
             None,
             Some(b"0123456789qa"),
             Some(b"short"),
         ];
-        let binary_view = BinaryViewArray::from_iter(binary_values.clone());
-        let binary = BinaryArray::from_opt_vec(binary_values);
-
-        assert!(binary_view.data_buffers().is_empty());
-        assert_same_rank(&binary_view, &binary);
+        (BinaryViewArray::from_iter(values.clone()), BinaryArray::from_opt_vec(values))
+    })]
+    fn test_inline_byte_views<T: ByteViewType, A: Array>(
+        #[case] arrays: (GenericByteViewArray<T>, A),
+    ) {
+        let (view, array) = arrays;
+        assert!(view.data_buffers().is_empty());
+        assert_same_rank(&view, &array);
     }
 
     #[test]

@@ -986,6 +986,7 @@ mod tests {
     use arrow_array::types::Int32Type;
     use arrow_array::{DictionaryArray, Int32Array, Scalar, StringArray};
     use arrow_buffer::{Buffer, ScalarBuffer};
+    use rstest::rstest;
 
     use super::*;
 
@@ -1426,31 +1427,25 @@ mod tests {
         arrow_array::RunArray::try_new(&Int32Array::from(ends), &StringArray::from(vals)).unwrap()
     }
 
-    #[test]
-    fn test_ree_scalar() {
+    #[rstest]
+    #[case::eq(eq, vec![false, false, false, true, true])]
+    #[case::neq(neq, vec![true, true, true, false, false])]
+    #[case::lt(lt, vec![true, true, true, false, false])]
+    #[case::lt_eq(lt_eq, vec![true; 5])]
+    #[case::gt(gt, vec![false; 5])]
+    #[case::gt_eq(gt_eq, vec![false, false, false, true, true])]
+    fn test_ree_scalar(
+        #[case] compare: fn(&dyn Datum, &dyn Datum) -> Result<BooleanArray, ArrowError>,
+        #[case] expected: Vec<bool>,
+    ) {
         let a = ree_str(&[(Some("a"), 3), (Some("b"), 2)]);
-
         let s = Scalar::new(StringArray::from(vec!["b"]));
-        assert_eq!(
-            eq(&a, &s).unwrap(),
-            BooleanArray::from(vec![false, false, false, true, true])
-        );
-        assert_eq!(
-            neq(&a, &s).unwrap(),
-            BooleanArray::from(vec![true, true, true, false, false])
-        );
-        assert_eq!(
-            lt(&a, &s).unwrap(),
-            BooleanArray::from(vec![true, true, true, false, false])
-        );
-        assert_eq!(lt_eq(&a, &s).unwrap(), BooleanArray::from(vec![true; 5]));
-        assert_eq!(gt(&a, &s).unwrap(), BooleanArray::from(vec![false; 5]));
-        assert_eq!(
-            gt_eq(&a, &s).unwrap(),
-            BooleanArray::from(vec![false, false, false, true, true])
-        );
+        assert_eq!(compare(&a, &s).unwrap(), BooleanArray::from(expected));
+    }
 
-        // Scalar on left side
+    #[test]
+    fn test_ree_scalar_on_left() {
+        let a = ree_str(&[(Some("a"), 3), (Some("b"), 2)]);
         let scalar = Scalar::new(ree_str(&[(Some("a"), 1)]));
         assert_eq!(
             eq(&scalar, &a).unwrap(),
@@ -1460,41 +1455,38 @@ mod tests {
             lt_eq(&scalar, &a).unwrap(),
             BooleanArray::from(vec![true; 5])
         );
+    }
 
+    #[test]
+    fn test_ree_wrapped_scalar() {
+        let a = ree_str(&[(Some("a"), 3), (Some("b"), 2)]);
         // REE-wrapped scalar (DataFusion's ScalarValue::RunEndEncoded)
         assert_eq!(
             eq(&a, &Scalar::new(ree_str(&[(Some("a"), 1)]))).unwrap(),
             BooleanArray::from(vec![true, true, true, false, false]),
         );
+    }
 
-        // Single run
+    #[test]
+    fn test_ree_single_run_scalar() {
         let a = ree_str(&[(Some("x"), 100)]);
         let r = eq(&a, &Scalar::new(StringArray::from(vec!["x"]))).unwrap();
         assert_eq!(r.true_count(), 100);
     }
 
-    #[test]
-    fn test_ree_ree() {
-        // Different run boundaries, all ops.
+    #[rstest]
+    #[case::eq(eq, vec![true, true, false, true, true])]
+    #[case::neq(neq, vec![false, false, true, false, false])]
+    #[case::lt(lt, vec![false, false, true, false, false])]
+    #[case::gt_eq(gt_eq, vec![true, true, false, true, true])]
+    fn test_ree_ree(
+        #[case] compare: fn(&dyn Datum, &dyn Datum) -> Result<BooleanArray, ArrowError>,
+        #[case] expected: Vec<bool>,
+    ) {
         let a = ree_str(&[(Some("a"), 3), (Some("b"), 2)]);
         let b = ree_str(&[(Some("a"), 2), (Some("b"), 3)]);
-        // a=[a,a,a,b,b] vs b=[a,a,b,b,b]
-        assert_eq!(
-            eq(&a, &b).unwrap(),
-            BooleanArray::from(vec![true, true, false, true, true])
-        );
-        assert_eq!(
-            neq(&a, &b).unwrap(),
-            BooleanArray::from(vec![false, false, true, false, false])
-        );
-        assert_eq!(
-            lt(&a, &b).unwrap(),
-            BooleanArray::from(vec![false, false, true, false, false])
-        );
-        assert_eq!(
-            gt_eq(&a, &b).unwrap(),
-            BooleanArray::from(vec![true, true, false, true, true])
-        );
+        // Different run boundaries: a=[a,a,a,b,b] vs b=[a,a,b,b,b].
+        assert_eq!(compare(&a, &b).unwrap(), BooleanArray::from(expected));
     }
 
     #[test]

@@ -112,6 +112,7 @@ mod tests {
     use arrow_data::ArrayData;
     use arrow_schema::{DataType, Field};
     use half::f16;
+    use rstest::rstest;
 
     use super::*;
 
@@ -336,177 +337,47 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_boolean_array_eq() {
+    #[rstest]
+    #[case::eq(crate::cmp::eq, vec![Some(true), Some(false), Some(true), Some(false), None, None])]
+    #[case::neq(crate::cmp::neq, vec![Some(false), Some(true), Some(false), Some(true), None, None])]
+    #[case::lt(crate::cmp::lt, vec![Some(false), Some(true), Some(false), Some(false), None, None])]
+    #[case::lt_eq(crate::cmp::lt_eq, vec![Some(true), Some(true), Some(true), Some(false), None, None])]
+    #[case::gt(crate::cmp::gt, vec![Some(false), Some(false), Some(false), Some(true), None, None])]
+    #[case::gt_eq(crate::cmp::gt_eq, vec![Some(true), Some(false), Some(true), Some(true), None, None])]
+    fn test_boolean_array_comparison(
+        #[case] compare: fn(&dyn Datum, &dyn Datum) -> Result<BooleanArray, ArrowError>,
+        #[case] expected: Vec<Option<bool>>,
+    ) {
         let a: BooleanArray =
             vec![Some(true), Some(false), Some(false), Some(true), Some(true), None].into();
         let b: BooleanArray =
             vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)].into();
-
-        let res: Vec<Option<bool>> = crate::cmp::eq(&a, &b).unwrap().iter().collect();
-
-        assert_eq!(
-            res,
-            vec![Some(true), Some(false), Some(true), Some(false), None, None]
-        )
+        let result: Vec<Option<bool>> = compare(&a, &b).unwrap().iter().collect();
+        assert_eq!(result, expected);
     }
 
-    #[test]
-    fn test_boolean_array_neq() {
-        let a: BooleanArray =
-            vec![Some(true), Some(false), Some(false), Some(true), Some(true), None].into();
-        let b: BooleanArray =
-            vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)].into();
-
-        let res: Vec<Option<bool>> = crate::cmp::neq(&a, &b).unwrap().iter().collect();
-
-        assert_eq!(
-            res,
-            vec![Some(false), Some(true), Some(false), Some(true), None, None]
-        )
-    }
-
-    #[test]
-    fn test_boolean_array_lt() {
-        let a: BooleanArray =
-            vec![Some(true), Some(false), Some(false), Some(true), Some(true), None].into();
-        let b: BooleanArray =
-            vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)].into();
-
-        let res: Vec<Option<bool>> = crate::cmp::lt(&a, &b).unwrap().iter().collect();
-
-        assert_eq!(
-            res,
-            vec![Some(false), Some(true), Some(false), Some(false), None, None]
-        )
-    }
-
-    #[test]
-    fn test_boolean_array_lt_eq() {
-        let a: BooleanArray =
-            vec![Some(true), Some(false), Some(false), Some(true), Some(true), None].into();
-        let b: BooleanArray =
-            vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)].into();
-
-        let res: Vec<Option<bool>> = crate::cmp::lt_eq(&a, &b).unwrap().iter().collect();
-
-        assert_eq!(
-            res,
-            vec![Some(true), Some(true), Some(true), Some(false), None, None]
-        )
-    }
-
-    #[test]
-    fn test_boolean_array_gt() {
-        let a: BooleanArray =
-            vec![Some(true), Some(false), Some(false), Some(true), Some(true), None].into();
-        let b: BooleanArray =
-            vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)].into();
-
-        let res: Vec<Option<bool>> = crate::cmp::gt(&a, &b).unwrap().iter().collect();
-
-        assert_eq!(
-            res,
-            vec![Some(false), Some(false), Some(false), Some(true), None, None]
-        )
-    }
-
-    #[test]
-    fn test_boolean_array_gt_eq() {
-        let a: BooleanArray =
-            vec![Some(true), Some(false), Some(false), Some(true), Some(true), None].into();
-        let b: BooleanArray =
-            vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)].into();
-
-        let res: Vec<Option<bool>> = crate::cmp::gt_eq(&a, &b).unwrap().iter().collect();
-
-        assert_eq!(
-            res,
-            vec![Some(true), Some(false), Some(true), Some(true), None, None]
-        )
-    }
-
-    #[test]
-    fn test_boolean_array_eq_scalar() {
+    #[rstest]
+    #[case::eq_false(crate::cmp::eq, false, vec![Some(false), Some(true), None])]
+    #[case::eq_true(crate::cmp::eq, true, vec![Some(true), Some(false), None])]
+    #[case::neq_false(crate::cmp::neq, false, vec![Some(true), Some(false), None])]
+    #[case::neq_true(crate::cmp::neq, true, vec![Some(false), Some(true), None])]
+    #[case::lt_false(crate::cmp::lt, false, vec![Some(false), Some(false), None])]
+    #[case::lt_true(crate::cmp::lt, true, vec![Some(false), Some(true), None])]
+    #[case::lt_eq_false(crate::cmp::lt_eq, false, vec![Some(false), Some(true), None])]
+    #[case::lt_eq_true(crate::cmp::lt_eq, true, vec![Some(true), Some(true), None])]
+    #[case::gt_false(crate::cmp::gt, false, vec![Some(true), Some(false), None])]
+    #[case::gt_true(crate::cmp::gt, true, vec![Some(false), Some(false), None])]
+    #[case::gt_eq_false(crate::cmp::gt_eq, false, vec![Some(true), Some(true), None])]
+    #[case::gt_eq_true(crate::cmp::gt_eq, true, vec![Some(true), Some(false), None])]
+    fn test_boolean_array_scalar_comparison(
+        #[case] compare: fn(&dyn Datum, &dyn Datum) -> Result<BooleanArray, ArrowError>,
+        #[case] scalar: bool,
+        #[case] expected: Vec<Option<bool>>,
+    ) {
         let a: BooleanArray = vec![Some(true), Some(false), None].into();
-        let b = BooleanArray::new_scalar(false);
-        let res1: Vec<Option<bool>> = crate::cmp::eq(&a, &b).unwrap().iter().collect();
-
-        assert_eq!(res1, vec![Some(false), Some(true), None]);
-        let b = BooleanArray::new_scalar(true);
-        let res2: Vec<Option<bool>> = crate::cmp::eq(&a, &b).unwrap().iter().collect();
-
-        assert_eq!(res2, vec![Some(true), Some(false), None]);
-    }
-
-    #[test]
-    fn test_boolean_array_neq_scalar() {
-        let a: BooleanArray = vec![Some(true), Some(false), None].into();
-        let b = BooleanArray::new_scalar(false);
-
-        let res1: Vec<Option<bool>> = crate::cmp::neq(&a, &b).unwrap().iter().collect();
-
-        assert_eq!(res1, vec![Some(true), Some(false), None]);
-        let b = BooleanArray::new_scalar(true);
-        let res2: Vec<Option<bool>> = crate::cmp::neq(&a, &b).unwrap().iter().collect();
-
-        assert_eq!(res2, vec![Some(false), Some(true), None]);
-    }
-
-    #[test]
-    fn test_boolean_array_lt_scalar() {
-        let a: BooleanArray = vec![Some(true), Some(false), None].into();
-        let b = BooleanArray::new_scalar(false);
-
-        let res1: Vec<Option<bool>> = crate::cmp::lt(&a, &b).unwrap().iter().collect();
-
-        assert_eq!(res1, vec![Some(false), Some(false), None]);
-
-        let b = BooleanArray::new_scalar(true);
-        let res2: Vec<Option<bool>> = crate::cmp::lt(&a, &b).unwrap().iter().collect();
-
-        assert_eq!(res2, vec![Some(false), Some(true), None]);
-    }
-
-    #[test]
-    fn test_boolean_array_lt_eq_scalar() {
-        let a: BooleanArray = vec![Some(true), Some(false), None].into();
-        let b = BooleanArray::new_scalar(false);
-        let res1: Vec<Option<bool>> = crate::cmp::lt_eq(&a, &b).unwrap().iter().collect();
-
-        assert_eq!(res1, vec![Some(false), Some(true), None]);
-
-        let b = BooleanArray::new_scalar(true);
-        let res2: Vec<Option<bool>> = crate::cmp::lt_eq(&a, &b).unwrap().iter().collect();
-
-        assert_eq!(res2, vec![Some(true), Some(true), None]);
-    }
-
-    #[test]
-    fn test_boolean_array_gt_scalar() {
-        let a: BooleanArray = vec![Some(true), Some(false), None].into();
-        let b = BooleanArray::new_scalar(false);
-        let res1: Vec<Option<bool>> = crate::cmp::gt(&a, &b).unwrap().iter().collect();
-
-        assert_eq!(res1, vec![Some(true), Some(false), None]);
-        let b = BooleanArray::new_scalar(true);
-        let res2: Vec<Option<bool>> = crate::cmp::gt(&a, &b).unwrap().iter().collect();
-
-        assert_eq!(res2, vec![Some(false), Some(false), None]);
-    }
-
-    #[test]
-    fn test_boolean_array_gt_eq_scalar() {
-        let a: BooleanArray = vec![Some(true), Some(false), None].into();
-
-        let b = BooleanArray::new_scalar(false);
-        let res1: Vec<Option<bool>> = crate::cmp::gt_eq(&a, &b).unwrap().iter().collect();
-
-        assert_eq!(res1, vec![Some(true), Some(true), None]);
-        let b = BooleanArray::new_scalar(true);
-        let res2: Vec<Option<bool>> = crate::cmp::gt_eq(&a, &b).unwrap().iter().collect();
-
-        assert_eq!(res2, vec![Some(true), Some(false), None]);
+        let b = BooleanArray::new_scalar(scalar);
+        let result: Vec<Option<bool>> = compare(&a, &b).unwrap().iter().collect();
+        assert_eq!(result, expected);
     }
 
     #[test]
@@ -1432,88 +1303,63 @@ mod tests {
         [true, true, true, true, true]
     );
 
-    #[test]
-    fn test_eq_dyn_scalar() {
+    #[rstest]
+    #[case::eq(crate::cmp::eq, BooleanArray::from(vec![Some(false), Some(false), Some(true), Some(true), Some(false)]))]
+    #[case::neq(crate::cmp::neq, BooleanArray::from(vec![Some(true), Some(true), Some(false), Some(false), Some(true)]))]
+    #[case::lt(crate::cmp::lt, BooleanArray::from(vec![true, true,false,false,false]))]
+    #[case::lt_eq(crate::cmp::lt_eq, BooleanArray::from(vec![true,true,true,true,false]))]
+    #[case::gt(crate::cmp::gt, BooleanArray::from(vec![Some(false), Some(false), Some(false), Some(false), Some(true)]))]
+    #[case::gt_eq(crate::cmp::gt_eq, BooleanArray::from(vec![false,false,true,true,true]))]
+    fn test_dyn_scalar(
+        #[case] compare: fn(&dyn Datum, &dyn Datum) -> Result<BooleanArray, ArrowError>,
+        #[case] expected: BooleanArray,
+    ) {
         let array = Int32Array::from(vec![6, 7, 8, 8, 10]);
-        let b = Int32Array::new_scalar(8);
-        let a_eq = crate::cmp::eq(&array, &b).unwrap();
-        assert_eq!(
-            a_eq,
-            BooleanArray::from(vec![Some(false), Some(false), Some(true), Some(true), Some(false)])
-        );
+        let scalar = Int32Array::new_scalar(8);
+        assert_eq!(compare(&array, &scalar).unwrap(), expected);
     }
 
-    #[test]
-    fn test_eq_dyn_scalar_with_dict() {
-        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(3, 2);
-        builder.append(123).unwrap();
-        builder.append_null();
-        builder.append(23).unwrap();
-        let array = builder.finish();
-        let b = DictionaryArray::<Int8Type>::new_scalar(Int32Array::new_scalar(123));
-
-        let a_eq = crate::cmp::eq(&array, &b).unwrap();
-        assert_eq!(
-            a_eq,
-            BooleanArray::from(vec![Some(true), None, Some(false)])
-        );
-    }
-
-    #[test]
-    fn test_eq_dyn_scalar_float() {
+    #[rstest]
+    #[case::eq(crate::cmp::eq, BooleanArray::from(vec![Some(false), Some(false), Some(true), Some(true), Some(false)]))]
+    #[case::neq(crate::cmp::neq, BooleanArray::from(vec![true,true,false,false,true]))]
+    #[case::lt(crate::cmp::lt, BooleanArray::from(vec![true,true,false,false,false]))]
+    #[case::lt_eq(crate::cmp::lt_eq, BooleanArray::from(vec![true, true,true,true,false]))]
+    #[case::gt(crate::cmp::gt, BooleanArray::from(vec![false,false,false,false,true]))]
+    #[case::gt_eq(crate::cmp::gt_eq, BooleanArray::from(vec![false, false,true,true,true]))]
+    fn test_dyn_scalar_float(
+        #[case] compare: fn(&dyn Datum, &dyn Datum) -> Result<BooleanArray, ArrowError>,
+        #[case] expected: BooleanArray,
+    ) {
         let array = Float32Array::from(vec![6.0, 7.0, 8.0, 8.0, 10.0]);
-        let expected =
-            BooleanArray::from(vec![Some(false), Some(false), Some(true), Some(true), Some(false)]);
-        let b = Float32Array::new_scalar(8.);
-        assert_eq!(crate::cmp::eq(&array, &b).unwrap(), expected);
-
+        let scalar = Float32Array::new_scalar(8.);
+        assert_eq!(compare(&array, &scalar).unwrap(), expected);
         let array = array.unary::<_, Float64Type>(|x| x as f64);
-        let b = Float64Array::new_scalar(8.);
-        assert_eq!(crate::cmp::eq(&array, &b).unwrap(), expected);
+        let scalar = Float64Array::new_scalar(8.);
+        assert_eq!(compare(&array, &scalar).unwrap(), expected);
     }
 
-    #[test]
-    fn test_lt_dyn_scalar() {
-        let array = Int32Array::from(vec![6, 7, 8, 8, 10]);
-        let b = Int32Array::new_scalar(8);
-        let a_eq = crate::cmp::lt(&array, &b).unwrap();
-        assert_eq!(a_eq, BooleanArray::from(vec![true, true,false,false,false]));
-    }
-
-    #[test]
-    fn test_lt_dyn_scalar_with_dict() {
+    #[rstest]
+    #[case::eq(crate::cmp::eq, Int8Type {}, 123, 123, BooleanArray::from(vec![Some(true), None, Some(false)]))]
+    #[case::neq(crate::cmp::neq, Int32Type {}, 22, 23, BooleanArray::from(vec![Some(true), None, Some(false)]))]
+    #[case::lt(crate::cmp::lt, Int8Type {}, 123, 123, BooleanArray::from(vec![Some(false), None, Some(true)]))]
+    #[case::lt_eq(crate::cmp::lt_eq, Int8Type {}, 123, 23, BooleanArray::from(vec![Some(false), None, Some(true)]))]
+    #[case::gt(crate::cmp::gt, Int8Type {}, 123, 23, BooleanArray::from(vec![Some(true), None, Some(false)]))]
+    #[case::gt_eq(crate::cmp::gt_eq, Int8Type {}, 22, 23, BooleanArray::from(vec![Some(false), None, Some(true)]))]
+    fn test_dyn_scalar_with_dict<K: ArrowDictionaryKeyType>(
+        #[case] compare: fn(&dyn Datum, &dyn Datum) -> Result<BooleanArray, ArrowError>,
+        #[case] scalar_key_type: K,
+        #[case] first_value: i32,
+        #[case] scalar_value: i32,
+        #[case] expected: BooleanArray,
+    ) {
+        let _ = scalar_key_type;
         let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(3, 2);
-        builder.append(123).unwrap();
+        builder.append(first_value).unwrap();
         builder.append_null();
         builder.append(23).unwrap();
         let array = builder.finish();
-        let b = DictionaryArray::<Int8Type>::new_scalar(Int32Array::new_scalar(123));
-        let a_eq = crate::cmp::lt(&array, &b).unwrap();
-        assert_eq!(
-            a_eq,
-            BooleanArray::from(vec![Some(false), None, Some(true)])
-        );
-    }
-
-    #[test]
-    fn test_lt_dyn_scalar_float() {
-        let array: Float32Array = Float32Array::from(vec![6.0, 7.0, 8.0, 8.0, 10.0]);
-        let expected = BooleanArray::from(vec![true,true,false,false,false]);
-        let b = Float32Array::new_scalar(8.);
-
-        assert_eq!(crate::cmp::lt(&array, &b).unwrap(), expected);
-
-        let array = array.unary::<_, Float64Type>(|x| x as f64);
-        let b = Float64Array::new_scalar(8.);
-        assert_eq!(crate::cmp::lt(&array, &b).unwrap(), expected);
-    }
-
-    #[test]
-    fn test_lt_eq_dyn_scalar() {
-        let array = Int32Array::from(vec![6, 7, 8, 8, 10]);
-        let b = Int32Array::new_scalar(8);
-        let a_eq = crate::cmp::lt_eq(&array, &b).unwrap();
-        assert_eq!(a_eq, BooleanArray::from(vec![true,true,true,true,false]));
+        let scalar = DictionaryArray::<K>::new_scalar(Int32Array::new_scalar(scalar_value));
+        assert_eq!(compare(&array, &scalar).unwrap(), expected);
     }
 
     fn test_primitive_dyn_scalar<T: ArrowPrimitiveType>(array: PrimitiveArray<T>) {
@@ -1633,498 +1479,121 @@ mod tests {
         test_primitive_dyn_scalar(array);
     }
 
-    #[test]
-    fn test_lt_eq_dyn_scalar_with_dict() {
-        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(3, 2);
-        builder.append(123).unwrap();
-        builder.append_null();
-        builder.append(23).unwrap();
-        let array = builder.finish();
-        let right = DictionaryArray::<Int8Type>::new_scalar(Int32Array::new_scalar(23));
-        let a_eq = crate::cmp::lt_eq(&array, &right).unwrap();
-        assert_eq!(
-            a_eq,
-            BooleanArray::from(vec![Some(false), None, Some(true)])
-        );
-    }
-
-    #[test]
-    fn test_lt_eq_dyn_scalar_float() {
-        let array = Float32Array::from(vec![6.0, 7.0, 8.0, 8.0, 10.0]);
-        let b = Float32Array::new_scalar(8.);
-        let expected = BooleanArray::from(vec![true, true,true,true,false]);
-        assert_eq!(crate::cmp::lt_eq(&array, &b).unwrap(), expected);
-
-        let array = array.unary::<_, Float64Type>(|x| x as f64);
-        let b = Float64Array::new_scalar(8.);
-        assert_eq!(crate::cmp::lt_eq(&array, &b).unwrap(), expected);
-    }
-
-    #[test]
-    fn test_gt_dyn_scalar() {
-        let array = Int32Array::from(vec![6, 7, 8, 8, 10]);
-        let scalar = Int32Array::new_scalar(8);
-        let a_eq = crate::cmp::gt(&array, &scalar).unwrap();
-        assert_eq!(
-            a_eq,
-            BooleanArray::from(
-                vec![Some(false), Some(false), Some(false), Some(false), Some(true)]
-            )
-        );
-    }
-
-    #[test]
-    fn test_gt_dyn_scalar_with_dict() {
-        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(3, 2);
-        builder.append(123).unwrap();
-        builder.append_null();
-        builder.append(23).unwrap();
-        let array = builder.finish();
-        let right = DictionaryArray::<Int8Type>::new_scalar(Int32Array::new_scalar(23));
-        let a_eq = crate::cmp::gt(&array, &right).unwrap();
-        assert_eq!(
-            a_eq,
-            BooleanArray::from(vec![Some(true), None, Some(false)])
-        );
-    }
-
-    #[test]
-    fn test_gt_dyn_scalar_float() {
-        let array = Float32Array::from(vec![6.0, 7.0, 8.0, 8.0, 10.0]);
-        let expected = BooleanArray::from(vec![false,false,false,false,true]);
-        let b = Float32Array::new_scalar(8.);
-        assert_eq!(crate::cmp::gt(&array, &b).unwrap(), expected);
-
-        let array = array.unary::<_, Float64Type>(|x| x as f64);
-        let b = Float64Array::new_scalar(8.);
-        assert_eq!(crate::cmp::gt(&array, &b).unwrap(), expected);
-    }
-
-    #[test]
-    fn test_gt_eq_dyn_scalar() {
-        let array = Int32Array::from(vec![6, 7, 8, 8, 10]);
-        let b = Int32Array::new_scalar(8);
-        let a_eq = crate::cmp::gt_eq(&array, &b).unwrap();
-        assert_eq!(a_eq, BooleanArray::from(vec![false,false,true,true,true]));
-    }
-
-    #[test]
-    fn test_gt_eq_dyn_scalar_with_dict() {
-        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(3, 2);
-        builder.append(22).unwrap();
-        builder.append_null();
-        builder.append(23).unwrap();
-        let array = builder.finish();
-        let right = DictionaryArray::<Int8Type>::new_scalar(Int32Array::new_scalar(23));
-        let a_eq = crate::cmp::gt_eq(&array, &right).unwrap();
-        assert_eq!(
-            a_eq,
-            BooleanArray::from(vec![Some(false), None, Some(true)])
-        );
-    }
-
-    #[test]
-    fn test_gt_eq_dyn_scalar_float() {
-        let array = Float32Array::from(vec![6.0, 7.0, 8.0, 8.0, 10.0]);
-        let b = Float32Array::new_scalar(8.);
-        let expected = BooleanArray::from(vec![false, false,true,true,true]);
-        assert_eq!(crate::cmp::gt_eq(&array, &b).unwrap(), expected);
-
-        let array = array.unary::<_, Float64Type>(|x| x as f64);
-        let b = Float64Array::new_scalar(8.);
-        assert_eq!(crate::cmp::gt_eq(&array, &b).unwrap(), expected);
-    }
-
-    #[test]
-    fn test_neq_dyn_scalar() {
-        let array = Int32Array::from(vec![6, 7, 8, 8, 10]);
-        let scalar = Int32Array::new_scalar(8);
-        let a_eq = crate::cmp::neq(&array, &scalar).unwrap();
-        assert_eq!(
-            a_eq,
-            BooleanArray::from(vec![Some(true), Some(true), Some(false), Some(false), Some(true)])
-        );
-    }
-
-    #[test]
-    fn test_neq_dyn_scalar_with_dict() {
-        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(3, 2);
-        builder.append(22).unwrap();
-        builder.append_null();
-        builder.append(23).unwrap();
-        let array = builder.finish();
-        let scalar = DictionaryArray::<Int32Type>::new_scalar(Int32Array::new_scalar(23));
-        let a_eq = crate::cmp::neq(&array, &scalar).unwrap();
-        assert_eq!(
-            a_eq,
-            BooleanArray::from(vec![Some(true), None, Some(false)])
-        );
-    }
-
-    #[test]
-    fn test_neq_dyn_scalar_float() {
-        let array = Float32Array::from(vec![6.0, 7.0, 8.0, 8.0, 10.0]);
-        let b = Float32Array::new_scalar(8.);
-        let expected = BooleanArray::from(vec![true,true,false,false,true]);
-        assert_eq!(crate::cmp::neq(&array, &b).unwrap(), expected);
-
-        let array = array.unary::<_, Float64Type>(|x| x as f64);
-        let b = Float64Array::new_scalar(8.);
-        assert_eq!(crate::cmp::neq(&array, &b).unwrap(), expected);
-    }
-
-    #[test]
-    fn test_eq_dyn_binary_scalar() {
+    #[rstest]
+    #[case::eq(crate::cmp::eq, b"flight", vec![Some(false), Some(false), Some(true), Some(false), Some(false), None])]
+    #[case::neq(crate::cmp::neq, b"flight", vec![Some(true), Some(true), Some(false), Some(true), Some(true), None])]
+    #[case::lt(crate::cmp::lt, b"flight", vec![Some(true), Some(true), Some(false), Some(false), Some(false), None])]
+    #[case::lt_eq(crate::cmp::lt_eq, b"flight", vec![Some(true), Some(true), Some(true), Some(false), Some(false), None])]
+    #[case::gt(crate::cmp::gt, b"flight", vec![Some(false), Some(false), Some(false), Some(true), Some(true), None])]
+    #[case::gt_eq(crate::cmp::gt_eq, b"\xff\xf8", vec![Some(false), Some(false), Some(false), Some(false), Some(true), None])]
+    fn test_dyn_binary_scalar<O: OffsetSizeTrait>(
+        #[case] compare: fn(&dyn Datum, &dyn Datum) -> Result<BooleanArray, ArrowError>,
+        #[case] scalar: &[u8],
+        #[case] expected: Vec<Option<bool>>,
+        #[values(0_i32, 0_i64)] offset_type: O,
+    ) {
+        let _ = offset_type;
         let data: Vec<Option<&[u8]>> = vec![Some(b"arrow"), Some(b"datafusion"), Some(b"flight"), Some(b"parquet"), Some(&[0xff, 0xf8]), None];
-        let array = BinaryArray::from(data.clone());
-        let large_array = LargeBinaryArray::from(data);
-        let scalar = BinaryArray::new_scalar("flight");
-        let large_scalar = LargeBinaryArray::new_scalar("flight");
-        let expected = BooleanArray::from(
-            vec![Some(false), Some(false), Some(true), Some(false), Some(false), None],
-        );
+        let array = GenericBinaryArray::<O>::from(data);
+        let scalar = GenericBinaryArray::<O>::new_scalar(scalar);
+        let expected = BooleanArray::from(expected);
+        assert_eq!(compare(&array, &scalar).unwrap(), expected);
+    }
 
-        assert_eq!(crate::cmp::eq(&array, &scalar).unwrap(), expected);
-        assert_eq!(
-            crate::cmp::eq(&large_array, &large_scalar).unwrap(),
-            expected
-        );
-
-        let fsb_array =
-            FixedSizeBinaryArray::try_from(vec![&[0u8], &[0u8], &[0u8], &[1u8]]).unwrap();
+    #[rstest]
+    #[case::eq(crate::cmp::eq, vec![Some(false), Some(false), Some(false), Some(true)])]
+    #[case::neq(crate::cmp::neq, vec![Some(true), Some(true), Some(true), Some(false)])]
+    fn test_dyn_fixed_size_binary_scalar(
+        #[case] compare: fn(&dyn Datum, &dyn Datum) -> Result<BooleanArray, ArrowError>,
+        #[case] expected: Vec<Option<bool>>,
+    ) {
+        let array = FixedSizeBinaryArray::try_from(vec![&[0u8], &[0u8], &[0u8], &[1u8]]).unwrap();
         let scalar = FixedSizeBinaryArray::new_scalar([1u8]);
-        let expected = BooleanArray::from(vec![Some(false), Some(false), Some(false), Some(true)]);
-        assert_eq!(crate::cmp::eq(&fsb_array, &scalar).unwrap(), expected);
+        let expected = BooleanArray::from(expected);
+        assert_eq!(compare(&array, &scalar).unwrap(), expected);
     }
 
-    #[test]
-    fn test_neq_dyn_binary_scalar() {
-        let data: Vec<Option<&[u8]>> = vec![Some(b"arrow"), Some(b"datafusion"), Some(b"flight"), Some(b"parquet"), Some(&[0xff, 0xf8]), None];
-        let array = BinaryArray::from(data.clone());
-        let large_array = LargeBinaryArray::from(data);
-        let scalar = BinaryArray::new_scalar("flight");
-        let large_scalar = LargeBinaryArray::new_scalar("flight");
-        let expected = BooleanArray::from(
-            vec![Some(true), Some(true), Some(false), Some(true), Some(true), None],
-        );
-
-        assert_eq!(crate::cmp::neq(&array, &scalar).unwrap(), expected);
-        assert_eq!(
-            crate::cmp::neq(&large_array, &large_scalar).unwrap(),
-            expected
-        );
-
-        let fsb_array =
-            FixedSizeBinaryArray::try_from(vec![&[0u8], &[0u8], &[0u8], &[1u8]]).unwrap();
-        let scalar = FixedSizeBinaryArray::new_scalar([1u8]);
-        let expected = BooleanArray::from(vec![Some(true), Some(true), Some(true), Some(false)]);
-        assert_eq!(crate::cmp::neq(&fsb_array, &scalar).unwrap(), expected);
-    }
-
-    #[test]
-    fn test_lt_dyn_binary_scalar() {
-        let data: Vec<Option<&[u8]>> = vec![Some(b"arrow"), Some(b"datafusion"), Some(b"flight"), Some(b"parquet"), Some(&[0xff, 0xf8]), None];
-        let array = BinaryArray::from(data.clone());
-        let large_array = LargeBinaryArray::from(data);
-        let scalar = BinaryArray::new_scalar("flight");
-        let large_scalar = LargeBinaryArray::new_scalar("flight");
-        let expected = BooleanArray::from(
-            vec![Some(true), Some(true), Some(false), Some(false), Some(false), None],
-        );
-
-        assert_eq!(crate::cmp::lt(&array, &scalar).unwrap(), expected);
-        assert_eq!(
-            crate::cmp::lt(&large_array, &large_scalar).unwrap(),
-            expected
-        );
-    }
-
-    #[test]
-    fn test_lt_eq_dyn_binary_scalar() {
-        let data: Vec<Option<&[u8]>> = vec![Some(b"arrow"), Some(b"datafusion"), Some(b"flight"), Some(b"parquet"), Some(&[0xff, 0xf8]), None];
-        let array = BinaryArray::from(data.clone());
-        let large_array = LargeBinaryArray::from(data);
-        let scalar = BinaryArray::new_scalar("flight");
-        let large_scalar = LargeBinaryArray::new_scalar("flight");
-        let expected = BooleanArray::from(
-            vec![Some(true), Some(true), Some(true), Some(false), Some(false), None],
-        );
-
-        assert_eq!(crate::cmp::lt_eq(&array, &scalar).unwrap(), expected);
-        assert_eq!(
-            crate::cmp::lt_eq(&large_array, &large_scalar).unwrap(),
-            expected
-        );
-    }
-
-    #[test]
-    fn test_gt_dyn_binary_scalar() {
-        let data: Vec<Option<&[u8]>> = vec![Some(b"arrow"), Some(b"datafusion"), Some(b"flight"), Some(b"parquet"), Some(&[0xff, 0xf8]), None];
-        let array = BinaryArray::from(data.clone());
-        let large_array = LargeBinaryArray::from(data);
-        let scalar = BinaryArray::new_scalar("flight");
-        let large_scalar = LargeBinaryArray::new_scalar("flight");
-        let expected = BooleanArray::from(
-            vec![Some(false), Some(false), Some(false), Some(true), Some(true), None],
-        );
-
-        assert_eq!(crate::cmp::gt(&array, &scalar).unwrap(), expected);
-        assert_eq!(
-            crate::cmp::gt(&large_array, &large_scalar).unwrap(),
-            expected
-        );
-    }
-
-    #[test]
-    fn test_gt_eq_dyn_binary_scalar() {
-        let data: Vec<Option<&[u8]>> = vec![Some(b"arrow"), Some(b"datafusion"), Some(b"flight"), Some(b"parquet"), Some(&[0xff, 0xf8]), None];
-        let array = BinaryArray::from(data.clone());
-        let large_array = LargeBinaryArray::from(data);
-        let scalar = BinaryArray::new_scalar([0xff, 0xf8]);
-        let large_scalar = LargeBinaryArray::new_scalar([0xff, 0xf8]);
-        let expected = BooleanArray::from(
-            vec![Some(false), Some(false), Some(false), Some(false), Some(true), None],
-        );
-
-        assert_eq!(crate::cmp::gt_eq(&array, &scalar).unwrap(), expected);
-        assert_eq!(
-            crate::cmp::gt_eq(&large_array, &large_scalar).unwrap(),
-            expected
-        );
-    }
-
-    #[test]
-    fn test_eq_dyn_utf8_scalar() {
+    #[rstest]
+    #[case::eq(crate::cmp::eq, "xyz", vec![Some(false), Some(false), Some(true)])]
+    #[case::neq(crate::cmp::neq, "xyz", vec![Some(true), Some(true), Some(false)])]
+    #[case::lt(crate::cmp::lt, "xyz", vec![Some(true), Some(true), Some(false)])]
+    #[case::lt_eq(crate::cmp::lt_eq, "def", vec![Some(true), Some(true), Some(false)])]
+    #[case::gt(crate::cmp::gt, "def", vec![Some(false), Some(false), Some(true)])]
+    #[case::gt_eq(crate::cmp::gt_eq, "def", vec![Some(false), Some(true), Some(true)])]
+    fn test_dyn_utf8_scalar(
+        #[case] compare: fn(&dyn Datum, &dyn Datum) -> Result<BooleanArray, ArrowError>,
+        #[case] scalar: &str,
+        #[case] expected: Vec<Option<bool>>,
+    ) {
         let array = StringArray::from(vec!["abc", "def", "xyz"]);
-        let scalar = StringArray::new_scalar("xyz");
-        let a_eq = crate::cmp::eq(&array, &scalar).unwrap();
-        assert_eq!(
-            a_eq,
-            BooleanArray::from(vec![Some(false), Some(false), Some(true)])
-        );
+        let scalar = StringArray::new_scalar(scalar);
+        let actual = compare(&array, &scalar).unwrap();
+        assert_eq!(actual, BooleanArray::from(expected));
     }
 
-    #[test]
-    fn test_eq_dyn_utf8_scalar_with_dict() {
+    #[rstest]
+    #[case::eq(crate::cmp::eq, "abc", vec![Some(false), None, Some(true), Some(true), Some(false)])]
+    #[case::neq(crate::cmp::neq, "abc", vec![Some(true), None, Some(false), Some(false), Some(true)])]
+    #[case::lt(crate::cmp::lt, "abc", vec![Some(true), None, Some(false), Some(false), Some(true)])]
+    #[case::lt_eq(crate::cmp::lt_eq, "xyz", vec![Some(true), None, Some(true), Some(true), Some(false)])]
+    #[case::gt(crate::cmp::gt, "xyz", vec![Some(false), None, Some(false), Some(false), Some(true)])]
+    #[case::gt_eq(crate::cmp::gt_eq, "xyz", vec![Some(false), None, Some(true), Some(true), Some(true)])]
+    fn test_dyn_utf8_scalar_with_dict(
+        #[case] compare: fn(&dyn Datum, &dyn Datum) -> Result<BooleanArray, ArrowError>,
+        #[case] last_value: &str,
+        #[case] expected: Vec<Option<bool>>,
+    ) {
         let mut builder = StringDictionaryBuilder::<Int8Type>::new();
         builder.append("abc").unwrap();
         builder.append_null();
         builder.append("def").unwrap();
         builder.append("def").unwrap();
-        builder.append("abc").unwrap();
+        builder.append(last_value).unwrap();
         let array = builder.finish();
         let scalar = DictionaryArray::<Int32Type>::new_scalar(StringArray::new_scalar("def"));
-        let a_eq = crate::cmp::eq(&array, &scalar).unwrap();
-        assert_eq!(
-            a_eq,
-            BooleanArray::from(vec![Some(false), None, Some(true), Some(true), Some(false)])
-        );
+        let actual = compare(&array, &scalar).unwrap();
+        assert_eq!(actual, BooleanArray::from(expected));
     }
 
-    #[test]
-    fn test_lt_dyn_utf8_scalar() {
-        let array = StringArray::from(vec!["abc", "def", "xyz"]);
-        let scalar = StringArray::new_scalar("xyz");
-        let a_eq = crate::cmp::lt(&array, &scalar).unwrap();
-        assert_eq!(
-            a_eq,
-            BooleanArray::from(vec![Some(true), Some(true), Some(false)])
-        );
-    }
-
-    #[test]
-    fn test_lt_dyn_utf8_scalar_with_dict() {
-        let mut builder = StringDictionaryBuilder::<Int8Type>::new();
-        builder.append("abc").unwrap();
-        builder.append_null();
-        builder.append("def").unwrap();
-        builder.append("def").unwrap();
-        builder.append("abc").unwrap();
-        let array = builder.finish();
-        let scalar = DictionaryArray::<Int32Type>::new_scalar(StringArray::new_scalar("def"));
-        let a_eq = crate::cmp::lt(&array, &scalar).unwrap();
-        assert_eq!(
-            a_eq,
-            BooleanArray::from(vec![Some(true), None, Some(false), Some(false), Some(true)])
-        );
-    }
-
-    #[test]
-    fn test_lt_eq_dyn_utf8_scalar() {
-        let array = StringArray::from(vec!["abc", "def", "xyz"]);
-        let scalar = StringArray::new_scalar("def");
-        let a_eq = crate::cmp::lt_eq(&array, &scalar).unwrap();
-        assert_eq!(
-            a_eq,
-            BooleanArray::from(vec![Some(true), Some(true), Some(false)])
-        );
-    }
-
-    #[test]
-    fn test_lt_eq_dyn_utf8_scalar_with_dict() {
-        let mut builder = StringDictionaryBuilder::<Int8Type>::new();
-        builder.append("abc").unwrap();
-        builder.append_null();
-        builder.append("def").unwrap();
-        builder.append("def").unwrap();
-        builder.append("xyz").unwrap();
-        let array = builder.finish();
-        let scalar = DictionaryArray::<Int32Type>::new_scalar(StringArray::new_scalar("def"));
-        let a_eq = crate::cmp::lt_eq(&array, &scalar).unwrap();
-        assert_eq!(
-            a_eq,
-            BooleanArray::from(vec![Some(true), None, Some(true), Some(true), Some(false)])
-        );
-    }
-
-    #[test]
-    fn test_gt_eq_dyn_utf8_scalar() {
-        let array = StringArray::from(vec!["abc", "def", "xyz"]);
-        let scalar = StringArray::new_scalar("def");
-        let a_eq = crate::cmp::gt_eq(&array, &scalar).unwrap();
-        assert_eq!(
-            a_eq,
-            BooleanArray::from(vec![Some(false), Some(true), Some(true)])
-        );
-    }
-
-    #[test]
-    fn test_gt_eq_dyn_utf8_scalar_with_dict() {
-        let mut builder = StringDictionaryBuilder::<Int8Type>::new();
-        builder.append("abc").unwrap();
-        builder.append_null();
-        builder.append("def").unwrap();
-        builder.append("def").unwrap();
-        builder.append("xyz").unwrap();
-        let array = builder.finish();
-        let scalar = DictionaryArray::<Int32Type>::new_scalar(StringArray::new_scalar("def"));
-        let a_eq = crate::cmp::gt_eq(&array, &scalar).unwrap();
-        assert_eq!(
-            a_eq,
-            BooleanArray::from(vec![Some(false), None, Some(true), Some(true), Some(true)])
-        );
-    }
-
-    #[test]
-    fn test_gt_dyn_utf8_scalar() {
-        let array = StringArray::from(vec!["abc", "def", "xyz"]);
-        let scalar = StringArray::new_scalar("def");
-        let a_eq = crate::cmp::gt(&array, &scalar).unwrap();
-        assert_eq!(
-            a_eq,
-            BooleanArray::from(vec![Some(false), Some(false), Some(true)])
-        );
-    }
-
-    #[test]
-    fn test_gt_dyn_utf8_scalar_with_dict() {
-        let mut builder = StringDictionaryBuilder::<Int8Type>::new();
-        builder.append("abc").unwrap();
-        builder.append_null();
-        builder.append("def").unwrap();
-        builder.append("def").unwrap();
-        builder.append("xyz").unwrap();
-        let array = builder.finish();
-        let scalar = DictionaryArray::<Int32Type>::new_scalar(StringArray::new_scalar("def"));
-        let a_eq = crate::cmp::gt(&array, &scalar).unwrap();
-        assert_eq!(
-            a_eq,
-            BooleanArray::from(vec![Some(false), None, Some(false), Some(false), Some(true)])
-        );
-    }
-
-    #[test]
-    fn test_neq_dyn_utf8_scalar() {
-        let array = StringArray::from(vec!["abc", "def", "xyz"]);
-        let scalar = StringArray::new_scalar("xyz");
-        let a_eq = crate::cmp::neq(&array, &scalar).unwrap();
-        assert_eq!(
-            a_eq,
-            BooleanArray::from(vec![Some(true), Some(true), Some(false)])
-        );
-    }
-
-    #[test]
-    fn test_neq_dyn_utf8_scalar_with_dict() {
-        let mut builder = StringDictionaryBuilder::<Int8Type>::new();
-        builder.append("abc").unwrap();
-        builder.append_null();
-        builder.append("def").unwrap();
-        builder.append("def").unwrap();
-        builder.append("abc").unwrap();
-        let array = builder.finish();
-        let scalar = DictionaryArray::<Int32Type>::new_scalar(StringArray::new_scalar("def"));
-        let a_eq = crate::cmp::neq(&array, &scalar).unwrap();
-        assert_eq!(
-            a_eq,
-            BooleanArray::from(vec![Some(true), None, Some(false), Some(false), Some(true)])
-        );
-    }
-
-    #[test]
-    fn test_eq_dyn_bool_scalar() {
-        let array = BooleanArray::from(vec![true, false, true]);
+    #[rstest]
+    #[case::eq(
+        crate::cmp::eq,
+        BooleanArray::from(vec![true, false, true]),
+        vec![Some(false), Some(true), Some(false)]
+    )]
+    #[case::neq(
+        crate::cmp::neq,
+        BooleanArray::from(vec![true, false, true]),
+        vec![Some(true), Some(false), Some(true)]
+    )]
+    #[case::lt(
+        crate::cmp::lt,
+        BooleanArray::from(vec![Some(true), Some(false), Some(true), None]),
+        vec![Some(false), Some(false), Some(false), None]
+    )]
+    #[case::lt_eq(
+        crate::cmp::lt_eq,
+        BooleanArray::from(vec![true, false, true]),
+        vec![Some(false), Some(true), Some(false)]
+    )]
+    #[case::gt(
+        crate::cmp::gt,
+        BooleanArray::from(vec![true, false, true]),
+        vec![Some(true), Some(false), Some(true)]
+    )]
+    #[case::gt_eq(
+        crate::cmp::gt_eq,
+        BooleanArray::from(vec![true, false, true]),
+        vec![Some(true), Some(true), Some(true)]
+    )]
+    fn test_dyn_bool_scalar(
+        #[case] compare: fn(&dyn Datum, &dyn Datum) -> Result<BooleanArray, ArrowError>,
+        #[case] array: BooleanArray,
+        #[case] expected: Vec<Option<bool>>,
+    ) {
         let scalar = BooleanArray::new_scalar(false);
-        let a_eq = crate::cmp::eq(&array, &scalar).unwrap();
-        assert_eq!(
-            a_eq,
-            BooleanArray::from(vec![Some(false), Some(true), Some(false)])
-        );
-    }
-
-    #[test]
-    fn test_lt_dyn_bool_scalar() {
-        let array = BooleanArray::from(vec![Some(true), Some(false), Some(true), None]);
-        let scalar = BooleanArray::new_scalar(false);
-        let a_eq = crate::cmp::lt(&array, &scalar).unwrap();
-        assert_eq!(
-            a_eq,
-            BooleanArray::from(vec![Some(false), Some(false), Some(false), None])
-        );
-    }
-
-    #[test]
-    fn test_gt_dyn_bool_scalar() {
-        let array = BooleanArray::from(vec![true, false, true]);
-        let scalar = BooleanArray::new_scalar(false);
-        let a_eq = crate::cmp::gt(&array, &scalar).unwrap();
-        assert_eq!(
-            a_eq,
-            BooleanArray::from(vec![Some(true), Some(false), Some(true)])
-        );
-    }
-
-    #[test]
-    fn test_lt_eq_dyn_bool_scalar() {
-        let array = BooleanArray::from(vec![true, false, true]);
-        let scalar = BooleanArray::new_scalar(false);
-        let a_eq = crate::cmp::lt_eq(&array, &scalar).unwrap();
-        assert_eq!(
-            a_eq,
-            BooleanArray::from(vec![Some(false), Some(true), Some(false)])
-        );
-    }
-
-    #[test]
-    fn test_gt_eq_dyn_bool_scalar() {
-        let array = BooleanArray::from(vec![true, false, true]);
-        let scalar = BooleanArray::new_scalar(false);
-        let a_eq = crate::cmp::gt_eq(&array, &scalar).unwrap();
-        assert_eq!(
-            a_eq,
-            BooleanArray::from(vec![Some(true), Some(true), Some(true)])
-        );
-    }
-
-    #[test]
-    fn test_neq_dyn_bool_scalar() {
-        let array = BooleanArray::from(vec![true, false, true]);
-        let scalar = BooleanArray::new_scalar(false);
-        let a_eq = crate::cmp::neq(&array, &scalar).unwrap();
-        assert_eq!(
-            a_eq,
-            BooleanArray::from(vec![Some(true), Some(false), Some(true)])
-        );
+        let actual = compare(&array, &scalar).unwrap();
+        assert_eq!(actual, BooleanArray::from(expected));
     }
 
     #[test]
@@ -2150,45 +1619,93 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_eq_dyn_neq_dyn_dictionary_i8_array() {
+    #[rstest]
+    #[case::eq(crate::cmp::eq, [2_i8, 3, 4], [2_i8, 4, 4], vec![true, false, true])]
+    #[case::neq(crate::cmp::neq, [2_i8, 3, 4], [2_i8, 4, 4], vec![false, true, false])]
+    #[case::lt(crate::cmp::lt, [3_i8, 4, 4], [4_i8, 3, 4], vec![true, false, false])]
+    #[case::lt_eq(crate::cmp::lt_eq, [3_i8, 4, 4], [4_i8, 3, 4], vec![true, false, true])]
+    #[case::gt(crate::cmp::gt, [3_i8, 4, 4], [4_i8, 3, 4], vec![false, true, false])]
+    #[case::gt_eq(crate::cmp::gt_eq, [3_i8, 4, 4], [4_i8, 3, 4], vec![false, true, true])]
+    fn test_dyn_dictionary_i8_array(
+        #[case] compare: fn(&dyn Datum, &dyn Datum) -> Result<BooleanArray, ArrowError>,
+        #[case] left_keys: [i8; 3],
+        #[case] right_keys: [i8; 3],
+        #[case] expected: Vec<bool>,
+    ) {
         // Construct a value array
         let values = Int8Array::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
         let values = Arc::new(values) as ArrayRef;
 
-        let keys1 = Int8Array::from_iter_values([2_i8, 3, 4]);
-        let keys2 = Int8Array::from_iter_values([2_i8, 4, 4]);
+        let keys1 = Int8Array::from_iter_values(left_keys);
+        let keys2 = Int8Array::from_iter_values(right_keys);
         let dict_array1 = DictionaryArray::new(keys1, values.clone());
         let dict_array2 = DictionaryArray::new(keys2, values.clone());
 
-        let result = crate::cmp::eq(&dict_array1, &dict_array2);
-        assert_eq!(result.unwrap(), BooleanArray::from(vec![true, false, true]));
-
-        let result = crate::cmp::neq(&dict_array1, &dict_array2);
         assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![false, true, false])
+            compare(&dict_array1, &dict_array2).unwrap(),
+            BooleanArray::from(expected)
         );
     }
 
-    #[test]
-    fn test_eq_dyn_neq_dyn_dictionary_u64_array() {
-        let values = UInt64Array::from_iter_values([10_u64, 11, 12, 13, 14, 15, 16, 17]);
-        let values = Arc::new(values) as ArrayRef;
-
-        let keys1 = UInt64Array::from_iter_values([1_u64, 3, 4]);
-        let keys2 = UInt64Array::from_iter_values([2_u64, 3, 5]);
+    #[rstest]
+    #[case::uint64(
+        Arc::new(UInt64Array::from_iter_values([10_u64, 11, 12, 13, 14, 15, 16, 17])),
+        [1_u64, 3, 4],
+        [2_u64, 3, 5],
+        vec![false, true, false],
+        vec![true, false, true]
+    )]
+    #[case::binary(
+        Arc::new(
+            ["hello", "", "parquet"]
+                .into_iter()
+                .map(|b| Some(b.as_bytes()))
+                .collect::<BinaryArray>()
+        ),
+        [0_u64, 1, 2],
+        [0_u64, 2, 1],
+        vec![true, false, false],
+        vec![false, true, true]
+    )]
+    #[case::interval_day_time(
+        Arc::new(IntervalDayTimeArray::from(vec![
+            Some(IntervalDayTime::new(0, 1)),
+            Some(IntervalDayTime::new(0, 1)),
+            Some(IntervalDayTime::new(0, 6)),
+            Some(IntervalDayTime::new(4, 10)),
+        ])),
+        [1_u64, 0, 3],
+        [2_u64, 1, 3],
+        vec![false, true, true],
+        vec![true, false, false]
+    )]
+    #[case::date32(
+        Arc::new(Date32Array::from(vec![1, 6, 10, 2, 3, 5])),
+        [1_u64, 0, 3],
+        [2_u64, 0, 3],
+        vec![false, true, true],
+        vec![true, false, false]
+    )]
+    fn test_dyn_dictionary_uint64_keys_eq_neq(
+        #[case] values: ArrayRef,
+        #[case] left_keys: [u64; 3],
+        #[case] right_keys: [u64; 3],
+        #[case] expected_eq: Vec<bool>,
+        #[case] expected_neq: Vec<bool>,
+    ) {
+        let keys1 = UInt64Array::from_iter_values(left_keys);
+        let keys2 = UInt64Array::from_iter_values(right_keys);
         let dict_array1 = DictionaryArray::new(keys1, values.clone());
         let dict_array2 = DictionaryArray::new(keys2, values.clone());
 
-        let result = crate::cmp::eq(&dict_array1, &dict_array2);
         assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![false, true, false])
+            crate::cmp::eq(&dict_array1, &dict_array2).unwrap(),
+            BooleanArray::from(expected_eq)
         );
-
-        let result = crate::cmp::neq(&dict_array1, &dict_array2);
-        assert_eq!(result.unwrap(), BooleanArray::from(vec![true, false, true]));
+        assert_eq!(
+            crate::cmp::neq(&dict_array1, &dict_array2).unwrap(),
+            BooleanArray::from(expected_neq)
+        );
     }
 
     #[test]
@@ -2218,1327 +1735,581 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_eq_dyn_neq_dyn_dictionary_binary_array() {
-        let values: BinaryArray = ["hello", "", "parquet"]
-            .into_iter()
-            .map(|b| Some(b.as_bytes()))
-            .collect();
-        let values = Arc::new(values) as ArrayRef;
-
-        let keys1 = UInt64Array::from_iter_values([0_u64, 1, 2]);
-        let keys2 = UInt64Array::from_iter_values([0_u64, 2, 1]);
-        let dict_array1 = DictionaryArray::new(keys1, values.clone());
-        let dict_array2 = DictionaryArray::new(keys2, values.clone());
-
-        let result = crate::cmp::eq(&dict_array1, &dict_array2);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![true, false, false])
-        );
-
-        let result = crate::cmp::neq(&dict_array1, &dict_array2);
-        assert_eq!(result.unwrap(), BooleanArray::from(vec![false, true, true]));
-    }
-
-    #[test]
-    fn test_eq_dyn_neq_dyn_dictionary_interval_array() {
-        let values = IntervalDayTimeArray::from(vec![
-            Some(IntervalDayTime::new(0, 1)),
-            Some(IntervalDayTime::new(0, 1)),
-            Some(IntervalDayTime::new(0, 6)),
-            Some(IntervalDayTime::new(4, 10)),
-        ]);
-        let values = Arc::new(values) as ArrayRef;
-
-        let keys1 = UInt64Array::from_iter_values([1_u64, 0, 3]);
-        let keys2 = UInt64Array::from_iter_values([2_u64, 1, 3]);
-        let dict_array1 = DictionaryArray::new(keys1, values.clone());
-        let dict_array2 = DictionaryArray::new(keys2, values.clone());
-
-        let result = crate::cmp::eq(&dict_array1, &dict_array2);
-        assert_eq!(result.unwrap(), BooleanArray::from(vec![false, true, true]));
-
-        let result = crate::cmp::neq(&dict_array1, &dict_array2);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![true, false, false])
-        );
-    }
-
-    #[test]
-    fn test_eq_dyn_neq_dyn_dictionary_date_array() {
-        let values = Date32Array::from(vec![1, 6, 10, 2, 3, 5]);
-        let values = Arc::new(values) as ArrayRef;
-
-        let keys1 = UInt64Array::from_iter_values([1_u64, 0, 3]);
-        let keys2 = UInt64Array::from_iter_values([2_u64, 0, 3]);
-        let dict_array1 = DictionaryArray::new(keys1, values.clone());
-        let dict_array2 = DictionaryArray::new(keys2, values.clone());
-
-        let result = crate::cmp::eq(&dict_array1, &dict_array2);
-        assert_eq!(result.unwrap(), BooleanArray::from(vec![false, true, true]));
-
-        let result = crate::cmp::neq(&dict_array1, &dict_array2);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![true, false, false])
-        );
-    }
-
-    #[test]
-    fn test_eq_dyn_neq_dyn_dictionary_bool_array() {
-        let values = BooleanArray::from(vec![true, false]);
-        let values = Arc::new(values) as ArrayRef;
-
-        let keys1 = UInt64Array::from_iter_values([1_u64, 1, 1]);
-        let keys2 = UInt64Array::from_iter_values([0_u64, 1, 0]);
-        let dict_array1 = DictionaryArray::new(keys1, values.clone());
-        let dict_array2 = DictionaryArray::new(keys2, values.clone());
-
-        let result = crate::cmp::eq(&dict_array1, &dict_array2);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![false, true, false])
-        );
-
-        let result = crate::cmp::neq(&dict_array1, &dict_array2);
-        assert_eq!(result.unwrap(), BooleanArray::from(vec![true, false, true]));
-    }
-
-    #[test]
-    fn test_lt_dyn_gt_dyn_dictionary_i8_array() {
-        // Construct a value array
-        let values = Int8Array::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
-        let values = Arc::new(values) as ArrayRef;
-
-        let keys1 = Int8Array::from_iter_values([3_i8, 4, 4]);
-        let keys2 = Int8Array::from_iter_values([4_i8, 3, 4]);
-        let dict_array1 = DictionaryArray::new(keys1, values.clone());
-        let dict_array2 = DictionaryArray::new(keys2, values.clone());
-
-        let result = crate::cmp::lt(&dict_array1, &dict_array2);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![true, false, false])
-        );
-
-        let result = crate::cmp::lt_eq(&dict_array1, &dict_array2);
-        assert_eq!(result.unwrap(), BooleanArray::from(vec![true, false, true]));
-
-        let result = crate::cmp::gt(&dict_array1, &dict_array2);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![false, true, false])
-        );
-
-        let result = crate::cmp::gt_eq(&dict_array1, &dict_array2);
-        assert_eq!(result.unwrap(), BooleanArray::from(vec![false, true, true]));
-    }
-
-    #[test]
-    fn test_lt_dyn_gt_dyn_dictionary_bool_array() {
-        let values = BooleanArray::from(vec![true, false]);
-        let values = Arc::new(values) as ArrayRef;
-
-        let keys1 = UInt64Array::from_iter_values([1_u64, 1, 0]);
-        let keys2 = UInt64Array::from_iter_values([0_u64, 1, 1]);
-        let dict_array1 = DictionaryArray::new(keys1, values.clone());
-        let dict_array2 = DictionaryArray::new(keys2, values.clone());
-
-        let result = crate::cmp::lt(&dict_array1, &dict_array2);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![true, false, false])
-        );
-
-        let result = crate::cmp::lt_eq(&dict_array1, &dict_array2);
-        assert_eq!(result.unwrap(), BooleanArray::from(vec![true, true, false]));
-
-        let result = crate::cmp::gt(&dict_array1, &dict_array2);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![false, false, true])
-        );
-
-        let result = crate::cmp::gt_eq(&dict_array1, &dict_array2);
-        assert_eq!(result.unwrap(), BooleanArray::from(vec![false, true, true]));
-    }
-
-    #[test]
-    fn test_eq_dyn_neq_dyn_dictionary_i8_i8_array() {
-        let values = Int8Array::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
-        let keys = Int8Array::from_iter_values([2_i8, 3, 4]);
-
-        let dict_array = DictionaryArray::new(keys, Arc::new(values));
-
-        let array = Int8Array::from_iter([Some(12_i8), None, Some(14)]);
-
-        let result = crate::cmp::eq(&dict_array, &array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(true), None, Some(true)])
-        );
-
-        let result = crate::cmp::eq(&array, &dict_array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(true), None, Some(true)])
-        );
-
-        let result = crate::cmp::neq(&dict_array, &array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(false), None, Some(false)])
-        );
-
-        let result = crate::cmp::neq(&array, &dict_array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(false), None, Some(false)])
-        );
-    }
-
-    #[test]
-    fn test_lt_dyn_lt_eq_dyn_gt_dyn_gt_eq_dyn_dictionary_i8_i8_array() {
-        let values = Int8Array::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
-        let keys = Int8Array::from_iter_values([2_i8, 3, 4]);
-
-        let dict_array = DictionaryArray::new(keys, Arc::new(values));
-
-        let array = Int8Array::from_iter([Some(12_i8), None, Some(11)]);
-
-        let result = crate::cmp::lt(&dict_array, &array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(false), None, Some(false)])
-        );
-
-        let result = crate::cmp::lt(&array, &dict_array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(false), None, Some(true)])
-        );
-
-        let result = crate::cmp::lt_eq(&dict_array, &array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(true), None, Some(false)])
-        );
-
-        let result = crate::cmp::lt_eq(&array, &dict_array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(true), None, Some(true)])
-        );
-
-        let result = crate::cmp::gt(&dict_array, &array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(false), None, Some(true)])
-        );
-
-        let result = crate::cmp::gt(&array, &dict_array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(false), None, Some(false)])
-        );
-
-        let result = crate::cmp::gt_eq(&dict_array, &array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(true), None, Some(true)])
-        );
-
-        let result = crate::cmp::gt_eq(&array, &dict_array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(true), None, Some(false)])
-        );
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
-    fn test_eq_dyn_neq_dyn_float_nan() {
-        let array1 = Float16Array::from(vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(10.0)]);
-        let array2 = Float16Array::from(
-            vec![f16::NAN, f16::NAN, f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(10.0)],
-        );
-        let expected = BooleanArray::from(vec![true, false, true, true, true]);
-        assert_eq!(crate::cmp::eq(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![false, true, false, false, false]);
-        assert_eq!(crate::cmp::neq(&array1, &array2).unwrap(), expected);
-
-        let array1 = Float32Array::from(vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]);
-        let array2 = Float32Array::from(vec![f32::NAN, f32::NAN, 8.0, 8.0, 10.0]);
-        let expected = BooleanArray::from(vec![true, false, true, true, true]);
-        assert_eq!(crate::cmp::eq(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![false, true, false, false, false]);
-        assert_eq!(crate::cmp::neq(&array1, &array2).unwrap(), expected);
-
-        let array1 = Float64Array::from(vec![f64::NAN, 7.0, 8.0, 8.0, 10.0]);
-        let array2 = Float64Array::from(vec![f64::NAN, f64::NAN, 8.0, 8.0, 10.0]);
-
-        let expected = BooleanArray::from(vec![true, false, true, true, true]);
-        assert_eq!(crate::cmp::eq(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![false, true, false, false, false]);
-        assert_eq!(crate::cmp::neq(&array1, &array2).unwrap(), expected);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
-    fn test_lt_dyn_lt_eq_dyn_float_nan() {
-        let array1 = Float16Array::from(vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(11.0), f16::NAN]);
-        let array2 = Float16Array::from(vec![f16::NAN, f16::NAN, f16::from_f32(8.0), f16::from_f32(9.0), f16::from_f32(10.0), f16::from_f32(1.0)]);
-
-        let expected = BooleanArray::from(vec![false, true, false, true, false, false]);
-        assert_eq!(crate::cmp::lt(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![true, true, true, true, false, false]);
-        assert_eq!(crate::cmp::lt_eq(&array1, &array2).unwrap(), expected);
-
-        let array1 = Float32Array::from(vec![f32::NAN, 7.0, 8.0, 8.0, 11.0, f32::NAN]);
-        let array2 = Float32Array::from(vec![f32::NAN, f32::NAN, 8.0, 9.0, 10.0, 1.0]);
-
-        let expected = BooleanArray::from(vec![false, true, false, true, false, false]);
-        assert_eq!(crate::cmp::lt(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![true, true, true, true, false, false]);
-        assert_eq!(crate::cmp::lt_eq(&array1, &array2).unwrap(), expected);
-
-        let array1 = Float64Array::from(vec![f64::NAN, 7.0, 8.0, 8.0, 11.0, f64::NAN]);
-        let array2: Float64Array =
-            Float64Array::from(vec![f64::NAN, f64::NAN, 8.0, 9.0, 10.0, 1.0]);
-
-        let expected = BooleanArray::from(vec![false, true, false, true, false, false]);
-        assert_eq!(crate::cmp::lt(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![true, true, true, true, false, false]);
-        assert_eq!(crate::cmp::lt_eq(&array1, &array2).unwrap(), expected);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
-    fn test_gt_dyn_gt_eq_dyn_float_nan() {
-        let array1 = Float16Array::from(vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(11.0), f16::NAN]);
-        let array2 = Float16Array::from(vec![f16::NAN, f16::NAN, f16::from_f32(8.0), f16::from_f32(9.0), f16::from_f32(10.0), f16::from_f32(1.0)]);
-
-        let expected = BooleanArray::from(vec![false, false, false, false, true, true]);
-        assert_eq!(crate::cmp::gt(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![true, false, true, false, true, true]);
-        assert_eq!(crate::cmp::gt_eq(&array1, &array2).unwrap(), expected);
-
-        let array1 = Float32Array::from(vec![f32::NAN, 7.0, 8.0, 8.0, 11.0, f32::NAN]);
-        let array2 = Float32Array::from(vec![f32::NAN, f32::NAN, 8.0, 9.0, 10.0, 1.0]);
-
-        let expected = BooleanArray::from(vec![false, false, false, false, true, true]);
-        assert_eq!(crate::cmp::gt(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![true, false, true, false, true, true]);
-        assert_eq!(crate::cmp::gt_eq(&array1, &array2).unwrap(), expected);
-
-        let array1 = Float64Array::from(vec![f64::NAN, 7.0, 8.0, 8.0, 11.0, f64::NAN]);
-        let array2 = Float64Array::from(vec![f64::NAN, f64::NAN, 8.0, 9.0, 10.0, 1.0]);
-
-        let expected = BooleanArray::from(vec![false, false, false, false, true, true]);
-        assert_eq!(crate::cmp::gt(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![true, false, true, false, true, true]);
-        assert_eq!(crate::cmp::gt_eq(&array1, &array2).unwrap(), expected);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
-    fn test_eq_dyn_scalar_neq_dyn_scalar_float_nan() {
-        let array = Float16Array::from(vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(10.0)]);
-        let scalar = Float16Array::new_scalar(f16::NAN);
-
-        let expected = BooleanArray::from(vec![true, false, false, false, false]);
-        assert_eq!(crate::cmp::eq(&array, &scalar).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![false, true, true, true, true]);
-        assert_eq!(crate::cmp::neq(&array, &scalar).unwrap(), expected);
-
-        let array = Float32Array::from(vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]);
-        let scalar = Float32Array::new_scalar(f32::NAN);
-        let expected = BooleanArray::from(vec![true, false, false, false, false]);
-        assert_eq!(crate::cmp::eq(&array, &scalar).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![false, true, true, true, true]);
-        assert_eq!(crate::cmp::neq(&array, &scalar).unwrap(), expected);
-
-        let array = Float64Array::from(vec![f64::NAN, 7.0, 8.0, 8.0, 10.0]);
-        let scalar = Float64Array::new_scalar(f64::NAN);
-        let expected = BooleanArray::from(vec![true, false, false, false, false]);
-        assert_eq!(crate::cmp::eq(&array, &scalar).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![false, true, true, true, true]);
-        assert_eq!(crate::cmp::neq(&array, &scalar).unwrap(), expected);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
-    fn test_lt_dyn_scalar_lt_eq_dyn_scalar_float_nan() {
-        let array = Float16Array::from(vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(10.0)]);
-        let scalar = Float16Array::new_scalar(f16::NAN);
-
-        let expected = BooleanArray::from(vec![false, true, true, true, true]);
-        assert_eq!(crate::cmp::lt(&array, &scalar).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![true, true, true, true, true]);
-        assert_eq!(crate::cmp::lt_eq(&array, &scalar).unwrap(), expected);
-
-        let array = Float32Array::from(vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]);
-        let scalar = Float32Array::new_scalar(f32::NAN);
-
-        let expected = BooleanArray::from(vec![false, true, true, true, true]);
-        assert_eq!(crate::cmp::lt(&array, &scalar).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![true, true, true, true, true]);
-        assert_eq!(crate::cmp::lt_eq(&array, &scalar).unwrap(), expected);
-
-        let array = Float64Array::from(vec![f64::NAN, 7.0, 8.0, 8.0, 10.0]);
-        let scalar = Float64Array::new_scalar(f64::NAN);
-        let expected = BooleanArray::from(vec![false, true, true, true, true]);
-        assert_eq!(crate::cmp::lt(&array, &scalar).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![true, true, true, true, true]);
-        assert_eq!(crate::cmp::lt_eq(&array, &scalar).unwrap(), expected);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
-    fn test_gt_dyn_scalar_gt_eq_dyn_scalar_float_nan() {
-        let array = Float16Array::from(vec![
-           f16::NAN,
-           f16::from_f32(7.0),
-           f16::from_f32(8.0),
-           f16::from_f32(8.0),
-           f16::from_f32(10.0),
-       ]);
-        let scalar = Float16Array::new_scalar(f16::NAN);
-        let expected = BooleanArray::from(vec![false, false, false, false, false]);
-        assert_eq!(crate::cmp::gt(&array, &scalar).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![true, false, false, false, false]);
-        assert_eq!(crate::cmp::gt_eq(&array, &scalar).unwrap(), expected);
-
-        let array = Float32Array::from(vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]);
-        let scalar = Float32Array::new_scalar(f32::NAN);
-        let expected = BooleanArray::from(vec![false, false, false, false, false]);
-        assert_eq!(crate::cmp::gt(&array, &scalar).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![true, false, false, false, false]);
-        assert_eq!(crate::cmp::gt_eq(&array, &scalar).unwrap(), expected);
-
-        let array = Float64Array::from(vec![f64::NAN, 7.0, 8.0, 8.0, 10.0]);
-        let scalar = Float64Array::new_scalar(f64::NAN);
-        let expected = BooleanArray::from(vec![false, false, false, false, false]);
-        assert_eq!(crate::cmp::gt(&array, &scalar).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![true, false, false, false, false]);
-        assert_eq!(crate::cmp::gt_eq(&array, &scalar).unwrap(), expected);
-    }
-
-    #[test]
-    fn test_eq_dyn_neq_dyn_dictionary_to_utf8_array() {
-        let test1 = ["a", "a", "b", "c"];
-        let test2 = ["a", "b", "b", "d"];
-
-        let dict_array: DictionaryArray<Int8Type> = test1
-            .iter()
-            .map(|&x| if x == "b" { None } else { Some(x) })
-            .collect();
-
-        let array: StringArray = test2
-            .iter()
-            .map(|&x| if x == "b" { None } else { Some(x) })
-            .collect();
-
-        let result = crate::cmp::eq(&dict_array, &array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(true), None, None, Some(false)])
-        );
-
-        let result = crate::cmp::eq(&array, &dict_array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(true), None, None, Some(false)])
-        );
-
-        let result = crate::cmp::neq(&dict_array, &array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(false), None, None, Some(true)])
-        );
-
-        let result = crate::cmp::neq(&array, &dict_array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(false), None, None, Some(true)])
-        );
-    }
-
-    #[test]
-    fn test_lt_dyn_lt_eq_dyn_gt_dyn_gt_eq_dyn_dictionary_to_utf8_array() {
-        let test1 = ["abc", "abc", "b", "cde"];
-        let test2 = ["abc", "b", "b", "def"];
-
-        let dict_array: DictionaryArray<Int8Type> = test1
-            .iter()
-            .map(|&x| if x == "b" { None } else { Some(x) })
-            .collect();
-
-        let array: StringArray = test2
-            .iter()
-            .map(|&x| if x == "b" { None } else { Some(x) })
-            .collect();
-
-        let result = crate::cmp::lt(&dict_array, &array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(false), None, None, Some(true)])
-        );
-
-        let result = crate::cmp::lt(&array, &dict_array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(false), None, None, Some(false)])
-        );
-
-        let result = crate::cmp::lt_eq(&dict_array, &array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(true), None, None, Some(true)])
-        );
-
-        let result = crate::cmp::lt_eq(&array, &dict_array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(true), None, None, Some(false)])
-        );
-
-        let result = crate::cmp::gt(&dict_array, &array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(false), None, None, Some(false)])
-        );
-
-        let result = crate::cmp::gt(&array, &dict_array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(false), None, None, Some(true)])
-        );
-
-        let result = crate::cmp::gt_eq(&dict_array, &array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(true), None, None, Some(false)])
-        );
-
-        let result = crate::cmp::gt_eq(&array, &dict_array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(true), None, None, Some(true)])
-        );
-    }
-
-    #[test]
-    fn test_eq_dyn_neq_dyn_dictionary_to_binary_array() {
-        let values: BinaryArray = ["hello", "", "parquet"]
-            .into_iter()
-            .map(|b| Some(b.as_bytes()))
-            .collect();
-
-        let keys = UInt64Array::from(vec![Some(0_u64), None, Some(2), Some(2)]);
-        let dict_array = DictionaryArray::new(keys, Arc::new(values));
-
-        let array: BinaryArray = ["hello", "", "parquet", "test"]
-            .into_iter()
-            .map(|b| Some(b.as_bytes()))
-            .collect();
-
-        let result = crate::cmp::eq(&dict_array, &array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(true), None, Some(true), Some(false)])
-        );
-
-        let result = crate::cmp::eq(&array, &dict_array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(true), None, Some(true), Some(false)])
-        );
-
-        let result = crate::cmp::neq(&dict_array, &array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(false), None, Some(false), Some(true)])
-        );
-
-        let result = crate::cmp::neq(&array, &dict_array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(false), None, Some(false), Some(true)])
-        );
-    }
-
-    #[test]
-    fn test_lt_dyn_lt_eq_dyn_gt_dyn_gt_eq_dyn_dictionary_to_binary_array() {
-        let values: BinaryArray = ["hello", "", "parquet"]
-            .into_iter()
-            .map(|b| Some(b.as_bytes()))
-            .collect();
-
-        let keys = UInt64Array::from(vec![Some(0_u64), None, Some(2), Some(2)]);
-        let dict_array = DictionaryArray::new(keys, Arc::new(values));
-
-        let array: BinaryArray = ["hello", "", "parquet", "test"]
-            .into_iter()
-            .map(|b| Some(b.as_bytes()))
-            .collect();
-
-        let result = crate::cmp::lt(&dict_array, &array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(false), None, Some(false), Some(true)])
-        );
-
-        let result = crate::cmp::lt(&array, &dict_array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(false), None, Some(false), Some(false)])
-        );
-
-        let result = crate::cmp::lt_eq(&dict_array, &array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(true), None, Some(true), Some(true)])
-        );
-
-        let result = crate::cmp::lt_eq(&array, &dict_array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(true), None, Some(true), Some(false)])
-        );
-
-        let result = crate::cmp::gt(&dict_array, &array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(false), None, Some(false), Some(false)])
-        );
-
-        let result = crate::cmp::gt(&array, &dict_array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(false), None, Some(false), Some(true)])
-        );
-
-        let result = crate::cmp::gt_eq(&dict_array, &array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(true), None, Some(true), Some(false)])
-        );
-
-        let result = crate::cmp::gt_eq(&array, &dict_array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(true), None, Some(true), Some(true)])
-        );
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
-    fn test_eq_dyn_neq_dyn_dict_non_dict_float_nan() {
-        let array1 = Float16Array::from(vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(10.0)]);
-        let values = Float16Array::from(vec![f16::NAN, f16::from_f32(8.0), f16::from_f32(10.0)]);
-        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 1, 2]);
-        let array2 = DictionaryArray::new(keys, Arc::new(values));
-
-        let expected = BooleanArray::from(vec![true, false, true, true, true]);
-        assert_eq!(crate::cmp::eq(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![false, true, false, false, false]);
-        assert_eq!(crate::cmp::neq(&array1, &array2).unwrap(), expected);
-
-        let array1 = Float32Array::from(vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]);
-        let values = Float32Array::from(vec![f32::NAN, 8.0, 10.0]);
-        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 1, 2]);
-        let array2 = DictionaryArray::new(keys, Arc::new(values));
-
-        let expected = BooleanArray::from(vec![true, false, true, true, true]);
-        assert_eq!(crate::cmp::eq(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![false, true, false, false, false]);
-        assert_eq!(crate::cmp::neq(&array1, &array2).unwrap(), expected);
-
-        let array1 = Float64Array::from(vec![f64::NAN, 7.0, 8.0, 8.0, 10.0]);
-        let values = Float64Array::from(vec![f64::NAN, 8.0, 10.0]);
-        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 1, 2]);
-        let array2 = DictionaryArray::new(keys, Arc::new(values));
-
-        let expected = BooleanArray::from(vec![true, false, true, true, true]);
-        assert_eq!(crate::cmp::eq(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![false, true, false, false, false]);
-        assert_eq!(crate::cmp::neq(&array1, &array2).unwrap(), expected);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
-    fn test_lt_dyn_lt_eq_dyn_dict_non_dict_float_nan() {
-        let array1 = Float16Array::from(vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(11.0), f16::NAN]);
-        let values = Float16Array::from(vec![f16::NAN, f16::from_f32(8.0), f16::from_f32(9.0), f16::from_f32(10.0), f16::from_f32(1.0)]);
-        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
-        let array2 = DictionaryArray::new(keys, Arc::new(values));
-
-        let expected = BooleanArray::from(vec![false, true, false, true, false, false]);
-        assert_eq!(crate::cmp::lt(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![true, true, true, true, false, false]);
-        assert_eq!(crate::cmp::lt_eq(&array1, &array2).unwrap(), expected);
-
-        let array1 = Float32Array::from(vec![f32::NAN, 7.0, 8.0, 8.0, 11.0, f32::NAN]);
-        let values = Float32Array::from(vec![f32::NAN, 8.0, 9.0, 10.0, 1.0]);
-        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
-        let array2 = DictionaryArray::new(keys, Arc::new(values));
-
-        let expected = BooleanArray::from(vec![false, true, false, true, false, false]);
-        assert_eq!(crate::cmp::lt(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![true, true, true, true, false, false]);
-        assert_eq!(crate::cmp::lt_eq(&array1, &array2).unwrap(), expected);
-
-        let array1 = Float64Array::from(vec![f64::NAN, 7.0, 8.0, 8.0, 11.0, f64::NAN]);
-        let values = Float64Array::from(vec![f64::NAN, 8.0, 9.0, 10.0, 1.0]);
-        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
-        let array2 = DictionaryArray::new(keys, Arc::new(values));
-
-        let expected = BooleanArray::from(vec![false, true, false, true, false, false]);
-        assert_eq!(crate::cmp::lt(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![true, true, true, true, false, false]);
-        assert_eq!(crate::cmp::lt_eq(&array1, &array2).unwrap(), expected);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
-    fn test_gt_dyn_gt_eq_dyn_dict_non_dict_float_nan() {
-        let array1 = Float16Array::from(vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(11.0), f16::NAN]);
-        let values = Float16Array::from(vec![f16::NAN, f16::from_f32(8.0), f16::from_f32(9.0), f16::from_f32(10.0), f16::from_f32(1.0)]);
-        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
-        let array2 = DictionaryArray::new(keys, Arc::new(values));
-
-        let expected = BooleanArray::from(vec![false, false, false, false, true, true]);
-        assert_eq!(crate::cmp::gt(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![true, false, true, false, true, true]);
-        assert_eq!(crate::cmp::gt_eq(&array1, &array2).unwrap(), expected);
-
-        let array1 = Float32Array::from(vec![f32::NAN, 7.0, 8.0, 8.0, 11.0, f32::NAN]);
-        let values = Float32Array::from(vec![f32::NAN, 8.0, 9.0, 10.0, 1.0]);
-        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
-        let array2 = DictionaryArray::new(keys, Arc::new(values));
-
-        let expected = BooleanArray::from(vec![false, false, false, false, true, true]);
-        assert_eq!(crate::cmp::gt(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![true, false, true, false, true, true]);
-        assert_eq!(crate::cmp::gt_eq(&array1, &array2).unwrap(), expected);
-
-        let array1 = Float64Array::from(vec![f64::NAN, 7.0, 8.0, 8.0, 11.0, f64::NAN]);
-        let values = Float64Array::from(vec![f64::NAN, 8.0, 9.0, 10.0, 1.0]);
-        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
-        let array2 = DictionaryArray::new(keys, Arc::new(values));
-
-        let expected = BooleanArray::from(vec![false, false, false, false, true, true]);
-        assert_eq!(crate::cmp::gt(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![true, false, true, false, true, true]);
-        assert_eq!(crate::cmp::gt_eq(&array1, &array2).unwrap(), expected);
-    }
-
-    #[test]
-    fn test_eq_dyn_neq_dyn_dictionary_to_boolean_array() {
-        let test1 = vec![Some(true), None, Some(false)];
-        let test2 = vec![Some(true), None, None, Some(true)];
-
-        let values = BooleanArray::from(test1);
-        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2]);
-        let dict_array = DictionaryArray::new(keys, Arc::new(values));
-
-        let array = BooleanArray::from(test2);
-
-        let result = crate::cmp::eq(&dict_array, &array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(true), None, None, Some(false)])
-        );
-
-        let result = crate::cmp::eq(&array, &dict_array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(true), None, None, Some(false)])
-        );
-
-        let result = crate::cmp::neq(&dict_array, &array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(false), None, None, Some(true)])
-        );
-
-        let result = crate::cmp::neq(&array, &dict_array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(false), None, None, Some(true)])
-        );
-    }
-
-    #[test]
-    fn test_lt_dyn_lt_eq_dyn_gt_dyn_gt_eq_dyn_dictionary_to_boolean_array() {
-        let test1 = vec![Some(true), None, Some(false)];
-        let test2 = vec![Some(true), None, None, Some(true)];
-
-        let values = BooleanArray::from(test1);
-        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2]);
-        let dict_array = DictionaryArray::new(keys, Arc::new(values));
-
-        let array = BooleanArray::from(test2);
-
-        let result = crate::cmp::lt(&dict_array, &array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(false), None, None, Some(true)])
-        );
-
-        let result = crate::cmp::lt(&array, &dict_array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(false), None, None, Some(false)])
-        );
-
-        let result = crate::cmp::lt_eq(&dict_array, &array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(true), None, None, Some(true)])
-        );
-
-        let result = crate::cmp::lt_eq(&array, &dict_array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(true), None, None, Some(false)])
-        );
-
-        let result = crate::cmp::gt(&dict_array, &array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(false), None, None, Some(false)])
-        );
-
-        let result = crate::cmp::gt(&array, &dict_array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(false), None, None, Some(true)])
-        );
-
-        let result = crate::cmp::gt_eq(&dict_array, &array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(true), None, None, Some(false)])
-        );
-
-        let result = crate::cmp::gt_eq(&array, &dict_array);
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(true), None, None, Some(true)])
-        );
-    }
-
-    fn create_decimal_array<T: DecimalType>(data: Vec<Option<T::Native>>) -> PrimitiveArray<T> {
-        data.into_iter().collect::<PrimitiveArray<T>>()
-    }
-
-    fn test_cmp_dict_decimal<T: DecimalType>(
-        values1: Vec<Option<T::Native>>,
-        values2: Vec<Option<T::Native>>,
+    #[rstest]
+    #[case::eq(crate::cmp::eq, [1_u64, 1, 1], [0_u64, 1, 0], vec![false, true, false])]
+    #[case::neq(crate::cmp::neq, [1_u64, 1, 1], [0_u64, 1, 0], vec![true, false, true])]
+    #[case::lt(crate::cmp::lt, [1_u64, 1, 0], [0_u64, 1, 1], vec![true, false, false])]
+    #[case::lt_eq(crate::cmp::lt_eq, [1_u64, 1, 0], [0_u64, 1, 1], vec![true, true, false])]
+    #[case::gt(crate::cmp::gt, [1_u64, 1, 0], [0_u64, 1, 1], vec![false, false, true])]
+    #[case::gt_eq(crate::cmp::gt_eq, [1_u64, 1, 0], [0_u64, 1, 1], vec![false, true, true])]
+    fn test_dyn_dictionary_bool_array(
+        #[case] compare: fn(&dyn Datum, &dyn Datum) -> Result<BooleanArray, ArrowError>,
+        #[case] left_keys: [u64; 3],
+        #[case] right_keys: [u64; 3],
+        #[case] expected: Vec<bool>,
     ) {
-        let values = create_decimal_array::<T>(values1);
+        let values = BooleanArray::from(vec![true, false]);
+        let values = Arc::new(values) as ArrayRef;
+
+        let keys1 = UInt64Array::from_iter_values(left_keys);
+        let keys2 = UInt64Array::from_iter_values(right_keys);
+        let dict_array1 = DictionaryArray::new(keys1, values.clone());
+        let dict_array2 = DictionaryArray::new(keys2, values.clone());
+
+        assert_eq!(
+            compare(&dict_array1, &dict_array2).unwrap(),
+            BooleanArray::from(expected)
+        );
+    }
+
+    #[rstest]
+    #[case::eq(
+        crate::cmp::eq,
+        [Some(12_i8), None, Some(14)],
+        vec![Some(true), None, Some(true)],
+        vec![Some(true), None, Some(true)]
+    )]
+    #[case::neq(
+        crate::cmp::neq,
+        [Some(12_i8), None, Some(14)],
+        vec![Some(false), None, Some(false)],
+        vec![Some(false), None, Some(false)]
+    )]
+    #[case::lt(
+        crate::cmp::lt,
+        [Some(12_i8), None, Some(11)],
+        vec![Some(false), None, Some(false)],
+        vec![Some(false), None, Some(true)]
+    )]
+    #[case::lt_eq(
+        crate::cmp::lt_eq,
+        [Some(12_i8), None, Some(11)],
+        vec![Some(true), None, Some(false)],
+        vec![Some(true), None, Some(true)]
+    )]
+    #[case::gt(
+        crate::cmp::gt,
+        [Some(12_i8), None, Some(11)],
+        vec![Some(false), None, Some(true)],
+        vec![Some(false), None, Some(false)]
+    )]
+    #[case::gt_eq(
+        crate::cmp::gt_eq,
+        [Some(12_i8), None, Some(11)],
+        vec![Some(true), None, Some(true)],
+        vec![Some(true), None, Some(false)]
+    )]
+    fn test_dyn_dictionary_to_int8_array(
+        #[case] compare: fn(&dyn Datum, &dyn Datum) -> Result<BooleanArray, ArrowError>,
+        #[case] array_values: [Option<i8>; 3],
+        #[case] expected_dictionary_left: Vec<Option<bool>>,
+        #[case] expected_dictionary_right: Vec<Option<bool>>,
+    ) {
+        let values = Int8Array::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
+        let keys = Int8Array::from_iter_values([2_i8, 3, 4]);
+
+        let dict_array = DictionaryArray::new(keys, Arc::new(values));
+
+        let array = Int8Array::from_iter(array_values);
+
+        assert_eq!(
+            compare(&dict_array, &array).unwrap(),
+            BooleanArray::from(expected_dictionary_left)
+        );
+        assert_eq!(
+            compare(&array, &dict_array).unwrap(),
+            BooleanArray::from(expected_dictionary_right)
+        );
+    }
+
+    #[rstest]
+    #[case::eq(
+        crate::cmp::eq,
+        vec![f32::NAN, 7.0, 8.0, 8.0, 10.0],
+        vec![f32::NAN, f32::NAN, 8.0, 8.0, 10.0],
+        vec![true, false, true, true, true]
+    )]
+    #[case::neq(
+        crate::cmp::neq,
+        vec![f32::NAN, 7.0, 8.0, 8.0, 10.0],
+        vec![f32::NAN, f32::NAN, 8.0, 8.0, 10.0],
+        vec![false, true, false, false, false]
+    )]
+    #[case::lt(
+        crate::cmp::lt,
+        vec![f32::NAN, 7.0, 8.0, 8.0, 11.0, f32::NAN],
+        vec![f32::NAN, f32::NAN, 8.0, 9.0, 10.0, 1.0],
+        vec![false, true, false, true, false, false]
+    )]
+    #[case::lt_eq(
+        crate::cmp::lt_eq,
+        vec![f32::NAN, 7.0, 8.0, 8.0, 11.0, f32::NAN],
+        vec![f32::NAN, f32::NAN, 8.0, 9.0, 10.0, 1.0],
+        vec![true, true, true, true, false, false]
+    )]
+    #[case::gt(
+        crate::cmp::gt,
+        vec![f32::NAN, 7.0, 8.0, 8.0, 11.0, f32::NAN],
+        vec![f32::NAN, f32::NAN, 8.0, 9.0, 10.0, 1.0],
+        vec![false, false, false, false, true, true]
+    )]
+    #[case::gt_eq(
+        crate::cmp::gt_eq,
+        vec![f32::NAN, 7.0, 8.0, 8.0, 11.0, f32::NAN],
+        vec![f32::NAN, f32::NAN, 8.0, 9.0, 10.0, 1.0],
+        vec![true, false, true, false, true, true]
+    )]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
+    fn test_dyn_float_nan<A: Array>(
+        #[case] compare: fn(&dyn Datum, &dyn Datum) -> Result<BooleanArray, ArrowError>,
+        #[case] left: Vec<f32>,
+        #[case] right: Vec<f32>,
+        #[case] expected: Vec<bool>,
+        #[values(
+            |values: Vec<f32>| Float16Array::from_iter_values(values.into_iter().map(f16::from_f32)),
+            Float32Array::from,
+            |values: Vec<f32>| Float64Array::from_iter_values(values.into_iter().map(f64::from))
+        )]
+        make_array: fn(Vec<f32>) -> A,
+    ) {
+        let left = make_array(left);
+        let right = make_array(right);
+        assert_eq!(
+            compare(&left, &right).unwrap(),
+            BooleanArray::from(expected)
+        );
+    }
+
+    #[rstest]
+    #[case::eq(
+        crate::cmp::eq,
+        vec![true, false, false, false, false]
+    )]
+    #[case::neq(
+        crate::cmp::neq,
+        vec![false, true, true, true, true]
+    )]
+    #[case::lt(
+        crate::cmp::lt,
+        vec![false, true, true, true, true]
+    )]
+    #[case::lt_eq(
+        crate::cmp::lt_eq,
+        vec![true, true, true, true, true]
+    )]
+    #[case::gt(
+        crate::cmp::gt,
+        vec![false, false, false, false, false]
+    )]
+    #[case::gt_eq(
+        crate::cmp::gt_eq,
+        vec![true, false, false, false, false]
+    )]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
+    fn test_dyn_scalar_float_nan<A: Array>(
+        #[case] compare: fn(&dyn Datum, &dyn Datum) -> Result<BooleanArray, ArrowError>,
+        #[case] expected: Vec<bool>,
+        #[values(
+            |values: Vec<f32>| Float16Array::from_iter_values(values.into_iter().map(f16::from_f32)),
+            Float32Array::from,
+            |values: Vec<f32>| Float64Array::from_iter_values(values.into_iter().map(f64::from))
+        )]
+        make_array: fn(Vec<f32>) -> A,
+    ) {
+        let array = make_array(vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]);
+        let scalar = Scalar::new(make_array(vec![f32::NAN]));
+        assert_eq!(
+            compare(&array, &scalar).unwrap(),
+            BooleanArray::from(expected)
+        );
+    }
+
+    #[rstest]
+    #[case::eq(
+        crate::cmp::eq,
+        ["a", "a", "b", "c"],
+        ["a", "b", "b", "d"],
+        vec![Some(true), None, None, Some(false)],
+        vec![Some(true), None, None, Some(false)]
+    )]
+    #[case::neq(
+        crate::cmp::neq,
+        ["a", "a", "b", "c"],
+        ["a", "b", "b", "d"],
+        vec![Some(false), None, None, Some(true)],
+        vec![Some(false), None, None, Some(true)]
+    )]
+    #[case::lt(
+        crate::cmp::lt,
+        ["abc", "abc", "b", "cde"],
+        ["abc", "b", "b", "def"],
+        vec![Some(false), None, None, Some(true)],
+        vec![Some(false), None, None, Some(false)]
+    )]
+    #[case::lt_eq(
+        crate::cmp::lt_eq,
+        ["abc", "abc", "b", "cde"],
+        ["abc", "b", "b", "def"],
+        vec![Some(true), None, None, Some(true)],
+        vec![Some(true), None, None, Some(false)]
+    )]
+    #[case::gt(
+        crate::cmp::gt,
+        ["abc", "abc", "b", "cde"],
+        ["abc", "b", "b", "def"],
+        vec![Some(false), None, None, Some(false)],
+        vec![Some(false), None, None, Some(true)]
+    )]
+    #[case::gt_eq(
+        crate::cmp::gt_eq,
+        ["abc", "abc", "b", "cde"],
+        ["abc", "b", "b", "def"],
+        vec![Some(true), None, None, Some(false)],
+        vec![Some(true), None, None, Some(true)]
+    )]
+    fn test_dyn_dictionary_to_utf8_array(
+        #[case] compare: fn(&dyn Datum, &dyn Datum) -> Result<BooleanArray, ArrowError>,
+        #[case] dictionary_values: [&str; 4],
+        #[case] array_values: [&str; 4],
+        #[case] expected_dictionary_left: Vec<Option<bool>>,
+        #[case] expected_dictionary_right: Vec<Option<bool>>,
+    ) {
+        let dict_array: DictionaryArray<Int8Type> = dictionary_values
+            .iter()
+            .map(|&x| if x == "b" { None } else { Some(x) })
+            .collect();
+
+        let array: StringArray = array_values
+            .iter()
+            .map(|&x| if x == "b" { None } else { Some(x) })
+            .collect();
+
+        assert_eq!(
+            compare(&dict_array, &array).unwrap(),
+            BooleanArray::from(expected_dictionary_left)
+        );
+        assert_eq!(
+            compare(&array, &dict_array).unwrap(),
+            BooleanArray::from(expected_dictionary_right)
+        );
+    }
+
+    #[rstest]
+    #[case::eq(
+        crate::cmp::eq,
+        vec![Some(true), None, Some(true), Some(false)],
+        vec![Some(true), None, Some(true), Some(false)]
+    )]
+    #[case::neq(
+        crate::cmp::neq,
+        vec![Some(false), None, Some(false), Some(true)],
+        vec![Some(false), None, Some(false), Some(true)]
+    )]
+    #[case::lt(
+        crate::cmp::lt,
+        vec![Some(false), None, Some(false), Some(true)],
+        vec![Some(false), None, Some(false), Some(false)]
+    )]
+    #[case::lt_eq(
+        crate::cmp::lt_eq,
+        vec![Some(true), None, Some(true), Some(true)],
+        vec![Some(true), None, Some(true), Some(false)]
+    )]
+    #[case::gt(
+        crate::cmp::gt,
+        vec![Some(false), None, Some(false), Some(false)],
+        vec![Some(false), None, Some(false), Some(true)]
+    )]
+    #[case::gt_eq(
+        crate::cmp::gt_eq,
+        vec![Some(true), None, Some(true), Some(false)],
+        vec![Some(true), None, Some(true), Some(true)]
+    )]
+    fn test_dyn_dictionary_to_binary_array(
+        #[case] compare: fn(&dyn Datum, &dyn Datum) -> Result<BooleanArray, ArrowError>,
+        #[case] expected_dictionary_left: Vec<Option<bool>>,
+        #[case] expected_dictionary_right: Vec<Option<bool>>,
+    ) {
+        let values: BinaryArray = ["hello", "", "parquet"]
+            .into_iter()
+            .map(|b| Some(b.as_bytes()))
+            .collect();
+
+        let keys = UInt64Array::from(vec![Some(0_u64), None, Some(2), Some(2)]);
+        let dict_array = DictionaryArray::new(keys, Arc::new(values));
+
+        let array: BinaryArray = ["hello", "", "parquet", "test"]
+            .into_iter()
+            .map(|b| Some(b.as_bytes()))
+            .collect();
+
+        assert_eq!(
+            compare(&dict_array, &array).unwrap(),
+            BooleanArray::from(expected_dictionary_left)
+        );
+        assert_eq!(
+            compare(&array, &dict_array).unwrap(),
+            BooleanArray::from(expected_dictionary_right)
+        );
+    }
+
+    #[rstest]
+    #[case::eq(
+        crate::cmp::eq,
+        vec![f32::NAN, 7.0, 8.0, 8.0, 10.0],
+        vec![f32::NAN, 8.0, 10.0],
+        [0_i8, 0, 1, 1, 2].to_vec(),
+        vec![true, false, true, true, true]
+    )]
+    #[case::neq(
+        crate::cmp::neq,
+        vec![f32::NAN, 7.0, 8.0, 8.0, 10.0],
+        vec![f32::NAN, 8.0, 10.0],
+        [0_i8, 0, 1, 1, 2].to_vec(),
+        vec![false, true, false, false, false]
+    )]
+    #[case::lt(
+        crate::cmp::lt,
+        vec![f32::NAN, 7.0, 8.0, 8.0, 11.0, f32::NAN],
+        vec![f32::NAN, 8.0, 9.0, 10.0, 1.0],
+        [0_i8, 0, 1, 2, 3, 4].to_vec(),
+        vec![false, true, false, true, false, false]
+    )]
+    #[case::lt_eq(
+        crate::cmp::lt_eq,
+        vec![f32::NAN, 7.0, 8.0, 8.0, 11.0, f32::NAN],
+        vec![f32::NAN, 8.0, 9.0, 10.0, 1.0],
+        [0_i8, 0, 1, 2, 3, 4].to_vec(),
+        vec![true, true, true, true, false, false]
+    )]
+    #[case::gt(
+        crate::cmp::gt,
+        vec![f32::NAN, 7.0, 8.0, 8.0, 11.0, f32::NAN],
+        vec![f32::NAN, 8.0, 9.0, 10.0, 1.0],
+        [0_i8, 0, 1, 2, 3, 4].to_vec(),
+        vec![false, false, false, false, true, true]
+    )]
+    #[case::gt_eq(
+        crate::cmp::gt_eq,
+        vec![f32::NAN, 7.0, 8.0, 8.0, 11.0, f32::NAN],
+        vec![f32::NAN, 8.0, 9.0, 10.0, 1.0],
+        [0_i8, 0, 1, 2, 3, 4].to_vec(),
+        vec![true, false, true, false, true, true]
+    )]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
+    fn test_dyn_dict_non_dict_float_nan<A: Array + 'static>(
+        #[case] compare: fn(&dyn Datum, &dyn Datum) -> Result<BooleanArray, ArrowError>,
+        #[case] left: Vec<f32>,
+        #[case] values: Vec<f32>,
+        #[case] keys: Vec<i8>,
+        #[case] expected: Vec<bool>,
+        #[values(
+            |values: Vec<f32>| Float16Array::from_iter_values(values.into_iter().map(f16::from_f32)),
+            Float32Array::from,
+            |values: Vec<f32>| Float64Array::from_iter_values(values.into_iter().map(f64::from))
+        )]
+        make_array: fn(Vec<f32>) -> A,
+    ) {
+        let array = make_array(left);
+        let dictionary = DictionaryArray::new(
+            Int8Array::from_iter_values(keys),
+            Arc::new(make_array(values)),
+        );
+        assert_eq!(
+            compare(&array, &dictionary).unwrap(),
+            BooleanArray::from(expected)
+        );
+    }
+
+    #[rstest]
+    #[case::eq(
+        crate::cmp::eq,
+        vec![Some(true), None, None, Some(false)],
+        vec![Some(true), None, None, Some(false)]
+    )]
+    #[case::neq(
+        crate::cmp::neq,
+        vec![Some(false), None, None, Some(true)],
+        vec![Some(false), None, None, Some(true)]
+    )]
+    #[case::lt(
+        crate::cmp::lt,
+        vec![Some(false), None, None, Some(true)],
+        vec![Some(false), None, None, Some(false)]
+    )]
+    #[case::lt_eq(
+        crate::cmp::lt_eq,
+        vec![Some(true), None, None, Some(true)],
+        vec![Some(true), None, None, Some(false)]
+    )]
+    #[case::gt(
+        crate::cmp::gt,
+        vec![Some(false), None, None, Some(false)],
+        vec![Some(false), None, None, Some(true)]
+    )]
+    #[case::gt_eq(
+        crate::cmp::gt_eq,
+        vec![Some(true), None, None, Some(false)],
+        vec![Some(true), None, None, Some(true)]
+    )]
+    fn test_dyn_dictionary_to_boolean_array(
+        #[case] compare: fn(&dyn Datum, &dyn Datum) -> Result<BooleanArray, ArrowError>,
+        #[case] expected_dictionary_left: Vec<Option<bool>>,
+        #[case] expected_dictionary_right: Vec<Option<bool>>,
+    ) {
+        let test1 = vec![Some(true), None, Some(false)];
+        let test2 = vec![Some(true), None, None, Some(true)];
+
+        let values = BooleanArray::from(test1);
+        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2]);
+        let dict_array = DictionaryArray::new(keys, Arc::new(values));
+
+        let array = BooleanArray::from(test2);
+
+        assert_eq!(
+            compare(&dict_array, &array).unwrap(),
+            BooleanArray::from(expected_dictionary_left)
+        );
+        assert_eq!(
+            compare(&array, &dict_array).unwrap(),
+            BooleanArray::from(expected_dictionary_right)
+        );
+    }
+
+    #[rstest]
+    #[case::eq(crate::cmp::eq, vec![false, false, false, true, true, false])]
+    #[case::lt(crate::cmp::lt, vec![true, true, false, false, false, true])]
+    #[case::lt_eq(crate::cmp::lt_eq, vec![true, true, false, true, true, true])]
+    #[case::gt(crate::cmp::gt, vec![false, false, true, false, false, false])]
+    #[case::gt_eq(crate::cmp::gt_eq, vec![false, false, true, true, true, false])]
+    fn test_cmp_dict_decimal<T: DecimalType>(
+        #[case] compare: fn(&dyn Datum, &dyn Datum) -> Result<BooleanArray, ArrowError>,
+        #[case] expected: Vec<bool>,
+        #[values(
+            (
+                vec![Some(0), Some(1), Some(2), Some(3), Some(4), Some(5)]
+                    .into_iter().collect::<Decimal32Array>(),
+                vec![Some(7), Some(-3), Some(4), Some(3), Some(5)]
+                    .into_iter().collect::<Decimal32Array>()
+            ),
+            (
+                Decimal64Array::from_iter_values([0, 1, 2, 3, 4, 5]),
+                Decimal64Array::from_iter_values([7, -3, 4, 3, 5])
+            ),
+            (
+                Decimal128Array::from_iter_values([0, 1, 2, 3, 4, 5]),
+                Decimal128Array::from_iter_values([7, -3, 4, 3, 5])
+            ),
+            (
+                Decimal256Array::from_iter_values([0, 1, 2, 3, 4, 5].map(i256::from_i128)),
+                Decimal256Array::from_iter_values([7, -3, 4, 3, 5].map(i256::from_i128))
+            )
+        )]
+        values: (PrimitiveArray<T>, PrimitiveArray<T>),
+    ) {
+        let (values1, values2) = values;
         let keys = Int8Array::from_iter_values([1_i8, 2, 5, 4, 3, 0]);
-        let array1 = DictionaryArray::new(keys, Arc::new(values));
+        let array1 = DictionaryArray::new(keys, Arc::new(values1));
+        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
+        let array2 = DictionaryArray::new(keys, Arc::new(values2));
+        let expected = BooleanArray::from(expected);
+        assert_eq!(compare(&array1, &array2).unwrap(), expected);
+    }
 
-        let values = create_decimal_array::<T>(values2);
+    #[rstest]
+    #[case::eq(crate::cmp::eq, vec![false, false, false, true, true, false])]
+    #[case::lt(crate::cmp::lt, vec![true, true, false, false, false, true])]
+    #[case::lt_eq(crate::cmp::lt_eq, vec![true, true, false, true, true, true])]
+    #[case::gt(crate::cmp::gt, vec![false, false, true, false, false, false])]
+    #[case::gt_eq(crate::cmp::gt_eq, vec![false, false, true, true, true, false])]
+    fn test_cmp_dict_non_dict_decimal<T: DecimalType>(
+        #[case] compare: fn(&dyn Datum, &dyn Datum) -> Result<BooleanArray, ArrowError>,
+        #[case] expected: Vec<bool>,
+        #[values(Decimal32Type {}, Decimal64Type {}, Decimal128Type {}, Decimal256Type {})]
+        decimal_type: T,
+    ) where
+        T::Native: From<i32>,
+    {
+        let _ = decimal_type;
+        let array1 = PrimitiveArray::<T>::from_iter_values([1, 2, 5, 4, 3, 0].map(T::Native::from));
+        let values = PrimitiveArray::<T>::from_iter_values([7, -3, 4, 3, 5].map(T::Native::from));
         let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
         let array2 = DictionaryArray::new(keys, Arc::new(values));
-
-        let expected = BooleanArray::from(vec![false, false, false, true, true, false]);
-        assert_eq!(crate::cmp::eq(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![true, true, false, false, false, true]);
-        assert_eq!(crate::cmp::lt(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![true, true, false, true, true, true]);
-        assert_eq!(crate::cmp::lt_eq(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![false, false, true, false, false, false]);
-        assert_eq!(crate::cmp::gt(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![false, false, true, true, true, false]);
-        assert_eq!(crate::cmp::gt_eq(&array1, &array2).unwrap(), expected);
+        let expected = BooleanArray::from(expected);
+        assert_eq!(compare(&array1, &array2).unwrap(), expected);
     }
 
-    #[test]
-    fn test_cmp_dict_decimal32() {
-        test_cmp_dict_decimal::<Decimal32Type>(
-            vec![Some(0), Some(1), Some(2), Some(3), Some(4), Some(5)],
-            vec![Some(7), Some(-3), Some(4), Some(3), Some(5)],
+    #[rstest]
+    #[case::eq(crate::cmp::eq, vec![false, false, true, false])]
+    #[case::lt(crate::cmp::lt, vec![true, false, false, false])]
+    #[case::lt_eq(crate::cmp::lt_eq, vec![true, false, true, false])]
+    #[case::gt(crate::cmp::gt, vec![false, true, false, true])]
+    #[case::gt_eq(crate::cmp::gt_eq, vec![false, true, true, true])]
+    fn test_decimal<T: DecimalType>(
+        #[case] compare: fn(&dyn Datum, &dyn Datum) -> Result<BooleanArray, ArrowError>,
+        #[case] expected: Vec<bool>,
+        #[values(Decimal32Type {}, Decimal64Type {}, Decimal128Type {}, Decimal256Type {})]
+        decimal_type: T,
+    ) where
+        T::Native: From<i32>,
+    {
+        let _ = decimal_type;
+        let a = PrimitiveArray::<T>::from_iter_values([1, 2, 4, 5].map(T::Native::from));
+        let b = PrimitiveArray::<T>::from_iter_values([7, -3, 4, 3].map(T::Native::from));
+        let expected = BooleanArray::from(expected);
+        assert_eq!(expected, compare(&a, &b).unwrap());
+    }
+
+    #[rstest]
+    #[case::eq(crate::cmp::eq, vec![Some(false), Some(false), Some(true), None, Some(false), Some(false)])]
+    #[case::neq(crate::cmp::neq, vec![Some(true), Some(true), Some(false), None, Some(true), Some(true)])]
+    #[case::lt(crate::cmp::lt, vec![Some(true), Some(true), Some(false), None, Some(false), Some(false)])]
+    #[case::lt_eq(crate::cmp::lt_eq, vec![Some(true), Some(true), Some(true), None, Some(false), Some(false)])]
+    #[case::gt(crate::cmp::gt, vec![Some(false), Some(false), Some(false), None, Some(true), Some(true)])]
+    #[case::gt_eq(crate::cmp::gt_eq, vec![Some(false), Some(false), Some(true), None, Some(true), Some(true)])]
+    fn test_decimal_scalar<T: DecimalType>(
+        #[case] compare: fn(&dyn Datum, &dyn Datum) -> Result<BooleanArray, ArrowError>,
+        #[case] expected: Vec<Option<bool>>,
+        #[values(Decimal32Type {}, Decimal128Type {})] decimal_type: T,
+    ) where
+        T::Native: From<i32>,
+    {
+        let _ = decimal_type;
+        let a = PrimitiveArray::<T>::from_iter(
+            [Some(1), Some(2), Some(3), None, Some(4), Some(5)]
+                .into_iter()
+                .map(|value| value.map(T::Native::from)),
         );
+        let b = PrimitiveArray::<T>::new_scalar(T::Native::from(3));
+        let expected = BooleanArray::from(expected);
+        assert_eq!(expected, compare(&a, &b).unwrap());
     }
 
-    #[test]
-    fn test_cmp_dict_non_dict_decimal32() {
-        let array1: Decimal32Array = Decimal32Array::from_iter_values([1, 2, 5, 4, 3, 0]);
-
-        let values = Decimal32Array::from_iter_values([7, -3, 4, 3, 5]);
-        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
-        let array2 = DictionaryArray::new(keys, Arc::new(values));
-
-        let expected = BooleanArray::from(vec![false, false, false, true, true, false]);
-        assert_eq!(crate::cmp::eq(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![true, true, false, false, false, true]);
-        assert_eq!(crate::cmp::lt(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![true, true, false, true, true, true]);
-        assert_eq!(crate::cmp::lt_eq(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![false, false, true, false, false, false]);
-        assert_eq!(crate::cmp::gt(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![false, false, true, true, true, false]);
-        assert_eq!(crate::cmp::gt_eq(&array1, &array2).unwrap(), expected);
-    }
-
-    #[test]
-    fn test_cmp_dict_decimal64() {
-        let values = Decimal64Array::from_iter_values([0, 1, 2, 3, 4, 5]);
-        let keys = Int8Array::from_iter_values([1_i8, 2, 5, 4, 3, 0]);
-        let array1 = DictionaryArray::new(keys, Arc::new(values));
-
-        let values = Decimal64Array::from_iter_values([7, -3, 4, 3, 5]);
-        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
-        let array2 = DictionaryArray::new(keys, Arc::new(values));
-
-        let expected = BooleanArray::from(vec![false, false, false, true, true, false]);
-        assert_eq!(crate::cmp::eq(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![true, true, false, false, false, true]);
-        assert_eq!(crate::cmp::lt(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![true, true, false, true, true, true]);
-        assert_eq!(crate::cmp::lt_eq(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![false, false, true, false, false, false]);
-        assert_eq!(crate::cmp::gt(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![false, false, true, true, true, false]);
-        assert_eq!(crate::cmp::gt_eq(&array1, &array2).unwrap(), expected);
-    }
-
-    #[test]
-    fn test_cmp_dict_non_dict_decimal64() {
-        let array1: Decimal64Array = Decimal64Array::from_iter_values([1, 2, 5, 4, 3, 0]);
-
-        let values = Decimal64Array::from_iter_values([7, -3, 4, 3, 5]);
-        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
-        let array2 = DictionaryArray::new(keys, Arc::new(values));
-
-        let expected = BooleanArray::from(vec![false, false, false, true, true, false]);
-        assert_eq!(crate::cmp::eq(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![true, true, false, false, false, true]);
-        assert_eq!(crate::cmp::lt(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![true, true, false, true, true, true]);
-        assert_eq!(crate::cmp::lt_eq(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![false, false, true, false, false, false]);
-        assert_eq!(crate::cmp::gt(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![false, false, true, true, true, false]);
-        assert_eq!(crate::cmp::gt_eq(&array1, &array2).unwrap(), expected);
-    }
-
-    #[test]
-    fn test_cmp_dict_decimal128() {
-        let values = Decimal128Array::from_iter_values([0, 1, 2, 3, 4, 5]);
-        let keys = Int8Array::from_iter_values([1_i8, 2, 5, 4, 3, 0]);
-        let array1 = DictionaryArray::new(keys, Arc::new(values));
-
-        let values = Decimal128Array::from_iter_values([7, -3, 4, 3, 5]);
-        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
-        let array2 = DictionaryArray::new(keys, Arc::new(values));
-
-        let expected = BooleanArray::from(vec![false, false, false, true, true, false]);
-        assert_eq!(crate::cmp::eq(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![true, true, false, false, false, true]);
-        assert_eq!(crate::cmp::lt(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![true, true, false, true, true, true]);
-        assert_eq!(crate::cmp::lt_eq(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![false, false, true, false, false, false]);
-        assert_eq!(crate::cmp::gt(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![false, false, true, true, true, false]);
-        assert_eq!(crate::cmp::gt_eq(&array1, &array2).unwrap(), expected);
-    }
-
-    #[test]
-    fn test_cmp_dict_non_dict_decimal128() {
-        let array1: Decimal128Array = Decimal128Array::from_iter_values([1, 2, 5, 4, 3, 0]);
-
-        let values = Decimal128Array::from_iter_values([7, -3, 4, 3, 5]);
-        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
-        let array2 = DictionaryArray::new(keys, Arc::new(values));
-
-        let expected = BooleanArray::from(vec![false, false, false, true, true, false]);
-        assert_eq!(crate::cmp::eq(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![true, true, false, false, false, true]);
-        assert_eq!(crate::cmp::lt(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![true, true, false, true, true, true]);
-        assert_eq!(crate::cmp::lt_eq(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![false, false, true, false, false, false]);
-        assert_eq!(crate::cmp::gt(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![false, false, true, true, true, false]);
-        assert_eq!(crate::cmp::gt_eq(&array1, &array2).unwrap(), expected);
-    }
-
-    #[test]
-    fn test_cmp_dict_decimal256() {
-        let values =
-            Decimal256Array::from_iter_values([0, 1, 2, 3, 4, 5].into_iter().map(i256::from_i128));
-        let keys = Int8Array::from_iter_values([1_i8, 2, 5, 4, 3, 0]);
-        let array1 = DictionaryArray::new(keys, Arc::new(values));
-
-        let values =
-            Decimal256Array::from_iter_values([7, -3, 4, 3, 5].into_iter().map(i256::from_i128));
-        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
-        let array2 = DictionaryArray::new(keys, Arc::new(values));
-
-        let expected = BooleanArray::from(vec![false, false, false, true, true, false]);
-        assert_eq!(crate::cmp::eq(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![true, true, false, false, false, true]);
-        assert_eq!(crate::cmp::lt(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![true, true, false, true, true, true]);
-        assert_eq!(crate::cmp::lt_eq(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![false, false, true, false, false, false]);
-        assert_eq!(crate::cmp::gt(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![false, false, true, true, true, false]);
-        assert_eq!(crate::cmp::gt_eq(&array1, &array2).unwrap(), expected);
-    }
-
-    #[test]
-    fn test_cmp_dict_non_dict_decimal256() {
-        let array1: Decimal256Array =
-            Decimal256Array::from_iter_values([1, 2, 5, 4, 3, 0].into_iter().map(i256::from_i128));
-
-        let values =
-            Decimal256Array::from_iter_values([7, -3, 4, 3, 5].into_iter().map(i256::from_i128));
-        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
-        let array2 = DictionaryArray::new(keys, Arc::new(values));
-
-        let expected = BooleanArray::from(vec![false, false, false, true, true, false]);
-        assert_eq!(crate::cmp::eq(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![true, true, false, false, false, true]);
-        assert_eq!(crate::cmp::lt(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![true, true, false, true, true, true]);
-        assert_eq!(crate::cmp::lt_eq(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![false, false, true, false, false, false]);
-        assert_eq!(crate::cmp::gt(&array1, &array2).unwrap(), expected);
-
-        let expected = BooleanArray::from(vec![false, false, true, true, true, false]);
-        assert_eq!(crate::cmp::gt_eq(&array1, &array2).unwrap(), expected);
-    }
-
-    #[test]
-    fn test_decimal32() {
-        let a = Decimal32Array::from_iter_values([1, 2, 4, 5]);
-        let b = Decimal32Array::from_iter_values([7, -3, 4, 3]);
-        let e = BooleanArray::from(vec![false, false, true, false]);
-        let r = crate::cmp::eq(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        let e = BooleanArray::from(vec![true, false, false, false]);
-        let r = crate::cmp::lt(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        let e = BooleanArray::from(vec![true, false, true, false]);
-        let r = crate::cmp::lt_eq(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        let e = BooleanArray::from(vec![false, true, false, true]);
-        let r = crate::cmp::gt(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        let e = BooleanArray::from(vec![false, true, true, true]);
-        let r = crate::cmp::gt_eq(&a, &b).unwrap();
-        assert_eq!(e, r);
-    }
-
-    #[test]
-    fn test_decimal32_scalar() {
-        let a = Decimal32Array::from(vec![Some(1), Some(2), Some(3), None, Some(4), Some(5)]);
-        let b = Decimal32Array::new_scalar(3_i32);
-        // array eq scalar
-        let e = BooleanArray::from(
-            vec![Some(false), Some(false), Some(true), None, Some(false), Some(false)],
+    #[rstest]
+    #[case::three_eq(crate::cmp::eq, i256::from_i128(3), vec![false, false, true, false, false])]
+    #[case::three_neq(crate::cmp::neq, i256::from_i128(3), vec![true, true, false, true, true])]
+    #[case::three_lt(crate::cmp::lt, i256::from_i128(3), vec![true, true, false, false, false])]
+    #[case::three_lt_eq(crate::cmp::lt_eq, i256::from_i128(3), vec![true, true, true, false, false])]
+    #[case::three_gt(crate::cmp::gt, i256::from_i128(3), vec![false, false, false, true, true])]
+    #[case::three_gt_eq(crate::cmp::gt_eq, i256::from_i128(3), vec![false, false, true, true, true])]
+    #[case::max_eq(crate::cmp::eq, i256::MAX, vec![false, false, false, false, false])]
+    #[case::max_neq(crate::cmp::neq, i256::MAX, vec![true, true, true, true, true])]
+    #[case::max_lt(crate::cmp::lt, i256::MAX, vec![true, true, true, true, true])]
+    #[case::max_lt_eq(crate::cmp::lt_eq, i256::MAX, vec![true, true, true, true, true])]
+    #[case::max_gt(crate::cmp::gt, i256::MAX, vec![false, false, false, false, false])]
+    #[case::max_gt_eq(crate::cmp::gt_eq, i256::MAX, vec![false, false, false, false, false])]
+    fn test_decimal256_scalar(
+        #[case] compare: fn(&dyn Datum, &dyn Datum) -> Result<BooleanArray, ArrowError>,
+        #[case] scalar: i256,
+        #[case] expected: Vec<bool>,
+    ) {
+        let array =
+            Decimal256Array::from_iter_values([1, 2, 3, 4, 5].into_iter().map(i256::from_i128));
+        let scalar = Decimal256Array::new_scalar(scalar);
+        assert_eq!(
+            compare(&array, &scalar).unwrap(),
+            BooleanArray::from(expected)
         );
-        let r = crate::cmp::eq(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        // array neq scalar
-        let e = BooleanArray::from(
-            vec![Some(true), Some(true), Some(false), None, Some(true), Some(true)],
-        );
-        let r = crate::cmp::neq(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        // array lt scalar
-        let e = BooleanArray::from(
-            vec![Some(true), Some(true), Some(false), None, Some(false), Some(false)],
-        );
-        let r = crate::cmp::lt(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        // array lt_eq scalar
-        let e = BooleanArray::from(
-            vec![Some(true), Some(true), Some(true), None, Some(false), Some(false)],
-        );
-        let r = crate::cmp::lt_eq(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        // array gt scalar
-        let e = BooleanArray::from(
-            vec![Some(false), Some(false), Some(false), None, Some(true), Some(true)],
-        );
-        let r = crate::cmp::gt(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        // array gt_eq scalar
-        let e = BooleanArray::from(
-            vec![Some(false), Some(false), Some(true), None, Some(true), Some(true)],
-        );
-        let r = crate::cmp::gt_eq(&a, &b).unwrap();
-        assert_eq!(e, r);
-    }
-
-    #[test]
-    fn test_decimal64() {
-        let a = Decimal64Array::from_iter_values([1, 2, 4, 5]);
-        let b = Decimal64Array::from_iter_values([7, -3, 4, 3]);
-        let e = BooleanArray::from(vec![false, false, true, false]);
-        let r = crate::cmp::eq(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        let e = BooleanArray::from(vec![true, false, false, false]);
-        let r = crate::cmp::lt(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        let e = BooleanArray::from(vec![true, false, true, false]);
-        let r = crate::cmp::lt_eq(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        let e = BooleanArray::from(vec![false, true, false, true]);
-        let r = crate::cmp::gt(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        let e = BooleanArray::from(vec![false, true, true, true]);
-        let r = crate::cmp::gt_eq(&a, &b).unwrap();
-        assert_eq!(e, r);
-    }
-
-    #[test]
-    fn test_decimal128() {
-        let a = Decimal128Array::from_iter_values([1, 2, 4, 5]);
-        let b = Decimal128Array::from_iter_values([7, -3, 4, 3]);
-        let e = BooleanArray::from(vec![false, false, true, false]);
-        let r = crate::cmp::eq(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        let e = BooleanArray::from(vec![true, false, false, false]);
-        let r = crate::cmp::lt(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        let e = BooleanArray::from(vec![true, false, true, false]);
-        let r = crate::cmp::lt_eq(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        let e = BooleanArray::from(vec![false, true, false, true]);
-        let r = crate::cmp::gt(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        let e = BooleanArray::from(vec![false, true, true, true]);
-        let r = crate::cmp::gt_eq(&a, &b).unwrap();
-        assert_eq!(e, r);
-    }
-
-    #[test]
-    fn test_decimal128_scalar() {
-        let a = Decimal128Array::from(vec![Some(1), Some(2), Some(3), None, Some(4), Some(5)]);
-        let b = Decimal128Array::new_scalar(3_i128);
-        // array eq scalar
-        let e = BooleanArray::from(
-            vec![Some(false), Some(false), Some(true), None, Some(false), Some(false)],
-        );
-        let r = crate::cmp::eq(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        // array neq scalar
-        let e = BooleanArray::from(
-            vec![Some(true), Some(true), Some(false), None, Some(true), Some(true)],
-        );
-        let r = crate::cmp::neq(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        // array lt scalar
-        let e = BooleanArray::from(
-            vec![Some(true), Some(true), Some(false), None, Some(false), Some(false)],
-        );
-        let r = crate::cmp::lt(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        // array lt_eq scalar
-        let e = BooleanArray::from(
-            vec![Some(true), Some(true), Some(true), None, Some(false), Some(false)],
-        );
-        let r = crate::cmp::lt_eq(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        // array gt scalar
-        let e = BooleanArray::from(
-            vec![Some(false), Some(false), Some(false), None, Some(true), Some(true)],
-        );
-        let r = crate::cmp::gt(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        // array gt_eq scalar
-        let e = BooleanArray::from(
-            vec![Some(false), Some(false), Some(true), None, Some(true), Some(true)],
-        );
-        let r = crate::cmp::gt_eq(&a, &b).unwrap();
-        assert_eq!(e, r);
-    }
-
-    #[test]
-    fn test_decimal256() {
-        let a = Decimal256Array::from_iter_values([1, 2, 4, 5].into_iter().map(i256::from_i128));
-        let b = Decimal256Array::from_iter_values([7, -3, 4, 3].into_iter().map(i256::from_i128));
-        let e = BooleanArray::from(vec![false, false, true, false]);
-        let r = crate::cmp::eq(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        let e = BooleanArray::from(vec![true, false, false, false]);
-        let r = crate::cmp::lt(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        let e = BooleanArray::from(vec![true, false, true, false]);
-        let r = crate::cmp::lt_eq(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        let e = BooleanArray::from(vec![false, true, false, true]);
-        let r = crate::cmp::gt(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        let e = BooleanArray::from(vec![false, true, true, true]);
-        let r = crate::cmp::gt_eq(&a, &b).unwrap();
-        assert_eq!(e, r);
-    }
-
-    #[test]
-    fn test_decimal256_scalar_i128() {
-        let a = Decimal256Array::from_iter_values([1, 2, 3, 4, 5].into_iter().map(i256::from_i128));
-        let b = Decimal256Array::new_scalar(i256::from_i128(3));
-        // array eq scalar
-        let e = BooleanArray::from(vec![false, false, true, false, false]);
-        let r = crate::cmp::eq(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        // array neq scalar
-        let e = BooleanArray::from(vec![true, true, false, true, true]);
-        let r = crate::cmp::neq(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        // array lt scalar
-        let e = BooleanArray::from(vec![true, true, false, false, false]);
-        let r = crate::cmp::lt(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        // array lt_eq scalar
-        let e = BooleanArray::from(vec![true, true, true, false, false]);
-        let r = crate::cmp::lt_eq(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        // array gt scalar
-        let e = BooleanArray::from(vec![false, false, false, true, true]);
-        let r = crate::cmp::gt(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        // array gt_eq scalar
-        let e = BooleanArray::from(vec![false, false, true, true, true]);
-        let r = crate::cmp::gt_eq(&a, &b).unwrap();
-        assert_eq!(e, r);
-    }
-
-    #[test]
-    fn test_decimal256_scalar_i256() {
-        let a = Decimal256Array::from_iter_values([1, 2, 3, 4, 5].into_iter().map(i256::from_i128));
-        let b = Decimal256Array::new_scalar(i256::MAX);
-        // array eq scalar
-        let e = BooleanArray::from(vec![false, false, false, false, false]);
-        let r = crate::cmp::eq(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        // array neq scalar
-        let e = BooleanArray::from(vec![true, true, true, true, true]);
-        let r = crate::cmp::neq(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        // array lt scalar
-        let e = BooleanArray::from(vec![true, true, true, true, true]);
-        let r = crate::cmp::lt(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        // array lt_eq scalar
-        let e = BooleanArray::from(vec![true, true, true, true, true]);
-        let r = crate::cmp::lt_eq(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        // array gt scalar
-        let e = BooleanArray::from(vec![false, false, false, false, false]);
-        let r = crate::cmp::gt(&a, &b).unwrap();
-        assert_eq!(e, r);
-
-        // array gt_eq scalar
-        let e = BooleanArray::from(vec![false, false, false, false, false]);
-        let r = crate::cmp::gt_eq(&a, &b).unwrap();
-        assert_eq!(e, r);
     }
 
     #[test]
