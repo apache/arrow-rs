@@ -15,9 +15,9 @@ const NUM_HEADER_BYTES: u32 = 1;
 /// Header structure for [`VariantObject`]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct VariantObjectHeader {
-    pub(crate) num_elements_size: OffsetSizeBytes,
-    pub(crate) field_id_size: OffsetSizeBytes,
-    pub(crate) field_offset_size: OffsetSizeBytes,
+    num_elements_size: OffsetSizeBytes,
+    field_id_size: OffsetSizeBytes,
+    field_offset_size: OffsetSizeBytes,
 }
 
 impl VariantObjectHeader {
@@ -30,6 +30,15 @@ impl VariantObjectHeader {
     }
     pub(crate) const fn field_offset_size(&self) -> u32 {
         self.field_offset_size as _
+    }
+    pub(crate) const fn num_elements_size_bytes(&self) -> OffsetSizeBytes {
+        self.num_elements_size
+    }
+    pub(crate) const fn field_id_size_bytes(&self) -> OffsetSizeBytes {
+        self.field_id_size
+    }
+    pub(crate) const fn field_offset_size_bytes(&self) -> OffsetSizeBytes {
+        self.field_offset_size
     }
 
     // Avoid materializing this offset, since it's cheaply and safely computable

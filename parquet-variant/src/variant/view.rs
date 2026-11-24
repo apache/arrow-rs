@@ -9,7 +9,7 @@ use arrow_schema::ArrowError;
 use crate::decoder::{VariantBasicType, get_basic_type};
 use crate::utils::{
     first_byte_from_slice, overflow_error, slice_from_slice, slice_from_slice_at_offset,
-    str_from_bytes, try_binary_search,
+    str_from_bytes, try_binary_search_range_by,
 };
 use crate::variant::list::VariantListHeader;
 use crate::variant::metadata::VariantMetadataHeader;
@@ -48,7 +48,7 @@ impl<'m> VariantMetadataView<'m> {
         let header = VariantMetadataHeader::try_new(first_byte_from_slice(bytes)?)?;
         let dictionary_size =
             header
-                .offset_size
+                .offset_size_bytes()
                 .unpack_u32_at_offset(bytes, NUM_HEADER_BYTES as _, 0)?;
 
         // There are dictionary_size + 1 offsets, and the string bytes immediately follow them.
@@ -83,7 +83,7 @@ impl<'m> VariantMetadataView<'m> {
     /// True if the header declares the entries unique and sorted.
     #[inline]
     pub fn is_sorted(&self) -> bool {
-        self.header.is_sorted
+        self.header.is_sorted()
     }
 
     /// The bytes of entry `id`, without UTF-8 validation.
@@ -106,7 +106,8 @@ impl<'m> VariantMetadataView<'m> {
     /// and a linear scan otherwise.
     pub fn find(&self, name: &[u8]) -> Result<Option<u32>, ArrowError> {
         if self.is_sorted() && self.len() > 10 {
-            let found = try_binary_search(self.len(), |id| Ok(self.read_entry(id)?.cmp(name)))?;
+            let found =
+                try_binary_search_range_by(0..self.len(), |id| Ok(self.read_entry(id)?.cmp(name)))?;
             return Ok(found.map(|id| id as u32));
         }
         for id in 0..self.len() {
@@ -126,7 +127,7 @@ impl<'m> VariantMetadataView<'m> {
     /// Entry `i` of the offset array, for `i` in `0..=self.len()`.
     #[inline]
     pub(crate) fn offset(&self, i: usize) -> Result<u32, ArrowError> {
-        self.header.offset_size.unpack_u32_at_offset(
+        self.header.offset_size_bytes().unpack_u32_at_offset(
             self.bytes,
             self.header.first_offset_byte() as _,
             i,
@@ -282,10 +283,11 @@ impl<'m, 'v> VariantObjectView<'m, 'v> {
     #[inline]
     pub fn try_new(metadata: VariantMetadataView<'m>, value: &'v [u8]) -> Result<Self, ArrowError> {
         let header = VariantObjectHeader::try_new(first_byte_from_slice(value)?)?;
-        let num_elements =
-            header
-                .num_elements_size
-                .unpack_u32_at_offset(value, NUM_HEADER_BYTES as _, 0)?;
+        let num_elements = header.num_elements_size_bytes().unpack_u32_at_offset(
+            value,
+            NUM_HEADER_BYTES as _,
+            0,
+        )?;
 
         let first_field_offset_byte = checked(
             num_elements
@@ -345,7 +347,7 @@ impl<'m, 'v> VariantObjectView<'m, 'v> {
     ///
     /// The spec requires fields to be sorted by name, so this is a binary search.
     pub fn find(&self, name: &[u8]) -> Result<Option<usize>, ArrowError> {
-        try_binary_search(self.len(), |i| Ok(self.read_field_name(i)?.cmp(name)))
+        try_binary_search_range_by(0..self.len(), |i| Ok(self.read_field_name(i)?.cmp(name)))
     }
 
     /// The value of the field named `name`, if any.
@@ -388,7 +390,7 @@ impl<'m, 'v> VariantObjectView<'m, 'v> {
 
     #[inline]
     pub(crate) fn read_field_id(&self, i: usize) -> Result<u32, ArrowError> {
-        self.header.field_id_size.unpack_u32_at_offset(
+        self.header.field_id_size_bytes().unpack_u32_at_offset(
             self.value,
             self.header.field_ids_start_byte() as _,
             i,
@@ -402,7 +404,7 @@ impl<'m, 'v> VariantObjectView<'m, 'v> {
 
     #[inline]
     fn read_offset(&self, i: usize) -> Result<u32, ArrowError> {
-        self.header.field_offset_size.unpack_u32_at_offset(
+        self.header.field_offset_size_bytes().unpack_u32_at_offset(
             self.value,
             self.first_field_offset_byte as _,
             i,
@@ -437,10 +439,11 @@ impl<'m, 'v> VariantListView<'m, 'v> {
     #[inline]
     pub fn try_new(metadata: VariantMetadataView<'m>, value: &'v [u8]) -> Result<Self, ArrowError> {
         let header = VariantListHeader::try_new(first_byte_from_slice(value)?)?;
-        let num_elements =
-            header
-                .num_elements_size
-                .unpack_u32_at_offset(value, NUM_HEADER_BYTES as _, 0)?;
+        let num_elements = header.num_elements_size_bytes().unpack_u32_at_offset(
+            value,
+            NUM_HEADER_BYTES as _,
+            0,
+        )?;
 
         // There are num_elements + 1 offsets, and the values immediately follow them.
         let first_value_byte = checked(
@@ -511,7 +514,7 @@ impl<'m, 'v> VariantListView<'m, 'v> {
     /// Entry `i` of the offset array, for `i` in `0..=self.len()`.
     #[inline]
     pub(crate) fn read_offset(&self, i: usize) -> Result<u32, ArrowError> {
-        self.header.offset_size.unpack_u32_at_offset(
+        self.header.offset_size_bytes().unpack_u32_at_offset(
             self.value,
             self.header.first_offset_byte() as _,
             i,

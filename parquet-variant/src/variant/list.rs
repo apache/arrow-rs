@@ -15,8 +15,8 @@ const NUM_HEADER_BYTES: u32 = 1;
 /// A parsed version of the variant array value header byte.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct VariantListHeader {
-    pub(crate) num_elements_size: OffsetSizeBytes,
-    pub(crate) offset_size: OffsetSizeBytes,
+    num_elements_size: OffsetSizeBytes,
+    offset_size: OffsetSizeBytes,
 }
 
 impl VariantListHeader {
@@ -26,6 +26,12 @@ impl VariantListHeader {
     }
     pub(crate) const fn offset_size(&self) -> u32 {
         self.offset_size as _
+    }
+    pub(crate) const fn num_elements_size_bytes(&self) -> OffsetSizeBytes {
+        self.num_elements_size
+    }
+    pub(crate) const fn offset_size_bytes(&self) -> OffsetSizeBytes {
+        self.offset_size
     }
 
     // Avoid materializing this offset, since it's cheaply and safely computable

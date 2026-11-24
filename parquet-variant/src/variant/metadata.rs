@@ -14,9 +14,9 @@ use arrow_schema::ArrowError;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct VariantMetadataHeader {
     version: u8,
-    pub(crate) is_sorted: bool,
+    is_sorted: bool,
     /// Note: This is `offset_size_minus_one` + 1
-    pub(crate) offset_size: OffsetSizeBytes,
+    offset_size: OffsetSizeBytes,
 }
 
 /// The version of the Variant specification implemented by this crate.
@@ -34,6 +34,12 @@ impl VariantMetadataHeader {
     // Hide the cast
     pub(crate) const fn offset_size(&self) -> u32 {
         self.offset_size as u32
+    }
+    pub(crate) const fn offset_size_bytes(&self) -> OffsetSizeBytes {
+        self.offset_size
+    }
+    pub(crate) const fn is_sorted(&self) -> bool {
+        self.is_sorted
     }
 
     // Avoid materializing this offset, since it's cheaply and safely computable
@@ -422,14 +428,11 @@ impl<'m> VariantMetadata<'m> {
         let offsets = slice_from_slice(self.bytes, offset_byte_range).ok()?;
         let offset_size = self.header.offset_size;
         let cmp = |i| {
-            Some(
-                offset_size
-                    .unpack_u32_at_offset(offsets, 0, i)
-                    .ok()?
-                    .cmp(&field_name_offset),
-            )
+            Ok(offset_size
+                .unpack_u32_at_offset(offsets, 0, i)?
+                .cmp(&field_name_offset))
         };
-        let field_id = try_binary_search_range_by(0..self.len(), cmp)?.ok()?;
+        let field_id = try_binary_search_range_by(0..self.len(), cmp).ok()??;
 
         // Verify that this entry has exactly `field_name`'s bytes; see "Correctness" above.
         let entry_end = offset_size
