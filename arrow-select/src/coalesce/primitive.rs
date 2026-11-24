@@ -147,6 +147,10 @@ fn append_filtered_nulls(
 }
 
 impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray<T> {
+    fn supports_dense_indexed_copy(&self) -> bool {
+        true
+    }
+
     fn set_source(&mut self, source: Option<ArrayRef>) {
         self.source = source;
     }
