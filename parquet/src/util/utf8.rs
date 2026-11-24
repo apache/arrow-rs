@@ -47,6 +47,7 @@ pub fn check_valid_utf8(val: &[u8]) -> Result<()> {
 ///
 /// [`check_valid_utf8`] over values stored back to back misses a character
 /// split across two of them, so each value's start must be checked as well.
+#[cfg(feature = "arrow")]
 #[inline(always)]
 pub(crate) fn check_utf8_value_start(value: &[u8]) -> Result<()> {
     match value.first() {
