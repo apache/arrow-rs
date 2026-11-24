@@ -4,10 +4,8 @@
 
 use crate::builder::ArrayBuilder;
 use crate::{Array, ArrayRef, MapArray, StructArray};
-use arrow_buffer::Buffer;
-use arrow_buffer::{NullBuffer, NullBufferBuilder};
-use arrow_data::ArrayData;
-use arrow_schema::{ArrowError, DataType, Field, FieldRef};
+use arrow_buffer::{Buffer, NullBuffer, NullBufferBuilder, OffsetBuffer};
+use arrow_schema::{ArrowError, Field, FieldRef};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -201,7 +199,6 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
     /// [`Self::with_values_field`] do not match the data types of the key and value
     /// builders, or if the keys contain nulls
     pub fn finish(&mut self) -> MapArray {
-        let len = self.len();
         // Build the keys
         let keys_arr = self.key_builder.finish();
         let values_arr = self.value_builder.finish();
@@ -209,7 +206,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         self.offsets_builder.push(0);
         let null_bit_buffer = self.null_buffer_builder.finish();
 
-        self.finish_helper(keys_arr, values_arr, offset_buffer, null_bit_buffer, len)
+        self.finish_helper(keys_arr, values_arr, offset_buffer, null_bit_buffer)
     }
 
     /// Builds the [`MapArray`] without resetting the builder.
@@ -220,17 +217,15 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
     /// [`Self::with_values_field`] do not match the data types of the key and value
     /// builders, or if the keys contain nulls
     pub fn finish_cloned(&self) -> MapArray {
-        let len = self.len();
         // Build the keys
         let keys_arr = self.key_builder.finish_cloned();
         let values_arr = self.value_builder.finish_cloned();
         let offset_buffer = Buffer::from_slice_ref(self.offsets_builder.as_slice());
         let nulls = self.null_buffer_builder.finish_cloned();
-        self.finish_helper(keys_arr, values_arr, offset_buffer, nulls, len)
+        self.finish_helper(keys_arr, values_arr, offset_buffer, nulls)
     }
 
     fn finish_preserve_values(&mut self) -> MapArray {
-        let len = self.len();
         // Build the keys
         let keys_arr = self.key_builder.finish_preserve_values();
         let values_arr = self.value_builder.finish_preserve_values();
@@ -238,7 +233,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         self.offsets_builder.push(0);
         let null_bit_buffer = self.null_buffer_builder.finish();
 
-        self.finish_helper(keys_arr, values_arr, offset_buffer, null_bit_buffer, len)
+        self.finish_helper(keys_arr, values_arr, offset_buffer, null_bit_buffer)
     }
 
     fn finish_helper(
@@ -247,7 +242,6 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         values_arr: Arc<dyn Array>,
         offset_buffer: Buffer,
         nulls: Option<NullBuffer>,
-        len: usize,
     ) -> MapArray {
         assert!(
             keys_arr.null_count() == 0,
@@ -283,16 +277,10 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
             struct_array.data_type().clone(),
             false, // always non-nullable
         ));
-        let array_data = ArrayData::builder(DataType::Map(map_field, false)) // TODO: support sorted keys
-            .len(len)
-            .add_buffer(offset_buffer)
-            .add_child_data(struct_array.into_data())
-            .nulls(nulls);
-
-        // SAFETY: builder is constructed from valid offset buffer and struct child array maintained by the builder
-        let array_data = unsafe { array_data.build_unchecked() };
-
-        MapArray::from(array_data)
+        // SAFETY: offsets are appended from the entry count, which the builder
+        // keeps equal for keys and values, and the entries are non-nullable
+        let offsets = unsafe { OffsetBuffer::new_unchecked(offset_buffer.into()) };
+        unsafe { MapArray::new_unchecked(map_field, offsets, struct_array, nulls, false) }
     }
 
     /// Returns the current null buffer as a slice
@@ -337,6 +325,7 @@ mod tests {
     use super::*;
     use crate::builder::{Int32Builder, StringBuilder, make_builder, tests::PreserveValuesMock};
     use crate::{Int32Array, StringArray};
+    use arrow_schema::DataType;
     use std::collections::HashMap;
 
     #[test]

@@ -64,13 +64,14 @@ impl FixedSizeBinaryBuilder {
     /// distinct value element.
     #[inline]
     pub fn append_value(&mut self, value: impl AsRef<[u8]>) -> Result<(), ArrowError> {
-        if value.as_ref().len() != self.value_length as usize {
+        let value = value.as_ref();
+        if value.len() != self.value_length as usize {
             Err(ArrowError::InvalidArgumentError(
                 "Byte slice does not have the same length as FixedSizeBinaryBuilder value lengths"
                     .to_string(),
             ))
         } else {
-            self.values_builder.extend_from_slice(value.as_ref());
+            self.values_builder.extend_from_slice(value);
             self.null_buffer_builder.append_non_null();
             Ok(())
         }
@@ -330,5 +331,22 @@ mod tests {
         let other_array = other_builder.finish();
         let mut builder = FixedSizeBinaryBuilder::with_capacity(3, 5);
         builder.append_array(&other_array).unwrap();
+    }
+
+    #[test]
+    fn test_fixed_size_binary_builder_append_array_trailing_bytes() {
+        let trailing = FixedSizeBinaryArray::new(3, vec![1_u8, 2, 3, 4, 5, 6, 99].into(), None);
+        assert_eq!(trailing.len(), 2);
+
+        let mut builder = FixedSizeBinaryBuilder::with_capacity(3, 3);
+        builder.append_array(&trailing).unwrap();
+        builder.append_value([7, 8, 9]).unwrap();
+        let array = builder.finish();
+
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.value(0), &[1, 2, 3]);
+        assert_eq!(array.value(1), &[4, 5, 6]);
+        assert_eq!(array.value(2), &[7, 8, 9]);
+        assert_eq!(array.value_data(), &[1, 2, 3, 4, 5, 6, 7, 8, 9]);
     }
 }

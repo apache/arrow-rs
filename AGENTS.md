@@ -62,6 +62,8 @@ Prefer safe code. Use `unsafe` only when a benchmark shows a gain over the safe 
 
 A performance PR needs benchmarks that show why the change is faster. Name the benchmark(s) the change targets. Say which part of the change produces the gain, and cover both well-predicted input (constant lengths, all valid) and poorly predicted input (random). Name the inputs that get slower. Prefer the smallest change that keeps the gain, and do not add code tuned to the benchmark's data. See [benchmarks](CONTRIBUTING.md#performance-improvements).
 
+If new benchmarks are needed, add them as the first commit of the PR and pass that commit's SHA as `baseline.ref` to the automated benchmark runner.
+
 ## Issue Ownership
 
 The following agent-specific rules are stricter than the general contribution
