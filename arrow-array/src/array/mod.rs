@@ -151,21 +151,28 @@ pub unsafe trait Array: std::fmt::Debug + Send + Sync {
 
     /// Returns an [`ArrayRef`] with the same contents as `self`, sharing its buffers.
     ///
-    /// The default implementation is `self.slice(0, self.len())`. The arrow-rs array types
-    /// implement this as a shallow clone, which avoids the null-count recomputation and child
-    /// re-slicing of [`Self::slice`].
+    /// If `self` is an `ArrayRef`, this only bumps the reference count, as if by
+    /// [`Arc::clone`]. The concrete arrow-rs array types all construct a new [`Arc`] from a shallow
+    /// clone of the array, which avoids the null-count recomputation and child re-slicing of
+    /// [`Self::slice`].
+    ///
+    /// The default implementation is `self.slice(0, self.len())`.
     ///
     /// # Example:
     ///
     /// ```
-    /// use arrow_array::{Array, ArrayRef, Int32Array};
-    ///
+    /// # use arrow_array::{Array, ArrayRef, Int32Array};
+    /// # use std::sync::Arc;
+    /// #
     /// fn to_array_ref(array: &dyn Array) -> ArrayRef {
     ///     array.to_arc()
     /// }
     ///
     /// let array = Int32Array::from(vec![1, 2, 3]);
     /// assert_eq!(to_array_ref(&array).as_ref(), &array);
+    ///
+    /// let array: ArrayRef = Arc::new(array);
+    /// assert!(Arc::ptr_eq(&to_array_ref(&array), &array));
     /// ```
     fn to_arc(&self) -> ArrayRef {
         self.slice(0, self.len())
@@ -1477,16 +1484,15 @@ mod tests {
         let run_ends = Int32Array::from(vec![2, 3, 5]);
         let run = RunArray::try_new(&run_ends, &primitive.slice(0, 3)).unwrap();
 
-        // Non-zero values and null buffer offsets: the clone must keep both slices intact.
-        check(&primitive.slice(1, 2));
         // The typed wrappers' `slice` returns the inner untyped array, so `to_arc` must as well.
         check(&dict.downcast_dict::<StringArray>().unwrap());
-        check(&run.downcast::<Int32Array>().unwrap());
+        check(&run.slice(1, 3).downcast::<Int32Array>().unwrap());
 
-        // `ArrayRef` must reuse its `Arc` (not allocate), and `&T` must forward to `T`.
         let array_ref: ArrayRef = Arc::new(primitive.clone());
-        assert!(Arc::ptr_eq(&array_ref.to_arc(), &array_ref));
-        assert_eq!(Array::to_arc(&&primitive).as_ref(), &primitive);
+        let dyn_ref: &dyn Array = &array_ref;
+        assert!(Arc::ptr_eq(&dyn_ref.to_arc(), &array_ref));
+        let dyn_ref: &dyn Array = &&primitive;
+        assert_eq!(dyn_ref.to_arc().as_ref(), &primitive);
     }
 
     #[test]
