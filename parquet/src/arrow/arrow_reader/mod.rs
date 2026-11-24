@@ -1779,8 +1779,10 @@ impl ParquetRecordBatchReader {
             .with_parquet_metadata(row_groups.metadata())
             .build_array_reader(levels.levels.as_ref(), &ProjectionMask::all())?;
 
+        // Selector execution skips pages outside the selection that RowGroups may omit.
         let read_plan = ReadPlanBuilder::new(batch_size)
             .with_selection(selection)
+            .with_row_selection_policy(RowSelectionPolicy::Selectors)
             .build();
 
         Ok(Self {

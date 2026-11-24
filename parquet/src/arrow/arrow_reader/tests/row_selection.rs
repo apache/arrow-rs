@@ -6,6 +6,73 @@
 
 use super::*;
 
+#[test]
+fn test_row_groups_reader_skips_unloaded_pages() {
+    use crate::arrow::in_memory_row_group::InMemoryRowGroup;
+    use crate::arrow::schema::parquet_to_arrow_field_levels;
+
+    let values = Arc::new(Int32Array::from_iter_values(0..24)) as ArrayRef;
+    let batch = RecordBatch::try_from_iter([("value", values)]).unwrap();
+    let props = WriterProperties::builder()
+        .set_dictionary_enabled(false)
+        .set_data_page_row_count_limit(8)
+        .set_write_batch_size(8)
+        .build();
+    let mut data = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut data, batch.schema(), Some(props)).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+    let data = Bytes::from(data);
+
+    let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
+    let metadata = ArrowReaderMetadata::load(&data, options).unwrap();
+    let metadata = metadata.metadata();
+    let projection = ProjectionMask::all();
+    let levels = parquet_to_arrow_field_levels(
+        metadata.file_metadata().schema_descr(),
+        projection.clone(),
+        None,
+    )
+    .unwrap();
+    let selection = RowSelection::from(vec![
+        RowSelector::select(1),
+        RowSelector::skip(15),
+        RowSelector::select(1),
+    ]);
+    let mut row_group = InMemoryRowGroup {
+        page_index: Some(metadata.page_index_for_row_group(0)),
+        column_chunks: vec![None],
+        row_count: batch.num_rows(),
+        row_group_idx: 0,
+        metadata,
+    };
+    let requested = row_group.fetch_ranges(&projection, Some(&selection), batch.num_rows(), None);
+    assert_eq!(requested.ranges.len(), 2);
+    let chunks = requested
+        .ranges
+        .into_iter()
+        .map(|range| data.slice(range.start as usize..range.end as usize));
+    row_group.fill_column_chunks(&projection, requested.page_start_offsets, chunks);
+
+    let mut reader = ParquetRecordBatchReader::try_new_with_row_groups(
+        &levels,
+        &row_group,
+        batch.num_rows(),
+        Some(selection),
+    )
+    .unwrap();
+    let result = reader.next().unwrap().unwrap();
+    assert_eq!(
+        result
+            .column(0)
+            .as_primitive::<types::Int32Type>()
+            .values()
+            .as_ref(),
+        &[0, 16]
+    );
+    assert!(reader.next().is_none());
+}
+
 /// Given a RecordBatch containing all the column data, return the expected batches given
 /// a `batch_size` and `selection`
 fn get_expected_batches(
