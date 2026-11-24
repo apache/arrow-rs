@@ -111,7 +111,7 @@ pub struct VariantObject<'m, 'v> {
     num_elements: u32,
     first_field_offset_byte: u32,
     first_value_byte: u32,
-    validated: bool,
+    pub(super) validated: bool,
 }
 
 // We don't want this to grow because it could increase the size of `Variant` and hurt performance.
@@ -354,6 +354,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         let value_bytes = slice_from_slice(self.value, self.first_value_byte as _..)?;
         let value_bytes = slice_from_slice(value_bytes, self.get_offset(i)? as _..)?;
         Variant::try_new_with_metadata_and_shallow_validation(self.metadata.clone(), value_bytes)
+            .map(|child| child.inherit_validation(self.validated))
     }
 
     // Attempts to retrieve the ith offset from the field offset region of the byte buffer.
