@@ -37,7 +37,7 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
     let len = left.len();
 
     if len == 0 || left.data_type() == &DataType::Null {
-        return Ok(make_array(left.to_data()));
+        return Ok(left.to_arc());
     }
 
     // Compute right_values & right_bitmap. True bits are positions that should
