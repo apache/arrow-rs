@@ -169,9 +169,10 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
 
     /// Finish the current map array slot
     ///
-    /// Returns an error if the key and values builders are in an inconsistent state,
-    /// the next offset would be less than the last offset, or the number of entries
-    /// exceeds `i32::MAX`. A rejected append leaves the builder unchanged.
+    /// Returns an error, leaving the builder unchanged, if:
+    /// - the key and value builders have different lengths
+    /// - the key and value builders were finished after the last append
+    /// - the number of entries exceeds `i32::MAX`
     #[inline]
     pub fn append(&mut self, is_valid: bool) -> Result<(), ArrowError> {
         self.validate_equal_lengths()?;
@@ -184,9 +185,10 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
 
     /// Append `n` nulls to this [`MapBuilder`]
     ///
-    /// Returns an error if the key and values builders are in an inconsistent state,
-    /// the next offset would be less than the last offset, or the number of entries
-    /// exceeds `i32::MAX`. A rejected append leaves the builder unchanged.
+    /// Returns an error, leaving the builder unchanged, if:
+    /// - the key and value builders have different lengths
+    /// - the key and value builders were finished after the last append
+    /// - the number of entries exceeds `i32::MAX`
     #[inline]
     pub fn append_nulls(&mut self, n: usize) -> Result<(), ArrowError> {
         self.validate_equal_lengths()?;
@@ -198,14 +200,15 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
     }
 
     /// `keys().finish()` resets the child length, so the next offset can be smaller
-    /// than one already recorded. Reject that before either buffer is updated.
+    /// than one already recorded.
     #[inline]
     fn ensure_offset_not_decreasing(&self, offset: i32) -> Result<(), ArrowError> {
         if let Some(&last) = self.offsets_builder.last()
             && offset < last
         {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "Cannot append to a map builder when the next offset {offset} is less than the last offset {last}"
+                "MapBuilder reached invalid state: values truncated unexpectedly \
+                 (next offset {offset} is less than last offset {last})"
             )));
         }
         Ok(())
@@ -215,10 +218,11 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
     ///
     /// # Panics
     ///
-    /// Panics if the fields set with [`Self::with_keys_field`] or
-    /// [`Self::with_values_field`] do not match the data types of the key and value
-    /// builders, if the keys contain nulls, or if the recorded offsets decrease or
-    /// extend past the finished key or value array
+    /// Panics if:
+    /// - the fields set with [`Self::with_keys_field`] or [`Self::with_values_field`]
+    ///   do not match the data types of the key and value builders
+    /// - the keys contain nulls
+    /// - the key or value builder was finished after the last append
     pub fn finish(&mut self) -> MapArray {
         let len = self.len();
         // Build the keys
@@ -235,10 +239,11 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
     ///
     /// # Panics
     ///
-    /// Panics if the fields set with [`Self::with_keys_field`] or
-    /// [`Self::with_values_field`] do not match the data types of the key and value
-    /// builders, if the keys contain nulls, or if the recorded offsets decrease or
-    /// extend past the finished key or value array
+    /// Panics if:
+    /// - the fields set with [`Self::with_keys_field`] or [`Self::with_values_field`]
+    ///   do not match the data types of the key and value builders
+    /// - the keys contain nulls
+    /// - the key or value builder was finished after the last append
     pub fn finish_cloned(&self) -> MapArray {
         let len = self.len();
         // Build the keys
@@ -274,9 +279,17 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
             "Keys array must have no null values, found {} null value(s)",
             keys_arr.null_count()
         );
-        // Checked before `build_unchecked`, which does not validate offsets.
+        // `append` keeps the offsets non-decreasing, but finishing a child builder
+        // afterwards can still leave the last offset past the end of the child.
         // A longer child is allowed: those entries are not part of a map slot yet.
-        assert_map_offsets(&offset_buffer, keys_arr.len(), values_arr.len());
+        let last_offset = *offset_buffer.typed_data::<i32>().last().unwrap() as usize;
+        assert!(
+            last_offset <= keys_arr.len() && last_offset <= values_arr.len(),
+            "MapBuilder reached invalid state: values truncated unexpectedly \
+             (last offset {last_offset}, keys length {}, values length {})",
+            keys_arr.len(),
+            values_arr.len()
+        );
 
         let keys_field = match &self.key_field {
             Some(f) => {
@@ -312,8 +325,9 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
             .add_child_data(struct_array.into_data())
             .nulls(nulls);
 
-        // SAFETY: offsets are non-decreasing and the last offset is within both child
-        // arrays, which were checked above. The struct child is built from those arrays.
+        // SAFETY: `append` and `append_nulls` keep the offsets non-negative and
+        // non-decreasing, and the last offset was checked above to be within the
+        // struct child, which is built from `keys_arr` and `values_arr`.
         let array_data = unsafe { array_data.build_unchecked() };
 
         MapArray::from(array_data)
@@ -323,26 +337,6 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
     pub fn validity_slice(&self) -> Option<&[u8]> {
         self.null_buffer_builder.as_slice()
     }
-}
-
-/// Reject decreasing offsets and a last offset past either finished child.
-///
-/// Child arrays may be longer than the last offset. Those entries have not been
-/// committed with [`MapBuilder::append`] yet.
-fn assert_map_offsets(offset_buffer: &Buffer, keys_len: usize, values_len: usize) {
-    let offsets = offset_buffer.typed_data::<i32>();
-    assert!(
-        offsets.windows(2).all(|pair| pair[0] <= pair[1]),
-        "MapBuilder offsets must be monotonically non-decreasing, got {offsets:?}"
-    );
-    let last = match offsets.last() {
-        Some(last) if *last >= 0 => *last as usize,
-        _ => panic!("MapBuilder offsets must end with a non-negative offset, got {offsets:?}"),
-    };
-    assert!(
-        last <= keys_len && last <= values_len,
-        "MapBuilder offset {last} extends past finished child arrays of lengths {keys_len} and {values_len}"
-    );
 }
 
 impl<K: ArrayBuilder, V: ArrayBuilder> ArrayBuilder for MapBuilder<K, V> {
@@ -698,7 +692,7 @@ mod tests {
             "expected InvalidArgumentError, got {err}"
         );
         assert!(
-            err.to_string().contains("less than the last offset"),
+            err.to_string().contains("values truncated unexpectedly"),
             "unexpected error: {err}"
         );
         assert_eq!(builder.offsets_builder, offsets_before);
@@ -722,7 +716,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "extends past finished child arrays")]
+    #[should_panic(expected = "values truncated unexpectedly")]
     fn test_finish_panics_when_child_was_finished_after_append() {
         let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
         builder.keys().append_value("1");
