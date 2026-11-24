@@ -581,6 +581,10 @@ unsafe impl<OffsetSize: OffsetSizeTrait> Array for GenericListArray<OffsetSize> 
         self
     }
 
+    fn into_any_arc(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
+        self
+    }
+
     fn to_arc(&self) -> ArrayRef {
         Arc::new(self.clone())
     }

@@ -7,6 +7,7 @@
 use crate::array::*;
 use crate::types::*;
 use arrow_data::ArrayData;
+use std::sync::Arc;
 
 /// Re-export symbols needed for downcast macros
 ///
@@ -846,6 +847,35 @@ where
     T::from(array.to_data())
 }
 
+/// Downcasts a `dyn Array` to an [`Arc`] of its concrete type, or returns `None` if its concrete
+/// type is not `T`.
+///
+/// If `array` is or wraps an `Arc` of the concrete array, bump its reference count as if by
+/// [`Arc::clone`]. Otherwise, shallow clone the array into a new `Arc` as if by [`Array::to_arc`].
+///
+/// # Example
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_array::{Array, ArrayRef, Int32Array, StringArray};
+/// # use arrow_array::cast::downcast_arc;
+/// // An `Arc` of the concrete array is shared, not cloned
+/// let array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+/// let shared: ArrayRef = downcast_arc::<Int32Array>(&array).unwrap();
+/// assert!(Arc::ptr_eq(&shared, &array));
+///
+/// // A plain reference has no `Arc` to share, so the array is shallow cloned into a new one
+/// let array = Int32Array::from(vec![1, 2, 3]);
+/// let cloned = downcast_arc::<Int32Array>(&array).unwrap();
+/// assert_eq!(*cloned, array);
+///
+/// // The wrong type returns `None`
+/// assert!(downcast_arc::<StringArray>(&array).is_none());
+/// ```
+pub fn downcast_arc<T: Array + 'static>(array: &dyn Array) -> Option<Arc<T>> {
+    array.to_arc().into_any_arc().downcast::<T>().ok()
+}
+
 mod private {
     pub trait Sealed {}
 }
@@ -1242,7 +1272,7 @@ impl AsArray for ArrayRef {
 mod tests {
     use super::*;
     use arrow_buffer::i256;
-    use arrow_schema::DataType;
+    use arrow_schema::{DataType, Field, Fields, UnionFields, UnionMode};
     use std::sync::Arc;
 
     #[test]
@@ -1329,5 +1359,80 @@ mod tests {
             },
             _ => panic!("unexpected data type")
         );
+    }
+
+    #[test]
+    fn test_downcast_arc_of_references() {
+        // A reference to a concrete array has no `Arc` to share, so we get a clone
+        let array = Int32Array::from(vec![1, 2, 3]);
+        assert_eq!(*downcast_arc::<Int32Array>(&&array).unwrap(), array);
+        let any = Arc::new(&array).into_any_arc();
+        assert_eq!(*any.downcast::<Int32Array>().unwrap(), array);
+
+        // A reference to an `ArrayRef` shares its `Arc`
+        let array: ArrayRef = Arc::new(StringViewArray::from(vec!["a", "b"]));
+        let shared: ArrayRef = downcast_arc::<StringViewArray>(&&array).unwrap();
+        assert!(Arc::ptr_eq(&shared, &array));
+    }
+
+    #[test]
+    fn test_downcast_arc_of_views() {
+        let run: RunArray<Int32Type> = vec!["a", "a", "b"].into_iter().collect();
+        let dict: DictionaryArray<Int32Type> = vec!["a", "a", "b"].into_iter().collect();
+        let run_view = run.downcast::<StringArray>().unwrap();
+        let dict_view = dict.downcast_dict::<StringArray>().unwrap();
+
+        // A view is not a concrete array, so we get a clone of the array it borrows
+        assert_eq!(
+            *downcast_arc::<RunArray<Int32Type>>(&run_view).unwrap(),
+            run
+        );
+        assert_eq!(
+            *downcast_arc::<DictionaryArray<Int32Type>>(&dict_view).unwrap(),
+            dict
+        );
+        assert!(downcast_arc::<StringArray>(&run_view).is_none());
+
+        // The same goes for a view inside an `Arc`
+        let any = Arc::new(run_view).into_any_arc();
+        assert_eq!(*any.downcast::<RunArray<Int32Type>>().unwrap(), run);
+        let any = Arc::new(dict_view).into_any_arc();
+        assert_eq!(*any.downcast::<DictionaryArray<Int32Type>>().unwrap(), dict);
+    }
+
+    #[test]
+    fn test_into_any_arc_matches_as_any_for_every_data_type() {
+        let field = |data_type| Arc::new(Field::new("f", data_type, true));
+        let entries = Fields::from(vec![
+            Field::new("key", DataType::Int32, false),
+            Field::new("value", DataType::Int32, true),
+        ]);
+        let data_types = [
+            DataType::Null,
+            DataType::Boolean,
+            DataType::Int32,
+            DataType::Utf8,
+            DataType::Utf8View,
+            DataType::FixedSizeBinary(2),
+            DataType::List(field(DataType::Int32)),
+            DataType::ListView(field(DataType::Int32)),
+            DataType::FixedSizeList(field(DataType::Int32), 2),
+            DataType::Map(field(DataType::Struct(entries.clone())), false),
+            DataType::Struct(entries),
+            DataType::Union(
+                UnionFields::from_fields(vec![Field::new("a", DataType::Int32, true)]),
+                UnionMode::Sparse,
+            ),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            DataType::RunEndEncoded(
+                Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                field(DataType::Int32),
+            ),
+        ];
+        for data_type in data_types {
+            let array = new_null_array(&data_type, 2);
+            let any = array.clone().into_any_arc();
+            assert_eq!((*any).type_id(), array.as_any().type_id(), "{data_type}");
+        }
     }
 }
