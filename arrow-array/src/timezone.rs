@@ -16,6 +16,9 @@
 //! When both are enabled, `jiff` is used. Cargo unifies features across a build, so enabling
 //! `jiff` for any crate changes how named timezones are resolved for every crate in the build.
 //!
+//! The `jiff` feature is experimental. It is a step in moving arrow-rs from chrono to jiff, so what
+//! it covers and how it behaves may change, even between minor releases.
+//!
 //! Each feature bundles its own copy of the database, which may be a different release, so the two
 //! can also disagree wherever the database changed between releases. [`tzdb_version`] returns the
 //! release in use.

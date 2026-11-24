@@ -59,8 +59,9 @@ all-features = true
 async = ["dep:futures"]
 ffi = ["arrow-schema/ffi", "arrow-data/ffi", "dep:libc"]
 force_validate = ["arrow-data/force_validate"]
-# Use jiff for date and time support. It currently resolves named timezones, taking precedence
-# over `chrono-tz` for every crate in the build (see the `timezone` module documentation).
+# Experimental: use jiff for date and time support. It currently resolves named timezones, taking
+# precedence over `chrono-tz` for every crate in the build (see the `timezone` module
+# documentation). What it covers and how it behaves may change, even between minor releases.
 jiff = ["dep:jiff", "dep:jiff-tzdb"]
 # Enable memory tracking support
 pool = ["arrow-buffer/pool", "arrow-data/pool"]
