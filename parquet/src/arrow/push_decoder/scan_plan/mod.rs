@@ -24,6 +24,7 @@ mod budget;
 mod frontier;
 
 pub(crate) use budget::{BudgetedReadPlan, RowBudget};
+pub use frontier::QueuedRowGroup;
 pub(crate) use frontier::{NextRowGroup, RowGroupFrontier};
 
 /// One item of a [`ScanPlan`].

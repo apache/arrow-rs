@@ -22,7 +22,7 @@ use bytes::Bytes;
 use reader_builder::{RowGroupReaderBuilder, RowGroupReaderBuilderParts};
 use remaining::{RemainingRowGroups, RemainingRowGroupsParts};
 use scan_plan::RowBudget;
-pub use scan_plan::{PageKind, PlannedRange, ScanPlan};
+pub use scan_plan::{PageKind, PlannedRange, QueuedRowGroup, ScanPlan};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -626,6 +626,69 @@ impl ParquetPushDecoder {
         self.state.peek_next_row_group()
     }
 
+    /// Returns the row group of the reader that [`Self::try_next_reader`]
+    /// returned last, or of the row group that the decoder fetches.
+    ///
+    /// | Decoder state | Result |
+    /// |---|---|
+    /// | [`Self::try_next_reader`] returned `NeedsData` | The row group whose bytes the decoder requested |
+    /// | [`Self::try_next_reader`] returned `Data` | The row group of that reader |
+    /// | [`Self::try_decode`] drains a row group | That row group |
+    /// | No row group was started, or the decoder finished | `None` |
+    ///
+    /// The decoder skips some queued row groups without a reader, for example
+    /// a row group with an empty selection. Such a row group never becomes
+    /// the active row group. Use this method after each
+    /// [`Self::try_next_reader`] call to find the row group of a reader.
+    pub fn active_row_group(&self) -> Option<usize> {
+        self.state.active_row_group()
+    }
+
+    /// Drops the queued row groups for which `f` returns `false`, and returns
+    /// the number of dropped entries.
+    ///
+    /// The queued row groups are the row groups that the decoder has not
+    /// started. `f` receives each of them once, in decode order, as a
+    /// [`QueuedRowGroup`]. A plan that lists a row group twice passes it twice.
+    /// Use this method to prune row groups at runtime, for example when a
+    /// dynamic filter proves that a row group has no matching rows. It needs
+    /// no rebuild, so the caller does not have to keep a copy of the plan.
+    ///
+    /// | Aspect | Behavior |
+    /// |---|---|
+    /// | Kept row groups | Keep their order and their row-group-local selections. With [`with_row_selection`](crate::arrow::arrow_reader::ArrowReaderBuilder::with_row_selection), each kept row group keeps the same rows. |
+    /// | Active row group | Never passed to `f` and never dropped, also when it has not yielded rows yet (for example while a `NeedsData` request is outstanding). See [`Self::active_row_group`]. |
+    /// | Row-group boundary | Not required. The method can run at any time, also while [`Self::try_decode`] drains a row group. |
+    /// | Offset and limit | Dropped row groups contribute zero rows. The remaining offset and limit apply to the rows of the kept row groups. |
+    /// | Buffered bytes | When an entry is dropped, the decoder releases the buffered bytes that neither the kept row groups nor the active row group read. |
+    /// | Late pushes | Bytes of a dropped row group that the caller pushes after this call stay buffered until a later call that drops an entry, or until [`build`](ParquetPushDecoderBuilder::build) after [`Self::into_builder`]. |
+    /// | [`Self::scan_plan`] | Reflects the kept row groups only. |
+    ///
+    /// When `f` keeps every entry, the method changes nothing. Calling it on a
+    /// finished decoder does nothing and returns `0`.
+    ///
+    /// ```no_run
+    /// # use parquet::arrow::push_decoder::ParquetPushDecoder;
+    /// # fn get_decoder() -> ParquetPushDecoder { unimplemented!() }
+    /// # fn can_match(row_group_idx: usize) -> bool { unimplemented!() }
+    /// let mut decoder = get_decoder();
+    /// // ... a dynamic filter changes while the scan runs ...
+    /// let dropped = decoder
+    ///     .retain_row_groups(|row_group| can_match(row_group.row_group_index()))
+    ///     .unwrap();
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the metadata has no entry for a queued row group.
+    /// The decoder does not change in that case.
+    pub fn retain_row_groups(
+        &mut self,
+        f: impl FnMut(&QueuedRowGroup<'_>) -> bool,
+    ) -> Result<usize, ParquetError> {
+        self.state.retain_row_groups(f)
+    }
+
     /// Returns the byte ranges that this decoder may still read, in the order
     /// that decoding needs them. See [`ScanPlan`].
     pub fn scan_plan(&self) -> ScanPlan {
@@ -939,6 +1002,49 @@ impl ParquetDecoderState {
                 ..
             } => remaining_row_groups.scan_plan(),
             ParquetDecoderState::Finished => ScanPlan::empty(),
+        }
+    }
+
+    fn active_row_group(&self) -> Option<usize> {
+        match self {
+            ParquetDecoderState::ReadingRowGroup {
+                remaining_row_groups,
+            }
+            | ParquetDecoderState::DecodingRowGroup {
+                remaining_row_groups,
+                ..
+            } => remaining_row_groups.current_row_group(),
+            ParquetDecoderState::Finished => None,
+        }
+    }
+
+    #[cfg(test)]
+    fn queued_row_groups(&self) -> Vec<usize> {
+        match self {
+            ParquetDecoderState::ReadingRowGroup {
+                remaining_row_groups,
+            }
+            | ParquetDecoderState::DecodingRowGroup {
+                remaining_row_groups,
+                ..
+            } => remaining_row_groups.queued_row_groups(),
+            ParquetDecoderState::Finished => vec![],
+        }
+    }
+
+    fn retain_row_groups(
+        &mut self,
+        f: impl FnMut(&QueuedRowGroup<'_>) -> bool,
+    ) -> Result<usize, ParquetError> {
+        match self {
+            ParquetDecoderState::ReadingRowGroup {
+                remaining_row_groups,
+            }
+            | ParquetDecoderState::DecodingRowGroup {
+                remaining_row_groups,
+                ..
+            } => remaining_row_groups.retain_row_groups(f),
+            ParquetDecoderState::Finished => Ok(0),
         }
     }
 
@@ -2918,6 +3024,397 @@ mod test {
         let batch1 = concat_batches(&TEST_BATCH.schema(), &batches1).unwrap();
         assert_eq!(batch1, TEST_BATCH.slice(225, 20));
         expect_finished(decoder.try_next_reader());
+    }
+
+    fn select(skip: usize, select: usize) -> Option<RowSelection> {
+        Some(RowSelection::from(vec![
+            RowSelector::skip(skip),
+            RowSelector::select(select),
+        ]))
+    }
+
+    fn drain_reader(reader: ParquetRecordBatchReader) -> RecordBatch {
+        let batches: Vec<_> = reader.collect::<Result<_, _>>().unwrap();
+        concat_batches(&TEST_BATCH.schema(), &batches).unwrap()
+    }
+
+    /// A plan with selections on four entries. After the first row group,
+    /// `retain_row_groups` drops RG1. The kept RG0 entry keeps its selection.
+    #[test]
+    fn test_retain_row_groups_keeps_local_selections() {
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+            .unwrap()
+            .with_row_group_selections(vec![
+                RowGroupSelection::new(0, select(10, 5)),
+                RowGroupSelection::new(1, select(20, 5)),
+                RowGroupSelection::new(0, select(100, 7)),
+                RowGroupSelection::new(1, select(30, 5)),
+            ])
+            .build()
+            .unwrap();
+        prefetch_test_file(&mut decoder);
+
+        let reader = expect_data(decoder.try_next_reader());
+        assert_eq!(drain_reader(reader), TEST_BATCH.slice(10, 5));
+        assert_eq!(decoder.state.queued_row_groups(), vec![1, 0, 1]);
+
+        assert_eq!(decoder.active_row_group(), Some(0));
+
+        let mut seen = vec![];
+        let dropped = decoder
+            .retain_row_groups(|row_group| {
+                seen.push((row_group.row_group_index(), row_group.selection().cloned()));
+                row_group.row_group_index() != 1
+            })
+            .unwrap();
+        assert_eq!(dropped, 2);
+        assert_eq!(
+            seen,
+            vec![(1, select(20, 5)), (0, select(100, 7)), (1, select(30, 5))]
+        );
+        assert_eq!(decoder.state.queued_row_groups(), vec![0]);
+        assert_eq!(decoder.row_groups_remaining(), 1);
+        assert_eq!(decoder.peek_next_row_group().unwrap(), Some(0));
+
+        let reader = expect_data(decoder.try_next_reader());
+        assert_eq!(drain_reader(reader), TEST_BATCH.slice(100, 7));
+        expect_finished(decoder.try_next_reader());
+    }
+
+    /// A dropped row group is not requested: after the drop, the decoder only
+    /// requests the bytes of RG0, and `scan_plan` matches a decoder that never
+    /// had RG1 in its plan.
+    #[test]
+    fn test_retain_row_groups_does_not_read_dropped_row_groups() {
+        let builder =
+            || ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata()).unwrap();
+        let mut decoder = builder()
+            .with_row_group_selections(vec![
+                RowGroupSelection::new(1, select(0, 5)),
+                RowGroupSelection::new(0, select(50, 5)),
+            ])
+            .build()
+            .unwrap();
+        let expected = builder()
+            .with_row_group_selections(vec![RowGroupSelection::new(0, select(50, 5))])
+            .build()
+            .unwrap();
+
+        decoder
+            .retain_row_groups(|row_group| row_group.row_group_index() == 0)
+            .unwrap();
+        let plan: Vec<_> = decoder.scan_plan().collect();
+        assert!(!plan.is_empty());
+        assert!(plan.iter().all(|range| range.row_group == 0));
+        assert_eq!(plan, expected.scan_plan().collect::<Vec<_>>());
+
+        let mut expected = expected;
+        let expected_ranges = expect_needs_data(expected.try_next_reader());
+        let ranges = expect_needs_data(decoder.try_next_reader());
+        assert_eq!(ranges, expected_ranges);
+        push_ranges_to_decoder(&mut decoder, ranges);
+
+        let reader = expect_data(decoder.try_next_reader());
+        assert_eq!(drain_reader(reader), TEST_BATCH.slice(50, 5));
+        expect_finished(decoder.try_next_reader());
+    }
+
+    /// The drop releases the buffered bytes of the dropped row group.
+    #[test]
+    fn test_retain_row_groups_releases_buffered_bytes() {
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+            .unwrap()
+            .build()
+            .unwrap();
+        prefetch_test_file(&mut decoder);
+        let all_bytes = decoder.buffered_bytes();
+
+        decoder
+            .retain_row_groups(|row_group| row_group.row_group_index() == 0)
+            .unwrap();
+        let rg0_bytes = decoder.buffered_bytes();
+        assert!(rg0_bytes < all_bytes, "{rg0_bytes} < {all_bytes}");
+
+        decoder.retain_row_groups(|_| false).unwrap();
+        assert_eq!(decoder.buffered_bytes(), 0);
+        expect_finished(decoder.try_next_reader());
+    }
+
+    /// The method can run while `try_decode` drains a row group. The active
+    /// row group finishes, and only the queued row groups change.
+    #[test]
+    fn test_retain_row_groups_mid_row_group() {
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+            .unwrap()
+            .with_batch_size(10)
+            .with_row_group_selections(vec![
+                RowGroupSelection::new(0, select(0, 25)),
+                RowGroupSelection::new(1, None),
+                RowGroupSelection::new(0, select(150, 3)),
+            ])
+            .build()
+            .unwrap();
+        prefetch_test_file(&mut decoder);
+
+        assert_eq!(expect_data(decoder.try_decode()), TEST_BATCH.slice(0, 10));
+        assert!(!decoder.is_at_row_group_boundary());
+        decoder
+            .retain_row_groups(|row_group| row_group.row_group_index() == 0)
+            .unwrap();
+        assert_eq!(decoder.state.queued_row_groups(), vec![0]);
+
+        assert_eq!(expect_data(decoder.try_decode()), TEST_BATCH.slice(10, 10));
+        assert_eq!(expect_data(decoder.try_decode()), TEST_BATCH.slice(20, 5));
+        assert_eq!(expect_data(decoder.try_decode()), TEST_BATCH.slice(150, 3));
+        expect_finished(decoder.try_decode());
+    }
+
+    /// The offset skips the rows of the kept row groups only.
+    #[test]
+    fn test_retain_row_groups_with_offset_and_limit() {
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+            .unwrap()
+            .with_row_group_selections(vec![
+                RowGroupSelection::new(0, None),
+                RowGroupSelection::new(1, None),
+                RowGroupSelection::new(0, None),
+            ])
+            .with_offset(250)
+            .with_limit(100)
+            .build()
+            .unwrap();
+        prefetch_test_file(&mut decoder);
+
+        // Without the drop, the offset ends in RG1. With the drop, the offset
+        // skips the first RG0 entry and 50 rows of the second one.
+        decoder
+            .retain_row_groups(|row_group| row_group.row_group_index() == 0)
+            .unwrap();
+        let reader = expect_data(decoder.try_next_reader());
+        assert_eq!(drain_reader(reader), TEST_BATCH.slice(50, 100));
+        expect_finished(decoder.try_next_reader());
+    }
+
+    /// The limit that is left after a row group applies to the kept row groups.
+    #[test]
+    fn test_retain_row_groups_mid_scan_with_limit() {
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+            .unwrap()
+            .with_row_group_selections(vec![
+                RowGroupSelection::new(0, select(0, 30)),
+                RowGroupSelection::new(1, None),
+                RowGroupSelection::new(0, select(100, 30)),
+            ])
+            .with_limit(40)
+            .build()
+            .unwrap();
+        prefetch_test_file(&mut decoder);
+
+        let reader = expect_data(decoder.try_next_reader());
+        assert_eq!(drain_reader(reader), TEST_BATCH.slice(0, 30));
+        decoder
+            .retain_row_groups(|row_group| row_group.row_group_index() == 0)
+            .unwrap();
+        let reader = expect_data(decoder.try_next_reader());
+        assert_eq!(drain_reader(reader), TEST_BATCH.slice(100, 10));
+        expect_finished(decoder.try_next_reader());
+    }
+
+    /// A global selection spans the queued row groups. The drop removes the
+    /// rows of the dropped row group, so that RG1 keeps its own rows.
+    #[test]
+    fn test_retain_row_groups_with_global_selection() {
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+            .unwrap()
+            .with_row_selection(RowSelection::from(vec![
+                RowSelector::skip(190),
+                RowSelector::select(20),
+            ]))
+            .build()
+            .unwrap();
+        prefetch_test_file(&mut decoder);
+
+        decoder
+            .retain_row_groups(|row_group| row_group.row_group_index() == 1)
+            .unwrap();
+        assert_eq!(decoder.state.queued_row_groups(), vec![1]);
+        let reader = expect_data(decoder.try_next_reader());
+        assert_eq!(drain_reader(reader), TEST_BATCH.slice(200, 10));
+        expect_finished(decoder.try_next_reader());
+
+        // The rebuilt builder keeps the global form of the plan.
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+            .unwrap()
+            .with_row_selection(RowSelection::from(vec![
+                RowSelector::skip(190),
+                RowSelector::select(20),
+            ]))
+            .build()
+            .unwrap();
+        decoder
+            .retain_row_groups(|row_group| row_group.row_group_index() == 1)
+            .unwrap();
+        let mut decoder = decoder.into_builder().unwrap().build().unwrap();
+        prefetch_test_file(&mut decoder);
+        let reader = expect_data(decoder.try_next_reader());
+        assert_eq!(drain_reader(reader), TEST_BATCH.slice(200, 10));
+        expect_finished(decoder.try_next_reader());
+    }
+
+    /// `f` keeps every entry: nothing changes, and the bytes stay buffered.
+    #[test]
+    fn test_retain_row_groups_keep_all_is_noop() {
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+            .unwrap()
+            .build()
+            .unwrap();
+        prefetch_test_file(&mut decoder);
+        let bytes = decoder.buffered_bytes();
+
+        assert_eq!(decoder.retain_row_groups(|_| true).unwrap(), 0);
+        assert_eq!(decoder.buffered_bytes(), bytes);
+        assert_eq!(decoder.state.queued_row_groups(), vec![0, 1]);
+    }
+
+    /// The global selection slices that `f` sees are row-group-local.
+    #[test]
+    fn test_retain_row_groups_global_selection_view() {
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+            .unwrap()
+            .with_row_selection(RowSelection::from(vec![
+                RowSelector::skip(190),
+                RowSelector::select(20),
+            ]))
+            .build()
+            .unwrap();
+        let mut seen = vec![];
+        decoder
+            .retain_row_groups(|row_group| {
+                seen.push((row_group.row_group_index(), row_group.selection().cloned()));
+                true
+            })
+            .unwrap();
+        assert_eq!(seen, vec![(0, select(190, 10)), (1, select(0, 10))]);
+    }
+
+    /// A failed row count lookup leaves the queue and the selection unchanged.
+    #[test]
+    fn test_retain_row_groups_error_leaves_decoder_unchanged() {
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+            .unwrap()
+            .with_row_groups(vec![0, 7])
+            .with_row_selection(RowSelection::from(vec![
+                RowSelector::skip(190),
+                RowSelector::select(5),
+            ]))
+            .build()
+            .unwrap();
+        prefetch_test_file(&mut decoder);
+
+        let err = decoder
+            .retain_row_groups(|row_group| row_group.row_group_index() == 7)
+            .unwrap_err();
+        assert!(err.to_string().contains("out of bounds"), "{err}");
+        assert_eq!(decoder.state.queued_row_groups(), vec![0, 7]);
+        let reader = expect_data(decoder.try_next_reader());
+        assert_eq!(drain_reader(reader), TEST_BATCH.slice(190, 5));
+    }
+
+    /// While a `NeedsData` request is outstanding, the active row group is
+    /// not passed to `f` and is not dropped.
+    #[test]
+    fn test_retain_row_groups_with_outstanding_needs_data() {
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+            .unwrap()
+            .with_row_group_selections(vec![
+                RowGroupSelection::new(0, select(40, 5)),
+                RowGroupSelection::new(1, select(0, 5)),
+            ])
+            .build()
+            .unwrap();
+        assert_eq!(decoder.active_row_group(), None);
+        let ranges = expect_needs_data(decoder.try_next_reader());
+        assert_eq!(decoder.active_row_group(), Some(0));
+
+        let mut seen = vec![];
+        let dropped = decoder
+            .retain_row_groups(|row_group| {
+                seen.push(row_group.row_group_index());
+                false
+            })
+            .unwrap();
+        assert_eq!((dropped, seen), (1, vec![1]));
+        assert_eq!(decoder.active_row_group(), Some(0));
+
+        push_ranges_to_decoder(&mut decoder, ranges);
+        let reader = expect_data(decoder.try_next_reader());
+        assert_eq!(drain_reader(reader), TEST_BATCH.slice(40, 5));
+        expect_finished(decoder.try_next_reader());
+        assert_eq!(decoder.active_row_group(), None);
+    }
+
+    /// Bytes of a dropped row group that arrive after the drop stay buffered
+    /// until a rebuild releases them.
+    #[test]
+    fn test_retain_row_groups_late_push_for_dropped_row_group() {
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(
+            decoder
+                .retain_row_groups(|row_group| row_group.row_group_index() == 0)
+                .unwrap(),
+            1
+        );
+        prefetch_test_file(&mut decoder);
+        let all_bytes = decoder.buffered_bytes();
+        assert_eq!(all_bytes, test_file_range().end - test_file_range().start);
+
+        let mut decoder = decoder.into_builder().unwrap().build().unwrap();
+        assert!(decoder.buffered_bytes() < all_bytes);
+        let reader = expect_data(decoder.try_next_reader());
+        assert_eq!(drain_reader(reader), TEST_BATCH.slice(0, 200));
+        expect_finished(decoder.try_next_reader());
+    }
+
+    /// `active_row_group` names the row group of each reader, also when the
+    /// decoder skips a row group with an empty selection.
+    #[test]
+    fn test_active_row_group_after_skipped_row_group() {
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+            .unwrap()
+            .with_row_group_selections(vec![
+                RowGroupSelection::new(1, select(0, 3)),
+                RowGroupSelection::new(0, Some(RowSelection::from(vec![RowSelector::skip(200)]))),
+                RowGroupSelection::new(0, select(7, 2)),
+            ])
+            .build()
+            .unwrap();
+        prefetch_test_file(&mut decoder);
+
+        let reader = expect_data(decoder.try_next_reader());
+        assert_eq!(decoder.active_row_group(), Some(1));
+        assert_eq!(drain_reader(reader), TEST_BATCH.slice(200, 3));
+        let reader = expect_data(decoder.try_next_reader());
+        assert_eq!(decoder.active_row_group(), Some(0));
+        assert_eq!(drain_reader(reader), TEST_BATCH.slice(7, 2));
+        expect_finished(decoder.try_next_reader());
+        assert_eq!(decoder.active_row_group(), None);
+    }
+
+    #[test]
+    fn test_retain_row_groups_on_finished_decoder() {
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+            .unwrap()
+            .with_row_group_selections(vec![])
+            .build()
+            .unwrap();
+        expect_finished(decoder.try_decode());
+        decoder
+            .retain_row_groups(|_| panic!("no row group is pending"))
+            .unwrap();
+        assert!(decoder.state.queued_row_groups().is_empty());
     }
 
     /// Drive the decoder incrementally. Start with a narrow projection,
