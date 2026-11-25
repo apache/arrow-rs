@@ -53,6 +53,7 @@ pub use crate::cast::union::*;
 
 use chrono::{TimeZone, Utc};
 use std::cmp::Ordering;
+use std::fmt;
 use std::sync::Arc;
 
 use crate::display::{ArrayFormatter, FormatOptions};
@@ -73,10 +74,36 @@ pub use decimal::{DecimalCast, float_to_decimal, float_to_decimal_opt, rescale_d
 pub use decimal::{parse_string_to_decimal_native, single_float_to_decimal};
 pub use string::cast_single_string_to_boolean_default;
 
-/// Integers below 2^53 convert to an `f64` exactly.
-const F64_EXACT_INT_LIMIT: f64 = 9_007_199_254_740_992.0;
-/// Integers below 2^24 convert to an `f32` exactly.
-const F32_EXACT_INT_LIMIT: f64 = 16_777_216.0;
+/// Integers at or below 2^53 convert to an `f64` exactly.
+const F64_EXACT_INT_LIMIT: i64 = 1 << 53;
+/// Integers at or below 2^24 convert to an `f32` exactly.
+const F32_EXACT_INT_LIMIT: i64 = 1 << 24;
+
+/// The largest decimal native value has 78 characters, including its sign.
+/// The scale may append up to 128 zeroes for a valid Arrow decimal value.
+const DECIMAL_FLOAT_BUFFER_SIZE: usize = 78 + 128 + 2;
+
+struct DecimalFloatBuffer {
+    bytes: [u8; DECIMAL_FLOAT_BUFFER_SIZE],
+    len: usize,
+}
+
+impl DecimalFloatBuffer {
+    #[inline]
+    fn as_bytes(&self) -> &[u8] {
+        &self.bytes[..self.len]
+    }
+}
+
+impl fmt::Write for DecimalFloatBuffer {
+    fn write_str(&mut self, value: &str) -> fmt::Result {
+        let end = self.len.checked_add(value.len()).ok_or(fmt::Error)?;
+        let target = self.bytes.get_mut(self.len..end).ok_or(fmt::Error)?;
+        target.copy_from_slice(value.as_bytes());
+        self.len = end;
+        Ok(())
+    }
+}
 
 /// Lossy conversion from decimal to float.
 ///
@@ -95,7 +122,10 @@ where
     let unscaled = f(x);
     // Both operands are exact in this range, so this rounds once. A negative scale
     // multiplies, since `10^-scale` is the exact power of ten there.
-    if (-22..=22).contains(&scale) && unscaled.abs() < F64_EXACT_INT_LIMIT {
+    if (-22..=22).contains(&scale)
+        && (unscaled.abs() < F64_EXACT_INT_LIMIT as f64
+            || decimal_value_fits_float_fast_path(x, F64_EXACT_INT_LIMIT))
+    {
         return if scale >= 0 {
             unscaled / 10_f64.powi(scale)
         } else {
@@ -113,11 +143,21 @@ where
 #[cold]
 #[inline(never)]
 fn decimal_to_f64_rounded_once<D: DecimalType>(x: D::Native, scale: i8, unscaled: f64) -> f64 {
-    // `format_decimal` always writes a decimal literal, so the parse cannot fail.
-    // The fallback is there to keep that from being a panic, not because it runs.
-    D::format_decimal(x, u8::MAX, scale)
-        .parse::<f64>()
-        .unwrap_or_else(|_| unscaled / 10_f64.powi(scale.into()))
+    let mut buffer = DecimalFloatBuffer {
+        bytes: [0; DECIMAL_FLOAT_BUFFER_SIZE],
+        len: 0,
+    };
+
+    // `write_decimal` uses the existing stack-backed decimal digit formatter.
+    // Parsing the bytes directly preserves the single-rounding guarantee while
+    // avoiding the allocation performed by `format_decimal`.
+    if arrow_data::decimal::write_decimal(&mut buffer, x, scale).is_ok()
+        && let Ok(value) = lexical_core::parse::<f64>(buffer.as_bytes())
+    {
+        return value;
+    }
+
+    unscaled / 10_f64.powi(scale.into())
 }
 
 /// As [`decimal_to_f64_rounded_once`], but narrowing to `f32` in one step.
@@ -127,10 +167,25 @@ fn decimal_to_f64_rounded_once<D: DecimalType>(x: D::Native, scale: i8, unscaled
 #[cold]
 #[inline(never)]
 fn decimal_to_f32_rounded_once<D: DecimalType>(x: D::Native, scale: i8, unscaled: f64) -> f32 {
-    // Unreachable, as in [`decimal_to_f64_rounded_once`].
-    D::format_decimal(x, u8::MAX, scale)
-        .parse::<f32>()
-        .unwrap_or_else(|_| unscaled as f32 / 10_f32.powi(scale.into()))
+    let mut buffer = DecimalFloatBuffer {
+        bytes: [0; DECIMAL_FLOAT_BUFFER_SIZE],
+        len: 0,
+    };
+
+    if arrow_data::decimal::write_decimal(&mut buffer, x, scale).is_ok()
+        && let Ok(value) = lexical_core::parse::<f32>(buffer.as_bytes())
+    {
+        return value;
+    }
+
+    unscaled as f32 / 10_f32.powi(scale.into())
+}
+
+#[inline]
+fn decimal_value_fits_float_fast_path<N: ArrowNativeType>(value: N, limit: i64) -> bool {
+    value
+        .to_i64()
+        .is_some_and(|value| (-limit..=limit).contains(&value))
 }
 
 /// Casts a decimal array to `Float64`, rounding each value once.
@@ -144,17 +199,27 @@ where
     F: Fn(D::Native) -> f64,
 {
     let array = array.as_primitive::<D>();
+
+    if scale == 0 {
+        let values = array.unary::<_, Float64Type>(as_float);
+        return Ok(Arc::new(values));
+    }
+
     // No power of ten outside this range is exactly representable.
     if !(-22..=22).contains(&scale) {
         let values = array
             .unary::<_, Float64Type>(|x| decimal_to_f64_rounded_once::<D>(x, scale, as_float(x)));
         return Ok(Arc::new(values));
     }
+
     let pow = 10_f64.powi(scale.unsigned_abs().into());
-    let values = if scale >= 0 {
+
+    let values = if scale > 0 {
         array.unary::<_, Float64Type>(|x| {
             let unscaled = as_float(x);
-            if unscaled.abs() < F64_EXACT_INT_LIMIT {
+            if unscaled.abs() < F64_EXACT_INT_LIMIT as f64
+                || decimal_value_fits_float_fast_path(x, F64_EXACT_INT_LIMIT)
+            {
                 unscaled / pow
             } else {
                 decimal_to_f64_rounded_once::<D>(x, scale, unscaled)
@@ -163,7 +228,9 @@ where
     } else {
         array.unary::<_, Float64Type>(|x| {
             let unscaled = as_float(x);
-            if unscaled.abs() < F64_EXACT_INT_LIMIT {
+            if unscaled.abs() < F64_EXACT_INT_LIMIT as f64
+                || decimal_value_fits_float_fast_path(x, F64_EXACT_INT_LIMIT)
+            {
                 unscaled * pow
             } else {
                 decimal_to_f64_rounded_once::<D>(x, scale, unscaled)
@@ -175,7 +242,7 @@ where
 
 /// Casts a decimal array to `Float32`, rounding each value once. Same shape as
 /// [`cast_decimal_to_f64`], with the smaller bounds an `f32` allows: integers are
-/// exact below 2^24, and `10^k` only up to `k = 10`.
+/// exact at or below 2^24, and `10^k` only up to `k = 10`.
 fn cast_decimal_to_f32<D, F>(
     array: &dyn Array,
     as_float: &F,
@@ -186,6 +253,11 @@ where
     F: Fn(D::Native) -> f64,
 {
     let array = array.as_primitive::<D>();
+    if scale == 0 {
+        let values = array.unary::<_, Float32Type>(|x| as_float(x) as f32);
+        return Ok(Arc::new(values));
+    }
+
     // No power of ten outside this range is exactly representable.
     if !(-10..=10).contains(&scale) {
         let values = array
@@ -193,10 +265,13 @@ where
         return Ok(Arc::new(values));
     }
     let pow = 10_f32.powi(scale.unsigned_abs().into());
-    let values = if scale >= 0 {
+
+    let values = if scale > 0 {
         array.unary::<_, Float32Type>(|x| {
             let unscaled = as_float(x);
-            if unscaled.abs() < F32_EXACT_INT_LIMIT {
+            if unscaled.abs() < F32_EXACT_INT_LIMIT as f64
+                || decimal_value_fits_float_fast_path(x, F32_EXACT_INT_LIMIT)
+            {
                 unscaled as f32 / pow
             } else {
                 decimal_to_f32_rounded_once::<D>(x, scale, unscaled)
@@ -205,7 +280,9 @@ where
     } else {
         array.unary::<_, Float32Type>(|x| {
             let unscaled = as_float(x);
-            if unscaled.abs() < F32_EXACT_INT_LIMIT {
+            if unscaled.abs() < F32_EXACT_INT_LIMIT as f64
+                || decimal_value_fits_float_fast_path(x, F32_EXACT_INT_LIMIT)
+            {
                 unscaled as f32 * pow
             } else {
                 decimal_to_f32_rounded_once::<D>(x, scale, unscaled)
