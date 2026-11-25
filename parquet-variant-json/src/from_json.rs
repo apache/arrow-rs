@@ -67,7 +67,7 @@ impl<T: VariantBuilderExt> JsonToVariant for T {
         match JsonParser::new(json, depth).parse(self) {
             Ok(()) => Ok(()),
             Err(DirectParseError::Syntax(error)) => Err(error),
-            Err(DirectParseError::UnstableFieldIds) => {
+            Err(DirectParseError::UnstableFieldIds | DirectParseError::ObjectFieldBudget) => {
                 JsonParser::new(json, depth).buffer_value(0)?.append(self)
             }
             // A duplicate (or a missing dictionary key in a field that a duplicate
@@ -137,11 +137,17 @@ fn first_json_control(bytes: &[u8]) -> Option<usize> {
         .map(|position| remainder_start + position)
 }
 
+// Bound the dictionary width introduced by a single streaming parse. For wide
+// documents, keep the legacy sorted object traversal so rebuilding a sparse
+// projection does not repeatedly search a large unsorted dictionary.
+const DIRECT_OBJECT_FIELD_BUDGET: usize = 64;
+
 struct JsonParser<'a> {
     input: &'a str,
     bytes: &'a [u8],
     offset: usize,
     container_limit: usize,
+    direct_fields_left: usize,
     saw_duplicate: bool,
 }
 
@@ -149,6 +155,7 @@ enum DirectParseError {
     Syntax(ArrowError),
     Append(ArrowError),
     UnstableFieldIds,
+    ObjectFieldBudget,
 }
 
 impl From<ArrowError> for DirectParseError {
@@ -217,6 +224,7 @@ impl<'a> JsonParser<'a> {
             bytes: input.as_bytes(),
             offset: 0,
             container_limit: MAX_NESTING_DEPTH.saturating_sub(parent_depth),
+            direct_fields_left: DIRECT_OBJECT_FIELD_BUDGET,
             saw_duplicate: false,
         }
     }
@@ -250,6 +258,10 @@ impl<'a> JsonParser<'a> {
                 }
                 object = object.with_validate_unique_fields(true);
                 self.object_fields(depth, |parser, key| {
+                    if parser.direct_fields_left == 0 {
+                        return Err(DirectParseError::ObjectFieldBudget);
+                    }
+                    parser.direct_fields_left -= 1;
                     let mut field = ObjectFieldBuilder::new(key.as_ref(), &mut object);
                     parser.parse_value(&mut field, depth + 1)
                 })?;
@@ -1287,6 +1299,35 @@ mod test {
 
         for first in [r#"{"a":0,"b":1}"#, r#"{"b":0,"a":1}"#] {
             assert_eq!(build(first, true)?, build(first, false)?);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_wide_json_preserves_sorted_dictionary() -> Result<(), ArrowError> {
+        use parquet_variant::VariantMetadata;
+
+        let fields = 4096;
+        let name = |id| format!("field_{id:026}");
+        let entry = |id| format!("\"{}\":{id}", name(id));
+        let flat = (0..fields).rev().map(entry).collect::<Vec<_>>().join(",");
+        let nested = (0..fields)
+            .step_by(2)
+            .map(|id| format!("{{{},{}}}", entry(id + 1), entry(id)))
+            .collect::<Vec<_>>()
+            .join(",");
+        for json in [format!("{{{flat}}}"), format!("[{nested}]")] {
+            let mut builder = VariantBuilder::new();
+            builder.append_json(&json)?;
+            let (metadata, value) = builder.finish();
+            let dictionary = VariantMetadata::try_new(&metadata)?;
+            assert!(dictionary.is_sorted());
+            assert_eq!(dictionary.len(), fields);
+            assert_eq!(dictionary.get(0)?, name(0));
+            assert_eq!(dictionary.get(fields - 1)?, name(fields - 1));
+            let variant = Variant::try_new(&metadata, &value)?;
+            let object = variant.get_list_element(0).unwrap_or(variant);
+            assert_eq!(object.get_object_field(&name(0)), Some(Variant::Int8(0)));
         }
         Ok(())
     }
