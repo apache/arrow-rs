@@ -259,8 +259,8 @@ where
     T: ByteArrayType,
 {
     fn get_or_insert_key(&mut self, value: impl AsRef<T::Native>) -> Result<K::Native, ArrowError> {
-        let value_native: &T::Native = value.as_ref();
-        let value_bytes: &[u8] = value_native.as_ref();
+        let value: &T::Native = value.as_ref();
+        let value_bytes: &[u8] = value.as_ref();
 
         let state = &self.state;
         let storage = &mut self.values_builder;
