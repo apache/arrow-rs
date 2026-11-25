@@ -84,7 +84,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shred_variant;
+    use crate::{json_to_variant, shred_variant, variant_to_json};
     use arrow::array::{
         ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal32Array,
         Decimal64Array, Decimal128Array, Decimal256Array, DictionaryArray,
@@ -2275,114 +2275,65 @@ mod tests {
         );
     }
 
+    fn json_variants(values: &[Option<&str>]) -> VariantArray {
+        let json: ArrayRef = Arc::new(StringArray::from(values.to_vec()));
+        json_to_variant(&json).unwrap()
+    }
+
+    fn assert_cast_json(input: &dyn Array, expected: &[Option<&str>]) {
+        let result = ArrayRef::from(cast_to_variant(input).unwrap());
+        let json = variant_to_json(&result).unwrap();
+        assert_eq!(json.iter().collect::<Vec<_>>(), expected);
+    }
+
     #[test]
     fn test_cast_to_variant_struct_with_variant_child() {
-        // A Variant-annotated child is copied through unchanged, while an
-        // unannotated struct with metadata/value columns is still serialized
-        // as an ordinary object.
-        let variant_child = VariantArray::from_iter(vec![Some(Variant::Int32(1)), None]);
-        let plain_child = variant_child.inner().clone();
+        let variant = json_variants(&[Some(r#"{"k":[2]}"#)]);
+        let plain = json_variants(&[Some("1")]).into_inner();
+        let shredded = shred_variant(
+            &json_variants(&[Some(r#"{"x":1,"y":"e"}"#)]),
+            &DataType::Struct(Fields::from(vec![Field::new("x", DataType::Int64, true)])),
+        )
+        .unwrap();
 
-        let fields = Fields::from(vec![
-            variant_child.field("a"),
-            Field::new("b", plain_child.data_type().clone(), true),
-        ]);
         let struct_array = StructArray::new(
-            fields,
+            Fields::from(vec![
+                variant.field("a"),
+                Field::new("b", plain.data_type().clone(), true),
+                shredded.field("c"),
+            ]),
             vec![
-                Arc::new(variant_child.inner().clone()) as ArrayRef,
-                Arc::new(plain_child) as ArrayRef,
+                Arc::new(variant.into_inner()) as ArrayRef,
+                Arc::new(plain) as ArrayRef,
+                Arc::new(shredded.into_inner()) as ArrayRef,
             ],
             None,
         );
 
-        let result = cast_to_variant(&struct_array).unwrap();
-        assert_eq!(result.len(), 2);
-
-        // {"a": 1, "b": {"metadata": ..., "value": ...}}
-        let variant0 = result.value(0);
-        let obj0 = variant0.as_object().unwrap();
-        assert_eq!(obj0.get("a"), Some(Variant::Int32(1)));
-        let b0 = obj0.get("b").unwrap();
-        let b0 = b0.as_object().unwrap();
-        assert!(b0.get("metadata").is_some());
-        assert!(b0.get("value").is_some());
-
-        // Null children are omitted from the object.
-        let variant1 = result.value(1);
-        let obj1 = variant1.as_object().unwrap();
-        assert_eq!(obj1.get("a"), None);
-        assert_eq!(obj1.get("b"), None);
-    }
-
-    #[test]
-    fn test_cast_to_variant_struct_with_shredded_variant_child() {
-        // A nested Variant stored as shredded typed_value is copied through too.
-        let unshredded =
-            VariantArray::from_iter(vec![Some(Variant::Int32(1)), Some(Variant::Int32(2))]);
-        let shredded = shred_variant(&unshredded, &DataType::Int32).unwrap();
-        assert!(shredded.typed_value_column().is_some());
-
-        let fields = Fields::from(vec![shredded.field("a")]);
-        let struct_array = StructArray::new(
-            fields,
-            vec![Arc::new(shredded.inner().clone()) as ArrayRef],
-            None,
-        );
-
-        let result = cast_to_variant(&struct_array).unwrap();
-        assert_eq!(result.len(), 2);
-        assert_eq!(
-            result.value(0).as_object().unwrap().get("a"),
-            Some(Variant::Int32(1))
-        );
-        assert_eq!(
-            result.value(1).as_object().unwrap().get("a"),
-            Some(Variant::Int32(2))
+        // `b` has no Variant annotation, so it stays an object of its storage columns.
+        assert_cast_json(
+            &struct_array,
+            &[Some(
+                r#"{"a":{"k":[2]},"b":{"metadata":"AQAA","value":"DAE="},"c":{"x":1,"y":"e"}}"#,
+            )],
         );
     }
 
     #[test]
     fn test_cast_to_variant_list_with_variant_values() {
-        let values = VariantArray::from_iter(vec![
-            Some(Variant::Int32(1)),
-            Some(Variant::from("hi")),
-            None,
-        ]);
+        let values = json_variants(&[Some("1"), Some(r#"{"k":[2]}"#), None]);
         let list_array = ListArray::new(
             Arc::new(values.field("item")),
-            OffsetBuffer::new(vec![0, 2, 3].into()),
-            Arc::new(values.inner().clone()) as ArrayRef,
+            OffsetBuffer::from_lengths([3]),
+            Arc::new(values.into_inner()) as ArrayRef,
             None,
         );
-
-        let (metadata, value) = {
-            let mut builder = VariantBuilder::new();
-            let mut list = builder.new_list();
-            list.append_value(1i32);
-            list.append_value("hi");
-            list.finish();
-            builder.finish()
-        };
-        let first = Variant::new(&metadata, &value);
-
-        let (metadata, value) = {
-            let mut builder = VariantBuilder::new();
-            let mut list = builder.new_list();
-            list.append_null();
-            list.finish();
-            builder.finish()
-        };
-        let second = Variant::new(&metadata, &value);
-
-        run_test(Arc::new(list_array), vec![Some(first), Some(second)]);
+        assert_cast_json(&list_array, &[Some(r#"[1,{"k":[2]},null]"#)]);
     }
 
     #[test]
     fn test_cast_to_variant_map_with_variant_values() {
-        let keys = StringArray::from(vec!["k1", "k2"]);
-        let values =
-            VariantArray::from_iter(vec![Some(Variant::Int32(1)), Some(Variant::from("v"))]);
+        let values = json_variants(&[Some("1"), Some(r#"{"k":[2]}"#)]);
         let entries_fields = Fields::from(vec![
             Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
             values.field(Field::MAP_VALUE_FIELD_DEFAULT_NAME),
@@ -2390,8 +2341,8 @@ mod tests {
         let entries = StructArray::new(
             entries_fields.clone(),
             vec![
-                Arc::new(keys) as ArrayRef,
-                Arc::new(values.inner().clone()) as ArrayRef,
+                Arc::new(StringArray::from(vec!["k1", "k2"])) as ArrayRef,
+                Arc::new(values.into_inner()) as ArrayRef,
             ],
             None,
         );
@@ -2402,59 +2353,34 @@ mod tests {
         ));
         let map_array = MapArray::try_new(
             map_field,
-            OffsetBuffer::new(vec![0, 2].into()),
+            OffsetBuffer::from_lengths([2]),
             entries,
             None,
             false,
         )
         .unwrap();
-
-        let result = cast_to_variant(&map_array).unwrap();
-        assert_eq!(result.len(), 1);
-        let variant0 = result.value(0);
-        let obj = variant0.as_object().unwrap();
-        assert_eq!(obj.get("k1"), Some(Variant::Int32(1)));
-        assert_eq!(obj.get("k2"), Some(Variant::from("v")));
+        assert_cast_json(&map_array, &[Some(r#"{"k1":1,"k2":{"k":[2]}}"#)]);
     }
 
     #[test]
     fn test_cast_to_variant_union_with_variant_child() {
-        let int_array = Int32Array::from(vec![Some(1), None, None]);
-        let variant_child = VariantArray::from_iter(vec![
+        let values = json_variants(&[Some(r#"{"k":[2]}"#)]);
+        let union_array = UnionArray::try_new(
+            UnionFields::from_fields(vec![values.field("v")]),
+            ScalarBuffer::from(vec![0i8]),
             None,
-            Some(Variant::from("hi")),
-            Some(Variant::Int32(2)),
-        ]);
-        let type_ids = [0, 1, 1].into_iter().collect::<ScalarBuffer<i8>>();
-
-        let union_fields = UnionFields::from_fields(vec![
-            Field::new("int_field", DataType::Int32, false),
-            variant_child.field("variant_field"),
-        ]);
-        let children: Vec<Arc<dyn Array>> =
-            vec![Arc::new(int_array), Arc::new(variant_child.inner().clone())];
-        let union_array = UnionArray::try_new(union_fields, type_ids, None, children).unwrap();
-
-        run_test(
-            Arc::new(union_array),
-            vec![
-                Some(Variant::Int32(1)),
-                Some(Variant::from("hi")),
-                Some(Variant::Int32(2)),
-            ],
-        );
+            vec![Arc::new(values.into_inner()) as ArrayRef],
+        )
+        .unwrap();
+        assert_cast_json(&union_array, &[Some(r#"{"k":[2]}"#)]);
     }
 
     #[test]
     fn test_cast_to_variant_run_end_encoded_with_variant_values() {
         use arrow::array::{ArrayData, RunArray};
 
-        let values =
-            VariantArray::from_iter(vec![Some(Variant::Int32(1)), Some(Variant::from("x"))]);
-        let run_ends = Int32Array::from(vec![2, 3]);
-
-        // RunArray::try_new drops the extension type on the values field, so
-        // build the array from ArrayData to keep the Variant annotation.
+        let values = json_variants(&[Some(r#"{"k":[2]}"#)]);
+        // `RunArray::try_new` drops the values field's extension type.
         let data_type = DataType::RunEndEncoded(
             Arc::new(Field::new(
                 Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
@@ -2464,23 +2390,15 @@ mod tests {
             Arc::new(values.field(Field::REE_VALUES_FIELD_DEFAULT_NAME)),
         );
         let data = ArrayData::builder(data_type)
-            .len(3)
+            .len(1)
             .child_data(vec![
-                run_ends.into_data(),
-                values.inner().clone().into_data(),
+                Int32Array::from(vec![1]).into_data(),
+                values.into_inner().into_data(),
             ])
             .build()
             .unwrap();
         let run_array = RunArray::<Int32Type>::from(data);
-
-        run_test(
-            Arc::new(run_array),
-            vec![
-                Some(Variant::Int32(1)),
-                Some(Variant::Int32(1)),
-                Some(Variant::from("x")),
-            ],
-        );
+        assert_cast_json(&run_array, &[Some(r#"{"k":[2]}"#)]);
     }
 
     /// Converts the given `Array` to a `VariantArray` and tests the conversion

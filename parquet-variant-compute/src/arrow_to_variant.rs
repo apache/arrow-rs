@@ -230,19 +230,22 @@ pub(crate) fn make_arrow_to_variant_row_builder<'a>(
             DataType::Utf8 => Utf8(StringArrowToVariantBuilder::new(array)),
             DataType::LargeUtf8 => LargeUtf8(StringArrowToVariantBuilder::new(array)),
             DataType::Utf8View => Utf8View(StringViewArrowToVariantBuilder::new(array)),
-            DataType::List(_) => List(ListArrowToVariantBuilder::new(array.as_list(), options)?),
-            DataType::LargeList(_) => {
-                LargeList(ListArrowToVariantBuilder::new(array.as_list(), options)?)
+            DataType::List(f) => List(ListArrowToVariantBuilder::new(f, array.as_list(), options)?),
+            DataType::LargeList(f) => {
+                LargeList(ListArrowToVariantBuilder::new(f, array.as_list(), options)?)
             }
-            DataType::ListView(_) => ListView(ListArrowToVariantBuilder::new(
+            DataType::ListView(f) => ListView(ListArrowToVariantBuilder::new(
+                f,
                 array.as_list_view(),
                 options,
             )?),
-            DataType::LargeListView(_) => LargeListView(ListArrowToVariantBuilder::new(
+            DataType::LargeListView(f) => LargeListView(ListArrowToVariantBuilder::new(
+                f,
                 array.as_list_view(),
                 options,
             )?),
-            DataType::FixedSizeList(_, _) => FixedSizeList(ListArrowToVariantBuilder::new(
+            DataType::FixedSizeList(f, _) => FixedSizeList(ListArrowToVariantBuilder::new(
+                f,
                 array.as_fixed_size_list(),
                 options,
             )?),
@@ -276,11 +279,8 @@ pub(crate) fn make_arrow_to_variant_row_builder<'a>(
     Ok(builder)
 }
 
-/// Builds the row builder for a child array described by `field`.
-///
-/// When the field carries a valid [`VariantType`] extension, the child is already
-/// a [`VariantArray`] and its rows are copied through unchanged; otherwise this
-/// falls back to dispatching on the field's data type.
+/// Like [`make_arrow_to_variant_row_builder`], but reads a Variant-annotated child as
+/// Variant values instead of as its storage struct.
 pub(crate) fn make_arrow_to_variant_row_builder_for_field<'a>(
     field: &'a Field,
     array: &'a dyn Array,
@@ -518,9 +518,7 @@ impl NullArrowToVariantBuilder {
     }
 }
 
-/// Builder for a child array that is already a [`VariantArray`]. Rows are copied
-/// through unchanged instead of being re-serialized as objects, including rows
-/// stored as shredded `typed_value`s.
+/// Builder for a Variant-annotated child array.
 pub(crate) struct VariantArrowToVariantBuilder {
     variant_array: VariantArray,
 }
@@ -528,7 +526,8 @@ pub(crate) struct VariantArrowToVariantBuilder {
 impl VariantArrowToVariantBuilder {
     pub(crate) fn new(array: &dyn Array) -> Result<Self, ArrowError> {
         Ok(Self {
-            variant_array: VariantArray::try_new(array)?,
+            // `try_value` cannot materialize a struct or list `typed_value`.
+            variant_array: crate::unshred_variant(&VariantArray::try_new(array)?)?,
         })
     }
 
@@ -554,21 +553,12 @@ pub(crate) struct ListArrowToVariantBuilder<'a, L: ListLikeArray> {
 }
 
 impl<'a, L: ListLikeArray> ListArrowToVariantBuilder<'a, L> {
-    pub(crate) fn new(array: &'a L, options: &'a CastOptions) -> Result<Self, ArrowError> {
+    pub(crate) fn new(
+        values_field: &'a Field,
+        array: &'a L,
+        options: &'a CastOptions,
+    ) -> Result<Self, ArrowError> {
         let values = array.values();
-        // The values field carries the extension type of the values, if any.
-        let values_field: &Field = match array.data_type() {
-            DataType::List(field)
-            | DataType::LargeList(field)
-            | DataType::FixedSizeList(field, _)
-            | DataType::ListView(field)
-            | DataType::LargeListView(field) => field,
-            data_type => {
-                return Err(ArrowError::CastError(format!(
-                    "Expected a list-like data type, got {data_type}"
-                )));
-            }
-        };
         let values_builder =
             make_arrow_to_variant_row_builder_for_field(values_field, values, options)?;
 
@@ -726,21 +716,12 @@ impl<'a> UnionArrowToVariantBuilder<'a> {
 
         // Create child builders for each union field
         let mut child_builders = HashMap::new();
-        for (type_id, _) in union_array.fields().iter() {
-            let child_array = union_array.child(type_id);
-            let child_builder = match union_array.fields().find_by_type_id(type_id) {
-                Some((_, child_field)) => make_arrow_to_variant_row_builder_for_field(
-                    child_field,
-                    child_array.as_ref(),
-                    options,
-                )?,
-                // A child with no matching field cannot carry an extension type.
-                None => make_arrow_to_variant_row_builder(
-                    child_array.data_type(),
-                    child_array.as_ref(),
-                    options,
-                )?,
-            };
+        for (type_id, child_field) in union_array.fields().iter() {
+            let child_builder = make_arrow_to_variant_row_builder_for_field(
+                child_field,
+                union_array.child(type_id).as_ref(),
+                options,
+            )?;
             child_builders.insert(type_id, Box::new(child_builder));
         }
 
