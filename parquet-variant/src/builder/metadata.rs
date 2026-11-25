@@ -88,15 +88,49 @@ pub struct ReadOnlyMetadataBuilder<'m> {
     // Field names borrowed from a sorted `metadata` bypass this cache; see
     // `VariantMetadata::borrowed_field_id`.
     known_field_names: HashMap<&'m str, u32>,
+    lookup_index: LookupIndex,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum LookupIndex {
+    Disabled,
+    Pending(usize),
+    Complete,
 }
 
 impl<'m> ReadOnlyMetadataBuilder<'m> {
     /// Creates a new read-only metadata builder from the given metadata dictionary.
     pub fn new(metadata: &'m VariantMetadata<'m>) -> Self {
+        // Don't allocate a full map for tiny dictionaries, sparse projections, or
+        // the largest dictionaries. Sorted dictionaries already have binary search.
+        let lookup_index = if !metadata.is_sorted()
+            && (64..=16_384).contains(&metadata.len())
+            && metadata.bytes.len() <= 128 * 1024
+        {
+            LookupIndex::Pending(0)
+        } else {
+            LookupIndex::Disabled
+        };
         Self {
             metadata,
             known_field_names: HashMap::new(),
+            lookup_index,
         }
+    }
+
+    fn build_lookup_index(&mut self) {
+        self.lookup_index = LookupIndex::Disabled;
+        let mut entries = HashMap::with_capacity(self.metadata.len());
+        for (id, name) in self.metadata.iter_try().enumerate() {
+            // Keep the original lookup behavior for shallow metadata with a bad
+            // entry unrelated to the requested field.
+            let Ok(name) = name else {
+                return;
+            };
+            entries.entry(name).or_insert(id as u32);
+        }
+        self.known_field_names = entries;
+        self.lookup_index = LookupIndex::Complete;
     }
 }
 
@@ -121,12 +155,31 @@ impl MetadataBuilder for ReadOnlyMetadataBuilder<'_> {
             return Ok(*field_id);
         }
 
-        let Some((field_id, field_name)) = self.metadata.get_entry(field_name) else {
+        // Pay for indexing only once successful uncached searches have already
+        // examined at least twice as many entries as a full scan.
+        if matches!(self.lookup_index, LookupIndex::Pending(seen) if seen >= 2 * self.metadata.len())
+        {
+            self.build_lookup_index();
+            if let Some(id) = self.known_field_names.get(field_name) {
+                return Ok(*id);
+            }
+        }
+
+        let entry = if self.lookup_index == LookupIndex::Complete {
+            None
+        } else {
+            self.metadata.get_entry_by_name(field_name)
+        };
+        let Some((field_id, field_name)) = entry else {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Field name '{field_name}' not found in metadata dictionary"
             )));
         };
 
+        if let LookupIndex::Pending(seen) = &mut self.lookup_index {
+            // A linear search visits the prefix ending at its first match.
+            *seen += field_id as usize + 1;
+        }
         self.known_field_names.insert(field_name, field_id);
         Ok(field_id)
     }
@@ -286,6 +339,7 @@ impl<S: AsRef<str>> Extend<S> for WritableMetadataBuilder {
 
 #[cfg(test)]
 mod test {
+    use super::{LookupIndex, MetadataBuilder};
     use crate::{
         ParentState, ValueBuilder, VariantMetadata,
         builder::{
@@ -373,6 +427,72 @@ mod test {
         let field_names: Vec<Box<str>> = vec!["a".into(), "b".into(), "c".into()];
         let metadata = WritableMetadataBuilder::from_iter(field_names);
         assert_eq!(metadata.num_field_names(), 3);
+    }
+
+    fn wide_unsorted_dictionary() -> Vec<u8> {
+        let mut metadata =
+            WritableMetadataBuilder::from_iter((0..64).rev().map(|id| format!("field_{id:02}")));
+        metadata.finish();
+        metadata.into_inner()
+    }
+
+    #[test]
+    fn test_read_only_lookup_indexes_wide_unsorted_dictionary() {
+        let mut bytes = wide_unsorted_dictionary();
+        let last_entry = bytes.len() - "field_00".len();
+        bytes[last_entry..].copy_from_slice(b"field_63");
+        let metadata = VariantMetadata::try_new(&bytes).unwrap();
+        let mut builder = ReadOnlyMetadataBuilder::new(&metadata);
+        for id in 0..9 {
+            let name = format!("field_{:02}", 63 - id);
+            assert_eq!(builder.try_upsert_field_name(&name).unwrap(), id);
+        }
+        assert_eq!(builder.try_upsert_field_name("field_63").unwrap(), 0);
+        assert_eq!(builder.lookup_index, LookupIndex::Pending(45));
+
+        assert_eq!(builder.try_upsert_field_name("field_03").unwrap(), 60);
+        assert_eq!(builder.try_upsert_field_name("field_04").unwrap(), 59);
+        assert_eq!(builder.lookup_index, LookupIndex::Pending(166));
+        assert_eq!(builder.try_upsert_field_name("field_05").unwrap(), 58);
+        assert_eq!(builder.lookup_index, LookupIndex::Complete);
+        // Unsorted metadata may repeat a name. Preserve the first ID.
+        assert_eq!(builder.try_upsert_field_name("field_63").unwrap(), 0);
+        assert!(builder.try_upsert_field_name("field_00").is_err());
+    }
+
+    #[test]
+    fn test_read_only_lookup_keeps_lazy_access_for_unvalidated_metadata() {
+        for invalid_offset in [false, true] {
+            let mut bytes = wide_unsorted_dictionary();
+            if invalid_offset {
+                // Corrupt entry 63's start offset; 64 entries of 8 bytes use two-byte offsets.
+                let start = 3 + 63 * 2;
+                bytes[start..start + 2].copy_from_slice(&0u16.to_le_bytes());
+            } else {
+                *bytes.last_mut().unwrap() = 0xff;
+            }
+            let metadata = VariantMetadata::new(&bytes);
+            let mut builder = ReadOnlyMetadataBuilder::new(&metadata);
+
+            for id in [61, 60, 59, 58] {
+                let name = format!("field_{:02}", 63 - id);
+                assert_eq!(builder.try_upsert_field_name(&name).unwrap(), id);
+            }
+            assert_eq!(builder.lookup_index, LookupIndex::Disabled);
+        }
+    }
+
+    #[test]
+    fn test_read_only_lookup_does_not_index_large_metadata_buffers() {
+        let suffix = "x".repeat(2_048);
+        let mut dictionary = WritableMetadataBuilder::from_iter(
+            (0..64).rev().map(|id| format!("field_{id:02}{suffix}")),
+        );
+        dictionary.finish();
+        let bytes = dictionary.into_inner();
+        let metadata = VariantMetadata::try_new(&bytes).unwrap();
+        let builder = ReadOnlyMetadataBuilder::new(&metadata);
+        assert_eq!(builder.lookup_index, LookupIndex::Disabled);
     }
 
     #[test]
