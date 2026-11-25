@@ -64,10 +64,14 @@ pub trait JsonToVariant {
 impl<T: VariantBuilderExt> JsonToVariant for T {
     fn append_json(&mut self, json: &str) -> Result<(), ArrowError> {
         let depth = self.container_depth();
-        match JsonParser::new(json, depth).parse(self) {
+        let mut parser = JsonParser::new(json, depth);
+        if parser.may_exceed_field_budget() {
+            return parser.buffer_value(0)?.append(self);
+        }
+        match parser.parse(self) {
             Ok(()) => Ok(()),
             Err(DirectParseError::Syntax(error)) => Err(error),
-            Err(DirectParseError::UnstableFieldIds | DirectParseError::ObjectFieldBudget) => {
+            Err(DirectParseError::UnstableFieldIds) => {
                 JsonParser::new(json, depth).buffer_value(0)?.append(self)
             }
             // A duplicate (or a missing dictionary key in a field that a duplicate
@@ -147,7 +151,6 @@ struct JsonParser<'a> {
     bytes: &'a [u8],
     offset: usize,
     container_limit: usize,
-    direct_fields_left: usize,
     saw_duplicate: bool,
 }
 
@@ -155,7 +158,6 @@ enum DirectParseError {
     Syntax(ArrowError),
     Append(ArrowError),
     UnstableFieldIds,
-    ObjectFieldBudget,
 }
 
 impl From<ArrowError> for DirectParseError {
@@ -224,9 +226,22 @@ impl<'a> JsonParser<'a> {
             bytes: input.as_bytes(),
             offset: 0,
             container_limit: MAX_NESTING_DEPTH.saturating_sub(parent_depth),
-            direct_fields_left: DIRECT_OBJECT_FIELD_BUDGET,
             saw_duplicate: false,
         }
+    }
+
+    fn may_exceed_field_budget(&mut self) -> bool {
+        // The shortest field, "":0, needs four bytes. Count separators before
+        // writing to avoid repeating a possibly large prefix at the cutoff.
+        // Colons inside strings can overestimate, but never hide a wide object.
+        if self.bytes.len() <= DIRECT_OBJECT_FIELD_BUDGET * 4 {
+            return false;
+        }
+        self.skip_whitespace();
+        matches!(self.peek(), Some(b'{' | b'['))
+            && memchr::memchr_iter(b':', &self.bytes[self.offset..])
+                .nth(DIRECT_OBJECT_FIELD_BUDGET)
+                .is_some()
     }
 
     fn parse(&mut self, builder: &mut impl VariantBuilderExt) -> Result<(), DirectParseError> {
@@ -258,10 +273,6 @@ impl<'a> JsonParser<'a> {
                 }
                 object = object.with_validate_unique_fields(true);
                 self.object_fields(depth, |parser, key| {
-                    if parser.direct_fields_left == 0 {
-                        return Err(DirectParseError::ObjectFieldBudget);
-                    }
-                    parser.direct_fields_left -= 1;
                     let mut field = ObjectFieldBuilder::new(key.as_ref(), &mut object);
                     parser.parse_value(&mut field, depth + 1)
                 })?;
@@ -1329,6 +1340,33 @@ mod test {
             let object = variant.get_list_element(0).unwrap_or(variant);
             assert_eq!(object.get_object_field(&name(0)), Some(Variant::Int8(0)));
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_wide_json_budget_and_duplicate_validation() -> Result<(), ArrowError> {
+        let fields = (0..DIRECT_OBJECT_FIELD_BUDGET)
+            .rev()
+            .map(|id| format!("\"field_{id:02}\":0"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let at_budget = format!("{{{fields}}}");
+        let over_budget = format!("{{{fields},\"field_00\":1}}");
+        assert!(!JsonParser::new(&at_budget, 0).may_exceed_field_budget());
+        assert!(JsonParser::new(&over_budget, 0).may_exceed_field_budget());
+
+        let mut builder = VariantBuilder::new().with_validate_unique_fields(true);
+        let mut list = builder.new_list();
+        list.append_json("1")?;
+        let error = list.append_json(&over_budget).unwrap_err().to_string();
+        assert!(error.contains("Duplicate field name: field_00"), "{error}");
+        list.append_json("2")?;
+        list.finish();
+        let (metadata, value) = builder.finish();
+        let value = Variant::try_new(&metadata, &value)?;
+        assert_eq!(value.get_list_element(0), Some(Variant::Int8(1)));
+        assert_eq!(value.get_list_element(1), Some(Variant::Int8(2)));
+        assert_eq!(value.get_list_element(2), None);
         Ok(())
     }
 
