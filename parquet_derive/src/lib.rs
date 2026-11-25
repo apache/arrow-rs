@@ -262,6 +262,7 @@ pub fn parquet_record_reader(input: proc_macro::TokenStream) -> proc_macro::Toke
             .enumerate()
             .map(|(idx,col)| (col.name().to_string(),idx))
             .collect();
+        let initial_len = self.len();
         self.extend(std::iter::repeat_with(|| {
           #derived_for {
             #(
@@ -270,7 +271,7 @@ pub fn parquet_record_reader(input: proc_macro::TokenStream) -> proc_macro::Toke
           }
         }).take(num_records));
 
-        let records = self; // Used by all the reader snippets to be more clear
+        let records = &mut self[initial_len..]; // Used by all the reader snippets to be more clear
 
         #(
           {

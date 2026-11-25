@@ -482,6 +482,10 @@ unsafe impl<T: ByteArrayType> Array for GenericByteArray<T> {
         self
     }
 
+    fn to_arc(&self) -> ArrayRef {
+        Arc::new(self.clone())
+    }
+
     fn to_data(&self) -> ArrayData {
         self.clone().into()
     }
