@@ -80,13 +80,15 @@ Planned Release Schedule
 | ---------------- | ---------- | --------------------------------------- |
 | October 2026     | [`60.1.0`] | Minor, NO breaking API changes          |
 | November 2026    | [`60.2.0`] | Minor, NO breaking API changes          |
-| December 2026    | [`61.0.0`] | Major, potentially breaking API changes |
-| January 2027     | [`61.1.0`] | Minor, NO breaking API changes          |
-| February 2027    | [`61.2.0`] | Minor, NO breaking API changes          |
-| March 2027       | [`62.0.0`] | Major, potentially breaking API changes |
+| December 2026    | [`60.3.0`] | Minor, NO breaking API changes          |
+| January 2027     | [`61.0.0`] | Major, potentially breaking API changes |
+| February 2027    | [`61.1.0`] | Minor, NO breaking API changes          |
+| March 2027       | [`61.2.0`] | Minor, NO breaking API changes          |
+| April 2027       | [`62.0.0`] | Major, potentially breaking API changes |
 
 [`60.1.0`]: https://github.com/apache/arrow-rs/issues/10525
 [`60.2.0`]: https://github.com/apache/arrow-rs/issues/10526
+[`60.3.0`]: https://github.com/apache/arrow-rs/issues/12244
 [`61.0.0`]: https://github.com/apache/arrow-rs/issues/10527
 [`61.1.0`]: https://github.com/apache/arrow-rs/issues/11886
 [`61.2.0`]: https://github.com/apache/arrow-rs/issues/11887
