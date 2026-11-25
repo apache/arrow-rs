@@ -869,6 +869,7 @@ unsafe impl<K: ArrowDictionaryKeyType, V: Sync> Array for TypedDictionaryArray<'
     }
 
     fn into_any_arc(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
+        // Same body as `to_arc`, just coerced to a different trait object
         Arc::new(self.dictionary.clone())
     }
 

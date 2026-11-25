@@ -579,7 +579,9 @@ unsafe impl<T: Array + 'static> Array for Arc<T> {
     }
 
     fn into_any_arc(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
-        T::into_any_arc(Arc::clone(&*self))
+        // We can't just return the inner because `T: Array + 'static` does not guarantee `T` is a
+        // concrete array type. `Arc<Arc<SomeNewtypeWrapper>>` could also satisfy the bound.
+        T::into_any_arc(Arc::unwrap_or_clone(self))
     }
 
     fn to_arc(&self) -> ArrayRef {
