@@ -72,13 +72,25 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     /// `buffer` must be a non-empty buffer containing monotonically increasing
     /// values greater than or equal to zero
     pub unsafe fn new_unchecked(buffer: ScalarBuffer<O>) -> Self {
+        if cfg!(feature = "force_validate") {
+            return Self::new(buffer);
+        }
         Self(buffer)
     }
 
     /// Create a new [`OffsetBuffer`] containing a single 0 value
+    ///
+    /// # Panics
+    ///
+    /// Panics if allocation fails. Use [`Self::try_new_empty`] for a fallible version.
     pub fn new_empty() -> Self {
         let buffer = MutableBuffer::from_len_zeroed(std::mem::size_of::<O>());
         Self(buffer.into_buffer().into())
+    }
+
+    /// Fallible version of [`Self::new_empty`].
+    pub fn try_new_empty() -> Result<Self, OverflowError> {
+        Self::try_new_zeroed(0)
     }
 
     /// Create a new [`OffsetBuffer`] containing `len + 1` `0` values
@@ -174,7 +186,8 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     ///
     /// # Panics
     ///
-    /// Panics on overflow. Use [`Self::try_from_repeated_length`] for a fallible version.
+    /// Panics on overflow or allocation failure.
+    /// Use [`Self::try_from_repeated_length`] for a fallible version.
     pub fn from_repeated_length(length: usize, n: usize) -> Self {
         Self::try_from_repeated_length(length, n).unwrap_or_else(|err| panic!("{err}"))
     }
@@ -193,7 +206,7 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     /// Errors if `length * n` overflows `usize` or `O`, or if the buffer cannot be allocated.
     pub fn try_from_repeated_length(length: usize, n: usize) -> Result<Self, OverflowError> {
         if n == 0 {
-            return Ok(Self::new_empty());
+            return Self::try_new_empty();
         }
 
         if length == 0 {
@@ -614,6 +627,13 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "offsets must be monotonically increasing")]
+    #[cfg(feature = "force_validate")]
+    fn non_monotonic_offsets_unchecked_force_validate() {
+        unsafe { OffsetBuffer::<i32>::new_unchecked(vec![0, 2, 1, 3].into()) };
+    }
+
+    #[test]
     fn from_lengths() {
         let buffer = OffsetBuffer::<i32>::from_lengths([2, 6, 3, 7, 2]);
         assert_eq!(buffer.as_ref(), &[0, 2, 8, 11, 18, 20]);
@@ -704,6 +724,12 @@ mod tests {
     fn impl_default() {
         let default = OffsetBuffer::<i32>::default();
         assert_eq!(default.as_ref(), &[0]);
+    }
+
+    #[test]
+    fn try_new_empty() {
+        let buffer = OffsetBuffer::<i32>::try_new_empty().unwrap();
+        assert_eq!(buffer.as_ref(), &[0]);
     }
 
     #[test]

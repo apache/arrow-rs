@@ -111,7 +111,7 @@ pub struct VariantObject<'m, 'v> {
     num_elements: u32,
     first_field_offset_byte: u32,
     first_value_byte: u32,
-    validated: bool,
+    pub(super) validated: bool,
 }
 
 // We don't want this to grow because it could increase the size of `Variant` and hurt performance.
@@ -354,13 +354,16 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         let value_bytes = slice_from_slice(self.value, self.first_value_byte as _..)?;
         let value_bytes = slice_from_slice(value_bytes, self.get_offset(i)? as _..)?;
         Variant::try_new_with_metadata_and_shallow_validation(self.metadata.clone(), value_bytes)
+            .map(|child| child.inherit_validation(self.validated))
     }
 
     // Attempts to retrieve the ith offset from the field offset region of the byte buffer.
     fn get_offset(&self, i: usize) -> Result<u32, ArrowError> {
         let byte_range = self.first_field_offset_byte as _..self.first_value_byte as _;
         let field_offsets = slice_from_slice(self.value, byte_range)?;
-        self.header.field_offset_size.unpack_u32(field_offsets, i)
+        self.header
+            .field_offset_size
+            .unpack_u32_at_offset(field_offsets, 0, i)
     }
 
     /// Get a field's name by index in `0..self.len()`
@@ -379,7 +382,10 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     fn try_field_name(&self, i: usize) -> Result<&'m str, ArrowError> {
         let byte_range = self.header.field_ids_start_byte() as _..self.first_field_offset_byte as _;
         let field_id_bytes = slice_from_slice(self.value, byte_range)?;
-        let field_id = self.header.field_id_size.unpack_u32(field_id_bytes, i)?;
+        let field_id = self
+            .header
+            .field_id_size
+            .unpack_u32_at_offset(field_id_bytes, 0, i)?;
         self.metadata.get(field_id as _)
     }
 

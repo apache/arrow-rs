@@ -1490,6 +1490,7 @@ impl DecimalType for Decimal32Type {
         validate_decimal32_precision(num, precision, scale)
     }
 
+    #[inline]
     fn is_valid_decimal_precision(value: Self::Native, precision: u8) -> bool {
         is_validate_decimal32_precision(value, precision)
     }
@@ -1522,6 +1523,7 @@ impl DecimalType for Decimal64Type {
         validate_decimal64_precision(num, precision, scale)
     }
 
+    #[inline]
     fn is_valid_decimal_precision(value: Self::Native, precision: u8) -> bool {
         is_validate_decimal64_precision(value, precision)
     }
@@ -1554,6 +1556,7 @@ impl DecimalType for Decimal128Type {
         validate_decimal_precision(num, precision, scale)
     }
 
+    #[inline]
     fn is_valid_decimal_precision(value: Self::Native, precision: u8) -> bool {
         is_validate_decimal_precision(value, precision)
     }
@@ -1586,6 +1589,7 @@ impl DecimalType for Decimal256Type {
         validate_decimal256_precision(num, precision, scale)
     }
 
+    #[inline]
     fn is_valid_decimal_precision(value: Self::Native, precision: u8) -> bool {
         is_validate_decimal256_precision(value, precision)
     }

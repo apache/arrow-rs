@@ -181,7 +181,6 @@ where
         let offsets = Buffer::from_vec(std::mem::take(&mut self.offsets_builder));
         self.current_offset = OffsetSize::zero();
 
-        // Safety: Safe by construction
         let offsets = ScalarBuffer::from(offsets);
         let sizes = Buffer::from_vec(std::mem::take(&mut self.sizes_builder));
         let sizes = ScalarBuffer::from(sizes);
@@ -203,7 +202,6 @@ where
         let nulls = self.null_buffer_builder.finish_cloned();
 
         let offsets = Buffer::from_slice_ref(self.offsets_builder.as_slice());
-        // Safety: safe by construction
         let offsets = ScalarBuffer::from(offsets);
 
         let sizes = Buffer::from_slice_ref(self.sizes_builder.as_slice());
@@ -223,7 +221,6 @@ where
         let offsets = Buffer::from_vec(std::mem::take(&mut self.offsets_builder));
         self.current_offset = OffsetSize::zero();
 
-        // Safety: Safe by construction
         let offsets = ScalarBuffer::from(offsets);
         let sizes = Buffer::from_vec(std::mem::take(&mut self.sizes_builder));
         let sizes = ScalarBuffer::from(sizes);

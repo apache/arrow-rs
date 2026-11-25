@@ -25,6 +25,17 @@ pub trait DecimalCast: Sized {
 
     /// Convert a decimal from a f64
     fn from_f64(n: f64) -> Option<Self>;
+
+    /// Multiply, returning `None` on overflow
+    ///
+    /// Unlike [`ArrowNativeTypeOp::mul_checked`], this does not build an error
+    /// message, which keeps per-value closures small enough to inline.
+    fn mul_checked_opt(self, rhs: Self) -> Option<Self>
+    where
+        Self: ArrowNativeTypeOp,
+    {
+        self.mul_checked(rhs).ok()
+    }
 }
 
 impl DecimalCast for i32 {
@@ -50,6 +61,11 @@ impl DecimalCast for i32 {
 
     fn from_f64(n: f64) -> Option<Self> {
         n.to_i32()
+    }
+
+    #[inline]
+    fn mul_checked_opt(self, rhs: Self) -> Option<Self> {
+        self.checked_mul(rhs)
     }
 }
 
@@ -79,6 +95,11 @@ impl DecimalCast for i64 {
         // in arrow-buffer that behaves differently.
         num_traits::ToPrimitive::to_i64(&n)
     }
+
+    #[inline]
+    fn mul_checked_opt(self, rhs: Self) -> Option<Self> {
+        self.checked_mul(rhs)
+    }
 }
 
 impl DecimalCast for i128 {
@@ -105,6 +126,11 @@ impl DecimalCast for i128 {
     fn from_f64(n: f64) -> Option<Self> {
         n.to_i128()
     }
+
+    #[inline]
+    fn mul_checked_opt(self, rhs: Self) -> Option<Self> {
+        self.checked_mul(rhs)
+    }
 }
 
 impl DecimalCast for i256 {
@@ -130,6 +156,11 @@ impl DecimalCast for i256 {
 
     fn from_f64(n: f64) -> Option<Self> {
         i256::from_f64(n)
+    }
+
+    #[inline]
+    fn mul_checked_opt(self, rhs: Self) -> Option<Self> {
+        self.checked_mul(rhs)
     }
 }
 
@@ -167,7 +198,7 @@ where
     // handling, which is faster and simpler for scaling by 10^delta_scale.
     let max = O::MAX_FOR_EACH_PRECISION.get(delta_scale as usize)?;
     let mul = max.add_wrapping(O::Native::ONE);
-    let f_fallible = move |x| O::Native::from_decimal(x)?.mul_checked(mul).ok();
+    let f_fallible = move |x| O::Native::from_decimal(x)?.mul_checked_opt(mul);
 
     // if the gain in precision (digits) is greater than the multiplication due to scaling
     // every number will fit into the output type
@@ -226,11 +257,12 @@ where
         // div is >= 10 and so this cannot overflow
         let (d, r) = x.div_rem_wrapping(div);
 
-        // Round result
-        let adjusted = match x >= I::Native::ZERO {
-            true if r >= half => d.add_wrapping(I::Native::ONE),
-            false if r <= half_neg => d.sub_wrapping(I::Native::ONE),
-            _ => d,
+        // Round half away from zero. Whether a value rounds depends on the
+        // data, so select the result instead of branching on it.
+        let adjusted = if x >= I::Native::ZERO {
+            std::hint::select_unpredictable(r >= half, d.add_wrapping(I::Native::ONE), d)
+        } else {
+            std::hint::select_unpredictable(r <= half_neg, d.sub_wrapping(I::Native::ONE), d)
         };
         O::Native::from_decimal(adjusted)
     };
@@ -1029,7 +1061,7 @@ where
         } else if cast_options.safe {
             array.unary_opt::<_, D>(|v| {
                 let v = integer_to_decimal_native::<_, M>(v)
-                    .and_then(|v| v.mul_checked(scale_factor).ok())?;
+                    .and_then(|v| v.mul_checked_opt(scale_factor))?;
                 (D::is_valid_decimal_precision(v, precision)).then_some(v)
             })
         } else {

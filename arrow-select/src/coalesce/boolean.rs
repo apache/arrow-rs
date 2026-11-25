@@ -2,10 +2,12 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use super::InProgressArray;
+use super::{InProgressArray, append_gathered_nulls};
 use crate::filter::{FilterPredicate, Packer};
+use crate::take::take_bits;
 use arrow_array::cast::AsArray;
-use arrow_array::{Array, ArrayRef, BooleanArray};
+use arrow_array::types::UInt32Type;
+use arrow_array::{Array, ArrayRef, BooleanArray, UInt32Array};
 use arrow_buffer::bit_chunk_iterator::BitChunks;
 use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder, NullBufferBuilder};
 use arrow_schema::ArrowError;
@@ -128,6 +130,10 @@ impl InProgressBooleanArray {
 }
 
 impl InProgressArray for InProgressBooleanArray {
+    fn supports_dense_indexed_copy(&self) -> bool {
+        true
+    }
+
     fn set_source(&mut self, source: Option<ArrayRef>) {
         self.source = source;
     }
@@ -199,6 +205,28 @@ impl InProgressArray for InProgressBooleanArray {
         } else {
             copy_filter_words_without_nulls(output_values, &source_value_chunks, &filter_chunks);
             self.nulls.append_n_non_nulls(selected_count);
+        }
+        Ok(())
+    }
+
+    unsafe fn copy_rows_by_indices(
+        &mut self,
+        source: &ArrayRef,
+        indices: &UInt32Array,
+    ) -> Result<(), ArrowError> {
+        if indices.is_empty() {
+            return Ok(());
+        }
+        let source = source.as_boolean();
+        let values = take_bits::<UInt32Type, false>(source.values(), indices);
+        self.values().append_buffer(&values);
+
+        if let Some(source_nulls) = source.nulls() {
+            // SAFETY: the caller validated every index against `source.len()`,
+            // which equals the length of its null buffer.
+            unsafe { append_gathered_nulls(&mut self.nulls, source_nulls, indices) };
+        } else {
+            self.nulls.append_n_non_nulls(indices.len());
         }
         Ok(())
     }
@@ -277,6 +305,58 @@ mod tests {
         let second = in_progress.finish().unwrap();
         assert_eq!(second.as_boolean(), &source.slice(2, 2));
         assert_eq!(in_progress.finish().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn indexed_copy_matches_take_for_sliced_values_and_validity() {
+        let values: BooleanBuffer = [true, false, true, true, false, false, true, false]
+            .into_iter()
+            .collect();
+        let validity: BooleanBuffer = [
+            true, true, false, true, true, false, true, true, true, false,
+        ]
+        .into_iter()
+        .collect();
+        let source = BooleanArray::new(
+            values.slice(1, 6),
+            Some(NullBuffer::new(validity.slice(3, 6))),
+        );
+        assert_ne!(source.values().offset(), source.nulls().unwrap().offset());
+        let source = Arc::new(source) as ArrayRef;
+        let indices = UInt32Array::from(vec![5, 0, 2, 2, 1]);
+        let expected = crate::take::take(source.as_ref(), &indices, None).unwrap();
+
+        let mut in_progress = InProgressBooleanArray::new(8);
+        // SAFETY: the indices are non-null and in bounds for `source`.
+        unsafe { in_progress.copy_rows_by_indices(&source, &indices).unwrap() };
+
+        let actual = in_progress.finish().unwrap();
+        assert_eq!(actual.as_boolean(), expected.as_boolean());
+    }
+
+    #[test]
+    fn indexed_copy_preserves_lazy_validity() {
+        let values: BooleanBuffer = [true, false, true, false].into_iter().collect();
+        let without_validity = BooleanArray::new(values.clone(), None);
+        let all_valid = BooleanArray::new(values, Some(NullBuffer::new_valid(4)));
+        let indices = UInt32Array::from(vec![3, 1, 1, 0]);
+
+        for source in [without_validity, all_valid] {
+            let source = Arc::new(source) as ArrayRef;
+            let mut in_progress = InProgressBooleanArray::new(8);
+            // SAFETY: the indices are non-null and in bounds for `source`.
+            unsafe {
+                in_progress.copy_rows_by_indices(&source, &indices).unwrap();
+                in_progress
+                    .copy_rows_by_indices(&source, &UInt32Array::from(Vec::<u32>::new()))
+                    .unwrap();
+            }
+
+            let actual = in_progress.finish().unwrap();
+            let expected = crate::take::take(source.as_ref(), &indices, None).unwrap();
+            assert_eq!(actual.as_boolean(), expected.as_boolean());
+            assert!(actual.nulls().is_none());
+        }
     }
 
     const FILTER_LEN: usize = 269;
