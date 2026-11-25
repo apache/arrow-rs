@@ -238,15 +238,18 @@ impl<'a> JsonParser<'a> {
     }
 
     fn may_exceed_field_budget(&mut self) -> bool {
-        // The shortest field, "":0, needs four bytes. Count separators before
-        // writing to avoid repeating a possibly large prefix at the cutoff.
-        // Colons inside strings can overestimate, but never hide a wide object.
+        // Count potential field separators before writing to avoid repeating a
+        // large prefix. A field needs at least four bytes ("":0), and its colon
+        // follows the closing quote of its key. This can overestimate but never
+        // hides a wide object.
         if self.bytes.len() <= DIRECT_OBJECT_FIELD_BUDGET * 4 {
             return false;
         }
         self.skip_whitespace();
+        let remaining = &self.bytes[self.offset..];
         matches!(self.peek(), Some(b'{' | b'['))
-            && memchr::memchr_iter(b':', &self.bytes[self.offset..])
+            && memchr::memchr_iter(b':', remaining)
+                .filter(|&index| remaining[..index].trim_ascii_end().last() == Some(&b'"'))
                 .nth(DIRECT_OBJECT_FIELD_BUDGET)
                 .is_some()
     }
@@ -1354,13 +1357,18 @@ mod test {
     fn test_wide_json_budget_and_duplicate_validation() -> Result<(), ArrowError> {
         let fields = (0..DIRECT_OBJECT_FIELD_BUDGET)
             .rev()
-            .map(|id| format!("\"field_{id:02}\":0"))
+            .map(|id| format!("\"field_{id:02}\" \n:\t0"))
             .collect::<Vec<_>>()
             .join(",");
         let at_budget = format!("{{{fields}}}");
         let over_budget = format!("{{{fields},\"field_00\":1}}");
+        let timestamps = format!(
+            "[{}]",
+            vec![r#""12:34:56""#; DIRECT_OBJECT_FIELD_BUDGET + 1].join(",")
+        );
         assert!(!JsonParser::new(&at_budget, 0).may_exceed_field_budget());
         assert!(JsonParser::new(&over_budget, 0).may_exceed_field_budget());
+        assert!(!JsonParser::new(&timestamps, 0).may_exceed_field_budget());
 
         let mut builder = VariantBuilder::new().with_validate_unique_fields(true);
         let mut list = builder.new_list();
