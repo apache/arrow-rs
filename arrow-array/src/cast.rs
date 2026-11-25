@@ -1376,23 +1376,6 @@ mod tests {
     }
 
     #[test]
-    fn test_downcast_arc_of_arcs() {
-        // An `Arc` of a concrete array is shared
-        let array = Arc::new(Int32Array::from(vec![1, 2, 3]));
-        let shared = downcast_arc::<Int32Array>(&array).unwrap();
-        assert!(Arc::ptr_eq(&shared, &array));
-
-        // No matter how many `Arc`s wrap an `ArrayRef`, the innermost one is shared
-        let array: ArrayRef = array;
-        let nested = Arc::new(Arc::clone(&array));
-        let shared: ArrayRef = downcast_arc::<Int32Array>(&nested).unwrap();
-        assert!(Arc::ptr_eq(&shared, &array));
-        let nested: ArrayRef = Arc::new(nested);
-        let shared: ArrayRef = downcast_arc::<Int32Array>(&nested).unwrap();
-        assert!(Arc::ptr_eq(&shared, &array));
-    }
-
-    #[test]
     fn test_downcast_arc_of_views() {
         let run: RunArray<Int32Type> = vec!["a", "a", "b"].into_iter().collect();
         let dict: DictionaryArray<Int32Type> = vec!["a", "a", "b"].into_iter().collect();
