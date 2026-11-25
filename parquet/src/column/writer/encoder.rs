@@ -84,15 +84,30 @@ pub trait ColumnValueEncoder {
     fn write(&mut self, values: &Self::Values, offset: usize, len: usize) -> Result<()>;
 
     /// Write the values at the indexes in `indices` to this [`ColumnValueEncoder`]
-    fn write_gather(&mut self, values: &Self::Values, indices: &[usize]) -> Result<()>;
-
-    /// Returns the largest `k` such that the first `k` values in
-    /// `values[offset..offset + len]` encode to at most `byte_budget`
-    /// bytes — i.e. how many values fit in a single page byte budget.
     ///
-    /// Returns `len` if every value fits. Returns at least 1 if a single
-    /// value alone exceeds the budget, matching parquet's "at least one
-    /// value per data page" rule.
+    /// `num_values_in_batch` is the number of non-null values in the whole write. The
+    /// column writer may split one write into several calls of this method (for
+    /// example by `write_batch_size` or the page size limit), so it can be larger than
+    /// `indices.len()`. It is the length of the write's full index list, which has one
+    /// entry per non-null value. The byte array encoder uses it to decide whether a
+    /// dictionary cache pays off.
+    fn write_gather(
+        &mut self,
+        values: &Self::Values,
+        indices: &[usize],
+        num_values_in_batch: usize,
+    ) -> Result<()>;
+
+    /// Counts how many leading values in `values[offset..offset + len]`
+    /// belong in one page of `byte_budget` bytes.
+    ///
+    /// Returns `len` if every value fits. Otherwise the result counts the
+    /// values that fit, and may also count the first value that overflows.
+    /// The variable-width implementations count that boundary value, so the
+    /// page-flush check trips on the mini-batch that crosses the budget.
+    /// The result is at least 1 when a single value alone exceeds the
+    /// budget. This matches the parquet rule of at least one value per data
+    /// page.
     ///
     /// `None` means "no cheap estimate available"; the caller stays on
     /// the batched fast path and lets the post-write
@@ -119,6 +134,17 @@ pub trait ColumnValueEncoder {
         _indices: &[usize],
         _byte_budget: usize,
     ) -> Option<usize> {
+        None
+    }
+
+    /// Returns an upper bound on the bytes that any one value of `values`
+    /// adds to a plain-encoded page, if the encoder knows one without
+    /// reading the values.
+    ///
+    /// The byte-budget chunker asks once per write call. The bound lets it
+    /// prove that a run of values fits a page from the length of the run
+    /// alone.
+    fn max_value_bytes(_values: &Self::Values) -> Option<usize> {
         None
     }
 
@@ -310,7 +336,12 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
         self.write_slice(slice)
     }
 
-    fn write_gather(&mut self, values: &Self::Values, indices: &[usize]) -> Result<()> {
+    fn write_gather(
+        &mut self,
+        values: &Self::Values,
+        indices: &[usize],
+        _num_values_in_batch: usize,
+    ) -> Result<()> {
         self.num_values += indices.len();
         let slice: Vec<_> = indices.iter().map(|idx| values[*idx].clone()).collect();
         self.write_slice(&slice)

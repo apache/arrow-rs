@@ -149,7 +149,9 @@ def validate_config(root=ROOT):
         assert job["needs"] == "changes", f"{suite}: missing suite selection dependency"
         condition = f"contains(fromJSON(needs.changes.outputs.suites), '{suite}')"
         assert job["if"] == condition, f"{suite}: unexpected routing condition"
-        path = root / job["uses"]
+        # strip self-repository syntax ($/)
+        # https://github.blog/changelog/2026-07-30-reference-same-repository-actions-with-self-repository-syntax/
+        path = root / job["uses"].removeprefix("$/")
         workflow = load_yaml(path)
         call = None
         if suite in CACHE_REFRESH_STEPS:

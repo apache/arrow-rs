@@ -15,6 +15,7 @@ use crate::data_type::Int32Type;
 use crate::encodings::decoding::{Decoder, DeltaBitPackDecoder};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
+use crate::util::utf8::check_utf8_value_start;
 use arrow_array::{
     Array, ArrayRef, BinaryArray, Decimal128Array, Decimal256Array, OffsetSizeTrait,
 };
@@ -40,6 +41,9 @@ pub fn make_byte_array_reader(
             .clone(),
     };
 
+    // A supplied schema can read an unannotated `BYTE_ARRAY` column as a string.
+    let validate_utf8 = matches!(data_type, ArrowType::Utf8 | ArrowType::LargeUtf8);
+
     match data_type {
         ArrowType::Binary
         | ArrowType::Utf8
@@ -49,6 +53,7 @@ pub fn make_byte_array_reader(
             if let Some(threshold) = padding_threshold {
                 reader.set_padding_threshold(threshold);
             }
+            reader.set_validate_utf8(validate_utf8);
             Ok(Box::new(ByteArrayReader::<i32>::new(
                 pages, data_type, reader,
             )))
@@ -58,6 +63,7 @@ pub fn make_byte_array_reader(
             if let Some(threshold) = padding_threshold {
                 reader.set_padding_threshold(threshold);
             }
+            reader.set_validate_utf8(validate_utf8);
             Ok(Box::new(ByteArrayReader::<i64>::new(
                 pages, data_type, reader,
             )))
@@ -182,6 +188,10 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
             decoder: None,
             validate_utf8,
         }
+    }
+
+    fn set_validate_utf8(&mut self, validate_utf8: bool) {
+        self.validate_utf8 = validate_utf8;
     }
 
     fn set_dict(
@@ -366,12 +376,11 @@ impl ByteArrayDecoderPlain {
         let initial_values_length = output.values.len();
 
         let to_read = len.min(self.max_remaining_values);
-        output.offsets.reserve(to_read);
-
         let remaining_bytes = self.buf.len() - self.offset;
-        if remaining_bytes == 0 {
+        if to_read == 0 || remaining_bytes == 0 {
             return Ok(0);
         }
+        output.offsets.reserve(to_read);
 
         let estimated_bytes = remaining_bytes
             .checked_mul(to_read)
@@ -391,10 +400,10 @@ impl ByteArrayDecoderPlain {
             let len = u32::from_le_bytes(len_bytes);
 
             let start_offset = self.offset + 4;
-            let end_offset = start_offset + len as usize;
-            if end_offset > buf.len() {
-                return Err(ParquetError::EOF("eof decoding byte array".into()));
-            }
+            let end_offset = start_offset
+                .checked_add(len as usize)
+                .filter(|&end| end <= buf.len())
+                .ok_or_else(|| ParquetError::EOF("eof decoding byte array".into()))?;
 
             output.try_push(&buf[start_offset..end_offset], self.validate_utf8)?;
 
@@ -420,8 +429,11 @@ impl ByteArrayDecoderPlain {
             }
             let len_bytes: [u8; 4] = buf[self.offset..self.offset + 4].try_into().unwrap();
             let len = u32::from_le_bytes(len_bytes) as usize;
+            self.offset = (self.offset + 4)
+                .checked_add(len)
+                .filter(|&end| end <= buf.len())
+                .ok_or_else(|| ParquetError::EOF("eof decoding byte array".into()))?;
             skip += 1;
-            self.offset = self.offset + 4 + len;
         }
         self.max_remaining_values -= skip;
         Ok(skip)
@@ -510,6 +522,12 @@ impl ByteArrayDecoderDeltaLength {
         self.length_offset += to_read;
 
         if self.validate_utf8 {
+            let mut start = initial_values_length;
+            for length in src_lengths {
+                let end = start + *length as usize;
+                check_utf8_value_start(&output.values[start..end])?;
+                start = end;
+            }
             output.check_valid_utf8(initial_values_length)?;
         }
         Ok(to_read)
@@ -765,6 +783,71 @@ mod tests {
         assert_eq!(output.values.as_slice(), b"foo");
         assert_eq!(output.offsets.as_slice(), &[0, 3]);
         assert_eq!(decoder.max_remaining_values, 1);
+    }
+
+    #[test]
+    fn test_plain_decoder_read_length_overflow_returns_error() {
+        // A length of 0xFFFF_FFFC after a 4 byte prefix ends at offset 2^32,
+        // which is 0 in a 32-bit usize.
+        let buffer = Bytes::from_static(&[0xFC, 0xFF, 0xFF, 0xFF, b'a', b'b', b'c', b'd']);
+        let mut decoder = ByteArrayDecoderPlain::new(buffer, 1, Some(1), false);
+        let mut output = OffsetBuffer::<i32>::with_capacity(0);
+
+        let error = decoder.read(&mut output, 1).unwrap_err();
+        assert!(matches!(error, ParquetError::EOF(_)), "{error}");
+        assert_eq!(decoder.offset, 0);
+        assert!(output.values.is_empty());
+    }
+
+    #[test]
+    fn test_plain_decoder_skip_past_end_returns_error() {
+        let buffer = Bytes::from_static(&[0xFF, 0xFF, 0, 0, b'a']);
+        let mut decoder = ByteArrayDecoderPlain::new(buffer, 2, Some(2), false);
+
+        let error = decoder.skip(1).unwrap_err();
+        assert!(matches!(error, ParquetError::EOF(_)), "{error}");
+        assert_eq!(decoder.offset, 0);
+        assert_eq!(decoder.max_remaining_values, 2);
+    }
+
+    #[test]
+    fn test_plain_decoder_no_remaining_values() {
+        let buffer = Bytes::from_static(&[1, 0, 0, 0, b'a']);
+        let mut decoder = ByteArrayDecoderPlain::new(buffer, 0, Some(0), false);
+        let mut output = OffsetBuffer::<i32>::with_capacity(0);
+
+        assert_eq!(decoder.read(&mut output, 1).unwrap(), 0);
+        assert!(output.values.is_empty());
+        assert_eq!(output.offsets.as_slice(), &[0]);
+    }
+
+    #[test]
+    fn test_plain_decoder_truncated_value() {
+        let bad_values: [&[u8]; 5] = [
+            &[10, 0, 0, 0, b'x'],
+            &[0xFF, 0xFF, 0xFF, 0xFF, b'x'],
+            &[3],
+            &[3, 0],
+            &[3, 0, 0],
+        ];
+        for bad in bad_values {
+            let mut page = vec![2, 0, 0, 0, b'a', b'b'];
+            page.extend_from_slice(bad);
+            let page = Bytes::from(page);
+
+            let mut decoder = ByteArrayDecoderPlain::new(page.clone(), 3, Some(3), false);
+            let mut output = OffsetBuffer::<i32>::with_capacity(0);
+            let error = decoder.read(&mut output, 3).unwrap_err();
+            assert!(matches!(error, ParquetError::EOF(_)), "{bad:?}: {error}");
+            assert_eq!(output.values.as_slice(), b"ab");
+            assert_eq!(output.offsets.as_slice(), &[0, 2]);
+            assert_eq!(decoder.offset, 6);
+
+            let mut decoder = ByteArrayDecoderPlain::new(page, 3, Some(3), false);
+            let error = decoder.skip(3).unwrap_err();
+            assert!(matches!(error, ParquetError::EOF(_)), "{bad:?}: {error}");
+            assert_eq!(decoder.offset, 6);
+        }
     }
 
     #[test]

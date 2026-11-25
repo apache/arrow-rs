@@ -37,6 +37,7 @@
 //!
 //! [`external_metadata.rs`]: https://github.com/apache/arrow-rs/tree/master/parquet/examples/external_metadata.rs
 //!
+mod column_chunk;
 #[cfg(feature = "arrow")]
 mod dictionary;
 mod footer_tail;
@@ -106,6 +107,8 @@ pub(crate) use writer::ThriftMetadataWriter;
 /// The individual fields of this structure are stored in a way that make cloning
 /// this structure low-cost.
 ///
+/// See [`PageIndexProvider`] for details on customizing page index handling.  
+///
 /// See the [`ParquetMetaDataBuilder`] to create and modify this structure.
 ///
 /// [`parquet.thrift`]: https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift
@@ -170,6 +173,28 @@ impl ParquetMetaData {
         &self.row_groups
     }
 
+    /// Returns [`ColumnChunkMetaData`] for a row-group position and physical leaf column index.
+    ///
+    /// Returns an error if either index is out of bounds.
+    pub fn column_chunk(
+        &self,
+        row_group_idx: usize,
+        column_idx: usize,
+    ) -> Result<&ColumnChunkMetaData> {
+        let row_group = self.row_groups().get(row_group_idx).ok_or_else(|| {
+            general_err!(
+                "Row group index {row_group_idx} out of bounds for file with {} row groups",
+                self.num_row_groups()
+            )
+        })?;
+        row_group.columns().get(column_idx).ok_or_else(|| {
+            general_err!(
+                "Column index {column_idx} out of bounds for row group {row_group_idx} with {} columns",
+                row_group.num_columns()
+            )
+        })
+    }
+
     /// Returns the number of rows in `row_group_idx`.
     ///
     /// Returns an error if the row group index is out of bounds or its row
@@ -209,14 +234,16 @@ impl ParquetMetaData {
     ///
     /// 1. Includes size of self
     ///
-    /// 2. Includes heap memory for sub fields such as [`FileMetaData`] and
-    ///    [`RowGroupMetaData`].
+    /// 2. Includes heap memory for sub fields such as [`FileMetaData`],
+    ///    [`RowGroupMetaData`], and the built-in [`PageIndex`] provider.
     ///
-    /// 3. Includes memory from shared pointers (e.g. [`SchemaDescPtr`]). This
-    ///    means `memory_size` will over estimate the memory size if such pointers
-    ///    are shared.
+    /// 3. Includes memory reachable through shared pointers, such as [`SchemaDescPtr`] and the
+    ///    [`Arc`]-wrapped page index provider. Therefore, the same allocation may be counted by
+    ///    multiple metadata values or when the provider is also retained in an external cache.
     ///
-    /// 4. Does not include any allocator overheads
+    /// 4. Does not include heap memory used by custom [`PageIndexProvider`] implementations.
+    ///
+    /// 5. Does not include any allocator overheads.
     pub fn memory_size(&self) -> usize {
         #[cfg(feature = "encryption")]
         let encryption_size = self.file_decryptor.heap_size();
@@ -391,6 +418,18 @@ impl ParquetMetaDataBuilder {
             #[cfg(feature = "encryption")]
             file_decryptor: metadata.file_decryptor,
         }
+    }
+
+    /// Replaces the file-level key-value metadata.
+    ///
+    /// Pass `None` to remove all entries. This only updates the in-memory metadata;
+    /// it does not modify the Parquet file.
+    ///
+    /// Other metadata, including row groups, page indexes, and decryption state,
+    /// is preserved. Shared file metadata is cloned before modification.
+    pub fn set_key_value_metadata(mut self, key_value_metadata: Option<Vec<KeyValue>>) -> Self {
+        Arc::make_mut(&mut self.file_metadata).key_value_metadata = key_value_metadata;
+        self
     }
 
     /// Adds a row group to the metadata
@@ -1821,6 +1860,62 @@ mod tests {
     }
 
     #[test]
+    fn test_column_chunk() {
+        let schema = get_test_schema_descr();
+        let row_groups = (0..2)
+            .map(|row| {
+                let columns = schema
+                    .columns()
+                    .iter()
+                    .enumerate()
+                    .map(|(column, descriptor)| {
+                        ColumnChunkMetaData::builder(descriptor.clone())
+                            .set_data_page_offset((row * 2 + column) as i64)
+                            .build()
+                            .unwrap()
+                    })
+                    .collect();
+                RowGroupMetaData::builder(schema.clone())
+                    .set_column_metadata(columns)
+                    .build()
+                    .unwrap()
+            })
+            .collect();
+        let metadata = ParquetMetaData::new(
+            FileMetaData::new(1, 0, None, None, schema, None),
+            row_groups,
+        );
+        for row in 0..2 {
+            for column in 0..2 {
+                assert_eq!(
+                    metadata
+                        .column_chunk(row, column)
+                        .unwrap()
+                        .data_page_offset(),
+                    (row * 2 + column) as i64
+                );
+            }
+        }
+        for index in [2, usize::MAX] {
+            assert_eq!(
+                metadata
+                    .column_chunk(index, usize::MAX)
+                    .unwrap_err()
+                    .to_string(),
+                format!(
+                    "Parquet error: Row group index {index} out of bounds for file with 2 row groups"
+                )
+            );
+            assert_eq!(
+                metadata.column_chunk(1, index).unwrap_err().to_string(),
+                format!(
+                    "Parquet error: Column index {index} out of bounds for row group 1 with 2 columns"
+                )
+            );
+        }
+    }
+
+    #[test]
     fn test_row_group_metadata_thrift_conversion() {
         let schema_descr = get_test_schema_descr();
 
@@ -2173,7 +2268,7 @@ mod tests {
             };
         }
 
-        page_index.put_column_index(column_index, 0, 0);
+        page_index.try_put_column_index(column_index, 0, 0).unwrap();
 
         // Now, add in OffsetIndex
         let mut offset_index = OffsetIndexBuilder::new();
@@ -2184,7 +2279,7 @@ mod tests {
         offset_index.append_offset_and_size(2, 3);
         offset_index.append_unencoded_byte_array_data_bytes(Some(10));
         let offset_index = offset_index.build();
-        page_index.put_offset_index(offset_index, 0, 0);
+        page_index.try_put_offset_index(offset_index, 0, 0).unwrap();
 
         let parquet_meta = ParquetMetaDataBuilder::new(file_metadata)
             .set_row_groups(row_group_meta)
@@ -2193,9 +2288,9 @@ mod tests {
 
         // Size with page index (includes Arc overhead plus PageIndex heap size)
         #[cfg(not(feature = "encryption"))]
-        let bigger_expected_size = 3312;
+        let bigger_expected_size = 3296;
         #[cfg(feature = "encryption")]
-        let bigger_expected_size = 3480;
+        let bigger_expected_size = 3464;
 
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);
@@ -2307,7 +2402,7 @@ mod tests {
         offset_idx_builder.append_row_count(50);
         offset_idx_builder.append_offset_and_size(1000, 500);
         let offset_idx = offset_idx_builder.build();
-        builder.put_offset_index(offset_idx, 0, 0);
+        builder.try_put_offset_index(offset_idx, 0, 0).unwrap();
 
         let page_index = builder.build();
 
@@ -2327,6 +2422,54 @@ mod tests {
         // Both should be None since they were never populated
         assert!(!page_index.has_column_indexes());
         assert!(!page_index.has_offset_indexes());
+    }
+
+    #[test]
+    fn test_set_key_value_metadata_preserves_shared_metadata() {
+        let original = vec![KeyValue::new("original".to_string(), "value".to_string())];
+        let replacement = vec![KeyValue::new("replacement".to_string(), "new".to_string())];
+        for initial in [None, Some(original)] {
+            let file_metadata = FileMetaData::new(
+                2,
+                0,
+                Some("test writer".to_string()),
+                initial.clone(),
+                get_test_schema_descr(),
+                None,
+            );
+            #[cfg(feature = "encryption")]
+            let file_metadata = file_metadata
+                .with_encryption_algorithm(Some(EncryptionAlgorithm::AES_GCM_V1(
+                    crate::file::metadata::thrift::encryption::AesGcmV1 {
+                        aad_prefix: Some(vec![1; 8]),
+                        aad_file_unique: Some(vec![2; 8]),
+                        supply_aad_prefix: Some(true),
+                    },
+                )))
+                .with_footer_signing_key_metadata(Some(vec![3; 8]));
+            let cached = ParquetMetaDataBuilder::new(file_metadata)
+                .set_page_index(Some(Arc::new(PageIndexBuilder::new(0, 2).build())))
+                .build();
+            for values in [None, Some(vec![]), Some(replacement.clone())] {
+                let updated = cached
+                    .clone()
+                    .into_builder()
+                    .set_key_value_metadata(values.clone())
+                    .build();
+                let mut expected = cached.file_metadata().clone();
+                expected.key_value_metadata = values;
+                assert_eq!(updated.file_metadata(), &expected);
+                assert_eq!(
+                    cached.file_metadata().key_value_metadata(),
+                    initial.as_ref()
+                );
+                assert!(Arc::ptr_eq(&cached.row_groups, &updated.row_groups));
+                assert!(Arc::ptr_eq(
+                    cached.page_index().unwrap(),
+                    updated.page_index().unwrap()
+                ));
+            }
+        }
     }
 
     #[test]
@@ -2356,14 +2499,16 @@ mod tests {
         let mut col_idx_builder = ColumnIndexBuilder::new(Type::INT32);
         col_idx_builder.append(false, vec![1, 0, 0, 0], vec![100, 0, 0, 0], 10, None);
         let col_idx = col_idx_builder.build().unwrap();
-        builder.put_column_index(col_idx.clone(), 0, 0);
+        builder.try_put_column_index(col_idx.clone(), 0, 0).unwrap();
 
         // Add an offset index for first column
         let mut offset_idx_builder = OffsetIndexBuilder::new();
         offset_idx_builder.append_row_count(50);
         offset_idx_builder.append_offset_and_size(1000, 500);
         let offset_idx = offset_idx_builder.build();
-        builder.put_offset_index(offset_idx.clone(), 0, 0);
+        builder
+            .try_put_offset_index(offset_idx.clone(), 0, 0)
+            .unwrap();
 
         let page_index = builder.build();
 
@@ -2380,8 +2525,8 @@ mod tests {
         let mut builder = PageIndexBuilder::new_from(page_index);
 
         // Add indexes for second column
-        builder.put_column_index(col_idx, 0, 1);
-        builder.put_offset_index(offset_idx, 0, 1);
+        builder.try_put_column_index(col_idx, 0, 1).unwrap();
+        builder.try_put_offset_index(offset_idx, 0, 1).unwrap();
         let page_index = builder.build();
 
         // now all populated

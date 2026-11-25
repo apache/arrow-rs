@@ -222,7 +222,7 @@ impl<R: RunEndIndexType> RunArray<R> {
         Ok(Self {
             data_type,
             run_ends: run_ends_buffer,
-            values: values.slice(0, values.len()),
+            values: values.to_arc(),
         })
     }
 
@@ -542,6 +542,10 @@ unsafe impl<T: RunEndIndexType> Array for RunArray<T> {
         self
     }
 
+    fn to_arc(&self) -> ArrayRef {
+        Arc::new(self.clone())
+    }
+
     fn to_data(&self) -> ArrayData {
         self.clone().into()
     }
@@ -806,6 +810,10 @@ impl<'a, R: RunEndIndexType, V> TypedRunArray<'a, R, V> {
 unsafe impl<R: RunEndIndexType, V: Sync> Array for TypedRunArray<'_, R, V> {
     fn as_any(&self) -> &dyn Any {
         self.run_array
+    }
+
+    fn to_arc(&self) -> ArrayRef {
+        Arc::new(self.run_array.clone())
     }
 
     fn to_data(&self) -> ArrayData {

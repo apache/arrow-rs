@@ -187,28 +187,38 @@ fn add_benchmark(c: &mut Criterion) {
 
     const DICTIONARY_SLICE_ROWS: usize = 682;
     const DICTIONARY_SLICE_COUNT: usize = 12;
-    for values_per_key in [12, 16, 24] {
-        let values_len = DICTIONARY_SLICE_ROWS * values_per_key;
-        let inputs = (0..DICTIONARY_SLICE_COUNT)
-            .map(|dictionary_idx| {
-                let values = StringArray::from_iter_values(
-                    (0..values_len).map(|value_idx| format!("{dictionary_idx:02}_{value_idx:017}")),
-                );
-                let keys = Int32Array::from_iter_values(0..values_len as i32);
-                let dictionary = DictionaryArray::<Int32Type>::new(keys, Arc::new(values));
-                dictionary.slice(values_len - DICTIONARY_SLICE_ROWS, DICTIONARY_SLICE_ROWS)
-            })
-            .collect::<Vec<_>>();
-        let arrays = inputs
-            .iter()
-            .map(|array| array as &dyn Array)
-            .collect::<Vec<_>>();
-        c.bench_function(
-            &format!(
-                "concat str_dict_slice rows={DICTIONARY_SLICE_ROWS} values_per_key={values_per_key} count={DICTIONARY_SLICE_COUNT}"
-            ),
-            |b| b.iter(|| bench_concat_arrays(&arrays)),
-        );
+    for values_per_key in [12, 16, 24, 128, 256, 400, 1024] {
+        for (key_order, scattered) in [("contiguous", false), ("scattered", true)] {
+            let values_len = DICTIONARY_SLICE_ROWS * values_per_key;
+            let inputs = (0..DICTIONARY_SLICE_COUNT)
+                .map(|dictionary_idx| {
+                    let values = StringArray::from_iter_values(
+                        (0..values_len)
+                            .map(|value_idx| format!("{dictionary_idx:02}_{value_idx:017}")),
+                    );
+                    let mut keys = (0..values_len as i32).collect::<Vec<_>>();
+                    if scattered {
+                        for row_idx in 0..DICTIONARY_SLICE_ROWS {
+                            keys[values_len - DICTIONARY_SLICE_ROWS + row_idx] =
+                                (row_idx * values_per_key) as i32;
+                        }
+                    }
+                    let dictionary =
+                        DictionaryArray::<Int32Type>::new(Int32Array::from(keys), Arc::new(values));
+                    dictionary.slice(values_len - DICTIONARY_SLICE_ROWS, DICTIONARY_SLICE_ROWS)
+                })
+                .collect::<Vec<_>>();
+            let arrays = inputs
+                .iter()
+                .map(|array| array as &dyn Array)
+                .collect::<Vec<_>>();
+            c.bench_function(
+                &format!(
+                    "concat str_dict_slice rows={DICTIONARY_SLICE_ROWS} values_per_key={values_per_key} key_order={key_order} count={DICTIONARY_SLICE_COUNT}"
+                ),
+                |b| b.iter(|| bench_concat_arrays(&arrays)),
+            );
+        }
     }
 
     let v1 = FixedSizeListArray::try_new(

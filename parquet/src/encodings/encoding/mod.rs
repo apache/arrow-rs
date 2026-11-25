@@ -577,8 +577,9 @@ impl<T: DataType> DeltaBitPackEncoder<T> {
         }
 
         let mut min_delta = i64::MAX;
-        for i in 0..self.values_in_block {
-            min_delta = cmp::min(min_delta, self.deltas[i]);
+        assert!(self.values_in_block <= self.deltas.len());
+        for &delta in self.deltas.iter().take(self.values_in_block) {
+            min_delta = cmp::min(min_delta, delta);
         }
 
         // Write min delta

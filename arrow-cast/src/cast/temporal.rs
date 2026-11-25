@@ -91,15 +91,7 @@ pub(crate) fn cast_duration_to_interval<D: ArrowTemporalType<Native = i64>>(
     array: &dyn Array,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
-    let array = array
-        .as_any()
-        .downcast_ref::<PrimitiveArray<D>>()
-        .ok_or_else(|| {
-            ArrowError::ComputeError(
-                "Internal Error: Cannot cast duration to DurationArray of expected type"
-                    .to_string(),
-            )
-        })?;
+    let array = array.as_primitive::<D>();
 
     let scale = match array.data_type() {
         DataType::Duration(TimeUnit::Second) => 1_000_000_000,
@@ -198,7 +190,7 @@ pub(crate) fn cast_timestamp_to_time<T: ArrowTimestampType>(
         DataType::Time64(TimeUnit::Nanosecond) => {
             timestamp_to_time::<T, Time64NanosecondType>(array, cast_options)
         }
-        _ => Err(ArrowError::CastError(format!(
+        _ => Err(ArrowError::InvalidArgumentError(format!(
             "Casting from {} to {to_type} not supported",
             array.data_type()
         ))),

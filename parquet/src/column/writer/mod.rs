@@ -626,7 +626,15 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         };
         debug_assert!(base_batch_size > 0);
 
-        let chunker = ByteBudgetChunker::new(&self.descr, &self.column_props, base_batch_size);
+        // The chunker looks ahead only at gathered values. See
+        // `ByteBudgetChunker::byte_budget_sub_batch`.
+        let max_value_bytes = value_indices.and_then(|_| E::max_value_bytes(values));
+        let chunker = ByteBudgetChunker::new(
+            &self.descr,
+            &self.column_props,
+            base_batch_size,
+            max_value_bytes,
+        );
         while levels_offset < num_levels {
             let mut end_offset = num_levels.min(levels_offset + base_batch_size);
 
@@ -1125,9 +1133,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         }
 
         match value_indices {
-            Some(indices) => {
-                let indices = &indices[values_offset..values_offset + values_to_write];
-                self.encoder.write_gather(values, indices)?;
+            Some(all_indices) => {
+                let indices = &all_indices[values_offset..values_offset + values_to_write];
+                self.encoder
+                    .write_gather(values, indices, all_indices.len())?;
             }
             None => self.encoder.write(values, values_offset, values_to_write)?,
         }

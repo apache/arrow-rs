@@ -9,7 +9,7 @@ use arrow_array::types::Int32Type;
 use arrow_array::{ArrayRef, FixedSizeBinaryArray, RecordBatch, builder::StringBuilder};
 use arrow_buffer::Buffer;
 use arrow_ipc::convert::try_fb_to_schema;
-use arrow_ipc::reader::{FileDecoder, FileReader, StreamReader, read_footer_length};
+use arrow_ipc::reader::{FileDecoder, FileReader, StreamDecoder, StreamReader, read_footer_length};
 use arrow_ipc::writer::{FileWriter, IpcWriteOptions, StreamWriter};
 use arrow_ipc::{Block, CompressionType, root_as_footer};
 use arrow_schema::{DataType, Field, Schema};
@@ -49,6 +49,33 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
+    group.bench_function("StreamDecoder/read_10", |b| {
+        let buffer = Buffer::from_vec(ipc_stream(IpcWriteOptions::default()));
+        b.iter(move || {
+            let mut decoder = StreamDecoder::new();
+            let mut buffer = buffer.clone();
+            for _ in 0..10 {
+                decoder.decode(&mut buffer).unwrap().unwrap();
+            }
+            assert!(decoder.decode(&mut buffer).unwrap().is_none());
+            decoder.finish().unwrap();
+        })
+    });
+
+    group.bench_function("StreamDecoder/no_validation/read_10", |b| {
+        let buffer = Buffer::from_vec(ipc_stream(IpcWriteOptions::default()));
+        b.iter(move || {
+            // safety: we created a valid IPC stream
+            let mut decoder = unsafe { StreamDecoder::new().with_skip_validation(true) };
+            let mut buffer = buffer.clone();
+            for _ in 0..10 {
+                decoder.decode(&mut buffer).unwrap().unwrap();
+            }
+            assert!(decoder.decode(&mut buffer).unwrap().is_none());
+            decoder.finish().unwrap();
+        })
+    });
+
     group.bench_function("StreamReader/read_10/zstd", |b| {
         let buffer = ipc_stream(
             IpcWriteOptions::default()
@@ -80,6 +107,34 @@ fn criterion_benchmark(c: &mut Criterion) {
             assert!(reader.next().is_none());
         })
     });
+
+    for (rows, threads) in [(256, 1), (8192, 1), (256, 16), (8192, 16)] {
+        group.bench_function(
+            format!("StreamReader/read_10/lz4/rows={rows}/threads={threads}"),
+            |b| {
+                let buffer = ipc_stream_with_rows(
+                    rows,
+                    IpcWriteOptions::default()
+                        .try_with_compression(Some(CompressionType::LZ4_FRAME))
+                        .unwrap(),
+                );
+                b.iter(|| {
+                    std::thread::scope(|s| {
+                        for _ in 0..threads {
+                            s.spawn(|| {
+                                let mut reader =
+                                    StreamReader::try_new(buffer.as_slice(), None).unwrap();
+                                for _ in 0..10 {
+                                    reader.next().unwrap().unwrap();
+                                }
+                                assert!(reader.next().is_none());
+                            });
+                        }
+                    })
+                })
+            },
+        );
+    }
 
     group.bench_function("StreamReader/no_validation/read_10/zstd", |b| {
         let buffer = ipc_stream(
@@ -225,7 +280,12 @@ fn dictionary_ipc_stream(num_columns: usize, num_distinct: usize, list: bool) ->
 
 /// Return an IPC stream with 10 record batches
 fn ipc_stream(options: IpcWriteOptions) -> Vec<u8> {
-    let batch = create_batch(8192, true);
+    ipc_stream_with_rows(8192, options)
+}
+
+/// Return an IPC stream with 10 record batches of `rows` rows each
+fn ipc_stream_with_rows(rows: usize, options: IpcWriteOptions) -> Vec<u8> {
+    let batch = create_batch(rows, true);
     let mut buffer = Vec::with_capacity(2 * 1024 * 1024);
     let mut writer =
         StreamWriter::try_new_with_options(&mut buffer, batch.schema().as_ref(), options).unwrap();

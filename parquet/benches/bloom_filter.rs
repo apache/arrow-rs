@@ -206,6 +206,73 @@ fn bench_check(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark `Sbbf::insert_hash` and `Sbbf::check_hashes` with precomputed
+/// hashes, as a caller that hashes values in bulk uses them.
+///
+/// `check_hashes` is measured on miss-only, hit-only and randomly mixed (50%)
+/// queries, against a sparse filter (`sparse`, about 5% of bits set) and one
+/// sized for 1% FPP (`fpp1`, about half the bits set).
+fn bench_hash_api(c: &mut Criterion) {
+    const NUM_BYTES: usize = 2 * 1024 * 1024;
+    const NUM_QUERIES: usize = 50_000;
+    let fills: [(&str, usize); 2] = [("sparse", 100_000), ("fpp1", 1_500_000)];
+
+    let mut group = c.benchmark_group("hash_api");
+    group.throughput(Throughput::Elements(NUM_QUERIES as u64));
+
+    for (label, ndv) in fills {
+        let mut rng = StdRng::seed_from_u64(0xC0FFEE);
+        // Inserted hashes have the low bit clear and misses have it set, so
+        // the two sets are disjoint.
+        let inserted: Vec<u64> = (0..ndv).map(|_| rng.random::<u64>() & !1).collect();
+        let mut filter = Sbbf::new_with_num_of_bytes(NUM_BYTES);
+        for &h in &inserted {
+            filter.insert_hash(h);
+        }
+        let miss = |rng: &mut StdRng| rng.random::<u64>() | 1;
+        let hit = |rng: &mut StdRng| inserted[rng.random_range(0..inserted.len())];
+        let inputs: [(&str, Vec<u64>); 3] = [
+            (
+                "check_miss",
+                (0..NUM_QUERIES).map(|_| miss(&mut rng)).collect(),
+            ),
+            (
+                "check_hit",
+                (0..NUM_QUERIES).map(|_| hit(&mut rng)).collect(),
+            ),
+            (
+                "check_mixed",
+                (0..NUM_QUERIES)
+                    .map(|_| {
+                        if rng.random::<bool>() {
+                            hit(&mut rng)
+                        } else {
+                            miss(&mut rng)
+                        }
+                    })
+                    .collect(),
+            ),
+        ];
+        for (name, hashes) in &inputs {
+            group.bench_with_input(BenchmarkId::new(*name, label), hashes, |b, hashes| {
+                b.iter(|| filter.check_hashes(hint::black_box(hashes)))
+            });
+        }
+    }
+
+    let mut rng = StdRng::seed_from_u64(0xC0FFEE);
+    let to_insert: Vec<u64> = (0..NUM_QUERIES).map(|_| rng.random()).collect();
+    let mut filter = Sbbf::new_with_num_of_bytes(NUM_BYTES);
+    group.bench_function("insert", |b| {
+        b.iter(|| {
+            for &h in &to_insert {
+                filter.insert_hash(hint::black_box(h));
+            }
+        })
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_fold_to_target_fpp,
@@ -213,5 +280,6 @@ criterion_group!(
     bench_insert_only,
     bench_insert,
     bench_check,
+    bench_hash_api,
 );
 criterion_main!(benches);

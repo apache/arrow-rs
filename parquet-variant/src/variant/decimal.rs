@@ -185,7 +185,8 @@ macro_rules! impl_variant_decimal {
 
             fn try_new_with_signed_scale(integer: $native, scale: i8) -> Result<Self, ArrowError> {
                 let (integer, scale) = if scale < 0 {
-                    let multiplier = <$native>::checked_pow(10, -scale as u32);
+                    let multiplier =
+                        <$native>::checked_pow(10, u32::from(scale.unsigned_abs()));
                     let Some(rescaled) = multiplier.and_then(|m| integer.checked_mul(m)) else {
                         return Err(ArrowError::InvalidArgumentError(format!(
                             "Overflow when rescaling {integer} with scale {scale}"
@@ -381,6 +382,31 @@ impl_try_from_int_for_decimal!(i128, VariantDecimal16);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_variant_decimal_signed_scale() {
+        fn check<D: VariantDecimalType>()
+        where
+            D::Native: From<i32> + std::fmt::Debug + PartialEq,
+        {
+            for scale in [i8::MIN, -127] {
+                assert!(matches!(
+                    D::try_new_with_signed_scale(1.into(), scale),
+                    Err(ArrowError::InvalidArgumentError(_))
+                ));
+            }
+
+            for value in [-12, 12] {
+                let decimal = D::try_new_with_signed_scale(value.into(), -2).unwrap();
+                assert_eq!(decimal.integer(), (value * 100).into());
+                assert_eq!(decimal.scale(), 0);
+            }
+        }
+
+        check::<VariantDecimal4>();
+        check::<VariantDecimal8>();
+        check::<VariantDecimal16>();
+    }
 
     #[test]
     fn test_variant_decimal_invalid_precision() {

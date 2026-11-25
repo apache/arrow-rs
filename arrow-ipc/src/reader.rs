@@ -902,6 +902,41 @@ fn update_dictionaries(
     Ok(())
 }
 
+/// Returns the first field with dictionary `id`, in [`Schema::fields_with_dict_id`] order.
+///
+/// Unlike that method this stops at the first match without collecting every nested field,
+/// which is significant when a stream has many dictionary batches.
+fn first_field_with_dict_id(fields: &Fields, id: i64) -> Option<&Field> {
+    fields
+        .iter()
+        .find_map(|field| field_with_dict_id(field, id))
+}
+
+fn field_with_dict_id(field: &Field, id: i64) -> Option<&Field> {
+    #[expect(deprecated)]
+    let dict_id = field.dict_id();
+    if dict_id == Some(id) {
+        return Some(field);
+    }
+    child_field_with_dict_id(field.data_type(), id)
+}
+
+fn child_field_with_dict_id(data_type: &DataType, id: i64) -> Option<&Field> {
+    match data_type {
+        DataType::Struct(fields) => first_field_with_dict_id(fields, id),
+        DataType::Union(fields, _) => fields.iter().find_map(|(_, f)| field_with_dict_id(f, id)),
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::Map(field, _)
+        | DataType::RunEndEncoded(_, field) => field_with_dict_id(field, id),
+        DataType::Dictionary(_, value_type) => child_field_with_dict_id(value_type, id),
+        _ => None,
+    }
+}
+
 /// Given a dictionary batch IPC message/body along with the full state of a
 /// stream including schema, dictionary cache, metadata, and other flags, this
 /// function will parse the buffer into an array of dictionary values.
@@ -915,9 +950,7 @@ fn get_dictionary_values(
     skip_validation: UnsafeFlag,
 ) -> Result<ArrayRef, ArrowError> {
     let id = batch.id();
-    #[expect(deprecated)]
-    let fields_using_this_dictionary = schema.fields_with_dict_id(id);
-    let first_field = fields_using_this_dictionary.first().ok_or_else(|| {
+    let first_field = first_field_with_dict_id(schema.fields(), id).ok_or_else(|| {
         ArrowError::InvalidArgumentError(format!("dictionary id {id} not found in schema"))
     })?;
 
@@ -1887,7 +1920,7 @@ pub(crate) enum IpcMessage {
 /// start here and the buffer doubles as the data arrives, so a body of `n` bytes costs
 /// `log2(n / MAX_PREALLOC_BYTES)` reallocations and the buffer never runs more than a factor
 /// of two ahead of the bytes actually received.
-const MAX_PREALLOC_BYTES: usize = 64 * 1024 * 1024;
+pub(crate) const MAX_PREALLOC_BYTES: usize = 64 * 1024 * 1024;
 
 /// Reads exactly `len` bytes of message body, without reserving `len` before reading it.
 fn read_body_bounded<R: Read>(reader: &mut R, len: usize) -> Result<MutableBuffer, ArrowError> {
@@ -2956,6 +2989,16 @@ mod tests {
         reader.next().unwrap()
     }
 
+    /// Return the first record batch read from the IPC Stream buffer
+    /// using the StreamDecoder API
+    fn read_stream_with_decoder(
+        buf: &[u8],
+        skip_validation: bool,
+    ) -> Result<RecordBatch, ArrowError> {
+        let mut decoder = unsafe { StreamDecoder::new().with_skip_validation(skip_validation) };
+        Ok(decoder.decode(&mut Buffer::from(buf))?.unwrap())
+    }
+
     fn roundtrip_ipc_stream(rb: &RecordBatch) -> RecordBatch {
         let buf = write_stream(rb);
         read_stream(&buf).unwrap()
@@ -3121,6 +3164,39 @@ mod tests {
 
         let run_array_1_unsliced = unslice_run_array(run_array_1_sliced.into_data()).unwrap();
         assert_eq!(run_array_1_unsliced, output_batch.column(0).into_data());
+    }
+
+    // Regression test for https://github.com/apache/arrow-rs/issues/12248:
+    // a RunEndEncoded array written with MetadataVersion::V4 did not read
+    // back, because the writer emitted a validity buffer for it while the
+    // reader never consumes one, shifting every later buffer by one.
+    #[test]
+    fn test_roundtrip_stream_run_array_v4() {
+        use crate::MetadataVersion;
+        use crate::writer::{IpcWriteOptions, StreamWriter};
+
+        let run_ends = Int32Array::from(vec![2, 5]);
+        let values = Int32Array::from(vec![10, 20]);
+        let array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            array.data_type().clone(),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(array)]).unwrap();
+
+        let mut buf = Vec::new();
+        {
+            let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V4).unwrap();
+            let mut writer =
+                StreamWriter::try_new_with_options(&mut buf, &schema, options).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+
+        let mut reader = StreamReader::try_new(buf.as_slice(), None).unwrap();
+        let read = reader.next().unwrap().unwrap();
+        assert_eq!(read, batch);
     }
 
     #[test]
@@ -3860,6 +3936,65 @@ mod tests {
     }
 
     #[test]
+    #[expect(deprecated)]
+    fn test_first_field_with_dict_id_matches_fields_with_dict_id() {
+        let dict = |name: &str, id: i64| {
+            let data_type =
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+            Arc::new(Field::new_dict(name, data_type, true, id, false))
+        };
+        let dict_of_list_of_dict = |name: &str, outer_id: i64, inner_id: i64| {
+            let inner = DataType::List(dict("inner", inner_id));
+            let data_type = DataType::Dictionary(Box::new(DataType::Int32), Box::new(inner));
+            Field::new_dict(name, data_type, true, outer_id, false)
+        };
+        // Duplicate IDs check that the first match in pre-order wins.
+        let schema = Schema::new(vec![
+            // dict_id is ignored on non-dictionary fields.
+            Field::new_dict("not_a_dictionary", DataType::Utf8, true, 3, false),
+            Field::new_struct(
+                "struct",
+                vec![dict("struct.a", 1), dict("struct.b", 2)],
+                true,
+            ),
+            Field::new(
+                "union",
+                DataType::Union(
+                    UnionFields::try_new(vec![0, 1], vec![dict("union.a", 3), dict("union.b", 1)])
+                        .unwrap(),
+                    UnionMode::Dense,
+                ),
+                true,
+            ),
+            Field::new("list", DataType::List(dict("list.item", 4)), true),
+            Field::new_map(
+                "map",
+                "entries",
+                dict("key", 5),
+                dict("value", 2),
+                false,
+                true,
+            ),
+            Field::new(
+                "ree",
+                DataType::RunEndEncoded(
+                    Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                    dict("ree.values", 6),
+                ),
+                true,
+            ),
+            dict_of_list_of_dict("dict_of_list_of_dict", 7, 8),
+            dict_of_list_of_dict("same_outer_and_inner_id", 9, 9),
+        ]);
+
+        for id in -1..=10 {
+            let expected = schema.fields_with_dict_id(id).first().map(|f| f.name());
+            let actual = first_field_with_dict_id(schema.fields(), id).map(|f| f.name());
+            assert_eq!(actual, expected, "dictionary id {id}");
+        }
+    }
+
+    #[test]
     fn test_same_dict_id_without_preserve() {
         let batch = RecordBatch::try_new(
             Arc::new(Schema::new(
@@ -4033,6 +4168,11 @@ mod tests {
         let buf = write_stream(&rb); // write is ok
         read_stream_skip_validation(&buf).unwrap();
         let err = read_stream(&buf).unwrap_err();
+        assert_eq!(err.to_string(), expected_err);
+
+        // IPC Stream format with StreamDecoder
+        read_stream_with_decoder(&buf, true).unwrap();
+        let err = read_stream_with_decoder(&buf, false).unwrap_err();
         assert_eq!(err.to_string(), expected_err);
 
         // IPC File format

@@ -24,6 +24,10 @@ all-features = true
 [features]
 # Enable memory tracking support
 pool = []
+# force_validate runs full data validation for all arrays that are created
+# this is not enabled by default as it is too computationally expensive
+# but is run as part of our CI checks
+force_validate = []
 
 [dependencies]
 bytes = { version = "1.4" }
@@ -52,6 +56,10 @@ name = "offset"
 harness = false
 
 [[bench]]
+name = "set_bit_counter"
+harness = false
+
+[[bench]]
 name = "mutable_buffer_repeat_slice"
 harness = false
 
@@ -61,6 +69,10 @@ harness = false
 
 [[bench]]
 name = "null_buffer_builder"
+harness = false
+
+[[bench]]
+name = "boolean_buffer_builder"
 harness = false
 
 [lints]
