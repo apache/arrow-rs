@@ -3,13 +3,6 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow_buffer::bit_chunk_iterator::UnalignedBitChunk;
-use std::ops::Range;
-
-/// Counts the number of set bits in the provided range
-pub fn count_set_bits(bytes: &[u8], range: Range<usize>) -> usize {
-    let unaligned = UnalignedBitChunk::new(bytes, range.start, range.end - range.start);
-    unaligned.count_ones()
-}
 
 /// Iterates through the set bit positions in `bytes` in reverse order
 pub fn iter_set_bits_rev(bytes: &[u8]) -> impl Iterator<Item = usize> + '_ {
@@ -68,6 +61,7 @@ pub fn sign_extend_be_fixed<const W: usize, const N: usize>(b: &[u8; W]) -> [u8;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::bit_util::count_set_bits;
     use arrow_array::builder::BooleanBufferBuilder;
     use rand::{prelude::*, rng};
 

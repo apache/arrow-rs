@@ -2581,6 +2581,7 @@ dependencies = [
  "ahash",
  "arrow",
  "arrow-array",
+ "arrow-bitutils",
  "arrow-buffer",
  "arrow-cast",
  "arrow-csv",

@@ -8,7 +8,6 @@ use arrow_buffer::bit_chunk_iterator::UnalignedBitChunk;
 use arrow_buffer::bit_util::compress;
 use bytes::Bytes;
 
-use crate::arrow::buffer::bit_util::count_set_bits;
 use crate::basic::Encoding;
 use crate::column::reader::decoder::{
     ColumnLevelDecoder, DefinitionLevelDecoder, DefinitionLevelDecoderImpl,
@@ -16,6 +15,7 @@ use crate::column::reader::decoder::{
 use crate::encodings::rle::run_len;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
+use crate::util::bit_util::count_set_bits;
 
 enum BufferInner {
     /// Compute levels and null mask

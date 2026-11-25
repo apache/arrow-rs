@@ -4,6 +4,7 @@
 
 use std::{cmp, mem::size_of};
 
+use arrow_bitutils::bit_chunk_iterator::UnalignedBitChunk;
 use bytes::Bytes;
 
 use crate::data_type::{AsBytes, ByteArray, FixedLenByteArray, Int96};
@@ -793,32 +794,10 @@ impl BitWriter {
 /// MAX_VLQ_BYTE_LEN = 5 for i32, and MAX_VLQ_BYTE_LEN = 10 for i64
 pub const MAX_VLQ_BYTE_LEN: usize = 10;
 
-/// Counts set bits directly over byte slices, including unaligned endpoints.
-fn count_set_bits(bytes: &[u8], range: std::ops::Range<usize>) -> usize {
+/// Counts the set bits of `bytes` at bit positions `range`
+pub(crate) fn count_set_bits(bytes: &[u8], range: std::ops::Range<usize>) -> usize {
     assert!(range.start <= range.end);
-    if range.start == range.end {
-        return 0;
-    }
-    let data = &bytes[range.start / 8..range.end.div_ceil(8)];
-    let (words, tail) = data.as_chunks::<8>();
-    let mut count = words
-        .iter()
-        .map(|word| u64::from_le_bytes(*word).count_ones() as usize)
-        .sum::<usize>();
-    if !tail.is_empty() {
-        let word = match data.last_chunk::<8>() {
-            Some(word) => u64::from_le_bytes(*word) >> ((8 - tail.len()) * 8),
-            None => read_num_bytes::<u64>(tail.len(), tail),
-        };
-        count += word.count_ones() as usize;
-    }
-    if !range.start.is_multiple_of(8) {
-        count -= (data[0] & ((1 << (range.start % 8)) - 1)).count_ones() as usize;
-    }
-    if !range.end.is_multiple_of(8) {
-        count -= (data[data.len() - 1] >> (range.end % 8)).count_ones() as usize;
-    }
-    count
+    UnalignedBitChunk::new(bytes, range.start, range.end - range.start).count_ones()
 }
 
 /// Reads bit packed values from an in-memory buffer.
