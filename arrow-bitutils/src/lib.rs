@@ -16,3 +16,4 @@
 #![warn(missing_docs)]
 
 pub mod bit_chunk_iterator;
+pub mod byte_util;

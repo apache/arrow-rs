@@ -23,5 +23,13 @@ all-features = true
 
 [dependencies]
 
+[dev-dependencies]
+criterion = { workspace = true, default-features = false }
+rand = { version = "0.10", default-features = false, features = ["std", "std_rng", "thread_rng"] }
+
+[[bench]]
+name = "byte_util"
+harness = false
+
 [lints]
 workspace = true

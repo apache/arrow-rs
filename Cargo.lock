@@ -277,6 +277,10 @@ dependencies = [
 [[package]]
 name = "arrow-bitutils"
 version = "60.2.0"
+dependencies = [
+ "criterion",
+ "rand",
+]
 
 [[package]]
 name = "arrow-buffer"
