@@ -118,15 +118,6 @@ impl WkbType {
     pub fn new(metadata: Option<Metadata>) -> Self {
         Self(metadata.unwrap_or_default())
     }
-
-    fn validate_impl(data_type: &DataType) -> ArrowResult<()> {
-        match data_type {
-            DataType::Binary | DataType::LargeBinary | DataType::BinaryView => Ok(()),
-            dt => Err(ArrowError::InvalidArgumentError(format!(
-                "Geometry data type mismatch, expected one of Binary, LargeBinary, BinaryView. Found {dt}"
-            ))),
-        }
-    }
 }
 
 type ArrowResult<T> = Result<T, ArrowError>;
@@ -152,16 +143,22 @@ impl ExtensionType for WkbType {
     }
 
     fn supports_data_type(&self, data_type: &arrow_schema::DataType) -> ArrowResult<()> {
-        Self::validate_impl(data_type)
+        match data_type {
+            DataType::Binary | DataType::LargeBinary | DataType::BinaryView => Ok(()),
+            dt => Err(ArrowError::InvalidArgumentError(format!(
+                "Geometry data type mismatch, expected one of Binary, LargeBinary, BinaryView. Found {dt}"
+            ))),
+        }
     }
 
     fn try_new(data_type: &arrow_schema::DataType, metadata: Self::Metadata) -> ArrowResult<Self> {
-        Self::validate_impl(data_type)?;
-        Ok(Self(metadata))
+        let wkb = Self(metadata);
+        wkb.supports_data_type(data_type)?;
+        Ok(wkb)
     }
 
-    fn validate(data_type: &DataType, _metadata: Self::Metadata) -> ArrowResult<()> {
-        Self::validate_impl(data_type)
+    fn validate(data_type: &DataType, metadata: Self::Metadata) -> ArrowResult<()> {
+        Self(metadata).supports_data_type(data_type)
     }
 }
 

@@ -98,6 +98,9 @@ impl VariableShapeTensor {
         })
     }
 
+    // Unlike `supports_data_type`, this needs no tensor instance. Borrowing metadata
+    // and returning the element type and rank lets `try_new` reuse validation without
+    // cloning metadata, while `validate` can check it without constructing a tensor.
     fn validate_impl<'a>(
         data_type: &'a DataType,
         metadata: &VariableShapeTensorMetadata,

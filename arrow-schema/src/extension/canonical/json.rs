@@ -31,17 +31,6 @@ use crate::{ArrowError, DataType, extension::ExtensionType};
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Json(JsonMetadata);
 
-impl Json {
-    fn validate_impl(data_type: &DataType) -> Result<(), ArrowError> {
-        match data_type {
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Ok(()),
-            data_type => Err(ArrowError::InvalidArgumentError(format!(
-                "Json data type mismatch, expected one of Utf8, LargeUtf8, Utf8View, found {data_type}"
-            ))),
-        }
-    }
-}
-
 /// Empty object
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Empty {}
@@ -158,16 +147,22 @@ impl ExtensionType for Json {
     }
 
     fn supports_data_type(&self, data_type: &DataType) -> Result<(), ArrowError> {
-        Self::validate_impl(data_type)
+        match data_type {
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Ok(()),
+            data_type => Err(ArrowError::InvalidArgumentError(format!(
+                "Json data type mismatch, expected one of Utf8, LargeUtf8, Utf8View, found {data_type}"
+            ))),
+        }
     }
 
     fn try_new(data_type: &DataType, metadata: Self::Metadata) -> Result<Self, ArrowError> {
-        Self::validate_impl(data_type)?;
-        Ok(Self(metadata))
+        let json = Self(metadata);
+        json.supports_data_type(data_type)?;
+        Ok(json)
     }
 
     fn validate(data_type: &DataType, _metadata: Self::Metadata) -> Result<(), ArrowError> {
-        Self::validate_impl(data_type)
+        Self::default().supports_data_type(data_type)
     }
 }
 
