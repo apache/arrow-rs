@@ -11,18 +11,7 @@ use std::io::Cursor;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-/// This example shows how to overlap IO and decoding when reading a Parquet file.
-///
-/// [`ParquetRecordBatchStream::next_row_group`] fetches the data of one row
-/// group and returns a reader that holds it in memory. One task fetches row
-/// groups as fast as the channel allows. The other task decodes each row group
-/// on a blocking thread, so CPU bound decoding does not stall the async runtime.
-///
-/// The file is kept in memory to keep the example self contained. With a real
-/// remote store, such as S3, the fetch of the next row group runs while the
-/// previous one is still being decoded.
-///
-/// [`ParquetRecordBatchStream::next_row_group`]: parquet::arrow::async_reader::ParquetRecordBatchStream::next_row_group
+/// Fetches row groups in one task while another decodes them on a blocking thread.
 #[tokio::main]
 async fn main() -> Result<()> {
     let data = create_parquet_data(4, 1_000)?;
