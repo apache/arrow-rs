@@ -288,7 +288,13 @@ impl<Value: AlpFloat> AlpPage<Value> {
     /// contiguous without parsing their neighbours.
     pub(crate) fn vector(&self, idx: usize) -> Result<AlpVector<Value>> {
         let num_vectors = self.num_vectors();
-        debug_assert!(idx < num_vectors, "vector index {idx} out of range");
+        if idx >= num_vectors {
+            return Err(general_err!(
+                "ALP vector index {} out of range for {} vectors",
+                idx,
+                num_vectors
+            ));
+        }
 
         let body = self.body.as_ref();
         let start = read_offset(body, idx)?;
@@ -321,23 +327,26 @@ impl<Value: AlpFloat> AlpPage<Value> {
             bit_width: view.for_info.bit_width,
             frame_of_reference: view.for_info.frame_of_reference,
             scale: Value::decode_scale(view.alp_info.exponent, view.alp_info.factor),
-            packed: self.body.slice(view.packed_values_range()),
-            exception_positions: self.body.slice(view.exception_positions_range()),
-            exception_values: self.body.slice(view.exception_values_range()),
+            packed: view.packed_values_range(),
+            exception_positions: view.exception_positions_range(),
+            exception_values: view.exception_values_range(),
         })
     }
 }
 
 /// One parsed vector: the constants needed to turn each packed integer back into
-/// a float, and its packed values and exception sections.
+/// a float, and the byte ranges of its sections in the page body.
+///
+/// Sections are ranges rather than `Bytes` slices because refcounting three
+/// handles per vector is a measurable share of short reads.
 pub(crate) struct AlpVector<Value: AlpFloat> {
     len: usize,
     bit_width: u8,
     frame_of_reference: Value::Exact,
     scale: Value::Scale,
-    packed: Bytes,
-    exception_positions: Bytes,
-    exception_values: Bytes,
+    packed: Range<usize>,
+    exception_positions: Range<usize>,
+    exception_values: Range<usize>,
 }
 
 /// Live decode state for the one vector currently being consumed.
@@ -355,9 +364,9 @@ struct CurrentVector<Value: AlpFloat> {
 }
 
 impl<Value: AlpFloat> CurrentVector<Value> {
-    fn new(vector: AlpVector<Value>) -> Self {
+    fn new(page: &AlpPage<Value>, vector: AlpVector<Value>) -> Self {
         Self {
-            reader: BitReader::new(vector.packed.clone()),
+            reader: BitReader::new(page.body.slice(vector.packed.clone())),
             remaining: vector.len,
             delivered: 0,
             vector,
@@ -387,6 +396,7 @@ const DECODE_TILE_CAP: usize = 1 << ALP_DEFAULT_LOG_VECTOR_SIZE;
 /// it.
 fn decode_range<Value: AlpFloat>(
     cur: &mut CurrentVector<Value>,
+    body: &[u8],
     scratch: &mut [Value::Exact],
     out: &mut [Value],
 ) -> Result<()> {
@@ -421,20 +431,18 @@ fn decode_range<Value: AlpFloat>(
     // positional overwrite, so it is independent of exception ordering.
     let lo = cur.delivered;
     let hi = cur.delivered + out.len();
-    // Both buffers were sliced to exactly `num_exceptions` whole entries at
-    // parse time. A mismatch here would make `zip` silently drop exceptions.
+    let exception_positions = &body[vector.exception_positions.clone()];
+    let exception_values = &body[vector.exception_values.clone()];
+    // Both ranges cover exactly `num_exceptions` whole entries at parse time.
+    // A mismatch here would make `zip` silently drop exceptions.
+    debug_assert_eq!(exception_positions.len() % std::mem::size_of::<u16>(), 0);
+    debug_assert_eq!(exception_values.len() % Value::Exact::WIDTH, 0);
     debug_assert_eq!(
-        vector.exception_positions.len() % std::mem::size_of::<u16>(),
-        0
+        exception_positions.len() / std::mem::size_of::<u16>(),
+        exception_values.len() / Value::Exact::WIDTH,
     );
-    debug_assert_eq!(vector.exception_values.len() % Value::Exact::WIDTH, 0);
-    debug_assert_eq!(
-        vector.exception_positions.len() / std::mem::size_of::<u16>(),
-        vector.exception_values.len() / Value::Exact::WIDTH,
-    );
-    let values_chunks = vector.exception_values.chunks_exact(Value::Exact::WIDTH);
-    for (pos_chunk, value_chunk) in vector
-        .exception_positions
+    let values_chunks = exception_values.chunks_exact(Value::Exact::WIDTH);
+    for (pos_chunk, value_chunk) in exception_positions
         .as_chunks::<{ std::mem::size_of::<u16>() }>()
         .0
         .iter()
@@ -512,7 +520,7 @@ where
     /// Parse the next vector and install it as `current`.
     fn load_current_vector(&mut self) -> Result<()> {
         let vector = self.page.vector(self.next_vector_idx)?;
-        self.current = Some(CurrentVector::new(vector));
+        self.current = Some(CurrentVector::new(&self.page, vector));
         self.next_vector_idx += 1;
         Ok(())
     }
@@ -574,7 +582,12 @@ where
             }
             let cur = self.current.as_mut().unwrap();
             let n = cur.remaining.min(target - written);
-            decode_range::<T::T>(cur, &mut self.scratch, &mut buffer[written..written + n])?;
+            decode_range::<T::T>(
+                cur,
+                self.page.body.as_ref(),
+                &mut self.scratch,
+                &mut buffer[written..written + n],
+            )?;
             written += n;
             self.num_values -= n;
         }
@@ -1066,6 +1079,18 @@ mod tests {
             err.to_string().contains(
                 "Invalid ALP page: exception position 1 out of bounds for vector length 1"
             )
+        );
+    }
+
+    #[test]
+    fn test_page_vector_rejects_out_of_range_index() {
+        let data = make_alp_page_bytes(0, 0, 3, 4, &[4], 13);
+        let page = AlpPage::<f64>::try_new(Bytes::from(data)).unwrap();
+        assert!(page.vector(0).is_ok());
+        let err = page.vector(1).err().unwrap();
+        assert!(
+            err.to_string()
+                .contains("ALP vector index 1 out of range for 1 vectors")
         );
     }
 
