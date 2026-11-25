@@ -247,11 +247,19 @@ impl<'a> JsonParser<'a> {
         }
         self.skip_whitespace();
         let remaining = &self.bytes[self.offset..];
-        matches!(self.peek(), Some(b'{' | b'['))
-            && memchr::memchr_iter(b':', remaining)
-                .filter(|&index| remaining[..index].trim_ascii_end().last() == Some(&b'"'))
+        if !matches!(self.peek(), Some(b'{' | b'['))
+            || memchr::memchr_iter(b':', remaining)
                 .nth(DIRECT_OBJECT_FIELD_BUDGET)
-                .is_some()
+                .is_none()
+        {
+            return false;
+        }
+        // The raw count stops early. Search for quotes next so a long string
+        // containing many colons does not require inspecting each one.
+        memchr::memchr_iter(b'"', remaining)
+            .filter(|&index| remaining[index + 1..].trim_ascii_start().first() == Some(&b':'))
+            .nth(DIRECT_OBJECT_FIELD_BUDGET)
+            .is_some()
     }
 
     fn parse(&mut self, builder: &mut impl VariantBuilderExt) -> Result<(), DirectParseError> {
@@ -1366,9 +1374,11 @@ mod test {
             "[{}]",
             vec![r#""12:34:56""#; DIRECT_OBJECT_FIELD_BUDGET + 1].join(",")
         );
+        let long_string = format!("{{\"payload\":\"{}\"}}", ":".repeat(2048));
         assert!(!JsonParser::new(&at_budget, 0).may_exceed_field_budget());
         assert!(JsonParser::new(&over_budget, 0).may_exceed_field_budget());
         assert!(!JsonParser::new(&timestamps, 0).may_exceed_field_budget());
+        assert!(!JsonParser::new(&long_string, 0).may_exceed_field_budget());
 
         let mut builder = VariantBuilder::new().with_validate_unique_fields(true);
         let mut list = builder.new_list();
