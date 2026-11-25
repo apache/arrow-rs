@@ -1212,7 +1212,66 @@ fn is_greater(is_decimal: bool, a: &[u8], b: &[u8]) -> bool {
     if is_decimal {
         compare_greater_byte_array_decimals(a, b)
     } else {
+        is_greater_bytes(a, b)
+    }
+}
+
+/// Returns `true` if `a > b` in lexicographic byte order
+///
+/// Most values differ within their first 8 bytes, which one big-endian `u64` comparison orders
+/// without a call to `memcmp`.
+#[inline]
+fn is_greater_bytes(a: &[u8], b: &[u8]) -> bool {
+    let n = a.len().min(b.len());
+    let (Some(a8), Some(b8)) = (a.first_chunk::<8>(), b.first_chunk::<8>()) else {
+        let (a8, b8) = match n {
+            0 => (0, 0),
+            _ => (short_key(&a[..n]), short_key(&b[..n])),
+        };
+        return (a8, a.len()) > (b8, b.len());
+    };
+    if a8 != b8 {
+        return u64::from_be_bytes(*a8) > u64::from_be_bytes(*b8);
+    }
+    // `memcmp` compares long shared prefixes faster than 8 bytes at a time
+    if n <= 64 {
+        is_greater_after_prefix(a, b)
+    } else {
         a > b
+    }
+}
+
+/// [`is_greater_bytes`] for `a` and `b` whose first 8 bytes are equal and whose common length
+/// is at most 64 bytes
+///
+/// Not inlined: the per-row loop of [`compute_min_max`] measured faster with only the first
+/// 8-byte comparison inlined.
+#[inline(never)]
+fn is_greater_after_prefix(a: &[u8], b: &[u8]) -> bool {
+    let n = a.len().min(b.len());
+    let (a_chunks, _) = a[8..n].as_chunks::<8>();
+    let (b_chunks, _) = b[8..n].as_chunks::<8>();
+    for (a8, b8) in a_chunks.iter().zip(b_chunks) {
+        if a8 != b8 {
+            return u64::from_be_bytes(*a8) > u64::from_be_bytes(*b8);
+        }
+    }
+    // The last 8 bytes of the common length start with bytes already compared equal
+    let a8 = u64::from_be_bytes(*a[..n].last_chunk::<8>().unwrap());
+    let b8 = u64::from_be_bytes(*b[..n].last_chunk::<8>().unwrap());
+    (a8, a.len()) > (b8, b.len())
+}
+
+/// Orders slices of the same length from 1 to 7 bytes as `u64`s
+#[inline]
+fn short_key(s: &[u8]) -> u64 {
+    let n = s.len();
+    if n >= 4 {
+        let hi = u32::from_be_bytes(*s.first_chunk::<4>().unwrap());
+        let lo = u32::from_be_bytes(*s.last_chunk::<4>().unwrap());
+        (u64::from(hi) << 32) | u64::from(lo)
+    } else {
+        (u64::from(s[0]) << 16) | (u64::from(s[n / 2]) << 8) | u64::from(s[n - 1])
     }
 }
 
@@ -1266,6 +1325,27 @@ mod tests {
         Arc::new(StringArray::from_iter_values(
             (0..n).map(|i| format!("v{i}")),
         ))
+    }
+
+    #[test]
+    fn is_greater_bytes_matches_slice_order() {
+        let mut values = vec![vec![]];
+        for len in (1..=20).chain([63, 64, 65, 72]) {
+            let base: Vec<u8> = (0..len as u8).map(|i| b'a' + i).collect();
+            for pos in 0..len {
+                for byte in [0x00, 0x7f, 0x80, 0xff] {
+                    let mut value = base.clone();
+                    value[pos] = byte;
+                    values.push(value);
+                }
+            }
+            values.push(base);
+        }
+        for a in &values {
+            for b in &values {
+                assert_eq!(is_greater_bytes(a, b), a > b, "{a:?} > {b:?}");
+            }
+        }
     }
 
     #[test]
