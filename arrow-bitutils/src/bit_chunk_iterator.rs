@@ -4,9 +4,6 @@
 
 //! Types for iterating over bitmasks in 64-bit chunks
 
-#[cfg(target_arch = "aarch64")]
-use crate::ToByteSlice;
-use crate::util::bit_util::ceil;
 use std::fmt::Debug;
 
 /// Iterates over an arbitrarily aligned byte buffer
@@ -182,7 +179,8 @@ fn count_ones_words(words: &[u64]) -> usize {
     for flush_group in blocks.chunks(BLOCKS_PER_FLUSH) {
         let mut lane_counts = [0u16; 16];
         for block in flush_group {
-            let bytes = block.as_slice().to_byte_slice();
+            let bytes = block.map(u64::to_ne_bytes);
+            let bytes = bytes.as_flattened();
             // Lane `lane` sums byte `lane` of each of the block's four 16-byte vectors.
             for lane in 0..16 {
                 let count = bytes[lane].count_ones() as u8
@@ -213,6 +211,7 @@ pub type UnalignedBitChunkIterator<'a> = std::iter::Chain<
     std::option::IntoIter<u64>,
 >;
 
+/// Reads up to 8 bytes as a little-endian `u64`, padded with zeros
 #[inline]
 fn read_u64(input: &[u8]) -> u64 {
     let len = input.len().min(8);
@@ -258,7 +257,10 @@ impl<'a> BitChunks<'a> {
     /// Create a new [`BitChunks`] from a byte array, and an offset and length in bits
     pub fn new(buffer: &'a [u8], offset: usize, len: usize) -> Self {
         let end = offset.checked_add(len).expect("offset + len out of bounds");
-        assert!(ceil(end, 8) <= buffer.len(), "offset + len out of bounds");
+        assert!(
+            end.div_ceil(8) <= buffer.len(),
+            "offset + len out of bounds"
+        );
 
         let byte_offset = offset / 8;
         let bit_offset = offset % 8;
@@ -309,9 +311,9 @@ impl<'a> BitChunks<'a> {
             let bit_offset = self.bit_offset;
             // number of bytes to read
             // might be one more than sizeof(u64) if the offset is in the middle of a byte
-            let byte_len = ceil(bit_len + bit_offset, 8);
+            let byte_len = (bit_len + bit_offset).div_ceil(8);
             // pointer to remainder bytes after all complete chunks
-            // Safety: the buffer contains `chunk_len * 8 + ceil(remainder_len + bit_offset, 8)`
+            // Safety: the buffer contains `chunk_len * 8 + (remainder_len + bit_offset).div_ceil(8)`
             // bytes, so offsetting by `chunk_len * 8` and reading `byte_len` bytes is in-bounds.
             let base = unsafe {
                 self.buffer
@@ -347,7 +349,7 @@ impl<'a> BitChunks<'a> {
     /// (including remainder).
     #[inline]
     pub fn num_bytes(&self) -> usize {
-        ceil(self.chunk_len * 64 + self.remainder_len, 8)
+        (self.chunk_len * 64 + self.remainder_len).div_ceil(8)
     }
 
     /// Returns the `index`th complete chunk of 64 bits, the value
@@ -360,10 +362,10 @@ impl<'a> BitChunks<'a> {
     /// # Example
     ///
     /// ```
-    /// # use arrow_buffer::Buffer;
-    /// let buffer = Buffer::from((0..17_u8).collect::<Vec<_>>());
+    /// # use arrow_bitutils::bit_chunk_iterator::BitChunks;
+    /// let buffer: Vec<u8> = (0..17).collect();
     /// // Start at bit 8, so chunk 1 holds bytes 9 through 16
-    /// let chunks = buffer.bit_chunks(8, 128);
+    /// let chunks = BitChunks::new(&buffer, 8, 128);
     /// assert_eq!(chunks.chunk_len(), 2);
     /// assert_eq!(chunks.chunk(1), 0x100f0e0d0c0b0a09);
     /// assert_eq!(chunks.iter().nth(1), Some(chunks.chunk(1)));

@@ -11,6 +11,7 @@ labelPRBasedOnFilePath:
   arrow-core:
     - "arrow/**/*"
     - "arrow-array/**/*"
+    - "arrow-bitutils/**/*"
     - "arrow-buffer/**/*"
     - "arrow-data/**/*"
     - "arrow-integration-test/**/*"

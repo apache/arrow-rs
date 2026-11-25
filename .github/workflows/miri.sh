@@ -22,6 +22,7 @@ CRATES="
     -p arrow-data
     -p arrow-ipc
     -p arrow-json
+    -p arrow-bitutils
     -p arrow-cmp
     -p arrow-ord
     -p arrow-row

@@ -225,6 +225,7 @@ following commands
 Rust Arrow Crates:
 
 ```shell
+(cd arrow-bitutils && cargo publish)
 (cd arrow-buffer && cargo publish)
 (cd arrow-schema && cargo publish)
 (cd arrow-data && cargo publish)
@@ -260,8 +261,10 @@ Some commands which differ in fish shell:
 set -gx GITHUB_TOKEN "token"
 sed -i '' -e 's/59.3.0/59.3.1/g' (find . -name 'Cargo.toml' -or -name '*.md' | grep -v CHANGELOG.md | grep -v CHANGELOG-old.md | grep -v README.md)
 
-# manually do arrow-buffer for sanity check
-cd arrow-buffer
+# manually do arrow-bitutils and arrow-buffer for sanity check
+cd arrow-bitutils
+cargo publish
+cd ../arrow-buffer
 cargo publish
 cd ..
 for crate in \
