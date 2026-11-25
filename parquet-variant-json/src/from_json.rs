@@ -112,9 +112,9 @@ fn variant_from_i64(i: i64) -> Variant<'static, 'static> {
 }
 
 /// Parses a JSON number whose grammar has already been checked.
-fn variant_from_float_text(value: &str) -> Result<Variant<'static, 'static>, ArrowError> {
+fn parse_float_text(value: &str) -> Result<f64, ArrowError> {
     match lexical_core::parse::<f64>(value.as_bytes()) {
-        Ok(float) if float.is_finite() => Ok(float.into()),
+        Ok(float) if float.is_finite() => Ok(float),
         _ => Err(ArrowError::InvalidArgumentError(format!(
             "Failed to parse {value} as finite number"
         ))),
@@ -167,16 +167,23 @@ impl From<ArrowError> for DirectParseError {
 }
 
 enum JsonScalar<'a> {
-    Value(Variant<'static, 'static>),
+    Null,
+    Boolean(bool),
+    Integer(i64),
+    Float(f64),
     String(Cow<'a, str>),
 }
 
 impl JsonScalar<'_> {
     fn append(self, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
-        match self {
-            Self::Value(value) => builder.try_append_value(value),
-            Self::String(value) => builder.try_append_value(value.as_ref()),
-        }
+        let variant = match self {
+            Self::Null => Variant::Null,
+            Self::Boolean(value) => value.into(),
+            Self::Integer(value) => variant_from_i64(value),
+            Self::Float(value) => Variant::Double(value),
+            Self::String(value) => return builder.try_append_value(value.as_ref()),
+        };
+        builder.try_append_value(variant)
     }
 }
 
@@ -291,25 +298,25 @@ impl<'a> JsonParser<'a> {
         let value = match self.peek() {
             Some(b'n') => {
                 self.parse_literal(b"null")?;
-                Variant::Null
+                JsonScalar::Null
             }
             Some(b't') => {
                 self.parse_literal(b"true")?;
-                Variant::BooleanTrue
+                JsonScalar::Boolean(true)
             }
             Some(b'f') => {
                 self.parse_literal(b"false")?;
-                Variant::BooleanFalse
+                JsonScalar::Boolean(false)
             }
-            Some(b'"') => return self.parse_string().map(JsonScalar::String),
+            Some(b'"') => JsonScalar::String(self.parse_string()?),
             Some(b'-' | b'0'..=b'9') => match self.parse_number()? {
-                (_, Some(integer)) => variant_from_i64(integer),
-                (text, None) => variant_from_float_text(text)?,
+                (_, Some(integer)) => JsonScalar::Integer(integer),
+                (text, None) => JsonScalar::Float(parse_float_text(text)?),
             },
             Some(_) => return self.error("expected a JSON value"),
             None => return self.error("expected a JSON value, found end of input"),
         };
-        Ok(JsonScalar::Value(value))
+        Ok(value)
     }
 
     fn array_items<E: From<ArrowError>>(
