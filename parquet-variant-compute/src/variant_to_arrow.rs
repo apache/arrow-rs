@@ -9,7 +9,7 @@ use crate::shred_variant::{
 use crate::type_conversion::{
     PrimitiveFromVariant, ShredDecimalVariant, TimestampFromVariant, VariantCastMode,
     shred_variant_to_unscaled_decimal, variant_cast_with_options, variant_to_boolean,
-    variant_to_unscaled_decimal,
+    variant_to_unscaled_decimal, write_variant_to_string,
 };
 use crate::variant_array::ShreddedVariantFieldArray;
 use crate::{VariantArray, VariantValueArrayBuilder};
@@ -595,11 +595,21 @@ pub(crate) fn make_primitive_variant_to_arrow_row_builder<'a>(
                 "DataType {data_type:?} not yet implemented"
             )));
         }
-        DataType::Utf8 => String(VariantToStringArrowBuilder::new(cast_options, capacity)),
-        DataType::LargeUtf8 => {
-            LargeString(VariantToStringArrowBuilder::new(cast_options, capacity))
-        }
-        DataType::Utf8View => StringView(VariantToStringArrowBuilder::new(cast_options, capacity)),
+        DataType::Utf8 => String(VariantToStringArrowBuilder::new(
+            cast_options,
+            capacity,
+            cast_mode,
+        )),
+        DataType::LargeUtf8 => LargeString(VariantToStringArrowBuilder::new(
+            cast_options,
+            capacity,
+            cast_mode,
+        )),
+        DataType::Utf8View => StringView(VariantToStringArrowBuilder::new(
+            cast_options,
+            capacity,
+            cast_mode,
+        )),
         DataType::List(_)
         | DataType::LargeList(_)
         | DataType::ListView(_)
@@ -1264,13 +1274,6 @@ macro_rules! define_variant_to_primitive_builder {
 }
 
 define_variant_to_primitive_builder!(
-    struct VariantToStringArrowBuilder<'a, B: StringLikeArrayBuilder>
-    |capacity| -> B { B::with_capacity(capacity) },
-    |value| value.as_string(),
-    type_name: B::type_name()
-);
-
-define_variant_to_primitive_builder!(
     struct VariantToBooleanArrowRowBuilder<'a>
     |capacity| -> BooleanBuilder { BooleanBuilder::with_capacity(capacity) },
     |value, cast_mode| variant_to_boolean(value, cast_mode),
@@ -1306,6 +1309,76 @@ define_variant_to_primitive_builder!(
     |value| value.as_u8_slice(),
     type_name: B::type_name()
 );
+
+pub(crate) struct VariantToStringArrowBuilder<'a, B: StringLikeArrayBuilder> {
+    builder: B,
+    cast_options: &'a CastOptions<'a>,
+    cast_mode: VariantCastMode,
+    buffer: String,
+}
+
+impl<'a, B: StringLikeArrayBuilder> VariantToStringArrowBuilder<'a, B> {
+    fn new(cast_options: &'a CastOptions<'a>, capacity: usize, cast_mode: VariantCastMode) -> Self {
+        Self {
+            builder: B::with_capacity(capacity),
+            cast_options,
+            cast_mode,
+            buffer: String::new(),
+        }
+    }
+
+    fn append_null(&mut self) -> Result<()> {
+        self.builder.append_null();
+        Ok(())
+    }
+
+    fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
+        let value = match value {
+            // short-circuit the common case of string-like variants to avoid the overhead of casting
+            Variant::String(value) => value,
+            Variant::ShortString(value) => value.as_str(),
+            Variant::Null => {
+                self.builder.append_null();
+                return Ok(false);
+            }
+            _ => return self.append_cast_value(value),
+        };
+
+        self.builder.append_value(value);
+        Ok(true)
+    }
+
+    fn append_cast_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
+        self.buffer.clear();
+        match variant_cast_with_options(value, self.cast_options, |value| {
+            match self.cast_mode {
+                VariantCastMode::Get => match write_variant_to_string(&mut self.buffer, value) {
+                    true => Some(self.buffer.as_str()),
+                    false => None,
+                },
+                // this function only handle no-string variant, return None here because we don't support shred non-string to string.
+                VariantCastMode::Shred => None,
+            }
+        }) {
+            Ok(Some(value)) => {
+                self.builder.append_value(value);
+                Ok(true)
+            }
+            Ok(None) => {
+                self.builder.append_null();
+                Ok(false)
+            }
+            Err(_) => Err(ArrowError::CastError(format!(
+                "Failed to extract primitive of type {} from variant {value:?}",
+                B::type_name()
+            ))),
+        }
+    }
+
+    fn finish(mut self) -> Result<ArrayRef> {
+        Ok(self.builder.finish())
+    }
+}
 
 /// Builder for converting variant values to arrow Decimal values
 pub(crate) struct VariantToDecimalArrowRowBuilder<'a, T>
@@ -1756,12 +1829,20 @@ mod tests {
     };
     use crate::type_conversion::VariantCastMode;
     use arrow::array::{
-        Array, Decimal32Array, FixedSizeBinaryArray, Int32Array, ListArray, StructArray,
+        Array, ArrayRef, AsArray, BooleanArray, Decimal32Array, Decimal64Array, Decimal128Array,
+        FixedSizeBinaryArray, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
+        Int64Array, ListArray, StringArray, StructArray,
     };
-    use arrow::compute::CastOptions;
-    use arrow::datatypes::{DataType, Field, Fields, UnionFields, UnionMode};
+    use arrow::compute::{CastOptions, cast_with_options};
+    use arrow::datatypes::{
+        DataType, Field, Fields, MAX_DECIMAL32_FOR_EACH_PRECISION,
+        MAX_DECIMAL64_FOR_EACH_PRECISION, MAX_DECIMAL128_FOR_EACH_PRECISION,
+        MIN_DECIMAL32_FOR_EACH_PRECISION, MIN_DECIMAL64_FOR_EACH_PRECISION,
+        MIN_DECIMAL128_FOR_EACH_PRECISION, UnionFields, UnionMode,
+    };
     use arrow::error::ArrowError;
-    use parquet_variant::{Variant, VariantDecimal4};
+    use arrow::util::display::FormatOptions;
+    use parquet_variant::{ShortString, Variant, VariantBuilder, VariantDecimal4, VariantDecimal8};
     use std::sync::Arc;
     use uuid::Uuid;
 
@@ -1931,5 +2012,512 @@ mod tests {
         let struct_array = struct_builder.finish().unwrap();
         let struct_array = struct_array.as_any().downcast_ref::<StructArray>().unwrap();
         assert!(struct_array.is_null(0));
+    }
+
+    struct StringCastCase<'a> {
+        name: &'a str,
+        variants: Vec<Variant<'a, 'a>>,
+        arrow: ArrayRef,
+    }
+
+    fn assert_string_array_equals(
+        left: ArrayRef,
+        right: ArrayRef,
+        target_type: DataType,
+        context: &str,
+    ) {
+        match target_type {
+            DataType::Utf8 => {
+                let left_array = left.as_string::<i32>();
+                let right_array = right.as_string::<i32>();
+                assert_eq!(
+                    left_array, right_array,
+                    "Cast {context} -> {target_type:?} is different between variant-get and arrow-cast"
+                );
+            }
+            DataType::LargeUtf8 => {
+                let left_array = left.as_string::<i64>();
+                let right_array = right.as_string::<i64>();
+                assert_eq!(
+                    left_array, right_array,
+                    "Cast {context} -> {target_type:?} is different between variant-get and arrow-cast"
+                );
+            }
+            DataType::Utf8View => {
+                let left_array = left.as_string_view();
+                let right_array = right.as_string_view();
+                assert_eq!(
+                    left_array, right_array,
+                    "Cast {context} -> {target_type:?} is different between variant-get and arrow-cast"
+                );
+            }
+            _ => unreachable!(
+                "Unsupported target type for string array comparison: {:?}",
+                target_type
+            ),
+        }
+    }
+
+    #[test]
+    fn test_top_level_null_ignores_null_format() {
+        let options = CastOptions {
+            safe: false,
+            format_options: FormatOptions::new().with_null("NULL"),
+        };
+
+        for target_type in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
+            let mut builder = make_typed_variant_to_arrow_row_builder(
+                &target_type,
+                &options,
+                2,
+                VariantCastMode::Get,
+            )
+            .unwrap();
+
+            assert!(!builder.append_value(Variant::Null).unwrap());
+            assert!(builder.append_value(Variant::String("Hello")).unwrap());
+
+            let array = builder.finish().unwrap();
+            assert!(
+                array.is_null(0),
+                "cast null -> target={target_type:?} unexpected."
+            );
+            assert_eq!(
+                arrow::util::display::array_value_to_string(array.as_ref(), 1).unwrap(),
+                "Hello"
+            );
+        }
+    }
+
+    #[test]
+    fn test_variant_to_string_align_cast_kernel_logic() {
+        let mut cases = vec![
+            StringCastCase {
+                name: "null",
+                variants: vec![Variant::Null, Variant::Int8(3)],
+                arrow: Arc::new(Int8Array::from(vec![None, Some(3)])),
+            },
+            StringCastCase {
+                name: "bool",
+                variants: vec![Variant::BooleanFalse, Variant::BooleanTrue],
+                arrow: Arc::new(BooleanArray::from(vec![false, true])),
+            },
+            StringCastCase {
+                name: "float",
+                variants: vec![
+                    Variant::Float(1.23),
+                    Variant::Float(0.0),
+                    Variant::Float(-0.0),
+                    Variant::Float(1.0),
+                    Variant::Float(1e10),
+                    Variant::Float(f32::NAN),
+                    Variant::Float(f32::INFINITY),
+                    Variant::Float(f32::NEG_INFINITY),
+                    Variant::Float(f32::MAX),
+                    Variant::Float(f32::MIN),
+                ],
+                arrow: Arc::new(Float32Array::from(vec![
+                    1.23,
+                    0.0,
+                    -0.0,
+                    1.0,
+                    1e10,
+                    f32::NAN,
+                    f32::INFINITY,
+                    f32::NEG_INFINITY,
+                    f32::MAX,
+                    f32::MIN,
+                ])),
+            },
+            StringCastCase {
+                name: "double",
+                variants: vec![
+                    Variant::Double(1.23),
+                    Variant::Double(0.0),
+                    Variant::Double(-0.0),
+                    Variant::Double(1.0),
+                    Variant::Double(1e10),
+                    Variant::Double(f64::NAN),
+                    Variant::Double(f64::INFINITY),
+                    Variant::Double(f64::NEG_INFINITY),
+                    Variant::Double(f64::MAX),
+                    Variant::Double(f64::MIN),
+                ],
+                arrow: Arc::new(Float64Array::from(vec![
+                    1.23,
+                    0.0,
+                    -0.0,
+                    1.0,
+                    1e10,
+                    f64::NAN,
+                    f64::INFINITY,
+                    f64::NEG_INFINITY,
+                    f64::MAX,
+                    f64::MIN,
+                ])),
+            },
+            StringCastCase {
+                name: "int8",
+                variants: vec![
+                    Variant::Int8(i8::MIN),
+                    Variant::Int8(-1),
+                    Variant::Int8(0),
+                    Variant::Int8(1),
+                    Variant::Int8(i8::MAX),
+                ],
+                arrow: Arc::new(Int8Array::from(vec![i8::MIN, -1, 0, 1, i8::MAX])),
+            },
+            StringCastCase {
+                name: "int16",
+                variants: vec![
+                    Variant::Int16(i16::MIN),
+                    Variant::Int16(-1),
+                    Variant::Int16(0),
+                    Variant::Int16(1),
+                    Variant::Int16(i16::MAX),
+                ],
+                arrow: Arc::new(Int16Array::from(vec![i16::MIN, -1, 0, 1, i16::MAX])),
+            },
+            StringCastCase {
+                name: "int32",
+                variants: vec![
+                    Variant::Int32(i32::MIN),
+                    Variant::Int32(-1),
+                    Variant::Int32(0),
+                    Variant::Int32(1),
+                    Variant::Int32(i32::MAX),
+                ],
+                arrow: Arc::new(Int32Array::from(vec![i32::MIN, -1, 0, 1, i32::MAX])),
+            },
+            StringCastCase {
+                name: "int64",
+                variants: vec![
+                    Variant::Int64(i64::MIN),
+                    Variant::Int64(-1),
+                    Variant::Int64(0),
+                    Variant::Int64(1),
+                    Variant::Int64(i64::MAX),
+                ],
+                arrow: Arc::new(Int64Array::from(vec![i64::MIN, -1, 0, 1, i64::MAX])),
+            },
+        ];
+
+        {
+            // DataType::Decimal32 with scale = 0
+            let unscaled_decimal32_array = MIN_DECIMAL32_FOR_EACH_PRECISION
+                .into_iter()
+                .chain(MAX_DECIMAL32_FOR_EACH_PRECISION)
+                .collect::<Vec<i32>>();
+            let variants = unscaled_decimal32_array
+                .iter()
+                .map(|&v| VariantDecimal4::try_new(v, 0).unwrap().into())
+                .collect::<Vec<Variant>>();
+            let arrow = Arc::new(
+                Decimal32Array::from_iter_values(unscaled_decimal32_array)
+                    .with_data_type(DataType::Decimal32(9, 0)),
+            );
+            cases.push(StringCastCase {
+                name: "decimal32(scale=0)",
+                variants,
+                arrow,
+            });
+        }
+
+        {
+            // DataType::Decimal32 with scale = 2
+            let unscaled_decimal32_array = MIN_DECIMAL32_FOR_EACH_PRECISION
+                .into_iter()
+                .chain(MAX_DECIMAL32_FOR_EACH_PRECISION)
+                .collect::<Vec<i32>>();
+            let variants = unscaled_decimal32_array
+                .iter()
+                .map(|&v| VariantDecimal4::try_new(v, 2).unwrap().into())
+                .collect::<Vec<Variant>>();
+            let arrow = Arc::new(
+                Decimal32Array::from_iter_values(unscaled_decimal32_array)
+                    .with_data_type(DataType::Decimal32(9, 2)),
+            );
+            cases.push(StringCastCase {
+                name: "decimal32(scale=2)",
+                variants,
+                arrow,
+            });
+        }
+
+        {
+            // DataType::Decimal64 with scale = 0
+            let unscaled_decimal64_array = MAX_DECIMAL64_FOR_EACH_PRECISION
+                .into_iter()
+                .chain(MIN_DECIMAL64_FOR_EACH_PRECISION)
+                .collect::<Vec<i64>>();
+            let variants = unscaled_decimal64_array
+                .iter()
+                .map(|&v| VariantDecimal8::try_new(v, 0).unwrap().into())
+                .collect::<Vec<Variant>>();
+            let arrow = Arc::new(
+                Decimal64Array::from_iter_values(unscaled_decimal64_array)
+                    .with_data_type(DataType::Decimal64(18, 0)),
+            );
+            cases.push(StringCastCase {
+                name: "decimal64(scale=0)",
+                variants,
+                arrow,
+            });
+        }
+
+        {
+            // DataType::Decimal64 with scale = 2
+            let unscaled_decimal64_array = MAX_DECIMAL64_FOR_EACH_PRECISION
+                .into_iter()
+                .chain(MIN_DECIMAL64_FOR_EACH_PRECISION)
+                .collect::<Vec<i64>>();
+            let variants = unscaled_decimal64_array
+                .iter()
+                .map(|&v| VariantDecimal8::try_new(v, 2).unwrap().into())
+                .collect::<Vec<Variant>>();
+            let arrow = Arc::new(
+                Decimal64Array::from_iter_values(unscaled_decimal64_array)
+                    .with_data_type(DataType::Decimal64(18, 2)),
+            );
+            cases.push(StringCastCase {
+                name: "decimal64(scale=2)",
+                variants,
+                arrow,
+            });
+        }
+
+        {
+            // DataType::Decimal128 with scale = 0
+            let unscaled_decimal128_array = MAX_DECIMAL128_FOR_EACH_PRECISION
+                .into_iter()
+                .chain(MIN_DECIMAL128_FOR_EACH_PRECISION)
+                .collect::<Vec<i128>>();
+            let variants = unscaled_decimal128_array
+                .iter()
+                .map(|&v| {
+                    parquet_variant::VariantDecimal16::try_new(v, 0)
+                        .unwrap()
+                        .into()
+                })
+                .collect::<Vec<Variant>>();
+            let arrow = Arc::new(
+                Decimal128Array::from_iter_values(unscaled_decimal128_array)
+                    .with_data_type(DataType::Decimal128(38, 0)),
+            );
+            cases.push(StringCastCase {
+                name: "decimal128(scale=0)",
+                variants,
+                arrow,
+            });
+        }
+
+        {
+            // DataType::Decimal128 with scale = 2
+            let unscaled_decimal128_array = MAX_DECIMAL128_FOR_EACH_PRECISION
+                .into_iter()
+                .chain(MIN_DECIMAL128_FOR_EACH_PRECISION)
+                .collect::<Vec<i128>>();
+            let variants = unscaled_decimal128_array
+                .iter()
+                .map(|&v| {
+                    parquet_variant::VariantDecimal16::try_new(v, 2)
+                        .unwrap()
+                        .into()
+                })
+                .collect::<Vec<Variant>>();
+            let arrow = Arc::new(
+                Decimal128Array::from_iter_values(unscaled_decimal128_array)
+                    .with_data_type(DataType::Decimal128(38, 2)),
+            );
+            cases.push(StringCastCase {
+                name: "decimal128(scale=2)",
+                variants,
+                arrow,
+            });
+        }
+
+        let options = CastOptions::default();
+        for case in &cases {
+            for target_type in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
+                let mut builder = make_typed_variant_to_arrow_row_builder(
+                    &target_type,
+                    &options,
+                    case.variants.len(),
+                    VariantCastMode::Get,
+                )
+                .unwrap();
+                for variant in &case.variants {
+                    builder.append_value(variant.clone()).unwrap();
+                }
+
+                let actual = builder.finish().unwrap();
+                let expected =
+                    cast_with_options(case.arrow.as_ref(), &target_type, &options).unwrap();
+
+                assert_string_array_equals(actual, expected, target_type, case.name);
+            }
+        }
+    }
+    #[test]
+    fn test_cast_variant_string_to_string_align_cast_kernel() {
+        let values = [
+            "",
+            "hello",
+            "a,b",
+            "a\"b",
+            "line\nbreak",
+            "tab\there",
+            "nul\0byte",
+            "emoji 🦀",
+            // 63 bytes
+            "012345678901234567890123456789012345678901234567890123456789012",
+            // 64 bytes
+            "0123456789012345678901234567890123456789012345678901234567890123",
+        ];
+
+        let options = [
+            CastOptions::default(),
+            CastOptions {
+                safe: false,
+                format_options: FormatOptions::new().with_quoted_strings(true),
+            },
+        ];
+        for options in options {
+            let mut variants = Vec::new();
+            let mut arrow_values = Vec::new();
+            for value in values {
+                variants.push(Variant::String(value));
+                arrow_values.push(value);
+
+                if let Ok(short) = ShortString::try_new(value) {
+                    variants.push(Variant::ShortString(short));
+                    arrow_values.push(value);
+                }
+            }
+
+            let arrow = StringArray::from(arrow_values);
+
+            for target_type in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
+                let mut builder = make_typed_variant_to_arrow_row_builder(
+                    &target_type,
+                    &options,
+                    variants.len(),
+                    VariantCastMode::Get,
+                )
+                .unwrap();
+                for variant in &variants {
+                    assert!(
+                        builder.append_value(variant.clone()).unwrap(),
+                        "string variants should always append, got {variant:?}"
+                    );
+                }
+
+                let actual = builder.finish().unwrap();
+                let expected = cast_with_options(&arrow, &target_type, &options).unwrap();
+
+                assert_string_array_equals(actual, expected, target_type.clone(), "string");
+            }
+        }
+    }
+
+    #[test]
+    fn test_cast_variant_object_to_string_unsupported() {
+        // Build a top-level Variant::Object.
+        let (metadata, value) = {
+            let mut builder = VariantBuilder::new();
+            let mut object = builder.new_object();
+            object.insert("key1", "value1");
+            object.insert("key2", 42);
+            object.finish();
+            builder.finish()
+        };
+        let object = Variant::new(&metadata, &value);
+
+        for target_type in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
+            // safe = true: value-level unsupported -> null
+            let cast_options = CastOptions::default();
+            let mut builder = make_typed_variant_to_arrow_row_builder(
+                &target_type,
+                &cast_options,
+                1,
+                VariantCastMode::Get,
+            )
+            .unwrap();
+
+            assert!(
+                !builder.append_value(object.clone()).unwrap(),
+                "Object should be reported as not appended, target={target_type:?}"
+            );
+            let array = builder.finish().unwrap();
+            assert_eq!(array.len(), 1);
+            assert!(
+                array.is_null(0),
+                "safe mode should produce null, target={target_type:?}"
+            );
+
+            // safe = false: must error, not silently become null
+            let strict = CastOptions {
+                safe: false,
+                ..Default::default()
+            };
+            let mut builder = make_typed_variant_to_arrow_row_builder(
+                &target_type,
+                &strict,
+                1,
+                VariantCastMode::Get,
+            )
+            .unwrap();
+
+            let err = builder.append_value(object.clone()).unwrap_err();
+            assert!(
+                matches!(err, ArrowError::CastError(_)),
+                "strict mode should return CastError, target={target_type:?}, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_cast_variant_uuid_to_string() {
+        let uuid_nil = Uuid::nil();
+        let variant_uuid_nil = Variant::Uuid(uuid_nil);
+        let uuid_max = Uuid::max();
+        let variant_uuid_max = Variant::Uuid(uuid_max);
+
+        let configs = [
+            CastOptions::default(),
+            CastOptions {
+                safe: false,
+                ..Default::default()
+            },
+        ];
+
+        for cfg in configs {
+            for target_type in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
+                let mut builder = make_typed_variant_to_arrow_row_builder(
+                    &target_type,
+                    &cfg,
+                    2,
+                    VariantCastMode::Get,
+                )
+                .unwrap();
+
+                assert!(builder.append_value(variant_uuid_nil.clone()).unwrap());
+                assert!(builder.append_value(variant_uuid_max.clone()).unwrap());
+
+                let array = builder.finish().unwrap();
+
+                // as uuid stored as FixedSizeBinary(16), and arrow-cast don't support casting FixedSizeBinary to String,
+                // so we check output here directly
+                assert_eq!(array.len(), 2);
+                assert_eq!(
+                    arrow::util::display::array_value_to_string(array.as_ref(), 0).unwrap(),
+                    uuid_nil.to_string()
+                );
+                assert_eq!(
+                    arrow::util::display::array_value_to_string(array.as_ref(), 1).unwrap(),
+                    uuid_max.to_string()
+                );
+            }
+        }
     }
 }

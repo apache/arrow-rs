@@ -18,8 +18,11 @@ use arrow::datatypes::{
 use arrow::error::{ArrowError, Result};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use half::f16;
+use lexical_core::FormattedSize;
 use num_traits::NumCast;
 use parquet_variant::{Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16};
+use ryu::Float;
+use std::fmt::Write;
 
 /// Controls the conversions allowed when extracting a typed value from a variant.
 #[derive(Debug, Clone, Copy)]
@@ -705,6 +708,57 @@ pub(crate) fn variant_to_boolean(
         Variant::String(s) => cast_single_string_to_boolean_default(s),
         _ => None,
     }
+}
+
+#[inline]
+fn write_float_to_string<F: Float>(out: &mut String, f: F) {
+    let mut buffer = ryu::Buffer::new();
+    out.push_str(buffer.format(f));
+}
+
+fn write_lexical_to_string<N: lexical_core::ToLexical>(out: &mut String, n: N) {
+    // i64::FORMATTED_SIZE is the upper bound for all integer types we support
+    // (i8/i16/i32/i64). With power-of-two feature it's 128, otherwise 20.
+    // We can't use N::FORMATTED_SIZE in a generic function (generic_const_exprs).
+    let mut buf = [0u8; i64::FORMATTED_SIZE];
+    let written = lexical_core::write(n, &mut buf);
+    // Lexical core produces valid UTF-8
+    out.push_str(unsafe { std::str::from_utf8_unchecked(written) });
+}
+
+pub(crate) fn write_variant_to_string(out: &mut String, variant: &Variant<'_, '_>) -> bool {
+    match variant {
+        Variant::BooleanTrue => out.push_str("true"),
+        Variant::BooleanFalse => out.push_str("false"),
+        Variant::Int8(i) => write_lexical_to_string(out, *i),
+        Variant::Int16(i) => write_lexical_to_string(out, *i),
+        Variant::Int32(i) => write_lexical_to_string(out, *i),
+        Variant::Int64(i) => write_lexical_to_string(out, *i),
+        Variant::Float(f) => write_float_to_string(out, *f),
+        Variant::Double(d) => write_float_to_string(out, *d),
+        Variant::Decimal4(d) => {
+            datatypes::write_decimal(out, d.integer(), d.scale() as _)
+                .expect("writing to string shouldn't fail");
+        }
+        Variant::Decimal8(d) => {
+            datatypes::write_decimal(out, d.integer(), d.scale() as _)
+                .expect("writing to string shouldn't fail");
+        }
+        Variant::Decimal16(d) => {
+            datatypes::write_decimal(out, d.integer(), d.scale() as _)
+                .expect("writing to string shouldn't fail");
+        }
+        // Arrow has no UUID type, FixedSizeBinary(16) -> Utf8 is unsupported.
+        // Emit the canonical hyphenated UUID as a deliberate Variant extension.
+        Variant::Uuid(u) => write!(out, "{u}").expect("writing to string shouldn't fail"),
+        // Top level object can't cast to string
+        Variant::Object(_) => return false,
+        // TODO: Other types need to be implemented
+        // Null/String/ShortString has been handled in the caller, add them back when supporting list
+        _ => return false,
+    }
+
+    true
 }
 
 /// Convert the value at a specific index in the given array into a `Variant`.
