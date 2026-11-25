@@ -101,12 +101,8 @@ enum LookupIndex {
 impl<'m> ReadOnlyMetadataBuilder<'m> {
     /// Creates a new read-only metadata builder from the given metadata dictionary.
     pub fn new(metadata: &'m VariantMetadata<'m>) -> Self {
-        // Don't allocate a full map for tiny dictionaries, sparse projections, or
-        // the largest dictionaries. Sorted dictionaries already have binary search.
-        let lookup_index = if !metadata.is_sorted()
-            && (64..=16_384).contains(&metadata.len())
-            && metadata.bytes.len() <= 128 * 1024
-        {
+        // Don't index tiny dictionaries. Sorted dictionaries already have binary search.
+        let lookup_index = if !metadata.is_sorted() && metadata.len() >= 64 {
             LookupIndex::Pending(0)
         } else {
             LookupIndex::Disabled
@@ -120,16 +116,18 @@ impl<'m> ReadOnlyMetadataBuilder<'m> {
 
     fn build_lookup_index(&mut self) {
         self.lookup_index = LookupIndex::Disabled;
-        let mut entries = HashMap::with_capacity(self.metadata.len());
+        // Reuse the lookup cache. Its keys borrow from the dictionary, and the
+        // reservation is capped so large dictionaries with duplicates grow on demand.
+        let remaining = self.metadata.len() - self.known_field_names.len();
+        self.known_field_names.reserve(remaining.min(16_384));
         for (id, name) in self.metadata.iter_try().enumerate() {
             // Keep the original lookup behavior for shallow metadata with a bad
             // entry unrelated to the requested field.
             let Ok(name) = name else {
                 return;
             };
-            entries.entry(name).or_insert(id as u32);
+            self.known_field_names.entry(name).or_insert(id as u32);
         }
-        self.known_field_names = entries;
         self.lookup_index = LookupIndex::Complete;
     }
 }
@@ -156,8 +154,12 @@ impl MetadataBuilder for ReadOnlyMetadataBuilder<'_> {
         }
 
         // Pay for indexing only once successful uncached searches have already
-        // examined at least twice as many entries as a full scan.
-        if matches!(self.lookup_index, LookupIndex::Pending(seen) if seen >= 2 * self.metadata.len())
+        // examined at least twice as many entries as a full scan. For large
+        // dictionaries also wait for 16 distinct hits to avoid indexing for
+        // sparse projections which happen to hit entries near the end.
+        if matches!(self.lookup_index, LookupIndex::Pending(seen) if seen >= self.metadata.len().saturating_mul(2))
+            && (self.known_field_names.len() >= 16
+                || (self.metadata.len() <= 16_384 && self.metadata.bytes.len() <= 128 * 1024))
         {
             self.build_lookup_index();
             if let Some(id) = self.known_field_names.get(field_name) {
@@ -178,7 +180,7 @@ impl MetadataBuilder for ReadOnlyMetadataBuilder<'_> {
 
         if let LookupIndex::Pending(seen) = &mut self.lookup_index {
             // A linear search visits the prefix ending at its first match.
-            *seen += field_id as usize + 1;
+            *seen = seen.saturating_add(field_id as usize + 1);
         }
         self.known_field_names.insert(field_name, field_id);
         Ok(field_id)
@@ -483,16 +485,38 @@ mod test {
     }
 
     #[test]
-    fn test_read_only_lookup_does_not_index_large_metadata_buffers() {
-        let suffix = "x".repeat(2_048);
-        let mut dictionary = WritableMetadataBuilder::from_iter(
-            (0..64).rev().map(|id| format!("field_{id:02}{suffix}")),
-        );
+    fn test_read_only_lookup_defers_indexing_large_metadata_buffers() {
+        let fields = 4_096;
+        let name = |id| format!("field_{id:026}");
+        let mut dictionary = WritableMetadataBuilder::from_iter((0..fields).rev().map(name));
         dictionary.finish();
         let bytes = dictionary.into_inner();
+        assert!(bytes.len() > 128 * 1024);
         let metadata = VariantMetadata::try_new(&bytes).unwrap();
-        let builder = ReadOnlyMetadataBuilder::new(&metadata);
-        assert_eq!(builder.lookup_index, LookupIndex::Disabled);
+        let mut builder = ReadOnlyMetadataBuilder::new(&metadata);
+
+        for id in 0..16 {
+            assert_eq!(
+                builder.try_upsert_field_name(&name(id)).unwrap(),
+                fields - id - 1
+            );
+        }
+        assert!(
+            matches!(builder.lookup_index, LookupIndex::Pending(seen) if seen >= 2 * metadata.len())
+        );
+        assert_eq!(builder.known_field_names.len(), 16);
+
+        assert_eq!(
+            builder.try_upsert_field_name(&name(16)).unwrap(),
+            fields - 17
+        );
+        assert_eq!(builder.lookup_index, LookupIndex::Complete);
+        for id in 17..fields {
+            assert_eq!(
+                builder.try_upsert_field_name(&name(id)).unwrap(),
+                fields - id - 1
+            );
+        }
     }
 
     #[test]
