@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use std::marker::PhantomData;
 use std::ops::Range;
 
 use bytes::Bytes;
@@ -37,14 +38,6 @@ struct AlpEncodedVectorView<Exact: AlpExact> {
 }
 
 impl<Exact: AlpExact> AlpEncodedVectorView<Exact> {
-    fn expected_stored_size(&self) -> usize {
-        AlpInfo::STORED_SIZE
-            + ForInfo::<Exact>::stored_size()
-            + self
-                .for_info
-                .get_data_stored_size(self.num_elements, self.alp_info.num_exceptions)
-    }
-
     /// Byte range of the bit-packed values section in the page body.
     fn packed_values_range(&self) -> Range<usize> {
         let len = self.for_info.get_bit_packed_size(self.num_elements);
@@ -239,24 +232,137 @@ fn parse_vector_view<Exact: AlpExact>(
     })
 }
 
+/// An ALP page whose header and offsets section are validated, with vectors
+/// parsed on demand.
+pub(crate) struct AlpPage<Value: AlpFloat> {
+    header: AlpHeader,
+    /// Page body following the 7-byte header: `[offsets][vector data...]`.
+    body: Bytes,
+    _value: PhantomData<Value>,
+}
+
+impl<Value: AlpFloat> AlpPage<Value> {
+    pub(crate) fn try_new(data: Bytes) -> Result<Self> {
+        let header = parse_alp_page_header(data.as_ref())?;
+
+        let offsets_section_size = header
+            .num_vectors()
+            .checked_mul(std::mem::size_of::<u32>())
+            .ok_or_else(|| general_err!("Invalid ALP page: offsets length overflow"))?;
+
+        // `parse_alp_page_header` guarantees `data.len() >= ALP_HEADER_SIZE`.
+        let body = data.slice(ALP_HEADER_SIZE..);
+        if body.len() < offsets_section_size {
+            return Err(general_err!(
+                "Invalid ALP page: expected at least {} bytes for {} offsets, got {}",
+                offsets_section_size,
+                header.num_vectors(),
+                body.len()
+            ));
+        }
+
+        Ok(Self {
+            header,
+            body,
+            _value: PhantomData,
+        })
+    }
+
+    /// Number of encoded (non-null) values in the page.
+    pub(crate) fn num_values(&self) -> usize {
+        self.header.num_elements
+    }
+
+    pub(crate) fn num_vectors(&self) -> usize {
+        self.header.num_vectors()
+    }
+
+    pub(crate) fn vector_size(&self) -> usize {
+        self.header.vector_size
+    }
+
+    /// Parse and validate vector `idx`.
+    ///
+    /// Each vector must fill its `[offset, next offset)` range exactly, and the
+    /// first must start right after the offsets section, so vectors are
+    /// contiguous without parsing their neighbours.
+    pub(crate) fn vector(&self, idx: usize) -> Result<AlpVector<Value>> {
+        let num_vectors = self.num_vectors();
+        debug_assert!(idx < num_vectors, "vector index {idx} out of range");
+
+        let body = self.body.as_ref();
+        let start = read_offset(body, idx)?;
+        let offsets_section_size = num_vectors * std::mem::size_of::<u32>();
+        if idx == 0 && start != offsets_section_size {
+            return Err(general_err!(
+                "Invalid ALP page: vector offset {} at index {} does not match expected {}",
+                start,
+                idx,
+                offsets_section_size
+            ));
+        }
+        let end = if idx + 1 < num_vectors {
+            read_offset(body, idx + 1)?
+        } else {
+            body.len()
+        };
+        if end < start || end > body.len() {
+            return Err(general_err!(
+                "Invalid ALP page: vector offset {} out of bounds at index {}",
+                end,
+                idx
+            ));
+        }
+
+        let len = self.header.vector_num_elements(idx);
+        let view = parse_vector_view::<Value::Exact>(body, start, end, len)?;
+        Ok(AlpVector {
+            len: len as usize,
+            bit_width: view.for_info.bit_width,
+            frame_of_reference: view.for_info.frame_of_reference,
+            scale: Value::decode_scale(view.alp_info.exponent, view.alp_info.factor),
+            packed: self.body.slice(view.packed_values_range()),
+            exception_positions: self.body.slice(view.exception_positions_range()),
+            exception_values: self.body.slice(view.exception_values_range()),
+        })
+    }
+}
+
+/// One parsed vector: the constants needed to turn each packed integer back into
+/// a float, and its packed values and exception sections.
+pub(crate) struct AlpVector<Value: AlpFloat> {
+    len: usize,
+    bit_width: u8,
+    frame_of_reference: Value::Exact,
+    scale: Value::Scale,
+    packed: Bytes,
+    exception_positions: Bytes,
+    exception_values: Bytes,
+}
+
 /// Live decode state for the one vector currently being consumed.
 ///
-/// Holds the bit position inside that vector's packed values plus the
-/// vector-level constants needed to turn each packed integer back into a float.
 /// `delivered` is the vector-local index of the next element to produce, so
 /// exception patches (which use vector-local positions) land in the right place
 /// even when a vector is split across several `get`/`skip` calls.
 struct CurrentVector<Value: AlpFloat> {
     reader: BitReader,
-    bit_width: u8,
-    frame_of_reference: Value::Exact,
-    scale: Value::Scale,
     /// Number of this vector's elements not yet delivered or skipped.
     remaining: usize,
     /// Vector-local index of the next element to produce.
     delivered: usize,
-    exception_positions: Bytes,
-    exception_values: Bytes,
+    vector: AlpVector<Value>,
+}
+
+impl<Value: AlpFloat> CurrentVector<Value> {
+    fn new(vector: AlpVector<Value>) -> Self {
+        Self {
+            reader: BitReader::new(vector.packed.clone()),
+            remaining: vector.len,
+            delivered: 0,
+            vector,
+        }
+    }
 }
 
 /// Largest slice decoded in one unpack-then-decode pass: the canonical ALP
@@ -284,14 +390,15 @@ fn decode_range<Value: AlpFloat>(
     scratch: &mut [Value::Exact],
     out: &mut [Value],
 ) -> Result<()> {
-    let frame_of_reference = cur.frame_of_reference;
-    if cur.bit_width == 0 {
+    let vector = &cur.vector;
+    let frame_of_reference = vector.frame_of_reference;
+    if vector.bit_width == 0 {
         // Every packed delta is zero, so all values share `frame_of_reference`.
         let signed = frame_of_reference.reinterpret_as_signed();
-        out.fill(Value::decode_value(signed, cur.scale));
+        out.fill(Value::decode_value(signed, vector.scale));
     } else {
-        let bit_width = cur.bit_width as usize;
-        let scale = cur.scale;
+        let bit_width = vector.bit_width as usize;
+        let scale = vector.scale;
         for chunk in out.chunks_mut(scratch.len()) {
             let deltas = &mut scratch[..chunk.len()];
             let unpacked = cur.reader.get_batch::<Value::Exact>(deltas, bit_width);
@@ -317,16 +424,16 @@ fn decode_range<Value: AlpFloat>(
     // Both buffers were sliced to exactly `num_exceptions` whole entries at
     // parse time. A mismatch here would make `zip` silently drop exceptions.
     debug_assert_eq!(
-        cur.exception_positions.len() % std::mem::size_of::<u16>(),
+        vector.exception_positions.len() % std::mem::size_of::<u16>(),
         0
     );
-    debug_assert_eq!(cur.exception_values.len() % Value::Exact::WIDTH, 0);
+    debug_assert_eq!(vector.exception_values.len() % Value::Exact::WIDTH, 0);
     debug_assert_eq!(
-        cur.exception_positions.len() / std::mem::size_of::<u16>(),
-        cur.exception_values.len() / Value::Exact::WIDTH,
+        vector.exception_positions.len() / std::mem::size_of::<u16>(),
+        vector.exception_values.len() / Value::Exact::WIDTH,
     );
-    let values_chunks = cur.exception_values.chunks_exact(Value::Exact::WIDTH);
-    for (pos_chunk, value_chunk) in cur
+    let values_chunks = vector.exception_values.chunks_exact(Value::Exact::WIDTH);
+    for (pos_chunk, value_chunk) in vector
         .exception_positions
         .as_chunks::<{ std::mem::size_of::<u16>() }>()
         .0
@@ -354,15 +461,9 @@ where
     T::T: AlpFloat,
     <T::T as AlpFloat>::Exact: Send,
 {
-    /// Validated page header; drives vector sizing and count.
-    header: AlpHeader,
-    /// Page body following the 7-byte header: `[offsets][vector data...]`.
-    body: Bytes,
+    page: AlpPage<T::T>,
     /// Index of the next vector to parse once `current` is exhausted.
     next_vector_idx: usize,
-    /// Body offset where the next vector must begin; offsets are validated to be
-    /// contiguous as vectors are parsed.
-    expected_next_offset: usize,
     /// Live decode state for the vector currently being consumed.
     current: Option<CurrentVector<T::T>>,
     /// Reused unpack buffer, sized once per page to `min(vector_size, cap)` and
@@ -389,74 +490,29 @@ where
 {
     pub fn new() -> Self {
         Self {
-            // Benign placeholder header; replaced on the first `set_data`. The
+            // Benign placeholder page; replaced on the first `set_data`. The
             // cursor never consults it while `num_values == 0`.
-            header: AlpHeader {
-                compression_mode: 0,
-                integer_encoding: 0,
-                vector_size: 1,
-                num_elements: 0,
+            page: AlpPage {
+                header: AlpHeader {
+                    compression_mode: 0,
+                    integer_encoding: 0,
+                    vector_size: 1,
+                    num_elements: 0,
+                },
+                body: Bytes::new(),
+                _value: PhantomData,
             },
-            body: Bytes::new(),
             next_vector_idx: 0,
-            expected_next_offset: 0,
             current: None,
             scratch: Vec::new(),
             num_values: 0,
         }
     }
 
-    /// Parse the next vector on demand and install it as `current`: validate its
-    /// offset is contiguous with the previous vector, parse its metadata, build a
-    /// live bit reader over its packed values, and slice out its exception
-    /// sections.
+    /// Parse the next vector and install it as `current`.
     fn load_current_vector(&mut self) -> Result<()> {
-        let idx = self.next_vector_idx;
-        let num_vectors = self.header.num_vectors();
-        debug_assert!(idx < num_vectors, "load_current_vector with no vector left");
-
-        let body_ref = self.body.as_ref();
-        let start = read_offset(body_ref, idx)?;
-        if start != self.expected_next_offset {
-            return Err(general_err!(
-                "Invalid ALP page: vector offset {} at index {} does not match expected {}",
-                start,
-                idx,
-                self.expected_next_offset
-            ));
-        }
-        let end = if idx + 1 < num_vectors {
-            read_offset(body_ref, idx + 1)?
-        } else {
-            body_ref.len()
-        };
-        if end < start || end > body_ref.len() {
-            return Err(general_err!(
-                "Invalid ALP page: vector offset {} out of bounds at index {}",
-                end,
-                idx
-            ));
-        }
-
-        let count = self.header.vector_num_elements(idx);
-        let view = parse_vector_view::<<T::T as AlpFloat>::Exact>(body_ref, start, end, count)?;
-
-        // The next vector must start exactly where this one ends.
-        self.expected_next_offset = start + view.expected_stored_size();
-
-        let packed = self.body.slice(view.packed_values_range());
-        let exception_positions = self.body.slice(view.exception_positions_range());
-        let exception_values = self.body.slice(view.exception_values_range());
-        self.current = Some(CurrentVector {
-            reader: BitReader::new(packed),
-            bit_width: view.for_info.bit_width,
-            frame_of_reference: view.for_info.frame_of_reference,
-            scale: <T::T as AlpFloat>::decode_scale(view.alp_info.exponent, view.alp_info.factor),
-            remaining: count as usize,
-            delivered: 0,
-            exception_positions,
-            exception_values,
-        });
+        let vector = self.page.vector(self.next_vector_idx)?;
+        self.current = Some(CurrentVector::new(vector));
         self.next_vector_idx += 1;
         Ok(())
     }
@@ -470,52 +526,34 @@ where
     /// Validate the page header and reset the read cursor. Vectors are parsed
     /// and decoded lazily, on the first `get`/`skip`.
     fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
-        let header = parse_alp_page_header(data.as_ref())?;
+        let page = AlpPage::try_new(data)?;
 
         // `num_values` is an upper bound, not an exact count: only non-null values
         // are encoded, and the caller passes the level count when the value count
         // is not known up front. The header carries the authoritative count.
-        if header.num_elements > num_values {
+        if page.num_values() > num_values {
             return Err(general_err!(
                 "Invalid ALP page: header num_elements {} exceeds page num_values {}",
-                header.num_elements,
+                page.num_values(),
                 num_values
             ));
         }
-        let num_values = header.num_elements;
-
-        let offsets_section_size = header
-            .num_vectors()
-            .checked_mul(std::mem::size_of::<u32>())
-            .ok_or_else(|| general_err!("Invalid ALP page: offsets length overflow"))?;
-
-        // `parse_alp_page_header` guarantees `data.len() >= ALP_HEADER_SIZE`.
-        let body = data.slice(ALP_HEADER_SIZE..);
-        if body.len() < offsets_section_size {
-            return Err(general_err!(
-                "Invalid ALP page: expected at least {} bytes for {} offsets, got {}",
-                offsets_section_size,
-                header.num_vectors(),
-                body.len()
-            ));
-        }
+        let num_values = page.num_values();
 
         // Size the reused unpack buffer to one vector, capped to stay L1-resident
         // and to the page's value count so tiny pages don't over-allocate. The
         // `.max(1)` keeps a non-empty tile so the `chunks_mut` decode never hits a
         // zero stride (an empty page returns before any decode anyway).
-        let tile = header
-            .vector_size
+        let tile = page
+            .vector_size()
             .min(DECODE_TILE_CAP)
             .min(num_values)
             .max(1);
         self.scratch.clear();
         self.scratch.resize(tile, Default::default());
 
-        self.header = header;
-        self.body = body;
+        self.page = page;
         self.next_vector_idx = 0;
-        self.expected_next_offset = offsets_section_size;
         self.current = None;
         self.num_values = num_values;
         Ok(())
@@ -567,8 +605,8 @@ where
         // within it advances it in place rather than jumping.
         if let Some(cur) = self.current.as_mut() {
             let within = left.min(cur.remaining);
-            if cur.bit_width != 0 {
-                cur.reader.skip(within, cur.bit_width as usize);
+            if cur.vector.bit_width != 0 {
+                cur.reader.skip(within, cur.vector.bit_width as usize);
             }
             cur.delivered += within;
             cur.remaining -= within;
@@ -579,34 +617,30 @@ where
             return Ok(to_skip);
         }
 
-        let vector_size = self.header.vector_size;
-        let num_elements = self.header.num_elements;
+        let vector_size = self.page.vector_size();
+        let num_elements = self.page.num_values();
         let target = (num_elements - self.num_values) + left;
 
         self.current = None;
         self.num_values = num_elements - target;
 
         if target == num_elements {
-            self.next_vector_idx = self.header.num_vectors();
+            self.next_vector_idx = self.page.num_vectors();
             return Ok(to_skip);
         }
 
         // vector_size is a power of two: shift and mask instead of div/rem.
         let landing = target >> vector_size.trailing_zeros();
         let within = target & (vector_size - 1);
-
-        // Seed expected_next_offset so the jump satisfies load_current_vector's
-        // contiguity check; validation resumes from the landing vector.
         self.next_vector_idx = landing;
-        self.expected_next_offset = read_offset(self.body.as_ref(), landing)?;
 
         // within == 0 lands on a boundary and is loaded lazily by the next
         // get/skip; a mid-vector landing must be parsed and advanced now.
         if within > 0 {
             self.load_current_vector()?;
             let cur = self.current.as_mut().unwrap();
-            if cur.bit_width != 0 {
-                cur.reader.skip(within, cur.bit_width as usize);
+            if cur.vector.bit_width != 0 {
+                cur.reader.skip(within, cur.vector.bit_width as usize);
             }
             cur.delivered = within;
             cur.remaining -= within;
