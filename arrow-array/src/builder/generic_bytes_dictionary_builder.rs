@@ -275,7 +275,9 @@ where
             )
             .or_insert_with(|| {
                 let idx = storage.len();
-                storage.append_value(value);
+                // Store the bytes that were hashed above, not a second s_ref()
+                // of alue, which is not required to be idempotent.
+                storage.append_value(value_native);
                 idx
             })
             .get();
@@ -670,13 +672,40 @@ pub type LargeBinaryDictionaryBuilder<K> = GenericByteDictionaryBuilder<K, Gener
 mod tests {
     use super::*;
 
-    use crate::array::Int8Array;
+    use std::cell::Cell;
+
+    use crate::array::{Int8Array, Int32Array};
     use crate::cast::AsArray;
     use crate::types::{
         BinaryType, Int8Type, Int16Type, Int32Type, UInt8Type, UInt16Type, Utf8Type,
     };
     use crate::{ArrowPrimitiveType, BinaryArray, StringArray};
     use arrow_schema::DataType;
+
+    /// A legal `AsRef<str>` whose result changes between calls, so the value
+    /// that is hashed can differ from the value that is stored.
+    struct AlternatingValue(Cell<u32>);
+
+    impl AsRef<str> for AlternatingValue {
+        fn as_ref(&self) -> &str {
+            let n = self.0.get();
+            self.0.set(n + 1);
+            if n.is_multiple_of(2) { "a" } else { "b" }
+        }
+    }
+
+    #[test]
+    fn test_dictionary_builder_hashes_and_stores_the_same_bytes() {
+        let mut builder = GenericByteDictionaryBuilder::<Int32Type, Utf8Type>::new();
+        builder.append(AlternatingValue(Cell::new(0))).unwrap();
+        builder.append("a").unwrap();
+        let array = builder.finish();
+
+        // The first append hashed "a", so "a" must be the stored value and the
+        // second append must reuse its key instead of adding a duplicate.
+        assert_eq!(array.values().len(), 1);
+        assert_eq!(array.keys(), &Int32Array::from(vec![0, 0]));
+    }
 
     fn test_bytes_dictionary_builder<T>(values: Vec<&T::Native>)
     where
