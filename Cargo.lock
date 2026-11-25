@@ -2672,6 +2672,8 @@ dependencies = [
  "arrow-schema",
  "base64 0.23.1",
  "chrono",
+ "lexical-core",
+ "memchr",
  "parquet-variant",
  "ryu",
  "serde_json",

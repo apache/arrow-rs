@@ -53,11 +53,37 @@ pub fn json_to_variant(input: &ArrayRef) -> Result<VariantArray, ArrowError> {
 
 #[cfg(test)]
 mod test {
-    use crate::json_to_variant;
+    use crate::{VariantValueArrayBuilder, json_to_variant};
     use arrow::array::{Array, ArrayRef, LargeStringArray, StringArray, StringViewArray};
     use arrow_schema::ArrowError;
-    use parquet_variant::{Variant, VariantBuilder};
+    use parquet_variant::{Variant, VariantBuilder, VariantMetadata};
+    use parquet_variant_json::JsonToVariant;
     use std::sync::Arc;
+
+    #[test]
+    fn test_json_duplicate_with_read_only_metadata() -> Result<(), ArrowError> {
+        let mut dictionary = VariantBuilder::new().with_field_names(["a"]);
+        dictionary.append_value(Variant::Null);
+        let (metadata_bytes, _) = dictionary.finish();
+        let metadata = VariantMetadata::try_new(&metadata_bytes)?;
+        let mut values = VariantValueArrayBuilder::new(1);
+        let error = values
+            .builder_ext(&metadata)
+            .append_json(r#"{"a":1,"a":{"b":2}}"#)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Field name 'b' not found"), "{error}");
+
+        values
+            .builder_ext(&metadata)
+            .append_json(r#"{"a":{"b":1},"a":2}"#)?;
+        let values = values.build()?;
+        assert_eq!(values.len(), 1);
+        let bytes = values.value(0);
+        let object = Variant::try_new(&metadata_bytes, bytes)?;
+        assert_eq!(object.get_object_field("a"), Some(Variant::Int8(2)));
+        Ok(())
+    }
 
     #[test]
     fn test_json_to_variant() -> Result<(), ArrowError> {

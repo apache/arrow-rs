@@ -21,6 +21,11 @@ fn write_offset(buf: &mut Vec<u8>, value: usize, nbytes: u8) {
 ///
 /// [`ValueBuilder`]: crate::builder::ValueBuilder
 pub trait MetadataBuilder: std::fmt::Debug {
+    /// Whether lookups of an existing name always return the same field ID.
+    fn has_stable_field_ids(&self) -> bool {
+        false
+    }
+
     /// Attempts to register a field name, returning the corresponding (possibly newly-created)
     /// field id on success. Attempting to register the same field name twice will _generally_
     /// produce the same field id both times, but the variant spec does not actually require it.
@@ -43,6 +48,10 @@ pub trait MetadataBuilder: std::fmt::Debug {
 }
 
 impl MetadataBuilder for WritableMetadataBuilder {
+    fn has_stable_field_ids(&self) -> bool {
+        true
+    }
+
     fn try_upsert_field_name(&mut self, field_name: &str) -> Result<u32, ArrowError> {
         Ok(self.upsert_field_name(field_name))
     }
@@ -53,7 +62,10 @@ impl MetadataBuilder for WritableMetadataBuilder {
         self.num_field_names()
     }
     fn truncate_field_names(&mut self, new_size: usize) {
-        self.field_names.truncate(new_size)
+        self.field_names.truncate(new_size);
+        if new_size <= self.first_unsorted {
+            self.first_unsorted = 0;
+        }
     }
     fn finish(&mut self) -> usize {
         self.finish()
@@ -89,6 +101,10 @@ impl<'m> ReadOnlyMetadataBuilder<'m> {
 }
 
 impl MetadataBuilder for ReadOnlyMetadataBuilder<'_> {
+    fn has_stable_field_ids(&self) -> bool {
+        true
+    }
+
     fn try_upsert_field_name(&mut self, field_name: &str) -> Result<u32, ArrowError> {
         // Callers that copy fields out of an object and back into the same metadata dictionary
         // (unshredding, shredding, and projection all do this) pass field names that are slices of
@@ -140,7 +156,8 @@ impl MetadataBuilder for ReadOnlyMetadataBuilder<'_> {
 pub struct WritableMetadataBuilder {
     pub(crate) field_names: IndexSet<String>,
 
-    pub(crate) is_sorted: bool,
+    // Index of the first field out of order, or zero if no such field exists.
+    first_unsorted: usize,
 
     /// Output buffer. Metadata is written to the end of this buffer
     metadata_buffer: Vec<u8>,
@@ -153,13 +170,9 @@ impl WritableMetadataBuilder {
 
         if new_entry {
             let n = self.num_field_names();
-
-            // Dictionary sort order tracking:
-            // - An empty dictionary is unsorted (ambiguous in spec but required by interop tests)
-            // - A single-entry dictionary is trivially sorted
-            // - Otherwise, an already-sorted dictionary becomes unsorted if the new entry breaks order
-            self.is_sorted =
-                n == 1 || self.is_sorted && (self.field_names[n - 2] < self.field_names[n - 1]);
+            if self.first_unsorted == 0 && n > 1 && self.field_names[n - 2].as_str() > field_name {
+                self.first_unsorted = id;
+            }
         }
 
         id as u32
@@ -191,6 +204,10 @@ impl WritableMetadataBuilder {
         self.field_names.iter().map(|k| k.len()).sum()
     }
 
+    pub(crate) fn is_sorted(&self) -> bool {
+        self.first_unsorted == 0 && !self.field_names.is_empty()
+    }
+
     /// Finalizes the metadata dictionary and appends its serialized bytes to the underlying buffer,
     /// returning the resulting [`Self::offset`]. The builder state is reset and ready to start
     /// building a new metadata dictionary.
@@ -200,8 +217,9 @@ impl WritableMetadataBuilder {
         // Calculate metadata size
         let total_dict_size = self.metadata_size();
 
+        let is_sorted = self.is_sorted();
+        self.first_unsorted = 0;
         let metadata_buffer = &mut self.metadata_buffer;
-        let is_sorted = std::mem::take(&mut self.is_sorted);
         let field_names = std::mem::take(&mut self.field_names);
 
         // Determine appropriate offset size based on the larger of dict size or total string size
@@ -283,38 +301,38 @@ mod test {
         assert_eq!(metadata.field_name(0), "apple");
         assert_eq!(metadata.field_name(1), "banana");
         assert_eq!(metadata.field_name(2), "cherry");
-        assert!(metadata.is_sorted);
+        assert!(metadata.is_sorted());
 
         let metadata = WritableMetadataBuilder::from_iter(["zebra", "apple", "banana"]);
         assert_eq!(metadata.num_field_names(), 3);
         assert_eq!(metadata.field_name(0), "zebra");
         assert_eq!(metadata.field_name(1), "apple");
         assert_eq!(metadata.field_name(2), "banana");
-        assert!(!metadata.is_sorted);
+        assert!(!metadata.is_sorted());
 
         let metadata = WritableMetadataBuilder::from_iter(Vec::<&str>::new());
         assert_eq!(metadata.num_field_names(), 0);
-        assert!(!metadata.is_sorted);
+        assert!(!metadata.is_sorted());
     }
 
     #[test]
     fn test_metadata_builder_extend() {
         let mut metadata = WritableMetadataBuilder::default();
         assert_eq!(metadata.num_field_names(), 0);
-        assert!(!metadata.is_sorted);
+        assert!(!metadata.is_sorted());
 
         metadata.extend(["apple", "cherry"]);
         assert_eq!(metadata.num_field_names(), 2);
         assert_eq!(metadata.field_name(0), "apple");
         assert_eq!(metadata.field_name(1), "cherry");
-        assert!(metadata.is_sorted);
+        assert!(metadata.is_sorted());
 
         // extend with more field names that maintain sort order
         metadata.extend(vec!["dinosaur", "monkey"]);
         assert_eq!(metadata.num_field_names(), 4);
         assert_eq!(metadata.field_name(2), "dinosaur");
         assert_eq!(metadata.field_name(3), "monkey");
-        assert!(metadata.is_sorted);
+        assert!(metadata.is_sorted());
 
         // test extending with duplicate field names
         let initial_count = metadata.num_field_names();
@@ -327,14 +345,14 @@ mod test {
         let mut metadata = WritableMetadataBuilder::default();
 
         metadata.extend(["middle"]);
-        assert!(metadata.is_sorted);
+        assert!(metadata.is_sorted());
 
         metadata.extend(["zebra"]);
-        assert!(metadata.is_sorted);
+        assert!(metadata.is_sorted());
 
         // add field that breaks sort order
         metadata.extend(["apple"]);
-        assert!(!metadata.is_sorted);
+        assert!(!metadata.is_sorted());
     }
 
     #[test]
