@@ -259,6 +259,11 @@ fn compare_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, 
         )));
     }
 
+    // An empty run-end encoded slice reports start run 0 whatever its offset
+    if len == 0 {
+        return Ok(BooleanArray::new(BooleanBuffer::new_unset(0), None));
+    }
+
     let l_side = SideInfo {
         is_scalar: l_s,
         dict: l_v,
@@ -1589,6 +1594,13 @@ mod tests {
         // Empty REE
         let empty_a = ree_str(&[(Some("a"), 1)]).slice(0, 0);
         let empty_b = ree_str(&[(Some("b"), 1)]).slice(0, 0);
+        assert_eq!(eq(&empty_a, &empty_b).unwrap().len(), 0);
+
+        // Empty REE sliced past the first run
+        let empty_a = ree_str(&[(Some("a"), 1), (Some("b"), 1)]).slice(2, 0);
+        let empty_b = ree_str(&[(Some("a"), 2)]).slice(2, 0);
+        let s = Scalar::new(StringArray::from(vec!["a"]));
+        assert_eq!(eq(&empty_a, &s).unwrap().len(), 0);
         assert_eq!(eq(&empty_a, &empty_b).unwrap().len(), 0);
     }
 

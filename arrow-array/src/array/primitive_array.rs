@@ -2281,7 +2281,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "chrono-tz")]
+    #[cfg(any(feature = "chrono-tz", feature = "jiff"))]
     fn test_timestamp_with_named_tz_fmt_debug() {
         let arr: PrimitiveArray<TimestampMillisecondType> =
             TimestampMillisecondArray::from(vec![1546214400000, 1546214400000, -1546214400000])
@@ -2293,7 +2293,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(feature = "chrono-tz"))]
+    #[cfg(not(any(feature = "chrono-tz", feature = "jiff")))]
     fn test_timestamp_with_named_tz_fmt_debug() {
         let arr: PrimitiveArray<TimestampMillisecondType> =
             TimestampMillisecondArray::from(vec![1546214400000, 1546214400000, -1546214400000])
@@ -2330,7 +2330,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "chrono-tz")]
+    #[cfg(any(feature = "chrono-tz", feature = "jiff"))]
     fn test_timestamp_with_tz_with_daylight_saving_fmt_debug() {
         let arr: PrimitiveArray<TimestampMillisecondType> = TimestampMillisecondArray::from(vec![
             1647161999000,
