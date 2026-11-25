@@ -4,10 +4,8 @@
 
 use crate::builder::ArrayBuilder;
 use crate::{Array, ArrayRef, MapArray, StructArray};
-use arrow_buffer::Buffer;
-use arrow_buffer::{NullBuffer, NullBufferBuilder};
-use arrow_data::ArrayData;
-use arrow_schema::{ArrowError, DataType, Field, FieldRef};
+use arrow_buffer::{Buffer, NullBuffer, NullBufferBuilder, OffsetBuffer};
+use arrow_schema::{ArrowError, Field, FieldRef};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -156,53 +154,20 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
 
     /// Returns the offset of the next map slot, i.e. the current number of entries.
     ///
-    /// Returns an error if the number of entries does not fit in an `i32` offset.
+    /// Returns an error if the next offset would be less than the last offset
+    /// already recorded, or if the number of entries does not fit in an `i32`
+    /// offset.
     #[inline]
     fn next_offset(&self) -> Result<i32, ArrowError> {
         let len = self.key_builder.len();
-        i32::try_from(len).map_err(|_| {
+        let offset = i32::try_from(len).map_err(|_| {
             ArrowError::InvalidArgumentError(format!(
                 "Cannot append to a map builder with {len} entries: offset exceeds i32::MAX"
             ))
-        })
-    }
-
-    /// Finish the current map array slot
-    ///
-    /// Returns an error, leaving the builder unchanged, if:
-    /// - the key and value builders have different lengths
-    /// - the key and value builders were finished after the last append
-    /// - the number of entries exceeds `i32::MAX`
-    #[inline]
-    pub fn append(&mut self, is_valid: bool) -> Result<(), ArrowError> {
-        self.validate_equal_lengths()?;
-        let offset = self.next_offset()?;
-        self.ensure_offset_not_decreasing(offset)?;
-        self.offsets_builder.push(offset);
-        self.null_buffer_builder.append(is_valid);
-        Ok(())
-    }
-
-    /// Append `n` nulls to this [`MapBuilder`]
-    ///
-    /// Returns an error, leaving the builder unchanged, if:
-    /// - the key and value builders have different lengths
-    /// - the key and value builders were finished after the last append
-    /// - the number of entries exceeds `i32::MAX`
-    #[inline]
-    pub fn append_nulls(&mut self, n: usize) -> Result<(), ArrowError> {
-        self.validate_equal_lengths()?;
-        let offset = self.next_offset()?;
-        self.ensure_offset_not_decreasing(offset)?;
-        self.offsets_builder.extend(std::iter::repeat_n(offset, n));
-        self.null_buffer_builder.append_n_nulls(n);
-        Ok(())
-    }
-
-    /// `keys().finish()` resets the child length, so the next offset can be smaller
-    /// than one already recorded.
-    #[inline]
-    fn ensure_offset_not_decreasing(&self, offset: i32) -> Result<(), ArrowError> {
+        })?;
+        // `keys().finish()` resets the child length, so the next offset can be
+        // smaller than one already recorded. Reject that before either buffer
+        // is updated.
         if let Some(&last) = self.offsets_builder.last()
             && offset < last
         {
@@ -211,6 +176,34 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
                  (next offset {offset} is less than last offset {last})"
             )));
         }
+        Ok(offset)
+    }
+
+    /// Finish the current map array slot
+    ///
+    /// Returns an error if the key and values builders are in an inconsistent state,
+    /// the next offset would be less than the last offset, or the number of entries
+    /// exceeds `i32::MAX`. A rejected append leaves the builder unchanged.
+    #[inline]
+    pub fn append(&mut self, is_valid: bool) -> Result<(), ArrowError> {
+        self.validate_equal_lengths()?;
+        let offset = self.next_offset()?;
+        self.offsets_builder.push(offset);
+        self.null_buffer_builder.append(is_valid);
+        Ok(())
+    }
+
+    /// Append `n` nulls to this [`MapBuilder`]
+    ///
+    /// Returns an error if the key and values builders are in an inconsistent state,
+    /// the next offset would be less than the last offset, or the number of entries
+    /// exceeds `i32::MAX`. A rejected append leaves the builder unchanged.
+    #[inline]
+    pub fn append_nulls(&mut self, n: usize) -> Result<(), ArrowError> {
+        self.validate_equal_lengths()?;
+        let offset = self.next_offset()?;
+        self.offsets_builder.extend(std::iter::repeat_n(offset, n));
+        self.null_buffer_builder.append_n_nulls(n);
         Ok(())
     }
 
@@ -224,7 +217,6 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
     /// - the keys contain nulls
     /// - the key or value builder was finished after the last append
     pub fn finish(&mut self) -> MapArray {
-        let len = self.len();
         // Build the keys
         let keys_arr = self.key_builder.finish();
         let values_arr = self.value_builder.finish();
@@ -232,7 +224,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         self.offsets_builder.push(0);
         let null_bit_buffer = self.null_buffer_builder.finish();
 
-        self.finish_helper(keys_arr, values_arr, offset_buffer, null_bit_buffer, len)
+        self.finish_helper(keys_arr, values_arr, offset_buffer, null_bit_buffer)
     }
 
     /// Builds the [`MapArray`] without resetting the builder.
@@ -245,17 +237,15 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
     /// - the keys contain nulls
     /// - the key or value builder was finished after the last append
     pub fn finish_cloned(&self) -> MapArray {
-        let len = self.len();
         // Build the keys
         let keys_arr = self.key_builder.finish_cloned();
         let values_arr = self.value_builder.finish_cloned();
         let offset_buffer = Buffer::from_slice_ref(self.offsets_builder.as_slice());
         let nulls = self.null_buffer_builder.finish_cloned();
-        self.finish_helper(keys_arr, values_arr, offset_buffer, nulls, len)
+        self.finish_helper(keys_arr, values_arr, offset_buffer, nulls)
     }
 
     fn finish_preserve_values(&mut self) -> MapArray {
-        let len = self.len();
         // Build the keys
         let keys_arr = self.key_builder.finish_preserve_values();
         let values_arr = self.value_builder.finish_preserve_values();
@@ -263,7 +253,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         self.offsets_builder.push(0);
         let null_bit_buffer = self.null_buffer_builder.finish();
 
-        self.finish_helper(keys_arr, values_arr, offset_buffer, null_bit_buffer, len)
+        self.finish_helper(keys_arr, values_arr, offset_buffer, null_bit_buffer)
     }
 
     fn finish_helper(
@@ -272,7 +262,6 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         values_arr: Arc<dyn Array>,
         offset_buffer: Buffer,
         nulls: Option<NullBuffer>,
-        len: usize,
     ) -> MapArray {
         assert!(
             keys_arr.null_count() == 0,
@@ -319,18 +308,12 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
             struct_array.data_type().clone(),
             false, // always non-nullable
         ));
-        let array_data = ArrayData::builder(DataType::Map(map_field, false)) // TODO: support sorted keys
-            .len(len)
-            .add_buffer(offset_buffer)
-            .add_child_data(struct_array.into_data())
-            .nulls(nulls);
-
-        // SAFETY: `append` and `append_nulls` keep the offsets non-negative and
+        // SAFETY: offsets are appended from the entry count, which the builder
+        // keeps equal for keys and values. `append` and `append_nulls` keep them
         // non-decreasing, and the last offset was checked above to be within the
-        // struct child, which is built from `keys_arr` and `values_arr`.
-        let array_data = unsafe { array_data.build_unchecked() };
-
-        MapArray::from(array_data)
+        // finished key and value arrays.
+        let offsets = unsafe { OffsetBuffer::new_unchecked(offset_buffer.into()) };
+        unsafe { MapArray::new_unchecked(map_field, offsets, struct_array, nulls, false) }
     }
 
     /// Returns the current null buffer as a slice
@@ -375,6 +358,7 @@ mod tests {
     use super::*;
     use crate::builder::{Int32Builder, StringBuilder, make_builder, tests::PreserveValuesMock};
     use crate::{Int32Array, StringArray};
+    use arrow_schema::DataType;
     use std::collections::HashMap;
 
     #[test]

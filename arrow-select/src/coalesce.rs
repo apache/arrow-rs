@@ -1009,6 +1009,12 @@ fn check_filter_len(filter: &FilterPredicate, source_len: usize) -> Result<(), A
 ///
 /// [`StringViewArray`]: arrow_array::StringViewArray
 trait InProgressArray: std::fmt::Debug + Send + Sync {
+    /// Returns true if this implementation supports dense indexed copying.
+    #[cfg_attr(not(test), expect(dead_code))]
+    fn supports_dense_indexed_copy(&self) -> bool {
+        false
+    }
+
     /// Set the source array.
     ///
     /// Calls to [`Self::copy_rows`] will copy rows from this array into the
@@ -2071,6 +2077,33 @@ mod tests {
         )]));
         let coalescer = BatchCoalescer::new(boolean, 100);
         assert!(!coalescer.has_non_specialized_filter_columns);
+    }
+
+    #[test]
+    fn test_dense_indexed_copy_capability() {
+        let cases = [
+            (DataType::Int32, true),
+            (DataType::Utf8View, true),
+            (DataType::BinaryView, true),
+            (
+                DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+                true,
+            ),
+            (DataType::Boolean, true),
+            (DataType::Utf8, false),
+            (DataType::FixedSizeBinary(4), false),
+            (DataType::new_list(DataType::Int32, true), false),
+            (DataType::Null, false),
+        ];
+
+        for (data_type, expected) in cases {
+            let in_progress = create_in_progress_array(&data_type, 100);
+            assert_eq!(
+                in_progress.supports_dense_indexed_copy(),
+                expected,
+                "unexpected capability for {data_type}"
+            );
+        }
     }
 
     fn sparse_filter_byte_array_input() -> (RecordBatch, BooleanArray) {
