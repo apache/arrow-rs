@@ -310,6 +310,49 @@ mod test {
     }
 
     #[test]
+    fn test_write_statistics_arrow_dictionary() {
+        use arrow_array::{DictionaryArray, Int32Array};
+        use rand::{RngExt, SeedableRng, rngs::StdRng};
+
+        let mut rng = StdRng::seed_from_u64(42);
+        let values = wkb_array_xy((0..50).map(|i| (i % 7 != 3).then_some((i as f64, -i as f64))));
+        let keys: Int32Array = (0..2000)
+            .map(|_| rng.random_bool(0.9).then(|| rng.random_range(0..50)))
+            .collect();
+        let dictionary: ArrayRef = Arc::new(DictionaryArray::new(keys, values));
+        let plain = arrow::compute::cast(&dictionary, &DataType::Binary).unwrap();
+
+        let write = |array: ArrayRef| {
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "geom",
+                array.data_type().clone(),
+                true,
+            )]));
+            let props = WriterProperties::builder()
+                .set_write_batch_size(64)
+                .set_data_page_size_limit(1024)
+                .build();
+            let options = ArrowWriterOptions::new()
+                .with_parquet_schema(parquet_schema_geometry())
+                .with_properties(props)
+                .with_skip_arrow_metadata(true);
+            let mut buf = Vec::new();
+            let mut writer =
+                ArrowWriter::try_new_with_options(&mut buf, schema.clone(), options).unwrap();
+            let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
+            writer.write(&batch).unwrap();
+            writer.write(&batch).unwrap();
+            writer.close().unwrap();
+            buf
+        };
+
+        let file = write(dictionary);
+        assert_eq!(file, write(plain));
+        let statistics = read_geo_statistics(file.into(), 0);
+        assert!(statistics[0].as_ref().unwrap().bounding_box().is_some());
+    }
+
+    #[test]
     fn test_roundtrip_statistics_geospatial() {
         let path = format!(
             "{}/geospatial/geospatial.parquet",

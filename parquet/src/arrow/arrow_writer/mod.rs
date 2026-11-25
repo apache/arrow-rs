@@ -5043,39 +5043,52 @@ mod tests {
 
     #[test]
     fn test_dictionary_array_writes_same_file_as_its_values() {
-        // Small dictionaries get their statistics from the values the rows reference, the
-        // largest from the rows. Either way they must be the plain values' statistics
         use rand::{RngExt, SeedableRng, rngs::StdRng};
 
         let mut rng = StdRng::seed_from_u64(42);
-        for dict_len in [1, 3, 50, 2000] {
-            let values: StringArray = (0..dict_len)
-                .map(|i| (i % 11 != 3).then(|| format!("{:03x}", rng.random_range(0..4096))))
-                .collect();
-            let keys: Int32Array = (0..5000)
-                .map(|_| rng.random_bool(0.9).then(|| rng.random_range(0..dict_len)))
-                .collect();
-            let dictionary = DictionaryArray::new(keys, Arc::new(values));
-            let plain = cast(&dictionary, &DataType::Utf8).unwrap();
-            let write = |array: ArrayRef| {
-                let batch = RecordBatch::try_from_iter_with_nullable([("c", array, true)]).unwrap();
-                let props = WriterProperties::builder()
-                    .set_write_batch_size(64)
-                    .set_data_page_size_limit(1024)
-                    .build();
-                let options = ArrowWriterOptions::new()
-                    .with_properties(props)
-                    .with_skip_arrow_metadata(true);
-                let mut buf = Vec::new();
-                let mut writer =
-                    ArrowWriter::try_new_with_options(&mut buf, batch.schema(), options).unwrap();
+        let write = |arrays: &[ArrayRef]| {
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "c",
+                arrays[0].data_type().clone(),
+                true,
+            )]));
+            let props = WriterProperties::builder()
+                .set_write_batch_size(64)
+                .set_data_page_size_limit(1024)
+                .build();
+            let options = ArrowWriterOptions::new()
+                .with_properties(props)
+                .with_skip_arrow_metadata(true);
+            let mut buf = Vec::new();
+            let mut writer =
+                ArrowWriter::try_new_with_options(&mut buf, schema.clone(), options).unwrap();
+            for array in arrays {
+                let batch = RecordBatch::try_new(schema.clone(), vec![array.clone()]).unwrap();
                 writer.write(&batch).unwrap();
-                writer.close().unwrap();
-                buf
+            }
+            writer.close().unwrap();
+            buf
+        };
+        for dict_len in [1, 3, 50, 2000] {
+            let mut dictionary = || -> ArrayRef {
+                let values: StringArray = (0..dict_len)
+                    .map(|i| (i % 11 != 3).then(|| format!("{:03x}", rng.random_range(0..4096))))
+                    .collect();
+                let keys: Int32Array = (0..5000)
+                    .map(|_| rng.random_bool(0.9).then(|| rng.random_range(0..dict_len)))
+                    .collect();
+                Arc::new(DictionaryArray::new(keys, Arc::new(values)))
             };
+            // The same dictionary twice, then another one with different values for its keys
+            let first = dictionary();
+            let dictionaries = [first.clone(), first, dictionary()];
+            let plain = dictionaries
+                .iter()
+                .map(|dictionary| cast(dictionary, &DataType::Utf8).unwrap())
+                .collect::<Vec<_>>();
             assert_eq!(
-                write(Arc::new(dictionary)),
-                write(plain),
+                write(&dictionaries),
+                write(&plain),
                 "dictionary of {dict_len} values"
             );
         }
