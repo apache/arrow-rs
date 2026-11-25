@@ -10,6 +10,7 @@ use parquet_variant::{MAX_NESTING_DEPTH, ObjectFieldBuilder, Variant, VariantBui
 use serde_json::{Number, Value};
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::num::NonZeroUsize;
 
 /// Converts a JSON string to Variant using a [`VariantBuilderExt`], such as
 /// [`VariantBuilder`].
@@ -66,21 +67,21 @@ impl<T: VariantBuilderExt> JsonToVariant for T {
         let depth = self.container_depth();
         let mut parser = JsonParser::new(json, depth);
         if parser.may_exceed_field_budget() {
-            return parser.buffer_value(0)?.append(self);
+            return parser.buffer_value(0)?.append(json, self);
         }
         match parser.parse(self) {
             Ok(()) => Ok(()),
             Err(DirectParseError::Syntax(error)) => Err(error),
-            Err(DirectParseError::UnstableFieldIds) => {
-                JsonParser::new(json, depth).buffer_value(0)?.append(self)
-            }
+            Err(DirectParseError::UnstableFieldIds) => JsonParser::new(json, depth)
+                .buffer_value(0)?
+                .append(json, self),
             // A duplicate (or a missing dictionary key in a field that a duplicate
             // overwrites) can fail the direct append. The builder has rolled back.
             Err(DirectParseError::Append(error)) => {
                 let mut parser = JsonParser::new(json, depth);
                 let value = parser.buffer_value(0)?;
                 if parser.saw_duplicate {
-                    value.append(self)
+                    value.append(json, self)
                 } else {
                     Err(error)
                 }
@@ -192,32 +193,41 @@ enum BufferedValue<'a> {
     Array(Vec<BufferedValue<'a>>),
     Object {
         fields: BTreeMap<Cow<'a, str>, BufferedValue<'a>>,
-        duplicate: Option<Cow<'a, str>>,
+        // The first repeated key starts after the opening brace. Only strict
+        // validation needs to decode it again for an error message.
+        duplicate_at: Option<NonZeroUsize>,
     },
 }
 
 impl BufferedValue<'_> {
-    fn append(self, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+    fn append(self, input: &str, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
         match self {
             Self::Scalar(value) => value.append(builder)?,
             Self::Array(values) => {
                 let mut list = builder.try_new_list()?;
                 for value in values {
-                    value.append(&mut list)?;
+                    value.append(input, &mut list)?;
                 }
                 list.finish();
             }
-            Self::Object { fields, duplicate } => {
+            Self::Object {
+                fields,
+                duplicate_at,
+            } => {
                 let mut object = builder.try_new_object()?;
                 if object.validates_unique_fields()
-                    && let Some(key) = duplicate
+                    && let Some(offset) = duplicate_at
                 {
+                    let key = JsonParser::new(&input[offset.get()..], 0).parse_string()?;
                     return Err(ArrowError::InvalidArgumentError(format!(
                         "Duplicate field name: {key}"
                     )));
                 }
                 for (key, value) in fields {
-                    value.append(&mut ObjectFieldBuilder::new(key.as_ref(), &mut object))?;
+                    value.append(
+                        input,
+                        &mut ObjectFieldBuilder::new(key.as_ref(), &mut object),
+                    )?;
                 }
                 object.finish();
             }
@@ -290,7 +300,7 @@ impl<'a> JsonParser<'a> {
                     return Err(DirectParseError::UnstableFieldIds);
                 }
                 object = object.with_validate_unique_fields(true);
-                self.object_fields(depth, |parser, key| {
+                self.object_fields(depth, |parser, key, _| {
                     let mut field = ObjectFieldBuilder::new(key.as_ref(), &mut object);
                     parser.parse_value(&mut field, depth + 1)
                 })?;
@@ -353,7 +363,7 @@ impl<'a> JsonParser<'a> {
     fn object_fields<E: From<ArrowError>>(
         &mut self,
         depth: usize,
-        mut field: impl FnMut(&mut Self, Cow<'a, str>) -> Result<(), E>,
+        mut field: impl FnMut(&mut Self, Cow<'a, str>, usize) -> Result<(), E>,
     ) -> Result<(), E> {
         self.skip_whitespace();
         if !self.consume(b'}') {
@@ -361,10 +371,11 @@ impl<'a> JsonParser<'a> {
                 if self.peek() != Some(b'"') {
                     return Err(self.format_error("expected a string object key").into());
                 }
+                let key_start = self.offset;
                 let key = self.parse_string()?;
                 self.skip_whitespace();
                 self.expect(b':', "expected ':' after object key")?;
-                field(self, key)?;
+                field(self, key, key_start)?;
                 self.skip_whitespace();
                 if self.consume(b'}') {
                     break;
@@ -394,8 +405,8 @@ impl<'a> JsonParser<'a> {
                 self.check_container_depth(depth)?;
                 self.offset += 1;
                 let mut fields = BTreeMap::new();
-                let mut duplicate = None;
-                self.object_fields::<ArrowError>(depth, |parser, key| {
+                let mut duplicate_at = None;
+                self.object_fields::<ArrowError>(depth, |parser, key, key_start| {
                     let value = parser.buffer_value(depth + 1)?;
                     match fields.entry(key) {
                         std::collections::btree_map::Entry::Vacant(entry) => {
@@ -403,15 +414,18 @@ impl<'a> JsonParser<'a> {
                         }
                         std::collections::btree_map::Entry::Occupied(mut entry) => {
                             parser.saw_duplicate = true;
-                            if duplicate.is_none() {
-                                duplicate = Some(entry.key().clone());
+                            if duplicate_at.is_none() {
+                                duplicate_at = NonZeroUsize::new(key_start);
                             }
                             entry.insert(value);
                         }
                     }
                     Ok(())
                 })?;
-                Ok(BufferedValue::Object { fields, duplicate })
+                Ok(BufferedValue::Object {
+                    fields,
+                    duplicate_at,
+                })
             }
             _ => {
                 let value = self.parse_scalar()?;
@@ -1369,7 +1383,7 @@ mod test {
             .collect::<Vec<_>>()
             .join(",");
         let at_budget = format!("{{{fields}}}");
-        let over_budget = format!("{{{fields},\"field_00\":1}}");
+        let over_budget = format!("{{{fields},\"\\u0066ield_00\":1}}");
         let timestamps = format!(
             "[{}]",
             vec![r#""12:34:56""#; DIRECT_OBJECT_FIELD_BUDGET + 1].join(",")
