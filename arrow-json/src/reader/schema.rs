@@ -154,6 +154,7 @@ impl SchemaDecoder {
             batch_size: 1024.min(max_read_records.unwrap_or(usize::MAX)),
             num_fields: 8,
             flatten_top_level_arrays: false,
+            allow_non_finite_floats: false,
         });
 
         Self {
