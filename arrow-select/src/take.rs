@@ -516,20 +516,78 @@ fn take_sparse_union_child<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES
     take_impl::<_, VALIDATE_INDICES>(values, &indices_without_nulls(indices))
 }
 
+/// Whether [`ArrayData::new_null`] can materialize a non-empty placeholder for `data_type`.
+///
+/// A union with zero fields has no type id for any slot, so constructing a
+/// non-empty array of that type (directly or as a child) is impossible.
+fn can_construct_take_placeholder(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Union(fields, UnionMode::Sparse) => {
+            !fields.is_empty()
+                && fields
+                    .iter()
+                    .all(|(_, f)| can_construct_take_placeholder(f.data_type()))
+        }
+        DataType::Union(fields, UnionMode::Dense) => fields
+            .iter()
+            .next()
+            .is_some_and(|(_, f)| can_construct_take_placeholder(f.data_type())),
+        DataType::RunEndEncoded(_, values) => can_construct_take_placeholder(values.data_type()),
+        DataType::Struct(fields) => fields
+            .iter()
+            .all(|f| can_construct_take_placeholder(f.data_type())),
+        DataType::FixedSizeList(field, list_len) => {
+            *list_len == 0 || can_construct_take_placeholder(field.data_type())
+        }
+        DataType::Dictionary(_, value_type) => can_construct_take_placeholder(value_type),
+        _ => true,
+    }
+}
+
+/// Recursively removes null bitmaps from `data` and its children.
+fn strip_non_null_datatype_nulls(data: ArrayData) -> Result<ArrayData, ArrowError> {
+    if let DataType::Dictionary(_, value_type) = data.data_type()
+        && !data.is_empty()
+        && data.child_data()[0].is_empty()
+    {
+        let dict_value = strip_non_null_datatype_nulls(ArrayData::new_null(value_type, 1))?;
+        return data
+            .into_builder()
+            .nulls(None)
+            .child_data(vec![dict_value])
+            .build();
+    }
+    let children = data
+        .child_data()
+        .iter()
+        .cloned()
+        .map(strip_non_null_datatype_nulls)
+        .collect::<Result<Vec<_>, _>>()?;
+    data.into_builder().nulls(None).child_data(children).build()
+}
+
 /// Takes a child of a struct or fixed-size list for `indices`.
 ///
 /// The parent marks the rows of null take indices null in its own validity, so
 /// the child's values at those rows are unspecified. A child that cannot store
-/// a null is taken with dummy indices there instead, unless it is empty and
-/// has no value to use as a dummy.
+/// a null is taken with dummy indices there instead, or materialized as an
+/// unmasked placeholder when the child is empty and every index is null.
 fn take_masked_child<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
     values: &dyn Array,
     indices: &PrimitiveArray<IndexType>,
 ) -> Result<ArrayRef, ArrowError> {
-    if indices.null_count() == 0
-        || data_type_can_represent_take_null(values.data_type())
-        || values.is_empty()
-    {
+    if indices.null_count() == 0 || data_type_can_represent_take_null(values.data_type()) {
+        return take_impl::<_, VALIDATE_INDICES>(values, indices);
+    }
+
+    if values.is_empty() {
+        if indices.null_count() == indices.len()
+            && can_construct_take_placeholder(values.data_type())
+        {
+            return Ok(make_array(strip_non_null_datatype_nulls(
+                ArrayData::new_null(values.data_type(), indices.len()),
+            )?));
+        }
         return take_impl::<_, VALIDATE_INDICES>(values, indices);
     }
 
@@ -3433,21 +3491,286 @@ mod tests {
             }
         }
 
-        // An empty child has no value to take for the masked rows
+        // A 0-field union has no type id to place in any non-empty slot
         let no_fields = UnionFields::try_new(vec![], Vec::<Field>::new()).unwrap();
         let no_field_union: ArrayRef = Arc::new(
             UnionArray::try_new(no_fields, ScalarBuffer::<i8>::from(vec![]), None, vec![]).unwrap(),
         );
-        let ree_error = "Compute error: Cannot take null indices from a RunEndEncoded array with a non-nullable values field";
         let union_error = "Compute error: Cannot take null indices from a union with no field that can represent nulls";
-        for (child, expected) in [
-            (ree.slice(0, 0), ree_error),
-            (union.slice(0, 0), union_error),
-            (no_field_union, union_error),
-        ] {
-            for parent in parents(&child) {
-                let error = take(&parent, &Int32Array::from(vec![None]), None).unwrap_err();
-                assert_eq!(error.to_string(), expected);
+        for parent in parents(&no_field_union) {
+            let error = take(&parent, &Int32Array::from(vec![None]), None).unwrap_err();
+            assert_eq!(error.to_string(), union_error);
+        }
+
+        // A RunEndEncoded wrapper around a 0-field union keeps its error instead of panicking
+        let ree_no_field_union: ArrayRef = Arc::new(unsafe {
+            RunArray::<Int32Type>::new_unchecked(
+                DataType::RunEndEncoded(
+                    Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                    Arc::new(Field::new(
+                        "values",
+                        no_field_union.data_type().clone(),
+                        false,
+                    )),
+                ),
+                RunEndBuffer::new(ScalarBuffer::from(Vec::<i32>::new()), 0, 0),
+                no_field_union,
+            )
+        });
+        let ree_error = "Compute error: Cannot take null indices from a RunEndEncoded array with a non-nullable values field";
+        for parent in parents(&ree_no_field_union) {
+            let error = take(&parent, &Int32Array::from(vec![None]), None).unwrap_err();
+            assert_eq!(error.to_string(), ree_error);
+        }
+    }
+
+    #[test]
+    fn test_take_null_indices_masked_by_empty_parent() {
+        let ree_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Int32, false)),
+        );
+        let ree_empty: ArrayRef = Arc::new(unsafe {
+            RunArray::<Int32Type>::new_unchecked(
+                ree_type.clone(),
+                RunEndBuffer::new(ScalarBuffer::from(Vec::<i32>::new()), 0, 0),
+                Arc::new(Int32Array::from(Vec::<i32>::new())),
+            )
+        });
+        let ree_nonempty: ArrayRef = Arc::new(unsafe {
+            RunArray::<Int32Type>::new_unchecked(
+                ree_type,
+                RunEndBuffer::new(vec![1_i32, 2].into(), 0, 2),
+                Arc::new(Int32Array::from(vec![10, 20])),
+            )
+        });
+
+        let sparse_fields =
+            UnionFields::try_new(vec![0], vec![Field::new("a", DataType::Int32, false)]).unwrap();
+        let sparse_empty: ArrayRef = Arc::new(
+            UnionArray::try_new(
+                sparse_fields,
+                ScalarBuffer::<i8>::from(vec![]),
+                None,
+                vec![Arc::new(Int32Array::from(Vec::<i32>::new()))],
+            )
+            .unwrap(),
+        );
+        let dense_fields =
+            UnionFields::try_new(vec![0], vec![Field::new("a", DataType::Int32, false)]).unwrap();
+        let dense_empty: ArrayRef = Arc::new(
+            UnionArray::try_new(
+                dense_fields,
+                ScalarBuffer::<i8>::from(vec![]),
+                Some(ScalarBuffer::<i32>::from(vec![])),
+                vec![Arc::new(Int32Array::from(Vec::<i32>::new()))],
+            )
+            .unwrap(),
+        );
+
+        let make_parents =
+            |child: &ArrayRef, with_null_buf: bool, child_nullable: bool| -> Vec<ArrayRef> {
+                let field = Arc::new(Field::new("c", child.data_type().clone(), child_nullable));
+                let nulls = with_null_buf.then(|| NullBuffer::new_valid(child.len()));
+                vec![
+                    Arc::new(StructArray::new(
+                        Fields::from(vec![field.clone()]),
+                        vec![child.clone()],
+                        nulls.clone(),
+                    )),
+                    Arc::new(FixedSizeListArray::new(field, 1, child.clone(), nulls)),
+                ]
+            };
+
+        let null_indices = Int32Array::from(vec![None, None]);
+
+        let ree_zero_slice_struct: ArrayRef = Arc::new(
+            StructArray::new(
+                Fields::from(vec![Field::new(
+                    "c",
+                    ree_nonempty.data_type().clone(),
+                    true,
+                )]),
+                vec![ree_nonempty.clone()],
+                None,
+            )
+            .slice(1, 0),
+        );
+        let ree_zero_slice_fsl: ArrayRef = Arc::new(
+            FixedSizeListArray::new(
+                Arc::new(Field::new("c", ree_nonempty.data_type().clone(), true)),
+                1,
+                ree_nonempty.clone(),
+                None,
+            )
+            .slice(1, 0),
+        );
+
+        for parent in [ree_zero_slice_struct, ree_zero_slice_fsl] {
+            let taken = take(&parent, &null_indices, None).unwrap();
+            taken.to_data().validate_full().unwrap();
+            assert_eq!(taken.len(), 2);
+            assert_eq!(taken.null_count(), 2);
+        }
+
+        for child in [&ree_empty, &sparse_empty, &dense_empty] {
+            for with_null_buf in [false, true] {
+                for child_nullable in [false, true] {
+                    for parent in make_parents(child, with_null_buf, child_nullable) {
+                        for candidate in [&parent, &parent.slice(0, 0)] {
+                            let taken = take(candidate.as_ref(), &null_indices, None).unwrap();
+                            taken.to_data().validate_full().unwrap();
+                            assert_eq!(taken.len(), 2);
+                            assert_eq!(taken.null_count(), 2);
+                            assert_eq!(taken.nulls(), Some(&NullBuffer::from(vec![false, false])));
+                            if let Some(s) = taken.as_struct_opt() {
+                                assert_eq!(s.column(0).logical_null_count(), 0);
+                            } else {
+                                let fsl = taken.as_fixed_size_list();
+                                assert_eq!(fsl.values().logical_null_count(), 0);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Multi-element and zero-length FixedSizeListArray over empty REE child
+        let fsl_len2 = FixedSizeListArray::new(
+            Arc::new(Field::new("item", ree_empty.data_type().clone(), false)),
+            2,
+            ree_empty.clone(),
+            None,
+        );
+        let taken_fsl_len2 = take(&fsl_len2, &Int32Array::from(vec![None]), None).unwrap();
+        taken_fsl_len2.to_data().validate_full().unwrap();
+        assert_eq!(taken_fsl_len2.len(), 1);
+        assert_eq!(taken_fsl_len2.null_count(), 1);
+        assert_eq!(taken_fsl_len2.as_fixed_size_list().values().len(), 2);
+
+        let fsl_len0 = FixedSizeListArray::new(
+            Arc::new(Field::new("item", ree_empty.data_type().clone(), false)),
+            0,
+            ree_empty.clone(),
+            None,
+        );
+        let taken_fsl_len0 = take(&fsl_len0, &Int32Array::from(vec![None]), None).unwrap();
+        taken_fsl_len0.to_data().validate_full().unwrap();
+        assert_eq!(taken_fsl_len0.len(), 1);
+        assert_eq!(taken_fsl_len0.null_count(), 1);
+
+        // Nested Struct -> Struct -> empty REE
+        let inner_struct: ArrayRef = Arc::new(StructArray::new(
+            Fields::from(vec![Field::new("c", ree_empty.data_type().clone(), false)]),
+            vec![ree_empty.clone()],
+            None,
+        ));
+        let outer_struct = StructArray::new(
+            Fields::from(vec![Field::new(
+                "inner",
+                inner_struct.data_type().clone(),
+                false,
+            )]),
+            vec![inner_struct],
+            None,
+        );
+        let taken_nested = take(&outer_struct, &Int32Array::from(vec![None]), None).unwrap();
+        taken_nested.to_data().validate_full().unwrap();
+        assert_eq!(taken_nested.len(), 1);
+        assert_eq!(taken_nested.null_count(), 1);
+
+        // Empty REE with non-nullable Dictionary values inside Struct
+        let ree_dict_empty: ArrayRef = Arc::new(unsafe {
+            RunArray::<Int32Type>::new_unchecked(
+                DataType::RunEndEncoded(
+                    Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                    Arc::new(Field::new(
+                        "values",
+                        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                        false,
+                    )),
+                ),
+                RunEndBuffer::new(ScalarBuffer::from(Vec::<i32>::new()), 0, 0),
+                new_empty_array(&DataType::Dictionary(
+                    Box::new(DataType::Int32),
+                    Box::new(DataType::Utf8),
+                )),
+            )
+        });
+        for parent in make_parents(&ree_dict_empty, false, false) {
+            let taken = take(parent.as_ref(), &null_indices, None).unwrap();
+            taken.to_data().validate_full().unwrap();
+            assert_eq!(taken.len(), 2);
+            assert_eq!(taken.null_count(), 2);
+        }
+
+        // Empty indices array must stay empty
+        let empty_indices = Int32Array::from(Vec::<Option<i32>>::new());
+        for parent in make_parents(&ree_empty, false, false) {
+            let taken = take(parent.as_ref(), &empty_indices, None).unwrap();
+            taken.to_data().validate_full().unwrap();
+            assert!(taken.is_empty());
+        }
+
+        // Mixed and non-null OOB indices on empty parents must still error with check_bounds
+        let opts = Some(TakeOptions { check_bounds: true });
+        for child in [&ree_empty, &sparse_empty] {
+            for parent in make_parents(child, false, true) {
+                for oob in [
+                    Int32Array::from(vec![Some(0)]),
+                    Int32Array::from(vec![Some(0), None]),
+                ] {
+                    let err = take(parent.as_ref(), &oob, opts.clone()).unwrap_err();
+                    assert!(
+                        err.to_string().contains("Array index out of bounds"),
+                        "{err}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_take_mixed_oob_indices_empty_parent_not_masked() {
+        let ree_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Int32, false)),
+        );
+        let ree_empty: ArrayRef = Arc::new(unsafe {
+            RunArray::<Int32Type>::new_unchecked(
+                ree_type.clone(),
+                RunEndBuffer::new(ScalarBuffer::from(Vec::<i32>::new()), 0, 0),
+                Arc::new(Int32Array::from(Vec::<i32>::new())),
+            )
+        });
+        let sparse_fields =
+            UnionFields::try_new(vec![0], vec![Field::new("a", DataType::Int32, false)]).unwrap();
+        let sparse_empty: ArrayRef = Arc::new(
+            UnionArray::try_new(
+                sparse_fields,
+                ScalarBuffer::<i8>::from(vec![]),
+                None,
+                vec![Arc::new(Int32Array::from(Vec::<i32>::new()))],
+            )
+            .unwrap(),
+        );
+        for child in [ree_empty, sparse_empty] {
+            let field = Arc::new(Field::new("c", child.data_type().clone(), true));
+            let struct_parent: ArrayRef = Arc::new(StructArray::new(
+                Fields::from(vec![field.clone()]),
+                vec![child.clone()],
+                None,
+            ));
+            let fsl_parent: ArrayRef = Arc::new(FixedSizeListArray::new(field, 1, child, None));
+            for parent in [struct_parent, fsl_parent] {
+                let mixed = Int32Array::from(vec![Some(0), None]);
+                assert!(take(parent.as_ref(), &mixed, None).is_err());
+                let opts = Some(TakeOptions { check_bounds: true });
+                let err = take(parent.as_ref(), &mixed, opts).unwrap_err();
+                assert!(
+                    err.to_string().contains("Array index out of bounds"),
+                    "{err}"
+                );
             }
         }
     }
