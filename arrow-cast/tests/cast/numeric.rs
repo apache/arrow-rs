@@ -191,6 +191,19 @@ fn test_cast_string_to_f16() {
 }
 
 #[test]
+fn test_cast_f64_to_f16_rounds_once() {
+    let midpoint = 1.0 + 2f64.powi(-11);
+    // Just above the midpoint of 1.0 and the next f16, which an f32 cannot hold.
+    let x = midpoint + 2f64.powi(-40);
+    let out = cast(&Float64Array::from(vec![x, -x, midpoint]), &Float16).unwrap();
+    let out = out.as_primitive::<Float16Type>();
+    let next_above_one = f16::from_bits(0x3c01);
+    assert_eq!(out.value(0), next_above_one);
+    assert_eq!(out.value(1), -next_above_one);
+    assert_eq!(out.value(2), f16::ONE);
+}
+
+#[test]
 fn test_cast_with_options_utf8_to_i32() {
     let array = StringArray::from(vec!["5", "6", "seven", "8", "9.1"]);
     let result = cast_with_options(

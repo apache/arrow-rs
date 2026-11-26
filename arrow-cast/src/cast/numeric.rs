@@ -111,6 +111,20 @@ where
     num_traits::cast::cast::<I, O>(value)
 }
 
+/// Rounds to `f32` by round-to-odd so the `f16` rounding is the only one (`f16::from_f64` rounds twice with F16C).
+pub(crate) fn f64_to_f16(v: f64) -> half::f16 {
+    let nearest = v as f32;
+    if v.is_nan() || (nearest as f64) == v {
+        return half::f16::from_f32(nearest);
+    }
+    let toward_zero = if (nearest as f64).abs() > v.abs() {
+        f32::from_bits(nearest.to_bits() - 1)
+    } else {
+        nearest
+    };
+    half::f16::from_f32(f32::from_bits(toward_zero.to_bits() | 1))
+}
+
 /// Cast numeric types to Boolean
 ///
 /// Any zero value returns `false` while non-zero returns `true`
