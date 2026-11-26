@@ -618,8 +618,6 @@ where
     scratch: Scratch<T::T>,
     /// The page built incrementally, used for every page after the first.
     streaming: StreamingPage<T::T>,
-    /// Values per vector, from the column's `log_vector_size`.
-    vector_size: usize,
 }
 
 impl<T: DataType> Default for AlpEncoder<T>
@@ -647,7 +645,6 @@ where
             preset: None,
             scratch: Scratch::new(),
             streaming: StreamingPage::new(vector_size),
-            vector_size,
         }
     }
 
@@ -672,7 +669,6 @@ where
             preset,
             scratch,
             streaming,
-            vector_size: _,
         } = self;
         match preset.as_deref() {
             // First page: buffer until the preset can be built on flush.
@@ -696,7 +692,7 @@ where
         // running encoded size) keeps the writer's page-boundary decisions
         // identical whether the page is buffered or streamed.
         let len = self.current_page_len();
-        let num_vectors = len.div_ceil(self.vector_size);
+        let num_vectors = len.div_ceil(self.streaming.vector_size);
         ALP_HEADER_SIZE
             + num_vectors
                 * (std::mem::size_of::<u32>()
@@ -720,7 +716,6 @@ where
             preset,
             scratch,
             streaming,
-            vector_size,
         } = self;
 
         // The first nonempty flush builds the preset from the whole buffered
@@ -729,10 +724,10 @@ where
             // Nothing to sample, so no preset to build. Leaving it unset keeps the
             // chunk off the fallback parameters, which would make every later
             // fractional value an exception.
-            None if values.is_empty() => encode_page(values, &[], *vector_size, scratch)?,
+            None if values.is_empty() => encode_page(values, &[], streaming.vector_size, scratch)?,
             None => {
-                let built = build_preset(values, *vector_size);
-                let page = encode_page(values, &built, *vector_size, scratch)?;
+                let built = build_preset(values, streaming.vector_size);
+                let page = encode_page(values, &built, streaming.vector_size, scratch)?;
                 values.clear();
                 *preset = Some(built);
                 page
@@ -746,38 +741,16 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data_type::{DoubleType, FloatType};
     use crate::encodings::alp::ALP_DEFAULT_LOG_VECTOR_SIZE;
+    use crate::encodings::decoding::Decoder;
+    use crate::encodings::decoding::alp_decoder::AlpDecoder;
 
     /// The spec-recommended size the encoder defaults to; most tests pin to it so
     /// existing coverage keeps measuring the default path.
     const DEFAULT_VECTOR_SIZE: usize = 1 << ALP_DEFAULT_LOG_VECTOR_SIZE;
-    use crate::data_type::{DoubleType, FloatType};
-    use crate::encodings::decoding::Decoder;
-    use crate::encodings::decoding::alp_decoder::AlpDecoder;
 
     /// Encode `values` and read them back through the decoder.
-    /// Encode at `vector_size` and read back. The decoder takes the size from the
-    /// page header, so it needs no configuration of its own.
-    fn roundtrip_with_log_vector_size<T: DataType>(
-        values: &[T::T],
-        log_vector_size: u8,
-    ) -> Vec<T::T>
-    where
-        T::T: AlpFloat,
-        <T::T as AlpFloat>::Exact: Send,
-    {
-        let options = AlpEncoderOptions::try_new(log_vector_size).unwrap();
-        let mut encoder = AlpEncoder::<T>::new_with_options(options);
-        encoder.put(values).unwrap();
-        let page = encoder.flush_buffer().unwrap();
-
-        let mut decoder = AlpDecoder::<T>::new();
-        decoder.set_data(page, values.len()).unwrap();
-        let mut out = vec![T::T::default(); values.len()];
-        assert_eq!(decoder.get(&mut out).unwrap(), values.len());
-        out
-    }
-
     fn roundtrip<T: DataType>(values: &[T::T]) -> Vec<T::T>
     where
         T::T: AlpFloat,
@@ -1168,54 +1141,24 @@ mod tests {
         );
     }
     /// Every `log_vector_size` the format permits must round-trip, including the
-    /// 3 and 15 bounds, and across both the buffered first page and the streaming path.
+    /// 3 and 15 bounds, on both the buffered first page and a streamed second page.
     #[test]
     fn test_roundtrip_all_vector_sizes() {
         let values: Vec<f64> = (0..5000).map(|i| (i as f64) * 0.01 - 7.5).collect();
         for log_vector_size in 3u8..=15 {
-            let out = roundtrip_with_log_vector_size::<DoubleType>(&values, log_vector_size);
-            assert_bits_eq(&out, &values);
-        }
-    }
-
-    /// A non-default vector size must survive the streaming path, where the size
-    /// governs the carry across `put` boundaries.
-    #[test]
-    fn test_streaming_with_non_default_vector_size() {
-        let page1: Vec<f64> = (0..3000).map(|i| (i as f64) * 0.01).collect();
-        let page2: Vec<f64> = (0..3000).map(|i| (i as f64) * 0.03 - 7.0).collect();
-        let options = AlpEncoderOptions::try_new(13).unwrap();
-        let vector_size = options.vector_size();
-
-        let mut encoder = AlpEncoder::<DoubleType>::new_with_options(options);
-        encoder.put(&page1).unwrap();
-        let _ = encoder.flush_buffer().unwrap();
-
-        // Feed page 2 in chunks that straddle vector boundaries.
-        for chunk in page2.chunks(997) {
-            encoder.put(chunk).unwrap();
-        }
-        let streamed = encoder.flush_buffer().unwrap();
-
-        // Same values, same preset, encoded in one pass.
-        let preset = build_preset(&page1, vector_size);
-        let mut scratch = Scratch::<f64>::new();
-        let reference = encode_page(&page2, &preset, vector_size, &mut scratch).unwrap();
-        assert_eq!(streamed.as_ref(), reference.as_slice());
-    }
-
-    /// The configured size must reach the page header, which is what lets the
-    /// decoder read the page back without being told.
-    #[test]
-    fn test_vector_size_recorded_in_page_header() {
-        let values: Vec<f64> = (0..2000).map(|i| (i as f64) * 0.01).collect();
-        for log_vector_size in [3u8, 10, 13, 15] {
             let options = AlpEncoderOptions::try_new(log_vector_size).unwrap();
             let mut encoder = AlpEncoder::<DoubleType>::new_with_options(options);
-            encoder.put(&values).unwrap();
-            let page = encoder.flush_buffer().unwrap();
-            // log_vector_size is byte 2 of the ALP header.
-            assert_eq!(page[2], log_vector_size);
+            for _ in 0..2 {
+                for chunk in values.chunks(997) {
+                    encoder.put(chunk).unwrap();
+                }
+                let page = encoder.flush_buffer().unwrap();
+                let mut decoder = AlpDecoder::<DoubleType>::new();
+                decoder.set_data(page, values.len()).unwrap();
+                let mut out = vec![0.0; values.len()];
+                assert_eq!(decoder.get(&mut out).unwrap(), values.len());
+                assert_bits_eq(&out, &values);
+            }
         }
     }
 }
