@@ -4567,9 +4567,9 @@ dependencies = [
 
 [[package]]
 name = "wkt"
-version = "0.14.0"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "efb2b923ccc882312e559ffaa832a055ba9d1ac0cc8e86b3e25453247e4b81d7"
+checksum = "c9ea54d13e287a50e6e6535389106d309fdbdc491a33a1b570260c4ee7f5b61b"
 dependencies = [
  "geo-traits",
  "geo-types",
