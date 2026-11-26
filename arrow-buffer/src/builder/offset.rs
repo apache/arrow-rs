@@ -1,23 +1,10 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::ops::Deref;
 
-use crate::{ArrowNativeType, OffsetBuffer};
+use crate::{ArrowNativeType, OffsetBuffer, OverflowError};
 
 /// Builder of [`OffsetBuffer`]
 #[derive(Debug)]
@@ -41,11 +28,27 @@ impl<O: ArrowNativeType> OffsetBufferBuilder<O> {
     ///
     /// # Panics
     ///
-    /// Panics if adding `length` would overflow `usize`
+    /// Panics if adding `length` would overflow `usize`.
+    /// Use [`Self::try_push_length`] for a fallible version.
     #[inline]
     pub fn push_length(&mut self, length: usize) {
-        self.last_offset = self.last_offset.checked_add(length).expect("overflow");
-        self.offsets.push(O::usize_as(self.last_offset))
+        self.try_push_length(length)
+            .unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    /// Push a slice of `length` bytes
+    ///
+    /// # Errors
+    ///
+    /// Errors if adding `length` would overflow `usize`. The builder is left unchanged.
+    #[inline]
+    pub fn try_push_length(&mut self, length: usize) -> Result<(), OverflowError> {
+        self.last_offset = self
+            .last_offset
+            .checked_add(length)
+            .ok_or_else(|| OverflowError::new::<usize>("total length"))?;
+        self.offsets.push(O::usize_as(self.last_offset));
+        Ok(())
     }
 
     /// Reserve space for at least `additional` further offsets
@@ -58,23 +61,44 @@ impl<O: ArrowNativeType> OffsetBufferBuilder<O> {
     ///
     /// # Panics
     ///
-    /// Panics if offsets overflow `O`
+    /// Panics if offsets overflow `O`. Use [`Self::try_finish`] for a fallible version.
     pub fn finish(self) -> OffsetBuffer<O> {
-        O::from_usize(self.last_offset).expect("overflow");
-        unsafe { OffsetBuffer::new_unchecked(self.offsets.into()) }
+        self.try_finish().unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    /// Takes the builder itself and returns an [`OffsetBuffer`]
+    ///
+    /// # Errors
+    ///
+    /// Errors if offsets overflow `O`, e.g. if they add up to more than `i32::MAX`
+    /// for a `OffsetBufferBuilder<i32>`.
+    pub fn try_finish(self) -> Result<OffsetBuffer<O>, OverflowError> {
+        O::from_usize(self.last_offset)
+            .ok_or_else(|| OverflowError::new::<O>("offset").with_value(self.last_offset))?;
+        Ok(unsafe { OffsetBuffer::new_unchecked(self.offsets.into()) })
     }
 
     /// Builds the [OffsetBuffer] without resetting the builder.
     ///
     /// # Panics
     ///
-    /// Panics if offsets overflow `O`
+    /// Panics if offsets overflow `O`. Use [`Self::try_finish_cloned`] for a fallible version.
     pub fn finish_cloned(&self) -> OffsetBuffer<O> {
+        self.try_finish_cloned()
+            .unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    /// Builds the [OffsetBuffer] without resetting the builder.
+    ///
+    /// # Errors
+    ///
+    /// Errors for the same reasons as [`Self::try_finish`].
+    pub fn try_finish_cloned(&self) -> Result<OffsetBuffer<O>, OverflowError> {
         let cloned = Self {
             offsets: self.offsets.clone(),
             last_offset: self.last_offset,
         };
-        cloned.finish()
+        cloned.try_finish()
     }
 }
 
@@ -88,6 +112,27 @@ impl<O: ArrowNativeType> Deref for OffsetBufferBuilder<O> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn try_finish_overflow() {
+        let mut builder = OffsetBufferBuilder::<i32>::new(2);
+        builder.try_push_length(u32::MAX as usize).unwrap();
+        let expected = "offset overflow: 4294967295 does not fit in i32";
+        assert_eq!(
+            builder.try_finish_cloned().unwrap_err().to_string(),
+            expected
+        );
+        assert_eq!(builder.try_finish().unwrap_err().to_string(), expected);
+
+        let mut builder = OffsetBufferBuilder::<i32>::new(2);
+        builder.try_push_length(usize::MAX).unwrap();
+        // The builder is unchanged by a failed push:
+        assert_eq!(
+            builder.try_push_length(1).unwrap_err().to_string(),
+            "total length overflow: does not fit in usize"
+        );
+        assert_eq!(builder.len(), 2);
+    }
     use crate::OffsetBufferBuilder;
 
     #[test]

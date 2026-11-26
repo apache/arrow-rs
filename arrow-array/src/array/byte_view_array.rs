@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::array::print_long_array;
 use crate::builder::{ArrayBuilder, GenericByteViewBuilder};
@@ -878,8 +865,8 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
 impl<T: ByteViewType + ?Sized> Debug for GenericByteViewArray<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{}ViewArray\n[\n", T::PREFIX)?;
-        print_long_array(self, f, |array, index, f| {
-            std::fmt::Debug::fmt(&array.value(index), f)
+        print_long_array(self, f, &mut |index, f| {
+            std::fmt::Debug::fmt(&self.value(index), f)
         })?;
         write!(f, "]")
     }
@@ -889,6 +876,10 @@ impl<T: ByteViewType + ?Sized> Debug for GenericByteViewArray<T> {
 unsafe impl<T: ByteViewType + ?Sized> Array for GenericByteViewArray<T> {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn to_arc(&self) -> ArrayRef {
+        Arc::new(self.clone())
     }
 
     fn to_data(&self) -> ArrayData {
@@ -1037,10 +1028,7 @@ where
     fn from(byte_array: &GenericByteArray<FROM>) -> Self {
         let offsets = byte_array.offsets();
 
-        let can_reuse_buffer = match offsets.last() {
-            Some(offset) => offset.as_usize() < u32::MAX as usize,
-            None => true,
-        };
+        let can_reuse_buffer = offsets.last().as_usize() < u32::MAX as usize;
 
         if can_reuse_buffer {
             // build views directly pointing to the existing buffer

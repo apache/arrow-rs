@@ -1,19 +1,7 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
 use std::io::Write;
 use std::sync::Arc;
 
@@ -149,7 +137,14 @@ impl EncoderOptions {
 ///
 /// [`WriterBuilder::with_encoder_factory`]: crate::writer::WriterBuilder::with_encoder_factory
 ///
-/// # Examples
+/// # Example: Encode a `BinaryArray` as an array of integers
+///
+/// This example encodes each `BinaryArray` value as an array of integers. For
+/// example, the bytes `b"abc"` would be encoded as `[97, 98, 99]`. See the
+/// example on [`DecoderFactory`] for how to decode this back into a
+/// `BinaryArray`.
+///
+/// [`DecoderFactory`]: crate::DecoderFactory
 ///
 /// ```
 /// use std::io::Write;
@@ -163,6 +158,8 @@ impl EncoderOptions {
 /// use serde_json::json;
 /// use serde_json::Value;
 ///
+/// /// Encoder for `BinaryArray` that encodes the bytes as an array of integers.
+/// /// For example, the bytes `b"abc"` would be encoded as `[97, 98, 99]`.
 /// struct IntArrayBinaryEncoder<B> {
 ///     array: B,
 /// }
@@ -184,10 +181,11 @@ impl EncoderOptions {
 ///     }
 /// }
 ///
+/// /// Factory that creates an `IntArrayBinaryEncoder` for `BinaryArray` types.
 /// #[derive(Debug)]
-/// struct IntArayBinaryEncoderFactory;
+/// struct IntArrayBinaryEncoderFactory;
 ///
-/// impl EncoderFactory for IntArayBinaryEncoderFactory {
+/// impl EncoderFactory for IntArrayBinaryEncoderFactory {
 ///     fn make_default_encoder<'a>(
 ///         &self,
 ///         _field: &'a FieldRef,
@@ -207,6 +205,9 @@ impl EncoderOptions {
 ///     }
 /// }
 ///
+/// // The input has two columns:
+/// // bytes: [b"a", null, b"b"]
+/// // float: [1.0, 2.3, null]
 /// let binary_array = BinaryArray::from_iter([Some(b"a".as_slice()), None, Some(b"b".as_slice())]);
 /// let float_array = Float64Array::from(vec![Some(1.0), Some(2.3), None]);
 /// let fields = vec![
@@ -222,10 +223,12 @@ impl EncoderOptions {
 /// )
 /// .unwrap();
 ///
+/// // write the record batch to JSON using the custom encoder factory
+/// // and then reparse into serde_json::Value to verify the output
 /// let json_value: Value = {
 ///     let mut buf = Vec::new();
 ///     let mut writer = WriterBuilder::new()
-///         .with_encoder_factory(Arc::new(IntArayBinaryEncoderFactory))
+///         .with_encoder_factory(Arc::new(IntArrayBinaryEncoderFactory))
 ///         .build::<_, JsonArray>(&mut buf);
 ///     writer.write_batches(&[&batch]).unwrap();
 ///     writer.finish().unwrap();
@@ -386,7 +389,7 @@ pub fn make_encoder<'a>(
 
         DataType::Dictionary(_, _) => downcast_dictionary_array! {
             array => {
-                NullableEncoder::new(Box::new(DictionaryEncoder::try_new(field, array, options)?), array.nulls().cloned())
+                NullableEncoder::new(Box::new(DictionaryEncoder::try_new(field, array, options)?), array.logical_nulls())
             },
             _ => unreachable!()
         }

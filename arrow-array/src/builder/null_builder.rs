@@ -1,24 +1,9 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::builder::ArrayBuilder;
 use crate::{ArrayRef, NullArray};
-use arrow_data::ArrayData;
-use arrow_schema::DataType;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -85,20 +70,12 @@ impl NullBuilder {
 
     /// Builds the [NullArray] and reset this builder.
     pub fn finish(&mut self) -> NullArray {
-        let len = self.len();
-        let builder = ArrayData::new_null(&DataType::Null, len).into_builder();
-
-        let array_data = unsafe { builder.build_unchecked() };
-        NullArray::from(array_data)
+        NullArray::new(std::mem::take(&mut self.len))
     }
 
     /// Builds the [NullArray] without resetting the builder.
     pub fn finish_cloned(&self) -> NullArray {
-        let len = self.len();
-        let builder = ArrayData::new_null(&DataType::Null, len).into_builder();
-
-        let array_data = unsafe { builder.build_unchecked() };
-        NullArray::from(array_data)
+        NullArray::new(self.len)
     }
 }
 
@@ -166,5 +143,21 @@ mod tests {
         builder.append_empty_values(5);
         array = builder.finish();
         assert_eq!(10, array.len());
+    }
+
+    #[test]
+    fn test_null_array_builder_finish_resets() {
+        let mut builder = NullBuilder::new();
+        builder.append_nulls(10);
+
+        let array = builder.finish();
+        assert_eq!(10, array.len());
+        assert_eq!(0, builder.len());
+        assert!(builder.is_empty());
+
+        builder.append_nulls(3);
+        let array = builder.finish();
+        assert_eq!(3, array.len());
+        assert_eq!(0, builder.len());
     }
 }

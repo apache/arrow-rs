@@ -1,25 +1,11 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::builder::ArrayBuilder;
 use crate::types::*;
 use crate::{Array, ArrayRef, PrimitiveArray};
 use arrow_buffer::{Buffer, MutableBuffer, NullBufferBuilder, ScalarBuffer};
-use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
 use std::sync::Arc;
@@ -32,13 +18,13 @@ pub type Int16Builder = PrimitiveBuilder<Int16Type>;
 pub type Int32Builder = PrimitiveBuilder<Int32Type>;
 /// A signed 64-bit integer array builder.
 pub type Int64Builder = PrimitiveBuilder<Int64Type>;
-/// An usigned 8-bit integer array builder.
+/// An unsigned 8-bit integer array builder.
 pub type UInt8Builder = PrimitiveBuilder<UInt8Type>;
-/// An usigned 16-bit integer array builder.
+/// An unsigned 16-bit integer array builder.
 pub type UInt16Builder = PrimitiveBuilder<UInt16Type>;
-/// An usigned 32-bit integer array builder.
+/// An unsigned 32-bit integer array builder.
 pub type UInt32Builder = PrimitiveBuilder<UInt32Type>;
-/// An usigned 64-bit integer array builder.
+/// An unsigned 64-bit integer array builder.
 pub type UInt64Builder = PrimitiveBuilder<UInt64Type>;
 /// A 16-bit floating point array builder.
 pub type Float16Builder = PrimitiveBuilder<Float16Type>;
@@ -61,13 +47,13 @@ pub type Date32Builder = PrimitiveBuilder<Date32Type>;
 /// A 64-bit date array builder.
 pub type Date64Builder = PrimitiveBuilder<Date64Type>;
 
-/// A 32-bit elaspsed time in seconds array builder.
+/// A 32-bit elapsed time in seconds array builder.
 pub type Time32SecondBuilder = PrimitiveBuilder<Time32SecondType>;
-/// A 32-bit elaspsed time in milliseconds array builder.
+/// A 32-bit elapsed time in milliseconds array builder.
 pub type Time32MillisecondBuilder = PrimitiveBuilder<Time32MillisecondType>;
-/// A 64-bit elaspsed time in microseconds array builder.
+/// A 64-bit elapsed time in microseconds array builder.
 pub type Time64MicrosecondBuilder = PrimitiveBuilder<Time64MicrosecondType>;
-/// A 64-bit elaspsed time in nanoseconds array builder.
+/// A 64-bit elapsed time in nanoseconds array builder.
 pub type Time64NanosecondBuilder = PrimitiveBuilder<Time64NanosecondType>;
 
 /// A “calendar” interval in months array builder.
@@ -96,6 +82,48 @@ pub type Decimal128Builder = PrimitiveBuilder<Decimal128Type>;
 pub type Decimal256Builder = PrimitiveBuilder<Decimal256Type>;
 
 /// Builder for [`PrimitiveArray`]
+///
+/// # Performance
+///
+/// Rust's `Vec` is highly optimized, and Arrow's conversion from `Vec` to
+/// [`PrimitiveArray`] is zero-copy — the array reuses the same underlying allocation
+/// without any data being copied. If your values are already in a `Vec`, or can be
+/// collected into one, prefer constructing a [`PrimitiveArray`] directly:
+///
+/// ```
+/// # use arrow_array::{Int32Array, Array};
+/// // Zero-copy: the array reuses the Vec's allocation
+/// let array = Int32Array::from(vec![1, 2, 3]);
+/// assert_eq!(array.len(), 3);
+/// ```
+///
+/// Internally, [`PrimitiveBuilder`] is itself backed by a `Vec<T::Native>` and a
+/// [`NullBufferBuilder`], so using one does not unlock any additional performance —
+/// it is simply a convenience wrapper for incremental construction.
+///
+/// # When to use [`PrimitiveBuilder`]
+///
+/// Prefer the builder when your array **may contain nulls but you don't know their
+/// positions upfront**. Managing a `Vec<T>` and a [`NullBufferBuilder`] in parallel
+/// by hand is error-prone; the builder keeps them in sync automatically as you call
+/// [`append_value`](PrimitiveBuilder::append_value) and
+/// [`append_null`](PrimitiveBuilder::append_null).
+///
+/// ```
+/// # use arrow_array::builder::Int32Builder;
+/// # use arrow_array::Array;
+/// let mut builder = Int32Builder::new();
+/// for (i, v) in [1, 2, 3].iter().enumerate() {
+///     if i == 1 {
+///         builder.append_null();
+///     } else {
+///         builder.append_value(*v);
+///     }
+/// }
+/// let array = builder.finish();
+/// assert_eq!(array.len(), 3);
+/// assert!(array.is_null(1));
+/// ```
 #[derive(Debug)]
 pub struct PrimitiveBuilder<T: ArrowPrimitiveType> {
     values_builder: Vec<T::Native>,
@@ -321,29 +349,16 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
 
     /// Builds the [`PrimitiveArray`] and reset this builder.
     pub fn finish(&mut self) -> PrimitiveArray<T> {
-        let len = self.len();
         let nulls = self.null_buffer_builder.finish();
-        let builder = ArrayData::builder(self.data_type.clone())
-            .len(len)
-            .add_buffer(std::mem::take(&mut self.values_builder).into())
-            .nulls(nulls);
-
-        let array_data = unsafe { builder.build_unchecked() };
-        PrimitiveArray::<T>::from(array_data)
+        let values = std::mem::take(&mut self.values_builder).into();
+        PrimitiveArray::new(values, nulls).with_data_type(self.data_type.clone())
     }
 
     /// Builds the [`PrimitiveArray`] without resetting the builder.
     pub fn finish_cloned(&self) -> PrimitiveArray<T> {
-        let len = self.len();
         let nulls = self.null_buffer_builder.finish_cloned();
-        let values_buffer = Buffer::from_slice_ref(self.values_builder.as_slice());
-        let builder = ArrayData::builder(self.data_type.clone())
-            .len(len)
-            .add_buffer(values_buffer)
-            .nulls(nulls);
-
-        let array_data = unsafe { builder.build_unchecked() };
-        PrimitiveArray::<T>::from(array_data)
+        let values = Buffer::from_slice_ref(self.values_builder.as_slice()).into();
+        PrimitiveArray::new(values, nulls).with_data_type(self.data_type.clone())
     }
 
     /// Returns the current values buffer as a slice
@@ -426,6 +441,15 @@ mod tests {
     use crate::array::Date32Array;
     use crate::array::Int32Array;
     use crate::array::TimestampSecondArray;
+
+    #[test]
+    fn test_finish_materialized_without_nulls() {
+        let mut builder = Int32Builder::new();
+        builder.append_nulls(0);
+        builder.append_value(1);
+        assert!(builder.finish_cloned().nulls().is_none());
+        assert!(builder.finish().nulls().is_none());
+    }
 
     #[test]
     fn test_primitive_array_builder_i32() {

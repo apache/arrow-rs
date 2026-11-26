@@ -1,47 +1,34 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 # workspace wide tests
 name: rust
 
-concurrency:
-  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
-  cancel-in-progress: true
-
-# trigger for all PRs and changes to main
+# Triggered by ci.yml, which owns event routing and concurrency.
 on:
-  push:
-    branches:
-      - main
-  pull_request:
+  workflow_call:
+    inputs:
+      lint-only:
+        description: Run only formatting and unused dependency checks
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
-  # Check workspace wide compile and test with default features for
-  # mac
+  # Check workspace wide compile and test with default features for macOS.
+  # Fork macOS runners frequently time out, so keep this testing upstream.
   macos:
+    if: ${{ !inputs.lint-only && github.repository == 'apache/arrow-rs' }}
     name: Test on Mac
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
+          persist-credentials: false
       - name: Install protoc with brew
         run: brew install protobuf
       - name: Setup Rust toolchain
@@ -56,15 +43,17 @@ jobs:
           # PyArrow tests happen in integration.yml.
           cargo test --workspace
 
-  # Check workspace wide compile and test with default features for
-  # windows
+  # Check workspace wide compile and test with default features for Windows.
+  # Keep this testing upstream to reduce compute in forks.
   windows:
+    if: ${{ !inputs.lint-only && github.repository == 'apache/arrow-rs' }}
     name: Test on Windows
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
+          persist-credentials: false
       - name: Install protobuf compiler in /d/protoc
         shell: bash
         run: |
@@ -90,37 +79,56 @@ jobs:
   # Run cargo fmt for all crates
   lint:
     name: Lint (cargo fmt)
-    runs-on: ubuntu-latest
-    container:
-      image: amd64/rust
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-rustup
       - name: Setup rustfmt
         run: rustup component add rustfmt
-      - name: Format arrow
+      - name: Format workspace
         run: cargo fmt --all -- --check
-      - name: Format parquet
-        # Many modules in parquet are skipped, so check parquet separately
-        # https://github.com/apache/arrow-rs/issues/6179
-        working-directory: parquet
-        run: |
-          # if this fails, run this from the parquet directory:
-          # cargo fmt -p parquet -- --config skip_children=true `find . -name "*.rs" \! -name format.rs`
-          cargo fmt -p parquet -- --check --config skip_children=true `find . -name "*.rs" \! -name format.rs`
+
+  unused-dependencies:
+    name: Check unused dependencies
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup Rust toolchain
+        uses: $/.github/actions/setup-rustup
+      - name: Install cargo-shear
+        id: install-shear
+        uses: taiki-e/install-action@25f51f6b1bf4e18876107cece836f4f77ac17c8c  # v2.90.7
+        with:
+          tool: cargo-shear
+      - name: Check workspace dependencies
+        run: cargo shear --deny-warnings
+      - name: Check arrow-pyarrow-testing dependencies
+        # Report excluded crates even when an earlier scan finds issues.
+        if: ${{ !cancelled() && steps.install-shear.outcome == 'success' }}
+        run: cargo shear --deny-warnings arrow-pyarrow-testing
+      - name: Check arrow-pyarrow-integration-testing dependencies
+        if: ${{ !cancelled() && steps.install-shear.outcome == 'success' }}
+        run: cargo shear --deny-warnings arrow-pyarrow-integration-testing
 
   msrv:
+    if: ${{ !inputs.lint-only }}
     name: Verify MSRV (Minimum Supported Rust Version)
     runs-on: ubuntu-latest
     container:
-      image: amd64/rust
+      image: amd64/rust@sha256:5b5938cbb2951fc2869eaf891a6616f722ef5bf28c90dc6a074c35c141e31537 # v1.99.1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
       - name: Install cargo-msrv
-        uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518  # v2.86.5
+        uses: taiki-e/install-action@25f51f6b1bf4e18876107cece836f4f77ac17c8c  # v2.90.7
         with:
           tool: cargo-msrv
       - name: Check all packages

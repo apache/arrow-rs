@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Partial support for the [Apache Arrow JSON test data format](https://github.com/apache/arrow/blob/master/docs/source/format/Integration.rst#json-test-data-format)
 //!
@@ -28,6 +15,13 @@
 //! this context](https://github.com/apache/arrow-rs/issues/8684#issuecomment-3433193158).
 //!
 //! </div>
+//!
+//! # Platform Support
+//!
+//! Only little-endian platforms are officially supported and tested in CI.
+//! Big-endian platforms are not tested in CI and may not work correctly.
+//! Fixes for big-endian platforms are welcome and handled on a best-effort basis,
+//! but compatibility is not guaranteed.
 
 #![doc(
     html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
@@ -53,6 +47,8 @@ use arrow::util::bit_util;
 mod datatype;
 mod field;
 mod schema;
+
+use datatype::{json_int, json_uint};
 
 pub use datatype::*;
 pub use field::*;
@@ -264,12 +260,10 @@ impl ArrowJson {
 impl ArrowJsonSchema {
     /// Compare the Arrow JSON schema with the Arrow `Schema`
     fn equals_schema(&self, schema: &Schema) -> bool {
-        let field_len = self.fields.len();
-        if field_len != schema.fields().len() {
+        if self.fields.len() != schema.fields().len() {
             return false;
         }
-        for i in 0..field_len {
-            let json_field = &self.fields[i];
+        for (i, json_field) in self.fields.iter().enumerate() {
             let field = schema.field(i);
             if !json_field.equals_field(field) {
                 return false;
@@ -377,9 +371,7 @@ pub fn array_from_json(
                 .zip(json_col.data.unwrap())
             {
                 match is_valid {
-                    1 => b.append_value(value.as_i64().ok_or_else(|| {
-                        ArrowError::JsonError(format!("Unable to get {value:?} as int64"))
-                    })? as i8),
+                    1 => b.append_value(json_int("int8 value", &value)?),
                     _ => b.append_null(),
                 }
             }
@@ -395,7 +387,7 @@ pub fn array_from_json(
                 .zip(json_col.data.unwrap())
             {
                 match is_valid {
-                    1 => b.append_value(value.as_i64().unwrap() as i16),
+                    1 => b.append_value(json_int("int16 value", &value)?),
                     _ => b.append_null(),
                 }
             }
@@ -411,7 +403,7 @@ pub fn array_from_json(
                 .zip(json_col.data.unwrap())
             {
                 match is_valid {
-                    1 => b.append_value(value.as_i64().unwrap() as i32),
+                    1 => b.append_value(json_int("int32 value", &value)?),
                     _ => b.append_null(),
                 }
             }
@@ -428,7 +420,7 @@ pub fn array_from_json(
                 .zip(json_col.data.unwrap())
             {
                 match is_valid {
-                    1 => b.append_value(value.as_i64().unwrap() as i32),
+                    1 => b.append_value(json_int("year-month interval", &value)?),
                     _ => b.append_null(),
                 }
             }
@@ -477,17 +469,9 @@ pub fn array_from_json(
                                 DataType::Interval(IntervalUnit::DayTime) => {
                                     let days = map.get("days").unwrap();
                                     let milliseconds = map.get("milliseconds").unwrap();
-
-                                    match (days, milliseconds) {
-                                        (Value::Number(d), Value::Number(m)) => {
-                                            let days = d.as_i64().unwrap() as _;
-                                            let millis = m.as_i64().unwrap() as _;
-                                            IntervalDayTime::new(days, millis)
-                                        }
-                                        _ => {
-                                            panic!("Unable to parse {value:?} as interval daytime")
-                                        }
-                                    }
+                                    let days = json_int("interval days", days)?;
+                                    let millis = json_int("interval milliseconds", milliseconds)?;
+                                    IntervalDayTime::new(days, millis)
                                 }
                                 _ => panic!("Unable to parse {value:?} as interval daytime"),
                             }
@@ -509,7 +493,7 @@ pub fn array_from_json(
                 .zip(json_col.data.unwrap())
             {
                 match is_valid {
-                    1 => b.append_value(value.as_u64().unwrap() as u8),
+                    1 => b.append_value(json_uint("uint8 value", &value)?),
                     _ => b.append_null(),
                 }
             }
@@ -525,7 +509,7 @@ pub fn array_from_json(
                 .zip(json_col.data.unwrap())
             {
                 match is_valid {
-                    1 => b.append_value(value.as_u64().unwrap() as u16),
+                    1 => b.append_value(json_uint("uint16 value", &value)?),
                     _ => b.append_null(),
                 }
             }
@@ -541,7 +525,7 @@ pub fn array_from_json(
                 .zip(json_col.data.unwrap())
             {
                 match is_valid {
-                    1 => b.append_value(value.as_u64().unwrap() as u32),
+                    1 => b.append_value(json_uint("uint32 value", &value)?),
                     _ => b.append_null(),
                 }
             }
@@ -598,8 +582,14 @@ pub fn array_from_json(
                                     Value::Number(days),
                                     Value::Number(nanoseconds),
                                 ) => {
-                                    let months = months.as_i64().unwrap() as i32;
-                                    let days = days.as_i64().unwrap() as i32;
+                                    let months = json_int(
+                                        "month-day-nano interval months",
+                                        &Value::Number(months.clone()),
+                                    )?;
+                                    let days = json_int(
+                                        "month-day-nano interval days",
+                                        &Value::Number(days.clone()),
+                                    )?;
                                     let nanoseconds = nanoseconds.as_i64().unwrap();
                                     IntervalMonthDayNano::new(months, days, nanoseconds)
                                 }
@@ -718,6 +708,15 @@ pub fn array_from_json(
             Ok(Arc::new(b.finish()))
         }
         DataType::FixedSizeBinary(len) => {
+            let byte_width = usize::try_from(*len).map_err(|_| {
+                ArrowError::JsonError("FixedSizeBinary byte width must be non-negative".to_string())
+            })?;
+            let capacity = json_col.count.checked_mul(byte_width).ok_or_else(|| {
+                ArrowError::JsonError("FixedSizeBinary capacity overflow".to_string())
+            })?;
+            std::alloc::Layout::array::<u8>(capacity).map_err(|_| {
+                ArrowError::JsonError("FixedSizeBinary capacity overflow".to_string())
+            })?;
             let mut b = FixedSizeBinaryBuilder::with_capacity(json_col.count, *len);
             for (is_valid, value) in json_col
                 .validity
@@ -744,8 +743,8 @@ pub fn array_from_json(
                 .offset
                 .unwrap()
                 .iter()
-                .map(|v| v.as_i64().unwrap() as i32)
-                .collect();
+                .map(|v| json_int("list offset", v))
+                .collect::<Result<_>>()?;
             let list_data = ArrayData::builder(field.data_type().clone())
                 .len(json_col.count)
                 .offset(0)
@@ -788,14 +787,14 @@ pub fn array_from_json(
                 .offset
                 .unwrap()
                 .iter()
-                .map(|v| v.as_i64().unwrap() as i32)
-                .collect();
+                .map(|v| json_int("list view offset", v))
+                .collect::<Result<_>>()?;
             let sizes: Vec<i32> = json_col
                 .size
                 .unwrap()
                 .iter()
-                .map(|v| v.as_i64().unwrap() as i32)
-                .collect();
+                .map(|v| json_int("list view size", v))
+                .collect::<Result<_>>()?;
             let list_data = ArrayData::builder(field.data_type().clone())
                 .len(json_col.count)
                 .add_buffer(Buffer::from(offsets.to_byte_slice()))
@@ -962,11 +961,19 @@ pub fn array_from_json(
                         let str = value.as_str().unwrap();
                         let integer = BigInt::parse_bytes(str.as_bytes(), 10).unwrap();
                         let integer_bytes = integer.to_signed_bytes_le();
-                        let mut bytes = if integer.is_positive() {
-                            [0_u8; 32]
-                        } else {
+                        // Sign-extend the minimal-length two's-complement
+                        // encoding to the full 32 bytes: 0x00 fill for
+                        // non-negative values, 0xFF for negative ones.
+                        let mut bytes = if integer.is_negative() {
                             [255_u8; 32]
+                        } else {
+                            [0_u8; 32]
                         };
+                        if integer_bytes.len() > bytes.len() {
+                            return Err(ArrowError::JsonError(
+                                "Decimal256 value exceeds 256 bits".to_string(),
+                            ));
+                        }
                         bytes[0..integer_bytes.len()].copy_from_slice(integer_bytes.as_slice());
                         b.append_value(i256::from_le_bytes(bytes));
                     }
@@ -985,8 +992,8 @@ pub fn array_from_json(
                 .offset
                 .unwrap()
                 .iter()
-                .map(|v| v.as_i64().unwrap() as i32)
-                .collect();
+                .map(|v| json_int("map offset", v))
+                .collect::<Result<_>>()?;
             let array_data = ArrayData::builder(field.data_type().clone())
                 .len(json_col.count)
                 .add_buffer(Buffer::from(offsets.to_byte_slice()))
@@ -1007,7 +1014,13 @@ pub fn array_from_json(
 
             let offset: Option<ScalarBuffer<i32>> = json_col
                 .offset
-                .map(|offsets| offsets.iter().map(|v| v.as_i64().unwrap() as i32).collect());
+                .map(|offsets| {
+                    offsets
+                        .iter()
+                        .map(|v| json_int("union offset", v))
+                        .collect::<Result<_>>()
+                })
+                .transpose()?;
 
             let mut children = Vec::with_capacity(fields.len());
             for ((_, field), col) in fields.iter().zip(json_col.children.unwrap()) {
@@ -1033,16 +1046,26 @@ pub fn array_from_json(
                     builder.append_null();
                 } else {
                     let view_obj = view.as_object().unwrap();
-                    let size = view_obj["SIZE"].as_u64().unwrap() as usize;
+                    let size: usize = json_uint("view size", &view_obj["SIZE"])?;
                     // Check for INLINED key presence - inlined if SIZE <= 12
                     if let Some(inlined) = view_obj.get("INLINED") {
                         builder.append_value(inlined.as_str().unwrap());
                     } else {
                         // Reference to variadic buffer
-                        let buffer_index = view_obj["BUFFER_INDEX"].as_u64().unwrap() as usize;
-                        let offset = view_obj["OFFSET"].as_u64().unwrap() as usize;
-                        let buffer_data = hex::decode(&variadic_buffers[buffer_index]).unwrap();
-                        let s = std::str::from_utf8(&buffer_data[offset..offset + size]).unwrap();
+                        let buffer_index: usize =
+                            json_uint("view buffer index", &view_obj["BUFFER_INDEX"])?;
+                        let offset: usize = json_uint("view offset", &view_obj["OFFSET"])?;
+                        let end = offset.checked_add(size).ok_or_else(|| {
+                            ArrowError::JsonError("View offset overflow".to_string())
+                        })?;
+                        let buffer = variadic_buffers.get(buffer_index).ok_or_else(|| {
+                            ArrowError::JsonError("View buffer index out of bounds".to_string())
+                        })?;
+                        let buffer_data = hex::decode(buffer).unwrap();
+                        let data = buffer_data.get(offset..end).ok_or_else(|| {
+                            ArrowError::JsonError("View range out of bounds".to_string())
+                        })?;
+                        let s = std::str::from_utf8(data).unwrap();
                         builder.append_value(s);
                     }
                 }
@@ -1063,17 +1086,27 @@ pub fn array_from_json(
                     builder.append_null();
                 } else {
                     let view_obj = view.as_object().unwrap();
-                    let size = view_obj["SIZE"].as_u64().unwrap() as usize;
+                    let size: usize = json_uint("view size", &view_obj["SIZE"])?;
                     // Check for INLINED key presence - inlined if SIZE <= 12
                     if let Some(inlined) = view_obj.get("INLINED") {
                         let data = hex::decode(inlined.as_str().unwrap()).unwrap();
                         builder.append_value(&data);
                     } else {
                         // Reference to variadic buffer
-                        let buffer_index = view_obj["BUFFER_INDEX"].as_u64().unwrap() as usize;
-                        let offset = view_obj["OFFSET"].as_u64().unwrap() as usize;
-                        let buffer_data = hex::decode(&variadic_buffers[buffer_index]).unwrap();
-                        builder.append_value(&buffer_data[offset..offset + size]);
+                        let buffer_index: usize =
+                            json_uint("view buffer index", &view_obj["BUFFER_INDEX"])?;
+                        let offset: usize = json_uint("view offset", &view_obj["OFFSET"])?;
+                        let end = offset.checked_add(size).ok_or_else(|| {
+                            ArrowError::JsonError("View offset overflow".to_string())
+                        })?;
+                        let buffer = variadic_buffers.get(buffer_index).ok_or_else(|| {
+                            ArrowError::JsonError("View buffer index out of bounds".to_string())
+                        })?;
+                        let buffer_data = hex::decode(buffer).unwrap();
+                        let data = buffer_data.get(offset..end).ok_or_else(|| {
+                            ArrowError::JsonError("View range out of bounds".to_string())
+                        })?;
+                        builder.append_value(data);
                     }
                 }
             }
@@ -1270,6 +1303,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_decimal256_from_json() {
+        let field = Field::new("c", DataType::Decimal256(76, 0), false);
+        let col: ArrowJsonColumn = serde_json::from_str(
+            r#"{
+                "name": "c",
+                "count": 5,
+                "VALIDITY": [1, 1, 1, 1, 1],
+                "DATA": [
+                    "0",
+                    "1",
+                    "-1",
+                    "123456789012345678901234567890",
+                    "-123456789012345678901234567890"
+                ]
+            }"#,
+        )
+        .unwrap();
+        let arr = array_from_json(&field, col, None).unwrap();
+        let arr = arr.as_any().downcast_ref::<Decimal256Array>().unwrap();
+        assert_eq!(arr.value(0), i256::ZERO);
+        assert_eq!(arr.value(1), i256::from_i128(1));
+        assert_eq!(arr.value(2), i256::from_i128(-1));
+        let big = i256::from_string("123456789012345678901234567890").unwrap();
+        assert_eq!(arr.value(3), big);
+        assert_eq!(arr.value(4), i256::ZERO - big);
+    }
+
+    #[test]
     fn test_schema_equality() {
         let json = r#"
         {
@@ -1421,8 +1482,16 @@ mod tests {
             Field::new(
                 "runendencoded",
                 DataType::RunEndEncoded(
-                    Arc::new(Field::new("run_ends", DataType::Int16, false)),
-                    Arc::new(Field::new("values", DataType::Int32, true)),
+                    Arc::new(Field::new(
+                        Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                        DataType::Int16,
+                        false,
+                    )),
+                    Arc::new(Field::new(
+                        Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                        DataType::Int32,
+                        true,
+                    )),
                 ),
                 true,
             ),
@@ -1538,8 +1607,16 @@ mod tests {
         let ree_run_ends = Int16Array::from(vec![2, 3]);
         let ree_values = Int32Array::from(vec![Some(100), None]);
         let ree_data_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Int16, false)),
-            Arc::new(Field::new("values", DataType::Int32, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int16,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                true,
+            )),
         );
         let ree_data = ArrayData::builder(ree_data_type)
             .len(3)

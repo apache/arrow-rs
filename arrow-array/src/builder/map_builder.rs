@@ -1,26 +1,11 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::builder::ArrayBuilder;
 use crate::{Array, ArrayRef, MapArray, StructArray};
-use arrow_buffer::Buffer;
-use arrow_buffer::{NullBuffer, NullBufferBuilder};
-use arrow_data::ArrayData;
-use arrow_schema::{ArrowError, DataType, Field, FieldRef};
+use arrow_buffer::{Buffer, NullBuffer, NullBufferBuilder, OffsetBuffer};
+use arrow_schema::{ArrowError, Field, FieldRef};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -167,24 +152,40 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         Ok(())
     }
 
+    /// Returns the offset of the next map slot, i.e. the current number of entries.
+    ///
+    /// Returns an error if the number of entries does not fit in an `i32` offset.
+    #[inline]
+    fn next_offset(&self) -> Result<i32, ArrowError> {
+        let len = self.key_builder.len();
+        i32::try_from(len).map_err(|_| {
+            ArrowError::InvalidArgumentError(format!(
+                "Cannot append to a map builder with {len} entries: offset exceeds i32::MAX"
+            ))
+        })
+    }
+
     /// Finish the current map array slot
     ///
-    /// Returns an error if the key and values builders are in an inconsistent state.
+    /// Returns an error if the key and values builders are in an inconsistent state,
+    /// or if the number of entries exceeds `i32::MAX`.
     #[inline]
     pub fn append(&mut self, is_valid: bool) -> Result<(), ArrowError> {
         self.validate_equal_lengths()?;
-        self.offsets_builder.push(self.key_builder.len() as i32);
+        let offset = self.next_offset()?;
+        self.offsets_builder.push(offset);
         self.null_buffer_builder.append(is_valid);
         Ok(())
     }
 
     /// Append `n` nulls to this [`MapBuilder`]
     ///
-    /// Returns an error if the key and values builders are in an inconsistent state.
+    /// Returns an error if the key and values builders are in an inconsistent state,
+    /// or if the number of entries exceeds `i32::MAX`.
     #[inline]
     pub fn append_nulls(&mut self, n: usize) -> Result<(), ArrowError> {
         self.validate_equal_lengths()?;
-        let offset = self.key_builder.len() as i32;
+        let offset = self.next_offset()?;
         self.offsets_builder.extend(std::iter::repeat_n(offset, n));
         self.null_buffer_builder.append_n_nulls(n);
         Ok(())
@@ -198,7 +199,6 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
     /// [`Self::with_values_field`] do not match the data types of the key and value
     /// builders, or if the keys contain nulls
     pub fn finish(&mut self) -> MapArray {
-        let len = self.len();
         // Build the keys
         let keys_arr = self.key_builder.finish();
         let values_arr = self.value_builder.finish();
@@ -206,7 +206,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         self.offsets_builder.push(0);
         let null_bit_buffer = self.null_buffer_builder.finish();
 
-        self.finish_helper(keys_arr, values_arr, offset_buffer, null_bit_buffer, len)
+        self.finish_helper(keys_arr, values_arr, offset_buffer, null_bit_buffer)
     }
 
     /// Builds the [`MapArray`] without resetting the builder.
@@ -217,17 +217,15 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
     /// [`Self::with_values_field`] do not match the data types of the key and value
     /// builders, or if the keys contain nulls
     pub fn finish_cloned(&self) -> MapArray {
-        let len = self.len();
         // Build the keys
         let keys_arr = self.key_builder.finish_cloned();
         let values_arr = self.value_builder.finish_cloned();
         let offset_buffer = Buffer::from_slice_ref(self.offsets_builder.as_slice());
         let nulls = self.null_buffer_builder.finish_cloned();
-        self.finish_helper(keys_arr, values_arr, offset_buffer, nulls, len)
+        self.finish_helper(keys_arr, values_arr, offset_buffer, nulls)
     }
 
     fn finish_preserve_values(&mut self) -> MapArray {
-        let len = self.len();
         // Build the keys
         let keys_arr = self.key_builder.finish_preserve_values();
         let values_arr = self.value_builder.finish_preserve_values();
@@ -235,7 +233,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         self.offsets_builder.push(0);
         let null_bit_buffer = self.null_buffer_builder.finish();
 
-        self.finish_helper(keys_arr, values_arr, offset_buffer, null_bit_buffer, len)
+        self.finish_helper(keys_arr, values_arr, offset_buffer, null_bit_buffer)
     }
 
     fn finish_helper(
@@ -244,7 +242,6 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         values_arr: Arc<dyn Array>,
         offset_buffer: Buffer,
         nulls: Option<NullBuffer>,
-        len: usize,
     ) -> MapArray {
         assert!(
             keys_arr.null_count() == 0,
@@ -280,15 +277,10 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
             struct_array.data_type().clone(),
             false, // always non-nullable
         ));
-        let array_data = ArrayData::builder(DataType::Map(map_field, false)) // TODO: support sorted keys
-            .len(len)
-            .add_buffer(offset_buffer)
-            .add_child_data(struct_array.into_data())
-            .nulls(nulls);
-
-        let array_data = unsafe { array_data.build_unchecked() };
-
-        MapArray::from(array_data)
+        // SAFETY: offsets are appended from the entry count, which the builder
+        // keeps equal for keys and values, and the entries are non-nullable
+        let offsets = unsafe { OffsetBuffer::new_unchecked(offset_buffer.into()) };
+        unsafe { MapArray::new_unchecked(map_field, offsets, struct_array, nulls, false) }
     }
 
     /// Returns the current null buffer as a slice
@@ -333,6 +325,7 @@ mod tests {
     use super::*;
     use crate::builder::{Int32Builder, StringBuilder, make_builder, tests::PreserveValuesMock};
     use crate::{Int32Array, StringArray};
+    use arrow_schema::DataType;
     use std::collections::HashMap;
 
     #[test]
@@ -582,5 +575,53 @@ mod tests {
         assert_eq!(1, map.len());
         assert_eq!(1, builder.keys().called);
         assert_eq!(1, builder.values().called);
+    }
+
+    /// Mock builder that reports an arbitrary length without allocating anything,
+    /// so offset overflow can be exercised without building `i32::MAX` entries.
+    struct FixedLenBuilder(usize);
+
+    impl ArrayBuilder for FixedLenBuilder {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
+
+        fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
+            self
+        }
+
+        fn len(&self) -> usize {
+            self.0
+        }
+
+        fn finish(&mut self) -> ArrayRef {
+            panic!("finish should never be called on FixedLenBuilder")
+        }
+
+        fn finish_cloned(&self) -> ArrayRef {
+            panic!("finish_cloned should never be called on FixedLenBuilder")
+        }
+    }
+
+    #[test]
+    fn test_append_offset_overflow() {
+        let len = i32::MAX as usize + 1;
+        let mut builder = MapBuilder::new(None, FixedLenBuilder(len), FixedLenBuilder(len));
+
+        let result = builder.append(true);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("exceeds i32::MAX"));
+
+        let result = builder.append_nulls(1);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("exceeds i32::MAX"));
+
+        // The builder must be left untouched after a rejected append
+        assert_eq!(builder.offsets_builder, vec![0]);
+        assert_eq!(builder.len(), 0);
     }
 }

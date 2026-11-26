@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Tests for the `parquet_derive` procedural macros.
 
@@ -409,6 +396,34 @@ mod tests {
         out.read_from_row_group(&mut *row_group, 1).unwrap();
 
         assert_eq!(drs, out);
+    }
+
+    #[test]
+    fn test_parquet_derive_read_into_non_empty_vec() {
+        #[derive(PartialEq, ParquetRecordWriter, ParquetRecordReader, Debug)]
+        struct ARecord {
+            id: i32,
+        }
+
+        let file = get_temp_file("test_parquet_derive_read_into_non_empty_vec", &[]);
+        let drs = [ARecord { id: 1 }];
+
+        let schema = drs.as_slice().schema().unwrap();
+        let mut writer =
+            SerializedFileWriter::new(file.try_clone().unwrap(), schema, Default::default())
+                .unwrap();
+        let mut row_group = writer.next_row_group().unwrap();
+        drs.as_slice().write_to_row_group(&mut row_group).unwrap();
+        row_group.close().unwrap();
+        writer.close().unwrap();
+
+        use parquet::file::{reader::FileReader, serialized_reader::SerializedFileReader};
+        let reader = SerializedFileReader::new(file).unwrap();
+        let mut out = vec![ARecord { id: 7 }];
+        out.read_from_row_group(&mut *reader.get_row_group(0).unwrap(), 1)
+            .unwrap();
+
+        assert_eq!(out, [ARecord { id: 7 }, ARecord { id: 1 }]);
     }
 
     #[test]

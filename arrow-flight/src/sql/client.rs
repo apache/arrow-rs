@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! A FlightSQL Client [`FlightSqlServiceClient`]
 
@@ -222,7 +209,9 @@ where
             .into_request(),
         )?;
         let mut result = self.flight_client.do_put(req).await?.into_inner();
-        let result = result.message().await?.unwrap();
+        let result = result.message().await?.ok_or_else(|| {
+            FlightError::protocol("Server closed the stream without sending a result")
+        })?;
         let result: DoPutUpdateResult = Message::decode(&*result.app_metadata)?;
         Ok(result.record_count)
     }
@@ -258,7 +247,9 @@ where
             return Err(FlightError::ExternalError(Box::new(msg)));
         }
 
-        let result = result.message().await?.unwrap();
+        let result = result.message().await?.ok_or_else(|| {
+            FlightError::protocol("Server closed the stream without sending a result")
+        })?;
         let result: DoPutUpdateResult = Message::decode(&*result.app_metadata)?;
         Ok(result.record_count)
     }
@@ -387,9 +378,16 @@ where
         };
         let req = self.set_request_headers(action.into_request())?;
         let mut result = self.flight_client.do_action(req).await?.into_inner();
-        let result = result.message().await?.unwrap();
+        let result = result.message().await?.ok_or_else(|| {
+            FlightError::protocol("Server closed the stream without sending a result")
+        })?;
         let any = Any::decode(&*result.body)?;
-        let prepared_result: ActionCreatePreparedStatementResult = any.unpack()?.unwrap();
+        let prepared_result: ActionCreatePreparedStatementResult =
+            any.unpack()?.ok_or_else(|| {
+                FlightError::protocol(
+                    "Server did not return an ActionCreatePreparedStatementResult",
+                )
+            })?;
         let dataset_schema = match prepared_result.dataset_schema.len() {
             0 => Schema::empty(),
             _ => Schema::try_from(IpcMessage(prepared_result.dataset_schema))?,
@@ -415,9 +413,13 @@ where
         };
         let req = self.set_request_headers(action.into_request())?;
         let mut result = self.flight_client.do_action(req).await?.into_inner();
-        let result = result.message().await?.unwrap();
+        let result = result.message().await?.ok_or_else(|| {
+            FlightError::protocol("Server closed the stream without sending a result")
+        })?;
         let any = Any::decode(&*result.body)?;
-        let begin_result: ActionBeginTransactionResult = any.unpack()?.unwrap();
+        let begin_result: ActionBeginTransactionResult = any.unpack()?.ok_or_else(|| {
+            FlightError::protocol("Server did not return an ActionBeginTransactionResult")
+        })?;
         Ok(begin_result.transaction_id)
     }
 
@@ -443,6 +445,7 @@ where
     /// Explicitly shut down and clean up the client.
     #[expect(
         clippy::unused_async,
+        clippy::unused_async_trait_impl,
         reason = "public API: dropping `async` would break callers that `.await` it"
     )]
     pub async fn close(&mut self) -> Result<()> {
@@ -542,7 +545,9 @@ where
                 ..Default::default()
             }]))
             .await?;
-        let result = result.message().await?.unwrap();
+        let result = result.message().await?.ok_or_else(|| {
+            FlightError::protocol("Server closed the stream without sending a result")
+        })?;
         let result: DoPutUpdateResult = Message::decode(&*result.app_metadata)?;
         Ok(result.record_count)
     }

@@ -1,0 +1,93 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+# Shared build inputs select all suites on pull requests.
+common:
+  - .asf.yaml
+  - .github/**
+  - .gitmodules
+  - .config/**
+  - Cargo.toml
+  - Cargo.lock
+  - rust-toolchain.toml
+  - testing
+  - parquet-testing
+  - format/**
+suites:
+  arrow:
+    - arrow-arith/**
+    - arrow-array/**
+    - arrow-buffer/**
+    - arrow-cast/**
+    - arrow-cmp/**
+    - arrow-csv/**
+    - arrow-data/**
+    - arrow-integration-test/**
+    - arrow-integration-testing/**
+    - arrow-ipc/**
+    - arrow-json/**
+    - arrow-avro/**
+    - arrow-ord/**
+    - arrow-row/**
+    - arrow-schema/**
+    - arrow-select/**
+    - arrow-string/**
+    - arrow/**
+  arrow-flight:
+    - arrow-array/**
+    - arrow-buffer/**
+    - arrow-cast/**
+    - arrow-data/**
+    - arrow-flight/**
+    - arrow-ipc/**
+    - arrow-schema/**
+    - arrow-select/**
+  parquet:
+    - arrow/**
+    - arrow-arith/**
+    - arrow-array/**
+    - arrow-buffer/**
+    - arrow-cast/**
+    - arrow-cmp/**
+    - arrow-csv/**
+    - arrow-data/**
+    - arrow-ipc/**
+    - arrow-json/**
+    - arrow-ord/**
+    - arrow-row/**
+    - arrow-schema/**
+    - arrow-select/**
+    - arrow-string/**
+    - parquet/**
+    - parquet_derive/**
+    - parquet_derive_test/**
+    - parquet-geospatial/**
+    - parquet-variant/**
+    - parquet-variant-compute/**
+    - parquet-variant-json/**
+  integration:
+    - arrow-arith/**
+    - arrow-array/**
+    - arrow-buffer/**
+    - arrow-cast/**
+    - arrow-cmp/**
+    - arrow-csv/**
+    - arrow-data/**
+    - arrow-flight/**
+    - arrow-integration-test/**
+    - arrow-integration-testing/**
+    - arrow-ipc/**
+    - arrow-json/**
+    - arrow-ord/**
+    - arrow-pyarrow-integration-testing/**
+    - arrow-pyarrow-testing/**
+    - arrow-pyarrow/**
+    - arrow-row/**
+    - arrow-schema/**
+    - arrow-select/**
+    - arrow-string/**
+    - arrow/**
+  audit:
+    - '**/Cargo.toml'
+    - '**/Cargo.lock'

@@ -1,20 +1,7 @@
 <!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+  SPDX-License-Identifier: Apache-2.0
+  SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+  SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 ## Introduction
@@ -49,9 +36,10 @@ If you want to work on an issue which is not already assigned to someone else
 and there are no comment indicating that someone is already working on that
 issue then you can assign the issue to yourself by submitting a single word
 comment `take`. This will assign the issue to yourself. However, if you are
-unable to make progress you should unassign the issue by using the `unassign me`
-link at the top of the issue page (and ask for help if are stuck) so that
-someone else can get involved in the work.
+unable to make progress you should unassign the issue so that someone else can
+get involved in the work. You can do this either by using the `unassign me`
+link at the top of the issue page or by leaving a single word comment `untake`
+(and ask for help if you are stuck).
 
 If you plan to work on a new feature that doesn't have an existing ticket, it is
 a good idea to open a ticket to discuss the feature. Advanced discussion often
@@ -60,6 +48,38 @@ Arrow-rs before too much time is invested. It also often helps to discuss your
 ideas with the community to get feedback on implementation.
 
 [good-first-issue]: https://github.com/apache/arrow-rs/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22
+
+## Creating Pull Requests
+
+With coding agents, the number of open PRs now far exceeds our review capacity.
+To encourage submitters to curate and prepare a small number of high quality PRs,
+and to help reviewers focus on them, users without write access are limited to
+**3 open, non-draft PRs** at a time.
+
+When possible, we recommend splitting your contributions into multiple smaller
+focused PRs rather than large PRs, because they are more likely to be reviewed
+quickly and are easier to understand and review.
+
+### Pull Requests from Forks
+
+To reduce load on ASF's shared runners, pull requests from forks to `main`
+run CPU-intensive tests on your fork using your fork's GitHub runners, with
+lightweight checks upstream. To enable Actions in your fork:
+
+1. Open the **Actions** tab in your fork and enable workflows before pushing.
+2. Sync your fork and rebase your branch onto upstream `main` to include the
+   current CI workflows.
+3. Push your branch, or manually run `CI` from your fork's **Actions** tab.
+   View results and rerun failed jobs there; the PR's `CI (fork)` check may lag.
+
+Fork branch pushes and manual runs execute all regular suites, excluding macOS
+tests, Windows tests, and Miri. macOS tests are skipped in forks to avoid frequent
+runner timeouts, and Windows tests to reduce compute.
+The `CI (fork)` check links to the fork run and is informational. When your PR is
+approved and added to the merge queue, the final CI checks, including macOS and
+Windows tests, run using ASF's runners against the proposed merge with `main`.
+Same-repository and release-branch PRs retain upstream testing. Miri runs
+separately on a daily schedule and on demand.
 
 ## Developer's guide to Arrow Rust
 
@@ -156,15 +176,42 @@ Our CI uses `rustfmt` to check code formatting. Before submitting a
 PR be sure to run the following and check for lint issues:
 
 ```bash
-cargo +stable fmt --all -- --check
+cargo fmt --all -- --check
 ```
 
-Note that currently the above will not check all source files in the parquet crate. To check all
-parquet files run the following from the top-level `arrow-rs` directory:
+## Miri
 
-```bash
-cargo fmt -p parquet -- --check --config skip_children=true `find ./parquet -name "*.rs" \! -name format.rs`
+Run tests under [`Miri`](https://github.com/rust-lang/miri) like so, assuming
+[`cargo-nextest`](https://nexte.st/) is available:
+
+```sh
+# Run all tests
+MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-no-extra-rounding-error" cargo +nightly miri nextest run
+# Run specific tests
+MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-no-extra-rounding-error" cargo +nightly miri nextest run -p arrow-buffer --lib bigint
+# Run specific crate
+MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-no-extra-rounding-error" cargo +nightly miri nextest run -p arrow-buffer
 ```
+
+The whole suite will take a long time to run so it's suggested to run individual
+suites/tests when required.
+
+Add a `cfg_attr` to tests in cases where the test should be ignored by Miri:
+
+```rust
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn test123() {}
+```
+
+Please ensure you include a comment why the test is being ignored. Common cases
+are:
+
+- Takes too long
+  - Threshold is if it takes longer than 1 minute
+- Zstd code unsupported by Miri
+- Inline assembly unsupported by Miri
+- Any other operation thats unsupported by Miri
 
 ## Breaking Changes
 
@@ -172,6 +219,10 @@ Our [release schedule] allows breaking API changes only in major releases.
 This means that if your PR has a breaking API change, it should be marked as
 `api-change` and it will not be merged until development opens for the next
 major release. See [this ticket] for details.
+
+CI uses `cargo-semver-checks` to add `api-change` for detected breakage without
+failing the check. Manual review is still needed, especially for Parquet features
+outside its defaults.
 
 [release schedule]: README.md#release-versioning-and-schedule
 [this ticket]: https://github.com/apache/arrow-rs/issues/5907
@@ -209,6 +260,49 @@ Search for `expect(clippy::` in the codebase to identify lints that are intentio
 - If you have several lints on a function or module, you may disable the lint on the function or module.
 - If a lint is pervasive across multiple modules, you may disable it at the crate level.
 
+## Spell Checking
+
+We use [`typos`](https://github.com/crate-ci/typos) to catch spelling mistakes in source code and
+comments. CI runs a spell check on every pull request.
+
+### Running locally
+
+Install `typos` and run it from the repo root:
+
+```bash
+cargo install typos-cli
+typos --config typos.toml
+```
+
+### Adding a pre-commit hook
+
+To catch typos before they reach CI, add `typos` as a Git pre-commit hook:
+
+```bash
+cat > .git/hooks/pre-commit << 'EOF'
+#!/bin/sh
+typos --config typos.toml
+EOF
+chmod +x .git/hooks/pre-commit
+```
+
+After that, `typos` will run automatically on every `git commit`. If it finds an issue, the commit
+is blocked until you fix or allowlist the word.
+
+### Allowlisting false positives
+
+If `typos` flags a word that is intentionally spelled that way (a test value, a domain-specific
+term, a crate name, etc.), add it to `[default.extend-words]` in `typos.toml` at the repo root
+with a short comment explaining why:
+
+```toml
+[default.extend-words]
+flate = "flate"  # flate2 is the crate name for the deflate/inflate compression library
+```
+
+Prefer renaming variables over adding allowlist entries when the flagged word is just a local
+identifier that can be changed without affecting test semantics.
+
 ## Performance Improvements
 
 Pull requests that improve performance, especially those that add non-trivial complexity or use `unsafe`, should include evidence of the improvement, such as benchmarks.
@@ -238,10 +332,17 @@ git checkout feature
 cargo bench --bench parse_time -- --baseline main
 ```
 
-If your PR proposes a performance improvement, include a summary of the benchmark results (for example, from `cargo-criterion` or `critcmp`) in the PR description.
-If you need to add new benchmarks to cover your change, make a separate PR first (for example, [#9729]) so we can run the benchmarks on an automated runner.
+If your PR proposes a performance improvement, include a summary of the benchmark results (for example, from `cargo-criterion` or `critcmp`) in the PR description. Name the benchmark(s) the change targets, so reviewers know which to run.
 
-[#9729]: https://github.com/apache/arrow-rs/pull/9729
+A benchmark that improves is not enough on its own. State which part of the change produces the gain, for example by removing it and rerunning. Cover both well-predicted input (constant lengths, all valid) and poorly predicted input (random), because branchless code wins on the second and can lose on the first. Name the inputs that get slower and say whether real workloads are likely to hit them.
+
+If you need to add new benchmarks to cover your change, add them as the first commit of the same PR. This lets reviewers see the benchmark and implementation together without requiring a separate benchmark PR. The automated benchmark runner can compare the implementation against the first commit by passing its SHA as the baseline:
+
+```yaml
+run benchmark <bench>
+baseline:
+  ref: <benchmark commit SHA>
+```
 
 ## AI Generated Submissions
 

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 pub use arrow_buffer::BufferBuilder;
 pub use arrow_buffer::OffsetBufferBuilder;
@@ -30,13 +17,13 @@ pub type Int16BufferBuilder = BufferBuilder<i16>;
 pub type Int32BufferBuilder = BufferBuilder<i32>;
 /// Buffer builder for signed 64-bit integer type.
 pub type Int64BufferBuilder = BufferBuilder<i64>;
-/// Buffer builder for usigned 8-bit integer type.
+/// Buffer builder for unsigned 8-bit integer type.
 pub type UInt8BufferBuilder = BufferBuilder<u8>;
-/// Buffer builder for usigned 16-bit integer type.
+/// Buffer builder for unsigned 16-bit integer type.
 pub type UInt16BufferBuilder = BufferBuilder<u16>;
-/// Buffer builder for usigned 32-bit integer type.
+/// Buffer builder for unsigned 32-bit integer type.
 pub type UInt32BufferBuilder = BufferBuilder<u32>;
-/// Buffer builder for usigned 64-bit integer type.
+/// Buffer builder for unsigned 64-bit integer type.
 pub type UInt64BufferBuilder = BufferBuilder<u64>;
 /// Buffer builder for 16-bit floating point type.
 pub type Float16BufferBuilder = BufferBuilder<f16>;
@@ -72,16 +59,16 @@ pub type Date32BufferBuilder = BufferBuilder<<Date32Type as ArrowPrimitiveType>:
 /// Buffer builder for 64-bit date type.
 pub type Date64BufferBuilder = BufferBuilder<<Date64Type as ArrowPrimitiveType>::Native>;
 
-/// Buffer builder for 32-bit elaspsed time since midnight of second unit.
+/// Buffer builder for 32-bit elapsed time since midnight of second unit.
 pub type Time32SecondBufferBuilder =
     BufferBuilder<<Time32SecondType as ArrowPrimitiveType>::Native>;
-/// Buffer builder for 32-bit elaspsed time since midnight of millisecond unit.
+/// Buffer builder for 32-bit elapsed time since midnight of millisecond unit.
 pub type Time32MillisecondBufferBuilder =
     BufferBuilder<<Time32MillisecondType as ArrowPrimitiveType>::Native>;
-/// Buffer builder for 64-bit elaspsed time since midnight of microsecond unit.
+/// Buffer builder for 64-bit elapsed time since midnight of microsecond unit.
 pub type Time64MicrosecondBufferBuilder =
     BufferBuilder<<Time64MicrosecondType as ArrowPrimitiveType>::Native>;
-/// Buffer builder for 64-bit elaspsed time since midnight of nanosecond unit.
+/// Buffer builder for 64-bit elapsed time since midnight of nanosecond unit.
 pub type Time64NanosecondBufferBuilder =
     BufferBuilder<<Time64NanosecondType as ArrowPrimitiveType>::Native>;
 
@@ -95,16 +82,16 @@ pub type IntervalDayTimeBufferBuilder =
 pub type IntervalMonthDayNanoBufferBuilder =
     BufferBuilder<<IntervalMonthDayNanoType as ArrowPrimitiveType>::Native>;
 
-/// Buffer builder for elaspsed time of second unit.
+/// Buffer builder for elapsed time of second unit.
 pub type DurationSecondBufferBuilder =
     BufferBuilder<<DurationSecondType as ArrowPrimitiveType>::Native>;
-/// Buffer builder for elaspsed time of milliseconds unit.
+/// Buffer builder for elapsed time of milliseconds unit.
 pub type DurationMillisecondBufferBuilder =
     BufferBuilder<<DurationMillisecondType as ArrowPrimitiveType>::Native>;
-/// Buffer builder for elaspsed time of microseconds unit.
+/// Buffer builder for elapsed time of microseconds unit.
 pub type DurationMicrosecondBufferBuilder =
     BufferBuilder<<DurationMicrosecondType as ArrowPrimitiveType>::Native>;
-/// Buffer builder for elaspsed time of nanoseconds unit.
+/// Buffer builder for elapsed time of nanoseconds unit.
 pub type DurationNanosecondBufferBuilder =
     BufferBuilder<<DurationNanosecondType as ArrowPrimitiveType>::Native>;
 

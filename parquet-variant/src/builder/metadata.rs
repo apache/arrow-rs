@@ -1,26 +1,13 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::collections::HashMap;
 
 use arrow_schema::ArrowError;
 use indexmap::IndexSet;
 
-use crate::{VariantMetadata, int_size};
+use crate::{VARIANT_SPEC_VERSION, VariantMetadata, int_size};
 
 /// Write little-endian integer to buffer
 fn write_offset(buf: &mut Vec<u8>, value: usize, nbytes: u8) {
@@ -86,6 +73,8 @@ pub struct ReadOnlyMetadataBuilder<'m> {
     metadata: &'m VariantMetadata<'m>,
     // A cache that tracks field names this builder has already seen, because finding the field id
     // for a given field name is expensive -- O(n) for a large and unsorted metadata dictionary.
+    // Field names borrowed from a sorted `metadata` bypass this cache; see
+    // `VariantMetadata::borrowed_field_id`.
     known_field_names: HashMap<&'m str, u32>,
 }
 
@@ -101,6 +90,17 @@ impl<'m> ReadOnlyMetadataBuilder<'m> {
 
 impl MetadataBuilder for ReadOnlyMetadataBuilder<'_> {
     fn try_upsert_field_name(&mut self, field_name: &str) -> Result<u32, ArrowError> {
+        // Callers that copy fields out of an object and back into the same metadata dictionary
+        // (unshredding, shredding, and projection all do this) pass field names that are slices of
+        // the dictionary itself. For a sorted dictionary those resolve without hashing or any
+        // string comparison, which matters because this builder is often created per row and so
+        // its `known_field_names` cache would otherwise be populated and discarded without ever
+        // serving a lookup. An unsorted dictionary may hold duplicate entries, so it keeps using
+        // the cache and the name-based search below.
+        if let Some(field_id) = self.metadata.borrowed_field_id(field_name) {
+            return Ok(field_id);
+        }
+
         if let Some(field_id) = self.known_field_names.get(field_name) {
             return Ok(*field_id);
         }
@@ -215,7 +215,8 @@ impl WritableMetadataBuilder {
         metadata_buffer.reserve(metadata_size);
 
         // Write header: version=1, field names are sorted, with calculated offset_size
-        metadata_buffer.push(0x01 | ((is_sorted as u8) << 4) | ((offset_size - 1) << 6));
+        metadata_buffer
+            .push(VARIANT_SPEC_VERSION | ((is_sorted as u8) << 4) | ((offset_size - 1) << 6));
 
         // Write dictionary size
         write_offset(metadata_buffer, nkeys, offset_size);

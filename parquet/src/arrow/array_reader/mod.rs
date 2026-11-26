@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Logic for reading into arrow arrays: [`ArrayReader`] and [`RowGroups`]
 
@@ -55,6 +42,9 @@ pub(crate) mod test_util;
 use crate::file::metadata::RowGroupMetaData;
 pub use builder::{ArrayReaderBuilder, CacheOptions, CacheOptionsBuilder};
 pub use byte_array::make_byte_array_reader;
+// Re-exported (beyond the `experimental` feature) so `file::metadata::dictionary`
+// can PLAIN-decode a raw dictionary page without duplicating this logic.
+pub(crate) use byte_array::ByteArrayDecoderPlain;
 pub use byte_array_dictionary::make_byte_array_dictionary_reader;
 #[cfg_attr(not(feature = "experimental"), expect(unused_imports))]
 pub use byte_view_array::make_byte_view_array_reader;

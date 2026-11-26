@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::array::print_long_array;
 use crate::iterator::FixedSizeBinaryIter;
@@ -111,6 +98,9 @@ impl FixedSizeBinaryArray {
     /// Create a new [`FixedSizeBinaryArray`] with `value_length` bytes per element, panicking on
     /// failure
     ///
+    /// If `values.len()` is not an exact multiple of `value_length`, trailing bytes beyond
+    /// `(values.len() / value_length) * value_length` are truncated.
+    ///
     /// # Panics
     ///
     /// Panics if [`Self::try_new`] returns an error
@@ -159,6 +149,10 @@ impl FixedSizeBinaryArray {
     /// buffer. If no null buffer is provided, the resulting array will have length zero.
     /// You can use [`Self::try_new_with_len`] to provide the length
     ///
+    /// If `values.len()` is not an exact multiple of `value_length`, trailing bytes beyond
+    /// `(values.len() / value_length) * value_length` are truncated so the stored values buffer
+    /// always has length `len * value_length`.
+    ///
     /// # Errors
     ///
     /// * `value_length < 0`
@@ -206,7 +200,11 @@ impl FixedSizeBinaryArray {
 
     /// Create a new [`FixedSizeBinaryArray`] from the provided parts and number of elements, returning an error on failure
     ///
-    /// This is useful when the length cannot be determinated from the provided values (in case of `value_length == 0`) or nulls (`nulls.is_none()`).
+    /// This is useful when the length cannot be determined from the provided values (in case of `value_length == 0`) or nulls (`nulls.is_none()`).
+    ///
+    /// If `values` contains trailing bytes beyond `len * value_length` (while still satisfying
+    /// `values.len() / value_length == len`), they are truncated so the stored values buffer always
+    /// has length `len * value_length`.
     ///
     /// # Errors
     ///
@@ -252,12 +250,22 @@ impl FixedSizeBinaryArray {
             ));
         }
 
+        // Guaranteed not to overflow: either `value_size == 0` or `values.len() / value_size == len` above.
+        let required_len = len
+            .checked_mul(value_size)
+            .expect("length bounded by values buffer check");
+        let value_data = if values.len() > required_len {
+            values.slice_with_length(0, required_len)
+        } else {
+            values
+        };
+
         Ok(Self {
             data_type,
-            value_data: values,
-            value_size,
+            value_data,
             nulls,
             len,
+            value_size,
         })
     }
 
@@ -419,7 +427,11 @@ impl FixedSizeBinaryArray {
     ///
     /// # Errors
     ///
-    /// Returns error if argument has length zero, or sizes of nested slices don't match.
+    /// Returns an error for:
+    /// - Empty input
+    /// - Mismatched lengths
+    /// - Overflow
+    /// - Allocation failure
     #[deprecated(
         since = "28.0.0",
         note = "This function will fail if the iterator produces only None values; prefer `try_from_sparse_iter_with_size`"
@@ -434,14 +446,17 @@ impl FixedSizeBinaryArray {
         let mut byte = 0;
 
         let iter_size_hint = iter.size_hint().0;
-        let mut null_buf = MutableBuffer::new(bit_util::ceil(iter_size_hint, 8));
-        let mut buffer = MutableBuffer::new(0);
+        let mut null_buf = MutableBuffer::try_with_capacity(bit_util::ceil(iter_size_hint, 8))
+            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+        let mut buffer = MutableBuffer::default();
 
         let mut prepend = 0;
         iter.try_for_each(|item| -> Result<(), ArrowError> {
             // extend null bitmask by one byte per each 8 items
             if byte == 0 {
-                null_buf.push(0u8);
+                null_buf
+                    .try_push(0u8)
+                    .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
                 byte = 8;
             }
             byte -= 1;
@@ -540,7 +555,10 @@ impl FixedSizeBinaryArray {
     ///
     /// # Errors
     ///
-    /// Returns error if argument has length zero, or sizes of nested slices don't match.
+    /// - `value_length` is negative
+    /// - A byte slice has a different length
+    /// - Size arithmetic overflows
+    /// - Buffer allocation fails
     pub fn try_from_sparse_iter_with_size<T, U>(
         mut iter: T,
         value_length: i32,
@@ -558,18 +576,22 @@ impl FixedSizeBinaryArray {
         let mut byte = 0;
 
         let iter_size_hint = iter.size_hint().0;
-        let mut null_buf = MutableBuffer::new(bit_util::ceil(iter_size_hint, 8));
+        let mut null_buf = MutableBuffer::try_with_capacity(bit_util::ceil(iter_size_hint, 8))
+            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
         let capacity = iter_size_hint.checked_mul(value_size).ok_or_else(|| {
             ArrowError::InvalidArgumentError(format!(
                 "FixedSizeBinaryArray error: value size {value_size} * len hint {iter_size_hint} exceeds usize"
             ))
         })?;
-        let mut buffer = MutableBuffer::new(capacity);
+        let mut buffer = MutableBuffer::try_with_capacity(capacity)
+            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
         iter.try_for_each(|item| -> Result<(), ArrowError> {
             // extend null bitmask by one byte per each 8 items
             if byte == 0 {
-                null_buf.push(0u8);
+                null_buf
+                    .try_push(0u8)
+                    .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
                 byte = 8;
             }
             byte -= 1;
@@ -585,9 +607,13 @@ impl FixedSizeBinaryArray {
                 }
 
                 bit_util::set_bit(null_buf.as_slice_mut(), len);
-                buffer.extend_from_slice(slice);
+                buffer
+                    .try_extend_from_slice(slice)
+                    .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
             } else {
-                buffer.extend_zeros(value_size);
+                buffer
+                    .try_extend_zeros(value_size)
+                    .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
             }
 
             len += 1;
@@ -622,7 +648,10 @@ impl FixedSizeBinaryArray {
     ///
     /// # Errors
     ///
-    /// Returns error if argument has length zero, or sizes of nested slices don't match.
+    /// - The iterator is empty
+    /// - The byte slices have different lengths
+    /// - The value length exceeds `i32`
+    /// - Buffer allocation fails
     pub fn try_from_iter<T, U>(mut iter: T) -> Result<Self, ArrowError>
     where
         T: Iterator<Item = U>,
@@ -631,7 +660,7 @@ impl FixedSizeBinaryArray {
         let mut len = 0;
         let mut value_size = None;
         let iter_size_hint = iter.size_hint().0;
-        let mut buffer = MutableBuffer::new(0);
+        let mut buffer = MutableBuffer::default();
 
         iter.try_for_each(|item| -> Result<(), ArrowError> {
             let slice = item.as_ref();
@@ -812,8 +841,8 @@ impl<const N: usize> TryFrom<Vec<&[u8; N]>> for FixedSizeBinaryArray {
 impl std::fmt::Debug for FixedSizeBinaryArray {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "FixedSizeBinaryArray<{}>\n[\n", self.value_length())?;
-        print_long_array(self, f, |array, index, f| {
-            std::fmt::Debug::fmt(&array.value(index), f)
+        print_long_array(self, f, &mut |index, f| {
+            std::fmt::Debug::fmt(&self.value(index), f)
         })?;
         write!(f, "]")
     }
@@ -823,6 +852,10 @@ impl std::fmt::Debug for FixedSizeBinaryArray {
 unsafe impl Array for FixedSizeBinaryArray {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn to_arc(&self) -> ArrayRef {
+        Arc::new(self.clone())
     }
 
     fn to_data(&self) -> ArrayData {
@@ -1029,6 +1062,9 @@ mod tests {
     }
 
     #[test]
+    // Under force_validate `build_unchecked` panics on the invalid child data
+    // before we reach the `FixedSizeBinaryArray::from` path we want to test.
+    #[cfg(not(feature = "force_validate"))]
     #[should_panic(expected = "The child array cannot contain null values.")]
     fn test_fixed_size_binary_array_from_fixed_size_list_array_with_child_nulls_failed() {
         let values = [0_u8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
@@ -1334,5 +1370,21 @@ mod tests {
             err.to_string(),
             "Invalid argument error: Buffer cannot have non-zero length if the value length is zero"
         );
+    }
+
+    #[test]
+    fn test_try_new_strips_trailing_bytes() {
+        let buffer = Buffer::from_vec(vec![1_u8, 2, 3, 4, 5, 6, 7, 8, 9, 99]);
+
+        let arr = FixedSizeBinaryArray::new(3, buffer.clone(), None);
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr.value_data(), &[1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        assert_eq!(arr.values().len(), 9);
+
+        let arr_with_len = FixedSizeBinaryArray::try_new_with_len(3, buffer, None, 3).unwrap();
+        assert_eq!(arr_with_len.value_data(), &[1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        assert_eq!(arr_with_len.values().len(), 9);
+        assert_eq!(arr_with_len.to_data().buffers()[0].len(), 9);
+        assert_eq!(arr_with_len.into_parts().1.len(), 9);
     }
 }

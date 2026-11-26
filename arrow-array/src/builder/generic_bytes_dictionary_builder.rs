@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::builder::{ArrayBuilder, GenericByteBuilder, PrimitiveBuilder};
 use crate::types::{ArrowDictionaryKeyType, ByteArrayType, GenericBinaryType, GenericStringType};
@@ -21,7 +8,7 @@ use crate::{
     Array, ArrayRef, DictionaryArray, GenericByteArray, PrimitiveArray, TypedDictionaryArray,
 };
 use arrow_buffer::ArrowNativeType;
-use arrow_schema::{ArrowError, DataType};
+use arrow_schema::ArrowError;
 use hashbrown::HashTable;
 use num_traits::NumCast;
 use std::any::Any;
@@ -214,9 +201,13 @@ where
         Ok(Self {
             state,
             dedup,
-            keys_builder: new_keys
-                .into_builder()
-                .expect("underlying buffer has no references"),
+            keys_builder: new_keys.into_builder().map_err(|_| {
+                ArrowError::ComputeError(
+                    "Internal Error: the keys just derived from the source builder are \
+                     unexpectedly shared, so they cannot be reused as a builder"
+                        .to_string(),
+                )
+            })?,
             values_builder,
         })
     }
@@ -497,15 +488,9 @@ where
         let values = self.values_builder.finish();
         let keys = self.keys_builder.finish();
 
-        let data_type = DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(T::DATA_TYPE));
-
-        let builder = keys
-            .into_data()
-            .into_builder()
-            .data_type(data_type)
-            .child_data(vec![values.into_data()]);
-
-        DictionaryArray::from(unsafe { builder.build_unchecked() })
+        // SAFETY: keys and values were produced by this builder; the builder
+        // only appends keys that index into the values it has built so far.
+        unsafe { DictionaryArray::new_unchecked(keys, Arc::new(values)) }
     }
 
     /// Builds the `DictionaryArray` without resetting the builder.
@@ -513,15 +498,9 @@ where
         let values = self.values_builder.finish_cloned();
         let keys = self.keys_builder.finish_cloned();
 
-        let data_type = DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(T::DATA_TYPE));
-
-        let builder = keys
-            .into_data()
-            .into_builder()
-            .data_type(data_type)
-            .child_data(vec![values.into_data()]);
-
-        DictionaryArray::from(unsafe { builder.build_unchecked() })
+        // SAFETY: keys and values were produced by this builder; the builder
+        // only appends keys that index into the values it has built so far.
+        unsafe { DictionaryArray::new_unchecked(keys, Arc::new(values)) }
     }
 
     /// Builds the `DictionaryArray` without resetting the values builder or
@@ -545,15 +524,9 @@ where
         let values = self.values_builder.finish_cloned();
         let keys = self.keys_builder.finish();
 
-        let data_type = DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(T::DATA_TYPE));
-
-        let builder = keys
-            .into_data()
-            .into_builder()
-            .data_type(data_type)
-            .child_data(vec![values.into_data()]);
-
-        DictionaryArray::from(unsafe { builder.build_unchecked() })
+        // SAFETY: keys and values were produced by this builder; the builder
+        // only appends keys that index into the values it has built so far.
+        unsafe { DictionaryArray::new_unchecked(keys, Arc::new(values)) }
     }
 
     /// Returns the current null buffer as a slice
@@ -703,6 +676,7 @@ mod tests {
         BinaryType, Int8Type, Int16Type, Int32Type, UInt8Type, UInt16Type, Utf8Type,
     };
     use crate::{ArrowPrimitiveType, BinaryArray, StringArray};
+    use arrow_schema::DataType;
 
     fn test_bytes_dictionary_builder<T>(values: Vec<&T::Native>)
     where

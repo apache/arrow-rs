@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::io::Write;
 use std::marker::PhantomData;
@@ -44,11 +31,11 @@ fn invalid_hex_error_at(index: usize, byte: u8) -> ArrowError {
 
 fn decode_hex_to_writer<W: Write>(hex_string: &str, writer: &mut W) -> Result<(), ArrowError> {
     let bytes = hex_string.as_bytes();
-    let mut iter = bytes.chunks_exact(2);
+    let (iter, remainder) = bytes.as_chunks::<2>();
     let mut buffer = [0u8; 64];
     let mut buffered = 0;
 
-    for (pair_index, pair) in (&mut iter).enumerate() {
+    for (pair_index, pair) in iter.iter().enumerate() {
         let base = pair_index * 2;
         let high = decode_hex_digit(pair[0]).ok_or_else(|| invalid_hex_error_at(base, pair[0]))?;
         let low =
@@ -64,7 +51,6 @@ fn decode_hex_to_writer<W: Write>(hex_string: &str, writer: &mut W) -> Result<()
         }
     }
 
-    let remainder = iter.remainder();
     if !remainder.is_empty() {
         let index = (bytes.len() / 2) * 2;
         let low = decode_hex_digit(remainder[0])

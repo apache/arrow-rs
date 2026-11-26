@@ -1,24 +1,9 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Common code used in the integration test binaries
 
-// The unused_crate_dependencies lint does not work well for crates defining additional examples/bin targets
-#![allow(unused_crate_dependencies)]
 #![warn(missing_docs)]
 use serde_json::Value;
 
@@ -58,22 +43,26 @@ pub struct ArrowFile {
 impl ArrowFile {
     /// Read a single [RecordBatch] from the file
     pub fn read_batch(&self, batch_num: usize) -> Result<RecordBatch> {
-        let b = self.arrow_json["batches"].get(batch_num).unwrap();
-        let json_batch: ArrowJsonBatch = serde_json::from_value(b.clone()).unwrap();
-        record_batch_from_json(&self.schema, json_batch, Some(&self.dictionaries))
+        let b = self.arrow_json["batches"].get(batch_num).ok_or_else(|| {
+            ArrowError::ParseError(format!("Arrow JSON has no batch {batch_num}"))
+        })?;
+        self.batch_from_json(b)
     }
 
     /// Read all [RecordBatch]es from the file
     pub fn read_batches(&self) -> Result<Vec<RecordBatch>> {
         self.arrow_json["batches"]
             .as_array()
-            .unwrap()
+            .ok_or_else(|| ArrowError::ParseError("Arrow JSON has no 'batches' array".to_string()))?
             .iter()
-            .map(|b| {
-                let json_batch: ArrowJsonBatch = serde_json::from_value(b.clone()).unwrap();
-                record_batch_from_json(&self.schema, json_batch, Some(&self.dictionaries))
-            })
+            .map(|b| self.batch_from_json(b))
             .collect()
+    }
+
+    fn batch_from_json(&self, batch: &Value) -> Result<RecordBatch> {
+        let json_batch: ArrowJsonBatch = serde_json::from_value(batch.clone())
+            .map_err(|err| ArrowError::ParseError(format!("Invalid Arrow JSON batch: {err}")))?;
+        record_batch_from_json(&self.schema, json_batch, Some(&self.dictionaries))
     }
 }
 
@@ -122,17 +111,20 @@ pub fn canonicalize_schema(schema: &Schema) -> Schema {
 pub fn open_json_file(json_name: &str) -> Result<ArrowFile> {
     let json_file = File::open(json_name)?;
     let reader = BufReader::new(json_file);
-    let arrow_json: Value = serde_json::from_reader(reader).unwrap();
+    let arrow_json: Value = serde_json::from_reader(reader)
+        .map_err(|err| ArrowError::ParseError(format!("Invalid Arrow JSON: {err}")))?;
     let schema = schema_from_json(&arrow_json["schema"])?;
     // read dictionaries
     let mut dictionaries = HashMap::new();
     if let Some(dicts) = arrow_json.get("dictionaries") {
-        for d in dicts
-            .as_array()
-            .expect("Unable to get dictionaries as array")
-        {
+        let dicts = dicts.as_array().ok_or_else(|| {
+            ArrowError::ParseError("Arrow JSON 'dictionaries' is not an array".to_string())
+        })?;
+        for d in dicts {
             let json_dict: ArrowJsonDictionaryBatch =
-                serde_json::from_value(d.clone()).expect("Unable to get dictionary from JSON");
+                serde_json::from_value(d.clone()).map_err(|err| {
+                    ArrowError::ParseError(format!("Invalid Arrow JSON dictionary: {err}"))
+                })?;
             // TODO: convert to a concrete Arrow type
             dictionaries.insert(json_dict.id, json_dict);
         }

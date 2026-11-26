@@ -1,19 +1,7 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
 use crate::ShortString;
 use crate::utils::{
     array_from_slice, overflow_error, slice_from_slice_at_offset, string_from_slice,
@@ -152,16 +140,6 @@ impl OffsetSizeBytes {
     /// Return one unsigned little-endian value from `bytes`.
     ///
     /// * `bytes` – the byte buffer to index
-    /// * `index` – 0-based index into the buffer
-    ///
-    /// Each value is `self as u32` bytes wide (1, 2, 3 or 4), zero-extended to 32 bits as needed.
-    pub(crate) fn unpack_u32(&self, bytes: &[u8], index: usize) -> Result<u32, ArrowError> {
-        self.unpack_u32_at_offset(bytes, 0, index)
-    }
-
-    /// Return one unsigned little-endian value from `bytes`.
-    ///
-    /// * `bytes` – the byte buffer to index
     /// * `byte_offset` – number of bytes to skip **before** reading the first
     ///   value (e.g. `1` to move past a header byte).
     /// * `offset_index` – 0-based index **after** the skipped bytes
@@ -169,7 +147,7 @@ impl OffsetSizeBytes {
     ///
     /// Each value is `self as u32` bytes wide (1, 2, 3 or 4), zero-extended to 32 bits as needed.
     pub(crate) fn unpack_u32_at_offset(
-        &self,
+        self,
         bytes: &[u8],
         byte_offset: usize,  // how many bytes to skip
         offset_index: usize, // which offset in an array of offsets
@@ -177,9 +155,9 @@ impl OffsetSizeBytes {
         use OffsetSizeBytes::*;
 
         // Index into the byte array:
-        // byte_offset + (*self as usize) * offset_index
+        // byte_offset + (self as usize) * offset_index
         let offset = offset_index
-            .checked_mul(*self as usize)
+            .checked_mul(self as usize)
             .and_then(|n| n.checked_add(byte_offset))
             .ok_or_else(|| overflow_error("unpacking offset array value"))?;
         let value = match self {
@@ -278,8 +256,14 @@ pub(crate) fn decode_double(data: &[u8]) -> Result<f64, ArrowError> {
 /// Decodes a Date from the value section of a variant.
 pub(crate) fn decode_date(data: &[u8]) -> Result<NaiveDate, ArrowError> {
     let days_since_epoch = i32::from_le_bytes(array_from_slice(data, 0)?);
-    let value = DateTime::UNIX_EPOCH + Duration::days(i64::from(days_since_epoch));
-    Ok(value.date_naive())
+    DateTime::UNIX_EPOCH
+        .checked_add_signed(Duration::days(i64::from(days_since_epoch)))
+        .map(|value| value.date_naive())
+        .ok_or_else(|| {
+            ArrowError::CastError(format!(
+                "Could not cast `{days_since_epoch}` days into a NaiveDate"
+            ))
+        })
 }
 
 /// Decodes a TimestampMicros from the value section of a variant.
@@ -338,8 +322,8 @@ pub(crate) fn decode_timestampntz_nanos(data: &[u8]) -> Result<NaiveDateTime, Ar
 
 /// Decodes a UUID from the value section of a variant.
 pub(crate) fn decode_uuid(data: &[u8]) -> Result<Uuid, ArrowError> {
-    Uuid::from_slice(&data[0..16])
-        .map_err(|_| ArrowError::CastError(format!("Cant decode uuid from {:?}", &data[0..16])))
+    let bytes: [u8; 16] = array_from_slice(data, 0)?;
+    Ok(Uuid::from_bytes(bytes))
 }
 
 /// Decodes a Binary from the value section of a variant.
@@ -439,6 +423,7 @@ mod tests {
         );
     }
 
+    #[expect(clippy::float_cmp_const)]
     mod float {
         use super::*;
 
@@ -466,6 +451,15 @@ mod tests {
             decode_date,
             NaiveDate::from_ymd_opt(2025, 4, 16).unwrap()
         );
+
+        #[test]
+        fn test_date_out_of_range() {
+            // A day count that overflows chrono's supported date range must error, not panic
+            for days in [i32::MAX, i32::MIN] {
+                let result = decode_date(&days.to_le_bytes());
+                assert!(matches!(result, Err(ArrowError::CastError(_))));
+            }
+        }
 
         test_decoder_bounds!(
             test_timestamp_micros,
@@ -531,18 +525,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_uuid() {
-        let data = [
+    test_decoder_bounds!(
+        test_uuid,
+        [
             0xf2, 0x4f, 0x9b, 0x64, 0x81, 0xfa, 0x49, 0xd1, 0xb7, 0x4e, 0x8c, 0x09, 0xa6, 0xe3,
             0x1c, 0x56,
-        ];
-        let result = decode_uuid(&data).unwrap();
-        assert_eq!(
-            Uuid::parse_str("f24f9b64-81fa-49d1-b74e-8c09a6e31c56").unwrap(),
-            result
-        );
-    }
+        ],
+        decode_uuid,
+        Uuid::parse_str("f24f9b64-81fa-49d1-b74e-8c09a6e31c56").unwrap()
+    );
 
     mod time {
         use super::*;
@@ -595,7 +586,7 @@ mod tests {
 
     #[test]
     fn test_short_string_truncated_length() {
-        let data = b"Hel";
+        let data = b"Abc";
         let result = decode_short_string(1 | (5 << 2), data);
         assert!(matches!(result, Err(ArrowError::InvalidArgumentError(_))));
     }
@@ -636,39 +627,61 @@ mod tests {
     fn unpack_u32_all_widths() {
         // One-byte offsets
         let buf_one = [0x01u8, 0xAB, 0xCD];
-        assert_eq!(OffsetSizeBytes::One.unpack_u32(&buf_one, 0).unwrap(), 0x01);
-        assert_eq!(OffsetSizeBytes::One.unpack_u32(&buf_one, 2).unwrap(), 0xCD);
+        assert_eq!(
+            OffsetSizeBytes::One
+                .unpack_u32_at_offset(&buf_one, 0, 0)
+                .unwrap(),
+            0x01
+        );
+        assert_eq!(
+            OffsetSizeBytes::One
+                .unpack_u32_at_offset(&buf_one, 0, 2)
+                .unwrap(),
+            0xCD
+        );
 
         // Two-byte offsets (little-endian 0x1234, 0x5678)
         let buf_two = [0x34, 0x12, 0x78, 0x56];
         assert_eq!(
-            OffsetSizeBytes::Two.unpack_u32(&buf_two, 0).unwrap(),
+            OffsetSizeBytes::Two
+                .unpack_u32_at_offset(&buf_two, 0, 0)
+                .unwrap(),
             0x1234
         );
         assert_eq!(
-            OffsetSizeBytes::Two.unpack_u32(&buf_two, 1).unwrap(),
+            OffsetSizeBytes::Two
+                .unpack_u32_at_offset(&buf_two, 0, 1)
+                .unwrap(),
             0x5678
         );
 
         // Three-byte offsets (0x030201 and 0x0000FF)
         let buf_three = [0x01, 0x02, 0x03, 0xFF, 0x00, 0x00];
         assert_eq!(
-            OffsetSizeBytes::Three.unpack_u32(&buf_three, 0).unwrap(),
+            OffsetSizeBytes::Three
+                .unpack_u32_at_offset(&buf_three, 0, 0)
+                .unwrap(),
             0x030201
         );
         assert_eq!(
-            OffsetSizeBytes::Three.unpack_u32(&buf_three, 1).unwrap(),
+            OffsetSizeBytes::Three
+                .unpack_u32_at_offset(&buf_three, 0, 1)
+                .unwrap(),
             0x0000FF
         );
 
         // Four-byte offsets (0x12345678, 0x90ABCDEF)
         let buf_four = [0x78, 0x56, 0x34, 0x12, 0xEF, 0xCD, 0xAB, 0x90];
         assert_eq!(
-            OffsetSizeBytes::Four.unpack_u32(&buf_four, 0).unwrap(),
+            OffsetSizeBytes::Four
+                .unpack_u32_at_offset(&buf_four, 0, 0)
+                .unwrap(),
             0x1234_5678
         );
         assert_eq!(
-            OffsetSizeBytes::Four.unpack_u32(&buf_four, 1).unwrap(),
+            OffsetSizeBytes::Four
+                .unpack_u32_at_offset(&buf_four, 0, 1)
+                .unwrap(),
             0x90AB_CDEF
         );
     }
@@ -676,8 +689,16 @@ mod tests {
     #[test]
     fn unpack_u32_out_of_bounds() {
         let tiny = [0x00u8]; // deliberately too short
-        assert!(OffsetSizeBytes::Two.unpack_u32(&tiny, 0).is_err());
-        assert!(OffsetSizeBytes::Three.unpack_u32(&tiny, 0).is_err());
+        assert!(
+            OffsetSizeBytes::Two
+                .unpack_u32_at_offset(&tiny, 0, 0)
+                .is_err()
+        );
+        assert!(
+            OffsetSizeBytes::Three
+                .unpack_u32_at_offset(&tiny, 0, 0)
+                .is_err()
+        );
     }
 
     #[test]

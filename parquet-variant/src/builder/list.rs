@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::{
     BASIC_TYPE_BITS, BuilderSpecificState, ParentState, ValueBuilder, Variant, VariantBuilderExt,
@@ -205,6 +192,13 @@ impl<S: BuilderSpecificState> VariantBuilderExt for ListBuilder<'_, S> {
     }
     fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>) {
         self.append_value(value);
+    }
+
+    fn try_append_value<'m, 'v>(
+        &mut self,
+        value: impl Into<Variant<'m, 'v>>,
+    ) -> Result<(), ArrowError> {
+        self.try_append_value(value)
     }
 
     fn try_new_list(&mut self) -> Result<ListBuilder<'_, Self::State<'_>>, ArrowError> {
@@ -679,8 +673,8 @@ mod tests {
                 }
 
                 {
-                    // the seconde object builder here wants to cover the logic for
-                    // list builder resue the parent buffer.
+                    // the second object builder here wants to cover the logic for
+                    // list builder reuse the parent buffer.
                     let mut inner_object_builder = inner_list_builder.new_object();
                     inner_object_builder.insert("c", "d");
                     inner_object_builder.insert("d", "e");

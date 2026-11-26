@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::cast::*;
 
@@ -25,9 +12,7 @@ pub(crate) fn cast_map_values(
     to_ordered: bool,
 ) -> Result<ArrayRef, ArrowError> {
     let DataType::Map(entries_field, _) = to_data_type else {
-        return Err(ArrowError::CastError(
-            "Internal Error: to_data_type is not a map type.".to_string(),
-        ));
+        unreachable!("cast_with_options only calls cast_map_values for Map target types");
     };
 
     let key_field = key_field(entries_field).ok_or(ArrowError::CastError(
@@ -37,16 +22,22 @@ pub(crate) fn cast_map_values(
         "map is missing value field".to_string(),
     ))?;
 
-    let key_array = cast_with_options(from.keys(), key_field.data_type(), cast_options)?;
-    let value_array = cast_with_options(from.values(), value_field.data_type(), cast_options)?;
+    let offsets = from.offsets();
+    let first = offsets.first();
+    // Only the entries that the offsets refer to, which excludes entries outside a slice
+    let entries = from
+        .entries()
+        .slice(first.as_usize(), (offsets.last() - first).as_usize());
+    let key_array = cast_with_options(entries.column(0), key_field.data_type(), cast_options)?;
+    let value_array = cast_with_options(entries.column(1), value_field.data_type(), cast_options)?;
 
     Ok(Arc::new(MapArray::try_new(
         entries_field.clone(),
-        from.offsets().clone(),
+        offsets.clone().subtract(first),
         StructArray::try_new(
             Fields::from(vec![key_field, value_field]),
             vec![key_array, value_array],
-            from.entries().nulls().cloned(),
+            entries.nulls().cloned(),
         )?,
         from.nulls().cloned(),
         to_ordered,

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::errors::AvroError;
 use crate::reader::async_reader::AsyncFileReader;
@@ -23,7 +10,6 @@ use futures::{FutureExt, TryFutureExt};
 use object_store::ObjectStore;
 use object_store::ObjectStoreExt;
 use object_store::path::Path;
-use std::error::Error;
 use std::ops::Range;
 use std::sync::Arc;
 use tokio::runtime::Handle;
@@ -76,7 +62,7 @@ impl AvroObjectReader {
             + Send
             + 'static,
         O: Send + 'static,
-        E: Error + Send + 'static,
+        E: Into<AvroError> + Send + 'static,
     {
         match &self.runtime {
             Some(handle) => {
@@ -89,13 +75,11 @@ impl AvroObjectReader {
                             Err(e) => Err(AvroError::External(Box::new(e))),
                             Ok(p) => std::panic::resume_unwind(p),
                         },
-                        |res| res.map_err(|e| AvroError::General(e.to_string())),
+                        |res| res.map_err(Into::into),
                     )
                     .boxed()
             }
-            None => f(&self.store, &self.path)
-                .map_err(|e| AvroError::General(e.to_string()))
-                .boxed(),
+            None => f(&self.store, &self.path).map_err(Into::into).boxed(),
         }
     }
 }
@@ -114,5 +98,53 @@ impl AsyncFileReader for AvroObjectReader {
         Self: Send,
     {
         self.spawn(|store, path| async move { store.get_ranges(path, &ranges).await }.boxed())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use object_store::memory::InMemory;
+
+    fn find_object_store_error(err: &AvroError) -> Option<&object_store::Error> {
+        let mut source: Option<&(dyn std::error::Error + 'static)> = Some(err);
+        while let Some(e) = source {
+            if let Some(os) = e.downcast_ref::<object_store::Error>() {
+                return Some(os);
+            }
+            source = e.source();
+        }
+        None
+    }
+
+    #[tokio::test]
+    async fn test_get_bytes_preserves_object_store_error_source() {
+        let store = Arc::new(InMemory::new());
+        #[expect(deprecated)]
+        let mut reader = AvroObjectReader::new(store, Path::from("missing.avro"));
+        let err = reader.get_bytes(0..10).await.unwrap_err();
+        assert!(
+            matches!(
+                find_object_store_error(&err),
+                Some(object_store::Error::NotFound { .. })
+            ),
+            "expected NotFound in source chain, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_bytes_on_runtime_preserves_object_store_error_source() {
+        let store = Arc::new(InMemory::new());
+        #[expect(deprecated)]
+        let mut reader = AvroObjectReader::new(store, Path::from("missing.avro"))
+            .with_runtime(Handle::current());
+        let err = reader.get_bytes(0..10).await.unwrap_err();
+        assert!(
+            matches!(
+                find_object_store_error(&err),
+                Some(object_store::Error::NotFound { .. })
+            ),
+            "expected NotFound in source chain, got: {err}"
+        );
     }
 }

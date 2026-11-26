@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! This module provides implementations and traits for building [`GeospatialStatistics`]
 
@@ -116,6 +103,13 @@ pub trait GeoStatsAccumulator: Send {
 pub struct DefaultGeoStatsAccumulatorFactory {}
 
 impl GeoStatsAccumulatorFactory for DefaultGeoStatsAccumulatorFactory {
+    #[cfg_attr(
+        feature = "geospatial",
+        expect(
+            clippy::used_underscore_binding,
+            reason = "`_descr` is only read when the `geospatial` feature is on"
+        )
+    )]
     fn new_accumulator(&self, _descr: &ColumnDescPtr) -> Box<dyn GeoStatsAccumulator> {
         #[cfg(feature = "geospatial")]
         if let Some(crate::basic::LogicalType::Geometry { .. }) = _descr.logical_type_ref() {
@@ -281,7 +275,7 @@ mod test {
         assert!(!accumulator.is_valid());
         assert!(accumulator.finish().is_none());
 
-        // Check that we return None if the type is not geometry or goegraphy
+        // Check that we return None if the type is not geometry or geography
         let parquet_type = Type::primitive_type_builder("geom", crate::basic::Type::BYTE_ARRAY)
             .build()
             .unwrap();

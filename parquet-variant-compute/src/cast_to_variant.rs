@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::arrow_to_variant::make_arrow_to_variant_row_builder;
 use crate::{VariantArray, VariantArrayBuilder};
@@ -58,15 +45,15 @@ pub fn cast_to_variant_with_options(
     input: &dyn Array,
     options: &CastOptions,
 ) -> Result<VariantArray, ArrowError> {
+    // Build before the all-null fast path so unsupported types fail regardless of contents.
+    let mut row_builder = make_arrow_to_variant_row_builder(input.data_type(), input, options)?;
+
     // Fast path: any all-null input maps to an all-null VariantArray.
     if input.null_count() == input.len() {
         let mut array_builder = VariantArrayBuilder::new(input.len());
         array_builder.append_nulls(input.len());
         return Ok(array_builder.build());
     }
-
-    // Create row builder for the input array type
-    let mut row_builder = make_arrow_to_variant_row_builder(input.data_type(), input, options)?;
 
     // Create output array builder
     let mut array_builder = VariantArrayBuilder::new(input.len());
@@ -109,7 +96,7 @@ mod tests {
         StructArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
         Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
         TimestampNanosecondArray, TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array,
-        UInt64Array, UnionArray,
+        UInt64Array, UnionArray, new_empty_array, new_null_array,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow::datatypes::{
@@ -120,7 +107,7 @@ mod tests {
     use arrow_schema::{
         DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION, DECIMAL128_MAX_PRECISION,
     };
-    use arrow_schema::{DataType, Field, Fields, UnionFields};
+    use arrow_schema::{DataType, Field, Fields, UnionFields, UnionMode};
     use chrono::{DateTime, NaiveDate, NaiveTime};
     use half::f16;
     use parquet_variant::{
@@ -1059,7 +1046,7 @@ mod tests {
             vec![Some(1), Some(1001), Some(123_456_789_012), None].into();
         run_test(
             Arc::new(array),
-            // as we can only present with micro second, so the nano second will round donw to 0
+            // as we can only present with micro second, so the nano second will round down to 0
             vec![
                 Some(Variant::Time(
                     NaiveTime::from_num_seconds_from_midnight_opt(0, 0).unwrap(),
@@ -1140,19 +1127,57 @@ mod tests {
         ];
 
         for array in arrays {
-            let result = cast_to_variant(array.as_ref());
-            assert!(result.is_err());
-            match result.unwrap_err() {
-                ArrowError::InvalidArgumentError(msg) => {
-                    assert!(
-                        msg.contains("Casting duration/interval types to Variant is not supported")
-                    );
-                    assert!(
-                        msg.contains("The Variant format does not define duration/interval types")
-                    );
-                }
-                _ => panic!("Expected InvalidArgumentError"),
+            let data_type = array.data_type().clone();
+            let field = Field::new("value", data_type.clone(), true);
+            let union_fields = UnionFields::from_fields(vec![
+                Field::new("int", DataType::Int32, true),
+                field.clone(),
+            ]);
+            let mut cases: Vec<ArrayRef> = vec![array.into()];
+            for data_type in [
+                DataType::new_list(data_type.clone(), true),
+                DataType::Struct(Fields::from(vec![field])),
+                // new_null_array points every union row at the first (Int32) child
+                DataType::Union(union_fields, UnionMode::Sparse),
+                data_type,
+            ] {
+                cases.push(new_empty_array(&data_type));
+                cases.push(new_null_array(&data_type, 2));
             }
+
+            for array in cases {
+                let result = cast_to_variant(array.as_ref());
+                assert!(
+                    result.is_err(),
+                    "{} with {} rows",
+                    array.data_type(),
+                    array.len()
+                );
+                match result.unwrap_err() {
+                    ArrowError::InvalidArgumentError(msg) => {
+                        assert!(msg.contains(
+                            "Casting duration/interval types to Variant is not supported"
+                        ));
+                        assert!(msg.contains(
+                            "The Variant format does not define duration/interval types"
+                        ));
+                    }
+                    _ => panic!("Expected InvalidArgumentError"),
+                }
+            }
+        }
+
+        let union_fields = UnionFields::from_fields(vec![
+            Field::new("int", DataType::Int32, true),
+            Field::new("string", DataType::Utf8, true),
+        ]);
+        for data_type in [
+            DataType::Int64,
+            DataType::new_list(DataType::Int64, true),
+            DataType::Union(union_fields, UnionMode::Sparse),
+        ] {
+            run_test(new_empty_array(&data_type), vec![]);
+            run_test(new_null_array(&data_type, 2), vec![None, None]);
         }
     }
 

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arbitrary::{Arbitrary, Unstructured};
 use arrow_json::ReaderBuilder;
@@ -22,6 +9,8 @@ use arrow_schema::{DataType, Field, Schema};
 use criterion::{
     BenchmarkId, Criterion, SamplingMode, Throughput, criterion_group, criterion_main,
 };
+use rand::rngs::StdRng;
+use rand::{RngExt, SeedableRng};
 use serde::Serialize;
 use serde_json::{Map, Number, Value};
 use std::fmt::Write;
@@ -405,6 +394,28 @@ fn bench_serialize_map(c: &mut Criterion) {
     bench_serialize_values(c, "decode_map_large_serialize", &large_values, schema);
 }
 
+fn build_decimal_json(rows: usize) -> Vec<u8> {
+    // Builds newline-delimited JSON objects with a single number field of
+    // seven integer and two fractional digits, e.g. {"d":8402913.57}
+    let mut rng = StdRng::seed_from_u64(42);
+    let mut out = String::with_capacity(rows * 18);
+    for _ in 0..rows {
+        let value: u32 = rng.random_range(100_000_000..1_000_000_000);
+        writeln!(&mut out, "{{\"d\":{}.{:02}}}", value / 100, value % 100).unwrap();
+    }
+    out.into_bytes()
+}
+
+fn bench_decode_decimal(c: &mut Criterion) {
+    let data = build_decimal_json(ROWS);
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "d",
+        DataType::Decimal128(10, 2),
+        false,
+    )]));
+    bench_decode_schema(c, "decode_decimal128_json", &data, schema);
+}
+
 fn build_ree_json(rows: usize, run_length: usize) -> Vec<u8> {
     let mut out = String::with_capacity(rows * 24);
     for row in 0..rows {
@@ -427,8 +438,16 @@ fn build_ree_values(rows: usize, run_length: usize) -> Vec<Value> {
 
 fn build_ree_schema() -> Arc<Schema> {
     let ree_type = DataType::RunEndEncoded(
-        Arc::new(Field::new("run_ends", DataType::Int32, false)),
-        Arc::new(Field::new("values", DataType::Int64, true)),
+        Arc::new(Field::new(
+            Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+            DataType::Int32,
+            false,
+        )),
+        Arc::new(Field::new(
+            Field::REE_VALUES_FIELD_DEFAULT_NAME,
+            DataType::Int64,
+            true,
+        )),
     );
     Arc::new(Schema::new(vec![Field::new("val", ree_type, false)]))
 }
@@ -539,6 +558,7 @@ criterion_group!(
     bench_serialize_map,
     bench_decode_ree,
     bench_serialize_ree,
+    bench_decode_decimal,
     bench_schema_inference
 );
 criterion_main!(benches);

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Transfer data between the Arrow memory format and JSON line-delimited records.
 //!
@@ -29,11 +16,13 @@
 //! Note that `Base16` only has 50% space efficiency (i.e., the encoded data is twice as large
 //! as the original). If that is an issue, there are two alternatives:
 //!
-//! 1. Provide a custom encoder. See the [Customizing the encoder] section of the writer documentation.
+//! 1. Provide a custom encoder and/or decoder. See the [Customizing the encoder] section of the
+//!    writer documentation and the [Customizing the decoder] section of the reader documentation.
 //! 2. Convert binary data to/from a different encoding format such as `Base64` before
 //!    writing / after reading, as shown in the following example.
 //!
 //! [Customizing the encoder]: writer#customizing-the-encoder
+//! [Customizing the decoder]: reader#customizing-the-decoder
 //!
 //! ## `Base64` Encoding Example
 //!
@@ -79,6 +68,13 @@
 //! [hexadecimal]: https://en.wikipedia.org/wiki/Hexadecimal
 //! [`Base16` encoding]: https://en.wikipedia.org/wiki/Base16#Base16
 //! [`Base64`]: https://en.wikipedia.org/wiki/Base64
+//!
+//! # Platform Support
+//!
+//! Only little-endian platforms are officially supported and tested in CI.
+//! Big-endian platforms are not tested in CI and may not work correctly.
+//! Fixes for big-endian platforms are welcome and handled on a best-effort basis,
+//! but compatibility is not guaranteed.
 
 #![doc(
     html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
@@ -91,7 +87,9 @@
 pub mod reader;
 pub mod writer;
 
-pub use self::reader::{Reader, ReaderBuilder};
+pub use self::reader::{
+    ArrayDecoder, DecoderContext, DecoderFactory, Reader, ReaderBuilder, Tape, TapeElement,
+};
 pub use self::writer::{
     ArrayWriter, Encoder, EncoderFactory, EncoderOptions, LineDelimitedWriter, Writer,
     WriterBuilder,
@@ -287,7 +285,7 @@ mod tests {
         assert!(str::from_utf8(not_utf8).is_err());
 
         let values: &[Option<&[u8]>] = &[
-            Some(b"Ned Flanders" as &[u8]),
+            Some(b"Bob Thompson" as &[u8]),
             None,
             Some(b"Troy McClure" as &[u8]),
             Some(not_utf8),

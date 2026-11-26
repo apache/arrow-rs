@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::fmt;
 use std::hash::Hash;
@@ -23,7 +10,46 @@ use crate::error::ArrowError;
 use crate::field::Field;
 use crate::{DataType, FieldRef, Fields, Metadata};
 
-/// A builder to facilitate building a [`Schema`] from iteratively from [`FieldRef`]
+/// A builder to facilitate building a [`Schema`] iteratively from [`FieldRef`]
+///
+/// # Examples
+///
+/// Build a schema from scratch:
+///
+/// ```
+/// # use arrow_schema::*;
+/// let schema = {
+///     let mut builder = SchemaBuilder::new();
+///     builder.push(Field::new("id", DataType::Int64, false));
+///     builder.push(Field::new("name", DataType::Utf8, true));
+///     builder.finish()
+/// };
+/// assert_eq!(schema.fields().len(), 2);
+/// ```
+///
+/// Derive a new schema from an existing one, keeping all fields and metadata
+/// while appending new columns:
+///
+/// ```
+/// # use arrow_schema::*;
+/// let base = Schema::new_with_metadata(
+///     vec![
+///         Field::new("id", DataType::Int64, false),
+///         Field::new("name", DataType::Utf8, true),
+///     ],
+///     [("created_by", "myapp")],
+/// );
+///
+/// // Build a new schema that extends `base` with an extra field.
+/// let mut builder = SchemaBuilder::from(&base); // copies all fields *and* metadata.
+/// builder.push(Field::new("score", DataType::Float64, true));
+/// let extended = builder.finish();
+///
+/// assert_eq!(extended.fields().len(), 3);
+/// assert_eq!(extended.field(0).name(), "id");     // original fields preserved
+/// assert_eq!(extended.field(2).name(), "score");  // new field appended
+/// assert_eq!(extended.metadata()["created_by"], "myapp"); // metadata carried over
+/// ```
 #[derive(Debug, Default)]
 pub struct SchemaBuilder {
     fields: Vec<FieldRef>,
@@ -69,6 +95,25 @@ impl SchemaBuilder {
 
     /// Returns a mutable reference to the [`FieldRef`] at index `idx`
     ///
+    /// # Example
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow_schema::*;
+    /// let original = Schema::new(vec![
+    ///     Field::new("id", DataType::Int32, false),
+    ///     Field::new("value", DataType::Utf8, true),
+    /// ]);
+    ///
+    /// let mut builder = SchemaBuilder::from(&original);
+    /// // Widen the "id" column from Int32 to Int64
+    /// *builder.field_mut(0) = Arc::new(Field::new("id", DataType::Int64, false));
+    /// let widened = builder.finish();
+    ///
+    /// assert_eq!(widened.field(0).data_type(), &DataType::Int64);
+    /// assert_eq!(widened.field(1).name(), "value"); // unchanged
+    /// ```
+    ///
     /// # Panics
     ///
     /// Panics if index out of bounds
@@ -86,7 +131,7 @@ impl SchemaBuilder {
         &mut self.metadata
     }
 
-    /// Reverse the fileds
+    /// Reverse the fields
     pub fn reverse(&mut self) {
         self.fields.reverse();
     }
@@ -118,6 +163,72 @@ impl SchemaBuilder {
             fields: self.fields.into(),
             metadata: self.metadata,
         }
+    }
+
+    /// Consume this [`SchemaBuilder`] yielding a [`Schema`] with fields reordered
+    /// or subsetted according to `indices`.
+    ///
+    /// Fields appear in the output in the order given by `indices`. Metadata is
+    /// carried over from the builder unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any index is out of bounds or if any index is repeated.
+    ///
+    /// # Example: reorder fields
+    ///
+    /// ```
+    /// # use arrow_schema::*;
+    /// let schema = Schema::new(vec![
+    ///     Field::new("id", DataType::Int64, false),
+    ///     Field::new("name", DataType::Utf8, true),
+    ///     Field::new("score", DataType::Float64, true),
+    /// ]);
+    ///
+    /// let reordered = SchemaBuilder::from(&schema).project(&[2, 0, 1]).unwrap();
+    /// assert_eq!(reordered.field(0).name(), "score");
+    /// assert_eq!(reordered.field(1).name(), "id");
+    /// assert_eq!(reordered.field(2).name(), "name");
+    /// ```
+    ///
+    /// # Example: select a subset of fields
+    ///
+    /// ```
+    /// # use arrow_schema::*;
+    /// let schema = Schema::new(vec![
+    ///     Field::new("id", DataType::Int64, false),
+    ///     Field::new("name", DataType::Utf8, true),
+    ///     Field::new("score", DataType::Float64, true),
+    /// ]);
+    ///
+    /// let subset = SchemaBuilder::from(&schema).project(&[0, 2]).unwrap();
+    /// assert_eq!(subset.fields().len(), 2);
+    /// assert_eq!(subset.field(0).name(), "id");
+    /// assert_eq!(subset.field(1).name(), "score");
+    /// ```
+    pub fn project(self, indices: &[usize]) -> Result<Schema, ArrowError> {
+        let num_fields = self.fields.len();
+        let mut seen = std::collections::HashSet::new();
+        for &idx in indices {
+            if idx >= num_fields {
+                return Err(ArrowError::SchemaError(format!(
+                    "project index {idx} out of bounds, schema has {num_fields} fields"
+                )));
+            }
+            if !seen.insert(idx) {
+                return Err(ArrowError::SchemaError(format!(
+                    "project index {idx} is repeated"
+                )));
+            }
+        }
+        let fields: Vec<FieldRef> = indices
+            .iter()
+            .map(|&idx| self.fields[idx].clone())
+            .collect();
+        Ok(Schema {
+            fields: fields.into(),
+            metadata: self.metadata,
+        })
     }
 }
 
@@ -408,7 +519,7 @@ impl Schema {
     /// Normalize a [`Schema`] into a flat table.
     ///
     /// Nested [`Field`]s will generate names separated by `separator`, up to a depth of `max_level`
-    /// (unlimited if `None`).
+    /// (unlimited if `None`). Flattened fields inherit nullability from their expanded ancestors.
     ///
     /// e.g. given a [`Schema`]:
     ///
@@ -453,18 +564,19 @@ impl Schema {
             0 => usize::MAX,
             val => val,
         };
-        let mut stack: Vec<(usize, Vec<&str>, &FieldRef)> = self
+        let mut stack: Vec<(usize, Vec<&str>, &FieldRef, bool)> = self
             .fields()
             .iter()
             .rev()
             .map(|f| {
                 let name_vec: Vec<&str> = vec![f.name()];
-                (0, name_vec, f)
+                (0, name_vec, f, false)
             })
             .collect();
         let mut fields: Vec<FieldRef> = Vec::new();
 
-        while let Some((depth, name, field_ref)) = stack.pop() {
+        while let Some((depth, name, field_ref, parent_nullable)) = stack.pop() {
+            let nullable = parent_nullable || field_ref.is_nullable();
             match field_ref.data_type() {
                 DataType::Struct(ff) if depth < max_level => {
                     // Need to zip these in reverse to maintain original order
@@ -472,15 +584,12 @@ impl Schema {
                         let mut name = name.clone();
                         name.push(separator);
                         name.push(fff.name());
-                        stack.push((depth + 1, name, fff))
+                        stack.push((depth + 1, name, fff, nullable))
                     }
                 }
                 _ => {
-                    let updated_field = Field::new(
-                        name.concat(),
-                        field_ref.data_type().clone(),
-                        field_ref.is_nullable(),
-                    );
+                    let updated_field =
+                        Field::new(name.concat(), field_ref.data_type().clone(), nullable);
                     fields.push(Arc::new(updated_field));
                 }
             }
@@ -798,6 +907,46 @@ mod tests {
     }
 
     #[test]
+    fn normalize_inherits_parent_nullability() {
+        for parent_nullable in [false, true] {
+            for middle_nullable in [false, true] {
+                for child_nullable in [false, true] {
+                    for data_type in [DataType::Int32, DataType::new_list(DataType::Int32, false)] {
+                        let child = Field::new("child", data_type.clone(), child_nullable);
+                        let middle =
+                            Field::new_struct("middle", vec![child.clone()], middle_nullable);
+                        let sibling = Field::new("sibling", DataType::Int32, false);
+                        let schema = Schema::new(vec![
+                            Field::new_struct("parent", vec![middle], parent_nullable),
+                            sibling.clone(),
+                        ]);
+                        for max_level in [None, Some(0), Some(1), Some(2)] {
+                            let expected_field = if max_level == Some(1) {
+                                Field::new_struct(
+                                    "parent.middle",
+                                    vec![child.clone()],
+                                    parent_nullable || middle_nullable,
+                                )
+                            } else {
+                                Field::new(
+                                    "parent.middle.child",
+                                    data_type.clone(),
+                                    parent_nullable || middle_nullable || child_nullable,
+                                )
+                            };
+                            assert_eq!(
+                                schema.normalize(".", max_level).unwrap(),
+                                Schema::new(vec![expected_field, sibling.clone()]),
+                                "parent_nullable={parent_nullable}, middle_nullable={middle_nullable}, child_nullable={child_nullable}, max_level={max_level:?}, data_type={data_type:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn normalize_nested() {
         let a = Arc::new(Field::new("a", DataType::Utf8, true));
         let b = Arc::new(Field::new("b", DataType::Int64, false));
@@ -833,7 +982,7 @@ mod tests {
             Field::new("!.1.b", DataType::Int64, false),
             Field::new("!.1.c", DataType::Int64, true),
             Field::new("!.2.d", DataType::Utf8, true),
-            Field::new("!.2.e", DataType::Int64, false),
+            Field::new("!.2.e", DataType::Int64, true),
             Field::new("!.2.f", DataType::Int64, true),
         ]);
 
@@ -889,7 +1038,7 @@ mod tests {
         // List shouldn't be affected
         let expected = Schema::new(vec![
             Field::new("!.1.a", DataType::Utf8, true),
-            Field::new("!.1.b", DataType::Int64, false),
+            Field::new("!.1.b", DataType::Int64, true),
             Field::new("!.1.c", DataType::Int64, true),
             Field::new(
                 "!.2",
@@ -935,7 +1084,7 @@ mod tests {
         // FixedSizeList shouldn't be affected
         let expected = Schema::new(vec![
             Field::new("!.1.a", DataType::Utf8, true),
-            Field::new("!.1.b", DataType::Int64, false),
+            Field::new("!.1.b", DataType::Int64, true),
             Field::new("!.1.c", DataType::Int64, true),
             Field::new(
                 "!.2",
@@ -988,7 +1137,7 @@ mod tests {
         // LargeList shouldn't be affected
         let expected = Schema::new(vec![
             Field::new("!.1.a", DataType::Utf8, true),
-            Field::new("!.1.b", DataType::Int64, false),
+            Field::new("!.1.b", DataType::Int64, true),
             Field::new("!.1.c", DataType::Int64, true),
             Field::new(
                 "!.2",
@@ -1354,6 +1503,27 @@ mod tests {
             ),]),
         );
 
+        // union members with the same type id must be the same field
+        let res = Schema::try_merge(vec![
+            Schema::new(vec![Field::new_union(
+                "c1",
+                vec![0],
+                vec![Field::new("c11", DataType::Utf8, true)],
+                UnionMode::Dense,
+            )]),
+            Schema::new(vec![Field::new_union(
+                "c1",
+                vec![0],
+                vec![Field::new("c12", DataType::Int64, true)],
+                UnionMode::Dense,
+            )]),
+        ])
+        .unwrap_err();
+        assert_eq!(
+            res.to_string(),
+            "Schema error: Fail to merge schema field 'c12' because type id 0 is already used by field 'c11'"
+        );
+
         // incompatible field should throw error
         assert!(
             Schema::try_merge(vec![
@@ -1428,5 +1598,57 @@ mod tests {
         assert_eq!(out.metadata.len(), 2);
         assert_eq!(out.metadata["k"], "v");
         assert_eq!(out.metadata["key"], "value");
+    }
+
+    #[test]
+    fn test_schema_builder_project() {
+        let schema = Schema::new_with_metadata(
+            vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Utf8, true),
+                Field::new("c", DataType::Float64, true),
+                Field::new("d", DataType::Boolean, false),
+            ],
+            [("meta", "data")],
+        );
+
+        // Reorder: reverse field order, keeping all fields.
+        let reordered = SchemaBuilder::from(&schema).project(&[3, 2, 1, 0]).unwrap();
+        assert_eq!(reordered.fields().len(), 4);
+        assert_eq!(reordered.field(0).name(), "d");
+        assert_eq!(reordered.field(1).name(), "c");
+        assert_eq!(reordered.field(2).name(), "b");
+        assert_eq!(reordered.field(3).name(), "a");
+        assert_eq!(reordered.metadata()["meta"], "data"); // metadata carried over
+
+        // Subset: keep only the two middle fields.
+        let subset = SchemaBuilder::from(&schema).project(&[1, 2]).unwrap();
+        assert_eq!(subset.fields().len(), 2);
+        assert_eq!(subset.field(0).name(), "b");
+        assert_eq!(subset.field(1).name(), "c");
+    }
+
+    #[test]
+    fn test_schema_builder_project_errors() {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, true),
+        ]);
+
+        // Out of bounds.
+        let err = SchemaBuilder::from(&schema).project(&[0, 5]).unwrap_err();
+        assert!(
+            err.to_string().contains("out of bounds"),
+            "unexpected error: {err}"
+        );
+
+        // Repeated index.
+        let err = SchemaBuilder::from(&schema)
+            .project(&[0, 1, 0])
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("repeated"),
+            "unexpected error: {err}"
+        );
     }
 }

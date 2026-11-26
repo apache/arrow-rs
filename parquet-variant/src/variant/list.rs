@@ -1,24 +1,12 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
 use crate::decoder::{OffsetSizeBytes, map_bytes_to_offsets};
 use crate::utils::{
     first_byte_from_slice, overflow_error, slice_from_slice, slice_from_slice_at_offset,
 };
-use crate::variant::{Variant, VariantMetadata};
+use crate::variant::{MAX_NESTING_DEPTH, Variant, VariantMetadata};
 
 use arrow_schema::ArrowError;
 
@@ -124,7 +112,7 @@ pub struct VariantList<'m, 'v> {
     header: VariantListHeader,
     num_elements: u32,
     first_value_byte: u32,
-    validated: bool,
+    pub(super) validated: bool,
 }
 
 // We don't want this to grow because it could increase the size of `Variant` and hurt performance.
@@ -157,7 +145,7 @@ impl<'m, 'v> VariantList<'m, 'v> {
         Self::try_new_with_shallow_validation(metadata, value).expect("Invalid variant list value")
     }
 
-    /// Attempts to interpet `metadata` and `value` as a variant array, performing only basic
+    /// Attempts to interpret `metadata` and `value` as a variant array, performing only basic
     /// (constant-cost) [validation].
     ///
     /// [validation]: Self#Validation
@@ -216,9 +204,25 @@ impl<'m, 'v> VariantList<'m, 'v> {
 
     /// Performs a full [validation] of this variant array and returns the result.
     ///
+    /// Values nested more than [`MAX_NESTING_DEPTH`] deep are rejected.
+    ///
     /// [validation]: Self#Validation
-    pub fn with_full_validation(mut self) -> Result<Self, ArrowError> {
+    pub fn with_full_validation(self) -> Result<Self, ArrowError> {
+        self.with_full_validation_at_depth(0)
+    }
+
+    // Same as [`Self::with_full_validation`], tracking how deeply validation has recursed.
+    pub(crate) fn with_full_validation_at_depth(
+        mut self,
+        depth: usize,
+    ) -> Result<Self, ArrowError> {
         if !self.validated {
+            if depth >= MAX_NESTING_DEPTH {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Variant nesting depth exceeds the maximum of {MAX_NESTING_DEPTH}"
+                )));
+            }
+
             // Validate the metadata dictionary first, if not already validated, because we pass it
             // by value to all the children (who would otherwise re-validate it repeatedly).
             self.metadata = self.metadata.with_full_validation()?;
@@ -239,7 +243,11 @@ impl<'m, 'v> VariantList<'m, 'v> {
 
             for next_offset in offset_iter {
                 let value_bytes = slice_from_slice(value_buffer, current_offset..next_offset)?;
-                Variant::try_new_with_metadata(self.metadata.clone(), value_bytes)?;
+                Variant::try_new_with_metadata_at_depth(
+                    self.metadata.clone(),
+                    value_bytes,
+                    depth + 1,
+                )?;
                 current_offset = next_offset;
             }
 
@@ -286,6 +294,7 @@ impl<'m, 'v> VariantList<'m, 'v> {
         let value_bytes =
             slice_from_slice_at_offset(self.value, self.first_value_byte as _, byte_range)?;
         Variant::try_new_with_metadata_and_shallow_validation(self.metadata.clone(), value_bytes)
+            .map(|child| child.inherit_validation(self.validated))
     }
 
     /// Iterates over the values of this list. When working with [unvalidated] input, consider
@@ -319,7 +328,9 @@ impl<'m, 'v> VariantList<'m, 'v> {
     fn get_offset(&self, index: usize) -> Result<u32, ArrowError> {
         let byte_range = self.header.first_offset_byte() as _..self.first_value_byte as _;
         let offset_bytes = slice_from_slice(self.value, byte_range)?;
-        self.header.offset_size.unpack_u32(offset_bytes, index)
+        self.header
+            .offset_size
+            .unpack_u32_at_offset(offset_bytes, 0, index)
     }
 }
 
@@ -742,6 +753,36 @@ mod tests {
         assert_eq!(object.get("list1").unwrap(), object.get("list2").unwrap());
         // Check that list1 and list3 are not equal
         assert_ne!(object.get("list1").unwrap(), object.get("list3").unwrap());
+    }
+
+    /// return the value bytes for `depth` single-element lists nested around a null
+    fn make_nested_lists(depth: usize) -> Vec<u8> {
+        let mut value = vec![0u8]; // null primitive
+        for _ in 0..depth {
+            // header: array basic type, 4-byte offsets, then num_elements=1 and two offsets
+            let mut outer = vec![0x0F, 1];
+            outer.extend_from_slice(&0u32.to_le_bytes());
+            outer.extend_from_slice(&(value.len() as u32).to_le_bytes());
+            outer.append(&mut value);
+            value = outer;
+        }
+        value
+    }
+
+    #[test]
+    fn test_variant_list_nesting_depth_limit() {
+        let metadata = [0x01, 0, 0]; // empty dictionary
+
+        let value = make_nested_lists(MAX_NESTING_DEPTH);
+        Variant::try_new(&metadata, &value).unwrap();
+
+        // One level deeper would recurse past the limit -- previously a stack overflow
+        let value = make_nested_lists(MAX_NESTING_DEPTH + 1);
+        let err = Variant::try_new(&metadata, &value).unwrap_err();
+        assert!(
+            err.to_string().contains("nesting depth exceeds"),
+            "unexpected error: {err}"
+        );
     }
 
     /// return metadata/value for a simple variant list with values in a range

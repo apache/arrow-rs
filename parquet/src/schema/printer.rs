@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Parquet schema printer.
 //! Provides methods to print Parquet file schema and list file metadata.
@@ -337,6 +324,7 @@ fn print_logical_and_converted(
                     format!("GEOGRAPHY({algorithm})")
                 }
             }
+            LogicalType::File => "FILE".to_string(),
             LogicalType::Unknown => "UNKNOWN".to_string(),
             LogicalType::_Unknown { field_id } => format!("_Unknown({field_id})"),
         },
@@ -1172,5 +1160,44 @@ mod tests {
             .unwrap();
 
         assert_print_parse_message(message);
+    }
+
+    #[test]
+    fn test_print_file_type() {
+        let mut s = String::new();
+        {
+            let mut p = Printer::new(&mut s);
+            let uri_field = Arc::new(
+                Type::primitive_type_builder("uri", PhysicalType::BYTE_ARRAY)
+                    .with_repetition(Repetition::OPTIONAL)
+                    .with_logical_type(Some(LogicalType::String))
+                    .build()
+                    .unwrap(),
+            );
+            let size_field = Arc::new(
+                Type::primitive_type_builder("size", PhysicalType::INT64)
+                    .with_repetition(Repetition::OPTIONAL)
+                    .build()
+                    .unwrap(),
+            );
+            let file_field = Type::group_type_builder("f")
+                .with_repetition(Repetition::REQUIRED)
+                .with_logical_type(Some(LogicalType::File))
+                .with_fields(vec![uri_field, size_field])
+                .build()
+                .unwrap();
+            let message = Type::group_type_builder("schema")
+                .with_fields(vec![Arc::new(file_field)])
+                .build()
+                .unwrap();
+            p.print(&message);
+        }
+        let expected = "message schema {
+  REQUIRED group f (FILE) {
+    OPTIONAL BYTE_ARRAY uri (STRING);
+    OPTIONAL INT64 size;
+  }
+}";
+        assert_eq!(&mut s, expected);
     }
 }

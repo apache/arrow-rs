@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Shared-prefix scanning for `DELTA_BYTE_ARRAY`.
 
@@ -40,7 +27,12 @@ pub(crate) fn common_prefix_length(a: &[u8], b: &[u8]) -> usize {
     let (a, b) = (&a[..n], &b[..n]);
 
     let mut matched = 0;
-    for (x, y) in a.chunks_exact(BLOCK).zip(b.chunks_exact(BLOCK)) {
+    for (x, y) in a
+        .as_chunks::<BLOCK>()
+        .0
+        .iter()
+        .zip(b.as_chunks::<BLOCK>().0)
+    {
         if x != y {
             break;
         }
@@ -83,6 +75,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_common_prefix_length_around_block_boundaries() {
         // Mismatches placed on, either side of, and well past the 32-byte
         // block boundary the scan steps in.
@@ -105,6 +98,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_common_prefix_length_unequal_lengths() {
         // Result is capped by the shorter value even when the longer one
         // continues to match, across block boundaries.

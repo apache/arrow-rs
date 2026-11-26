@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Common Avro errors and macros.
 
@@ -60,6 +47,8 @@ pub enum AvroError {
     /// Returned when a function needs more data to complete properly.
     /// The `Range<u64>` indicates the range of bytes that are needed.
     NeedMoreDataRange(std::ops::Range<u64>),
+    /// Returned when an unframed datum cannot be decoded until the current batch is flushed.
+    BatchFull,
 }
 
 impl std::fmt::Display for AvroError {
@@ -84,6 +73,9 @@ impl std::fmt::Display for AvroError {
             AvroError::NeedMoreData(needed) => write!(fmt, "NeedMoreData: {needed}"),
             AvroError::NeedMoreDataRange(range) => {
                 write!(fmt, "NeedMoreDataRange: {}..{}", range.start, range.end)
+            }
+            AvroError::BatchFull => {
+                write!(fmt, "Batch is full; flush before decoding another datum")
             }
         }
     }
@@ -127,6 +119,13 @@ impl From<FromUtf8Error> for AvroError {
 impl From<ArrowError> for AvroError {
     fn from(e: ArrowError) -> Self {
         AvroError::ArrowError(Box::new(e))
+    }
+}
+
+#[cfg(feature = "object_store")]
+impl From<object_store::Error> for AvroError {
+    fn from(e: object_store::Error) -> AvroError {
+        AvroError::External(Box::new(e))
     }
 }
 

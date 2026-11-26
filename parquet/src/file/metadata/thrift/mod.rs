@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! This module is the bridge between a Parquet file's thrift encoded metadata
 //! and this crate's [Parquet metadata API]. It contains objects and functions used
@@ -42,16 +29,16 @@ use crate::{
     errors::{ParquetError, Result},
     file::{
         metadata::{
-            ColumnChunkMetaData, ColumnChunkMetaDataBuilder, KeyValue, LevelHistogram,
-            PageEncodingStats, ParquetMetaData, ParquetMetaDataOptions, ParquetPageEncodingStats,
-            RowGroupMetaData, RowGroupMetaDataBuilder, SortingColumn,
+            ColumnChunkMetaData, ColumnChunkMetaDataBuilder, FileMetaData, KeyValue,
+            LevelHistogram, PageEncodingStats, ParquetMetaData, ParquetMetaDataOptions,
+            ParquetPageEncodingStats, RowGroupMetaData, RowGroupMetaDataBuilder, SortingColumn,
         },
         statistics::ValueStatistics,
     },
     parquet_thrift::{
         ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol,
         ThriftCompactOutputProtocol, ThriftSliceInputProtocol, WriteThrift, WriteThriftField,
-        read_thrift_vec, validate_list_type,
+        check_list_size, read_thrift_vec, validate_list_type,
     },
     schema::types::{
         ColumnDescriptor, SchemaDescriptor, TypePtr, num_nodes, parquet_schema_from_array,
@@ -546,7 +533,7 @@ fn read_column_metadata(
     Ok(seen_mask)
 }
 
-// using ThriftSliceInputProtocol rather than ThriftCompactInputProtocl trait because
+// using ThriftSliceInputProtocol rather than ThriftCompactInputProtocol trait because
 // these are all internal and operate on slices.
 fn read_column_chunk(
     prot: &mut ThriftSliceInputProtocol<'_>,
@@ -757,6 +744,14 @@ pub(crate) fn parquet_metadata_from_bytes(
     buf: &[u8],
     options: Option<&ParquetMetaDataOptions>,
 ) -> Result<ParquetMetaData> {
+    let (file_metadata, row_groups) = file_metadata_and_row_groups_from_bytes(buf, options)?;
+    Ok(ParquetMetaData::new(file_metadata, row_groups))
+}
+
+pub(crate) fn file_metadata_and_row_groups_from_bytes(
+    buf: &[u8],
+    options: Option<&ParquetMetaDataOptions>,
+) -> Result<(FileMetaData, Vec<RowGroupMetaData>)> {
     let mut prot = ThriftSliceInputProtocol::new(buf);
 
     // begin reading the file metadata
@@ -820,7 +815,10 @@ pub(crate) fn parquet_metadata_from_bytes(
                 let list_ident = prot.read_list_begin()?;
                 // check for list of struct
                 validate_list_type(ElementType::Struct, &list_ident)?;
-                let mut rg_vec = Vec::with_capacity(list_ident.size as usize);
+                let size = list_ident.size as usize;
+                // Validate list size.
+                check_list_size(prot.remaining_bytes(), size)?;
+                let mut rg_vec = Vec::with_capacity(size);
 
                 for _ in 0..list_ident.size {
                     rg_vec.push(read_row_group(&mut prot, schema_descr, options)?);
@@ -896,7 +894,7 @@ pub(crate) fn parquet_metadata_from_bytes(
     });
 
     #[cfg(not(feature = "encryption"))]
-    let fmd = crate::file::metadata::FileMetaData::new(
+    let fmd = FileMetaData::new(
         version,
         num_rows,
         created_by,
@@ -905,7 +903,7 @@ pub(crate) fn parquet_metadata_from_bytes(
         column_orders,
     );
     #[cfg(feature = "encryption")]
-    let fmd = crate::file::metadata::FileMetaData::new(
+    let fmd = FileMetaData::new(
         version,
         num_rows,
         created_by,
@@ -916,7 +914,7 @@ pub(crate) fn parquet_metadata_from_bytes(
     .with_encryption_algorithm(encryption_algorithm)
     .with_footer_signing_key_metadata(footer_signing_key_metadata.map(|v| v.to_vec()));
 
-    Ok(ParquetMetaData::new(fmd, row_groups))
+    Ok((fmd, row_groups))
 }
 
 /// Ensure [`RowGroupMetaData::ordinal`] is usable after decode without
@@ -1178,7 +1176,7 @@ pub(crate) struct PageHeader {
   /// Compressed (and potentially encrypted) page size in bytes, not including this header
   3: required i32 compressed_page_size
 
-  /// The 32-bit CRC checksum for the page, to be be calculated as follows:
+  /// The 32-bit CRC checksum for the page, to be calculated as follows:
   4: optional i32 crc
 
   // Headers for page specific data.  One only will be set.
@@ -1399,7 +1397,7 @@ pub(super) fn serialize_column_meta_data<W: Write>(
 
 // temp struct used for writing
 pub(super) struct FileMeta<'a> {
-    pub(super) file_metadata: &'a crate::file::metadata::FileMetaData,
+    pub(super) file_metadata: &'a FileMetaData,
     pub(super) row_groups: &'a Vec<RowGroupMetaData>,
     // If true, then write the `path_in_schema` field in the ColumnMetaData struct.
     pub(super) write_path_in_schema: bool,
@@ -2093,6 +2091,64 @@ pub(crate) mod tests {
         assert_eq!(
             roundtrip_rg_ordinals(&[None, Some(1), Some(2)]),
             vec![None, Some(1), Some(2)],
+        );
+    }
+
+    #[test]
+    fn metadata_schema_huge_child_count_is_rejected() {
+        // File version 1, one schema element named "r" with i32::MAX children.
+        let data = [
+            0x15, 0x02, 0x19, 0x1c, 0x48, 0x01, 0x72, 0x15, 0xfe, 0xff, 0xff, 0xff, 0x0f, 0x00,
+        ];
+        let err = super::parquet_metadata_from_bytes(&data, None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("Schema children count 2147483647 exceeds remaining schema elements 0"),
+            "{err}"
+        );
+    }
+
+    /// Test row group on-wire size validation.
+    #[test]
+    fn row_group_count_exceeding_remaining_input_is_rejected() {
+        use crate::file::metadata::thrift::parquet_metadata_from_bytes;
+        use crate::parquet_thrift::{FieldType, WriteThriftField};
+        use crate::schema::types::Type as SchemaType;
+
+        // Minimal valid schema: a group with one INT32 column.
+        let field = SchemaType::primitive_type_builder("c", PhysicalType::INT32)
+            .build()
+            .unwrap();
+        let schema = SchemaType::group_type_builder("schema")
+            .with_fields(vec![Arc::new(field)])
+            .build()
+            .unwrap();
+        let root: TypePtr = Arc::new(schema);
+        let schema_len = num_nodes(&root).unwrap();
+
+        let mut buf = Vec::new();
+        let mut w = ThriftCompactOutputProtocol::new(&mut buf);
+        // FileMetaData field 1: version.
+        1i32.write_thrift_field(&mut w, 1, 0).unwrap();
+        // field 2: schema (required before row groups are read).
+        w.write_field_begin(FieldType::List, 2, 1).unwrap();
+        w.write_list_begin(ElementType::Struct, schema_len).unwrap();
+        write_schema(&root, &mut w).unwrap();
+        // field 3: num_rows.
+        0i64.write_thrift_field(&mut w, 3, 2).unwrap();
+        // field 4: row_groups, declaring 1024 structs with no element bytes
+        // after the header. Only the struct-stop byte remains.
+        w.write_field_begin(FieldType::List, 4, 3).unwrap();
+        w.write_list_begin(ElementType::Struct, 1024).unwrap();
+        w.write_struct_end().unwrap();
+
+        let err = parquet_metadata_from_bytes(&buf, None)
+            .expect_err("over-declared row-group count must be rejected")
+            .to_string();
+        assert!(
+            err.contains("exceeds remaining input length"),
+            "expected a remaining-input bound error, got: {err}"
         );
     }
 }

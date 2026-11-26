@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use syn::ext::IdentExt;
 
@@ -81,17 +68,21 @@ impl Field {
     ///
     /// Can only generate writers for basic structs, for example:
     ///
+    /// ```ignore
     /// struct Record {
     ///   a_bool: bool,
-    ///   maybe_a_bool: `Option<bool>`
+    ///   maybe_a_bool: Option<bool>
     /// }
+    /// ```
     ///
     /// but not
     ///
+    /// ```ignore
     /// struct UnsupportedNestedRecord {
     ///   a_property: bool,
     ///   nested_record: Record
     /// }
+    /// ```
     ///
     /// because this parsing logic is not sophisticated enough for definition
     /// levels beyond 2.
@@ -240,16 +231,20 @@ impl Field {
     ///
     /// Can only generate writers for basic structs, for example:
     ///
+    /// ```ignore
     /// struct Record {
     ///   a_bool: bool
     /// }
+    /// ```
     ///
     /// but not
     ///
+    /// ```ignore
     /// struct UnsupportedNestedRecord {
     ///   a_property: bool,
     ///   nested_record: Record
     /// }
+    /// ```
     ///
     /// because this parsing logic is not sophisticated enough for definition
     /// levels beyond 2.

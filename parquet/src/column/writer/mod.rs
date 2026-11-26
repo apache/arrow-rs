@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Contains column writer API.
 
@@ -45,15 +32,17 @@ use crate::file::metadata::{
     OffsetIndexBuilder, PageEncodingStats,
 };
 use crate::file::properties::{
-    EnabledStatistics, WriterProperties, WriterPropertiesPtr, WriterVersion,
+    EnabledStatistics, ResolvedColumnProperties, WriterProperties, WriterPropertiesPtr,
+    WriterVersion,
 };
 use crate::file::statistics::{Statistics, ValueStatistics};
 use crate::schema::types::{BasicTypeInfo, ColumnDescPtr, ColumnDescriptor};
 
 mod byte_budget_chunker;
 pub(crate) mod encoder;
+pub(crate) mod min_max;
 
-use byte_budget_chunker::ByteBudgetChunker;
+use byte_budget_chunker::{ByteBudgetChunker, SubBatchStrategy};
 
 macro_rules! downcast_writer {
     ($e:expr, $i:ident, $b:expr) => {
@@ -457,7 +446,10 @@ pub struct GenericColumnWriter<'a, E: ColumnValueEncoder> {
     // Column writer properties
     descr: ColumnDescPtr,
     props: WriterPropertiesPtr,
-    statistics_enabled: EnabledStatistics,
+    /// Per-column settings for [`Self::descr`], resolved once here so that the
+    /// per-batch and per-page write paths never search the per-column override
+    /// map in `props` again.
+    column_props: ResolvedColumnProperties,
 
     page_writer: Box<dyn PageWriter + 'a>,
     codec: Compression,
@@ -499,16 +491,15 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         props: WriterPropertiesPtr,
         page_writer: Box<dyn PageWriter + 'a>,
     ) -> Self {
-        let codec = props.compression(descr.path());
+        let column_props = props.resolve_column_properties(descr.path());
+        let codec = column_props.compression;
         let codec_options = CodecOptionsBuilder::default().build();
         let compressor = create_codec(codec, &codec_options).unwrap();
-        let encoder = E::try_new(&descr, props.as_ref()).unwrap();
+        let encoder = E::try_new(&descr, props.as_ref(), &column_props).unwrap();
 
-        let statistics_enabled = props.statistics_enabled(descr.path());
+        let statistics_enabled = column_props.statistics_enabled;
 
-        let mut encodings = BTreeSet::new();
-        // Used for level information
-        encodings.insert(Encoding::RLE);
+        let encodings = BTreeSet::new();
 
         let mut page_metrics = PageMetrics::new();
         let mut column_metrics = ColumnMetrics::<E::T>::new();
@@ -540,7 +531,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             rep_levels_encoder: Self::create_level_encoder(descr.max_rep_level(), &props),
             descr,
             props,
-            statistics_enabled,
+            column_props,
             page_writer,
             codec,
             compressor,
@@ -612,12 +603,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             update_max(&self.descr, max, &mut self.column_metrics.max_column_value);
         }
 
-        // We can only set the distinct count if there are no other writes
-        if self.encoder.num_values() == 0 {
-            self.column_metrics.column_distinct_count = distinct_count;
-        } else {
-            self.column_metrics.column_distinct_count = None;
-        }
+        // Encoder counts reset per page; row metrics retain column-wide history.
+        let has_prior_data = self.column_metrics.total_rows_written != 0
+            || self.page_metrics.num_buffered_values != 0;
+        self.column_metrics.column_distinct_count =
+            if has_prior_data { None } else { distinct_count };
 
         let mut values_offset = 0;
         let mut levels_offset = 0;
@@ -630,13 +620,21 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         // materialized slice to split and the per-mini-batch work is O(1), so we
         // can safely use a much larger batch size.
         let base_batch_size = if both_levels_compact && has_levels {
-            self.props.data_page_row_count_limit()
+            self.column_props.data_page_row_count_limit
         } else {
             self.props.write_batch_size()
         };
         debug_assert!(base_batch_size > 0);
 
-        let chunker = ByteBudgetChunker::new(&self.descr, &self.props, base_batch_size);
+        // The chunker looks ahead only at gathered values. See
+        // `ByteBudgetChunker::byte_budget_sub_batch`.
+        let max_value_bytes = value_indices.and_then(|_| E::max_value_bytes(values));
+        let chunker = ByteBudgetChunker::new(
+            &self.descr,
+            &self.column_props,
+            base_batch_size,
+            max_value_bytes,
+        );
         while levels_offset < num_levels {
             let mut end_offset = num_levels.min(levels_offset + base_batch_size);
 
@@ -655,9 +653,9 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             // mini-batch (the common case — small or fixed-width values, no
             // further page-size accounting needed), or must we fall back to
             // byte-budget-aware sub-batching to keep a page from overshooting
-            // `data_page_size_limit`? `pick_sub_batch_size` returns
-            // `chunk_size` for the former.
-            let sub_batch_size = chunker.pick_sub_batch_size(
+            // `data_page_size_limit`? `pick_sub_batch` returns `None` for
+            // the former, and otherwise how wide one mini-batch may be.
+            let sub_batch = chunker.pick_sub_batch(
                 &self.encoder,
                 values,
                 value_indices,
@@ -666,25 +664,28 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 chunk_size,
             );
 
-            if sub_batch_size >= chunk_size {
-                values_offset += self.write_mini_batch(
-                    values,
-                    values_offset,
-                    value_indices,
-                    chunk_size,
-                    chunk_def,
-                    chunk_rep,
-                )?;
-            } else {
-                values_offset += self.write_granular_chunk(
-                    values,
-                    values_offset,
-                    value_indices,
-                    chunk_size,
-                    chunk_def,
-                    chunk_rep,
-                    sub_batch_size,
-                )?;
+            match sub_batch {
+                None => {
+                    values_offset += self.write_mini_batch(
+                        values,
+                        values_offset,
+                        value_indices,
+                        chunk_size,
+                        chunk_def,
+                        chunk_rep,
+                    )?;
+                }
+                Some(sub_batch) => {
+                    values_offset += self.write_granular_chunk(
+                        values,
+                        values_offset,
+                        value_indices,
+                        chunk_size,
+                        chunk_def,
+                        chunk_rep,
+                        sub_batch,
+                    )?;
+                }
             }
             levels_offset = end_offset;
         }
@@ -811,12 +812,19 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         if self.page_metrics.num_buffered_values > 0 {
             self.add_data_page()?;
         }
-        if self.encoder.has_dictionary() {
+        if self.encoder.has_dictionary() && self.column_metrics.total_rows_written > 0 {
             self.write_dictionary_page()?;
         }
         self.flush_data_pages()?;
         let metadata = self.build_column_metadata()?;
         self.page_writer.close()?;
+
+        let write_bloom_filter = self.props.bloom_filter_for_dictionary_encoded_chunks()
+            || self.has_non_dictionary_data_page();
+        let bloom_filter = self
+            .encoder
+            .flush_bloom_filter()
+            .filter(|_| write_bloom_filter);
 
         let boundary_order = match (
             self.data_page_boundary_ascending,
@@ -840,20 +848,27 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         Ok(ColumnCloseResult {
             bytes_written: self.column_metrics.total_bytes_written,
             rows_written: self.column_metrics.total_rows_written,
-            bloom_filter: self.encoder.flush_bloom_filter(),
+            bloom_filter,
             metadata,
             column_index,
             offset_index,
         })
     }
 
-    /// Writes a chunk in `sub_batch_size`-level sub-batches, checking the
-    /// data page byte limit after each. This keeps the page size close to
+    /// Writes a chunk in sub-batches sized by `sub_batch`, checking the page
+    /// byte limit after each. This keeps the page size close to
     /// `data_page_size_limit` instead of overshooting it by a whole chunk.
     ///
-    /// For repeated/nested columns sub-batches step from one `rep == 0`
-    /// boundary to the next so a record never spans data pages, matching
-    /// the parquet format rule.
+    /// [`SubBatchStrategy::Values`] windows are cut on value boundaries,
+    /// walking definition levels to find where the value budget is used up;
+    /// [`SubBatchStrategy::Levels`] windows are a fixed level count, capped
+    /// at a maximum number of values. See
+    /// [`SubBatchStrategy`] for which budget gets which and why.
+    ///
+    /// For repeated/nested columns sub-batches then extend to the next
+    /// `rep == 0` boundary so a record never spans data pages, matching the
+    /// parquet format rule. A record holding several over-limit values
+    /// therefore still exceeds the budget; that is inherent to the format.
     ///
     /// Returns the total number of values consumed across all sub-batches.
     ///
@@ -870,30 +885,55 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         chunk_size: usize,
         chunk_def: LevelDataRef<'_>,
         chunk_rep: LevelDataRef<'_>,
-        sub_batch_size: usize,
+        sub_batch: SubBatchStrategy,
     ) -> Result<usize> {
-        // The chunker always sizes a sub-batch to at least one level, so each
+        // The chunker always sizes a sub-batch to at least one value or one
+        // level, and a value-exact window spans at least one level, so each
         // iteration below makes progress (`sub_end > sub_start`).
-        debug_assert!(sub_batch_size >= 1, "chunker must size at least one level");
+        debug_assert!(
+            matches!(
+                sub_batch,
+                SubBatchStrategy::Values(n) | SubBatchStrategy::Levels { levels: n, max_values: _ }
+                    if n >= 1
+            ),
+            "chunker must size at least one value or level"
+        );
+        let max_def_level = self.descr.max_def_level();
         let mut values_consumed = 0;
         let mut sub_start = 0;
         while sub_start < chunk_size {
+            let window_end = match sub_batch {
+                SubBatchStrategy::Values(n) => {
+                    Self::window_end_for_values(chunk_def, chunk_size, max_def_level, sub_start, n)
+                }
+                SubBatchStrategy::Levels { levels, max_values } => {
+                    // Cap the ratio-sized window at `max_values` values so
+                    // clustered values cannot pile into one window.
+                    let level_end = (sub_start + levels).min(chunk_size);
+                    Self::window_end_for_values(
+                        chunk_def,
+                        level_end,
+                        max_def_level,
+                        sub_start,
+                        max_values,
+                    )
+                }
+            };
             let sub_end = match chunk_rep {
                 LevelDataRef::Materialized(levels) => {
-                    // Pack up to `sub_batch_size` levels per mini-batch, then
-                    // extend to the next record boundary (rep == 0) so a
-                    // record never spans data pages. Packing whole records
-                    // rather than stepping one record at a time avoids
-                    // calling `write_mini_batch` per record: records average
-                    // only a handful of levels, so a record-at-a-time step
-                    // would issue many more mini-batches than necessary.
-                    let mut e = (sub_start + sub_batch_size).min(chunk_size);
+                    // Extend the window to the next record boundary
+                    // (rep == 0) so a record never spans data pages. Packing
+                    // whole records rather than stepping one record at a time
+                    // avoids calling `write_mini_batch` per record: records
+                    // average only a handful of levels, so a record-at-a-time
+                    // step would issue many more mini-batches than necessary.
+                    let mut e = window_end;
                     while e < chunk_size && levels[e] != 0 {
                         e += 1;
                     }
                     e
                 }
-                _ => (sub_start + sub_batch_size).min(chunk_size),
+                _ => window_end,
             };
             let sub_len = sub_end - sub_start;
             let written = self.write_mini_batch(
@@ -908,6 +948,66 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             sub_start = sub_end;
         }
         Ok(values_consumed)
+    }
+
+    fn has_non_dictionary_data_page(&self) -> bool {
+        self.encoding_stats.iter().any(|stats| {
+            matches!(
+                stats.page_type,
+                PageType::DATA_PAGE | PageType::DATA_PAGE_V2
+            ) && !matches!(
+                stats.encoding,
+                Encoding::PLAIN_DICTIONARY | Encoding::RLE_DICTIONARY
+            )
+        })
+    }
+
+    /// Index one past the last level of a sub-batch window that starts at
+    /// `start` and covers at most `max_values` values, clamped to
+    /// `chunk_size`.
+    ///
+    /// Nulls trailing the last value are left to the next window, so a window
+    /// ends immediately after the value that exhausts its budget. The window
+    /// always spans at least one level, so callers make progress: `start` is
+    /// below `chunk_size` and `max_values` is at least one.
+    ///
+    /// Only nullable and nested columns pay the level walk. It runs solely in
+    /// the granular path, whose values are by definition large enough to
+    /// overflow a page budget, so touching each of the chunk's levels once is
+    /// noise next to writing those values — and that path already makes full
+    /// def-level and rep-level passes.
+    fn window_end_for_values(
+        chunk_def: LevelDataRef<'_>,
+        chunk_size: usize,
+        max_def_level: i16,
+        start: usize,
+        max_values: usize,
+    ) -> usize {
+        match chunk_def {
+            // `max_def_level == 0`: every level is a value.
+            LevelDataRef::Absent => (start + max_values).min(chunk_size),
+            LevelDataRef::Uniform { value, .. } => {
+                if value == max_def_level {
+                    (start + max_values).min(chunk_size)
+                } else {
+                    // Uniformly below max def: the chunk holds no values at
+                    // all, so no window boundary can help. (The chunker
+                    // returns `None` for such a chunk, so this is defensive.)
+                    chunk_size
+                }
+            }
+            LevelDataRef::Materialized(levels) => {
+                let mut seen = 0;
+                let mut end = start;
+                while end < chunk_size && seen < max_values {
+                    if levels[end] == max_def_level {
+                        seen += 1;
+                    }
+                    end += 1;
+                }
+                end
+            }
+        }
     }
 
     /// Creates a new streaming level encoder appropriate for the writer version.
@@ -1033,9 +1133,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         }
 
         match value_indices {
-            Some(indices) => {
-                let indices = &indices[values_offset..values_offset + values_to_write];
-                self.encoder.write_gather(values, indices)?;
+            Some(all_indices) => {
+                let indices = &all_indices[values_offset..values_offset + values_to_write];
+                self.encoder
+                    .write_gather(values, indices, all_indices.len())?;
             }
             None => self.encoder.write(values, values_offset, values_to_write)?,
         }
@@ -1065,11 +1166,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     #[inline]
     fn should_dict_fallback(&self) -> bool {
         match self.encoder.estimated_dict_page_size() {
-            Some(size) => {
-                size >= self
-                    .props
-                    .column_dictionary_page_size_limit(self.descr.path())
-            }
+            Some(size) => size >= self.column_props.dictionary_page_size_limit,
             None => false,
         }
     }
@@ -1094,19 +1191,20 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     /// `PLAIN` and `DELTA_LENGTH_BYTE_ARRAY` keep their tighter one-value page
     /// bound.
     ///
-    /// Known limitation: the caller's trigger keys on a page-opening
-    /// mini-batch holding exactly one value. Nulls in a chunk make the
-    /// byte-budget chunker emit multi-level mini-batches, so on nullable
-    /// columns pages that open with a two-value mini-batch miss the
-    /// exemption and dedup is only partial; see
-    /// `test_column_writer_delta_byte_array_nullable_shared_prefix_partial_dedup`.
+    /// The caller's trigger keys on a page-opening mini-batch holding exactly
+    /// one value. `write_granular_chunk` cuts windows after an exact value
+    /// count, so an over-limit value gets a single-value mini-batch whether
+    /// or not the chunk contains nulls; see
+    /// `test_column_writer_delta_byte_array_nullable_shared_prefix_dedup`.
+    /// The exception is a repeated column, where a record holding several
+    /// over-limit values cannot be split across pages at all.
     #[cold]
     fn set_page_size_exemption(&mut self) {
         if !self.encoder.compresses_against_previous_value() {
             return;
         }
         let size = self.encoder.estimated_data_page_size();
-        if size >= self.props.column_data_page_size_limit(self.descr.path()) {
+        if size >= self.column_props.data_page_size_limit {
             self.page_metrics.page_size_exemption = size;
         }
     }
@@ -1122,12 +1220,12 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             return false;
         }
 
-        self.page_metrics.num_buffered_rows as usize >= self.props.data_page_row_count_limit()
+        self.page_metrics.num_buffered_rows as usize >= self.column_props.data_page_row_count_limit
             || self
                 .encoder
                 .estimated_data_page_size()
                 .saturating_sub(self.page_metrics.page_size_exemption)
-                >= self.props.column_data_page_size_limit(self.descr.path())
+                >= self.column_props.data_page_size_limit
     }
 
     /// Performs dictionary fallback.
@@ -1170,8 +1268,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         page_variable_length_bytes: Option<i64>,
     ) {
         // update the column index
+        // `num_page_nulls` counts levels, not rows, so compare it with the number of levels:
+        // with repetition a page can hold as many nulls as rows and still have values.
         let null_page =
-            (self.page_metrics.num_buffered_rows as u64) == self.page_metrics.num_page_nulls;
+            (self.page_metrics.num_buffered_values as u64) == self.page_metrics.num_page_nulls;
         // a page contains only null values,
         // and writers have to set the corresponding entries in min_values and max_values to byte[0]
         if null_page && self.column_index_builder.valid() {
@@ -1264,14 +1364,13 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             // from that of FIXED_LEN_BYTE_ARRAY sort order.
             // So truncation of those types could lead to inaccurate min/max statistics
             Type::FIXED_LEN_BYTE_ARRAY
-                if !matches!(
-                    self.descr.logical_type_ref(),
-                    Some(&LogicalType::Decimal { .. } | &LogicalType::Float16)
-                ) =>
+                if !is_decimal_descr(self.descr.get_basic_info())
+                    && !matches!(self.descr.logical_type_ref(), Some(&LogicalType::Float16)) =>
             {
                 true
             }
-            Type::BYTE_ARRAY => true,
+            // As with FIXED_LEN_BYTE_ARRAY, do not truncate Decimal values
+            Type::BYTE_ARRAY if !is_decimal_descr(self.descr.get_basic_info()) => true,
             // Truncation only applies for fba/binary physical types
             _ => false,
         }
@@ -1291,7 +1390,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     ///
     /// UTF-8 Note:
     /// If the column type indicates UTF-8, and `data` contains valid UTF-8, then the result will
-    /// also remain valid UTF-8, but may be less tnan `truncation_length` bytes to avoid splitting
+    /// also remain valid UTF-8, but may be less than `truncation_length` bytes to avoid splitting
     /// on non-character boundaries.
     fn truncate_min_value(&self, truncation_length: Option<usize>, data: &[u8]) -> (Vec<u8>, bool) {
         truncation_length
@@ -1343,61 +1442,67 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     }
 
     /// Truncate the min and max values that will be written to a data page
-    /// header or column chunk Statistics
+    /// header or column chunk Statistics.
+    ///
+    /// Binary statistics are always rebuilt from a copy of their bytes, even when they are not
+    /// truncated, so the returned [`Statistics`] never alias the buffers the values were written
+    /// from. Columns whose values must not be truncated (see [`Self::can_truncate_value`]) are
+    /// copied without being shortened.
     fn truncate_statistics(&self, statistics: Statistics) -> Statistics {
-        let backwards_compatible_min_max = self.descr.sort_order().is_signed();
+        let truncation_length = self
+            .can_truncate_value()
+            .then(|| self.props.statistics_truncate_length())
+            .flatten();
         match statistics {
             Statistics::ByteArray(stats) if stats._internal_has_min_max_set() => {
-                let (min, did_truncate_min) = self.truncate_min_value(
-                    self.props.statistics_truncate_length(),
-                    stats.min_bytes_opt().unwrap(),
-                );
-                let (max, did_truncate_max) = self.truncate_max_value(
-                    self.props.statistics_truncate_length(),
-                    stats.max_bytes_opt().unwrap(),
-                );
-                Statistics::ByteArray(
-                    ValueStatistics::new(
-                        Some(min.into()),
-                        Some(max.into()),
-                        stats.distinct_count(),
-                        stats.null_count_opt(),
-                        backwards_compatible_min_max,
-                    )
-                    .with_max_is_exact(!did_truncate_max)
-                    .with_min_is_exact(!did_truncate_min),
-                )
+                Statistics::ByteArray(self.copy_and_truncate_min_max(stats, truncation_length))
             }
-            Statistics::FixedLenByteArray(stats)
-                if (stats._internal_has_min_max_set() && self.can_truncate_value()) =>
-            {
-                let (min, did_truncate_min) = self.truncate_min_value(
-                    self.props.statistics_truncate_length(),
-                    stats.min_bytes_opt().unwrap(),
-                );
-                let (max, did_truncate_max) = self.truncate_max_value(
-                    self.props.statistics_truncate_length(),
-                    stats.max_bytes_opt().unwrap(),
-                );
+            Statistics::FixedLenByteArray(stats) if stats._internal_has_min_max_set() => {
                 Statistics::FixedLenByteArray(
-                    ValueStatistics::new(
-                        Some(min.into()),
-                        Some(max.into()),
-                        stats.distinct_count(),
-                        stats.null_count_opt(),
-                        backwards_compatible_min_max,
-                    )
-                    .with_max_is_exact(!did_truncate_max)
-                    .with_min_is_exact(!did_truncate_min),
+                    self.copy_and_truncate_min_max(stats, truncation_length),
                 )
             }
             stats => stats,
         }
     }
 
+    /// Returns `stats` with min and max copied into their own buffers, truncated to
+    /// `truncation_length` bytes if one is given. Every other field is kept as is.
+    ///
+    /// Values handed to [`Self::write_batch`] may be slices of a larger shared buffer (the Arrow
+    /// writer slices all `FixedLenByteArray` values of a batch out of one allocation), and the
+    /// running min/max are clones of those values. Copying here keeps the column chunk
+    /// statistics, which outlive the write, from pinning those buffers.
+    fn copy_and_truncate_min_max<T>(
+        &self,
+        stats: ValueStatistics<T>,
+        truncation_length: Option<usize>,
+    ) -> ValueStatistics<T>
+    where
+        T: ParquetValueType + From<Vec<u8>>,
+    {
+        let (min, did_truncate_min) =
+            self.truncate_min_value(truncation_length, stats.min_bytes_opt().unwrap());
+        let (max, did_truncate_max) =
+            self.truncate_max_value(truncation_length, stats.max_bytes_opt().unwrap());
+        let min_is_exact = stats.min_is_exact() && !did_truncate_min;
+        let max_is_exact = stats.max_is_exact() && !did_truncate_max;
+        stats
+            .with_min_max(Some(min.into()), Some(max.into()))
+            .with_min_is_exact(min_is_exact)
+            .with_max_is_exact(max_is_exact)
+    }
+
     /// Adds data page.
     /// Data page is either buffered in case of dictionary encoding or written directly.
+    ///
+    /// A call with nothing buffered is a no-op. Skip empty pages to preserve
+    /// strictly increasing first_row_index values in the OffsetIndex.
     pub(crate) fn add_data_page(&mut self) -> Result<()> {
+        if self.page_metrics.num_buffered_values == 0 {
+            return Ok(());
+        }
+
         // Extract encoded values
         let values_data = self.encoder.flush_data_page()?;
 
@@ -1417,7 +1522,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 update_min(&self.descr, &min, &mut self.column_metrics.min_column_value);
                 update_max(&self.descr, &max, &mut self.column_metrics.max_column_value);
 
-                (self.statistics_enabled == EnabledStatistics::Page).then_some(
+                (self.column_props.statistics_enabled == EnabledStatistics::Page).then_some(
                     ValueStatistics::new(
                         Some(min),
                         Some(max),
@@ -1445,7 +1550,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
         // From here on, we only need page statistics if they will be written to the page header.
         let page_statistics = page_statistics
-            .filter(|_| self.props.write_page_header_statistics(self.descr.path()))
+            .filter(|_| self.column_props.write_page_header_statistics)
             .map(|stats| self.truncate_statistics(Statistics::from(stats)));
 
         let compressed_page = match self.props.writer_version() {
@@ -1509,9 +1614,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                         let buffer_len = buffer.len();
                         cmpr.compress(&values_data.buf, &mut buffer)?;
                         let compressed_values_size = buffer.len() - buffer_len;
-                        let threshold = self
-                            .props
-                            .column_data_page_v2_compression_ratio_threshold(self.descr.path());
+                        let threshold = self.column_props.data_page_v2_compression_ratio_threshold;
                         if (compressed_values_size as f64) >= (uncompressed_size as f64) * threshold
                         {
                             buffer.truncate(buffer_len);
@@ -1599,7 +1702,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             .set_data_page_offset(data_page_offset)
             .set_dictionary_page_offset(dict_page_offset);
 
-        if self.statistics_enabled != EnabledStatistics::None {
+        if self.column_props.statistics_enabled != EnabledStatistics::None {
             let backwards_compatible_min_max = self.descr.sort_order().is_signed();
 
             let distinct_count = self
@@ -1643,6 +1746,9 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     #[inline]
     fn write_data_page(&mut self, page: CompressedPage) -> Result<()> {
         self.encodings.insert(page.encoding());
+        if self.descr.max_def_level() > 0 || self.descr.max_rep_level() > 0 {
+            self.encodings.insert(Encoding::RLE);
+        }
         match self.encoding_stats.last_mut() {
             Some(encoding_stats)
                 if encoding_stats.page_type == page.page_type()
@@ -1698,11 +1804,18 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         };
 
         self.encodings.insert(compressed_page.encoding());
-        self.encoding_stats.push(PageEncodingStats {
-            page_type: PageType::DICTIONARY_PAGE,
-            encoding: compressed_page.encoding(),
-            count: 1,
-        });
+        // The dictionary page is always laid out first in the column chunk,
+        // even when a page writer that defers dictionary ordering receives it
+        // after the data pages. Keep `encoding_stats` in file order, as some
+        // readers (e.g. Arrow C++) expect the dictionary page entry first.
+        self.encoding_stats.insert(
+            0,
+            PageEncodingStats {
+                page_type: PageType::DICTIONARY_PAGE,
+                encoding: compressed_page.encoding(),
+                count: 1,
+            },
+        );
         let page_spec = self.page_writer.write_page(compressed_page)?;
         self.update_metrics_for_page(page_spec);
         // For the directory page, don't need to update column/offset index.
@@ -1856,13 +1969,7 @@ fn compare_greater<T: ParquetValueType>(basic_type_info: &BasicTypeInfo, a: &T, 
         {
             return compare_greater_f16(a.as_bytes(), b.as_bytes());
         }
-        Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY
-            if matches!(basic_type_info.converted_type(), ConvertedType::DECIMAL)
-                || matches!(
-                    basic_type_info.logical_type_ref(),
-                    Some(LogicalType::Decimal(_))
-                ) =>
-        {
+        Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY if is_decimal_descr(basic_type_info) => {
             return compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
         }
 
@@ -1892,13 +1999,10 @@ fn fallback_encoding(kind: Type, props: &WriterProperties) -> Encoding {
 }
 
 /// Returns true if dictionary is supported for column writer, false otherwise.
-fn has_dictionary_support(kind: Type, props: &WriterProperties) -> bool {
-    match (kind, props.writer_version()) {
+fn has_dictionary_support(kind: Type) -> bool {
+    match kind {
         // Booleans do not support dict encoding and should use a fallback encoding.
-        (Type::BOOLEAN, _) => false,
-        // Dictionary encoding was not enabled in PARQUET 1.0
-        (Type::FIXED_LEN_BYTE_ARRAY, WriterVersion::PARQUET_1_0) => false,
-        (Type::FIXED_LEN_BYTE_ARRAY, WriterVersion::PARQUET_2_0) => true,
+        Type::BOOLEAN => false,
         _ => true,
     }
 }
@@ -1915,8 +2019,18 @@ fn compare_greater_f16(a: &[u8], b: &[u8]) -> bool {
     a.total_cmp(&b) == Ordering::Greater
 }
 
+/// Returns `true` if the column described by `basic_type_info` is a Decimal column
+#[inline]
+pub(crate) fn is_decimal_descr(basic_type_info: &BasicTypeInfo) -> bool {
+    basic_type_info.converted_type() == ConvertedType::DECIMAL
+        || matches!(
+            basic_type_info.logical_type_ref(),
+            Some(LogicalType::Decimal(_))
+        )
+}
+
 /// Signed comparison of bytes arrays
-fn compare_greater_byte_array_decimals(a: &[u8], b: &[u8]) -> bool {
+pub(crate) fn compare_greater_byte_array_decimals(a: &[u8], b: &[u8]) -> bool {
     let a_length = a.len();
     let b_length = b.len();
 
@@ -1935,10 +2049,11 @@ fn compare_greater_byte_array_decimals(a: &[u8], b: &[u8]) -> bool {
         return (first_a as i8) > (first_b as i8);
     }
 
-    // When the lengths are unequal and the numbers are of the same
-    // sign we need to do comparison by sign extending the shorter
-    // value first, and once we get to equal sized arrays, lexicographical
-    // unsigned comparison of everything but the first byte is sufficient.
+    // When the lengths are unequal and the numbers are of the same sign,
+    // sign-extend the shorter value: if any of the longer value's extra
+    // leading bytes differs from the sign-extension byte it has the larger
+    // magnitude, and otherwise those bytes are redundant and the aligned
+    // equal-length tails decide via unsigned lexicographical comparison.
 
     let extension: u8 = if (first_a as i8) < 0 { 0xFF } else { 0 };
 
@@ -1958,7 +2073,8 @@ fn compare_greater_byte_array_decimals(a: &[u8], b: &[u8]) -> bool {
         }
     }
 
-    (a[1..]) > (b[1..])
+    let tail_length = a_length.min(b_length);
+    (a[a_length - tail_length..]) > (b[b_length - tail_length..])
 }
 
 /// Truncate a UTF-8 slice to the longest prefix that is still a valid UTF-8 string,
@@ -2153,10 +2269,32 @@ mod tests {
         let metadata = r.metadata;
         assert_eq!(
             metadata.encodings().collect::<Vec<_>>(),
-            vec![Encoding::PLAIN, Encoding::RLE]
+            vec![Encoding::PLAIN]
         );
         assert_eq!(metadata.num_values(), 4); // just values
         assert_eq!(metadata.dictionary_page_offset(), None);
+    }
+
+    #[test]
+    fn test_bloom_filter_for_dictionary_encoded_chunks() {
+        fn bloom_filter_written(dictionary_enabled: bool, for_dictionary_chunks: bool) -> bool {
+            let props = Arc::new(
+                WriterProperties::builder()
+                    .set_dictionary_enabled(dictionary_enabled)
+                    .set_bloom_filter_enabled(true)
+                    .set_bloom_filter_for_dictionary_encoded_chunks(for_dictionary_chunks)
+                    .build(),
+            );
+            let mut writer =
+                get_test_column_writer::<Int32Type>(get_test_page_writer(), 0, 0, props);
+            writer.write_batch(&[1, 2, 1, 2], None, None).unwrap();
+            writer.close().unwrap().bloom_filter.is_some()
+        }
+
+        assert!(bloom_filter_written(true, true));
+        assert!(bloom_filter_written(false, true));
+        assert!(bloom_filter_written(false, false));
+        assert!(!bloom_filter_written(true, false));
     }
 
     #[test]
@@ -2166,7 +2304,7 @@ mod tests {
             true,
             &[true, false],
             None,
-            &[Encoding::PLAIN, Encoding::RLE],
+            &[Encoding::PLAIN],
             &[encoding_stats(PageType::DATA_PAGE, Encoding::PLAIN, 1)],
         );
         check_encoding_write_support::<BoolType>(
@@ -2174,7 +2312,7 @@ mod tests {
             false,
             &[true, false],
             None,
-            &[Encoding::PLAIN, Encoding::RLE],
+            &[Encoding::PLAIN],
             &[encoding_stats(PageType::DATA_PAGE, Encoding::PLAIN, 1)],
         );
         check_encoding_write_support::<BoolType>(
@@ -2202,7 +2340,7 @@ mod tests {
             true,
             &[1, 2],
             Some(0),
-            &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
             &[
                 encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
                 encoding_stats(PageType::DATA_PAGE, Encoding::RLE_DICTIONARY, 1),
@@ -2213,7 +2351,7 @@ mod tests {
             false,
             &[1, 2],
             None,
-            &[Encoding::PLAIN, Encoding::RLE],
+            &[Encoding::PLAIN],
             &[encoding_stats(PageType::DATA_PAGE, Encoding::PLAIN, 1)],
         );
         check_encoding_write_support::<Int32Type>(
@@ -2221,7 +2359,7 @@ mod tests {
             true,
             &[1, 2],
             Some(0),
-            &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
             &[
                 encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
                 encoding_stats(PageType::DATA_PAGE_V2, Encoding::RLE_DICTIONARY, 1),
@@ -2232,7 +2370,7 @@ mod tests {
             false,
             &[1, 2],
             None,
-            &[Encoding::RLE, Encoding::DELTA_BINARY_PACKED],
+            &[Encoding::DELTA_BINARY_PACKED],
             &[encoding_stats(
                 PageType::DATA_PAGE_V2,
                 Encoding::DELTA_BINARY_PACKED,
@@ -2248,7 +2386,7 @@ mod tests {
             true,
             &[1, 2],
             Some(0),
-            &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
             &[
                 encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
                 encoding_stats(PageType::DATA_PAGE, Encoding::RLE_DICTIONARY, 1),
@@ -2259,7 +2397,7 @@ mod tests {
             false,
             &[1, 2],
             None,
-            &[Encoding::PLAIN, Encoding::RLE],
+            &[Encoding::PLAIN],
             &[encoding_stats(PageType::DATA_PAGE, Encoding::PLAIN, 1)],
         );
         check_encoding_write_support::<Int64Type>(
@@ -2267,7 +2405,7 @@ mod tests {
             true,
             &[1, 2],
             Some(0),
-            &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
             &[
                 encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
                 encoding_stats(PageType::DATA_PAGE_V2, Encoding::RLE_DICTIONARY, 1),
@@ -2278,7 +2416,7 @@ mod tests {
             false,
             &[1, 2],
             None,
-            &[Encoding::RLE, Encoding::DELTA_BINARY_PACKED],
+            &[Encoding::DELTA_BINARY_PACKED],
             &[encoding_stats(
                 PageType::DATA_PAGE_V2,
                 Encoding::DELTA_BINARY_PACKED,
@@ -2294,7 +2432,7 @@ mod tests {
             true,
             &[Int96::from(vec![1, 2, 3])],
             Some(0),
-            &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
             &[
                 encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
                 encoding_stats(PageType::DATA_PAGE, Encoding::RLE_DICTIONARY, 1),
@@ -2305,7 +2443,7 @@ mod tests {
             false,
             &[Int96::from(vec![1, 2, 3])],
             None,
-            &[Encoding::PLAIN, Encoding::RLE],
+            &[Encoding::PLAIN],
             &[encoding_stats(PageType::DATA_PAGE, Encoding::PLAIN, 1)],
         );
         check_encoding_write_support::<Int96Type>(
@@ -2313,7 +2451,7 @@ mod tests {
             true,
             &[Int96::from(vec![1, 2, 3])],
             Some(0),
-            &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
             &[
                 encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
                 encoding_stats(PageType::DATA_PAGE_V2, Encoding::RLE_DICTIONARY, 1),
@@ -2324,7 +2462,7 @@ mod tests {
             false,
             &[Int96::from(vec![1, 2, 3])],
             None,
-            &[Encoding::PLAIN, Encoding::RLE],
+            &[Encoding::PLAIN],
             &[encoding_stats(PageType::DATA_PAGE_V2, Encoding::PLAIN, 1)],
         );
     }
@@ -2336,7 +2474,7 @@ mod tests {
             true,
             &[1.0, 2.0],
             Some(0),
-            &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
             &[
                 encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
                 encoding_stats(PageType::DATA_PAGE, Encoding::RLE_DICTIONARY, 1),
@@ -2347,7 +2485,7 @@ mod tests {
             false,
             &[1.0, 2.0],
             None,
-            &[Encoding::PLAIN, Encoding::RLE],
+            &[Encoding::PLAIN],
             &[encoding_stats(PageType::DATA_PAGE, Encoding::PLAIN, 1)],
         );
         check_encoding_write_support::<FloatType>(
@@ -2355,7 +2493,7 @@ mod tests {
             true,
             &[1.0, 2.0],
             Some(0),
-            &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
             &[
                 encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
                 encoding_stats(PageType::DATA_PAGE_V2, Encoding::RLE_DICTIONARY, 1),
@@ -2366,7 +2504,7 @@ mod tests {
             false,
             &[1.0, 2.0],
             None,
-            &[Encoding::PLAIN, Encoding::RLE],
+            &[Encoding::PLAIN],
             &[encoding_stats(PageType::DATA_PAGE_V2, Encoding::PLAIN, 1)],
         );
     }
@@ -2378,7 +2516,7 @@ mod tests {
             true,
             &[1.0, 2.0],
             Some(0),
-            &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
             &[
                 encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
                 encoding_stats(PageType::DATA_PAGE, Encoding::RLE_DICTIONARY, 1),
@@ -2389,7 +2527,7 @@ mod tests {
             false,
             &[1.0, 2.0],
             None,
-            &[Encoding::PLAIN, Encoding::RLE],
+            &[Encoding::PLAIN],
             &[encoding_stats(PageType::DATA_PAGE, Encoding::PLAIN, 1)],
         );
         check_encoding_write_support::<DoubleType>(
@@ -2397,7 +2535,7 @@ mod tests {
             true,
             &[1.0, 2.0],
             Some(0),
-            &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
             &[
                 encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
                 encoding_stats(PageType::DATA_PAGE_V2, Encoding::RLE_DICTIONARY, 1),
@@ -2408,7 +2546,7 @@ mod tests {
             false,
             &[1.0, 2.0],
             None,
-            &[Encoding::PLAIN, Encoding::RLE],
+            &[Encoding::PLAIN],
             &[encoding_stats(PageType::DATA_PAGE_V2, Encoding::PLAIN, 1)],
         );
     }
@@ -2420,7 +2558,7 @@ mod tests {
             true,
             &[ByteArray::from(vec![1u8])],
             Some(0),
-            &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
             &[
                 encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
                 encoding_stats(PageType::DATA_PAGE, Encoding::RLE_DICTIONARY, 1),
@@ -2431,7 +2569,7 @@ mod tests {
             false,
             &[ByteArray::from(vec![1u8])],
             None,
-            &[Encoding::PLAIN, Encoding::RLE],
+            &[Encoding::PLAIN],
             &[encoding_stats(PageType::DATA_PAGE, Encoding::PLAIN, 1)],
         );
         check_encoding_write_support::<ByteArrayType>(
@@ -2439,7 +2577,7 @@ mod tests {
             true,
             &[ByteArray::from(vec![1u8])],
             Some(0),
-            &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
             &[
                 encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
                 encoding_stats(PageType::DATA_PAGE_V2, Encoding::RLE_DICTIONARY, 1),
@@ -2450,7 +2588,7 @@ mod tests {
             false,
             &[ByteArray::from(vec![1u8])],
             None,
-            &[Encoding::RLE, Encoding::DELTA_BYTE_ARRAY],
+            &[Encoding::DELTA_BYTE_ARRAY],
             &[encoding_stats(
                 PageType::DATA_PAGE_V2,
                 Encoding::DELTA_BYTE_ARRAY,
@@ -2461,20 +2599,44 @@ mod tests {
 
     #[test]
     fn test_column_writer_default_encoding_support_fixed_len_byte_array() {
+        for version in [WriterVersion::PARQUET_1_0, WriterVersion::PARQUET_2_0] {
+            let default_props = WriterProperties::builder()
+                .set_writer_version(version)
+                .build();
+            let meta = column_write_and_get_metadata::<FixedLenByteArrayType>(
+                default_props,
+                &[ByteArray::from(vec![1u8]).into()],
+            );
+            assert_eq!(meta.dictionary_page_offset(), Some(0));
+        }
+
         check_encoding_write_support::<FixedLenByteArrayType>(
             WriterVersion::PARQUET_1_0,
             true,
             &[ByteArray::from(vec![1u8]).into()],
-            None,
-            &[Encoding::PLAIN, Encoding::RLE],
-            &[encoding_stats(PageType::DATA_PAGE, Encoding::PLAIN, 1)],
+            Some(0),
+            &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
+            &[
+                encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
+                encoding_stats(PageType::DATA_PAGE, Encoding::RLE_DICTIONARY, 1),
+            ],
         );
+        let column_props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_enabled(false)
+            .set_column_dictionary_enabled(ColumnPath::from("col"), true)
+            .build();
+        let meta = column_write_and_get_metadata::<FixedLenByteArrayType>(
+            column_props,
+            &[ByteArray::from(vec![1u8]).into()],
+        );
+        assert_eq!(meta.dictionary_page_offset(), Some(0));
         check_encoding_write_support::<FixedLenByteArrayType>(
             WriterVersion::PARQUET_1_0,
             false,
             &[ByteArray::from(vec![1u8]).into()],
             None,
-            &[Encoding::PLAIN, Encoding::RLE],
+            &[Encoding::PLAIN],
             &[encoding_stats(PageType::DATA_PAGE, Encoding::PLAIN, 1)],
         );
         check_encoding_write_support::<FixedLenByteArrayType>(
@@ -2482,7 +2644,7 @@ mod tests {
             true,
             &[ByteArray::from(vec![1u8]).into()],
             Some(0),
-            &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
             &[
                 encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
                 encoding_stats(PageType::DATA_PAGE_V2, Encoding::RLE_DICTIONARY, 1),
@@ -2493,12 +2655,96 @@ mod tests {
             false,
             &[ByteArray::from(vec![1u8]).into()],
             None,
-            &[Encoding::RLE, Encoding::DELTA_BYTE_ARRAY],
+            &[Encoding::DELTA_BYTE_ARRAY],
             &[encoding_stats(
                 PageType::DATA_PAGE_V2,
                 Encoding::DELTA_BYTE_ARRAY,
                 1,
             )],
+        );
+    }
+
+    #[test]
+    fn test_column_writer_no_dictionary_page_for_empty_required() {
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_enabled(true)
+            .build();
+        let meta = column_write_and_get_metadata_with_def_levels::<Int64Type>(props, &[], &[], 0);
+        assert_eq!(meta.dictionary_page_offset(), None);
+        assert_eq!(meta.data_page_offset(), 0);
+        assert_eq!(meta.uncompressed_size(), 0);
+        assert_eq!(meta.compressed_size(), 0);
+        assert_eq!(meta.encodings().collect::<Vec<_>>(), &[]);
+        assert_eq!(meta.page_encoding_stats().unwrap(), &[]);
+    }
+
+    #[test]
+    fn test_column_writer_no_dictionary_page_for_empty_optional() {
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_enabled(true)
+            .build();
+        let meta = column_write_and_get_metadata_with_def_levels::<Int64Type>(props, &[], &[], 1);
+        assert_eq!(meta.dictionary_page_offset(), None);
+        assert_eq!(meta.data_page_offset(), 0);
+        assert_eq!(meta.uncompressed_size(), 0);
+        assert_eq!(meta.compressed_size(), 0);
+        assert_eq!(meta.encodings().collect::<Vec<_>>(), &[]);
+        assert_eq!(meta.page_encoding_stats().unwrap(), &[]);
+    }
+
+    #[test]
+    fn test_column_writer_encoding_includes_rle_for_all_null_data() {
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_enabled(true)
+            .build();
+        let meta = column_write_and_get_metadata_with_def_levels::<Int64Type>(props, &[], &[0], 1);
+        // this writes an empty dictionary page because we write the all-null data page with RLE_DICTIONARY encoding
+        assert_eq!(meta.dictionary_page_offset(), Some(0));
+        assert_eq!(meta.data_page_offset(), 0);
+        assert_eq!(meta.uncompressed_size(), 7);
+        assert_eq!(meta.compressed_size(), 7);
+        assert_eq!(
+            meta.encodings().collect::<Vec<_>>(),
+            &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY]
+        );
+        assert_eq!(
+            meta.page_encoding_stats().unwrap(),
+            &[
+                encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
+                encoding_stats(PageType::DATA_PAGE, Encoding::RLE_DICTIONARY, 1)
+            ]
+        );
+    }
+
+    #[test]
+    fn test_column_writer_encoding_includes_rle_for_mixed_null_data() {
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_enabled(true)
+            .build();
+        let meta = column_write_and_get_metadata_with_def_levels::<Int64Type>(
+            props,
+            &[42_i64],
+            &[1, 0],
+            1,
+        );
+        assert_eq!(meta.dictionary_page_offset(), Some(0));
+        assert_eq!(meta.data_page_offset(), 8);
+        assert_eq!(meta.uncompressed_size(), 16);
+        assert_eq!(meta.compressed_size(), 16);
+        assert_eq!(
+            meta.encodings().collect::<Vec<_>>(),
+            &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY]
+        );
+        assert_eq!(
+            meta.page_encoding_stats().unwrap(),
+            &[
+                encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
+                encoding_stats(PageType::DATA_PAGE, Encoding::RLE_DICTIONARY, 1)
+            ]
         );
     }
 
@@ -2516,12 +2762,12 @@ mod tests {
         let metadata = r.metadata;
         assert_eq!(
             metadata.encodings().collect::<Vec<_>>(),
-            vec![Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY]
+            vec![Encoding::PLAIN, Encoding::RLE_DICTIONARY]
         );
         assert_eq!(metadata.num_values(), 4);
         assert_eq!(metadata.compressed_size(), 20);
         assert_eq!(metadata.uncompressed_size(), 20);
-        assert_eq!(metadata.data_page_offset(), 0);
+        assert_eq!(metadata.data_page_offset(), 16);
         assert_eq!(metadata.dictionary_page_offset(), Some(0));
         if let Some(stats) = metadata.statistics() {
             assert_eq!(stats.null_count_opt(), Some(0));
@@ -2592,6 +2838,42 @@ mod tests {
     }
 
     #[test]
+    fn test_column_writer_byte_array_min_max_unequal_lengths() {
+        // Byte-array decimal min/max with values of different encoded lengths
+        // https://github.com/apache/arrow-rs/issues/10860
+        let page_writer = get_test_page_writer();
+        let props = Default::default();
+        let mut writer = get_test_decimals_column_writer::<ByteArrayType>(page_writer, 0, 0, props);
+        writer
+            .write_batch(
+                &[
+                    ByteArray::from(vec![0u8, 255u8]),      // 255
+                    ByteArray::from(vec![0u8, 128u8, 0u8]), // 32768
+                    ByteArray::from(vec![255u8, 127u8]),    // -129
+                    ByteArray::from(vec![128u8]),           // -128
+                ],
+                None,
+                None,
+            )
+            .unwrap();
+        let metadata = writer.close().unwrap().metadata;
+        let stats = metadata.statistics().expect("metadata missing statistics");
+        let Statistics::ByteArray(stats) = stats else {
+            panic!("expecting Statistics::ByteArray");
+        };
+        // -129
+        assert_eq!(
+            stats.min_opt().unwrap(),
+            &ByteArray::from(vec![255u8, 127u8])
+        );
+        // 32768
+        assert_eq!(
+            stats.max_opt().unwrap(),
+            &ByteArray::from(vec![0u8, 128u8, 0u8])
+        );
+    }
+
+    #[test]
     fn test_column_writer_uint32_converted_type_min_max() {
         let page_writer = get_test_page_writer();
         let props = Default::default();
@@ -2642,12 +2924,12 @@ mod tests {
         let metadata = r.metadata;
         assert_eq!(
             metadata.encodings().collect::<Vec<_>>(),
-            vec![Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY]
+            vec![Encoding::PLAIN, Encoding::RLE_DICTIONARY]
         );
         assert_eq!(metadata.num_values(), 4);
         assert_eq!(metadata.compressed_size(), 20);
         assert_eq!(metadata.uncompressed_size(), 20);
-        assert_eq!(metadata.data_page_offset(), 0);
+        assert_eq!(metadata.data_page_offset(), 16);
         assert_eq!(metadata.dictionary_page_offset(), Some(0));
         if let Some(stats) = metadata.statistics() {
             assert_eq!(stats.null_count_opt(), Some(0));
@@ -2671,6 +2953,7 @@ mod tests {
         let props = Arc::new(
             WriterProperties::builder()
                 .set_write_page_header_statistics(true)
+                .set_data_page_row_count_limit(4)
                 .build(),
         );
         let mut writer = get_test_column_writer::<Int32Type>(page_writer, 0, 0, props);
@@ -2704,22 +2987,18 @@ mod tests {
         .unwrap();
 
         let pages = reader.collect::<Result<Vec<_>>>().unwrap();
-        assert_eq!(pages.len(), 2);
+        assert_eq!(pages.len(), 3);
 
         assert_eq!(pages[0].page_type(), PageType::DICTIONARY_PAGE);
         assert_eq!(pages[1].page_type(), PageType::DATA_PAGE);
-
-        let page_statistics = pages[1].statistics().unwrap();
-        assert_eq!(
-            page_statistics.min_bytes_opt().unwrap(),
-            1_i32.to_le_bytes()
-        );
-        assert_eq!(
-            page_statistics.max_bytes_opt().unwrap(),
-            7_i32.to_le_bytes()
-        );
-        assert_eq!(page_statistics.null_count_opt(), Some(0));
-        assert!(page_statistics.distinct_count_opt().is_none());
+        assert_eq!(pages[2].page_type(), PageType::DATA_PAGE);
+        for (page, min, max) in [(&pages[1], 1_i32, 4_i32), (&pages[2], 5_i32, 7_i32)] {
+            let stats = page.statistics().unwrap();
+            assert_eq!(stats.min_bytes_opt().unwrap(), min.to_le_bytes());
+            assert_eq!(stats.max_bytes_opt().unwrap(), max.to_le_bytes());
+            assert_eq!(stats.null_count_opt(), Some(0));
+            assert!(stats.distinct_count_opt().is_none());
+        }
     }
 
     #[test]
@@ -2812,6 +3091,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_column_writer_small_write_batch_size() {
         for i in &[1usize, 2, 5, 10, 11, 1023] {
             let props = WriterProperties::builder().set_write_batch_size(*i).build();
@@ -2990,6 +3270,27 @@ mod tests {
     }
 
     #[test]
+    fn test_column_writer_column_data_page_row_count_limit() {
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_writer_version(WriterVersion::PARQUET_1_0)
+                .set_dictionary_enabled(false)
+                .set_data_page_row_count_limit(100)
+                .set_column_data_page_row_count_limit(ColumnPath::from("col"), 3)
+                .set_write_batch_size(1)
+                .build(),
+        );
+        let data = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
+        let col_values =
+            write_and_collect_page_values(ColumnPath::from("col"), Arc::clone(&props), data);
+        let other_values = write_and_collect_page_values(ColumnPath::from("other"), props, data);
+
+        assert_eq!(col_values, vec![3, 3, 3, 1]);
+        assert_eq!(other_values, vec![10]);
+    }
+
+    #[test]
     fn test_column_writer_caps_page_size_for_large_byte_array_values() {
         // Regression: the post-write data page byte limit check only fires
         // at mini-batch boundaries, so a 1024-row mini-batch of multi-MiB
@@ -3124,30 +3425,77 @@ mod tests {
     }
 
     #[test]
-    fn test_column_writer_delta_byte_array_nullable_shared_prefix_partial_dedup() {
-        // Documents the *current* behavior of the first-value exemption on a
-        // nullable column; this pins a known limitation, not an ideal.
+    fn test_column_writer_caps_page_size_with_sparse_nulls() {
+        // `PLAIN` keeps ratio-scaled windows, so a sparsely-null chunk puts
+        // *two* over-limit values on a page rather than one. That is the
+        // deliberate choice: value-exact windows would cut this to one, but
+        // `PLAIN` stores a value identically wherever it lands, so the output
+        // is byte for byte the same either way while the page count doubles.
         //
-        // The exemption fires when a page's first mini-batch contains exactly
-        // one value. For a non-nullable column the byte-budget chunker gives
-        // an over-limit value a one-level mini-batch, so that always holds.
-        // One null in the chunk changes the level:value ratio to 17:16, the
-        // chunker rounds up to two-level mini-batches, and a page whose first
-        // mini-batch carries two values misses the exemption: it is cut after
-        // those two values, and its first value is stored in full.
+        // What has to hold is that the bound stays a small constant and does
+        // not scale with `write_batch_size` — the failure #9972 fixed, where
+        // a page took a whole mini-batch. A window spans
+        // `ceil(values * levels / values_in_chunk)` levels, which covers at
+        // most two values however sparse the nulls are, so two is the whole
+        // exposure. Assert it exactly: this test fails if the encoding gate
+        // on value-exact windows is dropped (pages would hold one value) as
+        // well as if the bound is lost (they would hold many).
+        let value_size = 64 * 1024;
+        let page_byte_limit = 16 * 1024;
+        let num_values = 16;
+
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(false)
+            .set_encoding(Encoding::PLAIN)
+            .set_data_page_size_limit(page_byte_limit)
+            .set_statistics_enabled(EnabledStatistics::None)
+            .build();
+
+        let data: Vec<_> = (0..num_values)
+            .map(|_| ByteArray::from(vec![b'a'; value_size]))
+            .collect();
+        // 17 levels: a null at index 8, values everywhere else.
+        let def_levels: Vec<i16> = (0..num_values as i16 + 1)
+            .map(|i| i16::from(i != 8))
+            .collect();
+        let pages =
+            write_and_collect_pages::<ByteArrayType>(props, 1, 0, &data, Some(&def_levels), None);
+
+        // At most two values' payload on any page, and never a whole
+        // mini-batch's worth.
+        let upper_bound = 2 * value_size + 64;
+        for (size, n_levels) in &pages.data_pages {
+            assert!(
+                *size <= upper_bound,
+                "page size {size} exceeds two-value bound ({upper_bound}B); pages {:?}",
+                pages.data_pages,
+            );
+            assert!(
+                *n_levels <= 3,
+                "page holds {n_levels} levels, expected at most 3 (two values + a null); \
+                 pages {:?}",
+                pages.data_pages,
+            );
+        }
+        // Two-level windows over 17 levels: eight pages carrying two levels
+        // and a ninth holding the remainder.
+        let num_levels: usize = num_values + 1;
+        assert_eq!(pages.data_pages.len(), num_levels.div_ceil(2));
+    }
+
+    #[test]
+    fn test_column_writer_delta_byte_array_nullable_shared_prefix_dedup() {
+        // A null in the chunk must not cost dedup. The first-value exemption
+        // fires when a page's opening mini-batch holds exactly one value, and
+        // `write_granular_chunk` cuts windows after an exact value count, so
+        // the over-limit value that opens the page gets a single-value
+        // mini-batch regardless of where nulls fall.
         //
-        // The one mini-batch that pairs the null with a value has a single
-        // value, so the page it opens does get the exemption and accumulates
-        // every remaining suffix. The result for 16 identical values with a
-        // null at index 8 is four two-value pages (each storing one value in
-        // full), then one exempt page holding the rest:
-        //
-        //   values per page: [2, 2, 2, 2, 9]  (counts include the null level)
-        //   total bytes:     ~5 full values, vs ~1 ideally and 16 for PLAIN
-        //
-        // If the exemption trigger is ever keyed on values written to the
-        // page (0 -> 1) instead of mini-batch shape, this test should fail
-        // with fewer, larger pages — update it to pin the improved layout.
+        // This pinned `[2, 2, 2, 2, 9]` before #10538: the chunker scaled the
+        // one-value budget by the chunk's 17:16 level:value ratio and rounded
+        // up to two-level windows, so most pages opened with two values,
+        // missed the exemption, and stored their first value in full — ~5
+        // full values against ~1 here (`PLAIN` stores all 16).
         let value_size = 64 * 1024;
         let page_byte_limit = 16 * 1024;
         let num_values = 16;
@@ -3170,13 +3518,15 @@ mod tests {
         let pages =
             write_and_collect_pages::<ByteArrayType>(props, 1, 0, &data, Some(&def_levels), None);
 
+        // One page holding all 17 levels: the first value is exempt and every
+        // later value dedups down to a length pair.
         let per_page_values: Vec<u32> = pages.data_pages.iter().map(|(_, n)| *n).collect();
-        assert_eq!(per_page_values, vec![2, 2, 2, 2, 9]);
+        assert_eq!(per_page_values, vec![num_values as u32 + 1]);
 
         let total_bytes: usize = pages.data_pages.iter().map(|(size, _)| size).sum();
         assert!(
-            total_bytes > 4 * value_size && total_bytes < 6 * value_size,
-            "expected ~5 full values' worth of bytes (partial dedup), \
+            total_bytes < 2 * value_size,
+            "expected ~one full value's worth of bytes (full dedup), \
              got {total_bytes}B across pages {:?}",
             pages.data_pages,
         );
@@ -3392,6 +3742,49 @@ mod tests {
         assert!(
             dict_page_size <= 3 * dict_page_limit,
             "dictionary page {dict_page_size} exceeds 3x the {dict_page_limit} limit",
+        );
+    }
+
+    #[test]
+    fn test_column_writer_caps_dictionary_page_size_with_clustered_nulls() {
+        // Regression test for #11994. Large distinct values followed by a run
+        // of nulls: the chunk's average level:value ratio is ~36 levels per
+        // value, so a ratio-sized window over the leading values covers all
+        // of them. Each window must also be capped by value count, or every
+        // value lands in the dictionary page before its spill check runs.
+        let value_size = 64 * 1024;
+        let num_values = 28;
+        let num_nulls = 996;
+
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_enabled(true)
+            .set_dictionary_page_size_limit(value_size)
+            .build();
+
+        let data: Vec<_> = (0..num_values)
+            .map(|i| {
+                let mut v = vec![0u8; value_size];
+                v[..8].copy_from_slice(&(i as u64).to_le_bytes());
+                ByteArray::from(v)
+            })
+            .collect();
+        let mut def_levels = vec![1i16; num_values];
+        def_levels.extend(std::iter::repeat_n(0i16, num_nulls));
+
+        let pages =
+            write_and_collect_pages::<ByteArrayType>(props, 1, 0, &data, Some(&def_levels), None);
+        assert!(
+            pages.dict_page_size > 0,
+            "expected the column to dictionary-encode"
+        );
+        // At most two values per window. Before the fix the dictionary page
+        // held all 28 values (~1.8 MiB).
+        assert!(
+            pages.dict_page_size <= 3 * value_size,
+            "dictionary page {} exceeds three values ({}B)",
+            pages.dict_page_size,
+            3 * value_size,
         );
     }
 
@@ -3688,6 +4081,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // inline assembly is not supported
     fn test_column_writer_check_float16_min_max() {
         let input = [
             -f16::ONE,
@@ -3712,6 +4106,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // inline assembly is not supported
     fn test_column_writer_check_float16_nan_middle() {
         let input = [f16::ONE, f16::NAN, f16::ONE + f16::ONE]
             .into_iter()
@@ -3729,6 +4124,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // inline assembly is not supported
     fn test_float16_statistics_nan_middle() {
         let input = [f16::ONE, f16::NAN, f16::ONE + f16::ONE]
             .into_iter()
@@ -3746,6 +4142,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // inline assembly is not supported
     fn test_float16_statistics_nan_start() {
         let input = [f16::NAN, f16::ONE, f16::ONE + f16::ONE]
             .into_iter()
@@ -4032,6 +4429,46 @@ mod tests {
             &[0u8,],
             &[255u8, 35u8, 0u8, 0u8,],
         ),);
+
+        // Unequal lengths where the longer value's extra leading bytes are all
+        // sign extension, so the aligned tails decide.
+        // https://github.com/apache/arrow-rs/issues/10860
+
+        // 32768 > 255
+        assert!(compare_greater_byte_array_decimals(
+            &[0u8, 128u8, 0u8,],
+            &[0u8, 255u8,],
+        ),);
+        assert!(!compare_greater_byte_array_decimals(
+            &[0u8, 255u8,],
+            &[0u8, 128u8, 0u8,],
+        ),);
+        // -128 > -129
+        assert!(compare_greater_byte_array_decimals(
+            &[128u8,],
+            &[255u8, 127u8,],
+        ),);
+        assert!(!compare_greater_byte_array_decimals(
+            &[255u8, 127u8,],
+            &[128u8,],
+        ),);
+        // -128 > -256
+        assert!(compare_greater_byte_array_decimals(
+            &[128u8,],
+            &[255u8, 0u8,],
+        ),);
+        // 10 (with a redundant leading zero) > 5
+        assert!(compare_greater_byte_array_decimals(&[0u8, 10u8,], &[5u8,],),);
+        assert!(compare_greater_byte_array_decimals(&[10u8,], &[0u8, 5u8,],),);
+        // equal values of different lengths are not greater in either direction
+        assert!(!compare_greater_byte_array_decimals(
+            &[255u8, 128u8,],
+            &[128u8,],
+        ),);
+        assert!(!compare_greater_byte_array_decimals(
+            &[128u8,],
+            &[255u8, 128u8,],
+        ),);
     }
 
     #[test]
@@ -4061,6 +4498,50 @@ mod tests {
         // definition_level_histogram should be present and should be 0:4, 1:0
         assert!(col_idx.definition_level_histogram(0).is_some());
         assert_eq!(col_idx.definition_level_histogram(0).unwrap(), &[4, 0]);
+    }
+
+    #[test]
+    fn test_column_index_repeated_page_with_values_not_null() {
+        // four lists of [null, 7]: as many null levels as rows, but the page has values
+        let page_writer = get_test_page_writer();
+        let props = Default::default();
+        let mut writer = get_test_column_writer::<Int32Type>(page_writer, 2, 1, props);
+        writer
+            .write_batch(
+                &[7, 7, 7, 7],
+                Some(&[1, 2, 1, 2, 1, 2, 1, 2]),
+                Some(&[0, 1, 0, 1, 0, 1, 0, 1]),
+            )
+            .unwrap();
+
+        let r = writer.close().unwrap();
+        let ColumnIndexMetaData::INT32(col_idx) = r.column_index.unwrap() else {
+            panic!("wrong stats type")
+        };
+        assert!(!col_idx.is_null_page(0));
+        assert_eq!(col_idx.min_value(0), Some(&7));
+        assert_eq!(col_idx.max_value(0), Some(&7));
+        assert_eq!(col_idx.null_count(0), Some(4));
+    }
+
+    #[test]
+    fn test_column_index_repeated_page_of_nulls() {
+        // two lists of [null, null]: no values, more null levels than rows
+        let page_writer = get_test_page_writer();
+        let props = Default::default();
+        let mut writer = get_test_column_writer::<Int32Type>(page_writer, 2, 1, props);
+        writer
+            .write_batch(&[], Some(&[1, 1, 1, 1]), Some(&[0, 1, 0, 1]))
+            .unwrap();
+
+        let r = writer.close().unwrap();
+        let ColumnIndexMetaData::INT32(col_idx) = r.column_index.unwrap() else {
+            panic!("wrong stats type")
+        };
+        assert!(col_idx.is_null_page(0));
+        assert!(col_idx.min_value(0).is_none());
+        assert!(col_idx.max_value(0).is_none());
+        assert_eq!(col_idx.null_count(0), Some(4));
     }
 
     #[test]
@@ -4329,6 +4810,105 @@ mod tests {
     }
 
     #[test]
+    fn test_decimal_statistics_do_not_alias_written_values() {
+        // See https://github.com/apache/arrow-rs/issues/12027
+        //
+        // The Arrow writer slices all FixedLenByteArray values of a batch out of one shared
+        // buffer. Decimal and Float16 statistics are never truncated and used to be stored as
+        // clones of the written values, so the column chunk statistics kept every such buffer
+        // alive for as long as the file metadata existed.
+        let page_writer = get_test_page_writer();
+        let mut writer = get_test_decimals_column_writer::<FixedLenByteArrayType>(
+            page_writer,
+            0,
+            0,
+            Default::default(),
+        );
+
+        // Four 16-byte big-endian non-negative values in ascending order, in one buffer
+        let arena = Bytes::from((0..64u8).collect::<Vec<_>>());
+        let values: Vec<FixedLenByteArray> = (0..4)
+            .map(|i| ByteArray::from(arena.slice(i * 16..(i + 1) * 16)).into())
+            .collect();
+        writer.write_batch(&values, None, None).unwrap();
+        let r = writer.close().unwrap();
+        drop(values);
+
+        let statistics = r.metadata.statistics().unwrap();
+        // Copying must not change how the statistics are written: Decimal has a signed sort
+        // order, so both min_value/max_value and the deprecated min/max are emitted
+        assert!(!statistics.is_min_max_deprecated());
+        assert!(statistics.is_min_max_backwards_compatible());
+        let Statistics::FixedLenByteArray(stats) = statistics else {
+            panic!("expecting Statistics::FixedLenByteArray");
+        };
+        let min = stats.min_bytes_opt().unwrap();
+        let max = stats.max_bytes_opt().unwrap();
+        assert_eq!(min, &arena[..16]);
+        assert_eq!(max, &arena[48..]);
+
+        // The statistics must own their bytes rather than point into the written buffer
+        let arena_range = arena.as_ptr_range();
+        assert!(
+            !arena_range.contains(&min.as_ptr()),
+            "min aliases the written buffer"
+        );
+        assert!(
+            !arena_range.contains(&max.as_ptr()),
+            "max aliases the written buffer"
+        );
+
+        assert!(stats.min_is_exact());
+        assert!(stats.max_is_exact());
+    }
+
+    #[test]
+    fn test_decimal_byte_array_min_max_no_statistics_truncation() {
+        // See https://github.com/apache/arrow-rs/issues/11073
+        let page_writer = get_test_page_writer();
+
+        // Truncate at 1 byte -- far shorter than either encoded value below.
+        let builder = WriterProperties::builder().set_statistics_truncate_length(Some(1));
+        let props = Arc::new(builder.build());
+        let mut writer = get_test_decimals_column_writer::<ByteArrayType>(page_writer, 0, 0, props);
+
+        // Two's-complement, big-endian encodings of 200 and -200 (2 bytes each).
+        // Naive unsigned byte-wise truncation to 1 byte followed by an unsigned
+        // increment of the max value would corrupt these:
+        //   max: truncate([0x00, 0xC8], 1) -> [0x00], increment -> [0x01],
+        //        which decodes to 1 -- far less than the true max of 200.
+        let positive_200 = vec![0x00u8, 0xC8u8];
+        let negative_200 = vec![0xFFu8, 0x38u8];
+
+        let data = vec![
+            ByteArray::from(positive_200.clone()),
+            ByteArray::from(negative_200.clone()),
+        ];
+        writer.write_batch(&data, None, None).unwrap();
+        writer.flush_data_pages().unwrap();
+
+        let r = writer.close().unwrap();
+        assert_eq!(2, r.rows_written);
+
+        let stats = r.metadata.statistics().expect("statistics");
+        if let Statistics::ByteArray(stats) = stats {
+            // Decimal columns must never be truncated, regardless of
+            // `statistics_truncate_length`.
+            assert!(stats.min_is_exact());
+            assert!(stats.max_is_exact());
+
+            let min_value = stats.min_bytes_opt().unwrap();
+            let max_value = stats.max_bytes_opt().unwrap();
+
+            // Correct signed (two's-complement) ordering: -200 < 200.
+            assert_eq!(negative_200, min_value);
+            assert_eq!(positive_200, max_value);
+        } else {
+            panic!("expecting Statistics::ByteArray");
+        }
+    }
+
+    #[test]
     fn test_statistics_truncating_byte_array_default() {
         let page_writer = get_test_page_writer();
 
@@ -4348,12 +4928,12 @@ mod tests {
         assert_eq!(1, r.rows_written);
 
         let stats = r.metadata.statistics().expect("statistics");
-        if let Statistics::ByteArray(_stats) = stats {
-            let min_value = _stats.min_opt().unwrap();
-            let max_value = _stats.max_opt().unwrap();
+        if let Statistics::ByteArray(stats) = stats {
+            let min_value = stats.min_opt().unwrap();
+            let max_value = stats.max_opt().unwrap();
 
-            assert!(!_stats.min_is_exact());
-            assert!(!_stats.max_is_exact());
+            assert!(!stats.min_is_exact());
+            assert!(!stats.max_is_exact());
 
             let expected_len = 64;
             assert_eq!(min_value.len(), expected_len);
@@ -4398,12 +4978,12 @@ mod tests {
         let stats = r.metadata.statistics().expect("statistics");
         assert_eq!(stats.null_count_opt(), Some(0));
         assert_eq!(stats.distinct_count_opt(), None);
-        if let Statistics::ByteArray(_stats) = stats {
-            let min_value = _stats.min_opt().unwrap();
-            let max_value = _stats.max_opt().unwrap();
+        if let Statistics::ByteArray(stats) = stats {
+            let min_value = stats.min_opt().unwrap();
+            let max_value = stats.max_opt().unwrap();
 
-            assert!(!_stats.min_is_exact());
-            assert!(!_stats.max_is_exact());
+            assert!(!stats.min_is_exact());
+            assert!(!stats.max_is_exact());
 
             assert_eq!(min_value.len(), TEST_TRUNCATE_LENGTH);
             assert_eq!(max_value.len(), TEST_TRUNCATE_LENGTH);
@@ -4450,12 +5030,12 @@ mod tests {
         let stats = r.metadata.statistics().expect("statistics");
         assert_eq!(stats.null_count_opt(), Some(0));
         assert_eq!(stats.distinct_count_opt(), None);
-        if let Statistics::FixedLenByteArray(_stats) = stats {
-            let min_value = _stats.min_opt().unwrap();
-            let max_value = _stats.max_opt().unwrap();
+        if let Statistics::FixedLenByteArray(stats) = stats {
+            let min_value = stats.min_opt().unwrap();
+            let max_value = stats.max_opt().unwrap();
 
-            assert!(!_stats.min_is_exact());
-            assert!(!_stats.max_is_exact());
+            assert!(!stats.min_is_exact());
+            assert!(!stats.max_is_exact());
 
             assert_eq!(min_value.len(), TEST_TRUNCATE_LENGTH);
             assert_eq!(max_value.len(), TEST_TRUNCATE_LENGTH);
@@ -4886,14 +5466,14 @@ mod tests {
         // physical type representation
         let f16_descr = Arc::new(get_test_float16_column_descr(1, 0));
         let fba_descr = {
-            let tpe = SchemaType::primitive_type_builder(
+            let type_ = SchemaType::primitive_type_builder(
                 "col",
                 FixedLenByteArrayType::get_physical_type(),
             )
             .with_length(2)
             .build()?;
             Arc::new(ColumnDescriptor::new(
-                Arc::new(tpe),
+                Arc::new(type_),
                 1,
                 0,
                 ColumnPath::from("col"),
@@ -5151,6 +5731,19 @@ mod tests {
         writer.close().unwrap().metadata
     }
 
+    fn column_write_and_get_metadata_with_def_levels<T: DataType>(
+        props: WriterProperties,
+        values: &[T::T],
+        def_levels: &[i16],
+        max_def_level: i16,
+    ) -> ColumnChunkMetaData {
+        let page_writer = get_test_page_writer();
+        let props = Arc::new(props);
+        let mut writer = get_test_column_writer::<T>(page_writer, max_def_level, 0, props);
+        writer.write_batch(values, Some(def_levels), None).unwrap();
+        writer.close().unwrap().metadata
+    }
+
     // Helper function to more compactly create a PageEncodingStats struct.
     fn encoding_stats(page_type: PageType, encoding: Encoding, count: i32) -> PageEncodingStats {
         PageEncodingStats {
@@ -5289,13 +5882,13 @@ mod tests {
         max_rep_level: i16,
     ) -> ColumnDescriptor {
         let path = ColumnPath::from("col");
-        let tpe = SchemaType::primitive_type_builder("col", T::get_physical_type())
+        let type_ = SchemaType::primitive_type_builder("col", T::get_physical_type())
             // length is set for "encoding support" tests for FIXED_LEN_BYTE_ARRAY type,
             // it should be no-op for other types
             .with_length(1)
             .build()
             .unwrap();
-        ColumnDescriptor::new(Arc::new(tpe), max_def_level, max_rep_level, path)
+        ColumnDescriptor::new(Arc::new(type_), max_def_level, max_rep_level, path)
     }
 
     fn get_test_column_descr_with_path<T: DataType>(
@@ -5304,13 +5897,13 @@ mod tests {
         path: ColumnPath,
     ) -> ColumnDescriptor {
         let name = path.string();
-        let tpe = SchemaType::primitive_type_builder(&name, T::get_physical_type())
+        let type_ = SchemaType::primitive_type_builder(&name, T::get_physical_type())
             // length is set for "encoding support" tests for FIXED_LEN_BYTE_ARRAY type,
             // it should be no-op for other types
             .with_length(1)
             .build()
             .unwrap();
-        ColumnDescriptor::new(Arc::new(tpe), max_def_level, max_rep_level, path)
+        ColumnDescriptor::new(Arc::new(type_), max_def_level, max_rep_level, path)
     }
 
     fn write_and_collect_page_values(
@@ -5353,10 +5946,13 @@ mod tests {
 
     /// Returns page writer that collects pages without serializing them.
     fn get_test_page_writer() -> Box<dyn PageWriter> {
-        Box::new(TestPageWriter {})
+        Box::new(TestPageWriter::default())
     }
 
-    struct TestPageWriter {}
+    #[derive(Default)]
+    struct TestPageWriter {
+        bytes_written: u64,
+    }
 
     impl PageWriter for TestPageWriter {
         fn write_page(&mut self, page: CompressedPage) -> Result<PageWriteSpec> {
@@ -5365,8 +5961,9 @@ mod tests {
             res.uncompressed_size = page.uncompressed_size();
             res.compressed_size = page.compressed_size();
             res.num_values = page.num_values();
-            res.offset = 0;
+            res.offset = self.bytes_written;
             res.bytes_written = page.data().len() as u64;
+            self.bytes_written += res.bytes_written;
             Ok(res)
         }
 
@@ -5411,14 +6008,14 @@ mod tests {
         max_rep_level: i16,
     ) -> ColumnDescriptor {
         let path = ColumnPath::from("col");
-        let tpe = SchemaType::primitive_type_builder("col", T::get_physical_type())
+        let type_ = SchemaType::primitive_type_builder("col", T::get_physical_type())
             .with_length(16)
             .with_logical_type(Some(LogicalType::decimal(2, 3)))
             .with_scale(2)
             .with_precision(3)
             .build()
             .unwrap();
-        ColumnDescriptor::new(Arc::new(tpe), max_def_level, max_rep_level, path)
+        ColumnDescriptor::new(Arc::new(type_), max_def_level, max_rep_level, path)
     }
 
     fn float16_statistics_roundtrip(
@@ -5447,13 +6044,13 @@ mod tests {
 
     fn get_test_float16_column_descr(max_def_level: i16, max_rep_level: i16) -> ColumnDescriptor {
         let path = ColumnPath::from("col");
-        let tpe =
+        let type_ =
             SchemaType::primitive_type_builder("col", FixedLenByteArrayType::get_physical_type())
                 .with_length(2)
                 .with_logical_type(Some(LogicalType::Float16))
                 .build()
                 .unwrap();
-        ColumnDescriptor::new(Arc::new(tpe), max_def_level, max_rep_level, path)
+        ColumnDescriptor::new(Arc::new(type_), max_def_level, max_rep_level, path)
     }
 
     fn get_test_interval_column_writer(
@@ -5466,13 +6063,13 @@ mod tests {
 
     fn get_test_interval_column_descr() -> ColumnDescriptor {
         let path = ColumnPath::from("col");
-        let tpe =
+        let type_ =
             SchemaType::primitive_type_builder("col", FixedLenByteArrayType::get_physical_type())
                 .with_length(12)
                 .with_converted_type(ConvertedType::INTERVAL)
                 .build()
                 .unwrap();
-        ColumnDescriptor::new(Arc::new(tpe), 0, 0, path)
+        ColumnDescriptor::new(Arc::new(type_), 0, 0, path)
     }
 
     /// Returns column writer for UINT32 Column provided as ConvertedType only
@@ -5496,17 +6093,17 @@ mod tests {
         max_rep_level: i16,
     ) -> ColumnDescriptor {
         let path = ColumnPath::from("col");
-        let tpe = SchemaType::primitive_type_builder("col", T::get_physical_type())
+        let type_ = SchemaType::primitive_type_builder("col", T::get_physical_type())
             .with_converted_type(ConvertedType::UINT_32)
             .build()
             .unwrap();
-        ColumnDescriptor::new(Arc::new(tpe), max_def_level, max_rep_level, path)
+        ColumnDescriptor::new(Arc::new(type_), max_def_level, max_rep_level, path)
     }
 
     #[test]
     fn test_page_v2_snappy_compression_fallback() {
         // Test that PageV2 sets is_compressed to false when Snappy compression increases data size
-        let page_writer = TestPageWriter {};
+        let page_writer = TestPageWriter::default();
 
         // Create WriterProperties with PageV2 and Snappy compression
         let props = WriterProperties::builder()

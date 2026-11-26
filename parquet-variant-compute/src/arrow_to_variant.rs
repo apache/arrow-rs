@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::array::{
     Array, AsArray, FixedSizeListArray, GenericBinaryArray, GenericListArray, GenericListViewArray,
@@ -365,16 +352,16 @@ macro_rules! define_row_builder {
                         $(
                             // NOTE: The `?` macro expansion fails without the type annotation.
                             let Some(value): Option<$option_ty> = value else {
-                                if !self.options.safe {
-                                    return Err(ArrowError::ComputeError(format!(
-                                        "Failed to convert value at index {index}: conversion failed",
-                                    )));
-                                } else {
+                                return if self.options.safe {
                                     // Overflow is encoded as Variant::Null,
                                     // distinct from None indicating a missing value
                                     builder.append_value(Variant::Null);
-                                    return Ok(());
-                                }
+                                    Ok(())
+                                } else {
+                                    Err(ArrowError::ComputeError(format!(
+                                        "Failed to convert value at index {index}: conversion failed",
+                                    )))
+                                };
                             };
                         )?
                     )?
@@ -676,11 +663,10 @@ pub(crate) struct UnionArrowToVariantBuilder<'a> {
 impl<'a> UnionArrowToVariantBuilder<'a> {
     pub(crate) fn new(array: &'a dyn Array, options: &'a CastOptions) -> Result<Self, ArrowError> {
         let union_array = array.as_union();
-        let type_ids = union_array.type_ids();
 
         // Create child builders for each union field
         let mut child_builders = HashMap::new();
-        for &type_id in type_ids {
+        for (type_id, _) in union_array.fields().iter() {
             let child_array = union_array.child(type_id);
             let child_builder = make_arrow_to_variant_row_builder(
                 child_array.data_type(),

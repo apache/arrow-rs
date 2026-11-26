@@ -1,22 +1,9 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::buffer::ScalarBuffer;
-use crate::{ArrowNativeType, MutableBuffer, NullBuffer, OffsetBufferBuilder};
+use crate::{ArrowNativeType, MutableBuffer, NullBuffer, OffsetBufferBuilder, OverflowError};
 use std::ops::Deref;
 
 /// A non-empty buffer of monotonically increasing, positive integers.
@@ -85,27 +72,52 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     /// `buffer` must be a non-empty buffer containing monotonically increasing
     /// values greater than or equal to zero
     pub unsafe fn new_unchecked(buffer: ScalarBuffer<O>) -> Self {
+        if cfg!(feature = "force_validate") {
+            return Self::new(buffer);
+        }
         Self(buffer)
     }
 
     /// Create a new [`OffsetBuffer`] containing a single 0 value
+    ///
+    /// # Panics
+    ///
+    /// Panics if allocation fails. Use [`Self::try_new_empty`] for a fallible version.
     pub fn new_empty() -> Self {
         let buffer = MutableBuffer::from_len_zeroed(std::mem::size_of::<O>());
         Self(buffer.into_buffer().into())
+    }
+
+    /// Fallible version of [`Self::new_empty`].
+    pub fn try_new_empty() -> Result<Self, OverflowError> {
+        Self::try_new_zeroed(0)
     }
 
     /// Create a new [`OffsetBuffer`] containing `len + 1` `0` values
     ///
     /// # Panics
     ///
-    /// Panics if `(len + 1) * size_of::<O>()` overflows `usize`
+    /// Panics if `(len + 1) * size_of::<O>()` overflows `usize` or if the
+    /// required buffer cannot be allocated.
+    /// Use [`Self::try_new_zeroed`] for a fallible version.
     pub fn new_zeroed(len: usize) -> Self {
+        Self::try_new_zeroed(len).unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    /// Create a new [`OffsetBuffer`] containing `len + 1` `0` values
+    ///
+    /// # Errors
+    ///
+    /// Errors if `(len + 1) * size_of::<O>()` overflows `usize` or if the
+    /// required buffer cannot be allocated.
+    pub fn try_new_zeroed(len: usize) -> Result<Self, OverflowError> {
         let len_bytes = len
             .checked_add(1)
             .and_then(|o| o.checked_mul(std::mem::size_of::<O>()))
-            .expect("overflow");
-        let buffer = MutableBuffer::from_len_zeroed(len_bytes);
-        Self(buffer.into_buffer().into())
+            .ok_or_else(|| OverflowError::new::<usize>("buffer length"))?;
+        let buffer = MutableBuffer::try_from_len_zeroed(len_bytes)
+            .map_err(|_| OverflowError::new::<usize>("buffer length"))?;
+        Ok(Self(buffer.into_buffer().into()))
     }
 
     /// Create a new [`OffsetBuffer`] from the iterator of slice lengths
@@ -121,8 +133,27 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     ///
     /// # Panics
     ///
-    /// Panics on overflow
+    /// Panics on overflow. Use [`Self::try_from_lengths`] for a fallible version.
     pub fn from_lengths<I>(lengths: I) -> Self
+    where
+        I: IntoIterator<Item = usize>,
+    {
+        Self::try_from_lengths(lengths).unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    /// Create a new [`OffsetBuffer`] from the iterator of slice lengths
+    ///
+    /// ```
+    /// # use arrow_buffer::OffsetBuffer;
+    /// let offsets = OffsetBuffer::<i32>::try_from_lengths([1, 3, 5]).unwrap();
+    /// assert_eq!(offsets.as_ref(), &[0, 1, 4, 9]);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Errors if the total length overflows `usize` or `O`, e.g. if the lengths
+    /// add up to more than `i32::MAX` for a `OffsetBuffer<i32>`.
+    pub fn try_from_lengths<I>(lengths: I) -> Result<Self, OverflowError>
     where
         I: IntoIterator<Item = usize>,
     {
@@ -132,12 +163,14 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
 
         let mut acc = 0_usize;
         for length in iter {
-            acc = acc.checked_add(length).expect("usize overflow");
+            acc = acc
+                .checked_add(length)
+                .ok_or_else(|| OverflowError::new::<usize>("total length"))?;
             out.push(O::usize_as(acc))
         }
         // Check for overflow
-        O::from_usize(acc).expect("offset overflow");
-        Self(out.into())
+        O::from_usize(acc).ok_or_else(|| OverflowError::new::<O>("offset").with_value(acc))?;
+        Ok(Self(out.into()))
     }
 
     /// Create a new [`OffsetBuffer`] where each slice has the same length
@@ -153,28 +186,93 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     ///
     /// # Panics
     ///
-    /// Panics on overflow
+    /// Panics on overflow or allocation failure.
+    /// Use [`Self::try_from_repeated_length`] for a fallible version.
     pub fn from_repeated_length(length: usize, n: usize) -> Self {
+        Self::try_from_repeated_length(length, n).unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    /// Create a new [`OffsetBuffer`] where each slice has the same length
+    /// `length`, repeated `n` times.
+    ///
+    /// ```
+    /// # use arrow_buffer::OffsetBuffer;
+    /// let offsets = OffsetBuffer::<i32>::try_from_repeated_length(4, 3).unwrap();
+    /// assert_eq!(offsets.as_ref(), &[0, 4, 8, 12]);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Errors if `length * n` overflows `usize` or `O`, or if the buffer cannot be allocated.
+    pub fn try_from_repeated_length(length: usize, n: usize) -> Result<Self, OverflowError> {
         if n == 0 {
-            return Self::new_empty();
+            return Self::try_new_empty();
         }
 
         if length == 0 {
-            return Self::new_zeroed(n);
+            return Self::try_new_zeroed(n);
         }
 
-        // Check for overflow
         // Making sure we don't overflow usize or O when calculating the total length
-        length.checked_mul(n).expect("usize overflow");
+        let total_length = length
+            .checked_mul(n)
+            .ok_or_else(|| OverflowError::new::<usize>("total length"))?;
 
-        // Check for overflow
-        O::from_usize(length * n).expect("offset overflow");
+        O::from_usize(total_length)
+            .ok_or_else(|| OverflowError::new::<O>("offset").with_value(total_length))?;
 
-        let offsets = (0..=n)
-            .map(|index| O::usize_as(index * length))
-            .collect::<Vec<O>>();
+        let len_bytes = n
+            .checked_add(1)
+            .and_then(|o| o.checked_mul(std::mem::size_of::<O>()))
+            .ok_or_else(|| OverflowError::new::<usize>("buffer length"))?;
 
-        Self(ScalarBuffer::from(offsets))
+        let mut buffer = MutableBuffer::try_with_capacity(len_bytes)
+            .map_err(|_| OverflowError::new::<usize>("buffer length"))?;
+
+        for index in 0..=n {
+            // SAFETY: buffer capacity was allocated for `(n + 1) * size_of::<O>()` bytes.
+            unsafe {
+                buffer.push_unchecked(O::usize_as(index * length));
+            }
+        }
+
+        Ok(Self(buffer.into_buffer().into()))
+    }
+
+    /// The first offset, i.e. the start of the first range.
+    ///
+    /// An [`OffsetBuffer`] is never empty, so this always returns an offset.
+    ///
+    /// ```
+    /// # use arrow_buffer::OffsetBuffer;
+    /// let offsets = OffsetBuffer::<i32>::from_lengths([1, 3, 5]);
+    /// assert_eq!(offsets.first(), 0);
+    /// assert_eq!(OffsetBuffer::<i32>::new_empty().first(), 0);
+    /// ```
+    #[inline]
+    pub fn first(&self) -> O {
+        self.0
+            .first()
+            .copied()
+            .expect("An `OffsetBuffer` is never empty")
+    }
+
+    /// The last offset, i.e. the end of the last range.
+    ///
+    /// An [`OffsetBuffer`] is never empty, so this always returns an offset.
+    ///
+    /// ```
+    /// # use arrow_buffer::OffsetBuffer;
+    /// let offsets = OffsetBuffer::<i32>::from_lengths([1, 3, 5]);
+    /// assert_eq!(offsets.last(), 9);
+    /// assert_eq!(OffsetBuffer::<i32>::new_empty().last(), 0);
+    /// ```
+    #[inline]
+    pub fn last(&self) -> O {
+        self.0
+            .last()
+            .copied()
+            .expect("An `OffsetBuffer` is never empty")
     }
 
     /// Get an Iterator over the lengths of this [`OffsetBuffer`]
@@ -446,6 +544,66 @@ mod tests {
     }
 
     #[test]
+    fn try_from_lengths_overflow() {
+        // Fits in an i64, but not in an i32:
+        let lengths = [u32::MAX as usize, 1];
+
+        let err = OffsetBuffer::<i32>::try_from_lengths(lengths).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "offset overflow: 4294967296 does not fit in i32"
+        );
+        assert!(OffsetBuffer::<i64>::try_from_lengths(lengths).is_ok());
+
+        let err = OffsetBuffer::<i32>::try_from_lengths([usize::MAX, 1]).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "total length overflow: does not fit in usize"
+        );
+
+        // The panicking version agrees:
+        assert!(std::panic::catch_unwind(|| OffsetBuffer::<i32>::from_lengths(lengths)).is_err());
+    }
+
+    #[test]
+    fn try_from_repeated_length_overflow() {
+        assert_eq!(
+            OffsetBuffer::<i32>::try_from_repeated_length(2, usize::MAX)
+                .unwrap_err()
+                .to_string(),
+            "total length overflow: does not fit in usize"
+        );
+        assert_eq!(
+            OffsetBuffer::<i32>::try_from_repeated_length(u32::MAX as usize, 2)
+                .unwrap_err()
+                .to_string(),
+            "offset overflow: 8589934590 does not fit in i32"
+        );
+        assert_eq!(
+            OffsetBuffer::<i32>::try_from_repeated_length(4, 3)
+                .unwrap()
+                .as_ref(),
+            &[0, 4, 8, 12]
+        );
+    }
+
+    #[test]
+    fn try_new_zeroed_overflow() {
+        assert_eq!(
+            OffsetBuffer::<i64>::try_new_zeroed(usize::MAX)
+                .unwrap_err()
+                .to_string(),
+            "buffer length overflow: does not fit in usize"
+        );
+        let max_layout_len = isize::MAX as usize / std::mem::size_of::<i64>();
+        assert!(OffsetBuffer::<i64>::try_new_zeroed(max_layout_len).is_err());
+        assert_eq!(
+            OffsetBuffer::<i32>::try_new_zeroed(3).unwrap().as_ref(),
+            &[0; 4]
+        );
+    }
+
+    #[test]
     fn offsets() {
         OffsetBuffer::new(vec![0, 1, 2, 3].into());
 
@@ -469,6 +627,13 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "offsets must be monotonically increasing")]
+    #[cfg(feature = "force_validate")]
+    fn non_monotonic_offsets_unchecked_force_validate() {
+        unsafe { OffsetBuffer::<i32>::new_unchecked(vec![0, 2, 1, 3].into()) };
+    }
+
+    #[test]
     fn from_lengths() {
         let buffer = OffsetBuffer::<i32>::from_lengths([2, 6, 3, 7, 2]);
         assert_eq!(buffer.as_ref(), &[0, 2, 8, 11, 18, 20]);
@@ -485,7 +650,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "usize overflow")]
+    #[should_panic(expected = "total length overflow: does not fit in usize")]
     fn from_lengths_usize_overflow() {
         OffsetBuffer::<i32>::from_lengths([usize::MAX, 1]);
     }
@@ -509,7 +674,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "usize overflow")]
+    #[should_panic(expected = "total length overflow: does not fit in usize")]
     fn from_repeated_lengths_usize_length_usize_overflow() {
         OffsetBuffer::<i32>::from_repeated_length(usize::MAX, 2);
     }
@@ -559,6 +724,12 @@ mod tests {
     fn impl_default() {
         let default = OffsetBuffer::<i32>::default();
         assert_eq!(default.as_ref(), &[0]);
+    }
+
+    #[test]
+    fn try_new_empty() {
+        let buffer = OffsetBuffer::<i32>::try_new_empty().unwrap();
+        assert_eq!(buffer.as_ref(), &[0]);
     }
 
     #[test]

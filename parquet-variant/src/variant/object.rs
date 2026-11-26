@@ -1,25 +1,12 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::decoder::{OffsetSizeBytes, map_bytes_to_offsets};
 use crate::utils::{
     first_byte_from_slice, overflow_error, slice_from_slice, try_binary_search_range_by,
 };
-use crate::variant::{Variant, VariantMetadata};
+use crate::variant::{MAX_NESTING_DEPTH, Variant, VariantMetadata};
 
 use arrow_schema::ArrowError;
 
@@ -101,6 +88,7 @@ impl VariantObjectHeader {
 /// - field value array is in bounds
 /// - all field ids are valid metadata dictionary entries (*)
 /// - field ids are lexically ordered according by their corresponding string values (*)
+/// - field names are unique; no field name appears more than once (*)
 /// - all field offsets are in bounds (*)
 /// - all field values are (recursively) _valid_ variant values (*)
 /// - the associated variant metadata is [valid] (*)
@@ -123,7 +111,7 @@ pub struct VariantObject<'m, 'v> {
     num_elements: u32,
     first_field_offset_byte: u32,
     first_value_byte: u32,
-    validated: bool,
+    pub(super) validated: bool,
 }
 
 // We don't want this to grow because it could increase the size of `Variant` and hurt performance.
@@ -146,7 +134,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         Self::try_new_with_shallow_validation(metadata, value).expect("Invalid variant object")
     }
 
-    /// Attempts to interpet `metadata` and `value` as a variant object.
+    /// Attempts to interpret `metadata` and `value` as a variant object.
     ///
     /// # Validation
     ///
@@ -157,7 +145,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         Self::try_new_with_shallow_validation(metadata, value)?.with_full_validation()
     }
 
-    /// Attempts to interpet `metadata` and `value` as a variant object, performing only basic
+    /// Attempts to interpret `metadata` and `value` as a variant object, performing only basic
     /// (constant-cost) [validation].
     ///
     /// [validation]: Self#Validation
@@ -218,9 +206,25 @@ impl<'m, 'v> VariantObject<'m, 'v> {
 
     /// Performs a full [validation] of this variant object.
     ///
+    /// Values nested more than [`MAX_NESTING_DEPTH`] deep are rejected.
+    ///
     /// [validation]: Self#Validation
-    pub fn with_full_validation(mut self) -> Result<Self, ArrowError> {
+    pub fn with_full_validation(self) -> Result<Self, ArrowError> {
+        self.with_full_validation_at_depth(0)
+    }
+
+    // Same as [`Self::with_full_validation`], tracking how deeply validation has recursed.
+    pub(crate) fn with_full_validation_at_depth(
+        mut self,
+        depth: usize,
+    ) -> Result<Self, ArrowError> {
         if !self.validated {
+            if depth >= MAX_NESTING_DEPTH {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Variant nesting depth exceeds the maximum of {MAX_NESTING_DEPTH}"
+                )));
+            }
+
             // Validate the metadata dictionary first, if not already validated, because we pass it
             // by value to all the children (who would otherwise re-validate it repeatedly).
             self.metadata = self.metadata.with_full_validation()?;
@@ -274,8 +278,10 @@ impl<'m, 'v> VariantObject<'m, 'v> {
                 for field_id in field_ids_iter {
                     let next_field_name = self.metadata.get(field_id)?;
 
+                    // Equal names are rejected as well: field names must be unique within an
+                    // object. The sorted branch above enforces this via strictly ordered ids.
                     if let Some(current_name) = current_field_name
-                        && next_field_name < current_name
+                        && next_field_name <= current_name
                     {
                         return Err(ArrowError::InvalidArgumentError(
                             "field names not sorted".to_string(),
@@ -298,7 +304,11 @@ impl<'m, 'v> VariantObject<'m, 'v> {
                 .take(num_offsets.saturating_sub(1))
                 .try_for_each(|offset| {
                     let value_bytes = slice_from_slice(value_buffer, offset..)?;
-                    Variant::try_new_with_metadata(self.metadata.clone(), value_bytes)?;
+                    Variant::try_new_with_metadata_at_depth(
+                        self.metadata.clone(),
+                        value_bytes,
+                        depth + 1,
+                    )?;
 
                     Ok::<_, ArrowError>(())
                 })?;
@@ -344,13 +354,16 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         let value_bytes = slice_from_slice(self.value, self.first_value_byte as _..)?;
         let value_bytes = slice_from_slice(value_bytes, self.get_offset(i)? as _..)?;
         Variant::try_new_with_metadata_and_shallow_validation(self.metadata.clone(), value_bytes)
+            .map(|child| child.inherit_validation(self.validated))
     }
 
     // Attempts to retrieve the ith offset from the field offset region of the byte buffer.
     fn get_offset(&self, i: usize) -> Result<u32, ArrowError> {
         let byte_range = self.first_field_offset_byte as _..self.first_value_byte as _;
         let field_offsets = slice_from_slice(self.value, byte_range)?;
-        self.header.field_offset_size.unpack_u32(field_offsets, i)
+        self.header
+            .field_offset_size
+            .unpack_u32_at_offset(field_offsets, 0, i)
     }
 
     /// Get a field's name by index in `0..self.len()`
@@ -369,7 +382,10 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     fn try_field_name(&self, i: usize) -> Result<&'m str, ArrowError> {
         let byte_range = self.header.field_ids_start_byte() as _..self.first_field_offset_byte as _;
         let field_id_bytes = slice_from_slice(self.value, byte_range)?;
-        let field_id = self.header.field_id_size.unpack_u32(field_id_bytes, i)?;
+        let field_id = self
+            .header
+            .field_id_size
+            .unpack_u32_at_offset(field_id_bytes, 0, i)?;
         self.metadata.get(field_id as _)
     }
 
@@ -1005,5 +1021,72 @@ mod tests {
 
         let v2 = Variant::new_with_metadata(m, &v);
         assert_eq!(v1, v2);
+    }
+
+    #[test]
+    fn test_object_rejects_duplicate_field_names() {
+        // An unsorted dictionary may legally hold duplicate entries, but an object must not
+        // reference the same field name twice.
+        let metadata_bytes = vec![
+            0b0000_0001,
+            2, // dictionary size
+            0, // "a"
+            1, // "a"
+            2,
+            b'a',
+            b'a',
+        ];
+        assert!(
+            !VariantMetadata::try_new(&metadata_bytes)
+                .unwrap()
+                .is_sorted()
+        );
+
+        let value_bytes = vec![
+            0b0000_0010, // object header
+            2,           // num_elements
+            0,           // field id 0 -> "a"
+            1,           // field id 1 -> "a"
+            0,
+            1,
+            2,           // field offsets
+            0b0000_1100, // true
+            0b0000_1000, // false
+        ];
+        let err = Variant::try_new(&metadata_bytes, &value_bytes).unwrap_err();
+        assert!(
+            matches!(err, ArrowError::InvalidArgumentError(_)),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    /// return the value bytes for `depth` single-field objects nested around a null
+    fn make_nested_objects(depth: usize) -> Vec<u8> {
+        let mut value = vec![0u8]; // null primitive
+        for _ in 0..depth {
+            // header: object basic type, 1-byte field ids, 4-byte field offsets
+            let mut outer = vec![0b0000_1110, 1, 0];
+            outer.extend_from_slice(&0u32.to_le_bytes());
+            outer.extend_from_slice(&(value.len() as u32).to_le_bytes());
+            outer.append(&mut value);
+            value = outer;
+        }
+        value
+    }
+
+    #[test]
+    fn test_variant_object_nesting_depth_limit() {
+        let metadata = [0b0000_0001, 1, 0, 1, b'a']; // dictionary of one field name
+
+        let value = make_nested_objects(MAX_NESTING_DEPTH);
+        Variant::try_new(&metadata, &value).unwrap();
+
+        // One level deeper would recurse past the limit -- previously a stack overflow
+        let value = make_nested_objects(MAX_NESTING_DEPTH + 1);
+        let err = Variant::try_new(&metadata, &value).unwrap_err();
+        assert!(
+            err.to_string().contains("nesting depth exceeds"),
+            "unexpected error: {err}"
+        );
     }
 }

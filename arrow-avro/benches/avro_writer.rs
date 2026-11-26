@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Benchmarks for `arrow-avro` Writer (Avro Object Container File)
 
@@ -29,16 +16,15 @@ use arrow_avro::writer::AvroWriter;
 use arrow_buffer::{Buffer, i256};
 use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit, UnionFields, UnionMode};
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use once_cell::sync::Lazy;
 use rand::{
     RngExt, SeedableRng,
     distr::uniform::{SampleRange, SampleUniform},
     rngs::StdRng,
 };
-use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::Arc;
 use std::time::Duration;
+use std::{collections::HashMap, sync::LazyLock};
 use tempfile::tempfile;
 
 const SIZES: [usize; 4] = [4_096, 8_192, 100_000, 1_000_000];
@@ -371,7 +357,7 @@ fn schema_decimal_with_size(name: &str, dt: DataType, size_meta: Option<usize>) 
     Arc::new(Schema::new(vec![field]))
 }
 
-static BOOLEAN_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
+static BOOLEAN_DATA: LazyLock<Vec<RecordBatch>> = LazyLock::new(|| {
     let schema = schema_single("field1", DataType::Boolean);
     SIZES
         .iter()
@@ -382,7 +368,7 @@ static BOOLEAN_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
         .collect()
 });
 
-static INT32_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
+static INT32_DATA: LazyLock<Vec<RecordBatch>> = LazyLock::new(|| {
     let schema = schema_single("field1", DataType::Int32);
     SIZES
         .iter()
@@ -393,7 +379,7 @@ static INT32_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
         .collect()
 });
 
-static INT64_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
+static INT64_DATA: LazyLock<Vec<RecordBatch>> = LazyLock::new(|| {
     let schema = schema_single("field1", DataType::Int64);
     SIZES
         .iter()
@@ -404,7 +390,7 @@ static INT64_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
         .collect()
 });
 
-static FLOAT32_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
+static FLOAT32_DATA: LazyLock<Vec<RecordBatch>> = LazyLock::new(|| {
     let schema = schema_single("field1", DataType::Float32);
     SIZES
         .iter()
@@ -415,7 +401,7 @@ static FLOAT32_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
         .collect()
 });
 
-static FLOAT64_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
+static FLOAT64_DATA: LazyLock<Vec<RecordBatch>> = LazyLock::new(|| {
     let schema = schema_single("field1", DataType::Float64);
     SIZES
         .iter()
@@ -426,7 +412,7 @@ static FLOAT64_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
         .collect()
 });
 
-static BINARY_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
+static BINARY_DATA: LazyLock<Vec<RecordBatch>> = LazyLock::new(|| {
     let schema = schema_single("field1", DataType::Binary);
     SIZES
         .iter()
@@ -437,7 +423,7 @@ static BINARY_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
         .collect()
 });
 
-static FIXED16_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
+static FIXED16_DATA: LazyLock<Vec<RecordBatch>> = LazyLock::new(|| {
     let schema = schema_fixed16();
     SIZES
         .iter()
@@ -448,7 +434,7 @@ static FIXED16_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
         .collect()
 });
 
-static UUID16_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
+static UUID16_DATA: LazyLock<Vec<RecordBatch>> = LazyLock::new(|| {
     let schema = schema_uuid16();
     SIZES
         .iter()
@@ -460,7 +446,7 @@ static UUID16_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
         .collect()
 });
 
-static INTERVAL_MDN_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
+static INTERVAL_MDN_DATA: LazyLock<Vec<RecordBatch>> = LazyLock::new(|| {
     let schema = schema_interval_mdn();
     SIZES
         .iter()
@@ -471,7 +457,7 @@ static INTERVAL_MDN_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
         .collect()
 });
 
-static TIMESTAMP_US_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
+static TIMESTAMP_US_DATA: LazyLock<Vec<RecordBatch>> = LazyLock::new(|| {
     let schema = schema_single("field1", DataType::Timestamp(TimeUnit::Microsecond, None));
     SIZES
         .iter()
@@ -482,7 +468,7 @@ static TIMESTAMP_US_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
         .collect()
 });
 
-static MIXED_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
+static MIXED_DATA: LazyLock<Vec<RecordBatch>> = LazyLock::new(|| {
     let schema = schema_mixed();
     SIZES
         .iter()
@@ -496,7 +482,7 @@ static MIXED_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
         .collect()
 });
 
-static UTF8_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
+static UTF8_DATA: LazyLock<Vec<RecordBatch>> = LazyLock::new(|| {
     let schema = schema_single("field1", DataType::Utf8);
     SIZES
         .iter()
@@ -507,7 +493,7 @@ static UTF8_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
         .collect()
 });
 
-static LIST_UTF8_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
+static LIST_UTF8_DATA: LazyLock<Vec<RecordBatch>> = LazyLock::new(|| {
     // IMPORTANT: ListBuilder creates a child field named "item" that is nullable by default.
     // Make the schema's list item nullable to match the array we construct.
     let item_field = Arc::new(Field::new("item", DataType::Utf8, true));
@@ -521,7 +507,7 @@ static LIST_UTF8_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
         .collect()
 });
 
-static STRUCT_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
+static STRUCT_DATA: LazyLock<Vec<RecordBatch>> = LazyLock::new(|| {
     let struct_dt = DataType::Struct(
         vec![
             Field::new("s1", DataType::Utf8, false),
@@ -541,7 +527,7 @@ static STRUCT_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
 });
 
 #[cfg(feature = "small_decimals")]
-static DECIMAL32_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
+static DECIMAL32_DATA: LazyLock<Vec<RecordBatch>> = LazyLock::new(|| {
     // Choose a representative precision/scale within Decimal32 limits
     let precision: u8 = 7;
     let scale: i8 = 2;
@@ -557,7 +543,7 @@ static DECIMAL32_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
 });
 
 #[cfg(feature = "small_decimals")]
-static DECIMAL64_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
+static DECIMAL64_DATA: LazyLock<Vec<RecordBatch>> = LazyLock::new(|| {
     let precision: u8 = 13;
     let scale: i8 = 3;
     let schema = schema_single("amount", DataType::Decimal64(precision, scale));
@@ -571,7 +557,7 @@ static DECIMAL64_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
         .collect()
 });
 
-static DECIMAL128_BYTES_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
+static DECIMAL128_BYTES_DATA: LazyLock<Vec<RecordBatch>> = LazyLock::new(|| {
     let precision: u8 = 25;
     let scale: i8 = 6;
     let schema = schema_single("amount", DataType::Decimal128(precision, scale));
@@ -585,7 +571,7 @@ static DECIMAL128_BYTES_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
         .collect()
 });
 
-static DECIMAL128_FIXED16_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
+static DECIMAL128_FIXED16_DATA: LazyLock<Vec<RecordBatch>> = LazyLock::new(|| {
     // Same logical type as above but force Avro fixed(16) via metadata "size": "16"
     let precision: u8 = 25;
     let scale: i8 = 6;
@@ -601,7 +587,7 @@ static DECIMAL128_FIXED16_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
         .collect()
 });
 
-static DECIMAL256_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
+static DECIMAL256_DATA: LazyLock<Vec<RecordBatch>> = LazyLock::new(|| {
     // Use a higher precision typical of 256-bit decimals
     let precision: u8 = 50;
     let scale: i8 = 10;
@@ -616,7 +602,7 @@ static DECIMAL256_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
         .collect()
 });
 
-static MAP_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
+static MAP_DATA: LazyLock<Vec<RecordBatch>> = LazyLock::new(|| {
     use arrow_array::builder::{MapBuilder, StringBuilder};
 
     let key_field = Arc::new(Field::new(
@@ -660,7 +646,7 @@ static MAP_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
         .collect()
 });
 
-static ENUM_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
+static ENUM_DATA: LazyLock<Vec<RecordBatch>> = LazyLock::new(|| {
     // To represent an Avro enum, the Arrow writer expects a Dictionary<Int32, Utf8>
     // field with metadata specifying the enum symbols.
     let enum_symbols = r#"["RED", "GREEN", "BLUE"]"#;
@@ -690,7 +676,7 @@ static ENUM_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
         .collect()
 });
 
-static UNION_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
+static UNION_DATA: LazyLock<Vec<RecordBatch>> = LazyLock::new(|| {
     // Basic Dense Union of three types: Utf8, Int32, Float64
     let union_fields = UnionFields::try_new(
         vec![0, 1, 2],

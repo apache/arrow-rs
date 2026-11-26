@@ -1,32 +1,21 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Builders and function for building responses to FlightSQL metadata
 //! / information schema requests.
 //!
 //! - [`GetCatalogsBuilder`] for building responses to [`CommandGetCatalogs`] queries.
 //! - [`GetDbSchemasBuilder`] for building responses to [`CommandGetDbSchemas`] queries.
-//! - [`GetTablesBuilder`]for building responses to [`CommandGetTables`] queries.
-//! - [`SqlInfoDataBuilder`]for building responses to [`CommandGetSqlInfo`] queries.
-//! - [`XdbcTypeInfoDataBuilder`]for building responses to [`CommandGetXdbcTypeInfo`] queries.
+//! - [`GetTablesBuilder`] for building responses to [`CommandGetTables`] queries.
+//! - [`GetTableTypesBuilder`] for building responses to [`CommandGetTableTypes`] queries.
+//! - [`SqlInfoDataBuilder`] for building responses to [`CommandGetSqlInfo`] queries.
+//! - [`XdbcTypeInfoDataBuilder`] for building responses to [`CommandGetXdbcTypeInfo`] queries.
 //!
 //! [`CommandGetCatalogs`]: crate::sql::CommandGetCatalogs
 //! [`CommandGetDbSchemas`]: crate::sql::CommandGetDbSchemas
 //! [`CommandGetTables`]: crate::sql::CommandGetTables
+//! [`CommandGetTableTypes`]: crate::sql::CommandGetTableTypes
 //! [`CommandGetSqlInfo`]: crate::sql::CommandGetSqlInfo
 //! [`CommandGetXdbcTypeInfo`]: crate::sql::CommandGetXdbcTypeInfo
 
@@ -39,9 +28,12 @@ mod xdbc_info;
 
 pub use catalogs::GetCatalogsBuilder;
 pub use db_schemas::GetDbSchemasBuilder;
-pub use sql_info::{SqlInfoData, SqlInfoDataBuilder};
+pub use sql_info::{GetSqlInfoBuilder, SqlInfoData, SqlInfoDataBuilder};
+pub use table_types::GetTableTypesBuilder;
 pub use tables::GetTablesBuilder;
-pub use xdbc_info::{XdbcTypeInfo, XdbcTypeInfoData, XdbcTypeInfoDataBuilder};
+pub use xdbc_info::{
+    GetXdbcTypeInfoBuilder, XdbcTypeInfo, XdbcTypeInfoData, XdbcTypeInfoDataBuilder,
+};
 
 use arrow_array::ArrayRef;
 use arrow_array::UInt32Array;

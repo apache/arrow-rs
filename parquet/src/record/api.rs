@@ -1,25 +1,11 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Contains Row enum that is used to represent record in Rust.
 
 use std::fmt;
 
-use chrono::{TimeZone, Utc};
 use half::f16;
 use num_bigint::{BigInt, Sign};
 use num_traits::Float;
@@ -935,14 +921,10 @@ impl fmt::Display for Field {
 
 /// Helper method to convert Parquet date into a string.
 /// Input `value` is a number of days since the epoch in UTC.
-/// Date is displayed in local timezone.
+/// Date is displayed in UTC timezone.
 #[inline]
 fn convert_date_to_string(value: i32) -> String {
-    static NUM_SECONDS_IN_DAY: i64 = 60 * 60 * 24;
-    let dt = Utc
-        .timestamp_opt(value as i64 * NUM_SECONDS_IN_DAY, 0)
-        .unwrap();
-    format!("{}", dt.format("%Y-%m-%d"))
+    format_date(value as i64)
 }
 
 /// Helper method to convert Parquet timestamp into a string.
@@ -950,8 +932,8 @@ fn convert_date_to_string(value: i32) -> String {
 /// Datetime is displayed in UTC timezone.
 #[inline]
 fn convert_timestamp_millis_to_string(value: i64) -> String {
-    let dt = Utc.timestamp_millis_opt(value).unwrap();
-    format!("{}", dt.format("%Y-%m-%d %H:%M:%S%.3f %:z"))
+    let (secs, millis) = (value.div_euclid(1_000), value.rem_euclid(1_000));
+    format!("{}.{millis:03} +00:00", format_datetime(secs))
 }
 
 /// Helper method to convert Parquet timestamp into a string.
@@ -959,8 +941,40 @@ fn convert_timestamp_millis_to_string(value: i64) -> String {
 /// Datetime is displayed in UTC timezone.
 #[inline]
 fn convert_timestamp_micros_to_string(value: i64) -> String {
-    let dt = Utc.timestamp_micros(value).unwrap();
-    format!("{}", dt.format("%Y-%m-%d %H:%M:%S%.6f %:z"))
+    let (secs, micros) = (value.div_euclid(1_000_000), value.rem_euclid(1_000_000));
+    format!("{}.{micros:06} +00:00", format_datetime(secs))
+}
+
+/// Formats seconds since the epoch as `YYYY-MM-DD hh:mm:ss` in UTC.
+fn format_datetime(secs: i64) -> String {
+    let time = secs.rem_euclid(86_400);
+    format!(
+        "{} {:02}:{:02}:{:02}",
+        format_date(secs.div_euclid(86_400)),
+        time / 3_600,
+        time / 60 % 60,
+        time % 60
+    )
+}
+
+/// Formats days since the epoch as a proleptic Gregorian `YYYY-MM-DD` date. Years
+/// outside 0..=9999 are signed, as in ISO 8601 and chrono's `%Y`.
+fn format_date(days: i64) -> String {
+    // https://howardhinnant.github.io/date_algorithms.html#civil_from_days
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = era * 400 + yoe + i64::from(month <= 2);
+    if (0..=9999).contains(&year) {
+        format!("{year:04}-{month:02}-{day:02}")
+    } else {
+        format!("{year:+05}-{month:02}-{day:02}")
+    }
 }
 
 /// Helper method to convert Parquet time (milliseconds since midnight) into a string.
@@ -990,11 +1004,11 @@ fn convert_time_micros_to_string(value: i64) -> String {
 }
 
 /// Helper method to convert Parquet decimal into a string.
-/// We assert that `scale >= 0` and `precision > scale`, but this will be enforced
-/// when constructing Parquet schema.
+/// We assert that `scale >= 0` and `precision >= scale`, which is enforced when
+/// constructing a Parquet schema.
 #[inline]
 fn convert_decimal_to_string(decimal: &Decimal) -> String {
-    assert!(decimal.scale() >= 0 && decimal.precision() > decimal.scale());
+    assert!(decimal.scale() >= 0 && decimal.precision() >= decimal.scale());
 
     // Specify as signed bytes to resolve sign as part of conversion.
     let num = BigInt::from_signed_bytes_be(decimal.data());
@@ -1029,24 +1043,26 @@ mod tests {
     use std::f64::consts::PI;
     use std::sync::Arc;
 
+    use chrono::{TimeZone, Utc};
+
     use crate::schema::types::{ColumnDescriptor, ColumnPath, PrimitiveTypeBuilder};
 
     /// Creates test column descriptor based on provided type parameters.
     macro_rules! make_column_descr {
         ($physical_type:expr, $logical_type:expr) => {{
-            let tpe = PrimitiveTypeBuilder::new("col", $physical_type)
+            let type_ = PrimitiveTypeBuilder::new("col", $physical_type)
                 .with_converted_type($logical_type)
                 .build()
                 .unwrap();
             Arc::new(ColumnDescriptor::new(
-                Arc::new(tpe),
+                Arc::new(type_),
                 0,
                 0,
                 ColumnPath::from("col"),
             ))
         }};
         ($physical_type:expr, $logical_type:expr, $len:expr, $prec:expr, $scale:expr) => {{
-            let tpe = PrimitiveTypeBuilder::new("col", $physical_type)
+            let type_ = PrimitiveTypeBuilder::new("col", $physical_type)
                 .with_converted_type($logical_type)
                 .with_length($len)
                 .with_precision($prec)
@@ -1054,7 +1070,7 @@ mod tests {
                 .build()
                 .unwrap();
             Arc::new(ColumnDescriptor::new(
-                Arc::new(tpe),
+                Arc::new(type_),
                 0,
                 0,
                 ColumnPath::from("col"),
@@ -1236,13 +1252,13 @@ mod tests {
 
         // FLOAT16
         let descr = {
-            let tpe = PrimitiveTypeBuilder::new("col", PhysicalType::FIXED_LEN_BYTE_ARRAY)
+            let type_ = PrimitiveTypeBuilder::new("col", PhysicalType::FIXED_LEN_BYTE_ARRAY)
                 .with_logical_type(Some(LogicalType::Float16))
                 .with_length(2)
                 .build()
                 .unwrap();
             Arc::new(ColumnDescriptor::new(
-                Arc::new(tpe),
+                Arc::new(type_),
                 0,
                 0,
                 ColumnPath::from("col"),
@@ -1360,6 +1376,44 @@ mod tests {
     }
 
     #[test]
+    fn test_convert_date_and_timestamp_to_string_extreme_years() {
+        let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+        let dates = [
+            (-10000, 1, 1),
+            (-1, 12, 31),
+            (0, 1, 1),
+            (0, 2, 29),
+            (1969, 12, 31),
+            (9999, 12, 31),
+            (10000, 1, 1),
+        ]
+        .map(|(y, m, d)| chrono::NaiveDate::from_ymd_opt(y, m, d).unwrap());
+        let limits = [epoch, chrono::NaiveDate::MIN, chrono::NaiveDate::MAX];
+        for date in dates.into_iter().chain(limits) {
+            let days = (date - epoch).num_days() as i32;
+            assert_eq!(
+                convert_date_to_string(days),
+                date.format("%Y-%m-%d").to_string()
+            );
+            for time in [
+                date.and_hms_opt(0, 0, 0),
+                date.and_hms_micro_opt(23, 59, 59, 999_999),
+            ] {
+                let dt = Utc.from_utc_datetime(&time.unwrap());
+                assert_eq!(
+                    convert_timestamp_millis_to_string(dt.timestamp_millis()),
+                    dt.format("%Y-%m-%d %H:%M:%S%.3f %:z").to_string()
+                );
+                assert_eq!(
+                    convert_timestamp_micros_to_string(dt.timestamp_micros()),
+                    dt.format("%Y-%m-%d %H:%M:%S%.6f %:z").to_string()
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // inline assembly is not supported
     fn test_convert_float16_to_string() {
         assert_eq!(format!("{}", Field::Float16(f16::ONE)), "1.0");
         assert_eq!(format!("{}", Field::Float16(f16::PI)), "3.140625");
@@ -1428,9 +1482,13 @@ mod tests {
         check_decimal(vec![0, 0, 0, 0, 1, 201, 195, 140], 18, 2, "300000.12");
         check_decimal(vec![207, 200], 10, 2, "-123.44");
         check_decimal(vec![207, 200], 10, 8, "-0.00012344");
+        check_decimal(vec![48, 57], 5, 5, "0.12345");
+        check_decimal(vec![207, 199], 5, 5, "-0.12345");
+        check_decimal(vec![45], 5, 5, "0.00045");
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // inline assembly is not supported
     fn test_row_display() {
         // Primitive types
         assert_eq!(format!("{}", Field::Null), "null");
@@ -1554,6 +1612,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // inline assembly is not supported
     fn test_row_primitive_field_fmt() {
         // Primitives types
         let row = Row::new(vec![
@@ -1644,6 +1703,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // inline assembly is not supported
     fn test_row_primitive_accessors() {
         // primitives
         let row = Row::new(vec![
@@ -1753,6 +1813,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // inline assembly is not supported
     fn test_row_primitive_invalid_accessors() {
         // primitives
         let row = Row::new(vec![
@@ -1860,6 +1921,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // inline assembly is not supported
     fn test_list_primitive_accessors() {
         // primitives
         let list = make_list(vec![Field::Bool(false)]);
@@ -2044,6 +2106,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // inline assembly is not supported
     fn test_to_json_value() {
         assert_eq!(Field::Null.to_json_value(), Value::Null);
         assert_eq!(Field::Bool(true).to_json_value(), Value::Bool(true));

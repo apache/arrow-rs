@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Contains Rust mappings for Thrift definition. This module contains only mappings for thrift
 //! enums and unions. Thrift structs are handled elsewhere.
@@ -295,6 +282,8 @@ union LogicalType {
    17: (GeometryType) Geometry
    /// A geospatial feature in the WKB format with an explicit (non-linear/non-planar) edges interpolation.
    18: (GeographyType) Geography
+   /// A reference to a range of bytes, stored inline or in an external file.
+   19: File
 }
 );
 
@@ -449,6 +438,10 @@ enum Encoding {
   /// afterwards. Note that the use of this encoding with FIXED_LEN_BYTE_ARRAY(N) data may
   /// perform poorly for large values of N.
   BYTE_STREAM_SPLIT = 9;
+  /// Adaptive Lossless floating-Point encoding (ALP).
+  ///
+  /// Currently specified for FLOAT and DOUBLE.
+  ALP = 10;
 }
 );
 
@@ -469,6 +462,7 @@ impl FromStr for Encoding {
             "DELTA_BYTE_ARRAY" | "delta_byte_array" => Ok(Encoding::DELTA_BYTE_ARRAY),
             "RLE_DICTIONARY" | "rle_dictionary" => Ok(Encoding::RLE_DICTIONARY),
             "BYTE_STREAM_SPLIT" | "byte_stream_split" => Ok(Encoding::BYTE_STREAM_SPLIT),
+            "ALP" | "alp" => Ok(Encoding::ALP),
             _ => Err(general_err!("unknown encoding: {}", s)),
         }
     }
@@ -608,6 +602,7 @@ fn i32_to_encoding(val: i32) -> Encoding {
         7 => Encoding::DELTA_BYTE_ARRAY,
         8 => Encoding::RLE_DICTIONARY,
         9 => Encoding::BYTE_STREAM_SPLIT,
+        10 => Encoding::ALP,
         _ => panic!("Impossible encoding {val}"),
     }
 }
@@ -781,7 +776,7 @@ impl FromStr for Compression {
             }
             _ => {
                 return Err(ParquetError::General(format!(
-                    "unsupport compression {codec}"
+                    "unsupported compression {codec}"
                 )));
             }
         };
@@ -1114,6 +1109,7 @@ impl ColumnOrder {
                 LogicalType::Variant(_)
                 | LogicalType::Geometry(_)
                 | LogicalType::Geography(_)
+                | LogicalType::File
                 | LogicalType::_Unknown { .. } => SortOrder::UNDEFINED,
             },
             // Fall back to converted type
@@ -1341,6 +1337,7 @@ impl From<Option<LogicalType>> for ConvertedType {
                 | LogicalType::Variant(_)
                 | LogicalType::Geometry(_)
                 | LogicalType::Geography(_)
+                | LogicalType::File
                 | LogicalType::_Unknown { .. }
                 | LogicalType::Unknown => ConvertedType::NONE,
             },
@@ -1440,6 +1437,7 @@ impl str::FromStr for LogicalType {
             )),
             "FLOAT16" => Ok(LogicalType::Float16),
             "VARIANT" => Ok(LogicalType::variant(None)),
+            "FILE" => Ok(LogicalType::File),
             "GEOMETRY" => Ok(LogicalType::geometry(None)),
             "GEOGRAPHY" => Ok(LogicalType::geography(
                 None,
@@ -1965,6 +1963,7 @@ mod tests {
         );
         assert_eq!(Encoding::DELTA_BYTE_ARRAY.to_string(), "DELTA_BYTE_ARRAY");
         assert_eq!(Encoding::RLE_DICTIONARY.to_string(), "RLE_DICTIONARY");
+        assert_eq!(Encoding::ALP.to_string(), "ALP");
     }
 
     #[test]
@@ -2103,10 +2102,10 @@ mod tests {
         // Helper to check the order in a list of values.
         // Only logical type is checked.
         fn check_sort_order(types: Vec<LogicalType>, expected_order: SortOrder) {
-            for tpe in types {
+            for type_ in types {
                 assert_eq!(
                     ColumnOrder::column_order_for_type(
-                        Some(&tpe),
+                        Some(&type_),
                         ConvertedType::NONE,
                         Type::BYTE_ARRAY
                     )
@@ -2166,9 +2165,9 @@ mod tests {
         // Helper to check the order in a list of values.
         // Only converted type is checked.
         fn check_sort_order(types: Vec<ConvertedType>, expected_order: SortOrder) {
-            for tpe in types {
+            for type_ in types {
                 assert_eq!(
-                    ColumnOrder::column_order_for_type(None, tpe, Type::BYTE_ARRAY).sort_order(),
+                    ColumnOrder::column_order_for_type(None, type_, Type::BYTE_ARRAY).sort_order(),
                     expected_order
                 );
             }
@@ -2310,6 +2309,8 @@ mod tests {
         assert_eq!(encoding, Encoding::RLE_DICTIONARY);
         encoding = "BYTE_STREAM_SPLIT".parse().unwrap();
         assert_eq!(encoding, Encoding::BYTE_STREAM_SPLIT);
+        encoding = "alp".parse().unwrap();
+        assert_eq!(encoding, Encoding::ALP);
 
         // test lowercase
         encoding = "byte_stream_split".parse().unwrap();
@@ -2447,6 +2448,7 @@ mod tests {
             Encoding::PLAIN_DICTIONARY,
             Encoding::RLE_DICTIONARY,
             Encoding::BYTE_STREAM_SPLIT,
+            Encoding::ALP,
         ];
         encodings_roundtrip(encodings.into());
     }

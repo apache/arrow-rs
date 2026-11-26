@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Utilities to assist with reading and writing Arrow data as Flight messages
 
@@ -81,9 +68,9 @@ pub fn flight_data_to_arrow_batch(
 }
 
 /// Convert `RecordBatch`es to wire protocol `FlightData`s
-pub fn batches_to_flight_data(
+pub fn batches_to_flight_data<'a>(
     schema: &Schema,
-    batches: Vec<RecordBatch>,
+    batches: impl IntoIterator<Item = &'a RecordBatch>,
 ) -> Result<Vec<FlightData>, ArrowError> {
     let options = IpcWriteOptions::default();
     let schema_flight_data: FlightData = SchemaAsIpc::new(schema, &options).into();
@@ -94,7 +81,7 @@ pub fn batches_to_flight_data(
     let mut dictionary_tracker = writer::DictionaryTracker::new(false);
     let mut ipc_write_context = IpcWriteContext::default();
 
-    for batch in &batches {
+    for batch in batches {
         let (encoded_dictionaries, encoded_batch) = data_gen.encode(
             batch,
             &mut dictionary_tracker,

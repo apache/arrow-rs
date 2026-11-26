@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Module for unshredding VariantArray by folding typed_value columns back into the value column.
 
@@ -21,9 +8,8 @@ use crate::variant_array::{binary_array_value, validate_binary_array};
 use crate::{VariantArray, VariantValueArrayBuilder};
 use arrow::array::{
     Array, ArrayRef, AsArray as _, BinaryArray, BinaryViewArray, BooleanArray,
-    FixedSizeBinaryArray, FixedSizeListArray, GenericListArray, GenericListViewArray,
-    LargeBinaryArray, LargeStringArray, ListLikeArray, PrimitiveArray, StringArray,
-    StringViewArray, StructArray,
+    FixedSizeBinaryArray, GenericListArray, GenericListViewArray, LargeBinaryArray,
+    LargeStringArray, ListLikeArray, PrimitiveArray, StringArray, StringViewArray, StructArray,
 };
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{
@@ -36,8 +22,8 @@ use arrow::temporal_conversions::time64us_to_time;
 use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
 use parquet_variant::{
-    ListBuilder, ObjectBuilder, ObjectFieldBuilder, Variant, VariantBuilderExt, VariantDecimal4,
-    VariantDecimal8, VariantDecimal16, VariantDecimalType, VariantMetadata,
+    ObjectFieldBuilder, Variant, VariantBuilderExt, VariantDecimal4, VariantDecimal8,
+    VariantDecimal16, VariantDecimalType, VariantMetadata,
 };
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -56,7 +42,8 @@ use uuid::Uuid;
 /// A new VariantArray with all data in the value column and no typed_value column
 ///
 /// # Errors
-/// - If the shredded data contains spec violations (e.g., field name conflicts)
+/// - If the shredded data contains spec violations (e.g., field name conflicts or missing
+///   field names in metadata)
 /// - If unsupported data types are encountered in typed_value columns
 pub fn unshred_variant(array: &VariantArray) -> Result<VariantArray> {
     let nulls = array.nulls();
@@ -67,7 +54,7 @@ pub fn unshred_variant(array: &VariantArray) -> Result<VariantArray> {
     // Already unshredded: no data movement needed, but the output must annotate `value` as
     // non-nullable per the spec. Inputs whose value-nulls are not all masked by the parent null
     // buffer (spec-invalid "missing" rows) cannot be re-annotated and fall through to the row
-    // loop below, whose top-level sink materializes `Variant::Null` for such rows.
+    // loop below, whose top-level builder materializes `Variant::Null` for such rows.
     if typed_value_col.is_none() {
         if value_field_is_non_nullable(array) {
             return Ok(array.clone());
@@ -97,8 +84,8 @@ pub fn unshred_variant(array: &VariantArray) -> Result<VariantArray> {
                 )
             })?;
             let metadata = VariantMetadata::try_new(metadata_bytes)?;
-            let mut row_sink = TopLevelRowSink(value_builder.builder_ext(&metadata));
-            row_builder.append_row(&mut row_sink, &metadata, i)?;
+            let mut value_builder = value_builder.builder_ext(&metadata);
+            row_builder.append_row(&mut value_builder, &metadata, i)?;
         }
     }
 
@@ -124,38 +111,6 @@ fn value_nulls_are_masked(value: &ArrayRef, parent_nulls: Option<&NullBuffer>) -
         || parent_nulls
             .zip(value.nulls())
             .is_some_and(|(parent, value_nulls)| parent.contains(value_nulls))
-}
-
-/// Wraps the sink that every top-level row is appended into. The row builders signal a missing
-/// value (value and typed_value both NULL) by calling `append_null`, and this wrapper gives that
-/// signal its top-level meaning: `Variant::Null`, because the non-nullable output `value` column
-/// cannot hold a physical NULL. Array-level NULL rows are appended before the sink is built, so
-/// they never reach it. Nested builders created via `try_new_object`/`try_new_list` are returned
-/// unwrapped, so nested missing values keep their own semantics, e.g. [`ObjectFieldBuilder`]
-/// omits the field.
-struct TopLevelRowSink<B>(B);
-
-impl<B: VariantBuilderExt> VariantBuilderExt for TopLevelRowSink<B> {
-    type State<'a>
-        = B::State<'a>
-    where
-        Self: 'a;
-
-    fn append_null(&mut self) {
-        self.0.append_value(Variant::Null);
-    }
-
-    fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>) {
-        self.0.append_value(value);
-    }
-
-    fn try_new_list(&mut self) -> Result<ListBuilder<'_, Self::State<'_>>> {
-        self.0.try_new_list()
-    }
-
-    fn try_new_object(&mut self) -> Result<ObjectBuilder<'_, Self::State<'_>>> {
-        self.0.try_new_object()
-    }
 }
 
 /// Row builder for converting shredded VariantArray rows back to unshredded form
@@ -185,7 +140,6 @@ enum UnshredVariantRowBuilder<'a> {
     LargeList(ListUnshredVariantBuilder<'a, GenericListArray<i64>>),
     ListView(ListUnshredVariantBuilder<'a, GenericListViewArray<i32>>),
     LargeListView(ListUnshredVariantBuilder<'a, GenericListViewArray<i64>>),
-    FixedSizeList(ListUnshredVariantBuilder<'a, FixedSizeListArray>),
     Struct(StructUnshredVariantBuilder<'a>),
     ValueOnly(ValueOnlyUnshredVariantBuilder<'a>),
     Null(NullUnshredVariantBuilder),
@@ -230,7 +184,6 @@ impl<'a> UnshredVariantRowBuilder<'a> {
             Self::LargeList(b) => b.append_row(builder, metadata, index),
             Self::ListView(b) => b.append_row(builder, metadata, index),
             Self::LargeListView(b) => b.append_row(builder, metadata, index),
-            Self::FixedSizeList(b) => b.append_row(builder, metadata, index),
             Self::Struct(b) => b.append_row(builder, metadata, index),
             Self::ValueOnly(b) => b.append_row(builder, metadata, index),
             Self::Null(b) => b.append_row(builder, metadata, index),
@@ -342,9 +295,6 @@ impl<'a> UnshredVariantRowBuilder<'a> {
                 value,
                 typed_value.as_list_view(),
             )?),
-            DataType::FixedSizeList(_, _) => Self::FixedSizeList(
-                ListUnshredVariantBuilder::try_new(value, typed_value.as_fixed_size_list())?,
-            ),
             _ => {
                 return Err(ArrowError::NotYetImplemented(format!(
                     "Unshredding not yet supported for type: {}",
@@ -366,8 +316,7 @@ impl NullUnshredVariantBuilder {
         _metadata: &VariantMetadata,
         _index: usize,
     ) -> Result<()> {
-        builder.append_value(Variant::Null);
-        Ok(())
+        builder.try_append_value(Variant::Null)
     }
 }
 
@@ -396,7 +345,7 @@ impl<'a> ValueOnlyUnshredVariantBuilder<'a> {
                 )
             })?;
             let variant = Variant::try_new_with_metadata(metadata.clone(), value_bytes)?;
-            builder.append_value(variant);
+            builder.try_append_value(variant)?;
         }
         Ok(())
     }
@@ -432,7 +381,7 @@ macro_rules! handle_unshredded_case {
         // If typed_value is null, handle unshredded case and return early
         if $self.typed_value.is_null($index) {
             match value {
-                Some(value) => $builder.append_value(value),
+                Some(value) => $builder.try_append_value(value)?,
                 None => $builder.append_null(),
             }
             return Ok(());
@@ -488,8 +437,7 @@ macro_rules! impl_append_to_variant_builder {
                     let $v = value;
                     let value = $transform;
                 )?
-                builder.append_value(value);
-                Ok(())
+                builder.try_append_value(value)
             }
         }
     };
@@ -581,9 +529,9 @@ impl<'a, T: TimestampType> TimestampUnshredRowBuilder<'a, T> {
         let timestamp_value = self.typed_value.value(index);
         let dt = T::to_datetime_utc(timestamp_value)?;
         if self.has_timezone {
-            builder.append_value(dt);
+            builder.try_append_value(dt)?;
         } else {
-            builder.append_value(dt.naive_utc());
+            builder.try_append_value(dt.naive_utc())?;
         }
         Ok(())
     }
@@ -623,8 +571,7 @@ where
 
         let raw = self.typed_value.value(index);
         let variant = V::try_new_with_signed_scale(raw, self.scale)?;
-        builder.append_value(variant);
-        Ok(())
+        builder.try_append_value(variant)
     }
 }
 
@@ -692,7 +639,7 @@ impl<'a> StructUnshredVariantBuilder<'a> {
                         "Field '{field_name}' appears in both typed_value and value",
                     )));
                 }
-                object_builder.insert_bytes(field_name, field_value);
+                object_builder.try_insert_bytes(field_name, field_value)?;
             }
         }
 
@@ -759,10 +706,11 @@ impl<'a, L: ListLikeArray> ListUnshredVariantBuilder<'a, L> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{VariantArray, VariantArrayBuilder, shred_variant};
+    use crate::{VariantArray, VariantArrayBuilder, json_to_variant, shred_variant};
     use arrow::array::{
-        Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, Int64Array, LargeBinaryArray,
-        LargeStringArray, StringViewArray,
+        Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, Decimal64Array, Int64Array,
+        LargeBinaryArray, LargeStringArray, StringArray, StringViewArray, StructArrayAssembler,
+        TimestampMicrosecondArray,
     };
     use arrow::datatypes::{DataType, Field, Fields, TimeUnit};
     use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, Variant, VariantBuilder, VariantDecimal8};
@@ -863,9 +811,7 @@ mod tests {
 
     #[test]
     fn test_shred_unshred_round_trip_annotates_value_non_nullable() {
-        let mut builder = VariantArrayBuilder::new(1);
-        builder.append_variant(Variant::from(42i64));
-        let original = builder.build();
+        let original = VariantArray::from_iter([Some(42_i64)]);
         assert!(!value_field_is_nullable(&original));
 
         let shredded = shred_variant(&original, &DataType::Int64).unwrap();
@@ -898,10 +844,7 @@ mod tests {
 
     #[test]
     fn test_unshred_already_unshredded_reannotates_nullable_value() {
-        let mut builder = VariantArrayBuilder::new(2);
-        builder.append_variant(Variant::from(42i64));
-        builder.append_null();
-        let original = builder.build();
+        let original = VariantArray::from_iter([Some(42_i64), None]);
 
         // same data, but with the out-of-spec nullable `value` annotation
         let nullable_input = VariantArray::from_parts(
@@ -971,18 +914,14 @@ mod tests {
     /// shape has its own expansion of `handle_unshredded_case`.
     #[test]
     fn test_unshred_missing_row_for_decimal_timestamp_object_list() {
-        let mut builder = VariantArrayBuilder::new(2);
-        builder.append_variant(Variant::from(VariantDecimal8::try_new(1234, 2).unwrap()));
-        builder.append_null();
-        assert_missing_row_unshreds_to_variant_null(&builder.build(), &DataType::Decimal64(18, 2));
+        let decimals =
+            VariantArray::from_iter([Some(VariantDecimal8::try_new(1234, 2).unwrap()), None]);
+        assert_missing_row_unshreds_to_variant_null(&decimals, &DataType::Decimal64(18, 2));
 
-        let mut builder = VariantArrayBuilder::new(2);
-        builder.append_variant(Variant::from(
-            chrono::DateTime::from_timestamp(1, 0).unwrap(),
-        ));
-        builder.append_null();
+        let timestamps =
+            VariantArray::from_iter([Some(chrono::DateTime::from_timestamp(1, 0).unwrap()), None]);
         assert_missing_row_unshreds_to_variant_null(
-            &builder.build(),
+            &timestamps,
             &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
         );
 
@@ -1016,9 +955,7 @@ mod tests {
 
     #[test]
     fn test_unshred_value_only_with_unmasked_nulls_materializes_variant_null() {
-        let mut builder = VariantArrayBuilder::new(1);
-        builder.append_variant(Variant::from(42i64));
-        let single = builder.build();
+        let single = VariantArray::from_iter([Some(42_i64)]);
         let metadata_bytes = single.metadata_column().as_binary_view().value(0);
         let value_bytes = single.value_column().as_binary_view().value(0);
 
@@ -1055,5 +992,54 @@ mod tests {
             result.is_err(),
             "unshred_variant must return Err on malformed metadata, not panic",
         );
+    }
+
+    #[test]
+    fn test_unshred_missing_metadata_field() {
+        let null_value: ArrayRef = Arc::new(BinaryArray::from(vec![Some(&[0u8][..])]));
+        let no_value: ArrayRef = Arc::new(BinaryArray::from(vec![None::<&[u8]>]));
+        let decimal = Decimal64Array::from(vec![1234])
+            .with_precision_and_scale(10, 2)
+            .unwrap();
+        let timestamp = TimestampMicrosecondArray::from(vec![1]);
+        // Each row appends to field `a` through a different row builder.
+        let rows: [(&ArrayRef, Option<ArrayRef>); 6] = [
+            (&no_value, Some(Arc::new(Int64Array::from(vec![1])))),
+            (&null_value, Some(Arc::new(Int64Array::from(vec![None])))),
+            (&no_value, Some(Arc::new(decimal))),
+            (&no_value, Some(Arc::new(timestamp.clone()))),
+            (&no_value, Some(Arc::new(timestamp.with_timezone("UTC")))),
+            (&null_value, None),
+        ];
+        for (value, typed_value) in rows {
+            let mut field = StructArrayAssembler::new().with_field("value", value.clone(), true);
+            if let Some(typed_value) = typed_value {
+                field = field.with_field("typed_value", typed_value, true);
+            }
+            let object = StructArrayAssembler::new()
+                .with_field("a", Arc::new(field.build().unwrap()), false)
+                .build()
+                .unwrap();
+            let input = VariantArray::perfectly_shredded(
+                Arc::new(BinaryArray::from_vec(vec![EMPTY_VARIANT_METADATA_BYTES])),
+                Arc::new(object),
+                None,
+            );
+            let err = crate::unshred_variant(&input).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                "Invalid argument error: Field name 'a' not found in metadata dictionary"
+            );
+        }
+    }
+
+    #[test]
+    fn test_unshred_absent_field_missing_from_metadata() {
+        let json: ArrayRef = Arc::new(StringArray::from(vec!["{}"]));
+        let original = json_to_variant(&json).unwrap();
+        let object_type =
+            DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int64, true)]));
+        let shredded = shred_variant(&original, &object_type).unwrap();
+        assert_eq!(crate::unshred_variant(&shredded).unwrap(), original);
     }
 }

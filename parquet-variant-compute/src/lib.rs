@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`VariantArray`] and compute kernels for the [Variant Binary Encoding] from [Apache Parquet].
 //!
@@ -38,6 +25,13 @@
 //! [Apache Parquet]: https://parquet.apache.org/
 //! [`VariantPath`]: parquet_variant::VariantPath
 //! [Variant issue]: https://github.com/apache/arrow-rs/issues/6736
+//!
+//! # Platform Support
+//!
+//! Only little-endian platforms are officially supported and tested in CI.
+//! Big-endian platforms are not tested in CI and may not work correctly.
+//! Fixes for big-endian platforms are welcome and handled on a best-effort basis,
+//! but compatibility is not guaranteed.
 
 mod arrow_to_variant;
 mod cast_to_variant;
@@ -51,7 +45,8 @@ mod variant_array_builder;
 mod variant_get;
 mod variant_to_arrow;
 
-pub use variant_array::{ShreddingState, VariantArray, VariantArrayIter, VariantType};
+pub use parquet_variant::VariantType;
+pub use variant_array::{ShreddingState, VariantArray, VariantArrayIter};
 pub use variant_array_builder::{VariantArrayBuilder, VariantValueArrayBuilder};
 
 pub use cast_to_variant::{cast_to_variant, cast_to_variant_with_options};

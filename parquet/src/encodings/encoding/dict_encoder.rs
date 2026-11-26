@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 // ----------------------------------------------------------------------
 // Dictionary encoding
@@ -116,6 +103,11 @@ impl<T: DataType> DictEncoder<T> {
         self.interner.storage().uniques.len()
     }
 
+    /// Returns the distinct values interned so far, in dictionary order.
+    pub fn uniques(&self) -> &[T::T] {
+        &self.interner.storage().uniques
+    }
+
     /// Returns size of unique values (keys) in the dictionary, in bytes.
     pub fn dict_encoded_size(&self) -> usize {
         self.interner.storage().size_in_bytes
@@ -138,9 +130,7 @@ impl<T: DataType> DictEncoder<T> {
 
         // Write bit width in the first byte
         let mut encoder = RleEncoder::new_from_buf(self.bit_width(), buffer);
-        for index in &self.indices {
-            encoder.put(*index)
-        }
+        encoder.put_batch(&self.indices);
         self.indices.clear();
         Ok(encoder.consume().into())
     }

@@ -1,25 +1,13 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::builder::ArrayBuilder;
 use crate::types::{ByteArrayType, GenericBinaryType, GenericStringType};
 use crate::{Array, ArrayRef, GenericByteArray, OffsetSizeTrait};
-use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer, NullBufferBuilder, ScalarBuffer};
-use arrow_data::ArrayDataBuilder;
+use arrow_buffer::{
+    ArrowNativeType, Buffer, MutableBuffer, NullBufferBuilder, OffsetBuffer, ScalarBuffer,
+};
 use arrow_schema::ArrowError;
 use std::any::Any;
 use std::sync::Arc;
@@ -58,17 +46,24 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
 
     /// Creates a new  [`GenericByteBuilder`] from buffers.
     ///
+    /// Any bytes in `value_buffer` after the last offset are dropped. The first
+    /// bit of `null_buffer` is for the first row.
+    ///
     /// # Safety
     ///
     /// This doesn't verify buffer contents as it assumes the buffers are from
     /// existing and valid [`GenericByteArray`].
     pub unsafe fn new_from_buffer(
         offsets_buffer: MutableBuffer,
-        value_buffer: MutableBuffer,
+        mut value_buffer: MutableBuffer,
         null_buffer: Option<MutableBuffer>,
     ) -> Self {
         let offsets_builder: Vec<T::Offset> =
             ScalarBuffer::<T::Offset>::from(offsets_buffer).into();
+
+        // New values are appended at the end of the values buffer, so it must end
+        // at the last offset
+        value_buffer.truncate(offsets_builder.last().unwrap().as_usize());
         let value_builder: Vec<u8> = ScalarBuffer::<u8>::from(value_buffer).into();
 
         let null_buffer_builder = null_buffer
@@ -207,31 +202,46 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
 
     /// Builds the [`GenericByteArray`] and reset this builder.
     pub fn finish(&mut self) -> GenericByteArray<T> {
-        let array_type = T::DATA_TYPE;
-        let array_builder = ArrayDataBuilder::new(array_type)
-            .len(self.len())
-            .add_buffer(std::mem::take(&mut self.offsets_builder).into())
-            .add_buffer(std::mem::take(&mut self.value_builder).into())
-            .nulls(self.null_buffer_builder.finish());
+        debug_assert!(self.offsets_builder.is_sorted());
+        // SAFETY: offsets start at 0 and every append pushes the current end of
+        // `value_builder`, so they are non-empty and monotonically increasing.
+        let offsets = unsafe {
+            OffsetBuffer::new_unchecked(std::mem::take(&mut self.offsets_builder).into())
+        };
+        let values = std::mem::take(&mut self.value_builder).into();
+        let nulls = self.null_buffer_builder.finish();
 
-        self.offsets_builder.push(self.next_offset());
-        let array_data = unsafe { array_builder.build_unchecked() };
-        GenericByteArray::from(array_data)
+        self.offsets_builder.push(T::Offset::usize_as(0));
+
+        // SAFETY: `try_new` would not error. No append pushes an offset past
+        // the end of `value_builder`, which only grows, so the last offset is
+        // at most `values.len()` (`write!` can leave bytes after it). `nulls`
+        // has one entry per value. For strings, every append, `write!`
+        // included, copies whole UTF-8 sequences, so each offset pair bounds
+        // valid UTF-8.
+        unsafe { GenericByteArray::new_unchecked(offsets, values, nulls) }
     }
 
     /// Builds the [`GenericByteArray`] without resetting the builder.
     pub fn finish_cloned(&self) -> GenericByteArray<T> {
-        let array_type = T::DATA_TYPE;
-        let offset_buffer = Buffer::from_slice_ref(self.offsets_builder.as_slice());
-        let value_buffer = Buffer::from_slice_ref(self.value_builder.as_slice());
-        let array_builder = ArrayDataBuilder::new(array_type)
-            .len(self.len())
-            .add_buffer(offset_buffer)
-            .add_buffer(value_buffer)
-            .nulls(self.null_buffer_builder.finish_cloned());
+        debug_assert!(self.offsets_builder.is_sorted());
+        // SAFETY: offsets start at 0 and every append pushes the current end of
+        // `value_builder`, so they are non-empty and monotonically increasing.
+        let offsets = unsafe {
+            OffsetBuffer::new_unchecked(
+                Buffer::from_slice_ref(self.offsets_builder.as_slice()).into(),
+            )
+        };
+        let values = Buffer::from_slice_ref(self.value_builder.as_slice());
+        let nulls = self.null_buffer_builder.finish_cloned();
 
-        let array_data = unsafe { array_builder.build_unchecked() };
-        GenericByteArray::from(array_data)
+        // SAFETY: `try_new` would not error. No append pushes an offset past
+        // the end of `value_builder`, which only grows, so the last offset is
+        // at most `values.len()` (`write!` can leave bytes after it). `nulls`
+        // has one entry per value. For strings, every append, `write!`
+        // included, copies whole UTF-8 sequences, so each offset pair bounds
+        // valid UTF-8.
+        unsafe { GenericByteArray::new_unchecked(offsets, values, nulls) }
     }
 
     /// Returns the current values buffer as a slice
@@ -540,6 +550,15 @@ mod tests {
     use arrow_buffer::NullBuffer;
     use std::fmt::Write as _;
     use std::io::Write as _;
+
+    #[test]
+    fn test_finish_materialized_without_nulls() {
+        let mut builder = GenericStringBuilder::<i32>::new();
+        builder.append_nulls(0);
+        builder.append_value("a");
+        assert!(builder.finish_cloned().nulls().is_none());
+        assert!(builder.finish().nulls().is_none());
+    }
 
     fn _test_generic_binary_builder<O: OffsetSizeTrait>() {
         let mut builder = GenericBinaryBuilder::<O>::new();

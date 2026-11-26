@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow_flight::sql::DoPutPreparedStatementResult;
 use arrow_flight::sql::server::PeekableFlightDataStream;
@@ -21,12 +8,11 @@ use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
 use core::str;
 use futures::{Stream, TryStreamExt, stream};
-use once_cell::sync::Lazy;
 use prost::Message;
 use std::collections::HashSet;
 use std::pin::Pin;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use tonic::metadata::MetadataValue;
 use tonic::transport::Server;
 use tonic::transport::{Certificate, Identity, ServerTlsConfig};
@@ -70,7 +56,7 @@ const FAKE_TOKEN: &str = "uuid_token";
 const FAKE_HANDLE: &str = "uuid_handle";
 const FAKE_UPDATE_RESULT: i64 = 1;
 
-static INSTANCE_SQL_DATA: Lazy<SqlInfoData> = Lazy::new(|| {
+static INSTANCE_SQL_DATA: LazyLock<SqlInfoData> = LazyLock::new(|| {
     let mut builder = SqlInfoDataBuilder::new();
     // Server information
     builder.append(SqlInfo::FlightSqlServerName, "Example Flight SQL Server");
@@ -80,7 +66,7 @@ static INSTANCE_SQL_DATA: Lazy<SqlInfoData> = Lazy::new(|| {
     builder.build().unwrap()
 });
 
-static INSTANCE_XBDC_DATA: Lazy<XdbcTypeInfoData> = Lazy::new(|| {
+static INSTANCE_XBDC_DATA: LazyLock<XdbcTypeInfoData> = LazyLock::new(|| {
     let mut builder = XdbcTypeInfoDataBuilder::new();
     builder.append(XdbcTypeInfo {
         type_name: "INTEGER".into(),
@@ -106,7 +92,7 @@ static INSTANCE_XBDC_DATA: Lazy<XdbcTypeInfoData> = Lazy::new(|| {
     builder.build().unwrap()
 });
 
-static TABLES: Lazy<Vec<&'static str>> = Lazy::new(|| vec!["flight_sql.example.table"]);
+static TABLES: LazyLock<Vec<&'static str>> = LazyLock::new(|| vec!["flight_sql.example.table"]);
 
 #[derive(Clone)]
 pub struct FlightSqlServiceImpl {}
@@ -207,7 +193,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let batch = Self::fake_result().map_err(|e| status!("Could not fake a result", e))?;
         let schema = batch.schema_ref();
         let batches = vec![batch.clone()];
-        let flight_data = batches_to_flight_data(schema, batches)
+        let flight_data = batches_to_flight_data(schema, &batches)
             .map_err(|e| status!("Could not convert batches", e))?
             .into_iter()
             .map(Ok);
@@ -734,8 +720,6 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<ActionCancelQueryResult, Status> {
         Err(Status::unimplemented("Implement do_action_cancel_query"))
     }
-
-    async fn register_sql_info(&self, _id: i32, _result: &SqlInfo) {}
 }
 
 /// This example shows how to run a FlightSql server
@@ -749,7 +733,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::var("USE_TLS").ok().is_some() {
         let cert = std::fs::read_to_string("arrow-flight/examples/data/server.pem")?;
         let key = std::fs::read_to_string("arrow-flight/examples/data/server.key")?;
-        let client_ca = std::fs::read_to_string("arrow-flight/examples/data/client_ca.pem")?;
+        let client_ca = std::fs::read_to_string("arrow-flight/examples/data/ca_root.pem")?;
 
         let svc = FlightServiceServer::new(FlightSqlServiceImpl {});
         let tls_config = ServerTlsConfig::new()

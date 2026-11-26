@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::alloc::Layout;
 use std::mem;
@@ -27,9 +14,7 @@ use crate::{
 };
 
 #[cfg(feature = "pool")]
-use crate::pool::{MemoryPool, MemoryReservation};
-#[cfg(feature = "pool")]
-use std::sync::Mutex;
+use crate::pool::{MemoryPool, TrackedReservation};
 
 use super::Buffer;
 
@@ -130,7 +115,7 @@ pub struct MutableBuffer {
 
     /// Memory reservation for tracking memory usage
     #[cfg(feature = "pool")]
-    reservation: Mutex<Option<Box<dyn MemoryReservation>>>,
+    reservation: TrackedReservation,
 }
 
 impl MutableBuffer {
@@ -181,7 +166,7 @@ impl MutableBuffer {
             len: 0,
             layout,
             #[cfg(feature = "pool")]
-            reservation: std::sync::Mutex::new(None),
+            reservation: TrackedReservation::default(),
         })
     }
 
@@ -224,7 +209,7 @@ impl MutableBuffer {
             len,
             layout,
             #[cfg(feature = "pool")]
-            reservation: std::sync::Mutex::new(None),
+            reservation: TrackedReservation::default(),
         })
     }
 
@@ -238,7 +223,8 @@ impl MutableBuffer {
         let len = bytes.len();
         let data = bytes.ptr();
         #[cfg(feature = "pool")]
-        let reservation = bytes.reservation.lock().unwrap().take();
+        let reservation = bytes.reservation.take();
+
         mem::forget(bytes);
 
         Ok(Self {
@@ -246,7 +232,7 @@ impl MutableBuffer {
             len,
             layout,
             #[cfg(feature = "pool")]
-            reservation: Mutex::new(reservation),
+            reservation,
         })
     }
 
@@ -259,6 +245,12 @@ impl MutableBuffer {
     pub fn new_null(len: usize) -> Self {
         let num_bytes = bit_util::ceil(len, 8);
         MutableBuffer::from_len_zeroed(num_bytes)
+    }
+
+    /// Fallible version of [`MutableBuffer::new_null`].
+    pub fn try_new_null(len: usize) -> Result<Self, MutableBufferError> {
+        let num_bytes = bit_util::ceil(len, 8);
+        MutableBuffer::try_from_len_zeroed(num_bytes)
     }
 
     /// Set the bits in the range of `[0, end)` to 0 (if `val` is false), or 1 (if `val`
@@ -446,11 +438,7 @@ impl MutableBuffer {
         };
         self.layout = new_layout;
         #[cfg(feature = "pool")]
-        {
-            if let Some(reservation) = self.reservation.lock().unwrap().as_mut() {
-                reservation.resize(self.layout.size());
-            }
-        }
+        self.reservation.resize(self.layout.size());
         Ok(())
     }
     /// Truncates this buffer to `len` bytes
@@ -463,11 +451,7 @@ impl MutableBuffer {
         }
         self.len = len;
         #[cfg(feature = "pool")]
-        {
-            if let Some(reservation) = self.reservation.lock().unwrap().as_mut() {
-                reservation.resize(self.len);
-            }
-        }
+        self.reservation.resize(self.len);
     }
 
     /// Fallible version of [`MutableBuffer::resize`].
@@ -483,11 +467,7 @@ impl MutableBuffer {
         // this truncates the buffer when new_len < self.len
         self.len = new_len;
         #[cfg(feature = "pool")]
-        {
-            if let Some(reservation) = self.reservation.lock().unwrap().as_mut() {
-                reservation.resize(self.len);
-            }
-        }
+        self.reservation.resize(self.len);
         Ok(())
     }
     /// Resizes the buffer, either truncating its contents (with no change in capacity), or
@@ -572,11 +552,7 @@ impl MutableBuffer {
     pub fn clear(&mut self) {
         self.len = 0;
         #[cfg(feature = "pool")]
-        {
-            if let Some(reservation) = self.reservation.lock().unwrap().as_mut() {
-                reservation.resize(self.len);
-            }
-        }
+        self.reservation.resize(self.len);
     }
 
     /// Returns the data stored in this buffer as a slice.
@@ -607,10 +583,7 @@ impl MutableBuffer {
     pub(super) fn into_buffer(self) -> Buffer {
         let bytes = unsafe { Bytes::new(self.data, self.len, Deallocation::Standard(self.layout)) };
         #[cfg(feature = "pool")]
-        {
-            let reservation = self.reservation.lock().unwrap().take();
-            *bytes.reservation.lock().unwrap() = reservation;
-        }
+        bytes.reservation.replace(self.reservation.take());
         std::mem::forget(self);
         Buffer::from(bytes)
     }
@@ -708,6 +681,20 @@ impl MutableBuffer {
         self.len += additional;
     }
 
+    /// Fallible version of [`MutableBuffer::push`].
+    #[inline]
+    pub fn try_push<T: ToByteSlice>(&mut self, item: T) -> Result<(), MutableBufferError> {
+        let additional = std::mem::size_of::<T>();
+        self.try_reserve(additional)?;
+        unsafe {
+            let src = item.to_byte_slice().as_ptr();
+            let dst = self.data.as_ptr().add(self.len);
+            std::ptr::copy_nonoverlapping(src, dst, additional);
+        }
+        self.len += additional;
+        Ok(())
+    }
+
     /// Extends the buffer with a new item, without checking for sufficient capacity
     /// # Safety
     /// Caller must ensure that the capacity()-len()>=`size_of<T>`()
@@ -757,9 +744,31 @@ impl MutableBuffer {
     ///
     /// This is similar to `from_trusted_len_iter_bool`, however, can be significantly faster
     /// as it eliminates the conditional `Iterator::next`
+    ///
+    /// # Panics
+    ///
+    /// Panics if the backing storage for `len` bits cannot be allocated. Use
+    /// [`MutableBuffer::try_collect_bool`] for a fallible version.
     #[inline]
-    pub fn collect_bool<F: FnMut(usize) -> bool>(len: usize, mut f: F) -> Self {
-        let mut buffer: Vec<u64> = Vec::with_capacity(bit_util::ceil(len, 64));
+    pub fn collect_bool<F: FnMut(usize) -> bool>(len: usize, f: F) -> Self {
+        Self::try_collect_bool(len, f).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// Fallible version of [`MutableBuffer::collect_bool`].
+    ///
+    /// `len` is a bit count, so the reservation is `ceil(len / 64)` u64 slots. This function
+    /// returns an error if that much memory cannot be reserved up front.
+    #[inline]
+    pub fn try_collect_bool<F: FnMut(usize) -> bool>(
+        len: usize,
+        mut f: F,
+    ) -> Result<Self, MutableBufferError> {
+        let words = bit_util::ceil(len, 64);
+        let layout = Layout::array::<u64>(words).map_err(|_| MutableBufferError::LayoutError)?;
+        let mut buffer: Vec<u64> = Vec::new();
+        buffer
+            .try_reserve(words)
+            .map_err(|_| MutableBufferError::AllocationError(layout))?;
 
         let chunks = len / 64;
         let remainder = len % 64;
@@ -785,7 +794,7 @@ impl MutableBuffer {
 
         let mut buffer: MutableBuffer = buffer.into();
         buffer.truncate(bit_util::ceil(len, 8));
-        buffer
+        Ok(buffer)
     }
 
     /// Extends this buffer with boolean values.
@@ -887,7 +896,7 @@ impl MutableBuffer {
 
             let words_start = bit_idx / 8;
             let words_end = words_start + chunks * 8;
-            for dst in slice[words_start..words_end].chunks_exact_mut(8) {
+            for dst in slice[words_start..words_end].as_chunks_mut::<8>().0 {
                 let mut packed: u64 = 0;
                 for i in 0..64 {
                     packed |= (iter.next().unwrap() as u64) << i;
@@ -934,7 +943,7 @@ impl MutableBuffer {
     /// multiple arrays.
     #[cfg(feature = "pool")]
     pub fn claim(&self, pool: &dyn MemoryPool) {
-        *self.reservation.lock().unwrap() = Some(pool.reserve(self.capacity()));
+        self.reservation.claim(pool, self.capacity());
     }
 }
 
@@ -981,7 +990,7 @@ impl<T: ArrowNativeType> From<Vec<T>> for MutableBuffer {
             len,
             layout,
             #[cfg(feature = "pool")]
-            reservation: std::sync::Mutex::new(None),
+            reservation: TrackedReservation::default(),
         }
     }
 }
@@ -1383,6 +1392,28 @@ mod tests {
     }
 
     #[test]
+    fn mutable_try_push_matches_push() {
+        let mut fallible = MutableBuffer::new(0);
+        fallible.try_push(1_u8).unwrap();
+        fallible.try_push(1_u64).unwrap();
+
+        let mut infallible = MutableBuffer::new(0);
+        infallible.push(1_u8);
+        infallible.push(1_u64);
+
+        assert_eq!(fallible.as_slice(), infallible.as_slice());
+        assert_eq!(fallible.len(), infallible.len());
+        assert_eq!(fallible.capacity(), infallible.capacity());
+    }
+
+    #[test]
+    fn mutable_try_new_null() {
+        let buffer = MutableBuffer::try_new_null(9).unwrap();
+        assert_eq!(buffer.len(), 2);
+        assert_eq!(buffer.as_slice(), &[0, 0]);
+    }
+
+    #[test]
     fn mutable_push_unchecked_unaligned_u64() {
         let mut buf = MutableBuffer::new(16);
         unsafe {
@@ -1465,13 +1496,13 @@ mod tests {
 
         buf.extend_from_slice(&[0xaa]);
         buf2.extend_from_slice(&[0xaa, 0xbb]);
-        assert!(buf != buf2);
+        assert_ne!(buf, buf2);
 
         buf.extend_from_slice(&[0xbb]);
         assert_eq!(buf, buf2);
 
         buf2.reserve(65);
-        assert!(buf != buf2);
+        assert_ne!(buf, buf2);
     }
 
     #[test]

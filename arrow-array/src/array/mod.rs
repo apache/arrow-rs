@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! The concrete array definitions
 
@@ -121,6 +108,35 @@ pub unsafe trait Array: std::fmt::Debug + Send + Sync {
     ///     .expect("Failed to downcast");
     /// ```
     fn as_any(&self) -> &dyn Any;
+
+    /// Returns an [`ArrayRef`] with the same contents as `self`, sharing its buffers.
+    ///
+    /// If `self` is or wraps an `ArrayRef`, this only bumps the reference count, as if by
+    /// [`Arc::clone`]. The concrete arrow-rs array types all construct a new [`Arc`] from a shallow
+    /// clone of the array, which avoids the null-count recomputation and child re-slicing of
+    /// [`Self::slice`].
+    ///
+    /// The default implementation is `self.slice(0, self.len())`.
+    ///
+    /// # Example:
+    ///
+    /// ```
+    /// # use arrow_array::{Array, ArrayRef, Int32Array};
+    /// # use std::sync::Arc;
+    /// #
+    /// fn to_array_ref(array: &dyn Array) -> ArrayRef {
+    ///     array.to_arc()
+    /// }
+    ///
+    /// let array = Int32Array::from(vec![1, 2, 3]);
+    /// assert_eq!(to_array_ref(&array).as_ref(), &array);
+    ///
+    /// let array: ArrayRef = Arc::new(array);
+    /// assert!(Arc::ptr_eq(&to_array_ref(&array), &array));
+    /// ```
+    fn to_arc(&self) -> ArrayRef {
+        self.slice(0, self.len())
+    }
 
     /// Returns the underlying data of this array
     fn to_data(&self) -> ArrayData;
@@ -451,6 +467,10 @@ unsafe impl Array for ArrayRef {
         self.as_ref().as_any()
     }
 
+    fn to_arc(&self) -> ArrayRef {
+        Arc::clone(self)
+    }
+
     fn to_data(&self) -> ArrayData {
         self.as_ref().to_data()
     }
@@ -533,6 +553,10 @@ unsafe impl Array for ArrayRef {
 unsafe impl<T: Array> Array for &T {
     fn as_any(&self) -> &dyn Any {
         T::as_any(self)
+    }
+
+    fn to_arc(&self) -> ArrayRef {
+        T::to_arc(self)
     }
 
     fn to_data(&self) -> ArrayData {
@@ -1060,11 +1084,16 @@ unsafe fn get_offsets_from_buffer<O: ArrowNativeType>(
 }
 
 /// Helper function for printing potentially long arrays.
-fn print_long_array<A, F>(array: &A, f: &mut std::fmt::Formatter, print_item: F) -> std::fmt::Result
-where
-    A: Array,
-    F: Fn(&A, usize, &mut std::fmt::Formatter) -> std::fmt::Result,
-{
+///
+/// Note this function is deliberately not generic over the array or closure
+/// type: it is called from `Debug` impls that are instantiated for many
+/// concrete array types, and using dynamic dispatch here avoids duplicating
+/// this function's code in each of those instantiations
+fn print_long_array(
+    array: &dyn Array,
+    f: &mut std::fmt::Formatter,
+    print_item: &mut dyn FnMut(usize, &mut std::fmt::Formatter) -> std::fmt::Result,
+) -> std::fmt::Result {
     let head = std::cmp::min(10, array.len());
 
     for i in 0..head {
@@ -1072,7 +1101,7 @@ where
             writeln!(f, "  null,")?;
         } else {
             write!(f, "  ")?;
-            print_item(array, i, f)?;
+            print_item(i, f)?;
             writeln!(f, ",")?;
         }
     }
@@ -1088,7 +1117,7 @@ where
                 writeln!(f, "  null,")?;
             } else {
                 write!(f, "  ")?;
-                print_item(array, i, f)?;
+                print_item(i, f)?;
                 writeln!(f, ",")?;
             }
         }
@@ -1266,8 +1295,12 @@ mod tests {
     fn test_null_runs() {
         for r in [DataType::Int16, DataType::Int32, DataType::Int64] {
             let data_type = DataType::RunEndEncoded(
-                Arc::new(Field::new("run_ends", r, false)),
-                Arc::new(Field::new("values", DataType::Utf8, true)),
+                Arc::new(Field::new(Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME, r, false)),
+                Arc::new(Field::new(
+                    Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                    DataType::Utf8,
+                    true,
+                )),
             );
 
             let array = new_null_array(&data_type, 4);
@@ -1433,6 +1466,33 @@ mod tests {
         let arr: ArrayRef = Arc::new(arr);
         assert!(compute_my_thing(&arr));
         assert!(compute_my_thing(arr.as_ref()));
+    }
+
+    #[test]
+    fn test_to_arc() {
+        // Array equality ignores offsets, so compare them separately.
+        fn check(array: &dyn Array) {
+            let expected = array.slice(0, array.len());
+            let actual = array.to_arc();
+            assert_eq!(actual.as_ref(), expected.as_ref());
+            assert_eq!(actual.offset(), array.offset());
+        }
+
+        let primitive = Int32Array::from(vec![Some(1), None, Some(3), Some(4)]);
+        let dict: DictionaryArray<Int32Type> =
+            vec![Some("a"), None, Some("b")].into_iter().collect();
+        let run_ends = Int32Array::from(vec![2, 3, 5]);
+        let run = RunArray::try_new(&run_ends, &primitive.slice(0, 3)).unwrap();
+
+        // The typed wrappers' `slice` returns the inner untyped array, so `to_arc` must as well.
+        check(&dict.downcast_dict::<StringArray>().unwrap());
+        check(&run.slice(1, 3).downcast::<Int32Array>().unwrap());
+
+        let array_ref: ArrayRef = Arc::new(primitive.clone());
+        let dyn_ref: &dyn Array = &array_ref;
+        assert!(Arc::ptr_eq(&dyn_ref.to_arc(), &array_ref));
+        let dyn_ref: &dyn Array = &&primitive;
+        assert_eq!(dyn_ref.to_arc().as_ref(), &primitive);
     }
 
     #[test]

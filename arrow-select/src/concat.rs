@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Defines concat kernel for `ArrayRef`
 //!
@@ -30,7 +17,7 @@
 //! assert_eq!(arr.len(), 3);
 //! ```
 
-use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values};
+use crate::dictionary::{KeyMapping, merge_dictionary_values, should_merge_dictionary_values};
 use arrow_array::builder::{
     BooleanBuilder, GenericByteBuilder, GenericByteViewBuilder, PrimitiveBuilder,
 };
@@ -38,33 +25,43 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{
-    ArrowNativeType, BooleanBufferBuilder, MutableBuffer, NullBuffer, OffsetBuffer, ScalarBuffer,
+    ArrowNativeType, BooleanBufferBuilder, MutableBuffer, NullBuffer, OffsetBuffer, RunEndBuffer,
+    ScalarBuffer,
 };
-use arrow_data::ArrayDataBuilder;
 use arrow_data::transform::{Capacities, MutableArrayData};
 use arrow_schema::{ArrowError, DataType, FieldRef, Fields, SchemaRef};
 use std::{collections::HashSet, ops::Add, sync::Arc};
 
-fn binary_capacity<T: ByteArrayType>(arrays: &[&dyn Array]) -> Capacities {
-    let mut item_capacity = 0;
-    let mut bytes_capacity = 0;
+fn binary_capacity<T: ByteArrayType>(arrays: &[&dyn Array]) -> Result<Capacities, ArrowError> {
+    let mut item_capacity = 0usize;
+    let mut bytes_capacity = 0usize;
     for array in arrays {
         let a = array.as_bytes::<T>();
 
         // Guaranteed to always have at least one element
         let offsets = a.value_offsets();
-        bytes_capacity += offsets[offsets.len() - 1].as_usize() - offsets[0].as_usize();
-        item_capacity += a.len()
+        bytes_capacity = bytes_capacity
+            .checked_add(offsets[offsets.len() - 1].as_usize() - offsets[0].as_usize())
+            .ok_or_else(|| ArrowError::MemoryError("concatenated values overflow".into()))?;
+        item_capacity = item_capacity
+            .checked_add(a.len())
+            .ok_or_else(|| ArrowError::MemoryError("concatenated length overflow".into()))?;
     }
 
-    Capacities::Binary(item_capacity, Some(bytes_capacity))
+    Ok(Capacities::Binary(item_capacity, Some(bytes_capacity)))
 }
 
-fn fixed_size_list_capacity(arrays: &[&dyn Array], data_type: &DataType) -> Capacities {
+fn fixed_size_list_capacity(
+    arrays: &[&dyn Array],
+    data_type: &DataType,
+) -> Result<Capacities, ArrowError> {
     if let DataType::FixedSizeList(f, _) = data_type {
-        let item_capacity = arrays.iter().map(|a| a.len()).sum();
+        let item_capacity = arrays
+            .iter()
+            .try_fold(0usize, |total, array| total.checked_add(array.len()))
+            .ok_or_else(|| ArrowError::MemoryError("concatenated length overflow".into()))?;
         let child_data_type = f.data_type();
-        match child_data_type {
+        Ok(match child_data_type {
             // These types should match the types that `get_capacity`
             // has special handling for.
             DataType::Utf8
@@ -78,11 +75,11 @@ fn fixed_size_list_capacity(arrays: &[&dyn Array], data_type: &DataType) -> Capa
                     .collect();
                 Capacities::List(
                     item_capacity,
-                    Some(Box::new(get_capacity(&values, child_data_type))),
+                    Some(Box::new(get_capacity(&values, child_data_type)?)),
                 )
             }
             _ => Capacities::Array(item_capacity),
-        }
+        })
     } else {
         unreachable!("illegal data type for fixed size list")
     }
@@ -111,7 +108,7 @@ fn concat_dictionaries<K: ArrowDictionaryKeyType>(
         return concat_fallback(arrays, Capacities::Array(output_len));
     }
 
-    let merged = merge_dictionary_values(&dictionaries, None)?;
+    let merged = merge_dictionary_values(&dictionaries, None, None)?;
 
     // Recompute keys
     let mut key_values = Vec::with_capacity(output_len);
@@ -119,9 +116,19 @@ fn concat_dictionaries<K: ArrowDictionaryKeyType>(
     let mut has_nulls = false;
     for (d, mapping) in dictionaries.iter().zip(merged.key_mappings) {
         has_nulls |= d.null_count() != 0;
-        for key in d.keys().values() {
-            // Use get to safely handle nulls
-            key_values.push(mapping.get(key.as_usize()).copied().unwrap_or_default())
+        match mapping {
+            KeyMapping::Dense(mapping) => key_values.extend(
+                d.keys()
+                    .values()
+                    .iter()
+                    .map(|key| mapping.get(key.as_usize()).copied().unwrap_or_default()),
+            ),
+            KeyMapping::Sparse(mapping) => key_values.extend(
+                d.keys()
+                    .values()
+                    .iter()
+                    .map(|key| mapping.get(&key.as_usize()).copied().unwrap_or_default()),
+            ),
         }
     }
 
@@ -144,6 +151,48 @@ fn concat_dictionaries<K: ArrowDictionaryKeyType>(
     Ok(Arc::new(array))
 }
 
+/// Concatenates the child values and the validity bitmaps, without the per-array
+/// [`ArrayData`](arrow_data::ArrayData) that [`concat_fallback`] builds: with many short arrays
+/// that is most of the cost.
+fn concat_fixed_size_list(
+    arrays: &[&dyn Array],
+    field: &FieldRef,
+    size: i32,
+) -> Result<ArrayRef, ArrowError> {
+    let mut lists: Vec<&FixedSizeListArray> = Vec::with_capacity(arrays.len());
+    let mut values: Vec<&dyn Array> = Vec::with_capacity(arrays.len());
+    let (mut len, mut any_nulls) = (0, false);
+    for a in arrays {
+        let l = a.as_fixed_size_list();
+        len += l.len();
+        any_nulls |= l.null_count() != 0;
+        values.push(l.values().as_ref());
+        lists.push(l);
+    }
+
+    let nulls = any_nulls.then(|| {
+        let mut nulls = BooleanBufferBuilder::new(len);
+        for l in &lists {
+            match l.nulls() {
+                Some(n) => nulls.append_buffer(n.inner()),
+                None => nulls.append_n(l.len(), true),
+            }
+        }
+        NullBuffer::new(nulls.finish())
+    });
+
+    // Equal list types imply equal child types, so skip the check in `concat`.
+    let values = concat_same_type(&values, field.data_type())?;
+
+    Ok(Arc::new(FixedSizeListArray::try_new_with_length(
+        Arc::clone(field),
+        size,
+        values,
+        nulls,
+        len,
+    )?))
+}
+
 fn concat_lists<OffsetSize: OffsetSizeTrait>(
     arrays: &[&dyn Array],
     field: &FieldRef,
@@ -159,7 +208,7 @@ fn concat_lists<OffsetSize: OffsetSizeTrait>(
             output_len += l.len();
             list_has_nulls |= l.null_count() != 0;
             list_has_slices |= l.offsets()[0] > OffsetSize::zero()
-                || l.offsets().last().unwrap().as_usize() < l.values().len();
+                || l.offsets().last().as_usize() < l.values().len();
         })
         .collect::<Vec<_>>();
 
@@ -184,7 +233,7 @@ fn concat_lists<OffsetSize: OffsetSizeTrait>(
             // we concatenate them below only the relevant values are included
             let offsets = l.offsets();
             let start_offset = offsets[0].as_usize();
-            let end_offset = offsets.last().unwrap().as_usize();
+            let end_offset = offsets.last().as_usize();
             sliced_values.push(l.values().slice(start_offset, end_offset - start_offset));
         }
         sliced_values.iter().map(|a| a.as_ref()).collect()
@@ -224,7 +273,7 @@ fn concat_maps(
             output_len += m.len();
             map_has_nulls |= m.null_count() != 0;
             map_has_slices |=
-                m.offsets()[0] > 0 || m.offsets().last().unwrap().as_usize() < m.entries().len();
+                m.offsets()[0] > 0 || m.offsets().last().as_usize() < m.entries().len();
         })
         .collect::<Vec<_>>();
 
@@ -247,7 +296,7 @@ fn concat_maps(
         for m in &maps {
             let offsets = m.offsets();
             let start_offset = offsets[0].as_usize();
-            let end_offset = offsets.last().unwrap().as_usize();
+            let end_offset = offsets.last().as_usize();
             let entries_arr: &dyn Array = m.entries();
             sliced_entries.push(entries_arr.slice(start_offset, end_offset - start_offset));
         }
@@ -307,7 +356,13 @@ fn concat_list_view<OffsetSize: OffsetSizeTrait>(
 
     let sizes: ScalarBuffer<OffsetSize> = lists.iter().flat_map(|x| x.sizes()).copied().collect();
 
-    let mut offsets = MutableBuffer::with_capacity(lists.iter().map(|l| l.offsets().len()).sum());
+    let offsets_capacity = lists
+        .iter()
+        .try_fold(0usize, |acc, l| acc.checked_add(l.offsets().len()))
+        .and_then(|len| len.checked_mul(std::mem::size_of::<OffsetSize>()))
+        .ok_or_else(|| ArrowError::MemoryError("concatenated offsets size overflow".into()))?;
+    let mut offsets = MutableBuffer::try_with_capacity(offsets_capacity)
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
     let mut global_offset = OffsetSize::zero();
     for l in &lists {
         for &offset in l.offsets() {
@@ -353,7 +408,7 @@ fn concat_boolean(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
 }
 
 fn concat_bytes<T: ByteArrayType>(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
-    let Capacities::Binary(item_capacity, Some(bytes_capacity)) = binary_capacity::<T>(arrays)
+    let Capacities::Binary(item_capacity, Some(bytes_capacity)) = binary_capacity::<T>(arrays)?
     else {
         unreachable!()
     };
@@ -430,6 +485,12 @@ where
         return Ok(new_empty_array(arrays[0].data_type()));
     }
 
+    // Reject lengths that do not fit in `R` before any `R::Native` arithmetic can wrap.
+    let total_len: usize = run_arrays.iter().map(|r| r.len()).sum();
+    if R::Native::from_usize(total_len).is_none() {
+        return Err(ArrowError::RunEndIndexOverflowError);
+    }
+
     // The run ends need to be adjusted by the sum of the lengths of the previous arrays.
     let needed_run_end_adjustments = std::iter::once(R::default_value())
         .chain(
@@ -441,9 +502,6 @@ where
                 }),
         )
         .collect::<Vec<_>>();
-
-    // This works out nicely to be the total (logical) length of the resulting array.
-    let total_len = needed_run_end_adjustments.last().unwrap().as_usize();
 
     let run_ends_array =
         PrimitiveArray::<R>::from_iter_values(run_arrays.iter().enumerate().flat_map(
@@ -463,15 +521,15 @@ where
 
     let all_values = concat(&values_slices.iter().map(|x| x.as_ref()).collect::<Vec<_>>())?;
 
-    let builder = ArrayDataBuilder::new(run_arrays[0].data_type().clone())
-        .len(total_len)
-        .child_data(vec![run_ends_array.into_data(), all_values.into_data()]);
+    let data_type = run_arrays[0].data_type().clone();
+    let (_, run_ends_values, _) = run_ends_array.into_parts();
 
-    // `build_unchecked` is used to avoid recursive validation of child arrays.
-    let array_data = unsafe { builder.build_unchecked() };
-    array_data.validate_data()?;
-
-    Ok(Arc::<RunArray<R>>::new(array_data.into()))
+    // Safety: inputs are valid RunArrays; adjusted run ends are strictly increasing
+    // and end at `total_len`. Physical length matches `all_values`.
+    let run_ends = unsafe { RunEndBuffer::new_unchecked(run_ends_values, 0, total_len) };
+    Ok(Arc::new(unsafe {
+        RunArray::<R>::new_unchecked(data_type, run_ends, all_values)
+    }))
 }
 
 macro_rules! dict_helper {
@@ -486,14 +544,18 @@ macro_rules! primitive_concat {
     };
 }
 
-fn get_capacity(arrays: &[&dyn Array], data_type: &DataType) -> Capacities {
+fn get_capacity(arrays: &[&dyn Array], data_type: &DataType) -> Result<Capacities, ArrowError> {
     match data_type {
         DataType::Utf8 => binary_capacity::<Utf8Type>(arrays),
         DataType::LargeUtf8 => binary_capacity::<LargeUtf8Type>(arrays),
         DataType::Binary => binary_capacity::<BinaryType>(arrays),
         DataType::LargeBinary => binary_capacity::<LargeBinaryType>(arrays),
         DataType::FixedSizeList(_, _) => fixed_size_list_capacity(arrays, data_type),
-        _ => Capacities::Array(arrays.iter().map(|a| a.len()).sum()),
+        _ => arrays
+            .iter()
+            .try_fold(0usize, |total, array| total.checked_add(array.len()))
+            .map(Capacities::Array)
+            .ok_or_else(|| ArrowError::MemoryError("concatenated length overflow".into())),
     }
 }
 
@@ -505,7 +567,7 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
         ));
     } else if arrays.len() == 1 {
         let array = arrays[0];
-        return Ok(array.slice(0, array.len()));
+        return Ok(array.to_arc());
     }
 
     let d = arrays[0].data_type();
@@ -541,6 +603,10 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
         return Err(ArrowError::InvalidArgumentError(error_message));
     }
 
+    concat_same_type(arrays, d)
+}
+
+fn concat_same_type(arrays: &[&dyn Array], d: &DataType) -> Result<ArrayRef, ArrowError> {
     downcast_primitive! {
         d => (primitive_concat, arrays),
         DataType::Boolean => concat_boolean(arrays),
@@ -552,6 +618,7 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
         }
         DataType::List(field) => concat_lists::<i32>(arrays, field),
         DataType::LargeList(field) => concat_lists::<i64>(arrays, field),
+        DataType::FixedSizeList(field, size) => concat_fixed_size_list(arrays, field, *size),
         DataType::ListView(field) => concat_list_view::<i32>(arrays, field),
         DataType::LargeListView(field) => concat_list_view::<i64>(arrays, field),
         DataType::Map(field, ordered) => concat_maps(arrays, field, *ordered),
@@ -573,7 +640,7 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
         DataType::Utf8View => concat_byte_view::<StringViewType>(arrays),
         DataType::BinaryView => concat_byte_view::<BinaryViewType>(arrays),
         _ => {
-            let capacity = get_capacity(arrays, d);
+            let capacity = get_capacity(arrays, d)?;
             concat_fallback(arrays, capacity)
         }
     }
@@ -1042,7 +1109,7 @@ mod tests {
         // verify that this test covers the case when the first offset is zero, but the
         // last offset doesn't cover the entire array
         assert_eq!(list1_array.offsets()[0].as_usize(), 0);
-        assert!(list1_array.offsets().last().unwrap().as_usize() < list1_array.values().len());
+        assert!(list1_array.offsets().last().as_usize() < list1_array.values().len());
         let array_result = concat(&[&list1_array, &list2_array]).unwrap();
 
         let expected = list1_values.chain(list2);
@@ -1080,6 +1147,72 @@ mod tests {
             FixedSizeListArray::from_iter_primitive::<Int64Type, _, _>(expected, 2);
 
         assert_eq!(array_result.as_ref(), &array_expected as &dyn Array);
+    }
+
+    /// The fixed size list path against `concat_fallback`: slices, arrays with and without
+    /// nulls mixed, nested lists, zero-sized lists and many one-row arrays.
+    #[test]
+    fn test_concat_fixed_size_list_matches_fallback() {
+        let check = |arrays: &[&dyn Array]| {
+            let expected =
+                concat_fallback(arrays, get_capacity(arrays, arrays[0].data_type()).unwrap())
+                    .unwrap();
+            let got = concat(arrays).unwrap();
+            assert_eq!(got.as_ref(), expected.as_ref());
+            got.to_data().validate_full().unwrap();
+        };
+
+        let rows = [
+            Some(vec![Some(1), None, Some(3)]),
+            None,
+            Some(vec![Some(4), Some(5), Some(6)]),
+            Some(vec![None, None, None]),
+            None,
+            Some(vec![Some(7), Some(8), Some(9)]),
+        ];
+        let with_nulls = FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(rows, 3);
+        let without_nulls = FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+            (0..5).map(|i| Some(vec![Some(i), Some(i + 1), Some(i + 2)])),
+            3,
+        );
+        check(&[&with_nulls, &without_nulls]);
+        check(&[&without_nulls, &without_nulls]);
+        check(&[
+            &with_nulls.slice(1, 4),
+            &without_nulls.slice(2, 2),
+            &with_nulls,
+        ]);
+
+        let one_row: Vec<_> = (0..64).map(|i| with_nulls.slice(i % 6, 1)).collect();
+        let one_row: Vec<&dyn Array> = one_row.iter().map(|a| a as &dyn Array).collect();
+        check(&one_row);
+
+        let nested = FixedSizeListArray::try_new(
+            Arc::new(Field::new_list_field(with_nulls.data_type().clone(), true)),
+            2,
+            Arc::new(with_nulls.slice(0, 6)),
+            Some(NullBuffer::from(vec![true, false, true])),
+        )
+        .unwrap();
+        check(&[&nested, &nested.slice(1, 2)]);
+
+        let zero_sized = FixedSizeListArray::try_new_with_length(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            0,
+            Arc::new(Int32Array::from(Vec::<i32>::new())),
+            Some(NullBuffer::from(vec![true, false, true, true])),
+            4,
+        )
+        .unwrap();
+        let zero_sized_valid = FixedSizeListArray::try_new_with_length(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            0,
+            Arc::new(Int32Array::from(Vec::<i32>::new())),
+            None,
+            3,
+        )
+        .unwrap();
+        check(&[&zero_sized, &zero_sized_valid, &zero_sized.slice(1, 2)]);
     }
 
     #[test]
@@ -1442,6 +1575,44 @@ mod tests {
         // Not 30 as this is done on a best-effort basis
         let values_len = dictionary.values().len();
         assert!((30..40).contains(&values_len), "{values_len}")
+    }
+
+    #[test]
+    fn test_concat_sparse_primitive_dictionaries_with_nulls() {
+        let values_len = 3 * crate::dictionary::MAX_DENSE_MAPPING_VALUES_PER_ROW + 1;
+        let last = values_len as i32 - 1;
+        let make_dictionary = |offset, null_value, keys| {
+            let values = Int32Array::from_iter(
+                (0..values_len).map(|idx| (idx != null_value).then_some(offset + idx as i32)),
+            );
+            DictionaryArray::<Int32Type>::new(Int32Array::from(keys), Arc::new(values))
+        };
+        // Slicing moves the keys and their nulls to a non-zero offset; the unsliced
+        // arrays have 4 keys each and would take the dense path.
+        let a = make_dictionary(0, 1, vec![Some(0), Some(last), None, Some(1)]).slice(1, 3);
+        let b =
+            make_dictionary(10_000, 2, vec![Some(0), Some(2), Some(last - 1), None]).slice(1, 3);
+
+        let merged = merge_dictionary_values(&[&a, &b], None, None).unwrap();
+        assert!(
+            merged
+                .key_mappings
+                .iter()
+                .all(|mapping| matches!(mapping, KeyMapping::Sparse(_)))
+        );
+
+        let result = concat(&[&a, &b]).unwrap();
+        let actual = result
+            .as_dictionary::<Int32Type>()
+            .downcast_dict::<Int32Array>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            actual,
+            [Some(last), None, None, None, Some(10_000 + last - 1), None]
+        );
     }
 
     #[test]
@@ -1887,6 +2058,24 @@ mod tests {
             .unwrap();
         assert_eq!(values.len(), 4);
         assert_eq!(&[10, 20, 30, 40], values.values());
+    }
+
+    #[test]
+    fn test_concat_run_array_length_overflows_run_end_type() {
+        // 20_000 + 20_000 exceeds i16::MAX.
+        let array1 = RunArray::<Int16Type>::try_new(
+            &Int16Array::from(vec![20_000]),
+            &Int16Array::from(vec![1]),
+        )
+        .unwrap();
+        let array2 = RunArray::<Int16Type>::try_new(
+            &Int16Array::from(vec![20_000]),
+            &Int16Array::from(vec![2]),
+        )
+        .unwrap();
+
+        let err = concat(&[&array1, &array2]).unwrap_err();
+        assert!(matches!(err, ArrowError::RunEndIndexOverflowError));
     }
 
     #[test]

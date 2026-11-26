@@ -1,22 +1,9 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Interoperability test for https://github.com/apache/parquet-format/pull/514.
-//! Demonstrate reading NaN statstics and counts from a file generated with
+//! Demonstrate reading NaN statistics and counts from a file generated with
 //! parquet-java, and show that on write we produce the same statistics.
 
 use bytes::Bytes;
@@ -61,7 +48,8 @@ fn validate_float_metadata(
     assert_eq!(&mins, &exp);
 
     // verify page mins (should be 1 page per row group, so should be same)
-    let page_mins = converter.data_page_mins(metadata.page_index().unwrap(), &row_group_indices)?;
+    let page_index = metadata.page_index().unwrap().as_ref();
+    let page_mins = converter.data_page_mins(page_index, &row_group_indices)?;
     assert_eq!(&page_mins, &exp);
 
     let exp: Arc<dyn Array> = Arc::new(Float32Array::from(FLOAT_MAXS.to_vec()));
@@ -69,16 +57,14 @@ fn validate_float_metadata(
     assert_eq!(&maxs, &exp);
 
     // verify page maxs (should be 1 page per row group, so should be same)
-    let page_maxs =
-        converter.data_page_maxes(metadata.page_index().unwrap(), &row_group_indices)?;
+    let page_maxs = converter.data_page_maxes(page_index, &row_group_indices)?;
     assert_eq!(&page_maxs, &exp);
 
     let exp = UInt64Array::from(NAN_COUNTS.to_vec());
     let nans = converter.row_group_nan_counts(metadata.row_groups())?;
     assert_eq!(&nans, &exp);
 
-    let page_nans =
-        converter.data_page_nan_counts(metadata.page_index().unwrap(), &row_group_indices)?;
+    let page_nans = converter.data_page_nan_counts(page_index, &row_group_indices)?;
     assert_eq!(&page_nans, &exp);
 
     Ok(())
@@ -106,7 +92,8 @@ fn validate_double_metadata(
     assert_eq!(&mins, &exp);
 
     // verify page mins (should be 1 page per row group, so should be same)
-    let page_mins = converter.data_page_mins(metadata.page_index().unwrap(), &row_group_indices)?;
+    let page_index = metadata.page_index().unwrap().as_ref();
+    let page_mins = converter.data_page_mins(page_index, &row_group_indices)?;
     assert_eq!(&page_mins, &exp);
 
     let exp: Arc<dyn Array> = Arc::new(Float64Array::from(DOUBLE_MAXS.to_vec()));
@@ -114,16 +101,14 @@ fn validate_double_metadata(
     assert_eq!(&maxs, &exp);
 
     // verify page maxs (should be 1 page per row group, so should be same)
-    let page_maxs =
-        converter.data_page_maxes(metadata.page_index().unwrap(), &row_group_indices)?;
+    let page_maxs = converter.data_page_maxes(page_index, &row_group_indices)?;
     assert_eq!(&page_maxs, &exp);
 
     let exp = UInt64Array::from(NAN_COUNTS.to_vec());
     let nans = converter.row_group_nan_counts(metadata.row_groups())?;
     assert_eq!(&nans, &exp);
 
-    let page_nans =
-        converter.data_page_nan_counts(metadata.page_index().unwrap(), &row_group_indices)?;
+    let page_nans = converter.data_page_nan_counts(page_index, &row_group_indices)?;
     assert_eq!(&page_nans, &exp);
 
     Ok(())
@@ -163,7 +148,8 @@ fn validate_float16_metadata(
     assert_eq!(&mins, &exp);
 
     // verify page mins (should be 1 page per row group, so should be same)
-    let page_mins = converter.data_page_mins(metadata.page_index().unwrap(), &row_group_indices)?;
+    let page_index = metadata.page_index().unwrap().as_ref();
+    let page_mins = converter.data_page_mins(page_index, &row_group_indices)?;
     assert_eq!(&page_mins, &exp);
 
     let exp: Arc<dyn Array> = Arc::new(Float16Array::from(FLOAT16_MAXS.to_vec()));
@@ -171,16 +157,14 @@ fn validate_float16_metadata(
     assert_eq!(&maxs, &exp);
 
     // verify page maxs (should be 1 page per row group, so should be same)
-    let page_maxs =
-        converter.data_page_maxes(metadata.page_index().unwrap(), &row_group_indices)?;
+    let page_maxs = converter.data_page_maxes(page_index, &row_group_indices)?;
     assert_eq!(&page_maxs, &exp);
 
     let exp = UInt64Array::from(NAN_COUNTS.to_vec());
     let nans = converter.row_group_nan_counts(metadata.row_groups())?;
     assert_eq!(&nans, &exp);
 
-    let page_nans =
-        converter.data_page_nan_counts(metadata.page_index().unwrap(), &row_group_indices)?;
+    let page_nans = converter.data_page_nan_counts(page_index, &row_group_indices)?;
     assert_eq!(&page_nans, &exp);
 
     Ok(())
@@ -254,6 +238,7 @@ fn test_ieee754_interop() {
 // This test replicates the data produced by the parquet-java code that generated
 // parquet-testing/data/floating_orders_nan_count.parquet
 #[test]
+#[cfg_attr(miri, ignore)] // inline assembly is not supported
 fn test_ieee754_interop2() {
     // define schema
     let schema = Schema::new(vec![

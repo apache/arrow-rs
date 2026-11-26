@@ -1,22 +1,11 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
-use crate::bit_iterator::{BitIndexIterator, BitIndexU32Iterator, BitIterator, BitSliceIterator};
+use crate::bit_iterator::{
+    BitIndexIterator, BitIndexU32Iterator, BitIterator, BitSliceIterator, SetBitCounter,
+};
 use crate::bit_util::read_u64;
 use crate::{
     BooleanBufferBuilder, Buffer, MutableBuffer, bit_util, buffer_bin_and, buffer_bin_or,
@@ -90,6 +79,7 @@ use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, N
 ///
 /// # See Also
 /// * [`BooleanBufferBuilder`] for building [`BooleanBuffer`] instances
+/// * [`Self::set_bit_counter`] for counting the set bits in many ranges of one buffer
 /// * [`NullBuffer`] for representing null values in Arrow arrays
 ///
 /// [`NullBuffer`]: crate::NullBuffer
@@ -182,6 +172,7 @@ impl BooleanBuffer {
     /// }
     /// // However, underlying buffer has (ignored) bits set outside the requested range
     /// assert_eq!(result.values(), &[0b11001100u8, 0b10111010, 0, 0, 0, 0, 0, 0]);
+    /// ```
     pub fn from_bits(src: impl AsRef<[u8]>, offset_in_bits: usize, len_in_bits: usize) -> Self {
         Self::from_bitwise_unary_op(src, offset_in_bits, len_in_bits, |a| a)
     }
@@ -266,9 +257,8 @@ impl BooleanBuffer {
 
         // align to byte boundaries
         // Use unaligned code path, handle remainder bytes
-        let chunks = aligned_start.chunks_exact(8);
-        let remainder = chunks.remainder();
-        let iter = chunks.map(|c| u64::from_le_bytes(c.try_into().unwrap()));
+        let (chunks, remainder) = aligned_start.as_chunks::<8>();
+        let iter = chunks.iter().map(|c| u64::from_le_bytes(*c));
         let vec_u64s: Vec<u64> = if remainder.is_empty() {
             iter.map(&mut op).collect()
         } else {
@@ -389,13 +379,11 @@ impl BooleanBuffer {
             }
 
             // Memory not u64-aligned, use chunks_exact fallback
-            let left_chunks = left_slice.chunks_exact(8);
-            let left_rem = left_chunks.remainder();
-            let right_chunks = right_slice.chunks_exact(8);
-            let right_rem = right_chunks.remainder();
+            let (left_chunks, left_rem) = left_slice.as_chunks::<8>();
+            let (right_chunks, right_rem) = right_slice.as_chunks::<8>();
 
-            let left_iter = left_chunks.map(|c| u64::from_le_bytes(c.try_into().unwrap()));
-            let right_iter = right_chunks.map(|c| u64::from_le_bytes(c.try_into().unwrap()));
+            let left_iter = left_chunks.iter().map(|c| u64::from_le_bytes(*c));
+            let right_iter = right_chunks.iter().map(|c| u64::from_le_bytes(*c));
 
             let result_u64s: Vec<u64> = if left_rem.is_empty() && right_rem.is_empty() {
                 left_iter.zip(right_iter).map(|(l, r)| op(l, r)).collect()
@@ -635,6 +623,20 @@ impl BooleanBuffer {
         BitSliceIterator::new(self.values(), self.bit_offset, self.bit_len)
     }
 
+    /// Returns a [`SetBitCounter`] that counts the set bits in ranges of this
+    /// [`BooleanBuffer`]
+    ///
+    /// ```
+    /// # use arrow_buffer::BooleanBuffer;
+    /// let bits = BooleanBuffer::from(vec![true, false, true, true, false, true]);
+    /// let mut counter = bits.set_bit_counter();
+    /// assert_eq!(counter.count_range(0..2), 1);
+    /// assert_eq!(counter.count_range(2..4), 2);
+    /// ```
+    pub fn set_bit_counter(&self) -> SetBitCounter<'_> {
+        SetBitCounter::new(self.values(), self.bit_offset, self.bit_len)
+    }
+
     /// Block size for chunked fold operations in [`Self::has_true`] and [`Self::has_false`].
     /// Using `chunks_exact` with this size lets the compiler fully unroll the inner
     /// fold (no inner branch/loop), enabling short-circuit exits every N chunks.
@@ -649,10 +651,12 @@ impl BooleanBuffer {
     pub fn has_true(&self) -> bool {
         let bit_chunks = self.unaligned_bit_chunks();
         let chunks = bit_chunks.chunks();
-        let mut exact = chunks.chunks_exact(Self::CHUNK_FOLD_BLOCK_SIZE);
+        let (exact, remainder) = chunks.as_chunks::<{ Self::CHUNK_FOLD_BLOCK_SIZE }>();
         let found = bit_chunks.prefix().unwrap_or(0) != 0
-            || exact.any(|block| block.iter().fold(0u64, |acc, &c| acc | c) != 0);
-        found || exact.remainder().iter().any(|&c| c != 0) || bit_chunks.suffix().unwrap_or(0) != 0
+            || exact
+                .iter()
+                .any(|block| block.iter().fold(0u64, |acc, &c| acc | c) != 0);
+        found || remainder.iter().any(|&c| c != 0) || bit_chunks.suffix().unwrap_or(0) != 0
     }
 
     /// Returns whether there is at least one `false` value in this buffer.
@@ -678,13 +682,15 @@ impl BooleanBuffer {
             (None, None) => (0, 0),
         };
         let chunks = bit_chunks.chunks();
-        let mut exact = chunks.chunks_exact(Self::CHUNK_FOLD_BLOCK_SIZE);
+        let (exact, remainder) = chunks.as_chunks::<{ Self::CHUNK_FOLD_BLOCK_SIZE }>();
         let found = bit_chunks
             .prefix()
             .is_some_and(|v| (v | prefix_fill) != u64::MAX)
-            || exact.any(|block| block.iter().fold(u64::MAX, |acc, &c| acc & c) != u64::MAX);
+            || exact
+                .iter()
+                .any(|block| block.iter().fold(u64::MAX, |acc, &c| acc & c) != u64::MAX);
         found
-            || exact.remainder().iter().any(|&c| c != u64::MAX)
+            || remainder.iter().any(|&c| c != u64::MAX)
             || bit_chunks
                 .suffix()
                 .is_some_and(|v| (v | suffix_fill) != u64::MAX)

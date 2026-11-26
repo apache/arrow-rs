@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::arrow::array_reader::{ArrayReader, read_records, skip_records};
 use crate::arrow::buffer::view_buffer::ViewBuffer;
@@ -27,7 +14,7 @@ use crate::data_type::Int32Type;
 use crate::encodings::decoding::{Decoder, DeltaBitPackDecoder};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
-use crate::util::utf8::check_valid_utf8;
+use crate::util::utf8::{check_utf8_value_start, check_valid_utf8};
 use arrow_array::{ArrayRef, builder::make_view};
 use arrow_buffer::Buffer;
 use arrow_data::ByteView;
@@ -57,12 +44,16 @@ pub fn make_byte_view_array_reader(
         },
     };
 
+    // A supplied schema can read an unannotated `BYTE_ARRAY` column as a string.
+    let validate_utf8 = matches!(data_type, ArrowType::Utf8View);
+
     match data_type {
         ArrowType::BinaryView | ArrowType::Utf8View => {
             let mut reader = GenericRecordReader::new(column_desc, batch_size);
             if let Some(threshold) = padding_threshold {
                 reader.set_padding_threshold(threshold);
             }
+            reader.set_validate_utf8(validate_utf8);
             Ok(Box::new(ByteViewArrayReader::new(pages, data_type, reader)))
         }
 
@@ -157,6 +148,10 @@ impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
             decoder: None,
             validate_utf8,
         }
+    }
+
+    fn set_validate_utf8(&mut self, validate_utf8: bool) {
+        self.validate_utf8 = validate_utf8;
     }
 
     fn set_dict(
@@ -377,11 +372,10 @@ impl ByteViewArrayDecoderPlain {
                     .unwrap(),
             );
 
-            end_offset = start_offset + len as usize;
-
-            if end_offset > buf_len {
-                return Err(ParquetError::EOF("eof decoding byte array".into()));
-            }
+            end_offset = start_offset
+                .checked_add(len as usize)
+                .filter(|&end| end <= buf_len)
+                .ok_or_else(|| ParquetError::EOF("eof decoding byte array".into()))?;
 
             if VALIDATE_UTF8 {
                 // It seems you are trying to understand what's going on here, take a breath and be patient.
@@ -453,8 +447,11 @@ impl ByteViewArrayDecoderPlain {
             }
             let len_bytes: [u8; 4] = buf[self.offset..self.offset + 4].try_into().unwrap();
             let len = u32::from_le_bytes(len_bytes) as usize;
+            self.offset = (self.offset + 4)
+                .checked_add(len)
+                .filter(|&end| end <= buf.len())
+                .ok_or_else(|| ParquetError::EOF("eof decoding byte array".into()))?;
             skip += 1;
-            self.offset = self.offset + 4 + len;
         }
         self.max_remaining_values -= skip;
         Ok(skip)
@@ -637,8 +634,15 @@ impl ByteViewArrayDecoderDeltaLength {
             )
         }));
 
-        // Delta length encoding has continuous strings, we can validate utf8 in one go
+        // Delta length encoding has continuous strings, so validate utf8 in one go
+        // once each string is known to start on a character boundary
         if self.validate_utf8 {
+            let mut start = initial_offset;
+            for length in src_lengths {
+                let end = start + *length as usize;
+                check_utf8_value_start(&self.data[start..end])?;
+                start = end;
+            }
             check_valid_utf8(&self.data[initial_offset..current_offset])?;
         }
 
@@ -722,6 +726,9 @@ impl ByteViewArrayDecoderDelta {
             let mut utf8_validation_buffer = Vec::with_capacity(4096);
 
             let v = self.decoder.read(len, |bytes| {
+                // Both buffers are validated whole, so each string must also start
+                // on a character boundary
+                check_utf8_value_start(bytes)?;
                 let offset = array_buffer.len();
                 let view = make_view(bytes, buffer_id, offset as u32);
                 if bytes.len() > 12 {
@@ -843,5 +850,32 @@ mod tests {
 
         decoder.read(&mut view_buffer, 1).unwrap();
         assert_eq!(view_buffer.buffers.len(), 1);
+    }
+
+    #[test]
+    fn test_byte_view_array_plain_decoder_read_length_overflow_returns_error() {
+        // A length of 0xFFFF_FFFC after a 4 byte prefix ends at offset 2^32,
+        // which is 0 in a 32-bit usize.
+        let buffer = Bytes::from_static(&[0xFC, 0xFF, 0xFF, 0xFF, b'a', b'b', b'c', b'd']);
+        for validate_utf8 in [false, true] {
+            let mut decoder =
+                ByteViewArrayDecoderPlain::new(buffer.clone(), 1, Some(1), validate_utf8);
+            let mut output = ViewBuffer::with_capacity(0);
+
+            let error = decoder.read(&mut output, 1).unwrap_err();
+            assert!(matches!(error, ParquetError::EOF(_)), "{error}");
+            assert!(output.views.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_byte_view_array_plain_decoder_skip_past_end_returns_error() {
+        let buffer = Bytes::from_static(&[0xFF, 0xFF, 0, 0, b'a']);
+        let mut decoder = ByteViewArrayDecoderPlain::new(buffer, 2, Some(2), false);
+
+        let error = decoder.skip(1).unwrap_err();
+        assert!(matches!(error, ParquetError::EOF(_)), "{error}");
+        assert_eq!(decoder.offset, 0);
+        assert_eq!(decoder.max_remaining_values, 2);
     }
 }

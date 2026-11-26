@@ -1,19 +1,7 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
 use crate::utils::parse_path;
 use arrow_schema::ArrowError;
 use std::{borrow::Cow, ops::Deref};
@@ -85,6 +73,7 @@ use std::{borrow::Cow, ops::Deref};
 ///     VariantPathElement::index(2),
 ///     VariantPathElement::field("3")]);
 /// assert_eq!(path, expected)
+/// ```
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct VariantPath<'a>(Vec<VariantPathElement<'a>>);
 
@@ -159,7 +148,7 @@ impl<'a> Deref for VariantPath<'a> {
     }
 }
 
-/// Element of a [`VariantPath`] that can be a field name or an index.
+/// Element of a [`VariantPath`] that can be a field name, an index, or a list element wildcard.
 ///
 /// See [`VariantPath`] for more details and examples.
 #[derive(Debug, Clone, PartialEq)]
@@ -168,6 +157,8 @@ pub enum VariantPathElement<'a> {
     Field { name: Cow<'a, str> },
     /// Access the list element at `index`
     Index { index: usize },
+    /// Match the shared element schema of a list (`[*]`)
+    ListElement,
 }
 
 impl<'a> VariantPathElement<'a> {
@@ -178,6 +169,10 @@ impl<'a> VariantPathElement<'a> {
 
     pub fn index(index: usize) -> VariantPathElement<'a> {
         VariantPathElement::Index { index }
+    }
+
+    pub fn list_element() -> VariantPathElement<'a> {
+        VariantPathElement::ListElement
     }
 }
 
@@ -287,6 +282,15 @@ mod tests {
         ]);
         assert_eq!(path, expected);
 
+        // list wildcard is distinct from a quoted field named "*"
+        let path = VariantPath::try_from("foo[*]['*']").unwrap();
+        let expected = VariantPath::from_iter([
+            VariantPathElement::field("foo"),
+            VariantPathElement::list_element(),
+            VariantPathElement::field("*"),
+        ]);
+        assert_eq!(path, expected);
+
         // invalid index will be treated as field
         let path = VariantPath::try_from("foo.bar['abc'][\"def\"]").unwrap();
         let expected = VariantPath::from_iter([
@@ -306,6 +310,48 @@ mod tests {
             VariantPathElement::field("1"),
         ]);
         assert_eq!(path, expected);
+
+        // an unescaped closing bracket is literal inside a quoted field
+        for input in [r#"["a]b"]"#, "['a]b']"] {
+            let path = VariantPath::try_from(input).unwrap();
+            let expected = VariantPath::from_iter([VariantPathElement::field("a]b")]);
+            assert_eq!(path, expected);
+        }
+
+        // quoted brackets do not consume the following path element
+        let path = VariantPath::try_from(r#"["[0]"][1]"#).unwrap();
+        let expected = VariantPath::from_iter([
+            VariantPathElement::field("[0]"),
+            VariantPathElement::index(1),
+        ]);
+        assert_eq!(path, expected);
+
+        // escaped quotes and an unescaped bracket remain one quoted field
+        let path = VariantPath::try_from(r#"["\"][\""]"#).unwrap();
+        let expected = VariantPath::from_iter([VariantPathElement::field(r#""][""#)]);
+        assert_eq!(path, expected);
+
+        // the existing escaped spelling remains supported
+        let path = VariantPath::try_from(r#"["a\]b"]"#).unwrap();
+        let expected = VariantPath::from_iter([VariantPathElement::field("a]b")]);
+        assert_eq!(path, expected);
+    }
+
+    #[test]
+    fn test_variant_path_bracket_field_ownership() {
+        use VariantPathElement::Field;
+
+        let path = VariantPath::try_from(r#"[""]["plain"]["escaped\]field"]['a]b']"#).unwrap();
+
+        assert!(matches!(
+            &path[..],
+            [
+                Field { name: Cow::Borrowed("") },
+                Field { name: Cow::Borrowed("plain") },
+                Field { name: Cow::Owned(escaped) },
+                Field { name: Cow::Borrowed("a]b") },
+            ] if escaped == "escaped]field"
+        ));
     }
 
     #[test]
@@ -338,13 +384,13 @@ mod tests {
         let err = VariantPath::try_from("foo.bar[123abc]").unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Parser error: Invalid token in bracket request: `123abc`. Expected a quoted string or a number(e.g., `['field']` or `[123]`)"
+            "Parser error: Invalid token in bracket request: `123abc`. Expected `*`, a quoted string, or a number(e.g., `[*]`, `['field']`, or `[123]`)"
         );
 
         let err = VariantPath::try_from("foo.bar[abc]").unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Parser error: Invalid token in bracket request: `abc`. Expected a quoted string or a number(e.g., `['field']` or `[123]`)"
+            "Parser error: Invalid token in bracket request: `abc`. Expected `*`, a quoted string, or a number(e.g., `[*]`, `['field']`, or `[123]`)"
         );
 
         // Out-of-range integer indexes are invalid path tokens.

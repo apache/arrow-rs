@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 #[macro_use]
 extern crate criterion;
@@ -144,17 +131,41 @@ fn add_benchmark(c: &mut Criterion) {
         });
     }
 
-    // String view arrays
+    // String view arrays. Each iteration concatenates the next 10 of
+    // `NUM_VIEW_INPUTS` arrays, so the CPU can't learn the order of inline and
+    // out-of-line strings, or of nulls, in the input.
+    const NUM_VIEW_INPUTS: usize = 32;
     for null_density in [0.0, 0.2] {
-        // Any strings less than 12 characters are stored as prefix only, so specially
-        // benchmark cases that have different mixes of lengths.
-        for (name, str_len) in [("all_inline", 12), ("", 20), ("", 128)] {
-            let array = create_string_view_array_with_len(8192, null_density, str_len, false);
-            let arrays = (0..10).map(|_| &array as &dyn Array).collect::<Vec<_>>();
-            let id = format!(
-                "concat utf8_view {name} max_str_len={str_len} null_density={null_density}"
-            );
-            c.bench_function(&id, |b| b.iter(|| bench_concat_arrays(&arrays)));
+        // Strings of 12 bytes or fewer are stored inline in the view, so the
+        // cases cover all inline, all out of line, and a mix of the two.
+        for (name, lengths) in [
+            ("all_inline str_len=12", 12..13),
+            ("str_len=20", 20..21),
+            ("str_len=128", 128..129),
+            ("mixed str_len=3..20", 3..20),
+        ] {
+            let inputs = (0..NUM_VIEW_INPUTS as u64)
+                .map(|seed| {
+                    create_string_view_array_with_len_range_and_seed(
+                        8192,
+                        null_density,
+                        lengths.clone(),
+                        seed,
+                    )
+                })
+                .collect::<Vec<_>>();
+            let mut next = inputs.iter().cycle();
+            let id = format!("concat utf8_view {name} null_density={null_density}");
+            c.bench_function(&id, |b| {
+                b.iter(|| {
+                    let arrays = next
+                        .by_ref()
+                        .take(10)
+                        .map(|a| a as &dyn Array)
+                        .collect::<Vec<_>>();
+                    bench_concat_arrays(&arrays)
+                })
+            });
         }
     }
 
@@ -174,6 +185,42 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_concat(&v1, &v2))
     });
 
+    const DICTIONARY_SLICE_ROWS: usize = 682;
+    const DICTIONARY_SLICE_COUNT: usize = 12;
+    for values_per_key in [12, 16, 24, 128, 256, 400, 1024] {
+        for (key_order, scattered) in [("contiguous", false), ("scattered", true)] {
+            let values_len = DICTIONARY_SLICE_ROWS * values_per_key;
+            let inputs = (0..DICTIONARY_SLICE_COUNT)
+                .map(|dictionary_idx| {
+                    let values = StringArray::from_iter_values(
+                        (0..values_len)
+                            .map(|value_idx| format!("{dictionary_idx:02}_{value_idx:017}")),
+                    );
+                    let mut keys = (0..values_len as i32).collect::<Vec<_>>();
+                    if scattered {
+                        for row_idx in 0..DICTIONARY_SLICE_ROWS {
+                            keys[values_len - DICTIONARY_SLICE_ROWS + row_idx] =
+                                (row_idx * values_per_key) as i32;
+                        }
+                    }
+                    let dictionary =
+                        DictionaryArray::<Int32Type>::new(Int32Array::from(keys), Arc::new(values));
+                    dictionary.slice(values_len - DICTIONARY_SLICE_ROWS, DICTIONARY_SLICE_ROWS)
+                })
+                .collect::<Vec<_>>();
+            let arrays = inputs
+                .iter()
+                .map(|array| array as &dyn Array)
+                .collect::<Vec<_>>();
+            c.bench_function(
+                &format!(
+                    "concat str_dict_slice rows={DICTIONARY_SLICE_ROWS} values_per_key={values_per_key} key_order={key_order} count={DICTIONARY_SLICE_COUNT}"
+                ),
+                |b| b.iter(|| bench_concat_arrays(&arrays)),
+            );
+        }
+    }
+
     let v1 = FixedSizeListArray::try_new(
         Arc::new(Field::new_list_field(DataType::Int32, true)),
         1024,
@@ -191,6 +238,27 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("concat fixed size lists", |b| {
         b.iter(|| bench_concat(&v1, &v2))
     });
+
+    // A column assembled from one-row arrays, as ScalarValue::iter_to_array in DataFusion does
+    {
+        let input = (0..1024)
+            .map(|_| create_primitive_fixed_size_list_array::<Float32Type>(1, 0.0, 0.0, 3))
+            .collect::<Vec<_>>();
+        let arrays: Vec<_> = input.iter().map(|arr| arr as &dyn Array).collect();
+        c.bench_function("concat 1024 arrays fixed size list f32x3 1", |b| {
+            b.iter(|| bench_concat_arrays(&arrays))
+        });
+    }
+
+    {
+        // Slices, as the generator's fixed seed would give every one-row array the same validity
+        let input = create_primitive_fixed_size_list_array::<Float32Type>(1024, 0.2, 0.0, 3);
+        let slices = (0..1024).map(|i| input.slice(i, 1)).collect::<Vec<_>>();
+        let arrays: Vec<_> = slices.iter().map(|arr| arr as &dyn Array).collect();
+        c.bench_function("concat 1024 arrays fixed size list f32x3 nulls 1", |b| {
+            b.iter(|| bench_concat_arrays(&arrays))
+        });
+    }
 
     {
         let batch_size = 1024;
@@ -234,6 +302,21 @@ fn add_benchmark(c: &mut Criterion) {
             &format!("concat struct with int32 and dicts size={batch_size} count={batch_count}"),
             |b| b.iter(|| bench_concat_arrays(&array_refs)),
         );
+    }
+
+    // (name, logical_len, physical_len, num_arrays)
+    for (name, logical, physical, n) in [
+        ("small logical=32 physical=4 x4", 32usize, 4usize, 4usize),
+        ("logical=1024 physical=128 x8", 1024, 128, 8),
+        ("logical=8192 physical=1024 x10", 8192, 1024, 10),
+    ] {
+        let arrays: Vec<RunArray<Int32Type>> = (0..n)
+            .map(|_| create_primitive_run_array::<Int32Type, Int32Type>(logical, physical))
+            .collect();
+        let array_refs: Vec<&dyn Array> = arrays.iter().map(|a| a as &dyn Array).collect();
+        c.bench_function(&format!("concat run_end i32 {name}"), |b| {
+            b.iter(|| bench_concat_arrays(&array_refs))
+        });
     }
 }
 

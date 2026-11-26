@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::data::ArrayData;
 use arrow_schema::{DataType, UnionFields, UnionMode};
@@ -59,25 +46,37 @@ fn equal_dense(
         })
 }
 
+/// Compares `type_ids.len()` slots of two sparse unions whose type ids over that
+/// range are already known to be equal.
+///
+/// Only the child selected by each slot's type id contributes to the logical
+/// value of a sparse union; the values held by the other children at that slot
+/// are arbitrary and must not affect equality. Consecutive slots that select the
+/// same child are compared as a single range of that child.
 fn equal_sparse(
     lhs: &ArrayData,
     rhs: &ArrayData,
+    type_ids: &[i8],
+    fields: &UnionFields,
     lhs_start: usize,
     rhs_start: usize,
-    len: usize,
 ) -> bool {
-    lhs.child_data()
-        .iter()
-        .zip(rhs.child_data())
-        .all(|(lhs_values, rhs_values)| {
-            equal_range(
-                lhs_values,
-                rhs_values,
-                lhs_start + lhs.offset(),
-                rhs_start + rhs.offset(),
-                len,
-            )
-        })
+    let mut run_start = 0;
+    type_ids.chunk_by(|a, b| a == b).all(|run| {
+        let start = run_start;
+        run_start += run.len();
+
+        // Both sides share the same `UnionFields` (checked when comparing the
+        // data types), so the type id maps to the same child index on each side.
+        let child_index = fields.iter().position(|(id, _)| id == run[0]).unwrap();
+        equal_range(
+            &lhs.child_data()[child_index],
+            &rhs.child_data()[child_index],
+            lhs_start + lhs.offset() + start,
+            rhs_start + rhs.offset() + start,
+            run.len(),
+        )
+    })
 }
 
 pub(super) fn union_equal(
@@ -116,9 +115,9 @@ pub(super) fn union_equal(
                     rhs_fields,
                 )
         }
-        (DataType::Union(_, UnionMode::Sparse), DataType::Union(_, UnionMode::Sparse)) => {
+        (DataType::Union(fields, UnionMode::Sparse), DataType::Union(_, UnionMode::Sparse)) => {
             lhs_type_id_range == rhs_type_id_range
-                && equal_sparse(lhs, rhs, lhs_start, rhs_start, len)
+                && equal_sparse(lhs, rhs, lhs_type_id_range, fields, lhs_start, rhs_start)
         }
         _ => unimplemented!(
             "Logical equality not yet implemented between dense and sparse union arrays"

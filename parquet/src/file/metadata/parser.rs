@@ -1,35 +1,27 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Internal metadata parsing routines
 //!
 //! These functions parse thrift-encoded metadata from a byte slice
 //! into the corresponding Rust structures
 
-use crate::errors::ParquetError;
+use std::ops::Range;
+
+use bytes::Bytes;
+
+use crate::errors::{ParquetError, Result};
+use crate::file::metadata::column_chunk::{ColumnChunkEntries, ColumnChunkKey};
+use crate::file::metadata::page_index::{PageIndex, PageIndexProvider};
 use crate::file::metadata::thrift::parquet_metadata_from_bytes;
 use crate::file::metadata::{
-    ColumnChunkMetaData, PageIndex, PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions,
+    ColumnChunkMask, ColumnChunkMetaData, PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions,
 };
 
 use crate::file::page_index::column_index::ColumnIndexMetaData;
 use crate::file::page_index::index_reader::{decode_column_index, decode_offset_index};
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
-use bytes::Bytes;
 
 /// Helper struct for metadata parsing
 ///
@@ -46,7 +38,6 @@ mod inner {
 
     use super::*;
     use crate::encryption::decrypt::FileDecryptionProperties;
-    use crate::errors::Result;
 
     /// API for decoding metadata that may be encrypted
     #[derive(Debug, Default)]
@@ -104,7 +95,7 @@ mod inner {
         column: &ColumnChunkMetaData,
         row_group_index: usize,
         col_index: usize,
-    ) -> crate::errors::Result<ColumnIndexMetaData> {
+    ) -> Result<ColumnIndexMetaData> {
         use crate::encryption::decrypt::CryptoContext;
         match &column.column_crypto_metadata {
             Some(crypto_metadata) => {
@@ -132,7 +123,7 @@ mod inner {
         column: &ColumnChunkMetaData,
         row_group_index: usize,
         col_index: usize,
-    ) -> crate::errors::Result<OffsetIndexMetaData> {
+    ) -> Result<OffsetIndexMetaData> {
         use crate::encryption::decrypt::CryptoContext;
         match &column.column_crypto_metadata {
             Some(crypto_metadata) => {
@@ -158,7 +149,6 @@ mod inner {
 #[cfg(not(feature = "encryption"))]
 mod inner {
     use super::*;
-    use crate::errors::Result;
     use std::sync::Arc;
     /// parallel implementation when encryption feature is not enabled
     ///
@@ -204,7 +194,7 @@ mod inner {
         column: &ColumnChunkMetaData,
         _row_group_index: usize,
         _col_index: usize,
-    ) -> crate::errors::Result<ColumnIndexMetaData> {
+    ) -> Result<ColumnIndexMetaData> {
         decode_column_index(bytes, column.column_type())
     }
 
@@ -214,7 +204,7 @@ mod inner {
         _column: &ColumnChunkMetaData,
         _row_group_index: usize,
         _col_index: usize,
-    ) -> crate::errors::Result<OffsetIndexMetaData> {
+    ) -> Result<OffsetIndexMetaData> {
         decode_offset_index(bytes)
     }
 }
@@ -229,120 +219,155 @@ mod inner {
 pub(crate) fn decode_metadata(
     buf: &[u8],
     options: Option<&ParquetMetaDataOptions>,
-) -> crate::errors::Result<ParquetMetaData> {
+) -> Result<ParquetMetaData> {
     parquet_metadata_from_bytes(buf, options)
 }
 
-/// Parses page index from the provided bytes and adds it to the metadata.
+/// Parses page indexes from the provided bytes.
 ///
 /// Arguments
-/// * `metadata` - The ParquetMetaData to which the parsed column index will be added.
+/// * `metadata` - The footer metadata describing the page index locations.
 /// * `column_index_policy` - The policy for handling column index parsing (e.g.,
 ///   Required, Optional, Skip).
 /// * `offset_index_policy` - The policy for handling offset index parsing (e.g.,
 ///   Required, Optional, Skip).
-/// * `bytes` - The byte slice containing the column index data.
+/// * `column_index_mask` - The row groups and leaf columns whose column indexes are parsed.
+///   Ignored when `column_index_policy` is [`PageIndexPolicy::Skip`].
+/// * `offset_index_mask` - The row groups and leaf columns whose offset indexes are parsed.
+///   Ignored when `offset_index_policy` is [`PageIndexPolicy::Skip`].
+/// * `bytes` - The byte slice containing the page index data.
 /// * `start_offset` - The offset where `bytes` begin in the file.
 pub(crate) fn parse_page_index(
-    metadata: &mut ParquetMetaData,
+    metadata: &ParquetMetaData,
     column_index_policy: PageIndexPolicy,
     offset_index_policy: PageIndexPolicy,
+    column_index_mask: &ColumnChunkMask,
+    offset_index_mask: &ColumnChunkMask,
     bytes: &Bytes,
     start_offset: u64,
-) -> crate::errors::Result<()> {
-    if column_index_policy == PageIndexPolicy::Skip && offset_index_policy == PageIndexPolicy::Skip
-    {
-        return Ok(());
+) -> Result<Option<PageIndex>> {
+    let column_indexes = if column_index_policy == PageIndexPolicy::Skip {
+        None
+    } else {
+        Some(parse_column_index(
+            metadata,
+            column_index_mask,
+            bytes,
+            start_offset,
+        )?)
+    };
+    let offset_indexes = if offset_index_policy == PageIndexPolicy::Skip {
+        None
+    } else {
+        Some(parse_offset_index(
+            metadata,
+            offset_index_policy,
+            offset_index_mask,
+            bytes,
+            start_offset,
+        )?)
+    };
+
+    let page_index = PageIndex::from_entries(column_indexes, offset_indexes);
+    if page_index.has_column_indexes() || page_index.has_offset_indexes() {
+        Ok(Some(page_index))
+    } else {
+        Ok(None)
     }
-    let column_indexes = parse_column_index(metadata, column_index_policy, bytes, start_offset)?;
-    let offset_indexes = parse_offset_index(metadata, offset_index_policy, bytes, start_offset)?;
-    // this likely shouldn't happen, but check just in case
-    if column_indexes.is_none() && offset_indexes.is_none() {
-        return Ok(());
-    }
-    let page_index = PageIndex::new(column_indexes, offset_indexes);
-    metadata.set_page_index(Some(page_index));
-    Ok(())
+}
+
+/// Reserve only for selected chunks that actually have an index range. An extra
+/// metadata-only pass avoids both vector growth for dense reads and reserving a
+/// full rectangular grid for sparse reads or files with missing indexes.
+fn reserve_index_entries<T>(
+    metadata: &ParquetMetaData,
+    mask: &ColumnChunkMask,
+    index_range: impl Fn(&ColumnChunkMetaData) -> Option<Range<u64>>,
+) -> Result<Vec<(ColumnChunkKey, T)>> {
+    let num_entries =
+        mask.row_group_indices(metadata.num_row_groups())
+            .try_fold(0_usize, |count, rg_idx| {
+                let rg = metadata.row_group(rg_idx);
+                let present = mask
+                    .column_indices(rg.num_columns())
+                    .filter(|&col_idx| index_range(rg.column(col_idx)).is_some())
+                    .count();
+                count.checked_add(present).ok_or_else(|| {
+                    ParquetError::General("column chunk entry count exceeds usize::MAX".to_string())
+                })
+            })?;
+    let mut entries = Vec::new();
+    entries.try_reserve_exact(num_entries).map_err(|err| {
+        ParquetError::General(format!(
+            "failed to allocate storage for {num_entries} column chunk entries: {err}"
+        ))
+    })?;
+    Ok(entries)
 }
 
 fn parse_column_index(
     metadata: &ParquetMetaData,
-    column_index_policy: PageIndexPolicy,
+    mask: &ColumnChunkMask,
     bytes: &Bytes,
     start_offset: u64,
-) -> crate::errors::Result<Option<Vec<Vec<Option<ColumnIndexMetaData>>>>> {
-    if column_index_policy == PageIndexPolicy::Skip {
-        return Ok(None);
+) -> Result<ColumnChunkEntries<ColumnIndexMetaData>> {
+    let mut entries =
+        reserve_index_entries(metadata, mask, ColumnChunkMetaData::column_index_range)?;
+    // Mask axes are sorted and unique, so present entries remain in row-major
+    // order even when selected chunks have no index.
+    for rg_idx in mask.row_group_indices(metadata.num_row_groups()) {
+        let rg = metadata.row_group(rg_idx);
+        for col_idx in mask.column_indices(rg.num_columns()) {
+            let col = rg.column(col_idx);
+            if let Some(r) = col.column_index_range() {
+                let idx_bytes = get_index_bytes(bytes, start_offset, r)?;
+                let idx =
+                    inner::parse_single_column_index(idx_bytes, metadata, col, rg_idx, col_idx)?;
+                entries.push((ColumnChunkKey::try_new(rg_idx, col_idx)?, idx));
+            }
+        }
     }
-    let index = metadata
-        .row_groups()
-        .iter()
-        .enumerate()
-        .map(|(rg_idx, x)| {
-            x.columns()
-                .iter()
-                .enumerate()
-                .map(|(col_idx, c)| match c.column_index_range() {
-                    Some(r) => {
-                        let r_start = usize::try_from(r.start - start_offset)?;
-                        let r_end = usize::try_from(r.end - start_offset)?;
-                        inner::parse_single_column_index(
-                            &bytes[r_start..r_end],
-                            metadata,
-                            c,
-                            rg_idx,
-                            col_idx,
-                        )
-                        .map(Some)
-                    }
-                    None => Ok(None),
-                })
-                .collect::<crate::errors::Result<Vec<_>>>()
-        })
-        .collect::<crate::errors::Result<Vec<_>>>()?;
 
-    Ok(Some(index))
+    ColumnChunkEntries::try_from_sorted_entries(
+        metadata.num_row_groups(),
+        metadata.file_metadata().schema_descr().num_columns(),
+        entries,
+    )
 }
 
 fn parse_offset_index(
     metadata: &ParquetMetaData,
     offset_index_policy: PageIndexPolicy,
+    mask: &ColumnChunkMask,
     bytes: &Bytes,
     start_offset: u64,
-) -> crate::errors::Result<Option<Vec<Vec<Option<OffsetIndexMetaData>>>>> {
-    if offset_index_policy == PageIndexPolicy::Skip {
-        return Ok(None);
-    }
-    let row_groups = metadata.row_groups();
-    let mut all_indexes = Vec::with_capacity(row_groups.len());
-    for (rg_idx, x) in row_groups.iter().enumerate() {
-        let mut row_group_indexes = Vec::with_capacity(x.columns().len());
-        for (col_idx, c) in x.columns().iter().enumerate() {
-            let result = match c.offset_index_range() {
-                Some(r) => {
-                    let r_start = usize::try_from(r.start - start_offset)?;
-                    let r_end = usize::try_from(r.end - start_offset)?;
-                    inner::parse_single_offset_index(
-                        &bytes[r_start..r_end],
-                        metadata,
-                        c,
-                        rg_idx,
-                        col_idx,
-                    )
-                    .map(Some)
-                }
-                None => {
-                    if offset_index_policy == PageIndexPolicy::Required {
-                        Err(general_err!("missing offset index"))
-                    } else {
-                        Ok(None)
-                    }
-                }
-            };
-
-            row_group_indexes.push(result?);
+) -> Result<ColumnChunkEntries<OffsetIndexMetaData>> {
+    let mut entries =
+        reserve_index_entries(metadata, mask, ColumnChunkMetaData::offset_index_range)?;
+    for rg_idx in mask.row_group_indices(metadata.num_row_groups()) {
+        let rg = metadata.row_group(rg_idx);
+        for col_idx in mask.column_indices(rg.num_columns()) {
+            let col = rg.column(col_idx);
+            if let Some(r) = col.offset_index_range() {
+                let idx_bytes = get_index_bytes(bytes, start_offset, r)?;
+                let idx =
+                    inner::parse_single_offset_index(idx_bytes, metadata, col, rg_idx, col_idx)?;
+                entries.push((ColumnChunkKey::try_new(rg_idx, col_idx)?, idx));
+            } else if offset_index_policy == PageIndexPolicy::Required {
+                return Err(general_err!("missing offset index"));
+            }
         }
-        all_indexes.push(row_group_indexes);
     }
-    Ok(Some(all_indexes))
+
+    ColumnChunkEntries::try_from_sorted_entries(
+        metadata.num_row_groups(),
+        metadata.file_metadata().schema_descr().num_columns(),
+        entries,
+    )
+}
+
+fn get_index_bytes(bytes: &[u8], start_offset: u64, range: Range<u64>) -> Result<&[u8]> {
+    let start = usize::try_from(range.start - start_offset)?;
+    let end = usize::try_from(range.end - start_offset)?;
+    Ok(&bytes[start..end])
 }

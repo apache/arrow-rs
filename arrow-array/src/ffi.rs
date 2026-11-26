@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Contains declarations to bind to the [C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html).
 //!
@@ -101,7 +88,7 @@ To import an array, unsafely create an `ArrowArray` from two pointers using [Arr
 To export an array, create an `ArrowArray` using [ArrowArray::try_new].
 */
 
-use std::{mem::size_of, ptr::NonNull, sync::Arc};
+use std::{borrow::Cow, mem::size_of, ptr::NonNull, sync::Arc};
 
 use arrow_buffer::{Buffer, MutableBuffer, bit_util};
 pub use arrow_data::ffi::FFI_ArrowArray;
@@ -253,14 +240,8 @@ pub unsafe fn from_ffi(array: FFI_ArrowArray, schema: &FFI_ArrowSchema) -> Resul
         data_type: dt,
         owner: &array,
     };
-    let mut data = tmp.consume()?;
-    // arrow-rs has stricter alignment requirements than the C Data Interface spec;
-    // a no-op when buffers are already aligned. Unreachable under
-    // `cfg(feature = "force_validate")`; tracked in #10034.
-    // See https://github.com/apache/arrow/issues/43552 and
-    // https://github.com/apache/arrow-rs/issues/10028 for context.
-    data.align_buffers();
-    Ok(data)
+    // `consume` aligns under-aligned buffers before validating them.
+    tmp.consume()
 }
 
 /// Import [ArrayData] from the C Data Interface
@@ -278,14 +259,8 @@ pub unsafe fn from_ffi_and_data_type(
         data_type,
         owner: &array,
     };
-    let mut data = tmp.consume()?;
-    // arrow-rs has stricter alignment requirements than the C Data Interface spec;
-    // a no-op when buffers are already aligned. Unreachable under
-    // `cfg(feature = "force_validate")`; tracked in #10034.
-    // See https://github.com/apache/arrow/issues/43552 and
-    // https://github.com/apache/arrow-rs/issues/10028 for context.
-    data.align_buffers();
-    Ok(data)
+    // `consume` aligns under-aligned buffers before validating them.
+    tmp.consume()
 }
 
 #[derive(Debug)]
@@ -305,7 +280,21 @@ impl ImportedArrowArray<'_> {
         };
 
         let data_layout = layout(&self.data_type);
-        let buffers = self.buffers(data_layout.can_contain_null_mask, data_layout.variadic)?;
+        let mut buffers = self.buffers(data_layout.can_contain_null_mask, data_layout.variadic)?;
+
+        // The values buffer of an empty array at offset 0 is imported as empty (see
+        // `buffer_len`), so its lone offset, which can be any value, is reset to 0.
+        if len == 0
+            && offset == 0
+            && matches!(
+                self.data_type,
+                DataType::Utf8 | DataType::Binary | DataType::LargeUtf8 | DataType::LargeBinary
+            )
+        {
+            buffers[0] = MutableBuffer::try_from_len_zeroed(buffers[0].len())
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?
+                .into();
+        }
 
         let null_bit_buffer = if data_layout.can_contain_null_mask {
             self.null_bit_buffer()
@@ -322,18 +311,22 @@ impl ImportedArrowArray<'_> {
             child_data.push(d.consume()?);
         }
 
-        // Should FFI be checking validity?
-        Ok(unsafe {
-            ArrayData::new_unchecked(
-                self.data_type,
-                len,
-                null_count,
-                null_bit_buffer,
-                offset,
-                buffers,
-                child_data,
-            )
-        })
+        // Align before validate: spec-legal 8-byte-aligned buffers (e.g. Decimal128
+        // from JVM) get realigned rather than rejected, even under `force_validate`.
+        // Mirrors the IPC reader. See #10034.
+        let mut builder = ArrayData::builder(self.data_type)
+            .len(len)
+            .offset(offset)
+            .null_bit_buffer(null_bit_buffer)
+            .buffers(buffers)
+            .child_data(child_data)
+            .align_buffers(true);
+        // Only set the count if the producer reported one; else `build` recomputes.
+        if let Some(null_count) = null_count {
+            builder = builder.null_count(null_count);
+        }
+        // SAFETY: the caller guarantees the data agrees with the C Data Interface.
+        unsafe { builder.skip_validation(true) }.build()
     }
 
     fn consume_children(&self) -> Result<Vec<ArrayData>> {
@@ -345,7 +338,7 @@ impl ImportedArrowArray<'_> {
             | DataType::LargeListView(field)
             | DataType::Map(field, _) => Ok([self.consume_child(0, field.data_type())?].to_vec()),
             DataType::Struct(fields) => {
-                assert!(fields.len() == self.array.num_children());
+                assert_eq!(fields.len(), self.array.num_children());
                 fields
                     .iter()
                     .enumerate()
@@ -353,7 +346,7 @@ impl ImportedArrowArray<'_> {
                     .collect::<Result<Vec<_>>>()
             }
             DataType::Union(union_fields, _) => {
-                assert!(union_fields.len() == self.array.num_children());
+                assert_eq!(union_fields.len(), self.array.num_children());
                 union_fields
                     .iter()
                     .enumerate()
@@ -385,25 +378,38 @@ impl ImportedArrowArray<'_> {
         let buffer_begin = can_contain_null_mask as usize;
         let buffer_end = self.array.num_buffers() - usize::from(variadic);
 
-        let variadic_buffer_lens = if variadic {
+        let variadic_buffer_lens: Cow<'_, [i64]> = if variadic {
             // Each views array has 1 (optional) null buffer, 1 views buffer, 1 lengths buffer.
             // Rest are variadic.
             let num_variadic_buffers =
                 self.array.num_buffers() - (2 + usize::from(can_contain_null_mask));
+            // the pointer may not be aligned for `i64`, as `consume` aligns buffers only later.
+            #[expect(clippy::cast_ptr_alignment)]
+            let lengths = self
+                .array
+                .buffer(self.array.num_buffers() - 1)
+                .cast::<i64>();
             if num_variadic_buffers == 0 {
-                &[]
+                // the lengths buffer may be null when there are no variadic buffers.
+                Cow::Borrowed(&[])
+            } else if lengths.is_aligned() {
+                // SAFETY: lengths is non-null, aligned and valid for up to num_variadic_buffers.
+                Cow::Borrowed(unsafe { std::slice::from_raw_parts(lengths, num_variadic_buffers) })
             } else {
-                let lengths = self.array.buffer(self.array.num_buffers() - 1);
-                // SAFETY: is lengths is non-null, then it must be valid for up to num_variadic_buffers.
-                unsafe { std::slice::from_raw_parts(lengths.cast::<i64>(), num_variadic_buffers) }
+                // SAFETY: lengths is non-null and valid for up to num_variadic_buffers.
+                Cow::Owned(
+                    (0..num_variadic_buffers)
+                        .map(|i| unsafe { lengths.add(i).read_unaligned() })
+                        .collect(),
+                )
             }
         } else {
-            &[]
+            Cow::Borrowed(&[])
         };
 
         (buffer_begin..buffer_end)
             .map(|index| {
-                let len = self.buffer_len(index, variadic_buffer_lens, &self.data_type)?;
+                let len = self.buffer_len(index, &variadic_buffer_lens, &self.data_type)?;
                 match unsafe { create_buffer(self.owner.clone(), self.array, index, len) } {
                     Some(buf) => {
                         // External libraries may use a dangling pointer for a buffer with length 0.
@@ -411,7 +417,7 @@ impl ImportedArrowArray<'_> {
                         // if the length is incorrect, we cannot create a correct buffer even if
                         // the pointer is valid.
                         if buf.is_empty() {
-                            Ok(MutableBuffer::new(0).into())
+                            Ok(MutableBuffer::default().into())
                         } else {
                             Ok(buf)
                         }
@@ -419,7 +425,7 @@ impl ImportedArrowArray<'_> {
                     None if len == 0 => {
                         // Null data buffer, which Rust doesn't allow. So create
                         // an empty buffer.
-                        Ok(MutableBuffer::new(0).into())
+                        Ok(MutableBuffer::default().into())
                     }
                     None => Err(ArrowError::CDataInterface(format!(
                         "The external buffer at position {index} is null."
@@ -472,32 +478,51 @@ impl ImportedArrowArray<'_> {
                 length * (bits / 8)
             }
             (DataType::Utf8 | DataType::Binary, 2) => {
-                if self.array.is_empty() {
+                // We can short circuit for empty arrays with offset 0 since we know
+                // the values buffer must also be empty, and the single offset present
+                // in the offsets buffer can be an arbitrary value from the producer.
+                //
+                // If the array is empty yet has a non-zero offset, the C data interface
+                // guarantees there are `length + offset` values encoded in the buffer,
+                // so we must find the real size of the values buffer from the offsets
+                // buffer.
+                if self.array.is_empty() && self.array.offset() == 0 {
                     return Ok(0);
                 }
 
                 // the len of the data buffer (buffer 2) equals the last value of the offset buffer (buffer 1)
                 let len = self.buffer_len(1, variadic_buffer_lengths, dt)?;
                 // first buffer is the null buffer => add(1)
-                // we assume that pointer is aligned for `i32`, as Utf8 uses `i32` offsets.
+                // the pointer may not be aligned for `i32`, as `consume` aligns buffers only later.
                 #[expect(clippy::cast_ptr_alignment)]
                 let offset_buffer = self.array.buffer(1).cast::<i32>();
-                // get last offset
-                (unsafe { *offset_buffer.add(len / size_of::<i32>() - 1) }) as usize
+                // Safety: `len` is the byte length of the offset buffer; dividing by `size_of::<i32>()`
+                // gives the number of i32 elements. The `- 1` is safe because the offset buffer
+                // is always non-empty.
+                (unsafe {
+                    offset_buffer
+                        .add(len / size_of::<i32>() - 1)
+                        .read_unaligned()
+                }) as usize
             }
             (DataType::LargeUtf8 | DataType::LargeBinary, 2) => {
-                if self.array.is_empty() {
+                // See the note on the `Utf8` / `Binary` arm above.
+                if self.array.is_empty() && self.array.offset() == 0 {
                     return Ok(0);
                 }
 
                 // the len of the data buffer (buffer 2) equals the last value of the offset buffer (buffer 1)
                 let len = self.buffer_len(1, variadic_buffer_lengths, dt)?;
                 // first buffer is the null buffer => add(1)
-                // we assume that pointer is aligned for `i64`, as Large uses `i64` offsets.
+                // the pointer may not be aligned for `i64`, as `consume` aligns buffers only later.
                 #[expect(clippy::cast_ptr_alignment)]
                 let offset_buffer = self.array.buffer(1).cast::<i64>();
-                // get last offset
-                (unsafe { *offset_buffer.add(len / size_of::<i64>() - 1) }) as usize
+                // Safety: same as the i32 case above but for i64 offsets.
+                (unsafe {
+                    offset_buffer
+                        .add(len / size_of::<i64>() - 1)
+                        .read_unaligned()
+                }) as usize
             }
             // View types: these have variadic buffers.
             // Buffer 1 is the views buffer, which stores 1 u128 per length of the array.
@@ -652,33 +677,25 @@ mod tests_to_then_from_ffi {
     // case with nulls is tested in the docs, through the example on this module.
 
     #[test]
-    #[cfg(not(feature = "force_validate"))]
-    fn test_decimal128_under_aligned_round_trip() -> Result<()> {
-        // Construct an 8-aligned-but-not-16-aligned i128 data buffer to model
-        // an FFI producer that only guarantees the C Data Interface's
-        // recommended 8-byte alignment (e.g. arrow-java).
+    fn test_decimal128_under_aligned_import() -> Result<()> {
+        // FixedSizeBinary(16) needs only 1-byte alignment so it builds cleanly
+        // even under force_validate; imported as Decimal128 it triggers the
+        // realignment path. Regression test for #10034.
         let aligned = Buffer::from_vec(vec![0_i128, 1_i128, 2_i128]);
         let under_aligned = aligned.slice(8);
         assert_eq!(under_aligned.as_ptr().align_offset(8), 0);
         assert_ne!(under_aligned.as_ptr().align_offset(16), 0);
 
-        // SAFETY: buffer is large enough for 2 i128 elements; misaligned
-        // input is the condition under test.
-        let data = unsafe {
-            ArrayData::builder(DataType::Decimal128(10, 2))
-                .len(2)
-                .add_buffer(under_aligned)
-                .build_unchecked()
-        };
+        let data = ArrayData::builder(DataType::FixedSizeBinary(16))
+            .len(2)
+            .add_buffer(under_aligned)
+            .build()?;
 
-        let schema = FFI_ArrowSchema::try_from(data.data_type()).unwrap();
         let array = FFI_ArrowArray::new(&data);
-
-        let imported = unsafe { from_ffi(array, &schema) }?;
+        let imported = unsafe { from_ffi_and_data_type(array, DataType::Decimal128(10, 2)) }?;
         let array = Decimal128Array::from(imported);
 
-        // The little-endian byte layout of [0i128, 1, 2] sliced 8 bytes in
-        // yields elements `1 << 64` and `2 << 64`.
+        // slicing at byte 8 into [0i128, 1, 2] yields elements 1<<64 and 2<<64.
         assert_eq!(array.len(), 2);
         assert_eq!(array.value(0), 1_i128 << 64);
         assert_eq!(array.value(1), 2_i128 << 64);
@@ -1400,10 +1417,11 @@ mod tests_from_ffi {
     use crate::{
         ArrayRef, GenericByteViewArray, ListArray,
         array::{
-            Array, BooleanArray, DictionaryArray, FixedSizeBinaryArray, FixedSizeListArray,
-            Int32Array, Int64Array, StringArray, StructArray, UInt32Array, UInt64Array,
+            Array, BinaryArray, BooleanArray, DictionaryArray, FixedSizeBinaryArray,
+            FixedSizeListArray, Int32Array, Int64Array, LargeBinaryArray, LargeStringArray,
+            StringArray, StructArray, UInt32Array, UInt64Array,
         },
-        ffi::{FFI_ArrowArray, FFI_ArrowSchema, from_ffi},
+        ffi::{FFI_ArrowArray, FFI_ArrowSchema, from_ffi, to_ffi},
         make_array,
     };
 
@@ -1689,6 +1707,234 @@ mod tests_from_ffi {
         assert_eq!(data_buf_len, 0);
 
         test_round_trip(&imported_array.consume()?)
+    }
+
+    /// A zero-length `Utf8` / `Binary` array at a non-zero offset must survive a
+    /// round trip: the length of the values buffer has to come from the last offset
+    /// of the window, as it already does for non-empty arrays, rather than being
+    /// short-circuited to 0 on the length alone.
+    ///
+    /// <https://github.com/apache/arrow-rs/issues/10910>
+    #[test]
+    fn test_zero_length_bytes_at_non_zero_offset() -> Result<()> {
+        // "x", "aa", "bb", viewed as zero elements starting at `offset`.
+        let small = Buffer::from_slice_ref([0i32, 1, 3, 5]);
+        let large = Buffer::from_slice_ref([0i64, 1, 3, 5]);
+        let values = Buffer::from(b"xaabb".as_slice());
+
+        for (data_type, offsets) in [
+            (DataType::Utf8, &small),
+            (DataType::Binary, &small),
+            (DataType::LargeUtf8, &large),
+            (DataType::LargeBinary, &large),
+        ] {
+            for offset in 0..4 {
+                let data = ArrayData::try_new(
+                    data_type.clone(),
+                    0,
+                    None,
+                    offset,
+                    vec![offsets.clone(), values.clone()],
+                    vec![],
+                )?;
+
+                let array = FFI_ArrowArray::new(&data);
+                let schema = FFI_ArrowSchema::try_from(&data_type)?;
+                let imported = unsafe { from_ffi(array, &schema) }?;
+
+                // `from_ffi` builds the `ArrayData` with `new_unchecked`, so an
+                // inconsistency only surfaces once something validates it.
+                imported.validate_full()?;
+                assert_eq!(imported.len(), 0);
+                assert_eq!(imported, data);
+
+                // The values buffer is sized from the last offset of the window,
+                // not short-circuited to 0.
+                assert_eq!(imported.buffers()[1].len(), [0, 1, 3, 5][offset]);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// An empty slice keeps the offset it was sliced at as its lone offset, which
+    /// must not make the imported array invalid.
+    ///
+    /// <https://github.com/apache/arrow-rs/issues/11585>
+    #[test]
+    fn test_empty_slice_of_bytes() -> Result<()> {
+        let arrays: [ArrayRef; 4] = [
+            Arc::new(StringArray::from(vec!["ab", "c"])),
+            Arc::new(BinaryArray::from(vec![b"ab".as_ref(), b"c"])),
+            Arc::new(LargeStringArray::from(vec!["ab", "c"])),
+            Arc::new(LargeBinaryArray::from(vec![b"ab".as_ref(), b"c"])),
+        ];
+        for array in arrays {
+            let data = array.slice(1, 0).to_data();
+            let (array, schema) = to_ffi(&data)?;
+            let imported = unsafe { from_ffi(array, &schema) }?;
+
+            imported.validate_full()?;
+            assert_eq!(imported, data);
+        }
+
+        Ok(())
+    }
+
+    /// The C layout of `FFI_ArrowArray`, filled in by hand as a C producer would.
+    #[repr(C)]
+    struct RawArrowArray {
+        length: i64,
+        null_count: i64,
+        offset: i64,
+        n_buffers: i64,
+        n_children: i64,
+        buffers: *mut *const std::ffi::c_void,
+        children: *mut *mut RawArrowArray,
+        dictionary: *mut RawArrowArray,
+        release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowArray)>,
+        private_data: *mut std::ffi::c_void,
+    }
+
+    /// The buffers belong to the test, so release only marks the array released.
+    unsafe extern "C" fn release_raw(array: *mut FFI_ArrowArray) {
+        unsafe { (*array).set_release(None) };
+    }
+
+    /// Imports `data` from a hand-built C array of `buffers`, which must outlive the result.
+    fn import_raw(data: &ArrayData, buffers: &mut [*const std::ffi::c_void]) -> Result<ArrayData> {
+        let mut raw = RawArrowArray {
+            length: data.len() as i64,
+            null_count: 0,
+            offset: 0,
+            n_buffers: buffers.len() as i64,
+            n_children: 0,
+            buffers: buffers.as_mut_ptr(),
+            children: std::ptr::null_mut(),
+            dictionary: std::ptr::null_mut(),
+            release: Some(release_raw),
+            private_data: std::ptr::null_mut(),
+        };
+        let array = unsafe { FFI_ArrowArray::from_raw((&raw mut raw).cast()) };
+        let schema = FFI_ArrowSchema::try_from(data.data_type())?;
+        unsafe { from_ffi(array, &schema) }
+    }
+
+    /// Offsets that a producer stores at an address not aligned for their type must
+    /// import, as the C data interface only recommends alignment.
+    ///
+    /// <https://github.com/apache/arrow-rs/issues/7136>
+    #[test]
+    #[cfg(not(feature = "force_validate"))]
+    fn test_bytes_with_unaligned_offsets() -> Result<()> {
+        let arrays: [ArrayRef; 4] = [
+            Arc::new(StringArray::from(vec!["a", "bb", "ccc"])),
+            Arc::new(BinaryArray::from(vec![b"a".as_ref(), b"bb", b"ccc"])),
+            Arc::new(LargeStringArray::from(vec!["a", "bb", "ccc"])),
+            Arc::new(LargeBinaryArray::from(vec![b"a".as_ref(), b"bb", b"ccc"])),
+        ];
+        for array in arrays {
+            let data = array.to_data();
+            // The same offsets, one byte past an aligned address.
+            let mut offsets = arrow_buffer::MutableBuffer::from_len_zeroed(1);
+            offsets.extend_from_slice(data.buffers()[0].as_slice());
+            let offsets = Buffer::from(offsets).slice(1);
+            assert_ne!(offsets.as_ptr().align_offset(4), 0);
+
+            // SAFETY: the offsets are valid, only not aligned for their type.
+            let unaligned = unsafe {
+                data.clone()
+                    .into_builder()
+                    .buffers(vec![offsets, data.buffers()[1].clone()])
+                    .build_unchecked()
+            };
+            let (array, schema) = to_ffi(&unaligned)?;
+            let imported = unsafe { from_ffi(array, &schema) }?;
+
+            imported.validate_full()?;
+            assert_eq!(imported, data);
+        }
+
+        Ok(())
+    }
+
+    /// Like offsets, the variadic buffer lengths of a view array may be stored at an
+    /// address not aligned for `i64`.
+    ///
+    /// <https://github.com/apache/arrow-rs/issues/7136>
+    #[test]
+    fn test_views_with_unaligned_variadic_buffer_lengths() -> Result<()> {
+        // Values longer than 12 bytes live in the data buffers, and a 16 byte block
+        // holds only one of them, so each array has three data buffers.
+        let values = ["first long value", "second long one", "third long value"];
+        let mut strings = GenericByteViewBuilder::<StringViewType>::new().with_fixed_block_size(16);
+        let mut binaries =
+            GenericByteViewBuilder::<BinaryViewType>::new().with_fixed_block_size(16);
+        for value in values {
+            strings.append_value(value);
+            binaries.append_value(value.as_bytes());
+        }
+        let arrays: [ArrayRef; 2] = [Arc::new(strings.finish()), Arc::new(binaries.finish())];
+
+        for array in arrays {
+            let data = array.to_data();
+            assert_eq!(data.buffers().len(), 4);
+            // The same lengths `FFI_ArrowArray::new` exports, one byte past an aligned address.
+            let mut lengths = arrow_buffer::MutableBuffer::from_len_zeroed(1);
+            for buffer in &data.buffers()[1..] {
+                lengths.extend_from_slice(&(buffer.len() as i64).to_ne_bytes());
+            }
+            let lengths = &lengths[1..];
+            assert_ne!(lengths.as_ptr().align_offset(8), 0);
+
+            let mut buffers = std::iter::once(std::ptr::null())
+                .chain(data.buffers().iter().map(|b| b.as_ptr().cast()))
+                .chain(std::iter::once(lengths.as_ptr().cast()))
+                .collect::<Vec<_>>();
+            let imported = import_raw(&data, &mut buffers)?;
+
+            imported.validate_full()?;
+            assert_eq!(imported, data);
+        }
+
+        Ok(())
+    }
+
+    /// Unlike bytes, the values of lists and maps are a child array imported with its
+    /// own length, so the lone offset of an empty slice stays within it.
+    #[test]
+    fn test_empty_slice_of_lists() -> Result<()> {
+        use crate::builder::{
+            Int32Builder, LargeListBuilder, ListBuilder, MapBuilder, StringBuilder,
+        };
+
+        let mut list = ListBuilder::new(Int32Builder::new());
+        list.append_value([Some(1), Some(2)]);
+        list.append_value([Some(3)]);
+        let mut large_list = LargeListBuilder::new(Int32Builder::new());
+        large_list.append_value([Some(1), Some(2)]);
+        large_list.append_value([Some(3)]);
+        let mut map = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+        for (k, v) in [("a", 1), ("b", 2)] {
+            map.keys().append_value(k);
+            map.values().append_value(v);
+            map.append(true).unwrap();
+        }
+        let arrays: [ArrayRef; 3] = [
+            Arc::new(list.finish()),
+            Arc::new(large_list.finish()),
+            Arc::new(map.finish()),
+        ];
+        for array in arrays {
+            let data = array.slice(1, 0).to_data();
+            let (array, schema) = to_ffi(&data)?;
+            let imported = unsafe { from_ffi(array, &schema) }?;
+
+            imported.validate_full()?;
+            assert_eq!(imported, data);
+        }
+
+        Ok(())
     }
 
     fn roundtrip_string_array(array: StringArray) -> StringArray {

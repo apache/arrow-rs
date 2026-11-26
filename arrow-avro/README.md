@@ -1,20 +1,7 @@
 <!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+  SPDX-License-Identifier: Apache-2.0
+  SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+  SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # `arrow-avro`
@@ -28,6 +15,7 @@ This crate provides:
 
 - a **reader** that decodes Avro
   - **Object Container Files (OCF)**,
+  - **unframed binary datums**,
   - **Avro Single‑Object Encoding (SOE)**, and
   - **Confluent Schema Registry wire format**  
   into Arrow `RecordBatch`es; and
@@ -103,7 +91,10 @@ fn main() -> anyhow::Result<()> {
 }
 ```
 
-See the crate docs for runnable SOE and Confluent round‑trip examples.
+See the crate docs for runnable unframed-datum, SOE, and Confluent examples. Unframed Kafka
+messages or consecutive raw records can be decoded directly with `Decoder::decode` after
+selecting the known writer schema with `ReaderBuilder::with_active_fingerprint` and configuring
+`ReaderBuilder::with_decoder_mode(DecoderMode::UnframedDatum)`.
 
 ### Async reading (`async` feature)
 
@@ -209,6 +200,7 @@ the example on the `AsyncFileReader` trait documentation.
 ## What formats are supported?
 
 * **OCF (Object Container Files)**: self‑describing Avro files with header, optional compression, sync markers; reader and writer supported.
+* **Unframed binary datums**: bare Avro records with an externally known writer schema; configure `DecoderMode::UnframedDatum` and decode directly with `Decoder::decode`, without adding a synthetic framing prefix.
 * **Confluent Schema Registry wire format**: 1‑byte magic `0x00` + 4‑byte BE schema ID + Avro body; supports decode + encode helpers.
 * **Avro Single‑Object Encoding (SOE)**: 2‑byte magic `0xC3 0x01` + 8‑byte LE CRC‑64‑AVRO fingerprint + Avro body; supports decode + encode helpers.
 

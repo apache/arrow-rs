@@ -1,35 +1,20 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use bytes::Bytes;
 
 use crate::basic::{ConvertedType, Encoding, LogicalType, Type};
 use crate::bloom_filter::Sbbf;
-use crate::column::writer::{
-    compare_greater, fallback_encoding, has_dictionary_support, is_nan, update_max, update_min,
-};
+use crate::column::writer::{fallback_encoding, has_dictionary_support, update_max, update_min};
 use crate::data_type::DataType;
 use crate::data_type::private::ParquetValueType;
-use crate::encodings::encoding::{DictEncoder, Encoder, get_encoder};
+use crate::encodings::encoding::{DictEncoder, Encoder, get_encoder_with_properties};
 use crate::errors::{ParquetError, Result};
-use crate::file::properties::{EnabledStatistics, WriterProperties};
+use crate::file::properties::{EnabledStatistics, ResolvedColumnProperties, WriterProperties};
 use crate::geospatial::accumulator::{GeoStatsAccumulator, try_new_geo_stats_accumulator};
 use crate::geospatial::statistics::GeospatialStatistics;
-use crate::schema::types::{BasicTypeInfo, ColumnDescPtr};
+use crate::schema::types::ColumnDescPtr;
 
 /// A collection of [`ParquetValueType`] encoded by a [`ColumnValueEncoder`]
 pub trait ColumnValues {
@@ -80,7 +65,18 @@ pub trait ColumnValueEncoder {
     type Values: ColumnValues + ?Sized;
 
     /// Create a new [`ColumnValueEncoder`]
-    fn try_new(descr: &ColumnDescPtr, props: &WriterProperties) -> Result<Self>
+    ///
+    /// `column_props` holds the settings in `props` that apply specifically to
+    /// `descr`, already resolved by the caller.
+    #[expect(
+        private_interfaces,
+        reason = "this trait is not nameable outside the crate"
+    )]
+    fn try_new(
+        descr: &ColumnDescPtr,
+        props: &WriterProperties,
+        column_props: &ResolvedColumnProperties,
+    ) -> Result<Self>
     where
         Self: Sized;
 
@@ -88,15 +84,30 @@ pub trait ColumnValueEncoder {
     fn write(&mut self, values: &Self::Values, offset: usize, len: usize) -> Result<()>;
 
     /// Write the values at the indexes in `indices` to this [`ColumnValueEncoder`]
-    fn write_gather(&mut self, values: &Self::Values, indices: &[usize]) -> Result<()>;
-
-    /// Returns the largest `k` such that the first `k` values in
-    /// `values[offset..offset + len]` encode to at most `byte_budget`
-    /// bytes — i.e. how many values fit in a single page byte budget.
     ///
-    /// Returns `len` if every value fits. Returns at least 1 if a single
-    /// value alone exceeds the budget, matching parquet's "at least one
-    /// value per data page" rule.
+    /// `num_values_in_batch` is the number of non-null values in the whole write. The
+    /// column writer may split one write into several calls of this method (for
+    /// example by `write_batch_size` or the page size limit), so it can be larger than
+    /// `indices.len()`. It is the length of the write's full index list, which has one
+    /// entry per non-null value. The byte array encoder uses it to decide whether a
+    /// dictionary cache pays off.
+    fn write_gather(
+        &mut self,
+        values: &Self::Values,
+        indices: &[usize],
+        num_values_in_batch: usize,
+    ) -> Result<()>;
+
+    /// Counts how many leading values in `values[offset..offset + len]`
+    /// belong in one page of `byte_budget` bytes.
+    ///
+    /// Returns `len` if every value fits. Otherwise the result counts the
+    /// values that fit, and may also count the first value that overflows.
+    /// The variable-width implementations count that boundary value, so the
+    /// page-flush check trips on the mini-batch that crosses the budget.
+    /// The result is at least 1 when a single value alone exceeds the
+    /// budget. This matches the parquet rule of at least one value per data
+    /// page.
     ///
     /// `None` means "no cheap estimate available"; the caller stays on
     /// the batched fast path and lets the post-write
@@ -123,6 +134,17 @@ pub trait ColumnValueEncoder {
         _indices: &[usize],
         _byte_budget: usize,
     ) -> Option<usize> {
+        None
+    }
+
+    /// Returns an upper bound on the bytes that any one value of `values`
+    /// adds to a plain-encoded page, if the encoder knows one without
+    /// reading the values.
+    ///
+    /// The byte-budget chunker asks once per write call. The bound lets it
+    /// prove that a run of values fits a page from the length of the run
+    /// alone.
+    fn max_value_bytes(_values: &Self::Values) -> Option<usize> {
         None
     }
 
@@ -215,7 +237,7 @@ impl<T: DataType> ColumnValueEncoderImpl<T> {
             if let Some(accumulator) = self.geo_stats_accumulator.as_deref_mut() {
                 update_geo_stats_accumulator(accumulator, slice.iter());
             } else if let Some((min, max, nan_count)) =
-                get_min_max(self.descr.get_basic_info(), slice.iter())
+                T::T::min_max(self.descr.get_basic_info(), slice)
             {
                 update_min(&self.descr, &min, &mut self.min_value);
                 update_max(&self.descr, &max, &mut self.max_value);
@@ -229,16 +251,18 @@ impl<T: DataType> ColumnValueEncoderImpl<T> {
             }
         }
 
-        // encode the values into bloom filter if enabled
-        if let Some(bloom_filter) = &mut self.bloom_filter {
-            for value in slice {
-                bloom_filter.insert(value);
-            }
-        }
-
+        // While a dictionary is in use the filter is populated from its distinct values
+        // in `flush_dict_page`, so each value is hashed once rather than once per row.
         match &mut self.dict_encoder {
             Some(encoder) => encoder.put(slice),
-            _ => self.encoder.put(slice),
+            _ => {
+                if let Some(bloom_filter) = &mut self.bloom_filter {
+                    for value in slice {
+                        bloom_filter.insert(value);
+                    }
+                }
+                self.encoder.put(slice)
+            }
         }
     }
 }
@@ -254,22 +278,31 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
         Some(sbbf)
     }
 
-    fn try_new(descr: &ColumnDescPtr, props: &WriterProperties) -> Result<Self> {
-        let dict_supported = props.dictionary_enabled(descr.path())
-            && has_dictionary_support(T::get_physical_type(), props);
+    #[expect(
+        private_interfaces,
+        reason = "this trait is not nameable outside the crate"
+    )]
+    fn try_new(
+        descr: &ColumnDescPtr,
+        props: &WriterProperties,
+        column_props: &ResolvedColumnProperties,
+    ) -> Result<Self> {
+        let dict_supported =
+            column_props.dictionary_enabled && has_dictionary_support(T::get_physical_type());
         let dict_encoder = dict_supported.then(|| DictEncoder::new(descr.clone()));
 
         // Set either main encoder or fallback encoder.
-        let encoder = get_encoder(
-            props
-                .encoding(descr.path())
+        let encoder = get_encoder_with_properties(
+            column_props
+                .encoding
                 .unwrap_or_else(|| fallback_encoding(T::get_physical_type(), props)),
             descr,
+            column_props,
         )?;
 
-        let statistics_enabled = props.statistics_enabled(descr.path());
+        let statistics_enabled = column_props.statistics_enabled;
 
-        let (bloom_filter, bloom_filter_target_fpp) = create_bloom_filter(props, descr)?;
+        let (bloom_filter, bloom_filter_target_fpp) = create_bloom_filter(column_props)?;
 
         let geo_stats_accumulator = try_new_geo_stats_accumulator(descr);
 
@@ -303,7 +336,12 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
         self.write_slice(slice)
     }
 
-    fn write_gather(&mut self, values: &Self::Values, indices: &[usize]) -> Result<()> {
+    fn write_gather(
+        &mut self,
+        values: &Self::Values,
+        indices: &[usize],
+        _num_values_in_batch: usize,
+    ) -> Result<()> {
         self.num_values += indices.len();
         let slice: Vec<_> = indices.iter().map(|idx| values[*idx].clone()).collect();
         self.write_slice(&slice)
@@ -394,6 +432,12 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
                     ));
                 }
 
+                if let Some(bloom_filter) = &mut self.bloom_filter {
+                    for value in encoder.uniques() {
+                        bloom_filter.insert(value);
+                    }
+                }
+
                 let buf = encoder.write_dict()?;
 
                 Ok(Some(DictionaryPage {
@@ -428,59 +472,12 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
     }
 }
 
-// Get min and max values for all values in `iter`.
-//
-// For floating point we need to compare NaN values until we encounter a non-NaN
-// value which then becomes the new min/max. After this, only non-NaN values are
-// evaluated. If all values are NaN, then the min/max NaNs as determined by
-// IEEE 754 total order are returned.
-fn get_min_max<'a, T, I>(basic_type_info: &BasicTypeInfo, mut iter: I) -> Option<(T, T, u64)>
-where
-    T: ParquetValueType + 'a,
-    I: Iterator<Item = &'a T>,
-{
-    let first = iter.next()?;
-    let mut min_max_nan = is_nan(basic_type_info, first);
-    let mut nan_count = min_max_nan as u64;
-
-    let mut min = first;
-    let mut max = first;
-    for val in iter {
-        match (min_max_nan, is_nan(basic_type_info, val)) {
-            // skip NaNs if we've encounter non-NaN
-            (false, true) => {
-                nan_count += 1;
-            }
-            // if min/max are NaN, check for non-NaN and reset
-            (true, false) => {
-                min = val;
-                max = val;
-                min_max_nan = false;
-            }
-            // both are NaN or non-NaN, so do the comparison
-            (_, val_is_nan) => {
-                nan_count += val_is_nan as u64;
-                // we've already initialized min and max, so a single value can't be both
-                // extremes
-                if compare_greater(basic_type_info, min, val) {
-                    min = val;
-                } else if compare_greater(basic_type_info, val, max) {
-                    max = val;
-                }
-            }
-        }
-    }
-
-    Some((min.clone(), max.clone(), nan_count))
-}
-
 /// Creates a bloom filter sized for the column's configured NDV, returning the filter
 /// and the target FPP for folding.
 pub(crate) fn create_bloom_filter(
-    props: &WriterProperties,
-    descr: &ColumnDescPtr,
+    column_props: &ResolvedColumnProperties,
 ) -> Result<(Option<Sbbf>, f64)> {
-    match props.bloom_filter_properties(descr.path()) {
+    match column_props.bloom_filter_properties.as_ref() {
         Some(bf_props) => Ok((
             Some(Sbbf::new_with_ndv_fpp(bf_props.ndv(), bf_props.fpp())?),
             bf_props.fpp(),

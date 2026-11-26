@@ -1,25 +1,12 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`GetTablesBuilder`] for building responses to [`CommandGetTables`] queries.
 //!
 //! [`CommandGetTables`]: crate::sql::CommandGetTables
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use arrow_arith::boolean::{and, or};
 use arrow_array::builder::{BinaryBuilder, StringBuilder};
@@ -28,7 +15,6 @@ use arrow_ord::cmp::eq;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use arrow_select::{filter::filter_record_batch, take::take};
 use arrow_string::like::like;
-use once_cell::sync::Lazy;
 
 use super::lexsort_to_indices;
 use crate::error::*;
@@ -102,7 +88,7 @@ impl GetTablesBuilder {
     ///     - "%" means to match any substring with 0 or more characters.
     ///     - "_" means to match any one character.
     /// - `table_types`:  Specifies a filter of table types which must match.
-    ///   An empy Vec matches all table types.
+    ///   An empty Vec matches all table types.
     /// - `include_schema`: Specifies if the Arrow schema should be returned for found tables.
     ///
     /// [`CommandGetTables`]: crate::sql::CommandGetTables
@@ -289,7 +275,7 @@ fn get_tables_schema(include_schema: bool) -> SchemaRef {
 }
 
 /// The schema for GetTables without `table_schema` column
-static GET_TABLES_SCHEMA_WITHOUT_TABLE_SCHEMA: Lazy<SchemaRef> = Lazy::new(|| {
+static GET_TABLES_SCHEMA_WITHOUT_TABLE_SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
     Arc::new(Schema::new(vec![
         Field::new("catalog_name", DataType::Utf8, true),
         Field::new("db_schema_name", DataType::Utf8, true),
@@ -299,7 +285,7 @@ static GET_TABLES_SCHEMA_WITHOUT_TABLE_SCHEMA: Lazy<SchemaRef> = Lazy::new(|| {
 });
 
 /// The schema for GetTables with `table_schema` column
-static GET_TABLES_SCHEMA_WITH_TABLE_SCHEMA: Lazy<SchemaRef> = Lazy::new(|| {
+static GET_TABLES_SCHEMA_WITH_TABLE_SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
     Arc::new(Schema::new(vec![
         Field::new("catalog_name", DataType::Utf8, true),
         Field::new("db_schema_name", DataType::Utf8, true),

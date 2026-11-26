@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 #[macro_use]
 extern crate criterion;
@@ -23,6 +10,7 @@ use arrow::util::bench_util::create_boolean_array;
 
 use arrow::array::*;
 use arrow::compute::kernels::boolean as boolean_kernels;
+use arrow_buffer::NullBuffer;
 use std::hint;
 
 fn bench_and(lhs: &BooleanArray, rhs: &BooleanArray) {
@@ -77,5 +65,34 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("not_slice_24", |b| b.iter(|| bench_not(&array1_sliced_24)));
 }
 
-criterion_group!(benches, add_benchmark);
+fn make_null_buffer(len: usize) -> NullBuffer {
+    NullBuffer::from(
+        (0..len)
+            .map(|i| (i / 4) % 2 == 0)
+            .collect::<Vec<bool>>()
+            .as_slice(),
+    )
+}
+
+fn bench_null_buffer_expand(c: &mut Criterion) {
+    let mut group = c.benchmark_group("null_buffer_expand");
+
+    let cases: &[(&str, usize, usize)] = &[
+        ("len=512/count=16", 512, 16), // pow2
+        ("len=512/count=12", 512, 12), // non-pow2
+        ("len=1024/count=128", 1024, 128),
+        ("len=1024/count=96", 1024, 96),
+        ("len=2048/count=256", 2048, 256),
+        ("len=2048/count=192", 2048, 192),
+    ];
+
+    for &(label, len, count) in cases {
+        let buf = make_null_buffer(len);
+        group.bench_function(label, |b| b.iter(|| hint::black_box(buf.expand(count))));
+    }
+
+    group.finish();
+}
+
+criterion_group!(benches, add_benchmark, bench_null_buffer_expand);
 criterion_main!(benches);

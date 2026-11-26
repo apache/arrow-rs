@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::{ops::Range, sync::Arc};
 
@@ -244,6 +231,16 @@ impl AsyncFileReader for ParquetObjectReader {
                     .with_column_index_policy(options.column_index_policy())
                     .with_offset_index_policy(options.offset_index_policy());
             }
+            // TODO: https://github.com/apache/arrow-rs/issues/11395 may deprecate this API. Decide
+            // at that time if masks should be added to ParquetObjectReader.
+            if let Some(options) = options {
+                if !options.column_index_mask().is_all() {
+                    metadata = metadata.with_column_index_mask(options.column_index_mask().clone());
+                }
+                if !options.offset_index_mask().is_all() {
+                    metadata = metadata.with_offset_index_mask(options.offset_index_mask().clone());
+                }
+            }
 
             let metadata = if let Some(file_size) = self.file_size {
                 metadata.load_and_finish(self, file_size).await?
@@ -259,8 +256,8 @@ impl AsyncFileReader for ParquetObjectReader {
 #[cfg(test)]
 #[expect(deprecated)]
 mod tests {
+    use crate::arrow::async_reader::ArrowReaderOptions;
     use crate::file::metadata::PageIndexPolicy;
-    use crate::{arrow::async_reader::ArrowReaderOptions, file::metadata::PageIndex};
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -447,7 +444,7 @@ mod tests {
         let metadata = reader.get_metadata(Some(&options)).await.unwrap();
 
         // With preload=true, indexes should be loaded since the test file has them
-        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
+        assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
     }
 
     #[tokio::test]
@@ -516,6 +513,6 @@ mod tests {
         // With no options provided, preload flags (true) should be respected
         // and converted to Optional policy internally (preload=true -> Optional)
         // The test file has page indexes, so they will be some
-        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
+        assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
     }
 }

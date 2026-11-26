@@ -1,19 +1,7 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
 use arrow_schema::ArrowError;
 use std::fmt;
 
@@ -197,7 +185,8 @@ macro_rules! impl_variant_decimal {
 
             fn try_new_with_signed_scale(integer: $native, scale: i8) -> Result<Self, ArrowError> {
                 let (integer, scale) = if scale < 0 {
-                    let multiplier = <$native>::checked_pow(10, -scale as u32);
+                    let multiplier =
+                        <$native>::checked_pow(10, u32::from(scale.unsigned_abs()));
                     let Some(rescaled) = multiplier.and_then(|m| integer.checked_mul(m)) else {
                         return Err(ArrowError::InvalidArgumentError(format!(
                             "Overflow when rescaling {integer} with scale {scale}"
@@ -393,6 +382,31 @@ impl_try_from_int_for_decimal!(i128, VariantDecimal16);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_variant_decimal_signed_scale() {
+        fn check<D: VariantDecimalType>()
+        where
+            D::Native: From<i32> + std::fmt::Debug + PartialEq,
+        {
+            for scale in [i8::MIN, -127] {
+                assert!(matches!(
+                    D::try_new_with_signed_scale(1.into(), scale),
+                    Err(ArrowError::InvalidArgumentError(_))
+                ));
+            }
+
+            for value in [-12, 12] {
+                let decimal = D::try_new_with_signed_scale(value.into(), -2).unwrap();
+                assert_eq!(decimal.integer(), (value * 100).into());
+                assert_eq!(decimal.scale(), 0);
+            }
+        }
+
+        check::<VariantDecimal4>();
+        check::<VariantDecimal8>();
+        check::<VariantDecimal16>();
+    }
 
     #[test]
     fn test_variant_decimal_invalid_precision() {

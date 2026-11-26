@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow_array::{ArrayRef, Int32Array, RecordBatch, StringArray};
 use arrow_cast::pretty::pretty_format_batches;
@@ -87,7 +74,7 @@ async fn main() -> parquet::errors::Result<()> {
             "| 100 | oranges     |",
             "| 200 | apples      |",
             "| 201 | grapefruit  |",
-            "| 300 | bannanas    |",
+            "| 300 | bananas     |",
             "| 102 | grapes      |",
             "| 33  | pears       |",
             "+-----+-------------+",
@@ -139,7 +126,7 @@ fn prepare_metadata(metadata: ParquetMetaData) -> ParquetMetaData {
     }
     let metadata = builder.build();
 
-    // verifiy that the size has indeed been reduced
+    // verify that the size has indeed been reduced
     let new_size = metadata.memory_size();
     assert!(new_size < orig_size, "metadata size did not decrease");
     println!("Reduced metadata size from {orig_size} to {new_size}");
@@ -216,7 +203,7 @@ fn create_parquet_file(tmpdir: &TempDir) -> PathBuf {
                 "oranges",
                 "apples",
                 "grapefruit",
-                "bannanas",
+                "bananas",
                 "grapes",
                 "pears",
             ])),

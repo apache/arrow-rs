@@ -1,26 +1,12 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::builder::{ArrayBuilder, FixedSizeBinaryBuilder, PrimitiveBuilder};
 use crate::types::ArrowDictionaryKeyType;
-use crate::{Array, ArrayRef, DictionaryArray, PrimitiveArray};
+use crate::{ArrayRef, DictionaryArray, PrimitiveArray};
 use arrow_buffer::ArrowNativeType;
-use arrow_schema::DataType::FixedSizeBinary;
-use arrow_schema::{ArrowError, DataType};
+use arrow_schema::ArrowError;
 use hashbrown::HashTable;
 use num_traits::NumCast;
 use std::any::Any;
@@ -159,9 +145,13 @@ where
         Ok(Self {
             state,
             dedup,
-            keys_builder: new_keys
-                .into_builder()
-                .expect("underlying buffer has no references"),
+            keys_builder: new_keys.into_builder().map_err(|_| {
+                ArrowError::ComputeError(
+                    "Internal Error: the keys just derived from the source builder are \
+                     unexpectedly shared, so they cannot be reused as a builder"
+                        .to_string(),
+                )
+            })?,
             values_builder,
             byte_width,
         })
@@ -211,9 +201,7 @@ impl<K> FixedSizeBinaryDictionaryBuilder<K>
 where
     K: ArrowDictionaryKeyType,
 {
-    fn get_or_insert_key(&mut self, value: impl AsRef<[u8]>) -> Result<K::Native, ArrowError> {
-        let value_bytes: &[u8] = value.as_ref();
-
+    fn get_or_insert_key(&mut self, value_bytes: &[u8]) -> Result<K::Native, ArrowError> {
         let state = &self.state;
         let storage = &mut self.values_builder;
         let hash = state.hash_one(value_bytes);
@@ -227,7 +215,7 @@ where
             )
             .or_insert_with(|| {
                 let idx = storage.len();
-                let _ = storage.append_value(value);
+                let _ = storage.append_value(value_bytes);
                 idx
             })
             .get();
@@ -243,7 +231,8 @@ where
     ///
     /// Returns an error if the new index would overflow the key type.
     pub fn append(&mut self, value: impl AsRef<[u8]>) -> Result<K::Native, ArrowError> {
-        if self.byte_width != value.as_ref().len() as i32 {
+        let value = value.as_ref();
+        if value.len() != self.byte_width as usize {
             Err(ArrowError::InvalidArgumentError(format!(
                 "Invalid input length passed to FixedSizeBinaryBuilder. Expected {} got {}",
                 self.byte_width,
@@ -265,7 +254,8 @@ where
         value: impl AsRef<[u8]>,
         count: usize,
     ) -> Result<K::Native, ArrowError> {
-        if self.byte_width != value.as_ref().len() as i32 {
+        let value = value.as_ref();
+        if value.len() != self.byte_width as usize {
             Err(ArrowError::InvalidArgumentError(format!(
                 "Invalid input length passed to FixedSizeBinaryBuilder. Expected {} got {}",
                 self.byte_width,
@@ -305,18 +295,9 @@ where
         let values = self.values_builder.finish();
         let keys = self.keys_builder.finish();
 
-        let data_type = DataType::Dictionary(
-            Box::new(K::DATA_TYPE),
-            Box::new(FixedSizeBinary(self.byte_width)),
-        );
-
-        let builder = keys
-            .into_data()
-            .into_builder()
-            .data_type(data_type)
-            .child_data(vec![values.into_data()]);
-
-        DictionaryArray::from(unsafe { builder.build_unchecked() })
+        // SAFETY: keys and values were produced by this builder; the builder
+        // only appends keys that index into the values it has built so far.
+        unsafe { DictionaryArray::new_unchecked(keys, Arc::new(values)) }
     }
 
     /// Builds the `DictionaryArray` without resetting the builder.
@@ -324,18 +305,9 @@ where
         let values = self.values_builder.finish_cloned();
         let keys = self.keys_builder.finish_cloned();
 
-        let data_type = DataType::Dictionary(
-            Box::new(K::DATA_TYPE),
-            Box::new(FixedSizeBinary(self.byte_width)),
-        );
-
-        let builder = keys
-            .into_data()
-            .into_builder()
-            .data_type(data_type)
-            .child_data(vec![values.into_data()]);
-
-        DictionaryArray::from(unsafe { builder.build_unchecked() })
+        // SAFETY: keys and values were produced by this builder; the builder
+        // only appends keys that index into the values it has built so far.
+        unsafe { DictionaryArray::new_unchecked(keys, Arc::new(values)) }
     }
 
     /// Builds the `DictionaryArray` without resetting the values builder or
@@ -359,18 +331,9 @@ where
         let values = self.values_builder.finish_cloned();
         let keys = self.keys_builder.finish();
 
-        let data_type = DataType::Dictionary(
-            Box::new(K::DATA_TYPE),
-            Box::new(FixedSizeBinary(self.byte_width)),
-        );
-
-        let builder = keys
-            .into_data()
-            .into_builder()
-            .data_type(data_type)
-            .child_data(vec![values.into_data()]);
-
-        DictionaryArray::from(unsafe { builder.build_unchecked() })
+        // SAFETY: keys and values were produced by this builder; the builder
+        // only appends keys that index into the values it has built so far.
+        unsafe { DictionaryArray::new_unchecked(keys, Arc::new(values)) }
     }
 }
 

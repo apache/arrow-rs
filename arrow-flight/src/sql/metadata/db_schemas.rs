@@ -1,25 +1,12 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`GetDbSchemasBuilder`] for building responses to [`CommandGetDbSchemas`] queries.
 //!
 //! [`CommandGetDbSchemas`]: crate::sql::CommandGetDbSchemas
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use arrow_arith::boolean::and;
 use arrow_array::{ArrayRef, RecordBatch, StringArray, builder::StringBuilder};
@@ -27,7 +14,6 @@ use arrow_ord::cmp::eq;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use arrow_select::{filter::filter_record_batch, take::take};
 use arrow_string::like::like;
-use once_cell::sync::Lazy;
 
 use super::lexsort_to_indices;
 use crate::error::*;
@@ -175,7 +161,7 @@ fn get_db_schemas_schema() -> SchemaRef {
 }
 
 /// The schema for GetDbSchemas
-static GET_DB_SCHEMAS_SCHEMA: Lazy<SchemaRef> = Lazy::new(|| {
+static GET_DB_SCHEMAS_SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
     Arc::new(Schema::new(vec![
         Field::new("catalog_name", DataType::Utf8, true),
         Field::new("db_schema_name", DataType::Utf8, false),

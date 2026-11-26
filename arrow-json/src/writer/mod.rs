@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! # JSON Writer
 //!
@@ -1847,7 +1834,7 @@ mod tests {
             assert_eq!(
                 json!([
                     {
-                        "bytes": "4e656420466c616e64657273"
+                        "bytes": "426f622054686f6d70736f6e"
                     },
                     {
                         "bytes": null // the explicit null
@@ -1874,7 +1861,7 @@ mod tests {
 
             assert_eq!(
                 json!([
-                    { "bytes": "4e656420466c616e64657273" },
+                    { "bytes": "426f622054686f6d70736f6e" },
                     {},
                     { "bytes": "54726f79204d63436c757265" }
                 ]),
@@ -1886,7 +1873,7 @@ mod tests {
     #[test]
     fn test_writer_binary() {
         let values: [Option<&[u8]>; 3] = [
-            Some(b"Ned Flanders" as &[u8]),
+            Some(b"Bob Thompson" as &[u8]),
             None,
             Some(b"Troy McClure" as &[u8]),
         ];
@@ -2088,7 +2075,7 @@ mod tests {
         let json_str = str::from_utf8(&json).unwrap();
         assert_eq!(
             json_str,
-            r#"[{"my_dict":"a"},{"my_dict":null},{"my_dict":""}]"#
+            r#"[{"my_dict":"a"},{"my_dict":null},{"my_dict":null}]"#
         )
     }
 
@@ -2212,6 +2199,31 @@ mod tests {
             r#"{"decimal":12.34}
 {}
 {"decimal":56.78}
+"#,
+        );
+    }
+
+    #[test]
+    fn test_decimal_encoder_negative_scale() {
+        // https://github.com/apache/arrow-rs/issues/10865
+        let array = Decimal128Array::from_iter([Some(0), Some(12), Some(-12)])
+            .with_precision_and_scale(10, -2)
+            .unwrap();
+        let field = Arc::new(Field::new("decimal", array.data_type().clone(), true));
+        let schema = Schema::new(vec![field]);
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap();
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = LineDelimitedWriter::new(&mut buf);
+            writer.write_batches(&[&batch]).unwrap();
+        }
+
+        assert_json_eq(
+            &buf,
+            r#"{"decimal":0}
+{"decimal":1200}
+{"decimal":-1200}
 "#,
         );
     }
@@ -2524,9 +2536,9 @@ mod tests {
         }
 
         #[derive(Debug)]
-        struct IntArayBinaryEncoderFactory;
+        struct IntArrayBinaryEncoderFactory;
 
-        impl EncoderFactory for IntArayBinaryEncoderFactory {
+        impl EncoderFactory for IntArrayBinaryEncoderFactory {
             fn make_default_encoder<'a>(
                 &self,
                 _field: &'a FieldRef,
@@ -2564,7 +2576,7 @@ mod tests {
         let json_value: Value = {
             let mut buf = Vec::new();
             let mut writer = WriterBuilder::new()
-                .with_encoder_factory(Arc::new(IntArayBinaryEncoderFactory))
+                .with_encoder_factory(Arc::new(IntArrayBinaryEncoderFactory))
                 .build::<_, JsonArray>(&mut buf);
             writer.write_batches(&[&batch]).unwrap();
             writer.finish().unwrap();

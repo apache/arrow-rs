@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Contains definitions for working with Parquet statistics.
 //!
@@ -591,6 +578,11 @@ impl<T> ValueStatistics<T> {
         }
     }
 
+    /// Returns these statistics with `min` and `max` replaced and every other field kept.
+    pub(crate) fn with_min_max(self, min: Option<T>, max: Option<T>) -> Self {
+        Self { min, max, ..self }
+    }
+
     /// Set whether the stored `min` field represents the exact
     /// minimum, or just a bound on the minimum value.
     ///
@@ -753,8 +745,6 @@ impl<T: ParquetValueType> fmt::Debug for ValueStatistics<T> {
 
 #[cfg(test)]
 mod tests {
-    use core::f32;
-
     use super::*;
 
     #[test]
@@ -867,30 +857,46 @@ mod tests {
     fn test_statistics_partial_eq() {
         let expected = Statistics::int32(Some(12), Some(45), None, Some(11), true);
 
-        assert!(Statistics::int32(Some(12), Some(45), None, Some(11), true) == expected);
-        assert!(Statistics::int32(Some(11), Some(45), None, Some(11), true) != expected);
-        assert!(Statistics::int32(Some(12), Some(44), None, Some(11), true) != expected);
-        assert!(Statistics::int32(Some(12), Some(45), None, Some(23), true) != expected);
-        assert!(Statistics::int32(Some(12), Some(45), None, Some(11), false) != expected);
-
-        assert!(
-            Statistics::int32(Some(12), Some(45), None, Some(11), false)
-                != Statistics::int64(Some(12), Some(45), None, Some(11), false)
+        assert_eq!(
+            Statistics::int32(Some(12), Some(45), None, Some(11), true),
+            expected
+        );
+        assert_ne!(
+            Statistics::int32(Some(11), Some(45), None, Some(11), true),
+            expected
+        );
+        assert_ne!(
+            Statistics::int32(Some(12), Some(44), None, Some(11), true),
+            expected
+        );
+        assert_ne!(
+            Statistics::int32(Some(12), Some(45), None, Some(23), true),
+            expected
+        );
+        assert_ne!(
+            Statistics::int32(Some(12), Some(45), None, Some(11), false),
+            expected
         );
 
-        assert!(
-            Statistics::boolean(Some(false), Some(true), None, None, true)
-                != Statistics::double(Some(1.2), Some(4.5), None, None, true)
+        assert_ne!(
+            Statistics::int32(Some(12), Some(45), None, Some(11), false),
+            Statistics::int64(Some(12), Some(45), None, Some(11), false)
         );
 
-        assert!(
+        assert_ne!(
+            Statistics::boolean(Some(false), Some(true), None, None, true),
+            Statistics::double(Some(1.2), Some(4.5), None, None, true)
+        );
+
+        assert_ne!(
             Statistics::byte_array(
                 Some(ByteArray::from(vec![1, 2, 3])),
                 Some(ByteArray::from(vec![1, 2, 3])),
                 None,
                 None,
                 true
-            ) != Statistics::fixed_len_byte_array(
+            ),
+            Statistics::fixed_len_byte_array(
                 Some(ByteArray::from(vec![1, 2, 3]).into()),
                 Some(ByteArray::from(vec![1, 2, 3]).into()),
                 None,
@@ -899,14 +905,15 @@ mod tests {
             )
         );
 
-        assert!(
+        assert_ne!(
             Statistics::byte_array(
                 Some(ByteArray::from(vec![1, 2, 3])),
                 Some(ByteArray::from(vec![1, 2, 3])),
                 None,
                 None,
                 true,
-            ) != Statistics::ByteArray(
+            ),
+            Statistics::ByteArray(
                 ValueStatistics::new(
                     Some(ByteArray::from(vec![1, 2, 3])),
                     Some(ByteArray::from(vec![1, 2, 3])),
@@ -918,14 +925,15 @@ mod tests {
             )
         );
 
-        assert!(
+        assert_ne!(
             Statistics::fixed_len_byte_array(
                 Some(FixedLenByteArray::from(vec![1, 2, 3])),
                 Some(FixedLenByteArray::from(vec![1, 2, 3])),
                 None,
                 None,
                 true,
-            ) != Statistics::FixedLenByteArray(
+            ),
+            Statistics::FixedLenByteArray(
                 ValueStatistics::new(
                     Some(FixedLenByteArray::from(vec![1, 2, 3])),
                     Some(FixedLenByteArray::from(vec![1, 2, 3])),
@@ -942,10 +950,10 @@ mod tests {
     fn test_statistics_from_thrift() {
         // Helper method to check statistics conversion.
         fn check_stats(stats: Statistics) {
-            let tpe = stats.physical_type();
+            let type_ = stats.physical_type();
             let thrift_stats = page_stats_to_thrift(Some(&stats));
             assert_eq!(
-                from_thrift_page_stats(tpe, thrift_stats).unwrap(),
+                from_thrift_page_stats(type_, thrift_stats).unwrap(),
                 Some(stats)
             );
         }

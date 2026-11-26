@@ -1,19 +1,7 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
 use crate::decoder::{OffsetSizeBytes, VariantBasicType, VariantPrimitiveType};
 use crate::{
     ShortString, Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16, VariantList,
@@ -769,8 +757,8 @@ impl VariantBuilder {
     /// Enables validation of unique field keys in nested objects.
     ///
     /// This setting is propagated to all [`ObjectBuilder`]s created through this [`VariantBuilder`]
-    /// (including via any [`ListBuilder`]), and causes [`ObjectBuilder::finish()`] to return
-    /// an error if duplicate keys were inserted.
+    /// (including via any [`ListBuilder`]); see [`ObjectBuilder::with_validate_unique_fields`]
+    /// for how a duplicate key is reported.
     pub fn with_validate_unique_fields(mut self, validate_unique_fields: bool) -> Self {
         self.validate_unique_fields = validate_unique_fields;
         self
@@ -1002,6 +990,18 @@ pub trait VariantBuilderExt {
     /// Appends a new variant value to this builder. See e.g. [`VariantBuilder::append_value`].
     fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>);
 
+    /// Appends a new variant value, returning an error if it cannot be appended.
+    ///
+    /// The default delegates to [`Self::append_value`]. Implementations whose append operation
+    /// can fail should override this method to return the error instead of panicking.
+    fn try_append_value<'m, 'v>(
+        &mut self,
+        value: impl Into<Variant<'m, 'v>>,
+    ) -> Result<(), ArrowError> {
+        self.append_value(value);
+        Ok(())
+    }
+
     /// Creates a nested list builder. See e.g. [`VariantBuilder::new_list`]. Panics if the nested
     /// builder cannot be created, see e.g. [`ObjectBuilder::new_list`].
     fn new_list(&mut self) -> ListBuilder<'_, Self::State<'_>> {
@@ -1036,6 +1036,13 @@ impl VariantBuilderExt for VariantBuilder {
     }
     fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>) {
         self.append_value(value);
+    }
+
+    fn try_append_value<'m, 'v>(
+        &mut self,
+        value: impl Into<Variant<'m, 'v>>,
+    ) -> Result<(), ArrowError> {
+        self.try_append_value(value)
     }
 
     fn try_new_list(&mut self) -> Result<ListBuilder<'_, Self::State<'_>>, ArrowError> {

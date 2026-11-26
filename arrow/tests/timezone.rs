@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow_cast::parse::string_to_datetime;
 use chrono::Utc;
@@ -41,6 +28,22 @@ fn test_parse_timezone() {
             "2023-03-12 040506 America/Los_Angeles",
             "2023-03-12T11:05:06+00:00",
         ), // Daylight savings
+        (
+            // Sunday, 12 March 2023, 02:00:00 clocks are turned forward 1 hour to
+            // Sunday, 12 March 2023, 03:00:00 local daylight time instead, so
+            // 02:05:06 never happens. It is shifted forward by the length of the
+            // gap, to 03:05:06 PDT, as PostgreSQL and DuckDB do.
+            "2023-03-12 02:05:06 America/Los_Angeles",
+            "2023-03-12T10:05:06+00:00",
+        ),
+        (
+            // Sunday, 5 November 2023, 02:00:00 clocks are turned backward 1 hour
+            // to Sunday, 5 November 2023, 01:00:00 local standard time instead, so
+            // 01:30:06 happens twice. The later instant, i.e. PST, is used, as
+            // PostgreSQL and DuckDB do.
+            "2023-11-05 01:30:06 America/Los_Angeles",
+            "2023-11-05T09:30:06+00:00",
+        ),
     ];
 
     for (s, expected) in cases {
@@ -59,18 +62,6 @@ fn test_parse_timezone_invalid() {
         (
             "2023-01-01 04:05:06.789 +07:30:00",
             "Parser error: Invalid timezone \"+07:30:00\": failed to parse timezone",
-        ),
-        (
-            // Sunday, 12 March 2023, 02:00:00 clocks are turned forward 1 hour to
-            // Sunday, 12 March 2023, 03:00:00 local daylight time instead.
-            "2023-03-12 02:05:06 America/Los_Angeles",
-            "Parser error: Error parsing timestamp from '2023-03-12 02:05:06 America/Los_Angeles': error computing timezone offset",
-        ),
-        (
-            // Sunday, 5 November 2023, 02:00:00 clocks are turned backward 1 hour to
-            // Sunday, 5 November 2023, 01:00:00 local standard time instead.
-            "2023-11-05 01:30:06 America/Los_Angeles",
-            "Parser error: Error parsing timestamp from '2023-11-05 01:30:06 America/Los_Angeles': error computing timezone offset",
         ),
     ];
 

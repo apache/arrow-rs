@@ -1,26 +1,15 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 pub use self::decimal::{VariantDecimal4, VariantDecimal8, VariantDecimal16, VariantDecimalType};
 pub use self::list::VariantList;
-pub use self::metadata::{EMPTY_VARIANT_METADATA, EMPTY_VARIANT_METADATA_BYTES, VariantMetadata};
+pub use self::metadata::{
+    EMPTY_VARIANT_METADATA, EMPTY_VARIANT_METADATA_BYTES, VARIANT_SPEC_VERSION, VariantMetadata,
+};
 pub use self::object::VariantObject;
 
-// Publically export types used in the API
+// Publicly export types used in the API
 pub use half::f16;
 pub use uuid::Uuid;
 
@@ -40,6 +29,19 @@ mod metadata;
 mod object;
 
 const MAX_SHORT_STRING_BYTES: usize = 0x3F;
+
+/// The maximum number of nested objects and arrays a [`Variant`] may contain.
+///
+/// Full [validation] recurses into nested values, so unbounded nesting would overflow the stack --
+/// an abort, not a catchable panic. Validation therefore rejects more deeply nested values, which
+/// also bounds the recursion of infallible accesses such as [`Debug`] and [`PartialEq`].
+///
+/// The variant [spec] does not specify a limit. This value matches the default `serde_json`
+/// recursion limit, so any variant parsed from JSON already satisfies it.
+///
+/// [validation]: Variant#Validation
+/// [spec]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md
+pub const MAX_NESTING_DEPTH: usize = 128;
 
 /// A Variant [`ShortString`]
 ///
@@ -352,7 +354,17 @@ impl<'m, 'v> Variant<'m, 'v> {
         metadata: VariantMetadata<'m>,
         value: &'v [u8],
     ) -> Result<Self, ArrowError> {
-        Self::try_new_with_metadata_and_shallow_validation(metadata, value)?.with_full_validation()
+        Self::try_new_with_metadata_at_depth(metadata, value, 0)
+    }
+
+    // Same as [`Self::try_new_with_metadata`], tracking how deeply validation has recursed.
+    pub(crate) fn try_new_with_metadata_at_depth(
+        metadata: VariantMetadata<'m>,
+        value: &'v [u8],
+        depth: usize,
+    ) -> Result<Self, ArrowError> {
+        Self::try_new_with_metadata_and_shallow_validation(metadata, value)?
+            .with_full_validation_at_depth(depth)
     }
 
     /// Similar to [`Self::try_new_with_metadata`], but [unvalidated].
@@ -455,15 +467,33 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// If [`Self::is_fully_validated`] is true, validation is a no-op. Otherwise, the cost is `O(m + v)`
     /// where `m` and `v` are the sizes of metadata and value buffers, respectively.
     ///
+    /// Values nested more than [`MAX_NESTING_DEPTH`] deep are rejected.
+    ///
     /// [objects]: VariantObject#Validation
     /// [arrays]: VariantList#Validation
     pub fn with_full_validation(self) -> Result<Self, ArrowError> {
+        self.with_full_validation_at_depth(0)
+    }
+
+    // Same as [`Self::with_full_validation`], tracking how deeply validation has recursed.
+    pub(crate) fn with_full_validation_at_depth(self, depth: usize) -> Result<Self, ArrowError> {
         use Variant::*;
         match self {
-            List(list) => list.with_full_validation().map(List),
-            Object(obj) => obj.with_full_validation().map(Object),
+            List(list) => list.with_full_validation_at_depth(depth).map(List),
+            Object(obj) => obj.with_full_validation_at_depth(depth).map(Object),
             _ => Ok(self),
         }
+    }
+
+    // Validating an object or list also validates all of its children, so a child of a fully
+    // validated parent is marked validated instead of being validated again.
+    fn inherit_validation(mut self, parent_validated: bool) -> Self {
+        match &mut self {
+            Variant::List(list) => list.validated = parent_validated,
+            Variant::Object(obj) => obj.validated = parent_validated,
+            _ => {}
+        }
+        self
     }
 
     /// Converts this variant to `()` if it is null.
@@ -1538,6 +1568,7 @@ impl<'m, 'v> Variant<'m, 'v> {
             .try_fold(self.clone(), |output, element| match element {
                 VariantPathElement::Field { name } => output.get_object_field(name),
                 VariantPathElement::Index { index } => output.get_list_element(*index),
+                VariantPathElement::ListElement => None,
             })
     }
 }
@@ -1824,6 +1855,31 @@ impl std::fmt::Debug for Variant<'_, '_> {
 mod tests {
 
     use super::*;
+    use crate::VariantBuilder;
+
+    #[test]
+    fn test_children_inherit_full_validation() {
+        let mut builder = VariantBuilder::new();
+        let mut object = builder.new_object();
+        object.new_object("o").finish();
+        let mut list = object.new_list("l");
+        list.new_list().finish();
+        list.finish();
+        object.finish();
+        let (metadata, value) = builder.finish();
+
+        for (variant, validated) in [
+            (Variant::new(&metadata, &value), false),
+            (Variant::try_new(&metadata, &value).unwrap(), true),
+        ] {
+            let object = variant.as_object().unwrap();
+            let fields: Vec<_> = object.iter().map(|(_, v)| v.is_fully_validated()).collect();
+            assert_eq!(fields, [validated, validated]);
+            let list = object.get("l").unwrap();
+            let element = list.as_list().unwrap().get(0).unwrap();
+            assert_eq!(element.is_fully_validated(), validated);
+        }
+    }
 
     #[test]
     fn test_empty_variant_will_fail() {

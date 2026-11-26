@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::array::print_long_array;
 use crate::builder::{FixedSizeListBuilder, PrimitiveBuilder};
@@ -371,6 +358,11 @@ impl FixedSizeListArray {
     /// Returns the offset for value at index `i`.
     ///
     /// Note this doesn't do any bound checking, for performance reason.
+    ///
+    /// Past `i32::MAX` child elements the offset does not fit the return type
+    /// and wraps negative. Use [`Self::value_offset_at`], which stays in
+    /// `usize`.
+    #[deprecated(since = "60.0.0", note = "Use value_offset_at instead")]
     #[inline]
     pub fn value_offset(&self, i: usize) -> i32 {
         self.value_offset_at(i) as i32
@@ -384,8 +376,12 @@ impl FixedSizeListArray {
         self.value_length
     }
 
+    /// Returns the offset in the child array of the value at index `i`, in
+    /// elements.
+    ///
+    /// Note this doesn't do any bound checking, for performance reason.
     #[inline]
-    const fn value_offset_at(&self, i: usize) -> usize {
+    pub const fn value_offset_at(&self, i: usize) -> usize {
         i * self.value_length as usize
     }
 
@@ -513,6 +509,10 @@ unsafe impl Array for FixedSizeListArray {
         self
     }
 
+    fn to_arc(&self) -> ArrayRef {
+        Arc::new(self.clone())
+    }
+
     fn to_data(&self) -> ArrayData {
         self.clone().into()
     }
@@ -609,8 +609,8 @@ impl ArrayAccessor for FixedSizeListArray {
 impl std::fmt::Debug for FixedSizeListArray {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "FixedSizeListArray<{}>\n[\n", self.value_length())?;
-        print_long_array(self, f, |array, index, f| {
-            std::fmt::Debug::fmt(&array.value(index), f)
+        print_long_array(self, f, &mut |index, f| {
+            std::fmt::Debug::fmt(&self.value(index), f)
         })?;
         write!(f, "]")
     }
@@ -662,7 +662,7 @@ mod tests {
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(3, list_array.len());
         assert_eq!(0, list_array.null_count());
-        assert_eq!(6, list_array.value_offset(2));
+        assert_eq!(6, list_array.value_offset_at(2));
         assert_eq!(3, list_array.value_length());
         assert_eq!(0, list_array.value(0).as_primitive::<Int32Type>().value(0));
         for i in 0..3 {
@@ -684,7 +684,7 @@ mod tests {
         assert_eq!(2, list_array.len());
         assert_eq!(0, list_array.null_count());
         assert_eq!(3, list_array.value(0).as_primitive::<Int32Type>().value(0));
-        assert_eq!(3, list_array.value_offset(1));
+        assert_eq!(3, list_array.value_offset_at(1));
         assert_eq!(3, list_array.value_length());
     }
 
@@ -745,7 +745,7 @@ mod tests {
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(5, list_array.len());
         assert_eq!(2, list_array.null_count());
-        assert_eq!(6, list_array.value_offset(3));
+        assert_eq!(6, list_array.value_offset_at(3));
         assert_eq!(2, list_array.value_length());
 
         let sliced_array = list_array.slice(1, 4);
@@ -766,8 +766,8 @@ mod tests {
             .downcast_ref::<FixedSizeListArray>()
             .unwrap();
         assert_eq!(2, sliced_list_array.value_length());
-        assert_eq!(4, sliced_list_array.value_offset(2));
-        assert_eq!(6, sliced_list_array.value_offset(3));
+        assert_eq!(4, sliced_list_array.value_offset_at(2));
+        assert_eq!(6, sliced_list_array.value_offset_at(3));
     }
 
     #[test]

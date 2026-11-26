@@ -1,23 +1,14 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Tests for [`ArrowWriter`]
 
 mod layout;
+mod roundtrip;
+mod roundtrip_helpers;
+
+use parquet as parquet_crate;
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -25,7 +16,10 @@ use std::fs::File;
 use std::io::{Read as _, Seek, SeekFrom, Write as _};
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, BinaryArray, Float64Array, Int32Array, RecordBatch};
+use arrow::array::{
+    ArrayRef, BinaryArray, Float64Array, Int32Array, LargeBinaryArray, RecordBatch, StringArray,
+};
+use arrow::buffer::{Buffer, OffsetBuffer};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use bytes::Bytes;
 use parquet::arrow::arrow_writer::{
@@ -35,13 +29,11 @@ use parquet::arrow::arrow_writer::{
 use parquet::arrow::{ArrowSchemaConverter, ArrowWriter};
 use parquet::basic::Encoding;
 use parquet::errors::Result;
-use parquet::file::properties::WriterProperties;
+use parquet::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
 use parquet::file::writer::SerializedFileWriter;
 
 #[test]
-#[should_panic(
-    expected = "DeltaBitPackDecoder only supports Int32Type, UInt32Type, Int64Type, and UInt64Type"
-)]
+#[should_panic(expected = "Encoding DELTA_BINARY_PACKED is not supported for physical type DOUBLE")]
 fn test_delta_bit_pack_type() {
     let props = WriterProperties::builder()
         .set_column_encoding("col".into(), Encoding::DELTA_BINARY_PACKED)
@@ -138,6 +130,14 @@ unsafe impl GlobalAlloc for TrackingAllocator {
             }
         }
         new_ptr
+    }
+
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        let ptr = unsafe { self.inner.alloc_zeroed(layout) };
+        if !ptr.is_null() {
+            add_live_bytes(layout.size());
+        }
+        ptr
     }
 }
 
@@ -317,6 +317,7 @@ fn write_dict_dataset(options: ArrowWriterOptions) {
 /// fine), but keeping them together also keeps the in-memory/spill comparison on
 /// one consistent baseline.
 #[test]
+#[cfg_attr(miri, ignore)] // Takes too long
 fn page_store_bounds_write_memory() {
     let props = single_row_group_props();
 
@@ -483,7 +484,7 @@ fn write_dict_columns(page_store_factory: Option<Arc<dyn PageStoreFactory>>, poo
         SerializedFileWriter::new(std::io::sink(), parquet_schema.root_schema_ptr(), props)
             .unwrap();
 
-    let mut factory = ArrowRowGroupWriterFactory::new(&file, schema.clone());
+    let mut factory = ArrowRowGroupWriterFactory::try_new(&file, schema.clone()).unwrap();
     if let Some(f) = page_store_factory {
         factory = factory.with_page_store_factory(f);
     }
@@ -522,6 +523,7 @@ fn write_dict_columns(page_store_factory: Option<Arc<dyn PageStoreFactory>>, poo
 /// off the heap as its column closes, so at most one is ever resident, keeping
 /// the spilling peak far below the in-memory K × dict_page baseline.
 #[test]
+#[cfg_attr(miri, ignore)] // Takes too long
 fn page_store_spills_dictionary_pages() {
     // Build the distinct-value pool up front so its bytes sit in the baseline
     // and are not charged to either per-run peak below.
@@ -562,5 +564,62 @@ fn page_store_spills_dictionary_pages() {
         dict_spill < spill_ceiling,
         "expected dict-column spilling peak ({dict_spill}) below {spill_ceiling} bytes \
          (a few dictionary pages), not the ~K × dict_page of the in-memory baseline"
+    );
+}
+
+/// Regression test for <https://github.com/apache/arrow-rs/issues/11148>
+///
+/// Every byte array column eagerly builds its fallback encoder. With
+/// `DELTA_BYTE_ARRAY` that holds two `DeltaBitPackEncoder`s, which must not
+/// pre-allocate large buffers: here the columns dictionary encode, so the
+/// fallback is never used at all.
+#[test]
+fn unused_delta_fallback_does_not_preallocate() {
+    const COLUMNS: usize = 100;
+    let column: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "a"]));
+    let batch = RecordBatch::try_from_iter((0..COLUMNS).map(|i| (format!("c{i}"), column.clone())))
+        .unwrap();
+    let props = WriterProperties::builder()
+        .set_writer_version(WriterVersion::PARQUET_2_0)
+        .set_encoding(Encoding::DELTA_BYTE_ARRAY)
+        .build();
+
+    let peak = peak_heap_bytes(|| {
+        let mut writer = ArrowWriter::try_new(Vec::new(), batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+    });
+
+    assert!(peak < COLUMNS * 64 * 1024, "peak: {peak}");
+}
+
+#[test]
+// The value is 2^32 bytes, which does not fit in a 32-bit address space
+#[cfg(target_pointer_width = "64")]
+fn test_dictionary_rejects_value_longer_than_u32() {
+    // The dictionary page prefixes each value with its length as a u32, so a
+    // 2^32 byte value would have its length truncated to 0
+    let len = 1usize << 32;
+    let mut data = vec![0u8; len];
+    // Read as the next value's length if the truncated prefix were trusted
+    data[..4].copy_from_slice(&[0xFF; 4]);
+    let array = LargeBinaryArray::new(
+        OffsetBuffer::new(vec![0i64, len as i64].into()),
+        Buffer::from_vec(data),
+        None,
+    );
+    let batch = RecordBatch::try_from_iter([("col", Arc::new(array) as ArrayRef)]).unwrap();
+
+    let props = WriterProperties::builder()
+        // statistics are disabled to avoid copying the value for min/max and using a lot of extra memory in this test
+        .set_statistics_enabled(EnabledStatistics::None)
+        // The bloom filter is built from the dictionary page,
+        .set_bloom_filter_enabled(true)
+        .build();
+    let mut writer = ArrowWriter::try_new(std::io::sink(), batch.schema(), Some(props)).unwrap();
+
+    let err = writer.write(&batch).unwrap_err().to_string();
+    assert_eq!(
+        err,
+        "Parquet error: Byte array value is too large to be written in dictionary: 4294967296 bytes"
     );
 }

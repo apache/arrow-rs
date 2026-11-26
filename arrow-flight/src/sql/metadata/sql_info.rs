@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Helpers for building responses to [`CommandGetSqlInfo`] metadata requests.
 //!
@@ -21,11 +8,11 @@
 //!   and building a conformant `RecordBatch` with sql info server metadata.
 //! - [`SqlInfoData`] - a helper type wrapping a `RecordBatch`
 //!   used for storing sql info server metadata.
-//! - [`GetSqlInfoBuilder`] - a builder for consructing [`CommandGetSqlInfo`] responses.
+//! - [`GetSqlInfoBuilder`] - a builder for constructing [`CommandGetSqlInfo`] responses.
 //!
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use arrow_arith::boolean::or;
 use arrow_array::array::{Array, UInt32Array, UnionArray};
@@ -38,7 +25,6 @@ use arrow_data::ArrayData;
 use arrow_ord::cmp::eq;
 use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef, UnionFields, UnionMode};
 use arrow_select::filter::filter_record_batch;
-use once_cell::sync::Lazy;
 
 use crate::error::Result;
 use crate::sql::{CommandGetSqlInfo, SqlInfo};
@@ -114,7 +100,7 @@ impl From<&HashMap<i32, Vec<i32>>> for SqlInfoValue {
     }
 }
 
-/// Something that can be converted into u32 (the represenation of a [`SqlInfo`] name)
+/// Something that can be converted into u32 (the representation of a [`SqlInfo`] name)
 pub trait SqlInfoName {
     fn as_u32(&self) -> u32;
 }
@@ -163,7 +149,7 @@ struct SqlInfoUnionBuilder {
 }
 
 /// [`DataType`] for the output union array
-static UNION_TYPE: Lazy<DataType> = Lazy::new(|| {
+static UNION_TYPE: LazyLock<DataType> = LazyLock::new(|| {
     let fields = vec![
         Field::new("string_value", DataType::Utf8, false),
         Field::new("bool_value", DataType::Boolean, false),
@@ -326,7 +312,7 @@ impl SqlInfoUnionBuilder {
 /// [`CommandGetSqlInfo`] are metadata requests used by a Flight SQL
 /// server to communicate supported capabilities to Flight SQL clients.
 ///
-/// Servers constuct - usually static - [`SqlInfoData`] via the [`SqlInfoDataBuilder`],
+/// Servers construct - usually static - [`SqlInfoData`] via the [`SqlInfoDataBuilder`],
 /// and build responses using [`CommandGetSqlInfo::into_builder`]
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SqlInfoDataBuilder {
@@ -356,11 +342,8 @@ impl SqlInfoDataBuilder {
         let mut name_builder = UInt32Builder::new();
         let mut value_builder = SqlInfoUnionBuilder::new();
 
-        let mut names: Vec<_> = self.infos.keys().copied().collect();
-        names.sort_unstable();
-
-        for key in names {
-            let (name, value) = self.infos.get_key_value(&key).unwrap();
+        // `infos` is a `BTreeMap`, so it iterates in sorted order already
+        for (name, value) in &self.infos {
             name_builder.append_value(*name);
             value_builder.append_value(value)?
         }
@@ -463,7 +446,7 @@ impl GetSqlInfoBuilder<'_> {
 }
 
 // The schema produced by [`SqlInfoData`]
-static SQL_INFO_SCHEMA: Lazy<Schema> = Lazy::new(|| {
+static SQL_INFO_SCHEMA: LazyLock<Schema> = LazyLock::new(|| {
     Schema::new(vec![
         Field::new("info_name", DataType::UInt32, false),
         Field::new("value", SqlInfoUnionBuilder::schema().clone(), false),

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Defines union_extract kernel for [UnionArray]
 
@@ -141,7 +128,7 @@ fn extract_sparse(
     {
         Ok(Arc::clone(target))
     } else {
-        match eq_scalar(union_array.type_ids(), target_type_id) {
+        match eq_scalar(union_array.type_ids(), target_type_id)? {
             // case 2: all type ids equals our target, and since unions doesn't have a null mask, the result array is exactly the same as our target
             BoolValue::Scalar(true) => Ok(Arc::clone(target)),
             // case 3: none type_id matches our target, the result is a null array
@@ -188,7 +175,7 @@ fn extract_sparse(
 
                     Ok(make_array(data))
                 } else {
-                    // case 4.2: target can't containt a null mask, zip the values that match with a null value
+                    // case 4.2: target can't contain a null mask, zip the values that match with a null value
                     Ok(crate::zip::zip(
                         &BooleanArray::new(selected, None),
                         target,
@@ -223,9 +210,9 @@ fn extract_dense(
     } else if target.null_count() == target.len() || target.data_type().is_null() {
         // case 3: since all values on our target are null, regardless of selected type ids and offsets, the result is a null array
         match target.len().cmp(&union_array.len()) {
-            // case 3.1: since the target is smaller than the union, allocate a new correclty sized null array
+            // case 3.1: since the target is smaller than the union, allocate a new correctly sized null array
             Ordering::Less => Ok(new_null_array(target.data_type(), union_array.len())),
-            // case 3.2: target equals the union len, return it direcly
+            // case 3.2: target equals the union len, return it directly
             Ordering::Equal => Ok(Arc::clone(target)),
             // case 3.3: target len is bigger than the union len, slice it
             Ordering::Greater => Ok(target.slice(0, union_array.len())),
@@ -240,7 +227,7 @@ fn extract_dense(
         // case 4: every type id matches our target
         Ok(extract_dense_all_selected(union_array, target, offsets)?)
     } else {
-        match eq_scalar(union_array.type_ids(), target_type_id) {
+        match eq_scalar(union_array.type_ids(), target_type_id)? {
             // case 4C: all type ids matches our target.
             // Non empty sibling without any selected value may happen after slicing the parent union,
             // since only type_ids and offsets are sliced, not the children
@@ -252,7 +239,7 @@ fn extract_dense(
                 // Non empty target without any selected value may happen after slicing the parent union,
                 // since only type_ids and offsets are sliced, not the children
                 match (target.len().cmp(&union_array.len()), layout(target.data_type()).can_contain_null_mask) {
-                    (Ordering::Less, _) // case 5.1A: our target is smaller than the parent union, allocate a new correclty sized null array
+                    (Ordering::Less, _) // case 5.1A: our target is smaller than the parent union, allocate a new correctly sized null array
                     | (_, false) => { // case 5.1B: target array can't contain a null mask
                         Ok(new_null_array(target.data_type(), union_array.len()))
                     }
@@ -312,7 +299,7 @@ fn extract_dense_all_selected(
         // case 2: All offsets are sequential, but our target is bigger than our union, slice it, starting at the first offset
         Ok(target.slice(offsets[0] as usize, union_array.len()))
     } else {
-        // case 3: Since offsets are not sequential, take them from the child to a new sequential and correcly sized array
+        // case 3: Since offsets are not sequential, take them from the child to a new sequential and correctly sized array
         let indices = Int32Array::try_new(offsets.clone(), None)?;
 
         Ok(take(target, &indices, None)?)
@@ -327,11 +314,11 @@ enum BoolValue {
     /// If true, all type_ids matches the target type_id
     /// If false, none type_ids matches the target type_id
     Scalar(bool),
-    /// A mask represeting which type_ids matches the target type_id
+    /// A mask representing which type_ids matches the target type_id
     Buffer(BooleanBuffer),
 }
 
-fn eq_scalar(type_ids: &[i8], target: i8) -> BoolValue {
+fn eq_scalar(type_ids: &[i8], target: i8) -> Result<BoolValue, ArrowError> {
     eq_scalar_inner(EQ_SCALAR_CHUNK_SIZE, type_ids, target)
 }
 
@@ -344,19 +331,22 @@ fn count_first_run(chunk_size: usize, type_ids: &[i8], mut f: impl FnMut(i8) -> 
 }
 
 // This is like MutableBuffer::collect_bool(type_ids.len(), |i| type_ids[i] == target) with fast paths for all true or all false values.
-fn eq_scalar_inner(chunk_size: usize, type_ids: &[i8], target: i8) -> BoolValue {
+fn eq_scalar_inner(
+    chunk_size: usize,
+    type_ids: &[i8],
+    target: i8,
+) -> Result<BoolValue, ArrowError> {
     let true_bits = count_first_run(chunk_size, type_ids, |v| v == target);
 
     let (set_bits, val) = if true_bits == type_ids.len() {
-        return BoolValue::Scalar(true);
+        return Ok(BoolValue::Scalar(true));
     } else if true_bits == 0 {
         let false_bits = count_first_run(chunk_size, type_ids, |v| v != target);
 
         if false_bits == type_ids.len() {
-            return BoolValue::Scalar(false);
-        } else {
-            (false_bits, false)
+            return Ok(BoolValue::Scalar(false));
         }
+        (false_bits, false)
     } else {
         (true_bits, true)
     };
@@ -364,8 +354,9 @@ fn eq_scalar_inner(chunk_size: usize, type_ids: &[i8], target: i8) -> BoolValue 
     // restrict to chunk boundaries
     let set_bits = set_bits - set_bits % 64;
 
-    let mut buffer =
-        MutableBuffer::new(bit_util::ceil(type_ids.len(), 8)).with_bitset(set_bits / 8, val);
+    let mut buffer = MutableBuffer::try_with_capacity(bit_util::ceil(type_ids.len(), 8))
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?
+        .with_bitset(set_bits / 8, val);
 
     buffer.extend(type_ids[set_bits..].chunks(64).map(|chunk| {
         chunk
@@ -377,7 +368,11 @@ fn eq_scalar_inner(chunk_size: usize, type_ids: &[i8], target: i8) -> BoolValue 
             })
     }));
 
-    BoolValue::Buffer(BooleanBuffer::new(buffer.into(), 0, type_ids.len()))
+    Ok(BoolValue::Buffer(BooleanBuffer::new(
+        buffer.into(),
+        0,
+        type_ids.len(),
+    )))
 }
 
 const IS_SEQUENTIAL_CHUNK_SIZE: usize = 64;
@@ -404,22 +399,17 @@ fn is_sequential_generic<const N: usize>(offsets: &[i32]) -> bool {
         return false;
     }
 
-    let chunks = offsets.chunks_exact(N);
-
-    let remainder = chunks.remainder();
-
-    chunks.enumerate().all(|(i, chunk)| {
-        let chunk_array = <&[i32; N]>::try_from(chunk).unwrap();
-
+    let (chunks, remainder) = offsets.as_chunks::<N>();
+    chunks.iter().enumerate().all(|(i, chunk)| {
         //checks if values within chunk are sequential
-        chunk_array
+        chunk
             .iter()
             .copied()
             .enumerate()
             .fold(true, |acc, (i, offset)| {
-                acc & (offset == chunk_array[0] + i as i32)
+                acc & (offset == chunk[0] + i as i32)
             })
-            && offsets[0] + (i * N) as i32 == chunk_array[0] //checks if chunk is sequential relative to the first offset
+            && offsets[0] + (i * N) as i32 == chunk[0] //checks if chunk is sequential relative to the first offset
     }) && remainder
         .iter()
         .copied()
@@ -450,7 +440,7 @@ mod tests {
         const EQ_SCALAR_CHUNK_SIZE: usize = 3;
 
         fn eq_scalar(type_ids: &[i8], target: i8) -> BoolValue {
-            eq_scalar_inner(EQ_SCALAR_CHUNK_SIZE, type_ids, target)
+            eq_scalar_inner(EQ_SCALAR_CHUNK_SIZE, type_ids, target).unwrap()
         }
 
         fn cross_check(left: &[i8], right: i8) -> BooleanBuffer {

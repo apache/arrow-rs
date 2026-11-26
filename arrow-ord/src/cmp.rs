@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Comparison kernels for `Array`s.
 //!
@@ -257,10 +244,24 @@ fn compare_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, 
         return Err(ArrowError::InvalidArgumentError(format!(
             "Nested comparison: {l_t} {op} {r_t} (hint: use make_comparator instead)"
         )));
+    } else if matches!(l_t, Dictionary(_, _) | RunEndEncoded(_, _))
+        || matches!(r_t, Dictionary(_, _) | RunEndEncoded(_, _))
+    {
+        // One dictionary/REE layer is unwrapped above. A leftover dictionary
+        // (nested dict) or REE is not nested according to `DataType::is_nested`,
+        // so without this check `downcast_primitive_array!` panics.
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "Invalid comparison operation: {l_t} {op} {r_t}"
+        )));
     } else if l_t != r_t {
         return Err(ArrowError::InvalidArgumentError(format!(
             "Invalid comparison operation: {l_t} {op} {r_t}"
         )));
+    }
+
+    // An empty run-end encoded slice reports start run 0 whatever its offset
+    if len == 0 {
+        return Ok(BooleanArray::new(BooleanBuffer::new_unset(0), None));
     }
 
     let l_side = SideInfo {
@@ -1132,8 +1133,16 @@ mod tests {
 
         // REE, nested dictionary, and complex types are not supported.
         assert!(!supports_distinct(&RunEndEncoded(
-            Arc::new(Field::new("run_ends", Int32, false)),
-            Arc::new(Field::new("values", Int32, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                Int32,
+                false
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                Int32,
+                true
+            )),
         )));
         assert!(!supports_distinct(&Dictionary(
             Box::new(Int16),
@@ -1178,6 +1187,20 @@ mod tests {
         let col = DictionaryArray::try_new(keys, Arc::new(values)).unwrap();
 
         neq(&col.slice(0, col.len() - 1), &col.slice(1, col.len() - 1)).unwrap();
+    }
+
+    #[test]
+    fn test_nested_dictionary_eq_returns_error() {
+        let inner = DictionaryArray::new(
+            Int32Array::from(vec![0, 1]),
+            Arc::new(StringArray::from(vec!["a", "b"])),
+        );
+        let outer = DictionaryArray::new(Int32Array::from(vec![0, 1]), Arc::new(inner));
+        let err = eq(&outer, &outer).expect_err("nested dictionary must not panic");
+        assert!(
+            matches!(err, ArrowError::InvalidArgumentError(_)),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -1571,6 +1594,13 @@ mod tests {
         // Empty REE
         let empty_a = ree_str(&[(Some("a"), 1)]).slice(0, 0);
         let empty_b = ree_str(&[(Some("b"), 1)]).slice(0, 0);
+        assert_eq!(eq(&empty_a, &empty_b).unwrap().len(), 0);
+
+        // Empty REE sliced past the first run
+        let empty_a = ree_str(&[(Some("a"), 1), (Some("b"), 1)]).slice(2, 0);
+        let empty_b = ree_str(&[(Some("a"), 2)]).slice(2, 0);
+        let s = Scalar::new(StringArray::from(vec!["a"]));
+        assert_eq!(eq(&empty_a, &s).unwrap().len(), 0);
         assert_eq!(eq(&empty_a, &empty_b).unwrap().len(), 0);
     }
 

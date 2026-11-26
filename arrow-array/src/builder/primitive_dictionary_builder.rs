@@ -1,30 +1,16 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::builder::{ArrayBuilder, PrimitiveBuilder};
 use crate::types::ArrowDictionaryKeyType;
-use crate::{
-    Array, ArrayRef, ArrowPrimitiveType, DictionaryArray, PrimitiveArray, TypedDictionaryArray,
-};
+use crate::{ArrayRef, ArrowPrimitiveType, DictionaryArray, PrimitiveArray, TypedDictionaryArray};
 use arrow_buffer::{ArrowNativeType, ToByteSlice};
-use arrow_schema::{ArrowError, DataType};
+use arrow_schema::ArrowError;
 use num_traits::NumCast;
 use std::any::Any;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
 /// Wraps a type implementing `ToByteSlice` implementing `Hash` and `Eq` for it
@@ -35,7 +21,7 @@ struct Value<T>(T);
 
 impl<T: ToByteSlice> std::hash::Hash for Value<T> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0.to_byte_slice().hash(state)
+        state.write(self.0.to_byte_slice())
     }
 }
 
@@ -87,7 +73,7 @@ where
 {
     keys_builder: PrimitiveBuilder<K>,
     values_builder: PrimitiveBuilder<V>,
-    map: HashMap<Value<V::Native>, usize>,
+    map: HashMap<Value<V::Native>, usize, ahash::RandomState>,
 }
 
 impl<K, V> Default for PrimitiveDictionaryBuilder<K, V>
@@ -110,7 +96,7 @@ where
         Self {
             keys_builder: PrimitiveBuilder::new(),
             values_builder: PrimitiveBuilder::new(),
-            map: HashMap::new(),
+            map: HashMap::default(),
         }
     }
 
@@ -131,7 +117,7 @@ where
         Self {
             keys_builder,
             values_builder,
-            map: HashMap::with_capacity(values_capacity),
+            map: HashMap::with_capacity_and_hasher(values_capacity, Default::default()),
         }
     }
 
@@ -146,7 +132,7 @@ where
     ) -> Self {
         let keys = keys_builder.values_slice();
         let values = values_builder.values_slice();
-        let mut map = HashMap::with_capacity(values.len());
+        let mut map = HashMap::with_capacity_and_hasher(values.len(), Default::default());
 
         keys.iter().zip(values.iter()).for_each(|(key, value)| {
             map.insert(Value(*value), K::Native::to_usize(*key).unwrap());
@@ -167,7 +153,7 @@ where
         Self {
             keys_builder: PrimitiveBuilder::with_capacity(keys_capacity),
             values_builder: PrimitiveBuilder::with_capacity(values_capacity),
-            map: HashMap::with_capacity(values_capacity),
+            map: HashMap::with_capacity_and_hasher(values_capacity, Default::default()),
         }
     }
 
@@ -197,6 +183,7 @@ where
     /// let keys = dictionary_array.keys();
     ///
     /// assert_eq!(keys, &UInt16Array::from_iter(0..256));
+    /// ```
     pub fn try_new_from_builder<K2>(
         mut source: PrimitiveDictionaryBuilder<K2, V>,
     ) -> Result<Self, ArrowError>
@@ -226,9 +213,13 @@ where
 
         Ok(Self {
             map,
-            keys_builder: new_keys
-                .into_builder()
-                .expect("underlying buffer has no references"),
+            keys_builder: new_keys.into_builder().map_err(|_| {
+                ArrowError::ComputeError(
+                    "Internal Error: the keys just derived from the source builder are \
+                     unexpectedly shared, so they cannot be reused as a builder"
+                        .to_string(),
+                )
+            })?,
             values_builder,
         })
     }
@@ -281,17 +272,15 @@ where
 {
     #[inline]
     fn get_or_insert_key(&mut self, value: V::Native) -> Result<K::Native, ArrowError> {
-        match self.map.get(&Value(value)) {
-            Some(&key) => {
-                Ok(K::Native::from_usize(key).ok_or(ArrowError::DictionaryKeyOverflowError)?)
-            }
-            None => {
+        let key = match self.map.entry(Value(value)) {
+            Entry::Occupied(entry) => *entry.get(),
+            Entry::Vacant(entry) => {
                 let key = self.values_builder.len();
                 self.values_builder.append_value(value);
-                self.map.insert(Value(value), key);
-                Ok(K::Native::from_usize(key).ok_or(ArrowError::DictionaryKeyOverflowError)?)
+                *entry.insert(key)
             }
-        }
+        };
+        K::Native::from_usize(key).ok_or(ArrowError::DictionaryKeyOverflowError)
     }
 
     /// Append a primitive value to the array. Return an existing index
@@ -436,16 +425,9 @@ where
         let values = self.values_builder.finish();
         let keys = self.keys_builder.finish();
 
-        let data_type =
-            DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(values.data_type().clone()));
-
-        let builder = keys
-            .into_data()
-            .into_builder()
-            .data_type(data_type)
-            .child_data(vec![values.into_data()]);
-
-        DictionaryArray::from(unsafe { builder.build_unchecked() })
+        // SAFETY: keys and values were produced by this builder; the builder
+        // only appends keys that index into the values it has built so far.
+        unsafe { DictionaryArray::new_unchecked(keys, Arc::new(values)) }
     }
 
     /// Builds the `DictionaryArray` without resetting the builder.
@@ -453,15 +435,9 @@ where
         let values = self.values_builder.finish_cloned();
         let keys = self.keys_builder.finish_cloned();
 
-        let data_type = DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(V::DATA_TYPE));
-
-        let builder = keys
-            .into_data()
-            .into_builder()
-            .data_type(data_type)
-            .child_data(vec![values.into_data()]);
-
-        DictionaryArray::from(unsafe { builder.build_unchecked() })
+        // SAFETY: keys and values were produced by this builder; the builder
+        // only appends keys that index into the values it has built so far.
+        unsafe { DictionaryArray::new_unchecked(keys, Arc::new(values)) }
     }
 
     /// Builds the `DictionaryArray` without resetting the values builder or
@@ -485,15 +461,9 @@ where
         let values = self.values_builder.finish_cloned();
         let keys = self.keys_builder.finish();
 
-        let data_type = DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(V::DATA_TYPE));
-
-        let builder = keys
-            .into_data()
-            .into_builder()
-            .data_type(data_type)
-            .child_data(vec![values.into_data()]);
-
-        DictionaryArray::from(unsafe { builder.build_unchecked() })
+        // SAFETY: keys and values were produced by this builder; the builder
+        // only appends keys that index into the values it has built so far.
+        unsafe { DictionaryArray::new_unchecked(keys, Arc::new(values)) }
     }
 
     /// Returns the current dictionary values buffer as a slice
@@ -527,7 +497,7 @@ impl<K: ArrowDictionaryKeyType, P: ArrowPrimitiveType> Extend<Option<P::Native>>
 mod tests {
     use super::*;
 
-    use crate::array::{Int32Array, UInt8Array, UInt32Array};
+    use crate::array::{Array, Int32Array, UInt8Array, UInt32Array};
     use crate::builder::Decimal128Builder;
     use crate::cast::AsArray;
     use crate::types::{
@@ -535,6 +505,7 @@ mod tests {
         Int16Type, Int32Type, Int64Type, TimestampNanosecondType, UInt8Type, UInt16Type,
         UInt32Type, UInt64Type,
     };
+    use arrow_schema::DataType;
 
     #[test]
     fn test_primitive_dictionary_builder() {
@@ -596,15 +567,16 @@ mod tests {
                 keys_builder,
                 values_builder,
             );
+        let expected = DataType::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(DataType::Decimal128(1, 2)),
+        );
+        assert_eq!(builder.finish_cloned().data_type(), &expected);
+        assert_eq!(builder.finish_preserve_values().data_type(), &expected);
+
         let dict_array = builder.finish();
         assert_eq!(dict_array.value_type(), DataType::Decimal128(1, 2));
-        assert_eq!(
-            dict_array.data_type(),
-            &DataType::Dictionary(
-                Box::new(DataType::Int32),
-                Box::new(DataType::Decimal128(1, 2)),
-            )
-        );
+        assert_eq!(dict_array.data_type(), &expected);
     }
 
     #[test]

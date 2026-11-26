@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
 #
 # Script
 #
@@ -24,10 +28,11 @@ CRATES="
     -p arrow-schema
     -p arrow-select
     -p arrow-string
+    -p parquet
 "
 
 setup_miri() {
-    export MIRIFLAGS="-Zmiri-disable-isolation"
+    export MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-no-extra-rounding-error"
     export INSTA_WORKSPACE_ROOT="$PWD"
     cargo miri setup
     cargo clean

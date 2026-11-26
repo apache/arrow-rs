@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::Array;
 
@@ -75,6 +62,7 @@ use crate::Array;
 /// let r = eq(&a, &b).unwrap();
 /// let values: Vec<_> = r.values().iter().collect();
 /// assert_eq!(values, &[true, false, false, false, false]);
+/// ```
 pub trait Datum {
     /// Returns the value for this [`Datum`] and a boolean indicating if the value is scalar
     fn get(&self) -> (&dyn Array, bool);
@@ -115,7 +103,7 @@ impl Datum for &dyn Array {
 /// // Create a (typed) scalar for Int32Array for the value 42
 /// let scalar = Scalar::new(Int32Array::from(vec![42]));
 ///
-/// // Create a scalar using PrimtiveArray::scalar
+/// // Create a scalar using PrimitiveArray::scalar
 /// let scalar = Int32Array::new_scalar(42);
 ///
 /// // create a scalar from an ArrayRef (for dynamic typed Arrays)
