@@ -4,7 +4,7 @@
 
 name: Assign or unassign the issue via a `take`/`untake` comment
 on:
-  issue_comment:
+  issue_comment: # zizmor: ignore[dangerous-triggers] no checkout, comment only read as data
     types: created
 
 permissions:
