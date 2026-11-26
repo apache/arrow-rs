@@ -630,6 +630,10 @@ unsafe fn selected_non_inline_bytes(
 }
 
 impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
+    fn supports_dense_indexed_copy(&self) -> bool {
+        true
+    }
+
     fn set_source(&mut self, source: Option<ArrayRef>) {
         // If used values from source, add only the size that was used
         self.completed_buffers_size += self.size_of_completed_buffers_from_current_source;

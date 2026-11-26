@@ -630,7 +630,7 @@ pub fn cast_with_options(
     let from_type = array.data_type();
     // clone array if types are the same
     if from_type == to_type {
-        return Ok(make_array(array.to_data()));
+        return Ok(array.to_arc());
     }
     match (from_type, to_type) {
         (Null, _) => Ok(new_null_array(to_type, array.len())),
@@ -643,7 +643,7 @@ pub fn cast_with_options(
             ))),
         },
         (_, RunEndEncoded(index_type, value_type)) => {
-            let array_ref = make_array(array.to_data());
+            let array_ref = array.to_arc();
             match index_type.data_type() {
                 Int16 => cast_to_run_end_encoded::<Int16Type>(
                     &array_ref,
@@ -1685,19 +1685,17 @@ pub fn cast_with_options(
                 .unary::<_, Time64NanosecondType>(|x| x as i64 * (NANOSECONDS / MILLISECONDS)),
         )),
 
-        (Time64(TimeUnit::Microsecond), Time32(TimeUnit::Second)) => {
-            cast_time64_to_time32::<Time64MicrosecondType, Time32SecondType>(
-                array,
-                MICROSECONDS,
-                cast_options,
-            )
-        }
+        (Time64(TimeUnit::Microsecond), Time32(TimeUnit::Second)) => cast_time64_to_time32::<
+            Time64MicrosecondType,
+            Time32SecondType,
+            MICROSECONDS,
+        >(array, cast_options),
         (Time64(TimeUnit::Microsecond), Time32(TimeUnit::Millisecond)) => {
-            cast_time64_to_time32::<Time64MicrosecondType, Time32MillisecondType>(
-                array,
-                MICROSECONDS / MILLISECONDS,
-                cast_options,
-            )
+            cast_time64_to_time32::<
+                Time64MicrosecondType,
+                Time32MillisecondType,
+                { MICROSECONDS / MILLISECONDS },
+            >(array, cast_options)
         }
         (Time64(TimeUnit::Microsecond), Time64(TimeUnit::Nanosecond)) => {
             let array = array.as_primitive::<Time64MicrosecondType>();
@@ -1713,19 +1711,17 @@ pub fn cast_with_options(
             Ok(Arc::new(result))
         }
 
-        (Time64(TimeUnit::Nanosecond), Time32(TimeUnit::Second)) => {
-            cast_time64_to_time32::<Time64NanosecondType, Time32SecondType>(
-                array,
-                NANOSECONDS,
-                cast_options,
-            )
-        }
+        (Time64(TimeUnit::Nanosecond), Time32(TimeUnit::Second)) => cast_time64_to_time32::<
+            Time64NanosecondType,
+            Time32SecondType,
+            NANOSECONDS,
+        >(array, cast_options),
         (Time64(TimeUnit::Nanosecond), Time32(TimeUnit::Millisecond)) => {
-            cast_time64_to_time32::<Time64NanosecondType, Time32MillisecondType>(
-                array,
-                NANOSECONDS / MILLISECONDS,
-                cast_options,
-            )
+            cast_time64_to_time32::<
+                Time64NanosecondType,
+                Time32MillisecondType,
+                { NANOSECONDS / MILLISECONDS },
+            >(array, cast_options)
         }
         (Time64(TimeUnit::Nanosecond), Time64(TimeUnit::Microsecond)) => Ok(Arc::new(
             array
@@ -1769,8 +1765,14 @@ pub fn cast_with_options(
             // units are never the same when the types are the same
             let converted = match from_size.cmp(&to_size) {
                 Ordering::Greater => {
-                    let divisor = from_size / to_size;
-                    time_array.unary::<_, Int64Type>(|o| o / divisor)
+                    // A constant divisor lets the compiler replace each division with a multiply
+                    // and shifts. The ratio of two time units is always one of these three
+                    match from_size / to_size {
+                        1_000 => time_array.unary::<_, Int64Type>(|o| o / 1_000),
+                        1_000_000 => time_array.unary::<_, Int64Type>(|o| o / 1_000_000),
+                        1_000_000_000 => time_array.unary::<_, Int64Type>(|o| o / 1_000_000_000),
+                        divisor => time_array.unary::<_, Int64Type>(|o| o / divisor),
+                    }
                 }
                 Ordering::Equal => time_array.clone(),
                 Ordering::Less => {
@@ -1965,8 +1967,14 @@ pub fn cast_with_options(
             // units are never the same when the types are the same
             let converted = match from_size.cmp(&to_size) {
                 Ordering::Greater => {
-                    let divisor = from_size / to_size;
-                    time_array.unary::<_, Int64Type>(|o| o / divisor)
+                    // A constant divisor lets the compiler replace each division with a multiply
+                    // and shifts. The ratio of two time units is always one of these three
+                    match from_size / to_size {
+                        1_000 => time_array.unary::<_, Int64Type>(|o| o / 1_000),
+                        1_000_000 => time_array.unary::<_, Int64Type>(|o| o / 1_000_000),
+                        1_000_000_000 => time_array.unary::<_, Int64Type>(|o| o / 1_000_000_000),
+                        divisor => time_array.unary::<_, Int64Type>(|o| o / divisor),
+                    }
                 }
                 Ordering::Equal => time_array.clone(),
                 Ordering::Less => {
@@ -2035,9 +2043,10 @@ const fn time_unit_multiple(unit: &TimeUnit) -> i64 {
     }
 }
 
-fn cast_time64_to_time32<FROM, TO>(
+/// `DIVISOR` is a const parameter so that each division is by a constant, which the compiler
+/// replaces with a multiply and shifts even when the loops aren't inlined into this function
+fn cast_time64_to_time32<FROM, TO, const DIVISOR: i64>(
     array: &dyn Array,
-    divisor: i64,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError>
 where
@@ -2046,10 +2055,10 @@ where
 {
     let array = array.as_primitive::<FROM>();
     let result = if cast_options.safe {
-        array.unary_opt::<_, TO>(|value| i32::try_from(value / divisor).ok())
+        array.unary_opt::<_, TO>(|value| i32::try_from(value / DIVISOR).ok())
     } else {
         array.try_unary::<_, TO, _>(|value| {
-            let value = value / divisor;
+            let value = value / DIVISOR;
             i32::try_from(value).map_err(|_| {
                 ArrowError::CastError(format!(
                     "Can't cast value {value:?} to type {}",

@@ -130,6 +130,10 @@ impl InProgressBooleanArray {
 }
 
 impl InProgressArray for InProgressBooleanArray {
+    fn supports_dense_indexed_copy(&self) -> bool {
+        true
+    }
+
     fn set_source(&mut self, source: Option<ArrayRef>) {
         self.source = source;
     }

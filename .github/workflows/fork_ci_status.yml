@@ -13,7 +13,7 @@
 name: Fork CI status
 
 on:
-  workflow_run:
+  workflow_run: # zizmor: ignore[dangerous-triggers] no checkout or artifacts from the fork, see header
     workflows: [CI]
     types: [completed]
   schedule:

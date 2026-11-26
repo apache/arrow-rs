@@ -184,6 +184,10 @@ impl<K: ArrowDictionaryKeyType> InProgressDictionaryArray<K> {
 }
 
 impl<K: ArrowDictionaryKeyType> InProgressArray for InProgressDictionaryArray<K> {
+    fn supports_dense_indexed_copy(&self) -> bool {
+        true
+    }
+
     fn set_source(&mut self, source: Option<ArrayRef>) {
         self.source = source;
     }

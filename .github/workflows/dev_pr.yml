@@ -9,7 +9,7 @@ concurrency:
   cancel-in-progress: true
 
 on:
-  workflow_run:
+  workflow_run: # zizmor: ignore[dangerous-triggers] no checkout, only adds a label from API data
     workflows: [API changes]
     types: [completed]
 
