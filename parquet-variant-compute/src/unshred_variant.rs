@@ -42,7 +42,8 @@ use uuid::Uuid;
 /// A new VariantArray with all data in the value column and no typed_value column
 ///
 /// # Errors
-/// - If the shredded data contains spec violations (e.g., field name conflicts)
+/// - If the shredded data contains spec violations (e.g., field name conflicts or missing
+///   field names in metadata)
 /// - If unsupported data types are encountered in typed_value columns
 pub fn unshred_variant(array: &VariantArray) -> Result<VariantArray> {
     let nulls = array.nulls();
@@ -315,8 +316,7 @@ impl NullUnshredVariantBuilder {
         _metadata: &VariantMetadata,
         _index: usize,
     ) -> Result<()> {
-        builder.append_value(Variant::Null);
-        Ok(())
+        builder.try_append_value(Variant::Null)
     }
 }
 
@@ -345,7 +345,7 @@ impl<'a> ValueOnlyUnshredVariantBuilder<'a> {
                 )
             })?;
             let variant = Variant::try_new_with_metadata(metadata.clone(), value_bytes)?;
-            builder.append_value(variant);
+            builder.try_append_value(variant)?;
         }
         Ok(())
     }
@@ -381,7 +381,7 @@ macro_rules! handle_unshredded_case {
         // If typed_value is null, handle unshredded case and return early
         if $self.typed_value.is_null($index) {
             match value {
-                Some(value) => $builder.append_value(value),
+                Some(value) => $builder.try_append_value(value)?,
                 None => $builder.append_null(),
             }
             return Ok(());
@@ -437,8 +437,7 @@ macro_rules! impl_append_to_variant_builder {
                     let $v = value;
                     let value = $transform;
                 )?
-                builder.append_value(value);
-                Ok(())
+                builder.try_append_value(value)
             }
         }
     };
@@ -530,9 +529,9 @@ impl<'a, T: TimestampType> TimestampUnshredRowBuilder<'a, T> {
         let timestamp_value = self.typed_value.value(index);
         let dt = T::to_datetime_utc(timestamp_value)?;
         if self.has_timezone {
-            builder.append_value(dt);
+            builder.try_append_value(dt)?;
         } else {
-            builder.append_value(dt.naive_utc());
+            builder.try_append_value(dt.naive_utc())?;
         }
         Ok(())
     }
@@ -572,8 +571,7 @@ where
 
         let raw = self.typed_value.value(index);
         let variant = V::try_new_with_signed_scale(raw, self.scale)?;
-        builder.append_value(variant);
-        Ok(())
+        builder.try_append_value(variant)
     }
 }
 
@@ -641,7 +639,7 @@ impl<'a> StructUnshredVariantBuilder<'a> {
                         "Field '{field_name}' appears in both typed_value and value",
                     )));
                 }
-                object_builder.insert_bytes(field_name, field_value);
+                object_builder.try_insert_bytes(field_name, field_value)?;
             }
         }
 
@@ -708,10 +706,11 @@ impl<'a, L: ListLikeArray> ListUnshredVariantBuilder<'a, L> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{VariantArray, VariantArrayBuilder, shred_variant};
+    use crate::{VariantArray, VariantArrayBuilder, json_to_variant, shred_variant};
     use arrow::array::{
-        Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, Int64Array, LargeBinaryArray,
-        LargeStringArray, StringViewArray,
+        Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, Decimal64Array, Int64Array,
+        LargeBinaryArray, LargeStringArray, StringArray, StringViewArray, StructArrayAssembler,
+        TimestampMicrosecondArray,
     };
     use arrow::datatypes::{DataType, Field, Fields, TimeUnit};
     use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, Variant, VariantBuilder, VariantDecimal8};
@@ -993,5 +992,54 @@ mod tests {
             result.is_err(),
             "unshred_variant must return Err on malformed metadata, not panic",
         );
+    }
+
+    #[test]
+    fn test_unshred_missing_metadata_field() {
+        let null_value: ArrayRef = Arc::new(BinaryArray::from(vec![Some(&[0u8][..])]));
+        let no_value: ArrayRef = Arc::new(BinaryArray::from(vec![None::<&[u8]>]));
+        let decimal = Decimal64Array::from(vec![1234])
+            .with_precision_and_scale(10, 2)
+            .unwrap();
+        let timestamp = TimestampMicrosecondArray::from(vec![1]);
+        // Each row appends to field `a` through a different row builder.
+        let rows: [(&ArrayRef, Option<ArrayRef>); 6] = [
+            (&no_value, Some(Arc::new(Int64Array::from(vec![1])))),
+            (&null_value, Some(Arc::new(Int64Array::from(vec![None])))),
+            (&no_value, Some(Arc::new(decimal))),
+            (&no_value, Some(Arc::new(timestamp.clone()))),
+            (&no_value, Some(Arc::new(timestamp.with_timezone("UTC")))),
+            (&null_value, None),
+        ];
+        for (value, typed_value) in rows {
+            let mut field = StructArrayAssembler::new().with_field("value", value.clone(), true);
+            if let Some(typed_value) = typed_value {
+                field = field.with_field("typed_value", typed_value, true);
+            }
+            let object = StructArrayAssembler::new()
+                .with_field("a", Arc::new(field.build().unwrap()), false)
+                .build()
+                .unwrap();
+            let input = VariantArray::perfectly_shredded(
+                Arc::new(BinaryArray::from_vec(vec![EMPTY_VARIANT_METADATA_BYTES])),
+                Arc::new(object),
+                None,
+            );
+            let err = crate::unshred_variant(&input).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                "Invalid argument error: Field name 'a' not found in metadata dictionary"
+            );
+        }
+    }
+
+    #[test]
+    fn test_unshred_absent_field_missing_from_metadata() {
+        let json: ArrayRef = Arc::new(StringArray::from(vec!["{}"]));
+        let original = json_to_variant(&json).unwrap();
+        let object_type =
+            DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int64, true)]));
+        let shredded = shred_variant(&original, &object_type).unwrap();
+        assert_eq!(crate::unshred_variant(&shredded).unwrap(), original);
     }
 }

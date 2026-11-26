@@ -485,6 +485,17 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
+    // Validating an object or list also validates all of its children, so a child of a fully
+    // validated parent is marked validated instead of being validated again.
+    fn inherit_validation(mut self, parent_validated: bool) -> Self {
+        match &mut self {
+            Variant::List(list) => list.validated = parent_validated,
+            Variant::Object(obj) => obj.validated = parent_validated,
+            _ => {}
+        }
+        self
+    }
+
     /// Converts this variant to `()` if it is null.
     ///
     /// Returns `Some(())` for null variants,
@@ -1522,9 +1533,7 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Return a new Variant with the path followed.
     ///
-    /// If the path is not found, `None` is returned. Field names are case-sensitive.
-    /// A field step on a value that is not an object, an index step on a value that
-    /// is not a list, and an index past the end of a list all return `None`.
+    /// If the path is not found, `None` is returned.
     ///
     /// # Example
     /// ```
@@ -1540,9 +1549,9 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// // given a variant like `{"foo": ["bar", "baz"]}`
     /// let variant = Variant::new(&metadata, &value);
     /// // Accessing a non existent path returns None
-    /// assert_eq!(variant.get_path(&VariantPath::try_from("$.non_existent").unwrap()), None);
+    /// assert_eq!(variant.get_path(&VariantPath::try_from("non_existent").unwrap()), None);
     /// // Access obj["foo"]
-    /// let path = VariantPath::try_from("$.foo").unwrap();
+    /// let path = VariantPath::try_from("foo").unwrap();
     /// let foo = variant.get_path(&path).expect("field `foo` should exist");
     /// assert!(foo.as_list().is_some(), "field `foo` should be a list");
     /// // Access foo[0]
@@ -1551,7 +1560,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// // bar is a string
     /// assert_eq!(bar.as_string(), Some("bar"));
     /// // You can also access nested paths
-    /// let path = VariantPath::try_from("$.foo").unwrap().join(0);
+    /// let path = VariantPath::try_from("foo").unwrap().join(0);
     /// assert_eq!(variant.get_path(&path).unwrap(), bar);
     /// ```
     pub fn get_path(&self, path: &VariantPath) -> Option<Variant<'_, '_>> {
@@ -1846,6 +1855,31 @@ impl std::fmt::Debug for Variant<'_, '_> {
 mod tests {
 
     use super::*;
+    use crate::VariantBuilder;
+
+    #[test]
+    fn test_children_inherit_full_validation() {
+        let mut builder = VariantBuilder::new();
+        let mut object = builder.new_object();
+        object.new_object("o").finish();
+        let mut list = object.new_list("l");
+        list.new_list().finish();
+        list.finish();
+        object.finish();
+        let (metadata, value) = builder.finish();
+
+        for (variant, validated) in [
+            (Variant::new(&metadata, &value), false),
+            (Variant::try_new(&metadata, &value).unwrap(), true),
+        ] {
+            let object = variant.as_object().unwrap();
+            let fields: Vec<_> = object.iter().map(|(_, v)| v.is_fully_validated()).collect();
+            assert_eq!(fields, [validated, validated]);
+            let list = object.get("l").unwrap();
+            let element = list.as_list().unwrap().get(0).unwrap();
+            assert_eq!(element.is_fully_validated(), validated);
+        }
+    }
 
     #[test]
     fn test_empty_variant_will_fail() {

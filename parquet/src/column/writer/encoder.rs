@@ -98,13 +98,16 @@ pub trait ColumnValueEncoder {
         num_values_in_batch: usize,
     ) -> Result<()>;
 
-    /// Returns the largest `k` such that the first `k` values in
-    /// `values[offset..offset + len]` encode to at most `byte_budget`
-    /// bytes — i.e. how many values fit in a single page byte budget.
+    /// Counts how many leading values in `values[offset..offset + len]`
+    /// belong in one page of `byte_budget` bytes.
     ///
-    /// Returns `len` if every value fits. Returns at least 1 if a single
-    /// value alone exceeds the budget, matching parquet's "at least one
-    /// value per data page" rule.
+    /// Returns `len` if every value fits. Otherwise the result counts the
+    /// values that fit, and may also count the first value that overflows.
+    /// The variable-width implementations count that boundary value, so the
+    /// page-flush check trips on the mini-batch that crosses the budget.
+    /// The result is at least 1 when a single value alone exceeds the
+    /// budget. This matches the parquet rule of at least one value per data
+    /// page.
     ///
     /// `None` means "no cheap estimate available"; the caller stays on
     /// the batched fast path and lets the post-write
@@ -131,6 +134,17 @@ pub trait ColumnValueEncoder {
         _indices: &[usize],
         _byte_budget: usize,
     ) -> Option<usize> {
+        None
+    }
+
+    /// Returns an upper bound on the bytes that any one value of `values`
+    /// adds to a plain-encoded page, if the encoder knows one without
+    /// reading the values.
+    ///
+    /// The byte-budget chunker asks once per write call. The bound lets it
+    /// prove that a run of values fits a page from the length of the run
+    /// alone.
+    fn max_value_bytes(_values: &Self::Values) -> Option<usize> {
         None
     }
 

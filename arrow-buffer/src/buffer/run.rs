@@ -146,6 +146,9 @@ where
         logical_offset: usize,
         logical_length: usize,
     ) -> Self {
+        if cfg!(feature = "force_validate") {
+            return Self::new(run_ends, logical_offset, logical_length);
+        }
         Self {
             run_ends,
             logical_length,
@@ -415,5 +418,12 @@ mod tests {
         let sliced = buffer.slice(4, 2);
         let sliced_values: Vec<i32> = sliced.sliced_values().collect();
         assert_eq!(sliced_values, &[2]);
+    }
+
+    #[test]
+    #[should_panic(expected = "run-ends not strictly increasing")]
+    #[cfg(feature = "force_validate")]
+    fn new_unchecked_non_increasing_force_validate() {
+        unsafe { RunEndBuffer::<i32>::new_unchecked(vec![1, 3, 2].into(), 0, 2) };
     }
 }

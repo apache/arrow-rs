@@ -1229,6 +1229,10 @@ unsafe impl<T: ArrowPrimitiveType> Array for PrimitiveArray<T> {
         self
     }
 
+    fn to_arc(&self) -> ArrayRef {
+        Arc::new(self.clone())
+    }
+
     fn to_data(&self) -> ArrayData {
         self.clone().into()
     }
@@ -1712,14 +1716,14 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
                 self.scale()
             )));
         }
-        (0..self.len()).try_for_each(|idx| {
-            if self.is_valid(idx) {
-                let decimal = unsafe { self.value_unchecked(idx) };
-                T::validate_decimal_precision(decimal, precision, self.scale())
-            } else {
-                Ok(())
+        // A null slot can hold any value, so read the validity bit only for a value that
+        // doesn't fit
+        for (idx, &value) in self.values().iter().enumerate() {
+            if !T::is_valid_decimal_precision(value, precision) && self.is_valid(idx) {
+                return T::validate_decimal_precision(value, precision, self.scale());
             }
-        })
+        }
+        Ok(())
     }
 
     /// Validates the Decimal Array, if the value of slot is overflow for the specified precision, and
@@ -2277,7 +2281,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "chrono-tz")]
+    #[cfg(any(feature = "chrono-tz", feature = "jiff"))]
     fn test_timestamp_with_named_tz_fmt_debug() {
         let arr: PrimitiveArray<TimestampMillisecondType> =
             TimestampMillisecondArray::from(vec![1546214400000, 1546214400000, -1546214400000])
@@ -2289,7 +2293,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(feature = "chrono-tz"))]
+    #[cfg(not(any(feature = "chrono-tz", feature = "jiff")))]
     fn test_timestamp_with_named_tz_fmt_debug() {
         let arr: PrimitiveArray<TimestampMillisecondType> =
             TimestampMillisecondArray::from(vec![1546214400000, 1546214400000, -1546214400000])
@@ -2326,7 +2330,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "chrono-tz")]
+    #[cfg(any(feature = "chrono-tz", feature = "jiff"))]
     fn test_timestamp_with_tz_with_daylight_saving_fmt_debug() {
         let arr: PrimitiveArray<TimestampMillisecondType> = TimestampMillisecondArray::from(vec![
             1647161999000,
@@ -2659,6 +2663,36 @@ mod tests {
                 array.validate_decimal_precision(1).unwrap_err().to_string(),
                 "Invalid argument error: Decimal precision 1 is less than scale 2"
             );
+        }
+
+        check::<Decimal32Type>();
+        check::<Decimal64Type>();
+        check::<Decimal128Type>();
+        check::<Decimal256Type>();
+    }
+
+    #[test]
+    fn test_decimal_validate_precision_ignores_null_slots() {
+        fn check<T: DecimalType>()
+        where
+            T::Native: From<i32>,
+        {
+            // Rows 1 and 3 are null and hold values that don't fit precision 3
+            let values = [1, -1000, 2, -2000, 3, 1000, 4].map(T::Native::from);
+            let nulls = NullBuffer::from(&[true, false, true, false, true, true, true]);
+            let array = PrimitiveArray::<T>::new(values.into_iter().collect(), Some(nulls))
+                .with_precision_and_scale(4, 0)
+                .unwrap();
+            let too_large = format!(
+                "Invalid argument error: 1000 is too large to store in a {} of precision 3. Max is 999",
+                T::PREFIX
+            );
+            for array in [array.clone(), array.slice(2, 5)] {
+                let error = array.validate_decimal_precision(3).unwrap_err();
+                assert_eq!(error.to_string(), too_large);
+            }
+            array.slice(0, 5).validate_decimal_precision(3).unwrap();
+            array.slice(1, 3).validate_decimal_precision(3).unwrap();
         }
 
         check::<Decimal32Type>();
