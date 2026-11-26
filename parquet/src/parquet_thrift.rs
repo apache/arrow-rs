@@ -303,7 +303,12 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
         let mut shift = 7;
         loop {
             let byte = self.read_byte()?;
-            in_progress |= ((byte & 0x7F) as u64).wrapping_shl(shift);
+            // A u64 needs at most 10 bytes, and the 10th byte (shift == 63) may
+            // only contribute a single bit. Anything more is corrupt input.
+            if shift == 63 && byte > 1 {
+                return Err(ThriftProtocolError::IntegerOverflow);
+            }
+            in_progress |= ((byte & 0x7F) as u64) << shift;
             if byte & 0x80 == 0 {
                 return Ok(in_progress);
             }

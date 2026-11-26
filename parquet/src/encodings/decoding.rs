@@ -594,7 +594,7 @@ where
     fn next_block(&mut self) -> Result<()> {
         let min_delta = self
             .bit_reader
-            .get_zigzag_vlq_int()
+            .get_zigzag_vlq_int()?
             .ok_or_else(|| eof_err!("Not enough data to decode 'min_delta'"))?;
 
         self.min_delta =
@@ -668,14 +668,14 @@ where
         // Read header information
         self.block_size = self
             .bit_reader
-            .get_vlq_int()
+            .get_vlq_int()?
             .ok_or_else(|| eof_err!("Not enough data to decode 'block_size'"))?
             .try_into()
             .map_err(|_| general_err!("invalid 'block_size'"))?;
 
         self.mini_blocks_per_block = self
             .bit_reader
-            .get_vlq_int()
+            .get_vlq_int()?
             .ok_or_else(|| eof_err!("Not enough data to decode 'mini_blocks_per_block'"))?
             .try_into()
             .map_err(|_| general_err!("invalid 'mini_blocks_per_block'"))?;
@@ -686,14 +686,14 @@ where
 
         self.values_left = self
             .bit_reader
-            .get_vlq_int()
+            .get_vlq_int()?
             .ok_or_else(|| eof_err!("Not enough data to decode 'values_left'"))?
             .try_into()
             .map_err(|_| general_err!("invalid 'values_left'"))?;
 
         let first_value = self
             .bit_reader
-            .get_zigzag_vlq_int()
+            .get_zigzag_vlq_int()?
             .ok_or_else(|| eof_err!("Not enough data to decode 'first_value'"))?;
 
         self.first_value =
@@ -2076,10 +2076,10 @@ mod tests {
 
         let ptr = Bytes::from(data);
         let mut reader = BitReader::new(ptr.clone());
-        assert_eq!(reader.get_vlq_int().unwrap(), 256);
-        assert_eq!(reader.get_vlq_int().unwrap(), 4);
-        assert_eq!(reader.get_vlq_int().unwrap(), 419);
-        assert_eq!(reader.get_vlq_int().unwrap(), 7);
+        assert_eq!(reader.get_vlq_int().unwrap().unwrap(), 256);
+        assert_eq!(reader.get_vlq_int().unwrap().unwrap(), 4);
+        assert_eq!(reader.get_vlq_int().unwrap().unwrap(), 419);
+        assert_eq!(reader.get_vlq_int().unwrap().unwrap(), 7);
 
         // Test output buffer larger than needed and not exact multiple of block size
         let mut output = vec![0_i32; 420];
@@ -2506,6 +2506,33 @@ mod tests {
             }
             v
         }
+    }
+
+    #[test]
+    fn test_delta_bit_packed_corrupt_vlq_header() {
+        // 'block_size' encoded with more than MAX_VLQ_BYTE_LEN bytes
+        let mut buffer = vec![0x80; 11];
+        buffer.push(0x01);
+        let mut decoder = DeltaBitPackDecoder::<Int64Type>::new();
+        let err = decoder.set_data(Bytes::from(buffer), 0).unwrap_err();
+        assert!(err.to_string().contains("VLQ"), "{err}");
+
+        // 'first_value' whose 10th byte overflows 64 bits
+        let mut buffer = vec![0x80, 0x01, 0x04, 0x20];
+        buffer.extend([0xFF; 9]);
+        buffer.push(0x02);
+        let mut decoder = DeltaBitPackDecoder::<Int64Type>::new();
+        let err = decoder.set_data(Bytes::from(buffer), 0).unwrap_err();
+        assert!(err.to_string().contains("VLQ"), "{err}");
+
+        // Valid page header, but 'min_delta' of the first block is overlong
+        let mut buffer = vec![0x80, 0x01, 0x04, 0x20, 0x00];
+        buffer.extend([0xFF; 16]);
+        let mut decoder = DeltaBitPackDecoder::<Int64Type>::new();
+        decoder.set_data(Bytes::from(buffer), 0).unwrap();
+        let mut out = vec![0; 32];
+        let err = decoder.get(&mut out).unwrap_err();
+        assert!(err.to_string().contains("VLQ"), "{err}");
     }
 
     #[test]
