@@ -15,6 +15,7 @@ use crate::data_type::Int32Type;
 use crate::encodings::decoding::{Decoder, DeltaBitPackDecoder};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
+use crate::util::utf8::check_utf8_value_start;
 use arrow_array::{
     Array, ArrayRef, BinaryArray, Decimal128Array, Decimal256Array, OffsetSizeTrait,
 };
@@ -40,6 +41,9 @@ pub fn make_byte_array_reader(
             .clone(),
     };
 
+    // A supplied schema can read an unannotated `BYTE_ARRAY` column as a string.
+    let validate_utf8 = matches!(data_type, ArrowType::Utf8 | ArrowType::LargeUtf8);
+
     match data_type {
         ArrowType::Binary
         | ArrowType::Utf8
@@ -49,6 +53,7 @@ pub fn make_byte_array_reader(
             if let Some(threshold) = padding_threshold {
                 reader.set_padding_threshold(threshold);
             }
+            reader.set_validate_utf8(validate_utf8);
             Ok(Box::new(ByteArrayReader::<i32>::new(
                 pages, data_type, reader,
             )))
@@ -58,6 +63,7 @@ pub fn make_byte_array_reader(
             if let Some(threshold) = padding_threshold {
                 reader.set_padding_threshold(threshold);
             }
+            reader.set_validate_utf8(validate_utf8);
             Ok(Box::new(ByteArrayReader::<i64>::new(
                 pages, data_type, reader,
             )))
@@ -182,6 +188,10 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
             decoder: None,
             validate_utf8,
         }
+    }
+
+    fn set_validate_utf8(&mut self, validate_utf8: bool) {
+        self.validate_utf8 = validate_utf8;
     }
 
     fn set_dict(
@@ -512,6 +522,12 @@ impl ByteArrayDecoderDeltaLength {
         self.length_offset += to_read;
 
         if self.validate_utf8 {
+            let mut start = initial_values_length;
+            for length in src_lengths {
+                let end = start + *length as usize;
+                check_utf8_value_start(&output.values[start..end])?;
+                start = end;
+            }
             output.check_valid_utf8(initial_values_length)?;
         }
         Ok(to_read)

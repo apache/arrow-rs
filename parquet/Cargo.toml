@@ -43,7 +43,6 @@ brotli = { version = "9.0", default-features = false, features = ["std"], option
 flate2 = { version = "1.1", default-features = false, optional = true }
 lz4_flex = { version = "0.14", default-features = false, features = ["std", "frame"], optional = true }
 zstd = { version = "0.14", optional = true, default-features = false }
-chrono = { workspace = true }
 num-bigint = { version = "0.5", default-features = false }
 num-integer = { version = "0.1.46", default-features = false, features = ["std"] }
 num-traits = { version = "0.2.19", default-features = false, features = ["std"] }
@@ -64,6 +63,7 @@ simdutf8 = { workspace = true , optional = true }
 ring = { version = "0.17", default-features = false, features = ["std"], optional = true }
 
 [dev-dependencies]
+chrono = { workspace = true }
 mimalloc = { version = "0.1", default-features = false }
 base64 = { version = "0.23", default-features = false, features = ["std"] }
 criterion = { workspace = true, default-features = false, features = ["async_futures"]  }
@@ -165,6 +165,11 @@ path = "./examples/opendal.rs"
 name = "custom_page_index"
 required-features = ["arrow"]
 path = "./examples/custom_page_index.rs"
+
+[[example]]
+name = "page_index_cache"
+required-features = ["arrow"]
+path = "./examples/page_index_cache.rs"
 
 [[test]]
 name = "arrow_reader"
@@ -348,6 +353,7 @@ required-features = ["arrow"]
 
 [[bench]]
 name = "bloom_filter"
+required-features = ["arrow"]
 harness = false
 
 [[bench]]

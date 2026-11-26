@@ -71,21 +71,25 @@ pub(crate) fn string_from_slice(
     offset: usize,
     range: Range<usize>,
 ) -> Result<&str, ArrowError> {
-    let offset_buffer = slice_from_slice_at_offset(slice, offset, range)?;
+    str_from_bytes(slice_from_slice_at_offset(slice, offset, range)?)
+}
 
+/// Interprets `bytes` as a UTF-8 string.
+#[inline]
+pub(crate) fn str_from_bytes(bytes: &[u8]) -> Result<&str, ArrowError> {
     //Use simdutf8 by default
     #[cfg(feature = "simdutf8")]
     {
-        simdutf8::basic::from_utf8(offset_buffer).map_err(|_| {
+        simdutf8::basic::from_utf8(bytes).map_err(|_| {
             // Use simdutf8::compat to return details about the decoding error
-            let e = simdutf8::compat::from_utf8(offset_buffer).unwrap_err();
+            let e = simdutf8::compat::from_utf8(bytes).unwrap_err();
             ArrowError::InvalidArgumentError(format!("encountered non UTF-8 data: {e}"))
         })
     }
 
     //Use std::str if simdutf8 is not enabled
     #[cfg(not(feature = "simdutf8"))]
-    str::from_utf8(offset_buffer)
+    str::from_utf8(bytes)
         .map_err(|_| ArrowError::InvalidArgumentError("invalid UTF-8 string".to_string()))
 }
 

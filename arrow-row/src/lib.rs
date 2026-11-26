@@ -269,8 +269,8 @@ const DICTIONARY_GATHER_RATIO: usize = 4;
 /// encoded using a block based scheme described below.
 ///
 /// The byte array is broken up into fixed-width blocks, each block is written in turn
-/// to the output, followed by `0xFF_u8`. The final block is padded to 32-bytes
-/// with `0_u8` and written to the output, followed by the un-padded length in bytes
+/// to the output, followed by `0xFF_u8`. The final block is padded with `0_u8` to the
+/// length of its block and written to the output, followed by the un-padded length in bytes
 /// of this final block as a `u8`. The first 4 blocks have a length of 8, with subsequent
 /// blocks using a length of 32, this is to reduce space amplification for small strings.
 ///

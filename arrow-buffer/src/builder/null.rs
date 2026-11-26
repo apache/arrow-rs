@@ -116,6 +116,9 @@ impl NullBufferBuilder {
     /// to indicate that these `n` items are nulls.
     #[inline]
     pub fn append_n_nulls(&mut self, n: usize) {
+        if n == 0 {
+            return;
+        }
         self.materialize_if_needed().append_n(n, false);
     }
 
@@ -164,6 +167,12 @@ impl NullBufferBuilder {
     /// Panics for the same reasons as [`BooleanBufferBuilder::set_bit`]
     #[inline]
     pub fn set_bit(&mut self, index: usize, v: bool) {
+        // Setting a bit to `true` before the bitmap exists changes nothing:
+        // every bit is implicitly `true` until a null is appended.
+        // Out-of-bounds indices still panic, as before.
+        if v && self.bitmap_builder.is_none() && index < self.len {
+            return;
+        }
         self.materialize_if_needed().set_bit(index, v);
     }
 
@@ -228,20 +237,27 @@ impl NullBufferBuilder {
     /// when you don't need to reuse this builder.
     pub fn finish(&mut self) -> Option<NullBuffer> {
         self.len = 0;
-        Some(NullBuffer::new(self.bitmap_builder.take()?.build()))
+        self.bitmap_builder
+            .take()
+            .map(|builder| NullBuffer::new(builder.build()))
+            .filter(|buffer| buffer.null_count() > 0)
     }
 
     /// Builds the [`NullBuffer`] without resetting the builder.
     ///
     /// This consumes the builder. Use [`Self::finish`] to reuse it.
     pub fn build(self) -> Option<NullBuffer> {
-        self.bitmap_builder.map(NullBuffer::from)
+        self.bitmap_builder
+            .map(NullBuffer::from)
+            .filter(|buffer| buffer.null_count() > 0)
     }
 
     /// Builds the [NullBuffer] without resetting the builder.
     pub fn finish_cloned(&self) -> Option<NullBuffer> {
-        let buffer = self.bitmap_builder.as_ref()?.finish_cloned();
-        Some(NullBuffer::new(buffer))
+        self.bitmap_builder
+            .as_ref()
+            .map(|builder| NullBuffer::new(builder.finish_cloned()))
+            .filter(|buffer| buffer.null_count() > 0)
     }
 
     /// Returns the inner bitmap builder as slice
@@ -464,5 +480,66 @@ mod tests {
         builder.append_buffer(&buffer);
 
         assert_eq!(builder.finish(), None);
+    }
+
+    #[test]
+    fn test_finish_returns_none_when_no_nulls_were_appended() {
+        // append_n_nulls(0) must not materialize the bitmap (#12238)
+        let mut builder = NullBufferBuilder::new(0);
+        builder.append_n_nulls(0);
+        builder.append_non_null();
+        assert_eq!(builder.allocated_size(), 0);
+        assert!(builder.finish_cloned().is_none());
+        assert!(builder.finish().is_none());
+
+        // set_bit(i, true) can clear the only null (#12238)
+        let mut builder = NullBufferBuilder::new(0);
+        builder.append_null();
+        builder.set_bit(0, true);
+        assert!(builder.build().is_none());
+    }
+
+    #[test]
+    fn test_set_bit_true_does_not_materialize() {
+        let mut builder = NullBufferBuilder::new(0);
+        builder.append_n_non_nulls(4);
+        builder.set_bit(2, true);
+        assert_eq!(builder.allocated_size(), 0);
+        assert!(builder.finish().is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "index out of bounds")]
+    fn test_set_bit_true_out_of_bounds_panics() {
+        let mut builder = NullBufferBuilder::new(0);
+        builder.append_n_non_nulls(2);
+        builder.set_bit(8, true);
+    }
+
+    #[test]
+    fn test_finish_returns_none_after_truncate_removes_nulls() {
+        let mut builder = NullBufferBuilder::new(0);
+        builder.append_non_null();
+        builder.append_null();
+        builder.truncate(1);
+        assert!(builder.finish().is_none());
+    }
+
+    #[test]
+    fn test_finish_returns_none_after_clearing_nulls_via_slice_mut() {
+        let mut builder = NullBufferBuilder::new(0);
+        builder.append_null();
+        builder.append_non_null();
+        builder.as_slice_mut().unwrap()[0] = 0b11;
+        assert!(builder.finish().is_none());
+    }
+
+    #[test]
+    fn test_finish_returns_none_for_all_valid_buffer() {
+        let mut buffer = MutableBuffer::new(1);
+        buffer.push(0xFFu8);
+        let builder = NullBufferBuilder::new_from_buffer(buffer, 8);
+        assert!(builder.finish_cloned().is_none());
+        assert!(builder.build().is_none());
     }
 }

@@ -242,6 +242,24 @@ fn add_benchmark(c: &mut Criterion) {
 
     let decimal128_array: ArrayRef = Arc::new(create_decimal128_array(8_000, 10, 3));
     let decimal256_array: ArrayRef = Arc::new(create_decimal256_array(8_000, 50, 3));
+    // Downscaling rounds on the sign of each value and on its remainder. These inputs
+    // have random signs, or remainders that are always zero.
+    let mixed_sign =
+        create_primitive_array_range::<Int64Type>(8_000, 0.0, -1_000_000_000..1_000_000_000);
+    let small = create_primitive_array_range::<Int64Type>(8_000, 0.0, 0..100_000);
+    let decimal128 = |array: &Int64Array, mul: i64| -> ArrayRef {
+        let array = array.unary::<_, Decimal128Type>(|v| (v * mul) as i128);
+        Arc::new(array.with_precision_and_scale(10, 3).unwrap())
+    };
+    let decimal256 = |array: &Int64Array, mul: i64| -> ArrayRef {
+        let array = array.unary::<_, Decimal256Type>(|v| i256::from_i128((v * mul) as i128));
+        Arc::new(array.with_precision_and_scale(50, 3).unwrap())
+    };
+    let decimal128_mixed_sign = decimal128(&mixed_sign, 1);
+    let decimal256_mixed_sign = decimal256(&mixed_sign, 1);
+    // Multiples of 10^4 and 10, the divisors of the two downscales below
+    let decimal128_zero_remainder = decimal128(&small, 10_000);
+    let decimal256_zero_remainder = decimal256(&small, 10);
     let string_array = build_string_array(512);
     let wide_string_array = cast(&string_array, &DataType::LargeUtf8).unwrap();
 
@@ -399,6 +417,12 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("cast decimal256 to decimal128 512", |b| {
         b.iter(|| cast_array(&decimal256_array, DataType::Decimal128(38, 2)))
     });
+    c.bench_function("cast decimal256 to decimal128 512 mixed sign", |b| {
+        b.iter(|| cast_array(&decimal256_mixed_sign, DataType::Decimal128(38, 2)))
+    });
+    c.bench_function("cast decimal256 to decimal128 512 zero remainder", |b| {
+        b.iter(|| cast_array(&decimal256_zero_remainder, DataType::Decimal128(38, 2)))
+    });
     c.bench_function("cast decimal256 to decimal256 512", |b| {
         b.iter(|| cast_array(&decimal256_array, DataType::Decimal256(50, 5)))
     });
@@ -410,6 +434,14 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function(
         "cast decimal128 to decimal128 512 with lower scale (infallible)",
         |b| b.iter(|| cast_array(&decimal128_array, DataType::Decimal128(7, -1))),
+    );
+    c.bench_function(
+        "cast decimal128 to decimal128 512 with lower scale (infallible) mixed sign",
+        |b| b.iter(|| cast_array(&decimal128_mixed_sign, DataType::Decimal128(7, -1))),
+    );
+    c.bench_function(
+        "cast decimal128 to decimal128 512 with lower scale (infallible) zero remainder",
+        |b| b.iter(|| cast_array(&decimal128_zero_remainder, DataType::Decimal128(7, -1))),
     );
 
     c.bench_function("cast decimal256 to decimal256 512 with same scale", |b| {

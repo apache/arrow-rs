@@ -1847,5 +1847,9 @@ mod tests {
         assert!(col.is_valid(0));
         assert!(col.is_null(1));
         assert!(col.is_valid(2));
+
+        let normalized_schema = Arc::new(batch.schema().normalize(".", None).unwrap());
+        assert_eq!(normalized_schema, normalized.schema());
+        RecordBatch::try_new(normalized_schema, normalized.columns().to_vec()).unwrap();
     }
 }

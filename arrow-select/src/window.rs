@@ -6,7 +6,7 @@
 
 use crate::concat::concat;
 use crate::take::take;
-use arrow_array::{Array, ArrayRef, UInt64Array, make_array, new_null_array};
+use arrow_array::{Array, ArrayRef, UInt64Array, new_null_array};
 use arrow_schema::{ArrowError, DataType};
 use num_traits::abs;
 
@@ -42,7 +42,7 @@ use num_traits::abs;
 pub fn shift(array: &dyn Array, offset: i64) -> Result<ArrayRef, ArrowError> {
     let value_len = array.len() as i64;
     if offset == 0 {
-        Ok(make_array(array.to_data()))
+        Ok(array.to_arc())
     } else if matches!(
         array.data_type(),
         DataType::Union(_, _) | DataType::RunEndEncoded(_, _)
@@ -83,7 +83,9 @@ mod tests {
     use super::*;
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
-    use arrow_array::{Float64Array, Int32Array, Int32DictionaryArray, RunArray, UnionArray};
+    use arrow_array::{
+        Float64Array, Int32Array, Int32DictionaryArray, RunArray, UnionArray, make_array,
+    };
     use arrow_schema::{Field, UnionFields};
     use std::sync::Arc;
 
