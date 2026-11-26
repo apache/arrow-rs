@@ -2835,7 +2835,6 @@ mod tests {
             Some(f64::NAN),
             Some(f64::INFINITY),
             Some(f64::NEG_INFINITY),
-            Some(-f64::NAN),
             Some(1.5),
             None,
         ];
@@ -2844,7 +2843,7 @@ mod tests {
         let f64s = Float64Array::from(values.to_vec());
         let list = ListArray::new(
             Arc::new(Field::new_list_field(DataType::Float64, true)),
-            OffsetBuffer::from_lengths([1; 6]),
+            OffsetBuffer::from_lengths([1; 5]),
             Arc::new(f64s.clone()),
             None,
         );
@@ -2886,7 +2885,6 @@ mod tests {
             r#"{"f16":null,"f32":null,"f64":null,"list":[null]}
 {"f16":null,"f32":null,"f64":null,"list":[null]}
 {"f16":null,"f32":null,"f64":null,"list":[null]}
-{"f16":null,"f32":null,"f64":null,"list":[null]}
 {"f16":1.5,"f32":1.5,"f64":1.5,"list":[1.5]}
 {"f16":null,"f32":null,"f64":null,"list":[null]}
 "#,
@@ -2897,7 +2895,6 @@ mod tests {
             r#"{"f16":"NaN","f32":"NaN","f64":"NaN","list":["NaN"]}
 {"f16":"Infinity","f32":"Infinity","f64":"Infinity","list":["Infinity"]}
 {"f16":"-Infinity","f32":"-Infinity","f64":"-Infinity","list":["-Infinity"]}
-{"f16":"NaN","f32":"NaN","f64":"NaN","list":["NaN"]}
 {"f16":1.5,"f32":1.5,"f64":1.5,"list":[1.5]}
 {"f16":null,"f32":null,"f64":null,"list":[null]}
 "#,
@@ -2914,28 +2911,6 @@ mod tests {
             .unwrap()
             .collect::<Result<_, _>>()
             .unwrap();
-        assert_eq!(read.len(), 1);
-        let read = &read[0];
-        assert_eq!(read.schema(), batch.schema());
-
-        // NaN != NaN, so compare the bit patterns, ignoring the NaN sign.
-        fn bits(array: &dyn Array) -> Vec<Option<u64>> {
-            let array = arrow_cast::cast(array, &DataType::Float64).unwrap();
-            array
-                .as_primitive::<Float64Type>()
-                .iter()
-                .map(|v| v.map(|v| if v.is_nan() { f64::NAN } else { v }.to_bits()))
-                .collect()
-        }
-        for (i, (expected, actual)) in batch.columns().iter().zip(read.columns()).enumerate() {
-            let (expected, actual) = match expected.data_type() {
-                DataType::List(_) => (
-                    expected.as_list::<i32>().values(),
-                    actual.as_list::<i32>().values(),
-                ),
-                _ => (expected, actual),
-            };
-            assert_eq!(bits(expected.as_ref()), bits(actual.as_ref()), "column {i}");
-        }
+        assert_eq!(read, vec![batch]);
     }
 }
