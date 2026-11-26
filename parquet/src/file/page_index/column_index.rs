@@ -586,6 +586,21 @@ impl ColumnIndexMetaData {
         }
     }
 
+    /// Set boundary_order of this page index.
+    pub(crate) fn set_boundary_order(&mut self, boundary_order: BoundaryOrder) {
+        let index = match self {
+            Self::BOOLEAN(index) => &mut index.column_index,
+            Self::INT32(index) => &mut index.column_index,
+            Self::INT64(index) => &mut index.column_index,
+            Self::INT96(index) => &mut index.column_index,
+            Self::FLOAT(index) => &mut index.column_index,
+            Self::DOUBLE(index) => &mut index.column_index,
+            Self::BYTE_ARRAY(index) => &mut index.column_index,
+            Self::FIXED_LEN_BYTE_ARRAY(index) => &mut index.column_index,
+        };
+        index.boundary_order = boundary_order;
+    }
+
     /// Returns array of null counts, one per page.
     ///
     /// Returns `None` if no null counts have been set in the index
