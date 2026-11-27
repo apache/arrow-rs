@@ -533,6 +533,61 @@ impl FilterPredicate {
         self.filter.values()
     }
 
+    /// Split after `count` selected rows, sharing the normalized mask buffers.
+    ///
+    /// The left predicate ends just after the last selected row, unless `count`
+    /// is zero or equals [`Self::count`]. The right predicate's indices are relative
+    /// to the end of the left predicate. Precomputed indices and slices are not
+    /// retained, so splitting does not allocate new selection buffers.
+    pub(crate) fn split_at_selected(&self, count: usize) -> (Self, Self) {
+        assert!(count <= self.count);
+        let offset = if count == 0 {
+            0
+        } else if count == self.count {
+            self.filter.len()
+        } else {
+            let chunks = self.filter_mask().bit_chunks();
+            let mut remaining = count;
+            let mut offset = 0;
+            for mut word in chunks
+                .iter()
+                .chain(std::iter::once(chunks.remainder_bits()))
+            {
+                let selected = word.count_ones() as usize;
+                if selected < remaining {
+                    remaining -= selected;
+                    offset += 64;
+                    continue;
+                }
+                for _ in 1..remaining {
+                    word &= word - 1;
+                }
+                offset += word.trailing_zeros() as usize + 1;
+                break;
+            }
+            offset
+        };
+        // Normalization has already removed null selections. Dropping any
+        // all-valid bitmap also avoids recounting it when slicing the remainder.
+        let left = BooleanArray::new(self.filter_mask().slice(0, offset), None);
+        let right = BooleanArray::new(
+            self.filter_mask().slice(offset, self.filter.len() - offset),
+            None,
+        );
+        (
+            Self {
+                strategy: IterationStrategy::default_strategy(left.len(), count),
+                filter: left,
+                count,
+            },
+            Self {
+                strategy: IterationStrategy::default_strategy(right.len(), self.count - count),
+                filter: right,
+                count: self.count - count,
+            },
+        )
+    }
+
     /// Returns whether bit filtering should gather precomputed indices instead of compressing.
     pub(crate) fn uses_sparse_indices(&self) -> bool {
         self.count <= self.filter.len() / 64
@@ -821,6 +876,16 @@ pub(crate) struct Packer {
 }
 
 impl Packer {
+    /// Start packing after `len` existing low bits in the destination word.
+    pub(crate) fn with_prefix(bits: u64, len: usize) -> Self {
+        debug_assert!(len < 64);
+        let mask = if len == 0 { 0 } else { u64::MAX >> (64 - len) };
+        Self {
+            current: bits & mask,
+            filled: len as u32,
+        }
+    }
+
     #[inline(always)]
     pub(crate) fn push(&mut self, values: u64, mask: u64) -> Option<u64> {
         let bits = bit_util::compress(values, mask);
@@ -1313,6 +1378,54 @@ mod tests {
     use rand::distr::{Alphanumeric, StandardUniform};
     use rand::prelude::*;
     use rand::rng;
+
+    #[test]
+    fn test_split_at_selected() {
+        for offset in [0, 1, 7, 63] {
+            for len in [0, 1, 63, 64, 65, 129] {
+                for modulus in [1, 2, 17] {
+                    let filter = BooleanArray::new(
+                        BooleanBuffer::from_iter((0..offset + len).map(|i| i % modulus == 0)),
+                        Some(NullBuffer::from_iter(
+                            (0..offset + len).map(|i| i % 11 != 0),
+                        )),
+                    )
+                    .slice(offset, len);
+                    let values = Int32Array::from_iter_values(0..len as i32);
+                    let expected = super::filter(&values, &filter).unwrap();
+                    for optimize in [false, true] {
+                        let builder = FilterBuilder::new(&filter);
+                        let predicate = if optimize {
+                            builder.optimize()
+                        } else {
+                            builder
+                        }
+                        .build();
+                        for count in 0..=predicate.count() {
+                            let (left, right) = predicate.split_at_selected(count);
+                            let source_offset = left.filter_len();
+                            assert_eq!(left.count(), count);
+                            assert_eq!(right.count(), predicate.count() - count);
+                            assert_eq!(source_offset + right.filter_len(), len);
+                            assert_eq!(left.filter_mask().count_set_bits(), count);
+                            assert_eq!(right.filter_mask().count_set_bits(), right.count());
+                            assert_eq!(
+                                left.filter(&values).unwrap().as_ref(),
+                                expected.slice(0, count).as_ref()
+                            );
+                            assert_eq!(
+                                right
+                                    .filter(&values.slice(source_offset, len - source_offset))
+                                    .unwrap()
+                                    .as_ref(),
+                                expected.slice(count, predicate.count() - count).as_ref()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_filter_nulls_all() {

@@ -197,6 +197,20 @@ impl BooleanBufferBuilder {
     #[inline]
     pub fn append_word(&mut self, word: u64, count: usize) {
         debug_assert!(count <= 64);
+        if count == 64 {
+            let bit_offset = self.len & 7;
+            if bit_offset == 0 {
+                self.buffer.extend_from_slice(&word.to_le_bytes());
+            } else {
+                // Preserve the existing bits in the partial byte, then write
+                // the remaining bits directly into eight new bytes.
+                *self.buffer.as_slice_mut().last_mut().unwrap() |= (word << bit_offset) as u8;
+                self.buffer
+                    .extend_from_slice(&(word >> (8 - bit_offset)).to_le_bytes());
+            }
+            self.len += 64;
+            return;
+        }
         let mask = (u64::MAX >> ((64 - count) & 63)) * ((count != 0) as u64);
         let word = word & mask;
 
@@ -779,8 +793,31 @@ mod tests {
 
     #[test]
     fn test_append_word_full_word() {
-        check_append_word(0, u64::MAX, 64);
-        check_append_word(0, 0, 64);
+        for offset in 0..8 {
+            for word in [0, u64::MAX, 0xDEAD_BEEF_CAFE_BABE] {
+                check_append_word(offset, word, 64);
+            }
+        }
+    }
+
+    #[test]
+    fn test_append_word_full_word_after_truncate() {
+        let word = 0xDEAD_BEEF_CAFE_BABE;
+        for offset in 0..16 {
+            let mut got = BooleanBufferBuilder::new(128);
+            got.append_n(96, true);
+            got.truncate(offset);
+            got.append_word(word, 64);
+            got.append_n(7, false);
+
+            let mut expected = BooleanBufferBuilder::new(128);
+            expected.append_n(offset, true);
+            for bit in 0..64 {
+                expected.append((word >> bit) & 1 != 0);
+            }
+            expected.append_n(7, false);
+            assert_eq!(got.finish(), expected.finish());
+        }
     }
 
     #[test]
