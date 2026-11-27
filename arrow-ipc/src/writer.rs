@@ -129,14 +129,17 @@ struct MetadataLayout {
 }
 
 impl MetadataLayout {
-    fn new(metadata_len: usize, write_options: &IpcWriteOptions) -> MetadataLayout {
+    /// Lays out the header of a message that starts `offset` bytes past an alignment
+    /// boundary, padding the metadata so that the header ends on the next boundary.
+    fn new(offset: usize, metadata_len: usize, write_options: &IpcWriteOptions) -> MetadataLayout {
         let prefix_size = if write_options.write_legacy_ipc_format {
             4
         } else {
             8
         };
         let alignment_mask = usize::from(write_options.alignment - 1);
-        let padded_header_len = (metadata_len + prefix_size + alignment_mask) & !alignment_mask;
+        let padded_header_len =
+            ((offset + metadata_len + prefix_size + alignment_mask) & !alignment_mask) - offset;
         let padded_metadata_len = padded_header_len - prefix_size;
         let metadata_padding = padded_metadata_len - metadata_len;
 
@@ -217,11 +220,13 @@ trait IpcMessageSinkExt: IpcMessageSink {
     /// Writes an already encoded IPC message with optional contiguous body data.
     ///
     /// This is used for schema and dictionary messages represented by [`EncodedData`].
+    /// The message starts `offset` bytes past an alignment boundary of the output.
     /// Returns the padded metadata length and body length written.
     fn write_encoded_data(
         &mut self,
         encoded: EncodedData,
         write_options: &IpcWriteOptions,
+        offset: usize,
     ) -> Result<(usize, usize), ArrowError> {
         let arrow_data_len = encoded.arrow_data.len();
         if !arrow_data_len.is_multiple_of(usize::from(write_options.alignment)) {
@@ -232,7 +237,7 @@ trait IpcMessageSinkExt: IpcMessageSink {
 
         let metadata = encoded.ipc_message;
         let metadata_len = metadata.len();
-        let layout = MetadataLayout::new(metadata_len, write_options);
+        let layout = MetadataLayout::new(offset, metadata_len, write_options);
 
         self.write_continuation(write_options, layout.padded_metadata_len as i32)?;
         self.write_vec(metadata)?;
@@ -279,7 +284,7 @@ trait IpcRecordBatchSink: IpcMessageSinkExt {
         write_options: &IpcWriteOptions,
     ) -> Result<(usize, usize), ArrowError> {
         let alignment = write_options.alignment;
-        let layout = MetadataLayout::new(metadata.len(), write_options);
+        let layout = MetadataLayout::new(0, metadata.len(), write_options);
 
         self.write_continuation(write_options, layout.padded_metadata_len as i32)?;
         self.write_slice(metadata)?;
@@ -318,7 +323,7 @@ where
         write_options: &IpcWriteOptions,
     ) -> Result<(usize, usize), ArrowError> {
         let alignment = write_options.alignment;
-        let layout = MetadataLayout::new(metadata.len(), write_options);
+        let layout = MetadataLayout::new(0, metadata.len(), write_options);
 
         self.write_continuation(write_options, layout.padded_metadata_len as i32)?;
         self.write_all(metadata)?;
@@ -1764,8 +1769,8 @@ impl<W: Write> FileWriter<W> {
         ensure_supported_ipc_schema(schema)?;
 
         let data_gen = IpcDataGenerator::default();
-        // write magic to header aligned on alignment boundary
-        let pad_len = pad_to_alignment(write_options.alignment, super::ARROW_MAGIC.len());
+        // The IPC stream starts right after the magic and its padding to 8 bytes
+        let pad_len = pad_to_alignment(8, super::ARROW_MAGIC.len());
         let header_size = super::ARROW_MAGIC.len() + pad_len;
         writer.write_all(&super::ARROW_MAGIC)?;
         writer.write_all(&PADDING[..pad_len])?;
@@ -1776,7 +1781,10 @@ impl<W: Write> FileWriter<W> {
             &mut dictionary_tracker,
             &write_options,
         );
-        let (meta, data) = write_message(&mut writer, encoded_message, &write_options)?;
+        // Pad the schema message so that the messages after it start at a multiple of
+        // the alignment in the file
+        let (meta, data) =
+            writer.write_encoded_data(encoded_message, &write_options, header_size)?;
         Ok(Self {
             writer,
             write_options,
@@ -2042,7 +2050,7 @@ impl StreamEncoder {
                 &self.write_options,
             );
             let mut sink = Buffers { out };
-            sink.write_encoded_data(encoded_message, &self.write_options)?;
+            sink.write_encoded_data(encoded_message, &self.write_options, 0)?;
             self.schema_encoded = true;
         }
         Ok(())
@@ -2316,7 +2324,7 @@ pub fn write_message<W: Write>(
     encoded: EncodedData,
     write_options: &IpcWriteOptions,
 ) -> Result<(usize, usize), ArrowError> {
-    writer.write_encoded_data(encoded, write_options)
+    writer.write_encoded_data(encoded, write_options, 0)
 }
 
 /// In V4, null and run end encoded types have no validity bitmap
@@ -5136,6 +5144,52 @@ mod tests {
             "Invalid argument error: Misaligned buffers[0] in array of type Decimal128(38, 10), \
              offset from expected alignment of 16 by 8"
         );
+    }
+
+    #[test]
+    fn test_file_embeds_stream() {
+        let dict = DictionaryArray::<Int32Type>::from_iter(["a", "b", "a"]);
+        let decimal = Decimal128Array::from(vec![Some(1), None, Some(3)]);
+        let batch = RecordBatch::try_from_iter([
+            ("dict", Arc::new(dict) as ArrayRef),
+            ("decimal", Arc::new(decimal) as ArrayRef),
+        ])
+        .unwrap();
+
+        for (alignment, legacy, version) in [
+            (8, false, MetadataVersion::V5),
+            (16, false, MetadataVersion::V5),
+            (32, false, MetadataVersion::V5),
+            (64, false, MetadataVersion::V5),
+            (64, true, MetadataVersion::V4),
+        ] {
+            let options = IpcWriteOptions::try_new(alignment, legacy, version).unwrap();
+            let mut writer =
+                FileWriter::try_new_with_options(vec![], batch.schema_ref(), options).unwrap();
+            writer.write(&batch).unwrap();
+            writer.write(&batch).unwrap();
+            let file = writer.into_inner().unwrap();
+
+            // An IPC file is `ARROW1`, padding to 8 bytes, then an IPC stream
+            let stream = StreamReader::try_new(&file[8..], None).unwrap();
+            let from_stream = stream.collect::<Result<Vec<_>, _>>().unwrap();
+            let reader = FileReader::try_new(Cursor::new(&file), None).unwrap();
+            let from_file = reader.collect::<Result<Vec<_>, _>>().unwrap();
+            assert_eq!(from_stream, [batch.clone(), batch.clone()]);
+            assert_eq!(from_file, from_stream);
+
+            // The dictionary and record batch messages, and so their bodies, stay aligned
+            let trailer_start = file.len() - 10;
+            let footer_len = read_footer_length(file[trailer_start..].try_into().unwrap()).unwrap();
+            let footer = root_as_footer(&file[trailer_start - footer_len..trailer_start]).unwrap();
+            let dictionaries = footer.dictionaries().unwrap();
+            let record_batches = footer.recordBatches().unwrap();
+            assert_eq!((dictionaries.len(), record_batches.len()), (1, 2));
+            for block in dictionaries.iter().chain(record_batches.iter()) {
+                assert_eq!(block.offset() as usize % alignment, 0);
+                assert_eq!(block.metaDataLength() as usize % alignment, 0);
+            }
+        }
     }
 
     #[test]
