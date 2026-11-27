@@ -6,13 +6,11 @@
 
 use crate::{FlightData, SchemaAsIpc};
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_buffer::Buffer;
-use arrow_ipc::convert::try_fb_to_schema;
 use arrow_ipc::writer::IpcWriteContext;
-use arrow_ipc::{reader, root_as_message, writer, writer::IpcWriteOptions};
+use arrow_ipc::{IpcSchema, reader, root_as_message, writer, writer::IpcWriteOptions};
 use arrow_schema::{ArrowError, Schema, SchemaRef};
 
 /// Convert a slice of wire protocol `FlightData`s into a vector of `RecordBatch`es
@@ -26,13 +24,13 @@ pub fn flight_data_to_batches(flight_data: &[FlightData]) -> Result<Vec<RecordBa
     let ipc_schema: arrow_ipc::Schema = message
         .header_as_schema()
         .ok_or_else(|| ArrowError::CastError("Cannot get header as Schema".to_string()))?;
-    let schema = try_fb_to_schema(ipc_schema)?;
-    let schema = Arc::new(schema);
+    let ipc_schema = IpcSchema::try_from_fb(ipc_schema)?;
 
     let mut batches = vec![];
     let dictionaries_by_id = HashMap::new();
     for datum in &flight_data[1..] {
-        let batch = flight_data_to_arrow_batch(datum, schema.clone(), &dictionaries_by_id)?;
+        let batch =
+            flight_data_to_arrow_batch_with_ipc_schema(datum, &ipc_schema, &dictionaries_by_id)?;
         batches.push(batch);
     }
     Ok(batches)
@@ -65,6 +63,32 @@ pub fn flight_data_to_arrow_batch(
                 &message.version(),
             )
         })?
+}
+
+/// Like [`flight_data_to_arrow_batch`], but takes dictionary ids from
+/// `ipc_schema` instead of the deprecated `Field::dict_id`.
+///
+/// Get `ipc_schema` from the schema message with [`IpcSchema::try_from_fb`].
+pub fn flight_data_to_arrow_batch_with_ipc_schema(
+    data: &FlightData,
+    ipc_schema: &IpcSchema,
+    dictionaries_by_id: &HashMap<i64, ArrayRef>,
+) -> Result<RecordBatch, ArrowError> {
+    // check that the data_header is a record batch message
+    let message = arrow_ipc::root_as_message(&data.data_header[..])
+        .map_err(|err| ArrowError::ParseError(format!("Unable to get root as message: {err:?}")))?;
+
+    let batch = message.header_as_record_batch().ok_or_else(|| {
+        ArrowError::ParseError("Unable to convert flight data header to a record batch".to_string())
+    })?;
+    reader::read_record_batch_with_ipc_schema(
+        &Buffer::from(data.data_body.as_ref()),
+        batch,
+        ipc_schema,
+        dictionaries_by_id,
+        None,
+        &message.version(),
+    )
 }
 
 /// Convert `RecordBatch`es to wire protocol `FlightData`s

@@ -42,6 +42,9 @@ pub mod convert;
 pub mod reader;
 pub mod writer;
 
+mod ipc_schema;
+pub use ipc_schema::IpcSchema;
+
 mod compression;
 
 #[cfg(test)]
