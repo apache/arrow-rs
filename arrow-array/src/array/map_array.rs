@@ -678,6 +678,35 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn test_empty_array_from_filtered_map_fields() {
+        let value = Field::new_map(
+            "value",
+            "entries",
+            Field::new("key", DataType::Utf8, false),
+            Field::new("value", DataType::Int32, true),
+            false,
+            true,
+        );
+        let map = Field::new_map(
+            "map",
+            "entries",
+            Field::new("key", DataType::Utf8, false),
+            value,
+            false,
+            true,
+        );
+        let fields = Fields::from(vec![map]);
+        for mask in 0..8 {
+            let filtered = fields.filter_leaves(|idx, _| mask & (1 << idx) != 0);
+            for field in &filtered {
+                let array = crate::new_empty_array(field.data_type());
+                array.to_data().validate_full().unwrap();
+            }
+            assert_eq!(filtered.is_empty(), mask != 7);
+        }
+    }
+
     fn create_from_buffers() -> MapArray {
         // Construct key and values
         let keys_data = ArrayData::builder(DataType::Int32)
