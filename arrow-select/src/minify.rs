@@ -317,13 +317,12 @@ fn rebase_offsets<O: OffsetSizeTrait>(
 ) -> (OffsetBuffer<O>, Range<usize>) {
     let start = offsets[0];
     let end = offsets[offsets.len() - 1];
-    let values = if start == O::zero() {
-        minify_scalar_buffer(offsets.inner())
+    let offsets = if start == O::zero() {
+        // SAFETY: the offsets do not change
+        unsafe { OffsetBuffer::new_unchecked(minify_scalar_buffer(offsets.inner())) }
     } else {
-        offsets.iter().map(|o| *o - start).collect()
+        offsets.clone().subtract(start)
     };
-    // SAFETY: subtracting the first offset keeps the offsets monotonic and non-negative
-    let offsets = unsafe { OffsetBuffer::new_unchecked(values) };
     (offsets, start.as_usize()..end.as_usize())
 }
 
