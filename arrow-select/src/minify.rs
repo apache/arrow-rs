@@ -64,9 +64,7 @@ use arrow_buffer::{
 };
 use arrow_data::transform::{Capacities, MutableArrayData};
 use arrow_data::{ArrayData, ByteView, MAX_INLINE_VIEW_LEN};
-use arrow_schema::{
-    ArrowError, DataType, FieldRef, IntervalUnit, TimeUnit, UnionFields, UnionMode,
-};
+use arrow_schema::{ArrowError, DataType, FieldRef, UnionFields, UnionMode};
 
 use crate::take::take;
 
@@ -110,7 +108,7 @@ pub fn minify(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     let (after, allocations) = allocated_memory(&minified.to_data());
     let (before, _) = allocated_memory(&array.to_data());
     if grew(before, after, allocations) {
-        return Ok(make_array(array.to_data()));
+        return Ok(array.to_arc());
     }
     Ok(minified)
 }
@@ -169,49 +167,9 @@ fn same_data(a: &ArrayData, b: &ArrayData) -> bool {
 }
 
 fn minify_inner(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
-    macro_rules! primitive {
-        ($t:ty) => {
-            Ok(Arc::new(minify_primitive(array.as_primitive::<$t>())))
-        };
-    }
-    match array.data_type() {
+    downcast_primitive_array! {
+        array => Ok(Arc::new(minify_primitive(array))),
         DataType::Null => Ok(Arc::new(NullArray::new(array.len()))),
-        DataType::Int8 => primitive!(Int8Type),
-        DataType::Int16 => primitive!(Int16Type),
-        DataType::Int32 => primitive!(Int32Type),
-        DataType::Int64 => primitive!(Int64Type),
-        DataType::UInt8 => primitive!(UInt8Type),
-        DataType::UInt16 => primitive!(UInt16Type),
-        DataType::UInt32 => primitive!(UInt32Type),
-        DataType::UInt64 => primitive!(UInt64Type),
-        DataType::Float16 => primitive!(Float16Type),
-        DataType::Float32 => primitive!(Float32Type),
-        DataType::Float64 => primitive!(Float64Type),
-        DataType::Decimal32(_, _) => primitive!(Decimal32Type),
-        DataType::Decimal64(_, _) => primitive!(Decimal64Type),
-        DataType::Decimal128(_, _) => primitive!(Decimal128Type),
-        DataType::Decimal256(_, _) => primitive!(Decimal256Type),
-        DataType::Date32 => primitive!(Date32Type),
-        DataType::Date64 => primitive!(Date64Type),
-        DataType::Time32(TimeUnit::Second) => primitive!(Time32SecondType),
-        DataType::Time32(TimeUnit::Millisecond) => primitive!(Time32MillisecondType),
-        DataType::Time64(TimeUnit::Microsecond) => primitive!(Time64MicrosecondType),
-        DataType::Time64(TimeUnit::Nanosecond) => primitive!(Time64NanosecondType),
-        t @ (DataType::Time32(TimeUnit::Microsecond | TimeUnit::Nanosecond)
-        | DataType::Time64(TimeUnit::Second | TimeUnit::Millisecond)) => Err(
-            ArrowError::InvalidArgumentError(format!("invalid time unit in {t}")),
-        ),
-        DataType::Timestamp(TimeUnit::Second, _) => primitive!(TimestampSecondType),
-        DataType::Timestamp(TimeUnit::Millisecond, _) => primitive!(TimestampMillisecondType),
-        DataType::Timestamp(TimeUnit::Microsecond, _) => primitive!(TimestampMicrosecondType),
-        DataType::Timestamp(TimeUnit::Nanosecond, _) => primitive!(TimestampNanosecondType),
-        DataType::Duration(TimeUnit::Second) => primitive!(DurationSecondType),
-        DataType::Duration(TimeUnit::Millisecond) => primitive!(DurationMillisecondType),
-        DataType::Duration(TimeUnit::Microsecond) => primitive!(DurationMicrosecondType),
-        DataType::Duration(TimeUnit::Nanosecond) => primitive!(DurationNanosecondType),
-        DataType::Interval(IntervalUnit::YearMonth) => primitive!(IntervalYearMonthType),
-        DataType::Interval(IntervalUnit::DayTime) => primitive!(IntervalDayTimeType),
-        DataType::Interval(IntervalUnit::MonthDayNano) => primitive!(IntervalMonthDayNanoType),
         DataType::Boolean => {
             let array = array.as_boolean();
             let values = minify_bool_buffer(array.values());
@@ -315,6 +273,11 @@ fn minify_inner(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
                 "invalid run end type {t}"
             ))),
         },
+        // The arms above cover every valid data type. The macro nests its
+        // matches, so the compiler cannot check that without this arm.
+        t => Err(ArrowError::InvalidArgumentError(format!(
+            "invalid data type {t}"
+        ))),
     }
 }
 
@@ -351,11 +314,11 @@ fn minify_nulls(nulls: Option<&NullBuffer>) -> Option<NullBuffer> {
     Some(unsafe { NullBuffer::new_unchecked(buffer, nulls.null_count()) })
 }
 
-/// Returns offsets that start at zero, plus the start and end of the child
-/// range that the original offsets reference.
+/// Returns offsets that start at zero, plus the child range that the
+/// original offsets reference.
 fn rebase_offsets<O: OffsetSizeTrait>(
     offsets: &OffsetBuffer<O>,
-) -> (OffsetBuffer<O>, usize, usize) {
+) -> (OffsetBuffer<O>, Range<usize>) {
     let start = offsets[0];
     let end = offsets[offsets.len() - 1];
     let values = if start == O::zero() {
@@ -365,7 +328,7 @@ fn rebase_offsets<O: OffsetSizeTrait>(
     };
     // SAFETY: subtracting the first offset keeps the offsets monotonic and non-negative
     let offsets = unsafe { OffsetBuffer::new_unchecked(values) };
-    (offsets, start.as_usize(), end.as_usize())
+    (offsets, start.as_usize()..end.as_usize())
 }
 
 /// Returns the null buffer if a null row has a non-empty range in `offsets`.
@@ -774,8 +737,11 @@ fn minify_list_child<O: OffsetSizeTrait>(
 ) -> Result<(OffsetBuffer<O>, ArrayRef), ArrowError> {
     match nulls_with_ranges(offsets, nulls) {
         None => {
-            let (offsets, start, end) = rebase_offsets(offsets);
-            Ok((offsets, minify_inner(&values.slice(start, end - start))?))
+            let (offsets, range) = rebase_offsets(offsets);
+            Ok((
+                offsets,
+                minify_inner(&values.slice(range.start, range.len()))?,
+            ))
         }
         Some(nulls) => {
             let (offsets, ranges) = compact_offsets(offsets, nulls);
@@ -795,8 +761,8 @@ fn minify_primitive<T: ArrowPrimitiveType>(array: &PrimitiveArray<T>) -> Primiti
 fn minify_bytes<T: ByteArrayType>(array: &GenericByteArray<T>) -> GenericByteArray<T> {
     let (offsets, values) = match nulls_with_ranges(array.offsets(), array.nulls()) {
         None => {
-            let (offsets, start, end) = rebase_offsets(array.offsets());
-            let values = minify_buffer(&array.values().slice_with_length(start, end - start));
+            let (offsets, range) = rebase_offsets(array.offsets());
+            let values = minify_buffer(&array.values().slice_with_length(range.start, range.len()));
             (offsets, values)
         }
         Some(nulls) => {
@@ -994,12 +960,22 @@ struct ListViewChild {
     empty_end: usize,
 }
 
-/// Merges the child ranges of `views`, given as `(valid, offset, size)`.
-fn list_view_child(views: impl Iterator<Item = (bool, usize, usize)>) -> ListViewChild {
+/// Returns `(valid, offset, size)` for each row of `array`.
+fn list_views<O: OffsetSizeTrait>(
+    array: &GenericListViewArray<O>,
+) -> impl Iterator<Item = (bool, usize, usize)> + '_ {
+    let offsets = array.offsets().iter().zip(array.sizes());
+    offsets
+        .enumerate()
+        .map(|(i, (o, s))| (array.is_valid(i), o.as_usize(), s.as_usize()))
+}
+
+/// Merges the child ranges of the views of `array`.
+fn list_view_child<O: OffsetSizeTrait>(array: &GenericListViewArray<O>) -> ListViewChild {
     let mut ranges = vec![];
     let mut null_views = false;
     let mut empty_end = 0;
-    for (valid, offset, size) in views {
+    for (valid, offset, size) in list_views(array) {
         if !valid {
             null_views |= offset != 0 || size != 0;
         } else if size == 0 {
@@ -1037,21 +1013,12 @@ fn minify_list_view<O: OffsetSizeTrait>(
     field: &FieldRef,
 ) -> Result<ArrayRef, ArrowError> {
     let nulls = minify_nulls(array.nulls());
-    let is_valid = |i: usize| nulls.as_ref().is_none_or(|n| n.is_valid(i));
-    let views = || {
-        array
-            .offsets()
-            .iter()
-            .zip(array.sizes())
-            .enumerate()
-            .map(|(i, (o, s))| (is_valid(i), o.as_usize(), s.as_usize()))
-    };
 
     let ListViewChild {
         merged,
         null_views,
         empty_end,
-    } = list_view_child(views());
+    } = list_view_child(array);
 
     // The offset in the new child of the first row of each merged range
     let mut bases = Vec::with_capacity(merged.len());
@@ -1074,7 +1041,7 @@ fn minify_list_view<O: OffsetSizeTrait>(
                 let sizes = minify_scalar_buffer(array.sizes());
                 (offsets, sizes, values)
             } else {
-                let (offsets, sizes) = views()
+                let (offsets, sizes) = list_views(array)
                     .map(|(valid, offset, size)| match valid && size > 0 {
                         true => (O::usize_as(offset - range.start), O::usize_as(size)),
                         false => (O::zero(), O::zero()),
@@ -1085,7 +1052,7 @@ fn minify_list_view<O: OffsetSizeTrait>(
         }
         _ => {
             let values = gather_ranges(array.values().as_ref(), &merged)?;
-            let (offsets, sizes) = views()
+            let (offsets, sizes) = list_views(array)
                 .map(|(valid, offset, size)| match valid && size > 0 {
                     true => (O::usize_as(moved(offset)), O::usize_as(size)),
                     false => (O::zero(), O::zero()),
@@ -1127,7 +1094,7 @@ fn minify_union(
                 offsets,
                 mut indices,
                 in_order,
-            } = dense_union_rows(array, fields, 0..array.len());
+            } = dense_union_rows(array, fields);
             if in_order
                 && fields
                     .iter()
@@ -1177,13 +1144,10 @@ struct DenseUnionRows {
     in_order: bool,
 }
 
-/// Numbers the child rows that `rows` of `array` reference in ascending
+/// Numbers the child rows that the rows of `array` reference in ascending
 /// order. Rows that share a child row keep sharing it.
-fn dense_union_rows(
-    array: &UnionArray,
-    fields: &UnionFields,
-    rows: impl Iterator<Item = usize> + Clone,
-) -> DenseUnionRows {
+fn dense_union_rows(array: &UnionArray, fields: &UnionFields) -> DenseUnionRows {
+    let rows = 0..array.len();
     let type_ids = array.type_ids();
     let old_offsets = array.offsets().expect("dense union has offsets");
     // Type ids are in `0..128`, so a `Vec` can index them
@@ -1302,13 +1266,7 @@ fn used_values<K: ArrowDictionaryKeyType>(keys: &PrimitiveArray<K>) -> (usize, B
 
 fn minify_run<R: RunEndIndexType>(array: &RunArray<R>) -> Result<ArrayRef, ArrowError> {
     let run_ends = array.run_ends();
-    let values = if run_ends.is_empty() {
-        array.values().slice(0, 0)
-    } else {
-        let start = run_ends.get_start_physical_index();
-        let end = run_ends.get_end_physical_index();
-        array.values().slice(start, end - start + 1)
-    };
+    let values = array.values_slice();
     // The run ends are already minimal if the array uses all of them unchanged
     let run_ends = if run_ends.offset() == 0 && run_ends.len() == run_ends.max_value() {
         PrimitiveArray::<R>::new(minify_scalar_buffer(run_ends.inner()), None)
@@ -1724,17 +1682,14 @@ mod tests {
         let n = 1_000_000;
         let child: ArrayRef = Arc::new(Int8Array::from(vec![7i8; n]));
         let fields = UnionFields::try_new([0], [Field::new("a", DataType::Int8, false)]).unwrap();
-        let offsets: Vec<i32> = (0..n as i32).collect();
-        let array = UnionArray::try_new(
-            fields.clone(),
-            vec![0i8; n].into(),
-            Some(offsets.into()),
-            vec![child],
-        )
-        .unwrap();
-        let rows = dense_union_rows(&array, &fields, [6, 5, 6].into_iter());
+        let union = |type_ids: Vec<i8>, offsets: Vec<i32>| {
+            let (type_ids, offsets) = (type_ids.into(), Some(offsets.into()));
+            UnionArray::try_new(fields.clone(), type_ids, offsets, vec![child.clone()]).unwrap()
+        };
+        let rows = dense_union_rows(&union(vec![0; 3], vec![6, 5, 6]), &fields);
         assert_eq!(rows.offsets, [1, 0, 1]);
         assert_eq!(rows.indices[0], [5, 6]);
+        let array = union(vec![0; n], (0..n as i32).collect());
         let minified = minify(&array.slice(5, 1)).unwrap();
         let minified = minified.as_union();
         assert_eq!(minified.child(0).as_primitive::<Int8Type>().values(), &[7]);
