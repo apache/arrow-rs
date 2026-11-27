@@ -404,10 +404,9 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         // One view serves every field, and the range bounds each field index.
         let view = self.view();
         (0..self.len()).map(move |i| {
-            let field = view.read_field(i)?;
             let field = Variant::try_new_with_metadata_and_shallow_validation(
                 self.metadata.clone(),
-                field.value,
+                view.read_field_bytes(i)?,
             )?
             .inherit_validation(self.validated);
             Ok((self.metadata.get(view.read_field_id(i)? as _)?, field))

@@ -408,14 +408,16 @@ impl<'m, 'v> VariantObjectView<'m, 'v> {
 
     #[inline]
     pub(crate) fn read_field(&self, i: usize) -> Result<VariantView<'m, 'v>, ArrowError> {
+        VariantView::try_new(self.metadata, self.read_field_bytes(i)?)
+    }
+
+    #[inline]
+    pub(crate) fn read_field_bytes(&self, i: usize) -> Result<&'v [u8], ArrowError> {
         let start = checked(
             self.read_offset(i)?.checked_add(self.first_value_byte),
             "variant object field start",
         )?;
-        VariantView::try_new(
-            self.metadata,
-            slice_from_slice(self.value, start as usize..)?,
-        )
+        slice_from_slice(self.value, start as usize..)
     }
 }
 
