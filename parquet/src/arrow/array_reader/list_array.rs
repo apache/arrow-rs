@@ -138,73 +138,15 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
         // with an outer/row boundary), so `==` would drop it; continuation
         // entries of a nested child's own list have `r > self.rep_level` and
         // are excluded.
-        //
-        // Split the scan by nullable/parent-threshold mode to avoid checking
-        // these options once per decoded level in the hot loop.
-        let mut cur_offset: usize = 0;
-        let def_level = self.def_level;
-        let rep_level = self.rep_level;
-
-        match (self.parent_threshold, validity.as_mut()) {
-            (None, Some(validity)) => {
-                for (&d, &r) in def_levels.iter().zip(rep_levels) {
-                    if r < rep_level {
-                        list_offsets.push(OffsetSize::from_usize(cur_offset).unwrap());
-                        validity.append(d + 1 >= def_level);
-                    }
-
-                    if d >= def_level && r <= rep_level {
-                        cur_offset += 1;
-                    }
-                }
-            }
-            (None, None) => {
-                for (&d, &r) in def_levels.iter().zip(rep_levels) {
-                    if r < rep_level {
-                        list_offsets.push(OffsetSize::from_usize(cur_offset).unwrap());
-                    }
-
-                    if d >= def_level && r <= rep_level {
-                        cur_offset += 1;
-                    }
-                }
-            }
-            (Some(threshold), Some(validity)) => {
-                for (&d, &r) in def_levels.iter().zip(rep_levels) {
-                    // When this list is a child of another list, skip entries
-                    // belonging to null/empty parent lists.
-                    if d < threshold {
-                        continue;
-                    }
-
-                    if r < rep_level {
-                        list_offsets.push(OffsetSize::from_usize(cur_offset).unwrap());
-                        validity.append(d + 1 >= def_level);
-                    }
-
-                    if d >= def_level && r <= rep_level {
-                        cur_offset += 1;
-                    }
-                }
-            }
-            (Some(threshold), None) => {
-                for (&d, &r) in def_levels.iter().zip(rep_levels) {
-                    // When this list is a child of another list, skip entries
-                    // belonging to null/empty parent lists.
-                    if d < threshold {
-                        continue;
-                    }
-
-                    if r < rep_level {
-                        list_offsets.push(OffsetSize::from_usize(cur_offset).unwrap());
-                    }
-
-                    if d >= def_level && r <= rep_level {
-                        cur_offset += 1;
-                    }
-                }
-            }
-        }
+        let cur_offset = count_list_children(
+            def_levels,
+            rep_levels,
+            self.def_level,
+            self.rep_level,
+            self.parent_threshold,
+            validity.as_mut(),
+            &mut list_offsets,
+        );
 
         list_offsets.push(OffsetSize::from_usize(cur_offset).unwrap());
 
@@ -260,6 +202,79 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
     fn max_def_level(&self) -> i16 {
         self.def_level
     }
+}
+
+/// Pushes each list's start offset (and validity) and returns the number of child values.
+// Not inlined: inside `consume_batch` LLVM keeps the count or the level
+// thresholds on the stack and reloads them on every level.
+#[inline(never)]
+fn count_list_children<OffsetSize: OffsetSizeTrait>(
+    def_levels: &[i16],
+    rep_levels: &[i16],
+    def_level: i16,
+    rep_level: i16,
+    parent_threshold: Option<i16>,
+    validity: Option<&mut BooleanBufferBuilder>,
+    list_offsets: &mut Vec<OffsetSize>,
+) -> usize {
+    let mut cur_offset: usize = 0;
+
+    // Split the scan by nullable/parent-threshold mode to avoid checking
+    // these options once per decoded level in the hot loop.
+    match (parent_threshold, validity) {
+        (None, Some(validity)) => {
+            for (&d, &r) in def_levels.iter().zip(rep_levels) {
+                if r < rep_level {
+                    list_offsets.push(OffsetSize::from_usize(cur_offset).unwrap());
+                    validity.append(d + 1 >= def_level);
+                }
+
+                cur_offset += (d >= def_level && r <= rep_level) as usize;
+            }
+        }
+        (None, None) => {
+            for (&d, &r) in def_levels.iter().zip(rep_levels) {
+                if r < rep_level {
+                    list_offsets.push(OffsetSize::from_usize(cur_offset).unwrap());
+                }
+
+                cur_offset += (d >= def_level && r <= rep_level) as usize;
+            }
+        }
+        (Some(threshold), Some(validity)) => {
+            for (&d, &r) in def_levels.iter().zip(rep_levels) {
+                // When this list is a child of another list, skip entries
+                // belonging to null/empty parent lists.
+                if d < threshold {
+                    continue;
+                }
+
+                if r < rep_level {
+                    list_offsets.push(OffsetSize::from_usize(cur_offset).unwrap());
+                    validity.append(d + 1 >= def_level);
+                }
+
+                cur_offset += (d >= def_level && r <= rep_level) as usize;
+            }
+        }
+        (Some(threshold), None) => {
+            for (&d, &r) in def_levels.iter().zip(rep_levels) {
+                // When this list is a child of another list, skip entries
+                // belonging to null/empty parent lists.
+                if d < threshold {
+                    continue;
+                }
+
+                if r < rep_level {
+                    list_offsets.push(OffsetSize::from_usize(cur_offset).unwrap());
+                }
+
+                cur_offset += (d >= def_level && r <= rep_level) as usize;
+            }
+        }
+    }
+
+    cur_offset
 }
 
 #[cfg(test)]
