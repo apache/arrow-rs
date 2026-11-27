@@ -230,6 +230,7 @@ impl<'de> Visitor<'de> for VariableShapeTensorMetadataVisitor {
     where
         V: MapAccess<'de>,
     {
+        // Track key presence separately so repeated null values are duplicates.
         let mut dim_names = None;
         let mut permutations = None;
         let mut uniform_shape = None;
@@ -258,9 +259,9 @@ impl<'de> Visitor<'de> for VariableShapeTensorMetadataVisitor {
         }
 
         Ok(VariableShapeTensorMetadata {
-            dim_names,
-            permutations,
-            uniform_shape,
+            dim_names: dim_names.flatten(),
+            permutations: permutations.flatten(),
+            uniform_shape: uniform_shape.flatten(),
         })
     }
 }
@@ -477,41 +478,50 @@ mod tests {
     use super::*;
 
     #[test]
-    fn valid() -> Result<(), ArrowError> {
-        let variable_shape_tensor = VariableShapeTensor::try_new(
-            DataType::Float32,
-            3,
+    fn round_trip_optional_metadata() -> Result<(), ArrowError> {
+        for dimension_names in [
+            None,
             Some(vec!["C".to_owned(), "H".to_owned(), "W".to_owned()]),
-            Some(vec![2, 0, 1]),
-            Some(vec![Some(400), None, Some(3)]),
-        )?;
-        let mut field = Field::new_struct(
-            "",
-            vec![
-                Field::new_list(
-                    "data",
-                    Field::new_list_field(DataType::Float32, false),
-                    false,
-                ),
-                Field::new_fixed_size_list(
-                    "shape",
-                    Field::new("", DataType::Int32, false),
-                    3,
-                    false,
-                ),
-            ],
-            false,
-        );
-        field.try_with_extension_type(variable_shape_tensor.clone())?;
-        assert_eq!(
-            field.try_extension_type::<VariableShapeTensor>()?,
-            variable_shape_tensor
-        );
-        #[cfg(feature = "canonical_extension_types")]
-        assert_eq!(
-            field.try_canonical_extension_type()?,
-            CanonicalExtensionType::VariableShapeTensor(variable_shape_tensor)
-        );
+        ] {
+            for permutations in [None, Some(vec![2, 0, 1])] {
+                for uniform_shapes in [None, Some(vec![Some(400), None, Some(3)])] {
+                    let variable_shape_tensor = VariableShapeTensor::try_new(
+                        DataType::Float32,
+                        3,
+                        dimension_names.clone(),
+                        permutations.clone(),
+                        uniform_shapes,
+                    )?;
+                    let mut field = Field::new_struct(
+                        "",
+                        vec![
+                            Field::new_list(
+                                "data",
+                                Field::new_list_field(DataType::Float32, false),
+                                false,
+                            ),
+                            Field::new_fixed_size_list(
+                                "shape",
+                                Field::new("", DataType::Int32, false),
+                                3,
+                                false,
+                            ),
+                        ],
+                        false,
+                    );
+                    field.try_with_extension_type(variable_shape_tensor.clone())?;
+                    assert_eq!(
+                        field.try_extension_type::<VariableShapeTensor>()?,
+                        variable_shape_tensor
+                    );
+                    #[cfg(feature = "canonical_extension_types")]
+                    assert_eq!(
+                        field.try_canonical_extension_type()?,
+                        CanonicalExtensionType::VariableShapeTensor(variable_shape_tensor)
+                    );
+                }
+            }
+        }
         Ok(())
     }
 
@@ -657,5 +667,33 @@ mod tests {
     fn invalid_metadata_uniform_shapes() {
         VariableShapeTensor::try_new(DataType::Float32, 3, None, None, Some(vec![None, Some(1)]))
             .unwrap();
+    }
+
+    #[test]
+    fn missing_and_null_optional_metadata() -> Result<(), ArrowError> {
+        let expected = VariableShapeTensorMetadata::try_new(3, None, None, None)?;
+        for metadata in [
+            "{}",
+            r#"{"dim_names":null,"permutations":null,"uniform_shape":null}"#,
+        ] {
+            assert_eq!(
+                VariableShapeTensor::deserialize_metadata(Some(metadata))?,
+                expected
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn duplicate_null_metadata() {
+        for key in ["dim_names", "permutations", "uniform_shape"] {
+            let metadata = format!(r#"{{"{key}":null,"{key}":null}}"#);
+            let error = VariableShapeTensor::deserialize_metadata(Some(&metadata)).unwrap_err();
+            assert!(matches!(
+                error,
+                ArrowError::InvalidArgumentError(message)
+                    if message.contains(&format!("duplicate field `{key}`"))
+            ));
+        }
     }
 }
