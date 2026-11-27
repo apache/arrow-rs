@@ -29,17 +29,18 @@ fn get_fixed_point_info(
     left: (u8, i8),
     right: (u8, i8),
     required_scale: i8,
-) -> Result<(u8, i8, Option<i256>), ArrowError> {
-    let product_scale = left.1 + right.1;
+) -> Result<(u8, i16, Option<i256>), ArrowError> {
+    // Two i8 scales can add up to a value outside i8, such as -80 + -80
+    let product_scale = i16::from(left.1) + i16::from(right.1);
     let precision = min(left.0 + right.0 + 1, DECIMAL128_MAX_PRECISION);
 
-    if required_scale > product_scale {
+    if i16::from(required_scale) > product_scale {
         return Err(ArrowError::ComputeError(format!(
             "Required scale {required_scale} is greater than product scale {product_scale}",
         )));
     }
 
-    let exponent = i16::from(product_scale) - i16::from(required_scale);
+    let exponent = product_scale - i16::from(required_scale);
     let divisor =
         (exponent <= MAX_I256_POW10).then(|| i256::from_i128(10).pow_wrapping(exponent as u32));
 
@@ -105,7 +106,7 @@ pub fn multiply_fixed_point_checked(
         required_scale,
     )?;
 
-    if required_scale == product_scale {
+    if i16::from(required_scale) == product_scale {
         return try_binary::<_, _, _, Decimal128Type>(left, right, |a, b| a.mul_checked(b))?
             .with_precision_and_scale(precision, required_scale);
     }
@@ -156,7 +157,7 @@ pub fn multiply_fixed_point(
         required_scale,
     )?;
 
-    if required_scale == product_scale {
+    if i16::from(required_scale) == product_scale {
         return binary(left, right, |a, b| a.mul_wrapping(b))?
             .with_precision_and_scale(precision, required_scale);
     }
@@ -432,5 +433,21 @@ mod tests {
             .unwrap();
         assert_eq!(multiply_fixed_point(&c, &c, -90).unwrap(), expected);
         assert_eq!(multiply_fixed_point_checked(&c, &c, -90).unwrap(), expected);
+
+        // The product scale -80 + -80 does not fit in an i8, and every required scale is above it
+        let d = Decimal128Array::from(vec![1_i128])
+            .with_precision_and_scale(1, -80)
+            .unwrap();
+        for result in [
+            multiply_fixed_point(&d, &d, -100),
+            multiply_fixed_point_checked(&d, &d, -100),
+        ] {
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Required scale -100 is greater than product scale -160")
+            );
+        }
     }
 }
