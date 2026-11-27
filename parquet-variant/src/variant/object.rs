@@ -13,32 +13,47 @@ use arrow_schema::ArrowError;
 const NUM_HEADER_BYTES: u32 = 1;
 
 /// Header structure for [`VariantObject`]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct VariantObjectHeader {
-    num_elements_size: OffsetSizeBytes,
-    field_id_size: OffsetSizeBytes,
-    field_offset_size: OffsetSizeBytes,
+///
+/// Holds the `value_header` bits of the header byte. Views copy the header, and copying one byte
+/// is cheaper than copying the three decoded sizes.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) struct VariantObjectHeader(u8);
+
+impl std::fmt::Debug for VariantObjectHeader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VariantObjectHeader")
+            .field("num_elements_size", &self.num_elements_size_bytes())
+            .field("field_id_size", &self.field_id_size_bytes())
+            .field("field_offset_size", &self.field_offset_size_bytes())
+            .finish()
+    }
 }
 
 impl VariantObjectHeader {
     // Hide the ugly casting
     pub(crate) const fn num_elements_size(&self) -> u32 {
-        self.num_elements_size as _
+        self.num_elements_size_bytes() as _
     }
     pub(crate) const fn field_id_size(&self) -> u32 {
-        self.field_id_size as _
+        self.field_id_size_bytes() as _
     }
     pub(crate) const fn field_offset_size(&self) -> u32 {
-        self.field_offset_size as _
+        self.field_offset_size_bytes() as _
     }
+    #[inline]
     pub(crate) const fn num_elements_size_bytes(&self) -> OffsetSizeBytes {
-        self.num_elements_size
+        match self.0 & 0x10 != 0 {
+            true => OffsetSizeBytes::Four,
+            false => OffsetSizeBytes::One,
+        }
     }
+    #[inline]
     pub(crate) const fn field_id_size_bytes(&self) -> OffsetSizeBytes {
-        self.field_id_size
+        OffsetSizeBytes::from_bits(self.0 >> 2)
     }
+    #[inline]
     pub(crate) const fn field_offset_size_bytes(&self) -> OffsetSizeBytes {
-        self.field_offset_size
+        OffsetSizeBytes::from_bits(self.0)
     }
 
     // Avoid materializing this offset, since it's cheaply and safely computable
@@ -47,21 +62,8 @@ impl VariantObjectHeader {
     }
 
     #[inline]
-    pub(crate) fn try_new(header_byte: u8) -> Result<Self, ArrowError> {
-        // Parse the header byte to get object parameters
-        let value_header = header_byte >> 2;
-        let field_offset_size_minus_one = value_header & 0x03; // Last 2 bits
-        let field_id_size_minus_one = (value_header >> 2) & 0x03; // Next 2 bits
-        let is_large = (value_header & 0x10) != 0; // 5th bit
-        let num_elements_size = match is_large {
-            true => OffsetSizeBytes::Four,
-            false => OffsetSizeBytes::One,
-        };
-        Ok(Self {
-            num_elements_size,
-            field_id_size: OffsetSizeBytes::try_new(field_id_size_minus_one)?,
-            field_offset_size: OffsetSizeBytes::try_new(field_offset_size_minus_one)?,
-        })
+    pub(crate) const fn new(header_byte: u8) -> Self {
+        Self(header_byte >> 2)
     }
 }
 
@@ -238,7 +240,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
             )?;
 
             let mut field_ids_iter =
-                map_bytes_to_offsets(field_id_buffer, self.header.field_id_size);
+                map_bytes_to_offsets(field_id_buffer, self.header.field_id_size_bytes());
 
             // Validate all field ids exist in the metadata dictionary and the corresponding field names are lexicographically sorted
             if self.metadata.is_sorted() {
@@ -303,7 +305,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
 
             let value_buffer = slice_from_slice(self.value, self.first_value_byte as _..)?;
 
-            map_bytes_to_offsets(field_offset_buffer, self.header.field_offset_size)
+            map_bytes_to_offsets(field_offset_buffer, self.header.field_offset_size_bytes())
                 .take(num_offsets.saturating_sub(1))
                 .try_for_each(|offset| {
                     let value_bytes = slice_from_slice(value_buffer, offset..)?;
@@ -354,8 +356,8 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     // Attempts to retrieve the ith field value from the value region of the byte buffer; it
     // performs only basic (constant-cost) validation.
     fn try_field_with_shallow_validation(&self, i: usize) -> Result<Variant<'m, 'v>, ArrowError> {
-        let field = self.view().field(i)?;
-        Variant::try_new_with_metadata_and_shallow_validation(self.metadata.clone(), field.value)
+        let value = self.view().field_bytes(i)?;
+        Variant::try_new_with_metadata_and_shallow_validation(self.metadata.clone(), value)
             .map(|child| child.inherit_validation(self.validated))
     }
 
@@ -382,8 +384,12 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     ///
     /// Panics if this object is invalid. Use [`Self::iter_try`] for a fallible version.
     pub fn iter(&self) -> impl Iterator<Item = (&'m str, Variant<'m, 'v>)> + '_ {
-        self.iter_try_with_shallow_validation()
-            .map(|result| result.expect("Invalid variant object field value"))
+        // One view serves every field, and the range bounds each field index.
+        let view = self.view();
+        (0..self.len()).map(move |i| {
+            self.read_name_and_field(&view, i)
+                .expect("Invalid variant object field value")
+        })
     }
 
     /// Fallible iteration over the fields of this object.
@@ -396,20 +402,32 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         })
     }
 
+    // Reads field `i`, which the caller has bounded by `self.len()`, through `view`.
+    #[inline]
+    fn read_name_and_field(
+        &self,
+        view: &VariantObjectView<'m, 'v>,
+        i: usize,
+    ) -> Result<(&'m str, Variant<'m, 'v>), ArrowError> {
+        let field = Variant::try_new_with_metadata_and_shallow_validation(
+            self.metadata.clone(),
+            view.read_field_bytes(i)?,
+        )?
+        .inherit_validation(self.validated);
+        Ok((self.metadata.get(view.read_field_id(i)? as _)?, field))
+    }
+
     // Fallible iteration over the fields of this object that performs only shallow (constant-cost)
     // validation of field values.
+    //
+    // Unlike `iter`, this calls the out-of-line field accessors. That keeps `next` small enough to
+    // inline into callers of `iter_try`, such as the builder, which also validate each field.
     fn iter_try_with_shallow_validation(
         &self,
     ) -> impl Iterator<Item = Result<(&'m str, Variant<'m, 'v>), ArrowError>> + '_ {
-        // One view serves every field, and the range bounds each field index.
-        let view = self.view();
-        (0..self.len()).map(move |i| {
-            let field = Variant::try_new_with_metadata_and_shallow_validation(
-                self.metadata.clone(),
-                view.read_field_bytes(i)?,
-            )?
-            .inherit_validation(self.validated);
-            Ok((self.metadata.get(view.read_field_id(i)? as _)?, field))
+        (0..self.len()).map(|i| {
+            let field = self.try_field_with_shallow_validation(i)?;
+            Ok((self.try_field_name(i)?, field))
         })
     }
 
@@ -710,9 +728,11 @@ mod tests {
                 Variant::Int32(count - 1)
             );
             assert_eq!(
-                obj.header.field_id_size, expected_field_id_size,
+                obj.header.field_id_size_bytes(),
+                expected_field_id_size,
                 "Expected {}-byte field IDs, got {}-byte field IDs",
-                expected_field_id_size as usize, obj.header.field_id_size as usize
+                expected_field_id_size as usize,
+                obj.header.field_id_size() as usize
             );
         } else {
             panic!("Expected object variant");
@@ -765,9 +785,11 @@ mod tests {
         if let Variant::Object(obj) = variant {
             assert_eq!(obj.len(), num_fields);
             assert_eq!(
-                obj.header.field_offset_size, expected_field_offset_size,
+                obj.header.field_offset_size_bytes(),
+                expected_field_offset_size,
                 "Expected {}-byte field offsets, got {}-byte field offsets",
-                expected_field_offset_size as usize, obj.header.field_offset_size as usize
+                expected_field_offset_size as usize,
+                obj.header.field_offset_size() as usize
             );
         } else {
             panic!("Expected object variant");

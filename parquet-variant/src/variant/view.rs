@@ -277,7 +277,7 @@ impl<'m, 'v> VariantObjectView<'m, 'v> {
     /// Reads the header and the field count of the object at the start of `value`.
     #[inline]
     pub fn try_new(metadata: VariantMetadataView<'m>, value: &'v [u8]) -> Result<Self, ArrowError> {
-        let header = VariantObjectHeader::try_new(first_byte_from_slice(value)?)?;
+        let header = VariantObjectHeader::new(first_byte_from_slice(value)?);
         let num_elements = header.num_elements_size_bytes().unpack_u32_at_offset(
             value,
             NUM_HEADER_BYTES as _,
@@ -321,6 +321,7 @@ impl<'m, 'v> VariantObjectView<'m, 'v> {
     }
 
     /// The metadata dictionary id of field `i`.
+    #[inline]
     pub fn field_id(&self, i: usize) -> Result<u32, ArrowError> {
         self.check_index(i)?;
         self.read_field_id(i)
@@ -336,6 +337,14 @@ impl<'m, 'v> VariantObjectView<'m, 'v> {
     pub fn field(&self, i: usize) -> Result<VariantView<'m, 'v>, ArrowError> {
         self.check_index(i)?;
         self.read_field(i)
+    }
+
+    // The bytes from the start of field `i`'s value to the end of the object, without the
+    // throwaway view that `field` would build.
+    #[inline]
+    pub(crate) fn field_bytes(&self, i: usize) -> Result<&'v [u8], ArrowError> {
+        self.check_index(i)?;
+        self.read_field_bytes(i)
     }
 
     /// The position of the field named `name`, if any.
