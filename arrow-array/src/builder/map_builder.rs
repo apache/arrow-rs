@@ -154,21 +154,36 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
 
     /// Returns the offset of the next map slot, i.e. the current number of entries.
     ///
-    /// Returns an error if the number of entries does not fit in an `i32` offset.
+    /// Returns an error if the next offset would be less than the last offset
+    /// already recorded, or if the number of entries does not fit in an `i32`
+    /// offset.
     #[inline]
     fn next_offset(&self) -> Result<i32, ArrowError> {
         let len = self.key_builder.len();
-        i32::try_from(len).map_err(|_| {
+        let offset = i32::try_from(len).map_err(|_| {
             ArrowError::InvalidArgumentError(format!(
                 "Cannot append to a map builder with {len} entries: offset exceeds i32::MAX"
             ))
-        })
+        })?;
+        // `keys().finish()` resets the child length, so the next offset can be
+        // smaller than one already recorded. Reject that before either buffer
+        // is updated.
+        if let Some(&last) = self.offsets_builder.last()
+            && offset < last
+        {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "MapBuilder reached invalid state: values truncated unexpectedly \
+                 (next offset {offset} is less than last offset {last})"
+            )));
+        }
+        Ok(offset)
     }
 
     /// Finish the current map array slot
     ///
     /// Returns an error if the key and values builders are in an inconsistent state,
-    /// or if the number of entries exceeds `i32::MAX`.
+    /// the next offset would be less than the last offset, or the number of entries
+    /// exceeds `i32::MAX`. A rejected append leaves the builder unchanged.
     #[inline]
     pub fn append(&mut self, is_valid: bool) -> Result<(), ArrowError> {
         self.validate_equal_lengths()?;
@@ -181,7 +196,8 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
     /// Append `n` nulls to this [`MapBuilder`]
     ///
     /// Returns an error if the key and values builders are in an inconsistent state,
-    /// or if the number of entries exceeds `i32::MAX`.
+    /// the next offset would be less than the last offset, or the number of entries
+    /// exceeds `i32::MAX`. A rejected append leaves the builder unchanged.
     #[inline]
     pub fn append_nulls(&mut self, n: usize) -> Result<(), ArrowError> {
         self.validate_equal_lengths()?;
@@ -195,9 +211,11 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
     ///
     /// # Panics
     ///
-    /// Panics if the fields set with [`Self::with_keys_field`] or
-    /// [`Self::with_values_field`] do not match the data types of the key and value
-    /// builders, or if the keys contain nulls
+    /// Panics if:
+    /// - the fields set with [`Self::with_keys_field`] or [`Self::with_values_field`]
+    ///   do not match the data types of the key and value builders
+    /// - the keys contain nulls
+    /// - the key or value builder was finished after the last append
     pub fn finish(&mut self) -> MapArray {
         // Build the keys
         let keys_arr = self.key_builder.finish();
@@ -213,9 +231,11 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
     ///
     /// # Panics
     ///
-    /// Panics if the fields set with [`Self::with_keys_field`] or
-    /// [`Self::with_values_field`] do not match the data types of the key and value
-    /// builders, or if the keys contain nulls
+    /// Panics if:
+    /// - the fields set with [`Self::with_keys_field`] or [`Self::with_values_field`]
+    ///   do not match the data types of the key and value builders
+    /// - the keys contain nulls
+    /// - the key or value builder was finished after the last append
     pub fn finish_cloned(&self) -> MapArray {
         // Build the keys
         let keys_arr = self.key_builder.finish_cloned();
@@ -248,6 +268,17 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
             "Keys array must have no null values, found {} null value(s)",
             keys_arr.null_count()
         );
+        // `append` keeps the offsets non-decreasing, but finishing a child builder
+        // afterwards can still leave the last offset past the end of the child.
+        // A longer child is allowed: those entries are not part of a map slot yet.
+        let last_offset = *offset_buffer.typed_data::<i32>().last().unwrap() as usize;
+        assert!(
+            last_offset <= keys_arr.len() && last_offset <= values_arr.len(),
+            "MapBuilder reached invalid state: values truncated unexpectedly \
+             (last offset {last_offset}, keys length {}, values length {})",
+            keys_arr.len(),
+            values_arr.len()
+        );
 
         let keys_field = match &self.key_field {
             Some(f) => {
@@ -278,7 +309,9 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
             false, // always non-nullable
         ));
         // SAFETY: offsets are appended from the entry count, which the builder
-        // keeps equal for keys and values, and the entries are non-nullable
+        // keeps equal for keys and values. `append` and `append_nulls` keep them
+        // non-decreasing, and the last offset was checked above to be within the
+        // finished key and value arrays.
         let offsets = unsafe { OffsetBuffer::new_unchecked(offset_buffer.into()) };
         unsafe { MapArray::new_unchecked(map_field, offsets, struct_array, nulls, false) }
     }
@@ -623,5 +656,73 @@ mod tests {
         // The builder must be left untouched after a rejected append
         assert_eq!(builder.offsets_builder, vec![0]);
         assert_eq!(builder.len(), 0);
+    }
+
+    #[test]
+    fn test_append_rejects_decreasing_offset_after_child_finish() {
+        let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+        builder.keys().append_value("1");
+        builder.values().append_value(42);
+        builder.append(true).unwrap();
+
+        let offsets_before = builder.offsets_builder.clone();
+        let len_before = builder.len();
+        builder.keys().finish();
+        builder.values().finish();
+
+        let err = builder.append(true).unwrap_err();
+        assert!(
+            matches!(err, ArrowError::InvalidArgumentError(_)),
+            "expected InvalidArgumentError, got {err}"
+        );
+        assert!(
+            err.to_string().contains("values truncated unexpectedly"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(builder.offsets_builder, offsets_before);
+        assert_eq!(builder.offsets_builder, vec![0, 1]);
+        assert_eq!(builder.len(), len_before);
+
+        let mut nulls = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+        nulls.keys().append_value("1");
+        nulls.values().append_value(42);
+        nulls.append(true).unwrap();
+        nulls.keys().finish();
+        nulls.values().finish();
+        let offsets_before = nulls.offsets_builder.clone();
+        let err = nulls.append_nulls(2).unwrap_err();
+        assert!(
+            matches!(err, ArrowError::InvalidArgumentError(_)),
+            "expected InvalidArgumentError, got {err}"
+        );
+        assert_eq!(nulls.offsets_builder, offsets_before);
+        assert_eq!(nulls.len(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "values truncated unexpectedly")]
+    fn test_finish_panics_when_child_was_finished_after_append() {
+        let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+        builder.keys().append_value("1");
+        builder.values().append_value(42);
+        builder.append(true).unwrap();
+        builder.keys().finish();
+        builder.values().finish();
+        let _array = builder.finish();
+    }
+
+    #[test]
+    fn test_finish_allows_uncommitted_trailing_entries() {
+        let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+        builder.keys().append_value("1");
+        builder.values().append_value(42);
+        builder.append(true).unwrap();
+        builder.keys().append_value("trailing");
+        builder.values().append_value(7);
+
+        let map = builder.finish();
+        assert_eq!(map.value_offsets(), &[0, 1]);
+        assert_eq!(map.keys().len(), 2);
+        assert_eq!(map.values().len(), 2);
     }
 }
