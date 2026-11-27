@@ -1576,7 +1576,7 @@ impl FilterMaskAccumulator {
 }
 
 /// Converts the projection buffered by `array_reader` into a record batch.
-fn consume_record_batch(array_reader: &mut dyn ArrayReader) -> Result<RecordBatch> {
+pub(crate) fn consume_record_batch(array_reader: &mut dyn ArrayReader) -> Result<RecordBatch> {
     let array = array_reader.consume_batch()?;
     let struct_array = array.as_struct_opt().ok_or_else(|| {
         ArrowError::ParquetError("Struct array reader should return struct array".to_string())

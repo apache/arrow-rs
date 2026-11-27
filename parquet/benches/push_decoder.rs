@@ -9,13 +9,16 @@
 //!
 //! The `scan_plan` group measures `ParquetPushDecoder::scan_plan` for wide
 //! schemas with a page index.
+//!
+//! The `decode` and `decode_8192` groups decode a file with `try_decode`, for
+//! each [`RequestGranularity`].
 
 use std::hint::black_box;
 use std::ops::Range;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use arrow_array::{Float32Array, RecordBatch};
+use arrow_array::{Float32Array, RecordBatch, StringArray};
 use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use parquet::DecodeResult;
@@ -24,7 +27,7 @@ use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::{
     ArrowReaderMetadata, ArrowReaderOptions, RowSelection, RowSelector,
 };
-use parquet::arrow::push_decoder::ParquetPushDecoderBuilder;
+use parquet::arrow::push_decoder::{ParquetPushDecoderBuilder, RequestGranularity};
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataPushDecoder};
 use parquet::file::properties::WriterProperties;
 
@@ -311,11 +314,121 @@ fn bench_scan_plan(c: &mut Criterion) {
     group.finish();
 }
 
+/// The benchmark name of each [`RequestGranularity`].
+const GRANULARITIES: [(&str, RequestGranularity); 2] = [
+    ("row_group", RequestGranularity::RowGroup),
+    ("batch", RequestGranularity::Batch),
+];
+
+/// Decode the file with `try_decode`. Push exactly the ranges that the
+/// decoder requests. Returns the number of rows.
+fn decode_file(builder: ParquetPushDecoderBuilder, file_data: &Bytes) -> usize {
+    let mut decoder = builder.build().unwrap();
+    let mut num_rows = 0;
+    loop {
+        match decoder.try_decode().unwrap() {
+            DecodeResult::NeedsData(ranges) => {
+                let data = ranges
+                    .iter()
+                    .map(|r| file_data.slice(r.start as usize..r.end as usize))
+                    .collect();
+                decoder.push_ranges(ranges, data).unwrap();
+            }
+            DecodeResult::Data(batch) => num_rows += batch.num_rows(),
+            DecodeResult::Finished => return num_rows,
+        }
+    }
+}
+
+/// Decode 10 columns and 1,000 rows with small batches, so that the cost of
+/// one request is large next to the decode work.
+///
+/// `row_group` and `batch` are the [`RequestGranularity`] of the decoder.
+/// `10pages_100batch` has one page per batch. `100pages_10batch` has small
+/// pages and small batches.
+fn bench_decode(c: &mut Criterion) {
+    let mut group = c.benchmark_group("push_decoder/decode");
+
+    for (pages, batch_size) in [(10, 100), (100, 10)] {
+        let file_data = make_paged_test_file(10, pages);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
+        let metadata = ArrowReaderMetadata::load(&file_data, options).unwrap();
+
+        let id = format!("{pages}pages_{batch_size}batch");
+        for (name, granularity) in GRANULARITIES {
+            group.bench_function(BenchmarkId::new(name, &id), |b| {
+                b.iter(|| {
+                    let builder = ParquetPushDecoderBuilder::new_with_metadata(metadata.clone())
+                        .with_batch_size(batch_size)
+                        .with_request_granularity(granularity);
+                    black_box(decode_file(builder, &file_data))
+                })
+            });
+        }
+    }
+
+    group.finish();
+}
+
+/// Decode a file with one `f32` column and one string column in batches of
+/// 8,192 rows. The file has 1,000,000 rows in one row group and uses the
+/// default writer properties.
+///
+/// `low_cardinality` has 1,000 distinct strings, so the writer uses dictionary
+/// pages. `unique` has 1,000,000 distinct strings.
+fn bench_decode_large_batches(c: &mut Criterion) {
+    let mut group = c.benchmark_group("push_decoder/decode_8192");
+    group.sample_size(20);
+
+    let num_rows = 1_000_000usize;
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("f", DataType::Float32, false),
+        Field::new("s", DataType::Utf8, false),
+    ]));
+
+    for (strings, distinct) in [("low_cardinality", 1_000), ("unique", num_rows)] {
+        // Spread the values, so that the columns are not sorted.
+        let shuffle = |row: usize| row.wrapping_mul(2_654_435_761) % num_rows;
+        let floats = Float32Array::from_iter_values((0..num_rows).map(|row| shuffle(row) as f32));
+        let strings_array = StringArray::from_iter_values(
+            (0..num_rows).map(|row| format!("customer-{:012}", shuffle(row) % distinct)),
+        );
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(floats), Arc::new(strings_array)],
+        )
+        .unwrap();
+        let mut buf = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buf, schema.clone(), None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let file_data = Bytes::from(buf);
+
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
+        let metadata = ArrowReaderMetadata::load(&file_data, options).unwrap();
+
+        for (name, granularity) in GRANULARITIES {
+            group.bench_function(BenchmarkId::new(name, strings), |b| {
+                b.iter(|| {
+                    let builder = ParquetPushDecoderBuilder::new_with_metadata(metadata.clone())
+                        .with_batch_size(8192)
+                        .with_request_granularity(granularity);
+                    black_box(decode_file(builder, &file_data))
+                })
+            });
+        }
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_1buf,
     bench_nbuf,
     bench_prefetch,
-    bench_scan_plan
+    bench_scan_plan,
+    bench_decode,
+    bench_decode_large_batches
 );
 criterion_main!(benches);

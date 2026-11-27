@@ -11,6 +11,7 @@ use crate::file::metadata::page_index::RowGroupPageIndex;
 use crate::file::metadata::{ParquetMetaData, RowGroupMetaData};
 use crate::file::page_index::offset_index::PageLocation;
 use crate::file::reader::{ChunkReader, Length, SerializedPageReader};
+use crate::util::push_buffers::SharedPushBuffers;
 use bytes::{Buf, Bytes};
 use std::ops::Range;
 use std::sync::Arc;
@@ -230,17 +231,18 @@ impl<'a> ColumnFetch<'a> {
         };
         // `scan_ranges` returns the ranges of the selected pages in page
         // order. Map them back to page indexes.
-        let fetched = selection.scan_ranges(locations);
-        let mut fetched = fetched.iter().peekable();
-        let pages = locations
+        // Page offsets increase, so a binary search from the previous page
+        // finds each page. A scan of all pages would cost `O(pages)` for a
+        // selection of a few rows.
+        let mut from = 0;
+        let pages = selection
+            .scan_ranges(locations)
             .iter()
-            .enumerate()
-            .filter(|(_, location)| {
-                fetched
-                    .next_if(|range| range.start == location.offset as u64)
-                    .is_some()
+            .map(|range| {
+                from += locations[from..]
+                    .partition_point(|location| (location.offset as u64) < range.start);
+                from
             })
-            .map(|(idx, _)| idx)
             .collect();
         Self::Pages {
             dictionary: dictionary_range(chunk.start, locations),
@@ -350,6 +352,17 @@ pub(crate) enum ColumnChunkData {
     },
     /// Full column chunk and the offset within the original file
     Dense { offset: usize, data: Bytes },
+    /// Bytes in the [`PushBuffers`] of the push decoder. The decoder pushes
+    /// more pages while the reader uses them, so the reader can continue
+    /// across [`DecodeResult::NeedsData`].
+    ///
+    /// [`PushBuffers`]: crate::util::push_buffers::PushBuffers
+    /// [`DecodeResult::NeedsData`]: crate::DecodeResult::NeedsData
+    Shared {
+        /// Length of the full column chunk
+        length: usize,
+        buffers: SharedPushBuffers,
+    },
 }
 
 impl ColumnChunkData {
@@ -370,6 +383,14 @@ impl ColumnChunkData {
                 let start = start as usize - *offset;
                 Ok(data.slice(start..))
             }
+            ColumnChunkData::Shared { buffers, .. } => {
+                buffers.lock().unwrap().get_from(start).ok_or_else(|| {
+                    general_err!(
+                        "Internal Error: no data at offset {start} in shared column chunk data. \
+                         The push decoder did not request the page before the reader needed it."
+                    )
+                })
+            }
         }
     }
 }
@@ -380,6 +401,7 @@ impl Length for ColumnChunkData {
         match &self {
             ColumnChunkData::Sparse { length, .. } => *length as u64,
             ColumnChunkData::Dense { data, .. } => data.len() as u64,
+            ColumnChunkData::Shared { length, .. } => *length as u64,
         }
     }
 }
@@ -434,5 +456,24 @@ mod tests {
         );
         let err = dense.get_bytes(105, 6).unwrap_err().to_string();
         assert!(err.contains("has 5 bytes, expected 6"), "{err}");
+
+        let buffers = SharedPushBuffers::default();
+        buffers
+            .lock()
+            .unwrap()
+            .push_range(200..204, Bytes::from_static(b"abcd"))
+            .unwrap();
+        let shared = ColumnChunkData::Shared {
+            length: 10,
+            buffers,
+        };
+        assert_eq!(
+            shared.get_bytes(200, 4).unwrap(),
+            Bytes::from_static(b"abcd")
+        );
+        let err = shared.get_bytes(200, 5).unwrap_err().to_string();
+        assert!(err.contains("has 4 bytes, expected 5"), "{err}");
+        let err = shared.get_bytes(204, 1).unwrap_err().to_string();
+        assert!(err.contains("no data at offset 204"), "{err}");
     }
 }

@@ -32,7 +32,7 @@ pub(super) struct FilterInfo {
 ///
 /// Note this is basically the same as CacheOptionsBuilder
 /// but it owns the ProjectionMask and RowGroupCache
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct CacheInfo {
     /// The columns to cache in the predicate cache.
     /// Normally these are the columns that filters may look at such that

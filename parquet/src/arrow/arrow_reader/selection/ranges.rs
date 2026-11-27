@@ -48,6 +48,10 @@ pub(super) fn scan_ranges_from_mask(
 }
 
 /// Byte ranges of the data pages containing at least one selected row.
+///
+/// The cost is `O(log pages)` for each skip and `O(pages)` for each selected
+/// run in the pages that it covers. Thus, a selection of a few rows of a
+/// large column chunk does not visit all pages.
 #[inline]
 pub(super) fn scan_ranges_from_selectors<I>(
     selectors: I,
@@ -57,40 +61,44 @@ where
     I: IntoIterator<Item = RowSelector>,
 {
     let mut ranges: Vec<Range<u64>> = vec![];
+    if page_locations.is_empty() {
+        return ranges;
+    }
+    // The first row that the selectors did not cover yet
     let mut row_offset = 0;
-
-    let mut pages = page_locations.iter().peekable();
-    let mut selectors = selectors.into_iter();
-    let mut current_selector = selectors.next();
-    let mut current_page = pages.next();
-
+    // The page that holds `row_offset`
+    let mut page_idx = 0;
     let mut current_page_included = false;
 
-    while let Some((selector, page)) = current_selector.as_mut().zip(current_page) {
-        if !(selector.skip || current_page_included) {
-            let start = page.offset as u64;
-            let end = start + page.compressed_page_size as u64;
-            ranges.push(start..end);
-            current_page_included = true;
-        }
-
-        if let Some(next_page) = pages.peek() {
-            if row_offset + selector.row_count > next_page.first_row_index as usize {
-                let remaining_in_page = next_page.first_row_index as usize - row_offset;
-                selector.row_count -= remaining_in_page;
-                row_offset += remaining_in_page;
-                current_page = pages.next();
+    for selector in selectors {
+        let end = row_offset + selector.row_count;
+        if selector.skip {
+            // Go to the page that holds the first row after the skip
+            let after = page_locations[page_idx..]
+                .partition_point(|page| page.first_row_index as usize <= end);
+            if after > 1 {
+                page_idx += after - 1;
                 current_page_included = false;
-            } else {
-                if row_offset + selector.row_count == next_page.first_row_index as usize {
-                    current_page = pages.next();
+            }
+            row_offset = end;
+            continue;
+        }
+        // Include each page that holds a row of this run
+        while row_offset < end {
+            let page = &page_locations[page_idx];
+            if !current_page_included {
+                let start = page.offset as u64;
+                ranges.push(start..start + page.compressed_page_size as u64);
+                current_page_included = true;
+            }
+            match page_locations.get(page_idx + 1) {
+                Some(next_page) if next_page.first_row_index as usize <= end => {
+                    row_offset = next_page.first_row_index as usize;
+                    page_idx += 1;
                     current_page_included = false;
                 }
-                row_offset += selector.row_count;
-                current_selector = selectors.next();
+                _ => row_offset = end,
             }
-        } else {
-            current_selector = selectors.next()
         }
     }
 
@@ -138,6 +146,69 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The scan that visits every page, as a reference.
+    fn scan_all_pages(selectors: &[RowSelector], pages: &[PageLocation]) -> Vec<Range<u64>> {
+        let mut ranges = vec![];
+        let mut row = 0;
+        for selector in selectors {
+            let run = row..row + selector.row_count;
+            row = run.end;
+            if selector.skip || run.is_empty() {
+                continue;
+            }
+            for (idx, page) in pages.iter().enumerate() {
+                let first = page.first_row_index as usize;
+                let end = pages
+                    .get(idx + 1)
+                    .map_or(usize::MAX, |next| next.first_row_index as usize);
+                let range =
+                    page.offset as u64..(page.offset + page.compressed_page_size as i64) as u64;
+                if first < run.end && run.start < end && ranges.last() != Some(&range) {
+                    ranges.push(range);
+                }
+            }
+        }
+        ranges
+    }
+
+    #[test]
+    fn scan_ranges_from_selectors_matches_a_scan_of_all_pages() {
+        use rand::{RngExt, SeedableRng, rngs::StdRng};
+        let mut rng = StdRng::seed_from_u64(7);
+        for _ in 0..5_000 {
+            let mut first_row = 0;
+            let pages: Vec<PageLocation> = (0..rng.random_range(0..12))
+                .map(|idx| {
+                    let page = PageLocation {
+                        offset: 100 * idx,
+                        compressed_page_size: 100,
+                        first_row_index: first_row,
+                    };
+                    first_row += rng.random_range(1..8);
+                    page
+                })
+                .collect();
+            // Runs that are empty, end at a page boundary, cover many pages,
+            // and go past the last page.
+            let mut skip = rng.random_bool(0.5);
+            let selectors: Vec<RowSelector> = (0..rng.random_range(0..10))
+                .map(|_| {
+                    skip = !skip || rng.random_bool(0.1);
+                    let row_count = [0, 1, 2, 3, 7, 20, 60][rng.random_range(0..7)];
+                    match skip {
+                        true => RowSelector::skip(row_count),
+                        false => RowSelector::select(row_count),
+                    }
+                })
+                .collect();
+            assert_eq!(
+                scan_ranges_from_selectors(selectors.iter().copied(), &pages),
+                scan_all_pages(&selectors, &pages),
+                "{selectors:?} {pages:?}"
+            );
+        }
+    }
 
     fn page_locations(starts: impl IntoIterator<Item = usize>) -> Vec<PageLocation> {
         starts

@@ -384,7 +384,8 @@ impl LoadedRowRanges {
         Self(ranges)
     }
 
-    fn end_containing(&self, row: usize) -> Option<usize> {
+    /// The end of the loaded range that holds `row`, if any.
+    pub(crate) fn end_containing(&self, row: usize) -> Option<usize> {
         let idx = self.0.partition_point(|range| range.end <= row);
         self.0
             .get(idx)
