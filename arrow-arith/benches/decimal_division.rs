@@ -48,10 +48,14 @@ fn random_decimal<T: DecimalType>(
         .unwrap()
 }
 
-/// Returns `array` with a fifth of its values null, at random positions
-fn with_random_nulls<T: DecimalType>(array: &PrimitiveArray<T>) -> PrimitiveArray<T> {
+/// Returns `array` with `valid` in `of` of its values valid, at random positions
+fn with_random_nulls<T: DecimalType>(
+    array: &PrimitiveArray<T>,
+    valid: u32,
+    of: u32,
+) -> PrimitiveArray<T> {
     let mut rng = StdRng::seed_from_u64(7);
-    let nulls = NullBuffer::from_iter((0..array.len()).map(|_| rng.random_ratio(4, 5)));
+    let nulls = NullBuffer::from_iter((0..array.len()).map(|_| rng.random_ratio(valid, of)));
     PrimitiveArray::<T>::new(array.values().clone(), Some(nulls))
         .with_data_type(array.data_type().clone())
 }
@@ -103,11 +107,19 @@ fn benchmark_scalar<T: DecimalType>(
             });
 
             if i == 0 {
-                // `try_unary` visits only the valid values when the array has nulls
-                let with_nulls = with_random_nulls(&array);
-                group.bench_function(format!("{id}/mixed_nulls"), |b| {
-                    b.iter(|| hint::black_box(kernel(&with_nulls, &divisor).unwrap()))
-                });
+                // A fifth, half, three quarters, and nine tenths of the values null. `try_unary`
+                // visits only the valid values, which does less work as the share of nulls grows
+                for (nulls, valid, of) in [
+                    ("mixed_nulls", 4, 5),
+                    ("half_nulls", 1, 2),
+                    ("three_quarters_nulls", 1, 4),
+                    ("mostly_nulls", 1, 10),
+                ] {
+                    let with_nulls = with_random_nulls(&array, valid, of);
+                    group.bench_function(format!("{id}/{nulls}"), |b| {
+                        b.iter(|| hint::black_box(kernel(&with_nulls, &divisor).unwrap()))
+                    });
+                }
                 if op == "div" {
                     small = Some((id, array, divisor));
                 }
