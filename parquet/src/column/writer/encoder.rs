@@ -3,12 +3,14 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use bytes::Bytes;
+use std::collections::HashSet;
+use twox_hash::XxHash64;
 
 use crate::basic::{ConvertedType, Encoding, LogicalType, Type};
 use crate::bloom_filter::Sbbf;
 use crate::column::writer::{fallback_encoding, has_dictionary_support, update_max, update_min};
-use crate::data_type::DataType;
 use crate::data_type::private::ParquetValueType;
+use crate::data_type::{AsBytes, DataType};
 use crate::encodings::encoding::{DictEncoder, Encoder, get_encoder_with_properties};
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::{EnabledStatistics, ResolvedColumnProperties, WriterProperties};
@@ -32,6 +34,28 @@ impl ColumnValues for dyn arrow_array::Array {
 impl<T: ParquetValueType> ColumnValues for [T] {
     fn len(&self) -> usize {
         self.len()
+    }
+}
+
+/// Counts the distinct non-null values of a column chunk for
+/// [`WriterProperties::write_row_group_number_distinct_values`]
+///
+/// While the chunk is dictionary encoded its dictionary holds exactly its distinct values, so
+/// only values written without a dictionary are hashed here, after the dictionary's own values
+/// if the encoder fell back from one.
+#[derive(Debug, Default)]
+pub(crate) struct DistinctValues(HashSet<u64>);
+
+impl DistinctValues {
+    pub(crate) fn insert<T: AsBytes + ?Sized>(&mut self, value: &T) {
+        self.0.insert(XxHash64::oneshot(0, value.as_bytes()));
+    }
+
+    /// The distinct count of a chunk whose dictionary, if it still has one, holds
+    /// `dictionary_len` values, or `None` if it has no non-null values
+    pub(crate) fn count(&self, dictionary_len: Option<usize>) -> Option<u64> {
+        let count = dictionary_len.unwrap_or(self.0.len());
+        (count > 0).then_some(count as u64)
     }
 }
 
@@ -198,6 +222,10 @@ pub trait ColumnValueEncoder {
     /// Flush the next data page for this column chunk
     fn flush_data_page(&mut self) -> Result<DataPageValues<Self::T>>;
 
+    /// Returns the number of distinct non-null values written, if counting them is enabled.
+    /// Values written afterwards are not counted.
+    fn flush_distinct_count(&mut self) -> Option<u64>;
+
     /// Flushes bloom filter if enabled and returns it, otherwise returns `None`. Subsequent writes
     /// will *not* be tracked by the bloom filter as it is empty since. This should be called once
     /// near the end of encoding.
@@ -219,6 +247,7 @@ pub struct ColumnValueEncoderImpl<T: DataType> {
     nan_count: Option<u64>,
     bloom_filter: Option<Sbbf>,
     bloom_filter_target_fpp: f64,
+    distinct_values: Option<DistinctValues>,
     variable_length_bytes: Option<i64>,
     geo_stats_accumulator: Option<Box<dyn GeoStatsAccumulator>>,
 }
@@ -261,6 +290,11 @@ impl<T: DataType> ColumnValueEncoderImpl<T> {
                         bloom_filter.insert(value);
                     }
                 }
+                if let Some(distinct_values) = &mut self.distinct_values {
+                    for value in slice {
+                        distinct_values.insert(value);
+                    }
+                }
                 self.encoder.put(slice)
             }
         }
@@ -268,6 +302,14 @@ impl<T: DataType> ColumnValueEncoderImpl<T> {
 }
 
 impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
+    fn flush_distinct_count(&mut self) -> Option<u64> {
+        let dictionary_len = self
+            .dict_encoder
+            .as_ref()
+            .map(|encoder| encoder.num_entries());
+        self.distinct_values.take()?.count(dictionary_len)
+    }
+
     type T = T::T;
 
     type Values = [T::T];
@@ -306,6 +348,10 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
 
         let geo_stats_accumulator = try_new_geo_stats_accumulator(descr);
 
+        let distinct_values = (props.write_row_group_number_distinct_values()
+            && statistics_enabled != EnabledStatistics::None)
+            .then(DistinctValues::default);
+
         Ok(Self {
             encoder,
             dict_encoder,
@@ -314,6 +360,7 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
             statistics_enabled,
             bloom_filter,
             bloom_filter_target_fpp,
+            distinct_values,
             min_value: None,
             max_value: None,
             nan_count: None,
@@ -435,6 +482,11 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
                 if let Some(bloom_filter) = &mut self.bloom_filter {
                     for value in encoder.uniques() {
                         bloom_filter.insert(value);
+                    }
+                }
+                if let Some(distinct_values) = &mut self.distinct_values {
+                    for value in encoder.uniques() {
+                        distinct_values.insert(value);
                     }
                 }
 

@@ -1002,25 +1002,18 @@ impl WriterPropertiesBuilder {
     /// row group column chunk statistics (defaults to `false` via
     /// [`DEFAULT_WRITE_ROW_GROUP_NUMBER_DISTINCT_VALUES`]).
     ///
-    /// When enabled, the [`ArrowWriter`] scans each column's values before encoding
-    /// and stores the number of distinct non-null values in the row group statistics
-    /// footer.
-    ///
-    /// # Compatibility
-    ///
-    /// This setting only takes effect when using [`ArrowWriter`]. The row-based
-    /// [`SerializedFileWriter`] / [`SerializedRowGroupWriter`] APIs do not populate
-    /// `num_distinct_values` and will ignore this flag.
+    /// When enabled, the writer counts the distinct non-null values each column chunk
+    /// stores and writes the count into the chunk's statistics. Values are compared by
+    /// their encoded bytes, so for example `0.0` and `-0.0` are distinct.
     ///
     /// # Performance
     ///
-    /// Computing the distinct count requires hashing every non-null value in the column.
-    /// For large row groups or columns with many values this adds significant overhead.
-    /// Benchmark your workload before enabling this globally.
-    ///
-    /// [`ArrowWriter`]: crate::arrow::ArrowWriter
-    /// [`SerializedFileWriter`]: crate::file::writer::SerializedFileWriter
-    /// [`SerializedRowGroupWriter`]: crate::file::writer::SerializedRowGroupWriter
+    /// While a column chunk is dictionary encoded its dictionary already holds its
+    /// distinct values, so counting them adds no work. Values written without a
+    /// dictionary, because dictionary encoding is disabled or the chunk fell back to
+    /// another encoding once its dictionary page reached
+    /// [`Self::set_dictionary_page_size_limit`], are hashed one by one, which adds
+    /// significant overhead. Benchmark your workload before enabling this globally.
     pub fn set_write_row_group_number_distinct_values(mut self, value: bool) -> Self {
         self.write_row_group_number_distinct_values = value;
         self
