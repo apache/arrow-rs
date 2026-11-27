@@ -230,17 +230,18 @@ impl<'a> ColumnFetch<'a> {
         };
         // `scan_ranges` returns the ranges of the selected pages in page
         // order. Map them back to page indexes.
-        let fetched = selection.scan_ranges(locations);
-        let mut fetched = fetched.iter().peekable();
-        let pages = locations
+        // Page offsets increase, so a binary search from the previous page
+        // finds each page. A scan of all pages would cost `O(pages)` for a
+        // selection of a few rows.
+        let mut from = 0;
+        let pages = selection
+            .scan_ranges(locations)
             .iter()
-            .enumerate()
-            .filter(|(_, location)| {
-                fetched
-                    .next_if(|range| range.start == location.offset as u64)
-                    .is_some()
+            .map(|range| {
+                from += locations[from..]
+                    .partition_point(|location| (location.offset as u64) < range.start);
+                from
             })
-            .map(|(idx, _)| idx)
             .collect();
         Self::Pages {
             dictionary: dictionary_range(chunk.start, locations),
