@@ -333,11 +333,18 @@ fn test_cast_between_durations_and_numerics() {
     // numerics to durations
     let array = Int32Array::from(vec![Some(i32::MAX), Some(802034103), Some(10241096), None]);
     let b = cast(&array, &DataType::Duration(TimeUnit::Second)).unwrap();
-    let c = b.as_any().downcast_ref::<DurationSecondArray>().unwrap();
+    let c = b.as_primitive::<DurationSecondType>();
     assert_eq!(i32::MAX as i64, c.value(0));
     assert_eq!(802034103, c.value(1));
     assert_eq!(10241096, c.value(2));
     assert!(c.is_null(3));
+
+    let array = Int64Array::from(vec![Some(i64::MAX), Some(802034103), None]);
+    let b = cast(&array, &DataType::Duration(TimeUnit::Second)).unwrap();
+    let c = b.as_primitive::<DurationSecondType>();
+    assert_eq!(i64::MAX, c.value(0));
+    assert_eq!(802034103, c.value(1));
+    assert!(c.is_null(2));
 }
 
 /// helper function to test casting from duration to interval
