@@ -24,6 +24,7 @@ use arrow_schema::ArrowError;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 
 mod decimal;
+mod equivalence;
 mod list;
 mod metadata;
 mod object;

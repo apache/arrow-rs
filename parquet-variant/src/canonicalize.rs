@@ -15,29 +15,24 @@ use std::collections::BTreeSet;
 
 use arrow_schema::ArrowError;
 
-use crate::{
-    ObjectFieldBuilder, Variant, VariantBuilder, VariantBuilderExt, VariantDecimal4,
-    VariantDecimal8, VariantDecimal16, VariantObject,
-};
+use crate::{ObjectFieldBuilder, Variant, VariantBuilder, VariantBuilderExt};
 
 impl Variant<'_, '_> {
     /// Returns the canonical `(metadata, value)` encoding of this variant.
     ///
     /// Two variants that are logically equal canonicalize to identical bytes, so the result can be
-    /// hashed or compared byte-wise. The rules follow the canonical form proposed for Apache Spark
+    /// hashed or compared byte-wise. The rules follow the canonical form used by Apache Spark
     /// ([apache/spark#59669]):
     ///
     /// * The metadata dictionary holds only the field names the value references, sorted by their
     ///   unsigned UTF-8 bytes, with the smallest offset width that fits.
     /// * Object fields are written in dictionary (key) order; list elements keep their order.
-    /// * Integers use the smallest of `INT8`, `INT16`, `INT32`, `INT64` that holds the value.
-    /// * Decimals drop trailing zeros. An integral decimal that fits an `i64` becomes an integer;
-    ///   otherwise the smallest of `DECIMAL4`, `DECIMAL8`, `DECIMAL16` that holds it is used.
-    /// * `FLOAT` and `DOUBLE` keep their type; `-0.0` becomes `0.0` and every NaN becomes the
-    ///   same bit pattern ([`f32::NAN`] / [`f64::NAN`]).
-    /// * Strings use the short-string encoding when they fit (at most 63 bytes).
-    /// * Booleans, `NULL`, dates, times, timestamps, binary and UUID have one encoding already and
-    ///   are copied as-is.
+    /// * Each primitive uses the representative encoding of its equivalence class in the Variant
+    ///   spec, see [`Variant::canonical_primitive`]: the narrowest integer, decimals with trailing
+    ///   zeros dropped (promoted to an integer when integral and within `i64`), `-0.0` as `0.0`
+    ///   and one NaN pattern per float type, short strings when they fit, microsecond timestamps
+    ///   unless sub-microsecond digits are present. Null, booleans, dates, times, binary and UUID
+    ///   have one encoding already.
     ///
     /// Canonicalizing an already canonical value returns the same bytes.
     ///
@@ -47,7 +42,9 @@ impl Variant<'_, '_> {
     ///
     /// # Errors
     ///
-    /// Returns an error if the variant is malformed or an object holds the same field name twice.
+    /// Returns an error if the variant does not pass [full validation], for example when an object
+    /// holds unsorted or repeated field names. Validation is cached, so this is free for values
+    /// created with [`Variant::try_new`].
     ///
     /// # Example
     /// ```
@@ -68,182 +65,69 @@ impl Variant<'_, '_> {
     /// ```
     ///
     /// [apache/spark#59669]: https://github.com/apache/spark/pull/59669
+    /// [full validation]: Variant#Validation
     pub fn canonicalize(&self) -> Result<(Vec<u8>, Vec<u8>), ArrowError> {
+        // Full validation guarantees that object fields are unique and iterate in key order.
+        let value = self.clone().with_full_validation()?;
         let mut field_names = BTreeSet::new();
-        collect_field_names(self, &mut field_names)?;
+        collect_field_names(&value, &mut field_names);
         // `str` orders by bytes, so the set is already in unsigned UTF-8 order.
         let mut builder = VariantBuilder::new().with_field_names(field_names.iter().copied());
-        append_canonical(&mut builder, self)?;
+        append_canonical(&mut builder, &value)?;
         builder.try_finish()
     }
 }
 
-/// Collects every field name referenced anywhere inside `value`.
-fn collect_field_names<'m>(
-    value: &Variant<'m, '_>,
-    names: &mut BTreeSet<&'m str>,
-) -> Result<(), ArrowError> {
+/// Collects every field name referenced anywhere inside the validated `value`.
+fn collect_field_names<'m>(value: &Variant<'m, '_>, names: &mut BTreeSet<&'m str>) {
     match value {
         Variant::Object(object) => {
-            for field in object.iter_try() {
-                let (name, value) = field?;
+            for (name, value) in object.iter() {
                 names.insert(name);
-                collect_field_names(&value, names)?;
+                collect_field_names(&value, names);
             }
         }
         Variant::List(list) => {
-            for item in list.iter_try() {
-                collect_field_names(&item?, names)?;
+            for item in list.iter() {
+                collect_field_names(&item, names);
             }
         }
         _ => {}
     }
-    Ok(())
 }
 
-/// Appends `value` to `builder` in canonical form. The builder's metadata dictionary must already
-/// hold every field name `value` references, in sorted order.
+/// Appends the validated `value` to `builder` in canonical form. The builder's metadata dictionary
+/// must already hold every field name `value` references, in sorted order.
 fn append_canonical<B: VariantBuilderExt>(
     builder: &mut B,
     value: &Variant<'_, '_>,
 ) -> Result<(), ArrowError> {
     match value {
-        // Narrowed to the smallest width that fits
-        Variant::Int8(v) => builder.append_value(canonical_int(*v as i64)),
-        Variant::Int16(v) => builder.append_value(canonical_int(*v as i64)),
-        Variant::Int32(v) => builder.append_value(canonical_int(*v as i64)),
-        Variant::Int64(v) => builder.append_value(canonical_int(*v)),
-        Variant::Decimal4(d) => {
-            builder.append_value(canonical_decimal(d.integer() as i128, d.scale())?)
+        Variant::Object(object) => {
+            let mut object_builder = builder.try_new_object()?;
+            for (name, value) in object.iter() {
+                let mut field_builder = ObjectFieldBuilder::new(name, &mut object_builder);
+                append_canonical(&mut field_builder, &value)?;
+            }
+            object_builder.finish();
         }
-        Variant::Decimal8(d) => {
-            builder.append_value(canonical_decimal(d.integer() as i128, d.scale())?)
-        }
-        Variant::Decimal16(d) => builder.append_value(canonical_decimal(d.integer(), d.scale())?),
-        Variant::Float(v) => builder.append_value(canonical_f32(*v)),
-        Variant::Double(v) => builder.append_value(canonical_f64(*v)),
-        // `From<&str>` picks the short-string encoding whenever the string fits
-        Variant::String(s) => builder.append_value(*s),
-        Variant::ShortString(s) => builder.append_value(s.as_str()),
-        Variant::Object(object) => append_canonical_object(builder, object)?,
         Variant::List(list) => {
             let mut list_builder = builder.try_new_list()?;
-            for item in list.iter_try() {
-                append_canonical(&mut list_builder, &item?)?;
+            for item in list.iter() {
+                append_canonical(&mut list_builder, &item)?;
             }
             list_builder.finish();
         }
-        // One encoding in the spec: copy unchanged. Listed one by one so that a type added to the
-        // spec has to be classified here.
-        Variant::Null => builder.append_value(Variant::Null),
-        Variant::BooleanTrue => builder.append_value(Variant::BooleanTrue),
-        Variant::BooleanFalse => builder.append_value(Variant::BooleanFalse),
-        Variant::Date(v) => builder.append_value(*v),
-        Variant::Time(v) => builder.append_value(*v),
-        Variant::TimestampMicros(v) => builder.append_value(Variant::TimestampMicros(*v)),
-        Variant::TimestampNtzMicros(v) => builder.append_value(Variant::TimestampNtzMicros(*v)),
-        Variant::TimestampNanos(v) => builder.append_value(Variant::TimestampNanos(*v)),
-        Variant::TimestampNtzNanos(v) => builder.append_value(Variant::TimestampNtzNanos(*v)),
-        Variant::Binary(v) => builder.append_value(*v),
-        Variant::Uuid(v) => builder.append_value(*v),
+        primitive => builder.append_value(primitive.canonical_primitive()),
     }
     Ok(())
-}
-
-/// Appends an object with its fields sorted by key, each value in canonical form.
-fn append_canonical_object<'m, 'v, B: VariantBuilderExt>(
-    builder: &mut B,
-    object: &VariantObject<'m, 'v>,
-) -> Result<(), ArrowError> {
-    let mut fields: Vec<(&'m str, Variant<'m, 'v>)> =
-        object.iter_try().collect::<Result<_, _>>()?;
-    fields.sort_by(|(a, _), (b, _)| a.as_bytes().cmp(b.as_bytes()));
-    if let Some(pair) = fields.windows(2).find(|pair| pair[0].0 == pair[1].0) {
-        return Err(ArrowError::InvalidArgumentError(format!(
-            "Cannot canonicalize object with duplicate field name '{}'",
-            pair[0].0
-        )));
-    }
-
-    let mut object_builder = builder.try_new_object()?;
-    for (name, value) in &fields {
-        let mut field_builder = ObjectFieldBuilder::new(name, &mut object_builder);
-        append_canonical(&mut field_builder, value)?;
-    }
-    object_builder.finish();
-    Ok(())
-}
-
-/// The smallest integer type that holds `value`.
-fn canonical_int(value: i64) -> Variant<'static, 'static> {
-    if let Ok(v) = i8::try_from(value) {
-        Variant::Int8(v)
-    } else if let Ok(v) = i16::try_from(value) {
-        Variant::Int16(v)
-    } else if let Ok(v) = i32::try_from(value) {
-        Variant::Int32(v)
-    } else {
-        Variant::Int64(value)
-    }
-}
-
-/// Drops trailing zeros, promotes integral values that fit an `i64` to an integer, and otherwise
-/// picks the smallest decimal type that holds the value.
-fn canonical_decimal(
-    mut integer: i128,
-    mut scale: u8,
-) -> Result<Variant<'static, 'static>, ArrowError> {
-    while scale > 0 && integer % 10 == 0 {
-        integer /= 10;
-        scale -= 1;
-    }
-    if scale == 0
-        && let Ok(v) = i64::try_from(integer)
-    {
-        return Ok(canonical_int(v));
-    }
-    if let Ok(v) = i32::try_from(integer)
-        && let Ok(d) = VariantDecimal4::try_new(v, scale)
-    {
-        return Ok(Variant::Decimal4(d));
-    }
-    if let Ok(v) = i64::try_from(integer)
-        && let Ok(d) = VariantDecimal8::try_new(v, scale)
-    {
-        return Ok(Variant::Decimal8(d));
-    }
-    Ok(Variant::Decimal16(VariantDecimal16::try_new(
-        integer, scale,
-    )?))
-}
-
-/// Maps `-0.0` to `0.0` and every NaN to [`f32::NAN`].
-fn canonical_f32(value: f32) -> f32 {
-    if value == 0.0 {
-        0.0
-    } else if value.is_nan() {
-        f32::NAN
-    } else {
-        value
-    }
-}
-
-/// Maps `-0.0` to `0.0` and every NaN to [`f64::NAN`].
-fn canonical_f64(value: f64) -> f64 {
-    if value == 0.0 {
-        0.0
-    } else if value.is_nan() {
-        f64::NAN
-    } else {
-        value
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::VariantMetadata;
-    use chrono::{NaiveDate, NaiveTime};
+    use crate::{VariantDecimal4, VariantDecimal8, VariantDecimal16, VariantMetadata};
+    use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
     use uuid::Uuid;
 
     fn canonical_of<'m, 'v>(value: impl Into<Variant<'m, 'v>>) -> (Vec<u8>, Vec<u8>) {
@@ -372,6 +256,38 @@ mod tests {
                 .unwrap();
             assert_eq!(canonical, (metadata, encoded));
         }
+    }
+
+    #[test]
+    fn timestamps_use_micros_unless_sub_microsecond() {
+        let whole_micros = DateTime::<Utc>::from_timestamp(1_700_000_000, 123_000).unwrap();
+        let sub_micro = DateTime::<Utc>::from_timestamp(1_700_000_000, 123_456).unwrap();
+
+        // The same instant stored as nanos canonicalizes to the micros encoding
+        assert_canonical_eq(
+            Variant::TimestampNanos(whole_micros),
+            Variant::TimestampMicros(whole_micros),
+        );
+        assert_eq!(
+            canonical_of(Variant::TimestampNanos(whole_micros)),
+            canonical_of(Variant::TimestampMicros(whole_micros))
+        );
+        // Sub-microsecond digits keep the nanos encoding
+        assert_canonical_eq(
+            Variant::TimestampNanos(sub_micro),
+            Variant::TimestampNanos(sub_micro),
+        );
+
+        let ntz = whole_micros.naive_utc();
+        assert_canonical_eq(
+            Variant::TimestampNtzNanos(ntz),
+            Variant::TimestampNtzMicros(ntz),
+        );
+        let ntz_sub = sub_micro.naive_utc();
+        assert_canonical_eq(
+            Variant::TimestampNtzNanos(ntz_sub),
+            Variant::TimestampNtzNanos(ntz_sub),
+        );
     }
 
     #[test]
@@ -526,8 +442,9 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_field_names_are_rejected() {
-        // Hand-built object {"a": 1, "a": 2}: both fields point at dictionary id 0
+    fn malformed_objects_are_rejected_by_validation() {
+        // Hand-built object {"a": 1, "a": 2}: both fields point at dictionary id 0. Full
+        // validation rejects the repeated name before any rebuilding happens.
         let metadata = [
             0x01, // header: version 1, unsorted, offset_size 1
             1,    // one dictionary entry
@@ -545,7 +462,7 @@ mod tests {
         let variant = Variant::new(&metadata, &value);
         let err = variant.canonicalize().unwrap_err();
         assert!(
-            err.to_string().contains("duplicate field name 'a'"),
+            err.to_string().contains("field names not sorted"),
             "unexpected error: {err}"
         );
     }
