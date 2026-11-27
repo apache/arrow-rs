@@ -59,6 +59,7 @@ license = "Apache-2.0"
 keywords = ["arrow"]
 include = [
     "benches/*.rs",
+    "build.rs",
     "src/**/*.rs",
     "Cargo.toml",
     "LICENSE.txt",

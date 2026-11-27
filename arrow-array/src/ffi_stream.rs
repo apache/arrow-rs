@@ -83,7 +83,9 @@ const ENOSYS: i32 = 38;
 /// ABI-compatible struct for `ArrayStream` from C Stream Interface
 /// See <https://arrow.apache.org/docs/format/CStreamInterface.html#structure-definitions>
 /// This was created by bindgen
+// With `-Zsanitizer=cfi`, use the C struct name so callbacks match the C and C++ type ids.
 #[repr(C)]
+#[cfg_attr(arrow_cfi, cfi_encoding = "16ArrowArrayStream")]
 #[derive(Debug)]
 pub struct FFI_ArrowArrayStream {
     // Fields are intentionally private so safety guarantees can be upheld via

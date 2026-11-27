@@ -16,6 +16,7 @@
     html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
 )]
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![cfg_attr(arrow_cfi, feature(cfi_encoding))]
 #![warn(missing_docs)]
 
 mod datatype;
