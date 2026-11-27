@@ -48,7 +48,14 @@ mod parser;
 mod push_decoder;
 pub(crate) mod reader;
 pub(crate) mod thrift;
+#[cfg(feature = "experimental")]
+#[doc(hidden)]
+pub mod thrift_fields;
+#[cfg(not(feature = "experimental"))]
+pub(crate) mod thrift_fields;
 mod writer;
+
+use thrift_fields::{key_value as kv, page_encoding_stats as pes, sorting_column as sc};
 
 use crate::basic::{
     BoundaryOrder, ColumnOrder, Compression, CompressionCodec, Encoding, EncodingMask, PageType,
@@ -518,8 +525,8 @@ impl From<ParquetMetaData> for ParquetMetaDataBuilder {
 thrift_struct!(
 /// A key-value pair for [`FileMetaData`].
 pub struct KeyValue {
-  1: required string key
-  2: optional string value
+  kv::KEY: required string key
+  kv::VALUE: optional string value
 }
 );
 
@@ -539,9 +546,9 @@ impl KeyValue {
 thrift_struct!(
 /// PageEncodingStats for a column chunk and data page.
 pub struct PageEncodingStats {
-  1: required PageType page_type;
-  2: required Encoding encoding;
-  3: required i32 count;
+  pes::PAGE_TYPE: required PageType page_type;
+  pes::ENCODING: required Encoding encoding;
+  pes::COUNT: required i32 count;
 }
 );
 
@@ -686,14 +693,14 @@ thrift_struct!(
 /// Sort order within a RowGroup of a leaf column
 pub struct SortingColumn {
   /// The ordinal position of the column (in this row group)
-  1: required i32 column_idx
+  sc::COLUMN_IDX: required i32 column_idx
 
   /// If true, indicates this column is sorted in descending order.
-  2: required bool descending
+  sc::DESCENDING: required bool descending
 
   /// If true, nulls will come before non-null values, otherwise,
   /// nulls go at the end. */
-  3: required bool nulls_first
+  sc::NULLS_FIRST: required bool nulls_first
 }
 );
 

@@ -4,6 +4,10 @@
 
 //! Encryption support for Thrift serialization
 
+use crate::file::metadata::thrift_fields::{
+    aes_gcm_ctr_v1 as ctr, aes_gcm_v1 as gcm, encryption_algorithm as algorithm,
+    file_crypto_meta_data as crypto,
+};
 use crate::{
     encryption::decrypt::{FileDecryptionProperties, FileDecryptor},
     errors::{ParquetError, Result},
@@ -29,14 +33,14 @@ use std::sync::Arc;
 thrift_struct!(
 pub(crate) struct AesGcmV1 {
   /// AAD prefix
-  1: optional binary aad_prefix
+  gcm::AAD_PREFIX: optional binary aad_prefix
 
   /// Unique file identifier part of AAD suffix
-  2: optional binary aad_file_unique
+  gcm::AAD_FILE_UNIQUE: optional binary aad_file_unique
 
   /// In files encrypted with AAD prefix without storing it,
   /// readers must supply the prefix
-  3: optional bool supply_aad_prefix
+  gcm::SUPPLY_AAD_PREFIX: optional bool supply_aad_prefix
 }
 );
 
@@ -51,14 +55,14 @@ impl HeapSize for AesGcmV1 {
 thrift_struct!(
 pub(crate) struct AesGcmCtrV1 {
   /// AAD prefix
-  1: optional binary aad_prefix
+  ctr::AAD_PREFIX: optional binary aad_prefix
 
   /// Unique file identifier part of AAD suffix
-  2: optional binary aad_file_unique
+  ctr::AAD_FILE_UNIQUE: optional binary aad_file_unique
 
   /// In files encrypted with AAD prefix without storing it,
   /// readers must supply the prefix
-  3: optional bool supply_aad_prefix
+  ctr::SUPPLY_AAD_PREFIX: optional bool supply_aad_prefix
 }
 );
 
@@ -72,8 +76,8 @@ impl HeapSize for AesGcmCtrV1 {
 
 thrift_union!(
 union EncryptionAlgorithm {
-  1: (AesGcmV1) AES_GCM_V1
-  2: (AesGcmCtrV1) AES_GCM_CTR_V1
+  algorithm::AES_GCM_V1: (AesGcmV1) AES_GCM_V1
+  algorithm::AES_GCM_CTR_V1: (AesGcmCtrV1) AES_GCM_CTR_V1
 }
 );
 
@@ -92,11 +96,11 @@ pub(crate) struct FileCryptoMetaData<'a> {
   /// Encryption algorithm. This field is only used for files
   /// with encrypted footer. Files with plaintext footer store algorithm id
   /// inside footer (FileMetaData structure).
-  1: required EncryptionAlgorithm encryption_algorithm
+  crypto::ENCRYPTION_ALGORITHM: required EncryptionAlgorithm encryption_algorithm
 
   /// Retrieval metadata of key used for encryption of footer,
   /// and (possibly) columns.
-  2: optional binary<'a> key_metadata
+  crypto::KEY_METADATA: optional binary<'a> key_metadata
 }
 );
 

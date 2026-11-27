@@ -10,6 +10,12 @@
 //! [Parquet metadata API]: crate::file::metadata
 //! [Parquet specification]: https://github.com/apache/parquet-format/tree/master
 
+use crate::file::metadata::thrift_fields::{
+    bounding_box as bb, column_chunk as cc, column_meta_data as cm, data_page_header as dp,
+    data_page_header_v2 as dp2, dictionary_page_header as dh, file_meta_data as fm,
+    geospatial_statistics as gs, page_header as ph, row_group as rg, schema_element as se,
+    size_statistics as ss, statistics as st,
+};
 use std::io::Write;
 use std::sync::Arc;
 
@@ -52,83 +58,83 @@ use crate::{
 thrift_struct!(
 pub(crate) struct SchemaElement<'a> {
   /// Data type for this field. Not set if the current element is a non-leaf node
-  1: optional Type r#type;
+  se::TYPE: optional Type r#type;
   /// If type is FIXED_LEN_BYTE_ARRAY, this is the byte length of the values.
   /// Otherwise, if specified, this is the maximum bit length to store any of the values.
   /// (e.g. a low cardinality INT col could have this set to 3).  Note that this is
   /// in the schema, and therefore fixed for the entire file.
-  2: optional i32 type_length;
+  se::TYPE_LENGTH: optional i32 type_length;
   /// Repetition of the field. The root of the schema does not have a repetition_type.
   /// All other nodes must have one.
-  3: optional Repetition repetition_type;
+  se::REPETITION_TYPE: optional Repetition repetition_type;
   /// Name of the field in the schema
-  4: required string<'a> name;
+  se::NAME: required string<'a> name;
   /// Nested fields. Since thrift does not support nested fields,
   /// the nesting is flattened to a single list by a depth-first traversal.
   /// The children count is used to construct the nested relationship.
   /// This field is not set when the element is a primitive type.
-  5: optional i32 num_children;
+  se::NUM_CHILDREN: optional i32 num_children;
   /// DEPRECATED: When the schema is the result of a conversion from another model.
   /// Used to record the original type to help with cross conversion.
   ///
   /// This is superseded by logical_type.
-  6: optional ConvertedType converted_type;
+  se::CONVERTED_TYPE: optional ConvertedType converted_type;
   /// DEPRECATED: Used when this column contains decimal data.
   /// See the DECIMAL converted type for more details.
   ///
   /// This is superseded by using the DecimalType annotation in logical_type.
-  7: optional i32 scale
-  8: optional i32 precision
+  se::SCALE: optional i32 scale
+  se::PRECISION: optional i32 precision
   /// When the original schema supports field ids, this will save the
   /// original field id in the parquet schema
-  9: optional i32 field_id;
+  se::FIELD_ID: optional i32 field_id;
   /// The logical type of this SchemaElement
   ///
   /// LogicalType replaces ConvertedType, but ConvertedType is still required
   /// for some logical types to ensure forward-compatibility in format v1.
-  10: optional LogicalType logical_type
+  se::LOGICAL_TYPE: optional LogicalType logical_type
 }
 );
 
 thrift_struct!(
 struct Statistics<'a> {
-   1: optional binary<'a> max;
-   2: optional binary<'a> min;
-   3: optional i64 null_count;
-   4: optional i64 distinct_count;
-   5: optional binary<'a> max_value;
-   6: optional binary<'a> min_value;
-   7: optional bool is_max_value_exact;
-   8: optional bool is_min_value_exact;
-   9: optional i64 nan_count;
+   st::MAX: optional binary<'a> max;
+   st::MIN: optional binary<'a> min;
+   st::NULL_COUNT: optional i64 null_count;
+   st::DISTINCT_COUNT: optional i64 distinct_count;
+   st::MAX_VALUE: optional binary<'a> max_value;
+   st::MIN_VALUE: optional binary<'a> min_value;
+   st::IS_MAX_VALUE_EXACT: optional bool is_max_value_exact;
+   st::IS_MIN_VALUE_EXACT: optional bool is_min_value_exact;
+   st::NAN_COUNT: optional i64 nan_count;
 }
 );
 
 thrift_struct!(
 struct BoundingBox {
-  1: required double xmin;
-  2: required double xmax;
-  3: required double ymin;
-  4: required double ymax;
-  5: optional double zmin;
-  6: optional double zmax;
-  7: optional double mmin;
-  8: optional double mmax;
+  bb::XMIN: required double xmin;
+  bb::XMAX: required double xmax;
+  bb::YMIN: required double ymin;
+  bb::YMAX: required double ymax;
+  bb::ZMIN: optional double zmin;
+  bb::ZMAX: optional double zmax;
+  bb::MMIN: optional double mmin;
+  bb::MMAX: optional double mmax;
 }
 );
 
 thrift_struct!(
 struct GeospatialStatistics {
-  1: optional BoundingBox bbox;
-  2: optional list<i32> geospatial_types;
+  gs::BBOX: optional BoundingBox bbox;
+  gs::GEOSPATIAL_TYPES: optional list<i32> geospatial_types;
 }
 );
 
 thrift_struct!(
 struct SizeStatistics {
-   1: optional i64 unencoded_byte_array_data_bytes;
-   2: optional list<i64> repetition_level_histogram;
-   3: optional list<i64> definition_level_histogram;
+   ss::UNENCODED_BYTE_ARRAY_DATA_BYTES: optional i64 unencoded_byte_array_data_bytes;
+   ss::REPETITION_LEVEL_HISTOGRAM: optional list<i64> repetition_level_histogram;
+   ss::DEFINITION_LEVEL_HISTOGRAM: optional list<i64> definition_level_histogram;
 }
 );
 
@@ -453,49 +459,49 @@ fn read_column_metadata(
             break;
         }
         match field_ident.id {
-            // 1: type is never used, we can use the column descriptor
-            1 => {
+            // Type is never used; we can use the column descriptor.
+            cm::TYPE => {
                 // read for error handling
                 Type::read_thrift(&mut *prot)?;
                 seen_mask |= COL_META_TYPE;
             }
-            2 => {
+            cm::ENCODINGS => {
                 column.encodings = EncodingMask::read_thrift(&mut *prot)?;
                 seen_mask |= COL_META_ENCODINGS;
             }
-            // 3: path_in_schema is redundant
-            4 => {
+            // The path is redundant; column key/value metadata is not exposed.
+            cm::PATH_IN_SCHEMA | cm::KEY_VALUE_METADATA => prot.skip(field_ident.field_type)?,
+            cm::CODEC => {
                 column.compression = CompressionCodec::read_thrift(&mut *prot)?;
                 seen_mask |= COL_META_CODEC;
             }
-            5 => {
+            cm::NUM_VALUES => {
                 column.num_values = i64::read_thrift(&mut *prot)?;
                 seen_mask |= COL_META_NUM_VALUES;
             }
-            6 => {
+            cm::TOTAL_UNCOMPRESSED_SIZE => {
                 column.total_uncompressed_size = i64::read_thrift(&mut *prot)?;
                 seen_mask |= COL_META_TOTAL_UNCOMP_SZ;
             }
-            7 => {
+            cm::TOTAL_COMPRESSED_SIZE => {
                 column.total_compressed_size = i64::read_thrift(&mut *prot)?;
                 seen_mask |= COL_META_TOTAL_COMP_SZ;
             }
-            // 8: we don't expose this key value
-            9 => {
+            cm::DATA_PAGE_OFFSET => {
                 column.data_page_offset = i64::read_thrift(&mut *prot)?;
                 seen_mask |= COL_META_DATA_PAGE_OFFSET;
             }
-            10 => {
+            cm::INDEX_PAGE_OFFSET => {
                 column.index_page_offset = Some(i64::read_thrift(&mut *prot)?);
             }
-            11 => {
+            cm::DICTIONARY_PAGE_OFFSET => {
                 column.dictionary_page_offset = Some(i64::read_thrift(&mut *prot)?);
             }
-            12 if !skip_col_stats => {
+            cm::STATISTICS if !skip_col_stats => {
                 column.statistics =
                     convert_stats(column_descr, Some(Statistics::read_thrift(&mut *prot)?))?;
             }
-            13 if !skip_pes => {
+            cm::ENCODING_STATS if !skip_pes => {
                 if pes_mask {
                     let val = read_encoding_stats_as_mask(&mut *prot)?;
                     column.encoding_stats = Some(ParquetPageEncodingStats::Mask(val));
@@ -505,13 +511,13 @@ fn read_column_metadata(
                     column.encoding_stats = Some(ParquetPageEncodingStats::Full(val));
                 }
             }
-            14 => {
+            cm::BLOOM_FILTER_OFFSET => {
                 column.bloom_filter_offset = Some(i64::read_thrift(&mut *prot)?);
             }
-            15 => {
+            cm::BLOOM_FILTER_LENGTH => {
                 column.bloom_filter_length = Some(i32::read_thrift(&mut *prot)?);
             }
-            16 if !skip_size_stats => {
+            cm::SIZE_STATISTICS if !skip_size_stats => {
                 let val = SizeStatistics::read_thrift(&mut *prot)?;
                 column.unencoded_byte_array_data_bytes = val.unencoded_byte_array_data_bytes;
                 column.repetition_level_histogram =
@@ -519,7 +525,7 @@ fn read_column_metadata(
                 column.definition_level_histogram =
                     val.definition_level_histogram.map(LevelHistogram::from);
             }
-            17 => {
+            cm::GEOSPATIAL_STATISTICS => {
                 let val = GeospatialStatistics::read_thrift(&mut *prot)?;
                 column.geo_statistics = Some(Box::new(convert_geo_stats(val)));
             }
@@ -568,35 +574,35 @@ fn read_column_chunk(
             break;
         }
         match field_ident.id {
-            1 => {
+            cc::FILE_PATH => {
                 col.file_path = Some(String::read_thrift(&mut *prot)?);
             }
-            2 => {
+            cc::FILE_OFFSET => {
                 col.file_offset = i64::read_thrift(&mut *prot)?;
                 has_file_offset = true;
             }
-            3 => {
+            cc::META_DATA => {
                 col_meta_mask = read_column_metadata(&mut *prot, &mut col, col_index, options)?;
             }
-            4 => {
+            cc::OFFSET_INDEX_OFFSET => {
                 col.offset_index_offset = Some(i64::read_thrift(&mut *prot)?);
             }
-            5 => {
+            cc::OFFSET_INDEX_LENGTH => {
                 col.offset_index_length = Some(i32::read_thrift(&mut *prot)?);
             }
-            6 => {
+            cc::COLUMN_INDEX_OFFSET => {
                 col.column_index_offset = Some(i64::read_thrift(&mut *prot)?);
             }
-            7 => {
+            cc::COLUMN_INDEX_LENGTH => {
                 col.column_index_length = Some(i32::read_thrift(&mut *prot)?);
             }
             #[cfg(feature = "encryption")]
-            8 => {
+            cc::CRYPTO_METADATA => {
                 let val = ColumnCryptoMetaData::read_thrift(&mut *prot)?;
                 col.column_crypto_metadata = Some(Box::new(val));
             }
             #[cfg(feature = "encryption")]
-            9 => {
+            cc::ENCRYPTED_COLUMN_METADATA => {
                 col.encrypted_column_metadata = Some(<&[u8]>::read_thrift(&mut *prot)?.to_vec());
             }
             _ => {
@@ -655,7 +661,7 @@ fn read_row_group(
             break;
         }
         match field_ident.id {
-            1 => {
+            rg::COLUMNS => {
                 let list_ident = prot.read_list_begin()?;
                 // check for list of struct
                 validate_list_type(ElementType::Struct, &list_ident)?;
@@ -672,23 +678,23 @@ fn read_row_group(
                 }
                 mask |= RG_COLUMNS;
             }
-            2 => {
+            rg::TOTAL_BYTE_SIZE => {
                 row_group.total_byte_size = i64::read_thrift(&mut *prot)?;
                 mask |= RG_TOT_BYTE_SIZE;
             }
-            3 => {
+            rg::NUM_ROWS => {
                 row_group.num_rows = i64::read_thrift(&mut *prot)?;
                 mask |= RG_NUM_ROWS;
             }
-            4 => {
+            rg::SORTING_COLUMNS => {
                 let val = read_thrift_vec::<SortingColumn, ThriftSliceInputProtocol>(&mut *prot)?;
                 row_group.sorting_columns = Some(val);
             }
-            5 => {
+            rg::FILE_OFFSET => {
                 row_group.file_offset = Some(i64::read_thrift(&mut *prot)?);
             }
             // 6: we don't expose total_compressed_size
-            7 => {
+            rg::ORDINAL => {
                 row_group.ordinal = Some(i16::read_thrift(&mut *prot)? as i32);
             }
             _ => {
@@ -725,7 +731,7 @@ pub(crate) fn parquet_schema_from_bytes(buf: &[u8]) -> Result<SchemaDescriptor> 
             break;
         }
         match field_ident.id {
-            2 => {
+            fm::SCHEMA => {
                 // read schema and convert to SchemaDescriptor for use when reading row groups
                 let val = read_thrift_vec::<SchemaElement, ThriftSliceInputProtocol>(&mut prot)?;
                 let val = parquet_schema_from_array(val)?;
@@ -789,10 +795,10 @@ pub(crate) fn file_metadata_and_row_groups_from_bytes(
             break;
         }
         match field_ident.id {
-            1 => {
+            fm::VERSION => {
                 version = Some(i32::read_thrift(&mut prot)?);
             }
-            2 => {
+            fm::SCHEMA => {
                 // If schema was passed in, skip parsing it
                 if schema_descr.is_some() {
                     prot.skip(field_ident.field_type)?;
@@ -804,10 +810,10 @@ pub(crate) fn file_metadata_and_row_groups_from_bytes(
                     schema_descr = Some(Arc::new(SchemaDescriptor::new(val)));
                 }
             }
-            3 => {
+            fm::NUM_ROWS => {
                 num_rows = Some(i64::read_thrift(&mut prot)?);
             }
-            4 => {
+            fm::ROW_GROUPS => {
                 if schema_descr.is_none() {
                     return Err(general_err!("Required field schema is missing"));
                 }
@@ -826,24 +832,24 @@ pub(crate) fn file_metadata_and_row_groups_from_bytes(
                 ensure_row_group_ordinals(&mut rg_vec)?;
                 row_groups = Some(rg_vec);
             }
-            5 => {
+            fm::KEY_VALUE_METADATA => {
                 let val = read_thrift_vec::<KeyValue, ThriftSliceInputProtocol>(&mut prot)?;
                 key_value_metadata = Some(val);
             }
-            6 => {
+            fm::CREATED_BY => {
                 created_by = Some(<&str>::read_thrift(&mut prot)?);
             }
-            7 => {
+            fm::COLUMN_ORDERS => {
                 let val = read_thrift_vec::<ColumnOrder, ThriftSliceInputProtocol>(&mut prot)?;
                 column_orders = Some(val);
             }
             #[cfg(feature = "encryption")]
-            8 => {
+            fm::ENCRYPTION_ALGORITHM => {
                 let val = EncryptionAlgorithm::read_thrift(&mut prot)?;
                 encryption_algorithm = Some(val);
             }
             #[cfg(feature = "encryption")]
-            9 => {
+            fm::FOOTER_SIGNING_KEY_METADATA => {
                 footer_signing_key_metadata = Some(<&[u8]>::read_thrift(&mut prot)?);
             }
             _ => {
@@ -956,13 +962,13 @@ thrift_struct!(
 thrift_struct!(
 pub(crate) struct DictionaryPageHeader {
   /// Number of values in the dictionary
-  1: required i32 num_values;
+  dh::NUM_VALUES: required i32 num_values;
 
   /// Encoding using this dictionary page
-  2: required Encoding encoding
+  dh::ENCODING: required Encoding encoding
 
   /// If true, the entries in the dictionary are sorted in ascending order
-  3: optional bool is_sorted;
+  dh::IS_SORTED: optional bool is_sorted;
 }
 );
 
@@ -975,25 +981,25 @@ thrift_struct!(
 ///
 /// [`Read`]: crate::parquet_thrift::ThriftReadInputProtocol
 pub(crate) struct PageStatistics {
-   1: optional binary max;
-   2: optional binary min;
-   3: optional i64 null_count;
-   4: optional i64 distinct_count;
-   5: optional binary max_value;
-   6: optional binary min_value;
-   7: optional bool is_max_value_exact;
-   8: optional bool is_min_value_exact;
-   9: optional i64 nan_count;
+   st::MAX: optional binary max;
+   st::MIN: optional binary min;
+   st::NULL_COUNT: optional i64 null_count;
+   st::DISTINCT_COUNT: optional i64 distinct_count;
+   st::MAX_VALUE: optional binary max_value;
+   st::MIN_VALUE: optional binary min_value;
+   st::IS_MAX_VALUE_EXACT: optional bool is_max_value_exact;
+   st::IS_MIN_VALUE_EXACT: optional bool is_min_value_exact;
+   st::NAN_COUNT: optional i64 nan_count;
 }
 );
 
 thrift_struct!(
 pub(crate) struct DataPageHeader {
-  1: required i32 num_values
-  2: required Encoding encoding
-  3: required Encoding definition_level_encoding;
-  4: required Encoding repetition_level_encoding;
-  5: optional PageStatistics statistics;
+  dp::NUM_VALUES: required i32 num_values
+  dp::ENCODING: required Encoding encoding
+  dp::DEFINITION_LEVEL_ENCODING: required Encoding definition_level_encoding;
+  dp::REPETITION_LEVEL_ENCODING: required Encoding repetition_level_encoding;
+  dp::STATISTICS: optional PageStatistics statistics;
 }
 );
 
@@ -1015,19 +1021,19 @@ impl DataPageHeader {
                 break;
             }
             match field_ident.id {
-                1 => {
+                dp::NUM_VALUES => {
                     let val = i32::read_thrift(&mut *prot)?;
                     num_values = Some(val);
                 }
-                2 => {
+                dp::ENCODING => {
                     let val = Encoding::read_thrift(&mut *prot)?;
                     encoding = Some(val);
                 }
-                3 => {
+                dp::DEFINITION_LEVEL_ENCODING => {
                     let val = Encoding::read_thrift(&mut *prot)?;
                     definition_level_encoding = Some(val);
                 }
-                4 => {
+                dp::REPETITION_LEVEL_ENCODING => {
                     let val = Encoding::read_thrift(&mut *prot)?;
                     repetition_level_encoding = Some(val);
                 }
@@ -1065,14 +1071,14 @@ impl DataPageHeader {
 
 thrift_struct!(
 pub(crate) struct DataPageHeaderV2 {
-  1: required i32 num_values
-  2: required i32 num_nulls
-  3: required i32 num_rows
-  4: required Encoding encoding
-  5: required i32 definition_levels_byte_length;
-  6: required i32 repetition_levels_byte_length;
-  7: optional bool is_compressed = true;
-  8: optional PageStatistics statistics;
+  dp2::NUM_VALUES: required i32 num_values
+  dp2::NUM_NULLS: required i32 num_nulls
+  dp2::NUM_ROWS: required i32 num_rows
+  dp2::ENCODING: required Encoding encoding
+  dp2::DEFINITION_LEVELS_BYTE_LENGTH: required i32 definition_levels_byte_length;
+  dp2::REPETITION_LEVELS_BYTE_LENGTH: required i32 repetition_levels_byte_length;
+  dp2::IS_COMPRESSED: optional bool is_compressed = true;
+  dp2::STATISTICS: optional PageStatistics statistics;
 }
 );
 
@@ -1097,31 +1103,31 @@ impl DataPageHeaderV2 {
                 break;
             }
             match field_ident.id {
-                1 => {
+                dp2::NUM_VALUES => {
                     let val = i32::read_thrift(&mut *prot)?;
                     num_values = Some(val);
                 }
-                2 => {
+                dp2::NUM_NULLS => {
                     let val = i32::read_thrift(&mut *prot)?;
                     num_nulls = Some(val);
                 }
-                3 => {
+                dp2::NUM_ROWS => {
                     let val = i32::read_thrift(&mut *prot)?;
                     num_rows = Some(val);
                 }
-                4 => {
+                dp2::ENCODING => {
                     let val = Encoding::read_thrift(&mut *prot)?;
                     encoding = Some(val);
                 }
-                5 => {
+                dp2::DEFINITION_LEVELS_BYTE_LENGTH => {
                     let val = i32::read_thrift(&mut *prot)?;
                     definition_levels_byte_length = Some(val);
                 }
-                6 => {
+                dp2::REPETITION_LEVELS_BYTE_LENGTH => {
                     let val = i32::read_thrift(&mut *prot)?;
                     repetition_levels_byte_length = Some(val);
                 }
-                7 => {
+                dp2::IS_COMPRESSED => {
                     is_compressed = Some(field_ident.bool_val()?);
                 }
                 _ => {
@@ -1168,22 +1174,22 @@ impl DataPageHeaderV2 {
 thrift_struct!(
 pub(crate) struct PageHeader {
   /// the type of the page: indicates which of the *_header fields is set
-  1: required PageType r#type
+  ph::TYPE: required PageType r#type
 
   /// Uncompressed page size in bytes (not including this header)
-  2: required i32 uncompressed_page_size
+  ph::UNCOMPRESSED_PAGE_SIZE: required i32 uncompressed_page_size
 
   /// Compressed (and potentially encrypted) page size in bytes, not including this header
-  3: required i32 compressed_page_size
+  ph::COMPRESSED_PAGE_SIZE: required i32 compressed_page_size
 
   /// The 32-bit CRC checksum for the page, to be calculated as follows:
-  4: optional i32 crc
+  ph::CRC: optional i32 crc
 
   // Headers for page specific data.  One only will be set.
-  5: optional DataPageHeader data_page_header;
-  6: optional IndexPageHeader index_page_header;
-  7: optional DictionaryPageHeader dictionary_page_header;
-  8: optional DataPageHeaderV2 data_page_header_v2;
+  ph::DATA_PAGE_HEADER: optional DataPageHeader data_page_header;
+  ph::INDEX_PAGE_HEADER: optional IndexPageHeader index_page_header;
+  ph::DICTIONARY_PAGE_HEADER: optional DictionaryPageHeader dictionary_page_header;
+  ph::DATA_PAGE_HEADER_V2: optional DataPageHeaderV2 data_page_header_v2;
 }
 );
 
@@ -1210,35 +1216,35 @@ impl PageHeader {
                 break;
             }
             match field_ident.id {
-                1 => {
+                ph::TYPE => {
                     let val = PageType::read_thrift(&mut *prot)?;
                     type_ = Some(val);
                 }
-                2 => {
+                ph::UNCOMPRESSED_PAGE_SIZE => {
                     let val = i32::read_thrift(&mut *prot)?;
                     uncompressed_page_size = Some(val);
                 }
-                3 => {
+                ph::COMPRESSED_PAGE_SIZE => {
                     let val = i32::read_thrift(&mut *prot)?;
                     compressed_page_size = Some(val);
                 }
-                4 => {
+                ph::CRC => {
                     let val = i32::read_thrift(&mut *prot)?;
                     crc = Some(val);
                 }
-                5 => {
+                ph::DATA_PAGE_HEADER => {
                     let val = DataPageHeader::read_thrift_without_stats(&mut *prot)?;
                     data_page_header = Some(val);
                 }
-                6 => {
+                ph::INDEX_PAGE_HEADER => {
                     let val = IndexPageHeader::read_thrift(&mut *prot)?;
                     index_page_header = Some(val);
                 }
-                7 => {
+                ph::DICTIONARY_PAGE_HEADER => {
                     let val = DictionaryPageHeader::read_thrift(&mut *prot)?;
                     dictionary_page_header = Some(val);
                 }
-                8 => {
+                ph::DATA_PAGE_HEADER_V2 => {
                     let val = DataPageHeaderV2::read_thrift_without_stats(&mut *prot)?;
                     data_page_header_v2 = Some(val);
                 }
@@ -1316,50 +1322,80 @@ pub(super) fn serialize_column_meta_data<W: Write>(
 ) -> Result<()> {
     use crate::file::statistics::page_stats_to_thrift;
 
-    column_chunk.column_type().write_thrift_field(w, 1, 0)?;
+    column_chunk
+        .column_type()
+        .write_thrift_field(w, cm::TYPE, 0)?;
     column_chunk
         .encodings()
         .collect::<Vec<_>>()
-        .write_thrift_field(w, 2, 1)?;
+        .write_thrift_field(w, cm::ENCODINGS, cm::TYPE)?;
     if w.write_path_in_schema() {
         let path = column_chunk.column_descr.path().parts();
         let path: Vec<&str> = path.iter().map(|v| v.as_str()).collect();
-        path.write_thrift_field(w, 3, 2)?;
-        column_chunk.compression.write_thrift_field(w, 4, 3)?;
+        path.write_thrift_field(w, cm::PATH_IN_SCHEMA, cm::ENCODINGS)?;
+        column_chunk
+            .compression
+            .write_thrift_field(w, cm::CODEC, cm::PATH_IN_SCHEMA)?;
     } else {
-        column_chunk.compression.write_thrift_field(w, 4, 2)?;
+        column_chunk
+            .compression
+            .write_thrift_field(w, cm::CODEC, cm::ENCODINGS)?;
     }
 
-    column_chunk.num_values.write_thrift_field(w, 5, 4)?;
     column_chunk
-        .total_uncompressed_size
-        .write_thrift_field(w, 6, 5)?;
-    column_chunk
-        .total_compressed_size
-        .write_thrift_field(w, 7, 6)?;
+        .num_values
+        .write_thrift_field(w, cm::NUM_VALUES, cm::CODEC)?;
+    column_chunk.total_uncompressed_size.write_thrift_field(
+        w,
+        cm::TOTAL_UNCOMPRESSED_SIZE,
+        cm::NUM_VALUES,
+    )?;
+    column_chunk.total_compressed_size.write_thrift_field(
+        w,
+        cm::TOTAL_COMPRESSED_SIZE,
+        cm::TOTAL_UNCOMPRESSED_SIZE,
+    )?;
     // no key_value_metadata here
-    let mut last_field_id = column_chunk.data_page_offset.write_thrift_field(w, 9, 7)?;
+    let mut last_field_id = column_chunk.data_page_offset.write_thrift_field(
+        w,
+        cm::DATA_PAGE_OFFSET,
+        cm::TOTAL_COMPRESSED_SIZE,
+    )?;
     if let Some(index_page_offset) = column_chunk.index_page_offset {
-        last_field_id = index_page_offset.write_thrift_field(w, 10, last_field_id)?;
+        last_field_id =
+            index_page_offset.write_thrift_field(w, cm::INDEX_PAGE_OFFSET, last_field_id)?;
     }
     if let Some(dictionary_page_offset) = column_chunk.dictionary_page_offset {
-        last_field_id = dictionary_page_offset.write_thrift_field(w, 11, last_field_id)?;
+        last_field_id = dictionary_page_offset.write_thrift_field(
+            w,
+            cm::DICTIONARY_PAGE_OFFSET,
+            last_field_id,
+        )?;
     }
 
     if should_write_column_stats(column_chunk) {
         // PageStatistics is the same as thrift Statistics, but writable
         let stats = page_stats_to_thrift(column_chunk.statistics());
         if let Some(stats) = stats {
-            last_field_id = stats.write_thrift_field(w, 12, last_field_id)?;
+            last_field_id = stats.write_thrift_field(w, cm::STATISTICS, last_field_id)?;
         }
         if let Some(page_encoding_stats) = column_chunk.page_encoding_stats() {
-            last_field_id = page_encoding_stats.write_thrift_field(w, 13, last_field_id)?;
+            last_field_id =
+                page_encoding_stats.write_thrift_field(w, cm::ENCODING_STATS, last_field_id)?;
         }
         if let Some(bloom_filter_offset) = column_chunk.bloom_filter_offset {
-            last_field_id = bloom_filter_offset.write_thrift_field(w, 14, last_field_id)?;
+            last_field_id = bloom_filter_offset.write_thrift_field(
+                w,
+                cm::BLOOM_FILTER_OFFSET,
+                last_field_id,
+            )?;
         }
         if let Some(bloom_filter_length) = column_chunk.bloom_filter_length {
-            last_field_id = bloom_filter_length.write_thrift_field(w, 15, last_field_id)?;
+            last_field_id = bloom_filter_length.write_thrift_field(
+                w,
+                cm::BLOOM_FILTER_LENGTH,
+                last_field_id,
+            )?;
         }
 
         // SizeStatistics
@@ -1384,11 +1420,11 @@ pub(super) fn serialize_column_meta_data<W: Write>(
             None
         };
         if let Some(size_stats) = size_stats {
-            last_field_id = size_stats.write_thrift_field(w, 16, last_field_id)?;
+            last_field_id = size_stats.write_thrift_field(w, cm::SIZE_STATISTICS, last_field_id)?;
         }
 
         if let Some(geo_stats) = column_chunk.geo_statistics() {
-            geo_stats.write_thrift_field(w, 17, last_field_id)?;
+            geo_stats.write_thrift_field(w, cm::GEOSPATIAL_STATISTICS, last_field_id)?;
         }
     }
 
@@ -1426,41 +1462,49 @@ impl WriteThrift for FileMeta<'_> {
 
         self.file_metadata
             .version
-            .write_thrift_field(writer, 1, 0)?;
+            .write_thrift_field(writer, fm::VERSION, 0)?;
 
         // field 2 is schema. do depth-first traversal of tree, converting to SchemaElement and
         // writing along the way.
         let root = self.file_metadata.schema_descr().root_schema_ptr();
         let schema_len = num_nodes(&root)?;
-        writer.write_field_begin(FieldType::List, 2, 1)?;
+        writer.write_field_begin(FieldType::List, fm::SCHEMA, fm::VERSION)?;
         writer.write_list_begin(ElementType::Struct, schema_len)?;
         // recursively write Type nodes as SchemaElements
         write_schema(&root, writer)?;
 
         self.file_metadata
             .num_rows
-            .write_thrift_field(writer, 3, 2)?;
+            .write_thrift_field(writer, fm::NUM_ROWS, fm::SCHEMA)?;
 
         // this will call RowGroupMetaData::write_thrift
-        let mut last_field_id = self.row_groups.write_thrift_field(writer, 4, 3)?;
+        let mut last_field_id =
+            self.row_groups
+                .write_thrift_field(writer, fm::ROW_GROUPS, fm::NUM_ROWS)?;
 
         if let Some(kv_metadata) = self.file_metadata.key_value_metadata() {
-            last_field_id = kv_metadata.write_thrift_field(writer, 5, last_field_id)?;
+            last_field_id =
+                kv_metadata.write_thrift_field(writer, fm::KEY_VALUE_METADATA, last_field_id)?;
         }
         if let Some(created_by) = self.file_metadata.created_by() {
-            last_field_id = created_by.write_thrift_field(writer, 6, last_field_id)?;
+            last_field_id = created_by.write_thrift_field(writer, fm::CREATED_BY, last_field_id)?;
         }
         if let Some(column_orders) = self.file_metadata.column_orders() {
-            last_field_id = column_orders.write_thrift_field(writer, 7, last_field_id)?;
+            last_field_id =
+                column_orders.write_thrift_field(writer, fm::COLUMN_ORDERS, last_field_id)?;
         }
         #[cfg(feature = "encryption")]
         if let Some(algo) = self.file_metadata.encryption_algorithm.as_ref() {
-            last_field_id = algo.write_thrift_field(writer, 8, last_field_id)?;
+            last_field_id =
+                algo.write_thrift_field(writer, fm::ENCRYPTION_ALGORITHM, last_field_id)?;
         }
         #[cfg(feature = "encryption")]
         if let Some(key) = self.file_metadata.footer_signing_key_metadata.as_ref() {
-            key.as_slice()
-                .write_thrift_field(writer, 9, last_field_id)?;
+            key.as_slice().write_thrift_field(
+                writer,
+                fm::FOOTER_SIGNING_KEY_METADATA,
+                last_field_id,
+            )?;
         }
 
         writer.write_struct_end()
@@ -1570,26 +1614,33 @@ impl WriteThrift for RowGroupMetaData {
 
     fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         // this will call ColumnChunkMetaData::write_thrift
-        self.columns.write_thrift_field(writer, 1, 0)?;
-        self.total_byte_size.write_thrift_field(writer, 2, 1)?;
-        let mut last_field_id = self.num_rows.write_thrift_field(writer, 3, 2)?;
+        self.columns.write_thrift_field(writer, rg::COLUMNS, 0)?;
+        self.total_byte_size
+            .write_thrift_field(writer, rg::TOTAL_BYTE_SIZE, rg::COLUMNS)?;
+        let mut last_field_id =
+            self.num_rows
+                .write_thrift_field(writer, rg::NUM_ROWS, rg::TOTAL_BYTE_SIZE)?;
         if let Some(sorting_columns) = self.sorting_columns() {
-            last_field_id = sorting_columns.write_thrift_field(writer, 4, last_field_id)?;
+            last_field_id =
+                sorting_columns.write_thrift_field(writer, rg::SORTING_COLUMNS, last_field_id)?;
         }
         if let Some(file_offset) = self.file_offset() {
-            last_field_id = file_offset.write_thrift_field(writer, 5, last_field_id)?;
+            last_field_id =
+                file_offset.write_thrift_field(writer, rg::FILE_OFFSET, last_field_id)?;
         }
         // this is optional, but we'll always write it
-        last_field_id = self
-            .compressed_size()
-            .write_thrift_field(writer, 6, last_field_id)?;
+        last_field_id = self.compressed_size().write_thrift_field(
+            writer,
+            rg::TOTAL_COMPRESSED_SIZE,
+            last_field_id,
+        )?;
 
         // write ordinal if it will fit in an i16
         if writer.write_row_group_ordinal()
             && let Some(ordinal) = self.ordinal()
             && let Ok(ordinal) = i16::try_from(ordinal)
         {
-            ordinal.write_thrift_field(writer, 7, last_field_id)?;
+            ordinal.write_thrift_field(writer, rg::ORDINAL, last_field_id)?;
         }
         writer.write_struct_end()
     }
@@ -1613,11 +1664,11 @@ impl WriteThrift for ColumnChunkMetaData {
     fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         let mut last_field_id = 0i16;
         if let Some(file_path) = self.file_path() {
-            last_field_id = file_path.write_thrift_field(writer, 1, last_field_id)?;
+            last_field_id = file_path.write_thrift_field(writer, cc::FILE_PATH, last_field_id)?;
         }
-        last_field_id = self
-            .file_offset()
-            .write_thrift_field(writer, 2, last_field_id)?;
+        last_field_id =
+            self.file_offset()
+                .write_thrift_field(writer, cc::FILE_OFFSET, last_field_id)?;
 
         #[cfg(feature = "encryption")]
         let write_meta_data =
@@ -1631,32 +1682,54 @@ impl WriteThrift for ColumnChunkMetaData {
         // meta_data for backward compatibility with readers that expect it, but with
         // sensitive fields (statistics, bloom filter info, etc.) stripped out.
         if write_meta_data {
-            writer.write_field_begin(FieldType::Struct, 3, last_field_id)?;
+            writer.write_field_begin(FieldType::Struct, cc::META_DATA, last_field_id)?;
             serialize_column_meta_data(self, writer)?;
-            last_field_id = 3;
+            last_field_id = cc::META_DATA;
         }
 
         if let Some(offset_idx_off) = self.offset_index_offset() {
-            last_field_id = offset_idx_off.write_thrift_field(writer, 4, last_field_id)?;
+            last_field_id = offset_idx_off.write_thrift_field(
+                writer,
+                cc::OFFSET_INDEX_OFFSET,
+                last_field_id,
+            )?;
         }
         if let Some(offset_idx_len) = self.offset_index_length() {
-            last_field_id = offset_idx_len.write_thrift_field(writer, 5, last_field_id)?;
+            last_field_id = offset_idx_len.write_thrift_field(
+                writer,
+                cc::OFFSET_INDEX_LENGTH,
+                last_field_id,
+            )?;
         }
         if let Some(column_idx_off) = self.column_index_offset() {
-            last_field_id = column_idx_off.write_thrift_field(writer, 6, last_field_id)?;
+            last_field_id = column_idx_off.write_thrift_field(
+                writer,
+                cc::COLUMN_INDEX_OFFSET,
+                last_field_id,
+            )?;
         }
         if let Some(column_idx_len) = self.column_index_length() {
-            last_field_id = column_idx_len.write_thrift_field(writer, 7, last_field_id)?;
+            last_field_id = column_idx_len.write_thrift_field(
+                writer,
+                cc::COLUMN_INDEX_LENGTH,
+                last_field_id,
+            )?;
         }
         #[cfg(feature = "encryption")]
         {
             if let Some(crypto_metadata) = self.crypto_metadata() {
-                last_field_id = crypto_metadata.write_thrift_field(writer, 8, last_field_id)?;
+                last_field_id = crypto_metadata.write_thrift_field(
+                    writer,
+                    cc::CRYPTO_METADATA,
+                    last_field_id,
+                )?;
             }
             if let Some(encrypted_meta) = self.encrypted_column_metadata.as_ref() {
-                encrypted_meta
-                    .as_slice()
-                    .write_thrift_field(writer, 9, last_field_id)?;
+                encrypted_meta.as_slice().write_thrift_field(
+                    writer,
+                    cc::ENCRYPTED_COLUMN_METADATA,
+                    last_field_id,
+                )?;
             }
         }
 
@@ -1674,10 +1747,10 @@ impl WriteThrift for crate::geospatial::statistics::GeospatialStatistics {
     fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         let mut last_field_id = 0i16;
         if let Some(bbox) = self.bounding_box() {
-            last_field_id = bbox.write_thrift_field(writer, 1, last_field_id)?;
+            last_field_id = bbox.write_thrift_field(writer, gs::BBOX, last_field_id)?;
         }
         if let Some(geo_types) = self.geospatial_types() {
-            geo_types.write_thrift_field(writer, 2, last_field_id)?;
+            geo_types.write_thrift_field(writer, gs::GEOSPATIAL_TYPES, last_field_id)?;
         }
 
         writer.write_struct_end()
@@ -1702,22 +1775,26 @@ impl WriteThrift for crate::geospatial::bounding_box::BoundingBox {
     const ELEMENT_TYPE: ElementType = ElementType::Struct;
 
     fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
-        self.get_xmin().write_thrift_field(writer, 1, 0)?;
-        self.get_xmax().write_thrift_field(writer, 2, 1)?;
-        self.get_ymin().write_thrift_field(writer, 3, 2)?;
-        let mut last_field_id = self.get_ymax().write_thrift_field(writer, 4, 3)?;
+        self.get_xmin().write_thrift_field(writer, bb::XMIN, 0)?;
+        self.get_xmax()
+            .write_thrift_field(writer, bb::XMAX, bb::XMIN)?;
+        self.get_ymin()
+            .write_thrift_field(writer, bb::YMIN, bb::XMAX)?;
+        let mut last_field_id = self
+            .get_ymax()
+            .write_thrift_field(writer, bb::YMAX, bb::YMIN)?;
 
         if let Some(zmin) = self.get_zmin() {
-            last_field_id = zmin.write_thrift_field(writer, 5, last_field_id)?;
+            last_field_id = zmin.write_thrift_field(writer, bb::ZMIN, last_field_id)?;
         }
         if let Some(zmax) = self.get_zmax() {
-            last_field_id = zmax.write_thrift_field(writer, 6, last_field_id)?;
+            last_field_id = zmax.write_thrift_field(writer, bb::ZMAX, last_field_id)?;
         }
         if let Some(mmin) = self.get_mmin() {
-            last_field_id = mmin.write_thrift_field(writer, 7, last_field_id)?;
+            last_field_id = mmin.write_thrift_field(writer, bb::MMIN, last_field_id)?;
         }
         if let Some(mmax) = self.get_mmax() {
-            mmax.write_thrift_field(writer, 8, last_field_id)?;
+            mmax.write_thrift_field(writer, bb::MMAX, last_field_id)?;
         }
 
         writer.write_struct_end()

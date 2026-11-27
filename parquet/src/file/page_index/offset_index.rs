@@ -6,6 +6,7 @@
 //!
 //! [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 
+use crate::file::metadata::thrift_fields::{offset_index as oi, page_location as pl};
 use std::io::Write;
 
 use crate::parquet_thrift::{
@@ -21,13 +22,13 @@ thrift_struct!(
 /// Page location information for [`OffsetIndexMetaData`]
 pub struct PageLocation {
   /// Offset of the page in the file
-  1: required i64 offset
+  pl::OFFSET: required i64 offset
   /// Size of the page, including header. Sum of compressed_page_size and header
-  2: required i32 compressed_page_size
+  pl::COMPRESSED_PAGE_SIZE: required i32 compressed_page_size
   /// Index within the RowGroup of the first row of the page. When an
   /// OffsetIndex is present, pages must begin on row boundaries
   /// (repetition_level = 0).
-  3: required i64 first_row_index
+  pl::FIRST_ROW_INDEX: required i64 first_row_index
 }
 );
 
@@ -41,10 +42,10 @@ thrift_struct!(
 /// [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 pub struct OffsetIndexMetaData {
   /// Vector of [`PageLocation`] objects, one per page in the chunk.
-  1: required list<PageLocation> page_locations
+  oi::PAGE_LOCATIONS: required list<PageLocation> page_locations
   /// Optional vector of unencoded page sizes, one per page in the chunk.
   /// Only defined for BYTE_ARRAY columns.
-  2: optional list<i64> unencoded_byte_array_data_bytes
+  oi::UNENCODED_BYTE_ARRAY_DATA_BYTES: optional list<i64> unencoded_byte_array_data_bytes
 }
 );
 
@@ -71,7 +72,7 @@ impl OffsetIndexMetaData {
 
         // read field 1 header, then list header, then vec of PageLocations
         let (field_type, delta) = prot.read_field_header()?;
-        if delta != 1 || field_type != FieldType::List as u8 {
+        if i16::from(delta) != oi::PAGE_LOCATIONS || field_type != FieldType::List as u8 {
             return Err(general_err!("error reading OffsetIndex::page_locations"));
         }
 
@@ -91,7 +92,7 @@ impl OffsetIndexMetaData {
         // read second field...if it's Stop we're done
         let (mut field_type, delta) = prot.read_field_header()?;
         if field_type == FieldType::List as u8 {
-            if delta != 1 {
+            if i16::from(delta) != oi::UNENCODED_BYTE_ARRAY_DATA_BYTES - oi::PAGE_LOCATIONS {
                 return Err(general_err!(
                     "encountered unknown field while reading OffsetIndex"
                 ));
@@ -123,13 +124,15 @@ impl OffsetIndexMetaData {
 fn read_page_location<'a, R: ThriftCompactInputProtocol<'a>>(prot: &mut R) -> Result<PageLocation> {
     // there are 3 fields, all mandatory, so all field deltas should be 1
     let (field_type, delta) = prot.read_field_header()?;
-    if delta != 1 || field_type != FieldType::I64 as u8 {
+    if i16::from(delta) != pl::OFFSET || field_type != FieldType::I64 as u8 {
         return Err(general_err!("error reading PageLocation::offset"));
     }
     let offset = prot.read_i64()?;
 
     let (field_type, delta) = prot.read_field_header()?;
-    if delta != 1 || field_type != FieldType::I32 as u8 {
+    if i16::from(delta) != pl::COMPRESSED_PAGE_SIZE - pl::OFFSET
+        || field_type != FieldType::I32 as u8
+    {
         return Err(general_err!(
             "error reading PageLocation::compressed_page_size"
         ));
@@ -137,7 +140,9 @@ fn read_page_location<'a, R: ThriftCompactInputProtocol<'a>>(prot: &mut R) -> Re
     let compressed_page_size = prot.read_i32()?;
 
     let (field_type, delta) = prot.read_field_header()?;
-    if delta != 1 || field_type != FieldType::I64 as u8 {
+    if i16::from(delta) != pl::FIRST_ROW_INDEX - pl::COMPRESSED_PAGE_SIZE
+        || field_type != FieldType::I64 as u8
+    {
         return Err(general_err!("error reading PageLocation::first_row_index"));
     }
     let first_row_index = prot.read_i64()?;
