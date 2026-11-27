@@ -1,0 +1,87 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+name: Archery peer build
+description: >-
+  Build one language with apache/arrow's integration_arrow_build.sh and cache
+  the result. The build commands are upstream's; this only adds the cache.
+
+inputs:
+  language:
+    description: Archery switch suffix, such as CPP or JAVA
+    required: true
+  source:
+    description: Checkout whose revision identifies the source
+    required: true
+  paths:
+    description: Space-separated absolute paths that hold the build output
+    required: true
+  after-restore:
+    description: Command to run after restoring a cached build
+    default: ''
+  lookup-only:
+    description: Only check that the cache exists
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Identify build inputs
+      id: inputs
+      shell: bash
+      env:
+        SOURCE: ${{ inputs.source }}
+        LANGUAGE: ${{ inputs.language }}
+        # The job's environment variables, which the build scripts read.
+        JOB_ENV: ${{ toJSON(env) }}
+      run: |
+        conda run --no-capture-output bash -euo pipefail <<'BASH'
+        {
+          git -c safe.directory='*' -C "$SOURCE" rev-parse HEAD
+          # apache/arrow holds the build scripts.
+          git -c safe.directory='*' rev-parse HEAD
+          sha256sum rust/.github/actions/archery-peer-build/action.yml
+          printf '%s\n' "$JOB_ENV"
+          conda list --explicit
+          dpkg-query -W
+        } > "$RUNNER_TEMP/archery-$LANGUAGE-inputs"
+        echo "::group::$LANGUAGE cache key inputs"
+        cat "$RUNNER_TEMP/archery-$LANGUAGE-inputs"
+        echo "::endgroup::"
+        echo "key=archery-$LANGUAGE-v1-$(sha256sum "$RUNNER_TEMP/archery-$LANGUAGE-inputs" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+        BASH
+
+    - name: Cache build
+      id: cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+      with:
+        path: ${{ runner.temp }}/archery-${{ inputs.language }}.tar
+        # Exact matches only: never accept an older source or build environment.
+        key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.inputs.outputs.key }}
+        lookup-only: ${{ inputs.lookup-only }}
+
+    - name: Restore build
+      if: steps.cache.outputs.cache-hit == 'true' && inputs.lookup-only != 'true'
+      shell: bash
+      env:
+        LANGUAGE: ${{ inputs.language }}
+        AFTER_RESTORE: ${{ inputs.after-restore }}
+      run: |
+        tar -xPf "$RUNNER_TEMP/archery-$LANGUAGE.tar"
+        conda run --no-capture-output bash -c "${AFTER_RESTORE:-true}"
+
+    - name: Build with upstream's script
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        LANGUAGE: ${{ inputs.language }}
+        OUTPUT_PATHS: ${{ inputs.paths }}
+      run: |
+        # Turn every language off, then turn this one back on.
+        for name in CPP DOTNET GO JAVA JS NANOARROW RUBY RUST; do
+          export "ARCHERY_INTEGRATION_WITH_$name=0"
+        done
+        export "ARCHERY_INTEGRATION_WITH_$LANGUAGE=1"
+        conda run --no-capture-output ci/scripts/integration_arrow_build.sh "$PWD" /build
+        tar --exclude=.git -cPf "$RUNNER_TEMP/archery-$LANGUAGE.tar" $OUTPUT_PATHS

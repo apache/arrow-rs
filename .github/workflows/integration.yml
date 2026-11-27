@@ -29,6 +29,8 @@ jobs:
       ARROW_NANOARROW_PATH: /build/nanoarrow
       ARROW_RUST_EXE_PATH: /build/rust/debug
       BUILD_DOCS_CPP: OFF
+      BUILD_DOCS_JS: OFF
+      GOBIN: /build/go/bin
       ARROW_INTEGRATION_CPP: ON
       ARROW_INTEGRATION_CSHARP: ON
       ARCHERY_INTEGRATION_TARGET_IMPLEMENTATIONS: "rust"
@@ -55,6 +57,14 @@ jobs:
 
       - name: Remove unnecessary preinstalled software
         run: |
+          # Recent Archery builds use about 8 GiB. Keep ample headroom, but
+          # avoid deleting gigabytes of tools when the runner already has space.
+          available_kib=$(df -Pk / | awk 'NR == 2 {print $4}')
+          if (( available_kib >= 32 * 1024 * 1024 )); then
+            echo "At least 32 GiB free; no disk cleanup needed."
+            exit 0
+          fi
+
           echo "=== Cleaning up host disk space ==="
           echo "Disk space before cleanup:"
           df -h /
@@ -140,7 +150,47 @@ jobs:
           df -h /
           echo ""
 
+      - name: Prepare C++ build
+        uses: $/.github/actions/archery-peer-build
+        with:
+          language: CPP
+          source: .
+          paths: /build/cpp
+          # Upstream's C++ build also installs into ARROW_HOME.
+          after-restore: cmake --install /build/cpp && ldconfig
+      - name: Prepare Go build
+        uses: $/.github/actions/archery-peer-build
+        with:
+          language: GO
+          source: go
+          paths: /build/go go/arrow/internal/cdata_integration
+      - name: Prepare Java build
+        uses: $/.github/actions/archery-peer-build
+        with:
+          language: JAVA
+          source: java
+          paths: /build/java
+      - name: Prepare JavaScript build
+        uses: $/.github/actions/archery-peer-build
+        with:
+          language: JS
+          source: js
+          paths: /build/js
+      - name: Prepare nanoarrow build
+        uses: $/.github/actions/archery-peer-build
+        with:
+          language: NANOARROW
+          source: nanoarrow
+          paths: /build/nanoarrow
+
       - name: Build
+        env:
+          # Override build preparation only. The Run step still enables every language.
+          ARCHERY_INTEGRATION_WITH_CPP: "0"
+          ARCHERY_INTEGRATION_WITH_GO: "0"
+          ARCHERY_INTEGRATION_WITH_JAVA: "0"
+          ARCHERY_INTEGRATION_WITH_JS: "0"
+          ARCHERY_INTEGRATION_WITH_NANOARROW: "0"
         run: conda run --no-capture-output ci/scripts/integration_arrow_build.sh $PWD /build
 
       - name: Monitor disk usage - After build
@@ -159,6 +209,111 @@ jobs:
           echo "=== After Tests ==="
           df -h /
           echo ""
+
+  # PR and merge-queue caches cannot warm another branch's cache. Seed main
+  # with the same peer builds, without repeating cross-language tests.
+  archery-peer-cache:
+    if: ${{ inputs.cache-refresh-only }}
+    name: Populate Archery peer caches
+    runs-on: ubuntu-latest
+    container:
+      image: apache/arrow-dev:amd64-conda-integration
+    # Must match the integration job: the cache keys include it.
+    env:
+      ARROW_USE_CCACHE: OFF
+      ARROW_CPP_EXE_PATH: /build/cpp/debug
+      ARROW_NANOARROW_PATH: /build/nanoarrow
+      ARROW_RUST_EXE_PATH: /build/rust/debug
+      BUILD_DOCS_CPP: OFF
+      BUILD_DOCS_JS: OFF
+      GOBIN: /build/go/bin
+      ARROW_INTEGRATION_CPP: ON
+      ARROW_INTEGRATION_CSHARP: ON
+      ARCHERY_INTEGRATION_TARGET_IMPLEMENTATIONS: "rust"
+      ARCHERY_INTEGRATION_WITH_DOTNET: "1"
+      ARCHERY_INTEGRATION_WITH_GO: "1"
+      ARCHERY_INTEGRATION_WITH_JAVA: "1"
+      ARCHERY_INTEGRATION_WITH_JS: "1"
+      ARCHERY_INTEGRATION_WITH_NANOARROW: "1"
+      # https://github.com/apache/arrow/pull/38403/files#r1371281630
+      ARCHERY_INTEGRATION_WITH_RUST: "1"
+      # These are necessary because the github runner overrides $HOME
+      # https://github.com/actions/runner/issues/863
+      RUSTUP_HOME: /root/.rustup
+      CARGO_HOME: /root/.cargo
+    steps:
+      - name: Export conda path
+        run: echo "/opt/conda/envs/arrow/bin" >> $GITHUB_PATH
+      - name: Checkout Arrow
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: apache/arrow
+          persist-credentials: false
+      - name: Checkout Arrow Rust
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          path: rust
+          persist-credentials: false
+      - name: Checkout Arrow Java
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: apache/arrow-java
+          path: java
+          persist-credentials: false
+      - name: Checkout Arrow JavaScript
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: apache/arrow-js
+          path: js
+          persist-credentials: false
+      - name: Checkout Arrow Go
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: apache/arrow-go
+          path: go
+          persist-credentials: false
+      - name: Checkout Arrow nanoarrow
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: apache/arrow-nanoarrow
+          path: nanoarrow
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Prepare C++ build
+        uses: $/.github/actions/archery-peer-build
+        with:
+          language: CPP
+          source: .
+          paths: /build/cpp
+          lookup-only: 'true'
+      - name: Prepare Go build
+        uses: $/.github/actions/archery-peer-build
+        with:
+          language: GO
+          source: go
+          paths: /build/go go/arrow/internal/cdata_integration
+          lookup-only: 'true'
+      - name: Prepare Java build
+        uses: $/.github/actions/archery-peer-build
+        with:
+          language: JAVA
+          source: java
+          paths: /build/java
+          lookup-only: 'true'
+      - name: Prepare JavaScript build
+        uses: $/.github/actions/archery-peer-build
+        with:
+          language: JS
+          source: js
+          paths: /build/js
+          lookup-only: 'true'
+      - name: Prepare nanoarrow build
+        uses: $/.github/actions/archery-peer-build
+        with:
+          language: NANOARROW
+          source: nanoarrow
+          paths: /build/nanoarrow
+          lookup-only: 'true'
 
   # test FFI against the C-Data interface exposed by pyarrow
   pyarrow-integration-test:
