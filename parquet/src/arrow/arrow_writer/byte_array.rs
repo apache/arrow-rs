@@ -27,7 +27,7 @@ use arrow_array::{
     FixedSizeBinaryArray, GenericByteArray, LargeBinaryArray, LargeStringArray, StringArray,
     StringViewArray, TypedDictionaryArray,
 };
-use arrow_buffer::{ArrowNativeType, Buffer};
+use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, Buffer};
 use arrow_schema::DataType;
 use std::sync::{Arc, Weak};
 
@@ -757,6 +757,41 @@ pub struct ByteArrayEncoder {
     bloom_filter_target_fpp: f64,
     geo_stats_accumulator: Option<Box<dyn GeoStatsAccumulator>>,
     is_decimal: bool,
+    folded_values: Option<FoldedValues>,
+}
+
+/// The values of an arrow dictionary already folded into the page's statistics, so later
+/// batches with the same dictionary fold only the values they reference for the first time
+#[derive(Debug)]
+struct FoldedValues {
+    /// The dictionary's values, identified as in [`DictionaryCache`]
+    values: Weak<dyn Array>,
+    folded: BooleanBufferBuilder,
+    unfolded: usize,
+    /// The keys the last call to [`Self::fold`] folded, kept to reuse its allocation
+    newly_folded: Vec<usize>,
+}
+
+impl FoldedValues {
+    fn reset(&mut self, dictionary: &ArrayRef) {
+        self.values = Arc::downgrade(dictionary);
+        self.folded.truncate(0);
+        self.folded.append_n(dictionary.len(), false);
+        self.unfolded = dictionary.len();
+    }
+
+    /// Marks `keys` folded, returning those that were not already in the order they first appear
+    fn fold(&mut self, keys: impl Iterator<Item = usize>) -> &[usize] {
+        self.newly_folded.clear();
+        for key in keys {
+            if !self.folded.get_bit(key) {
+                self.folded.set_bit(key, true);
+                self.newly_folded.push(key);
+            }
+        }
+        self.unfolded -= self.newly_folded.len();
+        &self.newly_folded
+    }
 }
 
 impl ColumnValueEncoder for ByteArrayEncoder {
@@ -798,6 +833,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
             max_value: None,
             geo_stats_accumulator,
             is_decimal,
+            folded_values: None,
         })
     }
 
@@ -1006,6 +1042,9 @@ impl ColumnValueEncoder for ByteArrayEncoder {
     fn flush_data_page(&mut self) -> Result<DataPageValues<ByteArray>> {
         let min_value = self.min_value.take();
         let max_value = self.max_value.take();
+        if let Some(folded_values) = &mut self.folded_values {
+            folded_values.values = Weak::<StringArray>::new();
+        }
 
         match &mut self.dict_encoder {
             Some(encoder) => Ok(encoder.flush_data_page(min_value, max_value)),
@@ -1061,7 +1100,7 @@ where
     &'a V: ArrayAccessor,
     <&'a V as ArrayAccessor>::Item: Copy + Ord + Default + AsRef<[u8]>,
 {
-    update_statistics(values, indices, encoder);
+    update_dictionary_statistics(values, indices, dictionary, encoder);
     encoder
         .dict_encoder
         .as_mut()
@@ -1070,6 +1109,10 @@ where
 }
 
 /// Updates the statistics of `encoder` with the values at `indices`
+///
+/// Not inlined: `encode` is its only caller for each arrow array type, and the per-row loop
+/// compiles to fewer instructions in its own function than inlined there.
+#[inline(never)]
 fn update_statistics<T>(values: T, indices: &[usize], encoder: &mut ByteArrayEncoder)
 where
     T: ArrayAccessor + Copy,
@@ -1079,28 +1122,72 @@ where
         if let Some(accumulator) = encoder.geo_stats_accumulator.as_mut() {
             update_geo_stats_accumulator(accumulator.as_mut(), values, indices);
         } else if let Some((min, max)) = compute_min_max(values, indices, encoder.is_decimal) {
-            // Compare before copying: `write_gather` runs once per
-            // mini-batch, and a byte-budgeted mini-batch of large values can
-            // hold a single value, so an unconditional copy here would
-            // duplicate every value once for `min` and once for `max`.
-            let min = min.as_ref();
-            if encoder
-                .min_value
-                .as_ref()
-                .is_none_or(|m| is_greater(encoder.is_decimal, m.data(), min))
-            {
-                encoder.min_value = Some(min.to_vec().into());
-            }
-
-            let max = max.as_ref();
-            if encoder
-                .max_value
-                .as_ref()
-                .is_none_or(|m| is_greater(encoder.is_decimal, max, m.data()))
-            {
-                encoder.max_value = Some(max.to_vec().into());
-            }
+            update_min_max(encoder, min.as_ref(), max.as_ref());
         }
+    }
+}
+
+/// [`update_statistics`] for the rows of an arrow dictionary at `indices`, folding each
+/// dictionary value once per page rather than once per row that references it
+///
+/// Folding only a value's first row in the page gives the same statistics as folding every
+/// row: the comparisons are strict, so a repeat of a value already folded never replaces it.
+fn update_dictionary_statistics<'a, K, V>(
+    values: TypedDictionaryArray<'a, K, V>,
+    indices: &[usize],
+    dictionary: &ArrayRef,
+    encoder: &mut ByteArrayEncoder,
+) where
+    K: ArrowDictionaryKeyType,
+    V: Sync + Send,
+    &'a V: ArrayAccessor,
+    <&'a V as ArrayAccessor>::Item: Copy + Ord + Default + AsRef<[u8]>,
+{
+    if encoder.statistics_enabled == EnabledStatistics::None {
+        return;
+    }
+
+    let mut folded_values = encoder
+        .folded_values
+        .take()
+        .unwrap_or_else(|| FoldedValues {
+            values: Weak::<StringArray>::new(),
+            folded: BooleanBufferBuilder::new(dictionary.len()),
+            unfolded: 0,
+            newly_folded: Vec::new(),
+        });
+    if !std::ptr::addr_eq(folded_values.values.as_ptr(), Arc::as_ptr(dictionary)) {
+        folded_values.reset(dictionary);
+    }
+
+    if folded_values.unfolded > 0 {
+        let keys = values.keys().values();
+        let newly_folded = folded_values.fold(indices.iter().map(|&idx| keys[idx].as_usize()));
+        update_statistics(values.values(), newly_folded, encoder);
+    }
+    encoder.folded_values = Some(folded_values);
+}
+
+/// Folds the `min` and `max` of a batch into the encoder's statistics
+#[inline(always)]
+fn update_min_max(encoder: &mut ByteArrayEncoder, min: &[u8], max: &[u8]) {
+    // Compare before copying: `write_gather` runs once per mini-batch, and a byte-budgeted
+    // mini-batch of large values can hold a single value, so an unconditional copy here
+    // would duplicate every value once for `min` and once for `max`.
+    if encoder
+        .min_value
+        .as_ref()
+        .is_none_or(|m| is_greater(encoder.is_decimal, m.data(), min))
+    {
+        encoder.min_value = Some(min.to_vec().into());
+    }
+
+    if encoder
+        .max_value
+        .as_ref()
+        .is_none_or(|m| is_greater(encoder.is_decimal, max, m.data()))
+    {
+        encoder.max_value = Some(max.to_vec().into());
     }
 }
 
