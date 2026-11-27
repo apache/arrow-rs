@@ -28,6 +28,23 @@ vulnerability, unless it is **exploitable** and could allow an attacker to
 If that exploitation path is unclear, the issue should likely be reported as a
 bug.
 
+## Resource Exhaustion
+
+Readers should take reasonable precautions to reject clearly malformed input
+before it consumes excessive resources. For example, a Parquet reader should
+reject a value count that exceeds the enclosing page's declared count before
+allocating memory based on it.
+
+Even a valid file can require substantial memory or CPU time to decode. DuckDB
+describes a “Parquet bomb” in which a 42 kB file represents a table that would
+occupy over 4 PB if fully materialized. See [42.parquet – A Zip Bomb for the Big Data Age].
+
+Readers cannot in general guarantee bounded resource use for arbitrary files.
+Applications that read untrusted files should enforce their own memory and
+execution time limits, for example by decoding in a resource-limited process.
+
+[42.parquet – A Zip Bomb for the Big Data Age]: https://duckdb.org/2024/03/26/42-parquet-a-zip-bomb-for-the-big-data-age
+
 ## Rust Safety, Soundness, and Undefined Behavior
 
 Rust has a very [specific definition of unsafe]. When unsafe behavior results
