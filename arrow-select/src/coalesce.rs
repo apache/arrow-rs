@@ -13,7 +13,8 @@ use crate::take::{
     TakeOptions, check_bounds, take, take_arrays_unchecked, take_bits, take_record_batch,
 };
 use arrow_array::types::{
-    BinaryViewType, GenericBinaryType, GenericStringType, StringViewType, UInt32Type,
+    BinaryViewType, GenericBinaryType, GenericStringType, Int16Type, Int32Type, Int64Type,
+    StringViewType, UInt32Type,
 };
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, UInt32Array, downcast_primitive};
 use arrow_buffer::{NullBuffer, NullBufferBuilder};
@@ -31,6 +32,7 @@ mod fixed_size_binary;
 mod generic;
 mod list;
 mod primitive;
+mod run_end;
 
 use boolean::InProgressBooleanArray;
 use byte::InProgressByteArray;
@@ -40,6 +42,7 @@ use fixed_size_binary::InProgressFixedSizeBinaryArray;
 use generic::GenericInProgressArray;
 use list::InProgressListArray;
 use primitive::InProgressPrimitiveArray;
+use run_end::InProgressRunArray;
 
 /// Appends the validity bits selected by `indices` to `nulls`.
 ///
@@ -81,6 +84,7 @@ fn has_sparse_filter_copy(data_type: &DataType) -> bool {
                 | DataType::BinaryView
                 | DataType::List(_)
                 | DataType::LargeList(_)
+                | DataType::RunEndEncoded(_, _)
         )
 }
 
@@ -980,6 +984,12 @@ fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn 
         DataType::List(_) | DataType::LargeList(_) => {
             Box::new(InProgressListArray::new(data_type.clone()))
         }
+        DataType::RunEndEncoded(run_ends, _) => match run_ends.data_type() {
+            DataType::Int16 => Box::new(InProgressRunArray::<Int16Type>::new(data_type.clone())),
+            DataType::Int32 => Box::new(InProgressRunArray::<Int32Type>::new(data_type.clone())),
+            DataType::Int64 => Box::new(InProgressRunArray::<Int64Type>::new(data_type.clone())),
+            _ => unreachable!(),
+        },
         _ => Box::new(GenericInProgressArray::new()),
     }
 }
@@ -1111,8 +1121,8 @@ mod tests {
     use arrow_array::types::{Int32Type, UInt8Type};
     use arrow_array::{
         BinaryViewArray, DictionaryArray, FixedSizeBinaryArray, Int32Array, Int64Array,
-        RecordBatchOptions, StringArray, StringViewArray, TimestampNanosecondArray, UInt8Array,
-        UInt32Array, UInt64Array, make_array, record_batch,
+        RecordBatchOptions, RunArray, StringArray, StringViewArray, TimestampNanosecondArray,
+        UInt8Array, UInt32Array, UInt64Array, make_array, record_batch,
     };
     use arrow_buffer::BooleanBufferBuilder;
     use arrow_schema::{DataType, Field, Schema};
@@ -1437,6 +1447,24 @@ mod tests {
             .with_expected_output_sizes(vec![1024, 1024, 1024, 968])
             .run();
     }
+
+    #[test]
+    fn test_coalesce_run_array_reuses_single_values_range() {
+        let run_ends = Int32Array::from(vec![2, 4]);
+        let run_values = Int32Array::from(vec![10, 20]);
+        let runs = RunArray::<Int32Type>::try_new(&run_ends, &run_values).unwrap();
+        let source_values = runs.values().clone();
+        let batch = RecordBatch::try_from_iter([("runs", Arc::new(runs) as ArrayRef)]).unwrap();
+        let mut coalescer = BatchCoalescer::new(batch.schema(), 8);
+
+        coalescer.push_batch(batch).unwrap();
+        coalescer.finish_buffered_batch().unwrap();
+        let output = coalescer.next_completed_batch().unwrap();
+        let output = output.column(0).as_run::<Int32Type>();
+
+        assert!(Arc::ptr_eq(&source_values, output.values()));
+    }
+
     #[test]
     #[cfg_attr(miri, ignore)] // Takes too long
     fn test_utf8_split() {
@@ -2560,6 +2588,9 @@ mod tests {
 
     /// Return a RecordBatch of 100 rows
     fn multi_column_batch(range: Range<i32>) -> RecordBatch {
+        let run_ends = Int32Array::from_iter_values(1..=range.len() as i32);
+        let run_values = Int32Array::from_iter(range.clone().map(|x| (x % 5 > 0).then_some(x)));
+        let run_array = RunArray::<Int32Type>::try_new(&run_ends, &run_values).unwrap();
         let int64_array = Int64Array::from_iter(
             range
                 .clone()
@@ -2591,6 +2622,7 @@ mod tests {
         .with_timezone("America/New_York");
 
         RecordBatch::try_from_iter(vec![
+            ("run", Arc::new(run_array) as ArrayRef),
             ("int64", Arc::new(int64_array) as ArrayRef),
             ("stringview", Arc::new(string_view_array) as ArrayRef),
             ("string", Arc::new(string_array) as ArrayRef),
