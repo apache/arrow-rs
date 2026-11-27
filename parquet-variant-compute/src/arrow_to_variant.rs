@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use crate::VariantArray;
 use arrow::array::{
     Array, AsArray, FixedSizeListArray, GenericBinaryArray, GenericListArray, GenericListViewArray,
     GenericStringArray, ListLikeArray, OffsetSizeTrait, PrimitiveArray,
@@ -12,11 +13,11 @@ use arrow::datatypes::{
     DecimalType, RunEndIndexType,
 };
 use arrow::temporal_conversions::{as_date, as_datetime, as_time};
-use arrow_schema::{ArrowError, DataType, TimeUnit};
+use arrow_schema::{ArrowError, DataType, Field, TimeUnit};
 use chrono::{DateTime, TimeZone, Utc};
 use parquet_variant::{
     ObjectFieldBuilder, Variant, VariantBuilderExt, VariantDecimal4, VariantDecimal8,
-    VariantDecimal16, VariantDecimalType,
+    VariantDecimal16, VariantDecimalType, VariantType,
 };
 use std::collections::HashMap;
 
@@ -72,6 +73,7 @@ pub(crate) enum ArrowToVariantRowBuilder<'a> {
     RunEndEncodedInt16(RunEndEncodedArrowToVariantBuilder<'a, datatypes::Int16Type>),
     RunEndEncodedInt32(RunEndEncodedArrowToVariantBuilder<'a, datatypes::Int32Type>),
     RunEndEncodedInt64(RunEndEncodedArrowToVariantBuilder<'a, datatypes::Int64Type>),
+    Variant(VariantArrowToVariantBuilder),
 }
 
 impl ArrowToVariantRowBuilder<'_> {
@@ -129,6 +131,7 @@ impl ArrowToVariantRowBuilder<'_> {
             RunEndEncodedInt16(b) => b.append_row(builder, index),
             RunEndEncodedInt32(b) => b.append_row(builder, index),
             RunEndEncodedInt64(b) => b.append_row(builder, index),
+            Variant(b) => b.append_row(builder, index),
         }
     }
 }
@@ -227,19 +230,22 @@ pub(crate) fn make_arrow_to_variant_row_builder<'a>(
             DataType::Utf8 => Utf8(StringArrowToVariantBuilder::new(array)),
             DataType::LargeUtf8 => LargeUtf8(StringArrowToVariantBuilder::new(array)),
             DataType::Utf8View => Utf8View(StringViewArrowToVariantBuilder::new(array)),
-            DataType::List(_) => List(ListArrowToVariantBuilder::new(array.as_list(), options)?),
-            DataType::LargeList(_) => {
-                LargeList(ListArrowToVariantBuilder::new(array.as_list(), options)?)
+            DataType::List(f) => List(ListArrowToVariantBuilder::new(f, array.as_list(), options)?),
+            DataType::LargeList(f) => {
+                LargeList(ListArrowToVariantBuilder::new(f, array.as_list(), options)?)
             }
-            DataType::ListView(_) => ListView(ListArrowToVariantBuilder::new(
+            DataType::ListView(f) => ListView(ListArrowToVariantBuilder::new(
+                f,
                 array.as_list_view(),
                 options,
             )?),
-            DataType::LargeListView(_) => LargeListView(ListArrowToVariantBuilder::new(
+            DataType::LargeListView(f) => LargeListView(ListArrowToVariantBuilder::new(
+                f,
                 array.as_list_view(),
                 options,
             )?),
-            DataType::FixedSizeList(_, _) => FixedSizeList(ListArrowToVariantBuilder::new(
+            DataType::FixedSizeList(f, _) => FixedSizeList(ListArrowToVariantBuilder::new(
+                f,
                 array.as_fixed_size_list(),
                 options,
             )?),
@@ -271,6 +277,21 @@ pub(crate) fn make_arrow_to_variant_row_builder<'a>(
             },
         };
     Ok(builder)
+}
+
+/// Like [`make_arrow_to_variant_row_builder`], but reads a Variant-annotated child as
+/// Variant values instead of as its storage struct.
+pub(crate) fn make_arrow_to_variant_row_builder_for_field<'a>(
+    field: &'a Field,
+    array: &'a dyn Array,
+    options: &'a CastOptions,
+) -> Result<ArrowToVariantRowBuilder<'a>, ArrowError> {
+    if field.has_valid_extension_type::<VariantType>() {
+        return Ok(ArrowToVariantRowBuilder::Variant(
+            VariantArrowToVariantBuilder::new(array)?,
+        ));
+    }
+    make_arrow_to_variant_row_builder(field.data_type(), array, options)
 }
 
 /// Macro to define (possibly generic) row builders with consistent structure and behavior.
@@ -497,6 +518,33 @@ impl NullArrowToVariantBuilder {
     }
 }
 
+/// Builder for a Variant-annotated child array.
+pub(crate) struct VariantArrowToVariantBuilder {
+    variant_array: VariantArray,
+}
+
+impl VariantArrowToVariantBuilder {
+    pub(crate) fn new(array: &dyn Array) -> Result<Self, ArrowError> {
+        Ok(Self {
+            // `try_value` cannot materialize a struct or list `typed_value`.
+            variant_array: crate::unshred_variant(&VariantArray::try_new(array)?)?,
+        })
+    }
+
+    fn append_row(
+        &self,
+        builder: &mut impl VariantBuilderExt,
+        index: usize,
+    ) -> Result<(), ArrowError> {
+        if self.variant_array.is_null(index) {
+            builder.append_null();
+        } else {
+            builder.append_value(self.variant_array.try_value(index)?);
+        }
+        Ok(())
+    }
+}
+
 /// Generic list builder for ListLikeArray types including List, LargeList, ListView, LargeListView,
 /// and FixedSizeList
 pub(crate) struct ListArrowToVariantBuilder<'a, L: ListLikeArray> {
@@ -505,10 +553,14 @@ pub(crate) struct ListArrowToVariantBuilder<'a, L: ListLikeArray> {
 }
 
 impl<'a, L: ListLikeArray> ListArrowToVariantBuilder<'a, L> {
-    pub(crate) fn new(array: &'a L, options: &'a CastOptions) -> Result<Self, ArrowError> {
+    pub(crate) fn new(
+        values_field: &'a Field,
+        array: &'a L,
+        options: &'a CastOptions,
+    ) -> Result<Self, ArrowError> {
         let values = array.values();
         let values_builder =
-            make_arrow_to_variant_row_builder(values.data_type(), values, options)?;
+            make_arrow_to_variant_row_builder_for_field(values_field, values, options)?;
 
         Ok(Self {
             list_array: array,
@@ -552,17 +604,14 @@ impl<'a> StructArrowToVariantBuilder<'a> {
         let mut field_builders = Vec::new();
 
         // Create a row builder for each field
-        for (field_name, field_array) in struct_array
-            .column_names()
+        for (field, field_array) in struct_array
+            .fields()
             .iter()
             .zip(struct_array.columns().iter())
         {
-            let field_builder = make_arrow_to_variant_row_builder(
-                field_array.data_type(),
-                field_array.as_ref(),
-                options,
-            )?;
-            field_builders.push((*field_name, field_builder));
+            let field_builder =
+                make_arrow_to_variant_row_builder_for_field(field, field_array.as_ref(), options)?;
+            field_builders.push((field.name().as_str(), field_builder));
         }
 
         Ok(Self {
@@ -611,8 +660,9 @@ impl<'a> MapArrowToVariantBuilder<'a> {
 
         // Create recursive builder for values
         let values = map_array.values();
+        let (_, values_field) = map_array.entries_fields();
         let values_builder =
-            make_arrow_to_variant_row_builder(values.data_type(), values.as_ref(), options)?;
+            make_arrow_to_variant_row_builder_for_field(values_field, values.as_ref(), options)?;
 
         Ok(Self {
             map_array,
@@ -666,11 +716,10 @@ impl<'a> UnionArrowToVariantBuilder<'a> {
 
         // Create child builders for each union field
         let mut child_builders = HashMap::new();
-        for (type_id, _) in union_array.fields().iter() {
-            let child_array = union_array.child(type_id);
-            let child_builder = make_arrow_to_variant_row_builder(
-                child_array.data_type(),
-                child_array.as_ref(),
+        for (type_id, child_field) in union_array.fields().iter() {
+            let child_builder = make_arrow_to_variant_row_builder_for_field(
+                child_field,
+                union_array.child(type_id).as_ref(),
                 options,
             )?;
             child_builders.insert(type_id, Box::new(child_builder));
@@ -759,8 +808,11 @@ impl<'a, R: RunEndIndexType> RunEndEncodedArrowToVariantBuilder<'a, R> {
         };
 
         let values = run_array.values();
-        let values_builder =
-            make_arrow_to_variant_row_builder(values.data_type(), values.as_ref(), options)?;
+        let values_builder = make_arrow_to_variant_row_builder_for_field(
+            run_array.values_field(),
+            values.as_ref(),
+            options,
+        )?;
 
         Ok(Self {
             run_array,
