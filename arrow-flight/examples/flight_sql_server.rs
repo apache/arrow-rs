@@ -657,6 +657,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
             prepared_statement_handle: FAKE_HANDLE.into(),
             dataset_schema: schema_bytes,
             parameter_schema: Default::default(), // TODO: parameters
+            is_update: Some(false),
         };
         Ok(res)
     }
@@ -952,6 +953,7 @@ mod tests {
             auth_client(&mut client).await;
 
             let mut stmt = client.prepare("select 1;".to_string(), None).await.unwrap();
+            assert_eq!(stmt.is_update(), Some(false));
 
             let flight_info = stmt.execute().await.unwrap();
 
