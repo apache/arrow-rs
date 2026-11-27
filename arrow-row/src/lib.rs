@@ -156,6 +156,7 @@
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 use std::iter::Map;
+use std::ops::Range;
 use std::slice::Windows;
 use std::sync::Arc;
 
@@ -1101,6 +1102,35 @@ impl RowConverter {
 
         let write_offset = rows.num_rows();
         let lengths = row_lengths(columns, &encoders);
+        if let LengthTracker::Fixed { length, num_rows } = lengths
+            && length > 0
+            && columns.iter().all(|c| encodes_strided(c.as_ref()))
+        {
+            let start = rows.offsets[write_offset];
+            let total = start + num_rows * length;
+            rows.offsets
+                .extend((1..=num_rows).map(|row| start + row * length));
+            rows.buffer.resize(total, 0);
+            // Every column writes into a block of rows before the next block,
+            // so the block stays in the L1 data cache across the columns
+            let block_rows = (STRIDED_BLOCK_BYTES / length).max(1);
+            for first in (0..num_rows).step_by(block_rows) {
+                let block = first..num_rows.min(first + block_rows);
+                let bytes = start + block.start * length..start + block.end * length;
+                let mut at = 0;
+                for (column, field) in columns.iter().zip(self.fields.iter()) {
+                    at += encode_column_strided(
+                        &mut rows.buffer[bytes.clone()],
+                        length,
+                        at,
+                        column.as_ref(),
+                        block.clone(),
+                        field.options,
+                    );
+                }
+            }
+            return Ok(());
+        }
         let total = lengths.extend_offsets(rows.offsets[write_offset], &mut rows.offsets);
         rows.buffer.resize(total, 0);
 
@@ -2079,6 +2109,40 @@ fn push_byte_view_array_lengths<T: ByteViewType>(
     }
 }
 
+/// Whether [`encode_column_strided`] can encode `column`
+fn encodes_strided(column: &dyn Array) -> bool {
+    column.data_type().is_primitive() || matches!(column.data_type(), DataType::Boolean)
+}
+
+/// Bytes of rows that each column writes into before the next column, sized
+/// to stay in the L1 data cache of current x86-64 and aarch64 cores
+const STRIDED_BLOCK_BYTES: usize = 16 * 1024;
+
+/// Encodes rows `range` of `column` at byte `at` of each row of `rows`, rows
+/// of `stride` bytes, and returns the bytes each row of it takes
+fn encode_column_strided(
+    rows: &mut [u8],
+    stride: usize,
+    at: usize,
+    column: &dyn Array,
+    range: Range<usize>,
+    opts: SortOptions,
+) -> usize {
+    let nulls = column.nulls().filter(|n| n.null_count() > 0);
+    let nulls = nulls.map(|n| n.inner().slice(range.start, range.len()));
+    downcast_primitive_array! {
+        column => {
+            let values = column.values()[range].iter().copied();
+            fixed::encode_strided(rows, stride, at, values, nulls.as_ref(), opts)
+        }
+        DataType::Boolean => {
+            let values = column.as_boolean().values().slice(range.start, range.len());
+            fixed::encode_strided(rows, stride, at, values.iter(), nulls.as_ref(), opts)
+        }
+        _ => unreachable!("encodes_strided returned true for {}", column.data_type()),
+    }
+}
+
 /// Encodes a column to the provided [`Rows`] incrementing the offsets as it progresses
 fn encode_column(
     data: &mut [u8],
@@ -2114,7 +2178,7 @@ fn encode_column(
                     variable::encode_generic_byte_array(data, offsets, as_generic_binary_array::<i32>(column), opts)
                 }
                 DataType::BinaryView => {
-                    variable::encode(data, offsets, column.as_binary_view().iter(), opts)
+                    variable::encode_byte_view_array(data, offsets, column.as_binary_view(), opts)
                 }
                 DataType::LargeBinary => {
                     variable::encode_generic_byte_array(data, offsets, as_generic_binary_array::<i64>(column), opts)
@@ -2129,11 +2193,9 @@ fn encode_column(
                     column.as_string::<i64>(),
                     opts,
                 ),
-                DataType::Utf8View => variable::encode(
-                    data, offsets,
-                    column.as_string_view().iter().map(|x| x.map(|x| x.as_bytes())),
-                    opts,
-                ),
+                DataType::Utf8View => {
+                    variable::encode_byte_view_array(data, offsets, column.as_string_view(), opts)
+                }
                 DataType::FixedSizeBinary(_) => {
                     let array = column.as_any().downcast_ref().unwrap();
                     fixed::encode_fixed_size_binary(data, offsets, array, opts)
@@ -2984,6 +3046,182 @@ mod tests {
         assert_eq!(rows.num_rows(), 10);
         // NULL element encoded as 2 bytes data
         assert_eq!(rows.row(1).data.len(), 2);
+    }
+
+    /// Every length from 0 to past three full blocks, with distinct bytes so
+    /// that a byte copied to the wrong place changes the row. Each length
+    /// appears twice, differing only in its last byte, so rows of equal length
+    /// must also order correctly.
+    #[test]
+    fn test_variable_width_every_length() {
+        let values: Vec<Vec<u8>> = (0..=3 * variable::BLOCK_SIZE + 5)
+            .flat_map(|len| {
+                let value: Vec<u8> = (0..len).map(|i| (i * 7 + 3) as u8).collect();
+                let mut larger = value.clone();
+                if let Some(last) = larger.last_mut() {
+                    *last = last.wrapping_add(1).max(1);
+                }
+                [value, larger]
+            })
+            .collect();
+        let binary = Arc::new(BinaryArray::from_iter_values(&values)) as ArrayRef;
+        let view = Arc::new(BinaryViewArray::from_iter_values(&values)) as ArrayRef;
+
+        for col in [binary, view] {
+            for descending in [false, true] {
+                let options = SortOptions::default().with_descending(descending);
+                let converter = RowConverter::new(vec![SortField::new_with_options(
+                    col.data_type().clone(),
+                    options,
+                )])
+                .unwrap();
+                let rows = converter.convert_columns(&[Arc::clone(&col)]).unwrap();
+                let decoded = converter.convert_rows(&rows).unwrap();
+                assert_eq!(&decoded[0], &col);
+
+                for i in 0..values.len() {
+                    for j in 0..values.len() {
+                        let expected = match descending {
+                            false => values[i].cmp(&values[j]),
+                            true => values[j].cmp(&values[i]),
+                        };
+                        assert_eq!(
+                            rows.row(i).cmp(&rows.row(j)),
+                            expected,
+                            "{:?} {descending} {i} {j}",
+                            col.data_type()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Rows are written in blocks of rows. Each row must match the same row
+    /// encoded on its own, across block boundaries and when appended after
+    /// existing rows, for fixed-width keys and for keys with variable-length
+    /// columns.
+    #[test]
+    fn test_rows_across_blocks() {
+        let mut rng = StdRng::seed_from_u64(0xB10C);
+        let len = 5000;
+        let fixed: Vec<ArrayRef> = vec![
+            Arc::new(Int32Array::from_iter(
+                (0..len).map(|_| rng.random_bool(0.9).then(|| rng.random())),
+            )),
+            Arc::new(BooleanArray::from_iter(
+                (0..len).map(|_| rng.random_bool(0.8).then(|| rng.random_bool(0.5))),
+            )),
+            Arc::new(Int64Array::from_iter_values((0..len).map(|_| rng.random()))),
+        ];
+        let bytes = |rng: &mut StdRng| -> Vec<u8> {
+            (0..rng.random_range(0..60)).map(|_| rng.random()).collect()
+        };
+        let mixed: Vec<ArrayRef> = vec![
+            Arc::new(StringArray::from_iter((0..len).map(|_| {
+                rng.random_bool(0.9)
+                    .then(|| "x".repeat(rng.random_range(0..50)))
+            }))),
+            Arc::new(Int32Array::from_iter(
+                (0..len).map(|_| rng.random_bool(0.9).then(|| rng.random())),
+            )),
+            Arc::new(BinaryViewArray::from_iter_values(
+                (0..len).map(|_| bytes(&mut rng)).collect::<Vec<_>>(),
+            )),
+        ];
+        for (columns, options) in [fixed, mixed]
+            .iter()
+            .flat_map(|c| all_sort_options().map(|o| (c.clone(), o)))
+        {
+            let fields = columns
+                .iter()
+                .map(|c| SortField::new_with_options(c.data_type().clone(), options))
+                .collect();
+            let converter = RowConverter::new(fields).unwrap();
+            let rows = converter.convert_columns(&columns).unwrap();
+            let decoded = converter.convert_rows(&rows).unwrap();
+            assert_eq!(decoded, columns);
+            for i in 0..len {
+                let one: Vec<ArrayRef> = columns.iter().map(|c| c.slice(i, 1)).collect();
+                let single = converter.convert_columns(&one).unwrap();
+                assert_eq!(rows.row(i), single.row(0), "{options:?} row {i}");
+            }
+
+            let (head, tail): (Vec<ArrayRef>, Vec<ArrayRef>) = columns
+                .iter()
+                .map(|c| (c.slice(0, 1234), c.slice(1234, len - 1234)))
+                .unzip();
+            let mut appended = converter.empty_rows(len, 0);
+            converter.append(&mut appended, &head).unwrap();
+            converter.append(&mut appended, &tail).unwrap();
+            assert_eq!(appended.num_rows(), len);
+            for i in 0..len {
+                assert_eq!(appended.row(i), rows.row(i), "{options:?} appended row {i}");
+            }
+        }
+    }
+
+    /// Encoded rows of every length are copied into dictionary, struct, and
+    /// fixed-size binary rows, and must keep their bytes and their order
+    #[test]
+    fn test_copied_rows_every_length() {
+        let values: Vec<Vec<u8>> = (0..=3 * variable::BLOCK_SIZE + 5)
+            .map(|len| (0..len).map(|i| (i * 7 + 3) as u8).collect())
+            .collect();
+        let sorted = |rows: &Rows| {
+            for i in 1..rows.num_rows() {
+                assert!(rows.row(i - 1) < rows.row(i), "row {i}");
+            }
+        };
+
+        // Keys in reverse order, so each row copies a different value row
+        let dict_values = Arc::new(BinaryArray::from_iter_values(&values)) as ArrayRef;
+        let keys = Int32Array::from_iter_values((0..values.len() as i32).rev());
+        let dict = Arc::new(DictionaryArray::new(keys, dict_values)) as ArrayRef;
+        let converter = RowConverter::new(vec![SortField::new(dict.data_type().clone())]).unwrap();
+        let rows = converter.convert_columns(&[dict]).unwrap();
+        let decoded = converter.convert_rows(&rows).unwrap();
+        let reversed: Vec<&[u8]> = values.iter().rev().map(Vec::as_slice).collect();
+        assert_eq!(decoded[0].as_binary::<i32>(), &BinaryArray::from(reversed));
+        for i in 1..rows.num_rows() {
+            assert!(rows.row(i - 1) > rows.row(i), "dictionary row {i}");
+        }
+
+        let child = Arc::new(BinaryArray::from_iter_values(&values)) as ArrayRef;
+        let field = Arc::new(Field::new("b", DataType::Binary, false));
+        let strct = Arc::new(StructArray::from(vec![(field, child)])) as ArrayRef;
+        let converter = RowConverter::new(vec![SortField::new(strct.data_type().clone())]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&strct)]).unwrap();
+        assert_eq!(&converter.convert_rows(&rows).unwrap()[0], &strct);
+        sorted(&rows);
+
+        for width in 0..=70 {
+            let bytes: Vec<u8> = (0..20u8)
+                .flat_map(|v| (0..width).map(move |i| (i as u8) ^ v.wrapping_mul(13)))
+                .collect();
+            let fsb = Arc::new(
+                FixedSizeBinaryArray::try_new_with_len(width, Buffer::from_vec(bytes), None, 20)
+                    .unwrap(),
+            ) as ArrayRef;
+            let converter =
+                RowConverter::new(vec![SortField::new(fsb.data_type().clone())]).unwrap();
+            let rows = converter.convert_columns(&[Arc::clone(&fsb)]).unwrap();
+            assert_eq!(
+                &converter.convert_rows(&rows).unwrap()[0],
+                &fsb,
+                "width {width}"
+            );
+            let fsb = fsb.as_fixed_size_binary();
+            for i in 0..fsb.len() {
+                for j in 0..fsb.len() {
+                    assert_eq!(
+                        rows.row(i).cmp(&rows.row(j)),
+                        fsb.value(i).cmp(fsb.value(j)),
+                        "width {width} rows {i} {j}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
