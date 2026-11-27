@@ -2803,4 +2803,58 @@ mod tests {
         assert!(values.is_null(1));
         assert_eq!(values.value(2), "b");
     }
+
+    #[test]
+    fn test_write_temporal_with_escaped_custom_formats() {
+        let schema = Arc::new(arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("dt", DataType::Date32, false),
+            arrow_schema::Field::new("tm", DataType::Time32(TimeUnit::Second), false),
+            arrow_schema::Field::new("ts", DataType::Timestamp(TimeUnit::Second, None), false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Date32Array::from(vec![19000])),
+                Arc::new(Time32SecondArray::from(vec![3661])),
+                Arc::new(TimestampSecondArray::from(vec![1_700_000_000])),
+            ],
+        )
+        .unwrap();
+
+        let mut custom_buf = Vec::new();
+        {
+            let mut writer = WriterBuilder::new()
+                .with_date_format("\"%Y-%m-%d\"".to_string())
+                .with_time_format("%H:%M\\%S".to_string())
+                .with_timestamp_format("%Y-%m-%d\n%H:%M:%S".to_string())
+                .build::<_, LineDelimited>(&mut custom_buf);
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+        let parsed: Value = serde_json::from_slice(&custom_buf).unwrap();
+        assert_eq!(
+            parsed,
+            json!({
+                "dt": "\"2022-01-08\"",
+                "tm": "01:01\\01",
+                "ts": "2023-11-14\n22:13:20",
+            })
+        );
+
+        let mut default_buf = Vec::new();
+        {
+            let mut writer = WriterBuilder::new().build::<_, LineDelimited>(&mut default_buf);
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+        let default_parsed: Value = serde_json::from_slice(&default_buf).unwrap();
+        assert_eq!(
+            default_parsed,
+            json!({
+                "dt": "2022-01-08",
+                "tm": "01:01:01",
+                "ts": "2023-11-14T22:13:20",
+            })
+        );
+    }
 }
