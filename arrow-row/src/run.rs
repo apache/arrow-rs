@@ -4,9 +4,11 @@
 
 use crate::{RowConverter, Rows, SortField, variable};
 use arrow_array::types::RunEndIndexType;
-use arrow_array::{PrimitiveArray, RunArray};
+use arrow_array::{Array, PrimitiveArray, RunArray};
 use arrow_buffer::{ArrowNativeType, ScalarBuffer};
-use arrow_schema::{ArrowError, SortOptions};
+use arrow_data::ArrayData;
+use arrow_schema::{ArrowError, DataType, SortOptions};
+use std::sync::Arc;
 
 /// Computes the lengths of each row for a RunEndEncodedArray
 pub fn compute_lengths<R: RunEndIndexType>(
@@ -77,11 +79,8 @@ pub unsafe fn decode<R: RunEndIndexType>(
     field: &SortField,
     validate_utf8: bool,
 ) -> Result<RunArray<R>, ArrowError> {
-    if rows.is_empty() {
-        let values = unsafe { converter.convert_raw(&mut [], validate_utf8) }?;
-        let run_ends_array = PrimitiveArray::<R>::try_new(ScalarBuffer::from(vec![]), None)?;
-        return RunArray::<R>::try_new(&run_ends_array, &values[0]);
-    }
+    let len = rows.len();
+    let final_end = R::Native::from_usize(len).ok_or(ArrowError::RunEndIndexOverflowError)?;
 
     // Decode each row's REE data and collect the decoded values
     let mut decoded_values = Vec::new();
@@ -122,22 +121,31 @@ pub unsafe fn decode<R: RunEndIndexType>(
             ));
         }
     }
-    // Add the final run end
-    run_ends.push(R::Native::usize_as(rows.len()));
+    if len != 0 {
+        run_ends.push(final_end);
+    }
 
-    // Convert the unique decoded values using the row converter
     let mut unique_rows: Vec<&[u8]> = decoded_values.iter().map(|v| v.as_slice()).collect();
-    let values = if unique_rows.is_empty() {
-        unsafe { converter.convert_raw(&mut [], validate_utf8) }?
-    } else {
-        unsafe { converter.convert_raw(&mut unique_rows, validate_utf8) }?
+    let values = unsafe { converter.convert_raw(&mut unique_rows, validate_utf8) }?;
+    let run_ends = PrimitiveArray::<R>::try_new(ScalarBuffer::from(run_ends), None)?;
+
+    let DataType::RunEndEncoded(run_ends_field, values_field) = &field.data_type else {
+        unreachable!()
     };
-
-    // Create run ends array
-    let run_ends_array = PrimitiveArray::<R>::try_new(ScalarBuffer::from(run_ends), None)?;
-
-    // Create the RunEndEncodedArray
-    RunArray::<R>::try_new(&run_ends_array, &values[0])
+    let data_type = DataType::RunEndEncoded(
+        Arc::clone(run_ends_field),
+        Arc::new(
+            values_field
+                .as_ref()
+                .clone()
+                .with_data_type(values[0].data_type().clone()),
+        ),
+    );
+    let data = ArrayData::builder(data_type)
+        .len(len)
+        .child_data(vec![run_ends.into_data(), values[0].to_data()])
+        .build()?;
+    Ok(RunArray::from(data))
 }
 
 #[cfg(test)]
