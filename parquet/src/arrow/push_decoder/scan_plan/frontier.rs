@@ -21,6 +21,29 @@ enum QueuedRowGroupDecision {
     Skip { remaining_budget: RowBudget },
 }
 
+/// A row group that a push decoder has not started, as passed to
+/// [`ParquetPushDecoder::retain_row_groups`](crate::arrow::push_decoder::ParquetPushDecoder::retain_row_groups).
+#[derive(Debug)]
+pub struct QueuedRowGroup<'a> {
+    row_group_index: usize,
+    selection: Option<&'a RowSelection>,
+}
+
+impl QueuedRowGroup<'_> {
+    /// The index of the row group in the file.
+    pub fn row_group_index(&self) -> usize {
+        self.row_group_index
+    }
+
+    /// The rows of this row group that the decoder reads, in row-group-local
+    /// coordinates. `None` means all rows. For a plan from
+    /// [`with_row_selection`](crate::arrow::arrow_reader::ArrowReaderBuilder::with_row_selection),
+    /// this is the slice of the global selection that covers this row group.
+    pub fn selection(&self) -> Option<&RowSelection> {
+        self.selection
+    }
+}
+
 /// Work item handed from [`RowGroupFrontier`] to [`RowGroupReaderBuilder`](crate::arrow::push_decoder::reader_builder::RowGroupReaderBuilder).
 #[derive(Debug, Clone)]
 pub(crate) struct NextRowGroup {
@@ -83,6 +106,23 @@ impl QueuedRowGroups {
     fn clear(&mut self) {
         self.queue.clear();
         self.counts.clear();
+    }
+
+    /// See [`Queue::retain`].
+    fn retain(
+        &mut self,
+        parquet_metadata: &ParquetMetaData,
+        f: impl FnMut(&QueuedRowGroup<'_>) -> bool,
+    ) -> Result<usize, ParquetError> {
+        let dropped = self.queue.retain(parquet_metadata, f)?;
+        if dropped == 0 {
+            return Ok(0);
+        }
+        self.counts.clear();
+        for row_group_idx in self.queue.row_group_indices() {
+            *self.counts.entry(row_group_idx).or_default() += 1;
+        }
+        Ok(dropped)
     }
 
     /// See [`Queue::global_selection_is_exhausted`].
@@ -207,6 +247,102 @@ impl Queue {
         }
     }
 
+    /// Keep only the queued row groups for which `f` returns `true`, in order.
+    /// Returns the number of dropped entries.
+    ///
+    /// A per-row-group entry keeps its own selection. A global selection
+    /// loses the rows of each dropped row group, so that every kept row group
+    /// keeps the same rows as before. The queue does not change when `f`
+    /// keeps every entry or when the method returns an error.
+    fn retain(
+        &mut self,
+        parquet_metadata: &ParquetMetaData,
+        mut f: impl FnMut(&QueuedRowGroup<'_>) -> bool,
+    ) -> Result<usize, ParquetError> {
+        match self {
+            Self::Global {
+                row_groups,
+                selection: None,
+            } => {
+                let keep: Vec<bool> = row_groups
+                    .iter()
+                    .map(|&row_group_index| {
+                        f(&QueuedRowGroup {
+                            row_group_index,
+                            selection: None,
+                        })
+                    })
+                    .collect();
+                let dropped = keep.iter().filter(|keep| !**keep).count();
+                if dropped > 0 {
+                    let mut keep = keep.into_iter();
+                    row_groups.retain(|_| keep.next().unwrap_or(true));
+                }
+                Ok(dropped)
+            }
+            Self::Global {
+                row_groups,
+                selection: Some(selection),
+            } => {
+                // Look up every row count first, so that an error leaves the
+                // queue unchanged.
+                let row_counts = row_groups
+                    .iter()
+                    .map(|&row_group_idx| parquet_metadata.row_group_num_rows(row_group_idx))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let mut rest = selection.clone();
+                let locals: Vec<RowSelection> = row_counts
+                    .iter()
+                    .map(|&row_count| rest.split_off(row_count))
+                    .collect();
+                let keep: Vec<bool> = row_groups
+                    .iter()
+                    .zip(&locals)
+                    .map(|(&row_group_index, local)| {
+                        f(&QueuedRowGroup {
+                            row_group_index,
+                            selection: Some(local),
+                        })
+                    })
+                    .collect();
+                let dropped = keep.iter().filter(|keep| !**keep).count();
+                if dropped == 0 {
+                    return Ok(0);
+                }
+                let mut kept_row_groups = VecDeque::with_capacity(row_groups.len() - dropped);
+                let mut kept_selectors = vec![];
+                for ((&row_group_idx, local), keep) in row_groups.iter().zip(&locals).zip(keep) {
+                    if keep {
+                        kept_row_groups.push_back(row_group_idx);
+                        kept_selectors.extend(local.iter().copied());
+                    }
+                }
+                // Rows past the queued row groups, if any, stay at the end.
+                kept_selectors.extend(rest.iter().copied());
+                *row_groups = kept_row_groups;
+                *selection = RowSelection::from(kept_selectors);
+                Ok(dropped)
+            }
+            Self::PerRowGroup(row_groups) => {
+                let keep: Vec<bool> = row_groups
+                    .iter()
+                    .map(|row_group| {
+                        f(&QueuedRowGroup {
+                            row_group_index: row_group.row_group_index,
+                            selection: row_group.selection.as_ref(),
+                        })
+                    })
+                    .collect();
+                let dropped = keep.iter().filter(|keep| !**keep).count();
+                if dropped > 0 {
+                    let mut keep = keep.into_iter();
+                    row_groups.retain(|_| keep.next().unwrap_or(true));
+                }
+                Ok(dropped)
+            }
+        }
+    }
+
     /// Returns `true` when a shared global selection has no selected rows left.
     /// Per-row-group selections are independent and are drained one at a time.
     fn global_selection_is_exhausted(&self) -> bool {
@@ -301,6 +437,21 @@ impl RowGroupFrontier {
             .clone()
             .next_readable_row_group()?
             .map(|next_row_group| next_row_group.row_group_idx))
+    }
+
+    /// Keep only the queued row groups for which `f` returns `true`. See
+    /// [`ParquetPushDecoder::retain_row_groups`](crate::arrow::push_decoder::ParquetPushDecoder::retain_row_groups).
+    pub(crate) fn retain_row_groups(
+        &mut self,
+        f: impl FnMut(&QueuedRowGroup<'_>) -> bool,
+    ) -> Result<usize, ParquetError> {
+        self.queued.retain(&self.parquet_metadata, f)
+    }
+
+    /// The queued row group indexes, in decode order, with duplicates.
+    #[cfg(test)]
+    pub(crate) fn queued_row_groups_in_order(&self) -> Vec<usize> {
+        self.queued.queue.row_group_indices()
     }
 
     /// Number of row groups not yet handed to the builder.

@@ -7,7 +7,9 @@ use crate::arrow::arrow_reader::{ParquetRecordBatchReader, RowGroupPlan};
 use crate::arrow::push_decoder::reader_builder::{
     RowGroupBuildResult, RowGroupReaderBuilder, RowGroupReaderBuilderParts,
 };
-use crate::arrow::push_decoder::scan_plan::{NextRowGroup, RowBudget, RowGroupFrontier, ScanPlan};
+use crate::arrow::push_decoder::scan_plan::{
+    NextRowGroup, QueuedRowGroup, RowBudget, RowGroupFrontier, ScanPlan,
+};
 use crate::errors::ParquetError;
 use crate::file::metadata::ParquetMetaData;
 use arrow_schema::SchemaRef;
@@ -36,6 +38,11 @@ pub(crate) struct RemainingRowGroups {
     /// The row group that the reader builder is fetching, for
     /// [`Self::scan_plan`]. `None` when the builder requests no more bytes.
     active_row_group: Option<NextRowGroup>,
+
+    /// The row group of the last reader that [`Self::try_next_reader`]
+    /// returned, or of the row group that the reader builder fetches. See
+    /// [`ParquetPushDecoder::active_row_group`](super::ParquetPushDecoder::active_row_group).
+    current_row_group: Option<usize>,
 }
 
 /// The state recovered from a [`RemainingRowGroups`] by
@@ -76,6 +83,7 @@ impl RemainingRowGroups {
             )?,
             row_group_reader_builder,
             active_row_group: None,
+            current_row_group: None,
         })
     }
 
@@ -90,6 +98,7 @@ impl RemainingRowGroups {
             frontier,
             row_group_reader_builder,
             active_row_group: _,
+            current_row_group: _,
         } = self;
         // `has_predicates` is recomputed by `build()` from the filter.
         let (parquet_metadata, row_group_plan, budget) = frontier.into_parts();
@@ -164,6 +173,35 @@ impl RemainingRowGroups {
         self.frontier.peek_next_row_group()
     }
 
+    /// Keep only the queued row groups for which `f` returns `true`, then
+    /// release the buffered bytes that no kept row group reads. The active row
+    /// group, if any, keeps its plan and its bytes. Returns the number of
+    /// dropped entries.
+    pub fn retain_row_groups(
+        &mut self,
+        f: impl FnMut(&QueuedRowGroup<'_>) -> bool,
+    ) -> Result<usize, ParquetError> {
+        let dropped = self.frontier.retain_row_groups(f)?;
+        if dropped > 0 {
+            let active = self.row_group_reader_builder.active_row_group_idx();
+            let keep: Vec<usize> = self.frontier.queued_row_groups().chain(active).collect();
+            self.row_group_reader_builder.release_unread_bytes(keep);
+        }
+        Ok(dropped)
+    }
+
+    /// The row group of the last reader that [`Self::try_next_reader`]
+    /// returned, or of the row group that the reader builder fetches.
+    pub fn current_row_group(&self) -> Option<usize> {
+        self.current_row_group
+    }
+
+    /// The queued row group indexes, in decode order, with duplicates.
+    #[cfg(test)]
+    pub fn queued_row_groups(&self) -> Vec<usize> {
+        self.frontier.queued_row_groups_in_order()
+    }
+
     /// Release the buffered bytes that are outside the read column chunks of
     /// the queued row groups. The decoder does not read these bytes.
     pub fn release_unread_bytes(&mut self) {
@@ -196,6 +234,7 @@ impl RemainingRowGroups {
 
                 match self.frontier.next_readable_row_group()? {
                     Some(next_row_group) => {
+                        self.current_row_group = Some(next_row_group.row_group_idx);
                         self.active_row_group = Some(next_row_group.clone());
                         let NextRowGroup {
                             row_group_idx,
@@ -210,7 +249,10 @@ impl RemainingRowGroups {
                             budget,
                         )?;
                     }
-                    None => return Ok(DecodeResult::Finished),
+                    None => {
+                        self.current_row_group = None;
+                        return Ok(DecodeResult::Finished);
+                    }
                 }
             }
 
