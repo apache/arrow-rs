@@ -42,6 +42,12 @@ impl VLQDecoder {
         }
         Ok(None)
     }
+
+    /// Returns true if bytes of an unterminated varint have been consumed
+    #[cfg(feature = "async")]
+    pub(crate) fn is_in_progress(&self) -> bool {
+        self.shift != 0
+    }
 }
 
 /// Read a varint from `buf` returning the decoded `u64` and the number of bytes read

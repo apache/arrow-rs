@@ -142,6 +142,11 @@ impl BlockDecoder {
     pub(crate) fn bytes_remaining(&self) -> usize {
         self.bytes_remaining
     }
+
+    /// Returns true if no bytes of the next block have been consumed
+    pub(crate) fn is_between_blocks(&self) -> bool {
+        matches!(self.state, BlockDecoderState::Count) && !self.vlq_decoder.is_in_progress()
+    }
 }
 
 #[cfg(test)]
