@@ -1372,7 +1372,7 @@ impl ArrayData {
                         run_ends_data.len, values_data.len
                     )));
                 }
-                if run_ends_data.nulls.is_some() {
+                if run_ends_data.null_count() != 0 {
                     return Err(ArrowError::InvalidArgumentError(
                         "Found null values in run_ends array. The run_ends array should not have null values.".to_string(),
                     ));

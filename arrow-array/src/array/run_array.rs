@@ -174,7 +174,7 @@ impl<R: RunEndIndexType> RunArray<R> {
         }
 
         // 2. run_ends must not contain null values.
-        if run_ends.nulls().is_some() {
+        if run_ends.null_count() != 0 {
             return Err(ArrowError::InvalidArgumentError(
                 "Found null values in run_ends array. The run_ends array should not have null values."
                     .to_string(),
@@ -1246,6 +1246,18 @@ mod tests {
                 .to_string(),
         );
         assert_eq!(expected.to_string(), actual.err().unwrap().to_string());
+    }
+
+    #[test]
+    fn test_run_array_run_ends_with_empty_null_buffer() {
+        let values = Int32Array::from(vec![7, 8]);
+        let run_ends = Int32Array::new(vec![2, 3].into(), Some(NullBuffer::new_valid(2)));
+
+        assert_eq!(run_ends.null_count(), 0);
+        assert!(run_ends.nulls().is_some());
+
+        let array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+        assert_eq!(array.len(), 3);
     }
 
     #[test]
