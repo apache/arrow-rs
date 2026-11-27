@@ -3168,70 +3168,34 @@ mod tests {
         assert_eq!(run_array_1_unsliced, output_batch.column(0).into_data());
     }
 
-    // Zero-row slice of a RunEndEncoded array with Utf8View values (see #12249).
+    // Zero-row slice of a RunEndEncoded array whose values hold Utf8View data (see #12249).
     #[test]
     fn test_roundtrip_stream_run_array_zero_rows_utf8_view() {
-        let values = StringViewArray::from(vec!["a long string that is not inlined", "b"]);
-        let ree = RunArray::<Int32Type>::try_new(&Int32Array::from(vec![1, 2]), &values).unwrap();
-        let batch = RecordBatch::try_from_iter([("a", Arc::new(ree) as ArrayRef)])
-            .unwrap()
-            .slice(1, 0);
+        let long = "a long string that is not inlined";
+        let mut list_view = ListViewBuilder::new(StringViewBuilder::new());
+        let mut list = ListBuilder::new(StringViewBuilder::new());
+        list_view.values().append_value(long);
+        list_view.append(true);
+        list.values().append_value(long);
+        list.append(true);
+        let values: [ArrayRef; 3] = [
+            Arc::new(StringViewArray::from(vec![long])),
+            Arc::new(list_view.finish()),
+            Arc::new(list.finish()),
+        ];
 
-        let output = roundtrip_ipc_stream(&batch);
-        assert_eq!(output.num_rows(), 0);
+        for values in values {
+            let ree = RunArray::<Int32Type>::try_new(&Int32Array::from(vec![1]), &values).unwrap();
+            let batch = RecordBatch::try_from_iter([("a", Arc::new(ree) as ArrayRef)])
+                .unwrap()
+                .slice(1, 0);
 
-        let expected = unslice_run_array(batch.column(0).into_data()).unwrap();
-        assert_eq!(expected, output.column(0).into_data());
-    }
+            let output = roundtrip_ipc_stream(&batch);
+            assert_eq!(output.num_rows(), 0);
 
-    // Same, with the Utf8View values nested inside a ListView.
-    #[test]
-    fn test_roundtrip_stream_run_array_zero_rows_list_view_utf8_view() {
-        let mut list_builder = ListViewBuilder::new(StringViewBuilder::new());
-        list_builder
-            .values()
-            .append_value("a long string that is not inlined");
-        list_builder.values().append_value("b");
-        list_builder.append(true);
-        list_builder.values().append_value("c");
-        list_builder.append(true);
-        let values = list_builder.finish();
-
-        let ree = RunArray::<Int32Type>::try_new(&Int32Array::from(vec![1, 2]), &values).unwrap();
-        let batch = RecordBatch::try_from_iter([("a", Arc::new(ree) as ArrayRef)])
-            .unwrap()
-            .slice(1, 0);
-
-        let output = roundtrip_ipc_stream(&batch);
-        assert_eq!(output.num_rows(), 0);
-
-        let expected = unslice_run_array(batch.column(0).into_data()).unwrap();
-        assert_eq!(expected, output.column(0).into_data());
-    }
-
-    // Same, with the Utf8View values nested inside a List.
-    #[test]
-    fn test_roundtrip_stream_run_array_zero_rows_list_utf8_view() {
-        let mut list_builder = ListBuilder::new(StringViewBuilder::new());
-        list_builder
-            .values()
-            .append_value("a long string that is not inlined");
-        list_builder.values().append_value("b");
-        list_builder.append(true);
-        list_builder.values().append_value("c");
-        list_builder.append(true);
-        let values = list_builder.finish();
-
-        let ree = RunArray::<Int32Type>::try_new(&Int32Array::from(vec![1, 2]), &values).unwrap();
-        let batch = RecordBatch::try_from_iter([("a", Arc::new(ree) as ArrayRef)])
-            .unwrap()
-            .slice(1, 0);
-
-        let output = roundtrip_ipc_stream(&batch);
-        assert_eq!(output.num_rows(), 0);
-
-        let expected = unslice_run_array(batch.column(0).into_data()).unwrap();
-        assert_eq!(expected, output.column(0).into_data());
+            let expected = unslice_run_array(batch.column(0).into_data()).unwrap();
+            assert_eq!(expected, output.column(0).into_data());
+        }
     }
 
     // Same, with the RunEndEncoded array nested inside a List.
