@@ -716,6 +716,7 @@ mod lz4_hadoop_codec {
         }
     }
 
+    // Copyright [2021] [Jorge C Leitao] (parquet2, Apache-2.0)
     /// Try to decompress the buffer as if it was compressed with the Hadoop Lz4Codec.
     /// Adapted from parquet2's [try_decompress_hadoop](https://github.com/jorgecarleitao/parquet2/blob/main/src/compression.rs#L231).
     /// Translated from the apache arrow c++ function [TryDecompressHadoop](https://github.com/apache/arrow/blob/bf18e6e4b5bb6180706b1ba0d597a65a4ce5ca48/cpp/src/arrow/util/compression_lz4.cc#L474).

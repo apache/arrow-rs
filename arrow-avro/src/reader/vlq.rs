@@ -59,12 +59,9 @@ pub(crate) fn read_varint(buf: &[u8]) -> Option<(u64, usize)> {
     read_varint_slow(buf)
 }
 
-/// Adapted from prost's varint decoder and the protobuf implementations below,
-/// with the unrolled computation expressed as a loop over a fixed-size array.
-///
-/// Historical reference implementations:
-/// - <https://github.com/tokio-rs/prost/blob/5ae30c5fd2725132c4daa0ef9f6d2f14f1308bd5/prost/src/encoding/varint.rs#L71>
-/// - <https://github.com/protocolbuffers/protobuf/blob/5532abc15b97f3489183b266b41844306052a3fa/src/google/protobuf/io/coded_stream.cc#L365-L406>
+/// Varint decoding references:
+/// - <https://github.com/tokio-rs/prost/blob/master/prost/src/encoding/varint.rs#L71>
+/// - <https://github.com/google/protobuf/blob/3.3.x/src/google/protobuf/io/coded_stream.cc#L365-L406>
 /// - <https://github.com/protocolbuffers/protobuf-go/blob/v1.27.1/encoding/protowire/wire.go#L358>
 #[inline]
 fn read_varint_array(buf: [u8; 10]) -> Option<(u64, usize)> {
@@ -82,6 +79,7 @@ fn read_varint_array(buf: [u8; 10]) -> Option<(u64, usize)> {
     (b < 0x02).then_some((in_progress, 10))
 }
 
+// Copyright 2022 Dan Burkert & Tokio Contributors (prost, Apache-2.0)
 /// Adapted from prost's decode_varint_slow to read a slice and return
 /// both the decoded value and the number of bytes consumed.
 ///
