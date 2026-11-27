@@ -136,6 +136,9 @@ struct Windows {
     output_rows: VecDeque<Range<usize>>,
     /// The rows that the output reader read and did not return yet.
     pending_rows: usize,
+    /// The pages that end at or before this row are released. See
+    /// [`RowGroupReaderBuilder::release_passed_pages`].
+    released_before: usize,
 }
 
 impl Windows {
@@ -152,6 +155,7 @@ impl Windows {
             output_reader: None,
             output_rows: VecDeque::new(),
             pending_rows: 0,
+            released_before: 0,
         }
     }
 }
@@ -323,6 +327,9 @@ pub(crate) struct RowGroupReaderBuilder {
     request_granularity: RequestGranularity,
     /// `try_build_incremental` started the active row group.
     batch_mode_active: bool,
+    /// The queue reads the active row group again later, so the decoder keeps
+    /// its pages. See [`Self::release_passed_pages`].
+    keep_passed_pages: bool,
 }
 
 /// The parts of a [`RowGroupReaderBuilder`] needed to rebuild it, recovered by
@@ -392,6 +399,7 @@ impl RowGroupReaderBuilder {
             stages: Arc::new(stages),
             request_granularity,
             batch_mode_active: false,
+            keep_passed_pages: false,
         }
     }
 
@@ -416,6 +424,7 @@ impl RowGroupReaderBuilder {
             stages: _,
             request_granularity,
             batch_mode_active: _,
+            keep_passed_pages: _,
         } = self;
         // A reader of the discarded state can hold a reference.
         let buffers = std::mem::take(&mut *buffers.lock().unwrap());
@@ -472,7 +481,15 @@ impl RowGroupReaderBuilder {
     /// Decode the active row group one batch at a time. See
     /// [`RequestGranularity::Batch`]. This runs the same state machine as
     /// [`Self::try_build`].
-    pub(crate) fn try_build_incremental(&mut self) -> Result<IncrementalResult, ParquetError> {
+    ///
+    /// `read_again`: the queue reads this row group again later. The decoder
+    /// then keeps the pages of the row group, so the later read does not
+    /// request them again.
+    pub(crate) fn try_build_incremental(
+        &mut self,
+        read_again: bool,
+    ) -> Result<IncrementalResult, ParquetError> {
+        self.keep_passed_pages = read_again;
         if !self.batch_mode_active {
             if !matches!(self.state, Some(RowGroupDecoderState::Start { .. })) {
                 return Err(general_err!(
@@ -1069,6 +1086,9 @@ impl RowGroupReaderBuilder {
             return Ok(NextState::result(RowGroupDecoderState::Finished, result));
         }
 
+        if let Some(next) = windows.remaining.front() {
+            self.release_passed_pages(row_group_idx, next.start, &mut windows.released_before);
+        }
         let rows = take_rows(&mut windows.remaining, self.batch_size);
         let plan_builder = ReadPlanBuilder::new(self.batch_size)
             .with_selection(Some(ranges_to_selection(&rows, row_count)));
@@ -1115,6 +1135,59 @@ impl RowGroupReaderBuilder {
             column_chunks: None,
             filter_info: FilterInfo::new(filter, cache_info),
         }))
+    }
+
+    /// Release the pages of the active row group that no later window reads.
+    /// `first_row` is the first row of the next window.
+    ///
+    /// ```text
+    /// batch_size = 100, next window starts at row 250
+    ///
+    /// rows:      0        100       200  250  300
+    /// pages:     ├── p0 ──┼── p1 ───┼──── p2 ────┼── p3 ──
+    /// released:  ██████████████████
+    /// ```
+    ///
+    /// The readers have decoded the rows before `first_row`, so they do not
+    /// need those bytes again. Three things stay:
+    ///
+    /// | Bytes | Reason |
+    /// |---|---|
+    /// | The page that holds `first_row` | A later window reads it. |
+    /// | Pages from the last `batch_size` boundary on | On a predicate cache miss, the reader decodes the full cache batch again. |
+    /// | The dictionary page | Each request of the column chunk lists it. |
+    ///
+    /// Without an offset index, the column chunk is one buffer and stays
+    /// until the row group ends.
+    fn release_passed_pages(
+        &self,
+        row_group_idx: usize,
+        first_row: usize,
+        released_before: &mut usize,
+    ) {
+        if self.keep_passed_pages {
+            return;
+        }
+        let before = first_row - first_row % self.batch_size;
+        if before <= *released_before {
+            return;
+        }
+        *released_before = before;
+        let Some(page_index) = self.row_group_offset_index(row_group_idx) else {
+            return;
+        };
+        let num_columns = self.metadata.row_group(row_group_idx).num_columns();
+        let ranges: Vec<Range<u64>> = (0..num_columns)
+            .filter_map(|column_idx| {
+                let pages = page_index.page_locations(column_idx)?;
+                // The pages before the page that holds row `before`
+                let passed = pages
+                    .partition_point(|page| page.first_row_index as usize <= before)
+                    .checked_sub(1)?;
+                Some(pages.first()?.offset as u64..pages[passed].offset as u64)
+            })
+            .collect();
+        self.buffers.lock().unwrap().release_ranges(&ranges);
     }
 
     /// Evaluate the current predicate on the rows of the current window.
@@ -1251,6 +1324,12 @@ impl RowGroupReaderBuilder {
             if rows.start == rows.end {
                 windows.output_rows.pop_front();
             }
+        }
+        if windows.output_rows.is_empty()
+            && let Some(next) = windows.remaining.front()
+        {
+            // The readers decoded all rows of the window
+            self.release_passed_pages(row_group_idx, next.start, &mut windows.released_before);
         }
         if windows.pending_rows < self.batch_size {
             // The window did not fill a batch

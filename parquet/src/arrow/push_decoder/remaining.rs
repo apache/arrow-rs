@@ -218,10 +218,11 @@ impl RemainingRowGroups {
             }
 
             let row_group_idx = self.row_group_reader_builder.active_row_group_idx();
+            let read_again = row_group_idx.is_some_and(|idx| self.frontier.is_queued(idx));
             // `remaining_budget` is `Some` if the row group is finished.
             let (batch, remaining_budget) = match self
                 .row_group_reader_builder
-                .try_build_incremental()?
+                .try_build_incremental(read_again)?
             {
                 IncrementalResult::NeedsData(ranges) => {
                     return Ok(DecodeResult::NeedsData(ranges));

@@ -12,7 +12,8 @@
 //!   ([`test_partial_pushes_across_batches`],
 //!   [`test_predicates_do_not_wait_for_the_row_group`],
 //!   [`test_dictionary_page_is_requested_once_per_column_chunk`]).
-//! * Memory release: the decoder releases the bytes that it no longer needs
+//! * Memory release: the decoder releases the pages of a batch when it
+//!   returns the batch
 //!   ([`test_releases_bytes_pushed_ahead`],
 //!   [`test_predicates_release_bytes_pushed_ahead`]).
 //! * The API: row group boundaries, `into_builder`, `try_next_reader` and
@@ -304,9 +305,10 @@ fn test_partial_pushes_across_batches() {
     }
 }
 
-/// Push every planned byte of the scan up front, one buffer per page, and
-/// check that the decoder releases the bytes of a row group when the row
-/// group ends.
+/// Push every planned byte of the first two row groups up front, one buffer
+/// per page. The decoder releases the pages of each batch when it returns the
+/// batch, and holds less than one batch of a row group that was not pushed
+/// ahead.
 #[test]
 #[cfg_attr(miri, ignore)] // Takes too long
 fn test_releases_bytes_pushed_ahead() {
@@ -351,10 +353,19 @@ fn test_releases_bytes_pushed_ahead() {
         ControlFlow::<()>::Continue(())
     });
     assert_eq!(rows, NUM_ROWS);
-    // The decoder holds the first row group until it ends. Then only the
-    // second row group is left.
-    assert!(resident[..5].iter().all(|&r| r == pushed), "{resident:?}");
+    // Each row group has 6 batches. Each batch of the two row groups that
+    // were pushed ahead releases its pages.
+    assert!(resident[0] < pushed, "{resident:?}");
+    assert!(resident[..12].is_sorted_by(|a, b| a > b), "{resident:?}");
     assert_eq!(resident[5], row_group_bytes(1));
+    assert_eq!(resident[11], 0);
+    // The third row group was not pushed ahead. After each batch, only the
+    // dictionary pages are left.
+    let batch_bytes = row_group_bytes(2) / 6;
+    assert!(
+        resident[12..].iter().all(|&r| r * 4 < batch_bytes),
+        "{resident:?}"
+    );
     assert_eq!(decoder.buffered_bytes(), 0);
 }
 

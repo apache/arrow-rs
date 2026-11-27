@@ -1573,12 +1573,25 @@ mod test {
         let batch = expect_data(decoder.try_decode());
         assert_eq!(batch, TEST_BATCH.slice(0, 100));
 
-        // The decoder holds the pages until the row group is done.
-        let first_page_bytes: u64 = dictionary_and_first_pages
+        // The decoder releases each first data page that ends at or before
+        // row 100. It holds the dictionary pages, and each first data page
+        // that also has rows of the second batch.
+        let page_index = metadata.page_index_for_row_group(0);
+        let held_bytes: u64 = metadata
+            .row_group(0)
+            .columns()
             .iter()
-            .map(|range| range.end - range.start)
+            .enumerate()
+            .map(|(idx, column)| {
+                let pages = page_index.page_locations(idx).unwrap();
+                let dictionary = pages[0].offset as u64 - column.byte_range().0;
+                match pages[1].first_row_index <= 100 {
+                    true => dictionary,
+                    false => dictionary + pages[0].compressed_page_size as u64,
+                }
+            })
             .sum();
-        assert_eq!(decoder.buffered_bytes(), first_page_bytes);
+        assert_eq!(decoder.buffered_bytes(), held_bytes);
 
         // The second batch needs the second page of each column.
         let ranges = expect_needs_data(decoder.try_decode());
