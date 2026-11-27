@@ -14,6 +14,8 @@ use crate::basic::*;
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
 pub use crate::encodings::decoding::alp_decoder::AlpDecoder;
+#[cfg(all(feature = "arrow", feature = "experimental"))]
+pub use crate::encodings::decoding::alp_decoder::AlpPage;
 pub use crate::encodings::decoding::byte_stream_split_decoder::{
     ByteStreamSplitDecoder, VariableWidthByteStreamSplitDecoder,
 };

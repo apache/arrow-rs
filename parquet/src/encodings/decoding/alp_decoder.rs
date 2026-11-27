@@ -28,7 +28,7 @@ use crate::util::bit_util::BitReader;
 /// `num_exceptions` for both exception sections), so only the start offset is
 /// stored.
 #[derive(Debug, Clone, Copy)]
-struct AlpEncodedVectorView<Exact: AlpExact> {
+pub(crate) struct AlpEncodedVectorView<Exact: AlpExact> {
     num_elements: u16,
     alp_info: AlpInfo,
     for_info: ForInfo<Exact>,
@@ -54,6 +54,33 @@ impl<Exact: AlpExact> AlpEncodedVectorView<Exact> {
     fn exception_values_range(&self) -> Range<usize> {
         let len = self.alp_info.num_exceptions as usize * Exact::WIDTH;
         self.exception_values..self.exception_values + len
+    }
+
+    /// Call `f` with the vector-local position and exact bits of each exception,
+    /// read from the page `body` this vector was parsed from.
+    ///
+    /// Only exceptions at vector-local positions in `range` are read, and `f`
+    /// gets each one's offset from `range.start`.
+    #[inline]
+    fn for_each_exception_in(
+        &self,
+        body: &[u8],
+        range: Range<usize>,
+        mut f: impl FnMut(usize, Exact),
+    ) {
+        let positions = &body[self.exception_positions_range()];
+        let values = &body[self.exception_values_range()];
+        for (pos, value) in positions
+            .as_chunks::<{ std::mem::size_of::<u16>() }>()
+            .0
+            .iter()
+            .zip(values.chunks_exact(Exact::WIDTH))
+        {
+            let pos = u16::from_le_bytes(*pos) as usize;
+            if range.contains(&pos) {
+                f(pos - range.start, Exact::from_le_slice(value));
+            }
+        }
     }
 }
 
@@ -232,9 +259,12 @@ fn parse_vector_view<Exact: AlpExact>(
     })
 }
 
+#[cfg(feature = "arrow")]
+pub(crate) mod compare;
+
 /// An ALP page whose header and offsets section are validated, with vectors
 /// parsed on demand.
-pub(crate) struct AlpPage<Value: AlpFloat> {
+pub struct AlpPage<Value: AlpFloat> {
     header: AlpHeader,
     /// Page body following the 7-byte header: `[offsets][vector data...]`.
     body: Bytes,
@@ -242,7 +272,8 @@ pub(crate) struct AlpPage<Value: AlpFloat> {
 }
 
 impl<Value: AlpFloat> AlpPage<Value> {
-    pub(crate) fn try_new(data: Bytes) -> Result<Self> {
+    /// Validate the header and offsets section of an ALP page's values section.
+    pub fn try_new(data: Bytes) -> Result<Self> {
         let header = parse_alp_page_header(data.as_ref())?;
 
         let offsets_section_size = header
@@ -268,8 +299,25 @@ impl<Value: AlpFloat> AlpPage<Value> {
         })
     }
 
+    /// [`Self::try_new`] for a page that holds at most `max_values` values.
+    ///
+    /// Readers know only an upper bound: just the non-null values are encoded,
+    /// and the level count stands in when the value count is not known up
+    /// front. The header carries the authoritative count.
+    pub(crate) fn try_new_bounded(data: Bytes, max_values: usize) -> Result<Self> {
+        let page = Self::try_new(data)?;
+        if page.num_values() > max_values {
+            return Err(general_err!(
+                "Invalid ALP page: header num_elements {} exceeds page num_values {}",
+                page.num_values(),
+                max_values
+            ));
+        }
+        Ok(page)
+    }
+
     /// Number of encoded (non-null) values in the page.
-    pub(crate) fn num_values(&self) -> usize {
+    pub fn num_values(&self) -> usize {
         self.header.num_elements
     }
 
@@ -281,12 +329,23 @@ impl<Value: AlpFloat> AlpPage<Value> {
         self.header.vector_size
     }
 
+    /// Length of the unpack scratch for decoding this page: one vector, capped
+    /// to stay L1-resident and to the page's value count so tiny pages don't
+    /// over-allocate. Never zero, so the `chunks_mut` decode never hits a zero
+    /// stride (an empty page returns before any decode anyway).
+    fn decode_tile_len(&self) -> usize {
+        self.vector_size()
+            .min(DECODE_TILE_CAP)
+            .min(self.num_values())
+            .max(1)
+    }
+
     /// Parse and validate vector `idx`.
     ///
     /// Each vector must fill its `[offset, next offset)` range exactly, and the
     /// first must start right after the offsets section, so vectors are
     /// contiguous without parsing their neighbours.
-    pub(crate) fn vector(&self, idx: usize) -> Result<AlpVector<Value>> {
+    pub(crate) fn vector(&self, idx: usize) -> Result<AlpEncodedVectorView<Value::Exact>> {
         let num_vectors = self.num_vectors();
         if idx >= num_vectors {
             return Err(general_err!(
@@ -320,33 +379,8 @@ impl<Value: AlpFloat> AlpPage<Value> {
             ));
         }
 
-        let len = self.header.vector_num_elements(idx);
-        let view = parse_vector_view::<Value::Exact>(body, start, end, len)?;
-        Ok(AlpVector {
-            len: len as usize,
-            bit_width: view.for_info.bit_width,
-            frame_of_reference: view.for_info.frame_of_reference,
-            scale: Value::decode_scale(view.alp_info.exponent, view.alp_info.factor),
-            packed: view.packed_values_range(),
-            exception_positions: view.exception_positions_range(),
-            exception_values: view.exception_values_range(),
-        })
+        parse_vector_view(body, start, end, self.header.vector_num_elements(idx))
     }
-}
-
-/// One parsed vector: the constants needed to turn each packed integer back into
-/// a float, and the byte ranges of its sections in the page body.
-///
-/// Sections are ranges rather than `Bytes` slices because refcounting three
-/// handles per vector is a measurable share of short reads.
-pub(crate) struct AlpVector<Value: AlpFloat> {
-    len: usize,
-    bit_width: u8,
-    frame_of_reference: Value::Exact,
-    scale: Value::Scale,
-    packed: Range<usize>,
-    exception_positions: Range<usize>,
-    exception_values: Range<usize>,
 }
 
 /// Live decode state for the one vector currently being consumed.
@@ -356,21 +390,37 @@ pub(crate) struct AlpVector<Value: AlpFloat> {
 /// even when a vector is split across several `get`/`skip` calls.
 struct CurrentVector<Value: AlpFloat> {
     reader: BitReader,
-    /// Number of this vector's elements not yet delivered or skipped.
-    remaining: usize,
+    scale: Value::Scale,
     /// Vector-local index of the next element to produce.
     delivered: usize,
-    vector: AlpVector<Value>,
+    view: AlpEncodedVectorView<Value::Exact>,
 }
 
 impl<Value: AlpFloat> CurrentVector<Value> {
-    fn new(page: &AlpPage<Value>, vector: AlpVector<Value>) -> Self {
+    fn new(page: &AlpPage<Value>, view: AlpEncodedVectorView<Value::Exact>) -> Self {
         Self {
-            reader: BitReader::new(page.body.slice(vector.packed.clone())),
-            remaining: vector.len,
+            // Sections stay as offsets into the page body, so only the packed
+            // values take a refcounted `Bytes` slice.
+            reader: BitReader::new(page.body.slice(view.packed_values_range())),
+            scale: Value::decode_scale(view.alp_info.exponent, view.alp_info.factor),
             delivered: 0,
-            vector,
+            view,
         }
+    }
+
+    /// Number of this vector's elements not yet delivered or skipped.
+    fn remaining(&self) -> usize {
+        self.view.num_elements as usize - self.delivered
+    }
+
+    /// Skip the next `n` elements without decoding them.
+    fn advance(&mut self, n: usize) {
+        debug_assert!(n <= self.remaining());
+        let bit_width = self.view.for_info.bit_width;
+        if bit_width != 0 {
+            self.reader.skip(n, bit_width as usize);
+        }
+        self.delivered += n;
     }
 }
 
@@ -400,15 +450,15 @@ fn decode_range<Value: AlpFloat>(
     scratch: &mut [Value::Exact],
     out: &mut [Value],
 ) -> Result<()> {
-    let vector = &cur.vector;
-    let frame_of_reference = vector.frame_of_reference;
-    if vector.bit_width == 0 {
+    let view = &cur.view;
+    let frame_of_reference = view.for_info.frame_of_reference;
+    let scale = cur.scale;
+    if view.for_info.bit_width == 0 {
         // Every packed delta is zero, so all values share `frame_of_reference`.
         let signed = frame_of_reference.reinterpret_as_signed();
-        out.fill(Value::decode_value(signed, vector.scale));
+        out.fill(Value::decode_value(signed, scale));
     } else {
-        let bit_width = vector.bit_width as usize;
-        let scale = vector.scale;
+        let bit_width = view.for_info.bit_width as usize;
         for chunk in out.chunks_mut(scratch.len()) {
             let deltas = &mut scratch[..chunk.len()];
             let unpacked = cur.reader.get_batch::<Value::Exact>(deltas, bit_width);
@@ -431,31 +481,11 @@ fn decode_range<Value: AlpFloat>(
     // positional overwrite, so it is independent of exception ordering.
     let lo = cur.delivered;
     let hi = cur.delivered + out.len();
-    let exception_positions = &body[vector.exception_positions.clone()];
-    let exception_values = &body[vector.exception_values.clone()];
-    // Both ranges cover exactly `num_exceptions` whole entries at parse time.
-    // A mismatch here would make `zip` silently drop exceptions.
-    debug_assert_eq!(exception_positions.len() % std::mem::size_of::<u16>(), 0);
-    debug_assert_eq!(exception_values.len() % Value::Exact::WIDTH, 0);
-    debug_assert_eq!(
-        exception_positions.len() / std::mem::size_of::<u16>(),
-        exception_values.len() / Value::Exact::WIDTH,
-    );
-    let values_chunks = exception_values.chunks_exact(Value::Exact::WIDTH);
-    for (pos_chunk, value_chunk) in exception_positions
-        .as_chunks::<{ std::mem::size_of::<u16>() }>()
-        .0
-        .iter()
-        .zip(values_chunks)
-    {
-        let pos = u16::from_le_bytes([pos_chunk[0], pos_chunk[1]]) as usize;
-        if (lo..hi).contains(&pos) {
-            out[pos - lo] = Value::from_exact_bits(Value::Exact::from_le_slice(value_chunk));
-        }
-    }
+    view.for_each_exception_in(body, lo..hi, |offset, bits| {
+        out[offset] = Value::from_exact_bits(bits);
+    });
 
     cur.delivered = hi;
-    cur.remaining -= out.len();
     Ok(())
 }
 
@@ -534,31 +564,12 @@ where
     /// Validate the page header and reset the read cursor. Vectors are parsed
     /// and decoded lazily, on the first `get`/`skip`.
     fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
-        let page = AlpPage::try_new(data)?;
-
-        // `num_values` is an upper bound, not an exact count: only non-null values
-        // are encoded, and the caller passes the level count when the value count
-        // is not known up front. The header carries the authoritative count.
-        if page.num_values() > num_values {
-            return Err(general_err!(
-                "Invalid ALP page: header num_elements {} exceeds page num_values {}",
-                page.num_values(),
-                num_values
-            ));
-        }
+        let page = AlpPage::try_new_bounded(data, num_values)?;
         let num_values = page.num_values();
 
-        // Size the reused unpack buffer to one vector, capped to stay L1-resident
-        // and to the page's value count so tiny pages don't over-allocate. The
-        // `.max(1)` keeps a non-empty tile so the `chunks_mut` decode never hits a
-        // zero stride (an empty page returns before any decode anyway).
-        let tile = page
-            .vector_size()
-            .min(DECODE_TILE_CAP)
-            .min(num_values)
-            .max(1);
         self.scratch.clear();
-        self.scratch.resize(tile, Default::default());
+        self.scratch
+            .resize(page.decode_tile_len(), Default::default());
 
         self.page = page;
         self.next_vector_idx = 0;
@@ -577,11 +588,11 @@ where
 
         let mut written = 0;
         while written < target {
-            if self.current.as_ref().is_none_or(|c| c.remaining == 0) {
+            if self.current.as_ref().is_none_or(|c| c.remaining() == 0) {
                 self.load_current_vector()?;
             }
             let cur = self.current.as_mut().unwrap();
-            let n = cur.remaining.min(target - written);
+            let n = cur.remaining().min(target - written);
             decode_range::<T::T>(
                 cur,
                 self.page.body.as_ref(),
@@ -617,12 +628,8 @@ where
         // The current vector carries live bit-reader/cursor state, so a skip
         // within it advances it in place rather than jumping.
         if let Some(cur) = self.current.as_mut() {
-            let within = left.min(cur.remaining);
-            if cur.vector.bit_width != 0 {
-                cur.reader.skip(within, cur.vector.bit_width as usize);
-            }
-            cur.delivered += within;
-            cur.remaining -= within;
+            let within = left.min(cur.remaining());
+            cur.advance(within);
             self.num_values -= within;
             left -= within;
         }
@@ -651,12 +658,7 @@ where
         // get/skip; a mid-vector landing must be parsed and advanced now.
         if within > 0 {
             self.load_current_vector()?;
-            let cur = self.current.as_mut().unwrap();
-            if cur.vector.bit_width != 0 {
-                cur.reader.skip(within, cur.vector.bit_width as usize);
-            }
-            cur.delivered = within;
-            cur.remaining -= within;
+            self.current.as_mut().unwrap().advance(within);
         }
 
         Ok(to_skip)
@@ -739,7 +741,7 @@ mod tests {
     }
 
     /// Decode a full page through the streaming decoder.
-    fn decode_page<T: DataType>(page: Vec<u8>, num_values: usize) -> Vec<T::T>
+    pub(super) fn decode_page<T: DataType>(page: Vec<u8>, num_values: usize) -> Vec<T::T>
     where
         T::T: AlpFloat,
         <T::T as AlpFloat>::Exact: Send,

@@ -174,7 +174,7 @@ fn columns(names: &[&str]) -> ProjectionMask {
 
 /// Decode `file`, pushing exactly the requested ranges. Returns the batches
 /// and every range that the decoder requested, in order.
-fn drive_file(
+pub(super) fn drive_file(
     mut decoder: ParquetPushDecoder,
     file: &Bytes,
 ) -> (Vec<RecordBatch>, Vec<Range<u64>>) {

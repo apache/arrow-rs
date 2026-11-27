@@ -4,12 +4,16 @@
 
 use std::sync::{Arc, RwLock};
 
+use arrow_array::Datum;
+use arrow_array::cast::AsArray;
+use arrow_array::types::{Float32Type, Float64Type};
 use arrow_schema::{DataType, Fields, SchemaBuilder};
 
 use crate::arrow::ProjectionMask;
 use crate::arrow::array_reader::byte_view_array::make_byte_view_array_reader;
 use crate::arrow::array_reader::cached_array_reader::CacheRole;
 use crate::arrow::array_reader::cached_array_reader::CachedArrayReader;
+use crate::arrow::array_reader::comparison::ComparisonArrayReader;
 use crate::arrow::array_reader::empty_array::make_empty_array_reader;
 use crate::arrow::array_reader::fixed_len_byte_array::make_fixed_len_byte_array_reader;
 use crate::arrow::array_reader::row_group_cache::RowGroupCache;
@@ -20,8 +24,8 @@ use crate::arrow::array_reader::{
     NullArrayReader, PrimitiveArrayReader, RowGroups, StructArrayReader,
     make_byte_array_dictionary_reader, make_byte_array_reader,
 };
-use crate::arrow::arrow_reader::DEFAULT_BATCH_SIZE;
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
+use crate::arrow::arrow_reader::{ArrowPredicate, DEFAULT_BATCH_SIZE, single_top_level_leaf};
 use crate::arrow::schema::{ParquetField, ParquetFieldType, VirtualColumnType};
 use crate::basic::Type as PhysicalType;
 use crate::data_type::{BoolType, DoubleType, FloatType, Int32Type, Int64Type, Int96Type};
@@ -182,6 +186,106 @@ impl<'a> ArrayReaderBuilder<'a> {
             .unwrap_or_else(|| make_empty_array_reader(self.num_rows()));
 
         Ok(reader)
+    }
+
+    /// Create an [`ArrayReader`] for evaluating `predicate`.
+    ///
+    /// Returns `true` with a reader whose only column is the predicate's result
+    /// when the comparison from [`ArrowPredicate::comparison`] can be evaluated
+    /// while decoding. Otherwise returns `false` with a reader for the
+    /// predicate's projection.
+    pub(crate) fn build_predicate_reader(
+        &self,
+        field: Option<&ParquetField>,
+        predicate: &dyn ArrowPredicate,
+    ) -> Result<(Box<dyn ArrayReader>, bool)> {
+        if let Some(reader) = self.build_comparison_reader(field, predicate)? {
+            return Ok((reader, true));
+        }
+        let reader = self.build_array_reader(field, predicate.projection())?;
+        Ok((reader, false))
+    }
+
+    /// A reader of `predicate`'s comparison when it projects one top-level,
+    /// non-repeated FLOAT or DOUBLE column read as `Float32` or `Float64` and
+    /// compares it with a non-null scalar of the same type.
+    fn build_comparison_reader(
+        &self,
+        field: Option<&ParquetField>,
+        predicate: &dyn ArrowPredicate,
+    ) -> Result<Option<Box<dyn ArrayReader>>> {
+        let (Some(root), Some(comparison)) = (field, predicate.comparison()) else {
+            return Ok(None);
+        };
+        let (Some(children), DataType::Struct(arrow_fields)) = (root.children(), &root.arrow_type)
+        else {
+            return Ok(None);
+        };
+        let schema = self.row_groups.metadata().file_metadata().schema_descr();
+        let Some(col_idx) = single_top_level_leaf(predicate.projection(), schema) else {
+            return Ok(None);
+        };
+        let Some((child_idx, leaf, primitive_type)) =
+            children
+                .iter()
+                .enumerate()
+                .find_map(|(child_idx, child)| match &child.field_type {
+                    ParquetFieldType::Primitive {
+                        col_idx: idx,
+                        primitive_type,
+                    } if *idx == col_idx => Some((child_idx, child, primitive_type)),
+                    _ => None,
+                })
+        else {
+            return Ok(None);
+        };
+        let (scalar, _) = comparison.scalar().get();
+        if scalar.is_null(0) {
+            return Ok(None);
+        }
+
+        let column_desc = Arc::new(ColumnDescriptor::new(
+            primitive_type.clone(),
+            leaf.def_level,
+            leaf.rep_level,
+            ColumnPath::new(vec![]),
+        ));
+        let physical_type = primitive_type.get_physical_type();
+        let op = comparison.op();
+        let reader: Box<dyn ArrayReader> = match (&leaf.arrow_type, scalar.data_type()) {
+            (DataType::Float32, DataType::Float32) if physical_type == PhysicalType::FLOAT => {
+                Box::new(ComparisonArrayReader::<FloatType>::new(
+                    self.row_groups.column_chunks(col_idx)?,
+                    column_desc,
+                    self.batch_size,
+                    op,
+                    scalar.as_primitive::<Float32Type>().value(0),
+                ))
+            }
+            (DataType::Float64, DataType::Float64) if physical_type == PhysicalType::DOUBLE => {
+                Box::new(ComparisonArrayReader::<DoubleType>::new(
+                    self.row_groups.column_chunks(col_idx)?,
+                    column_desc,
+                    self.batch_size,
+                    op,
+                    scalar.as_primitive::<Float64Type>().value(0),
+                ))
+            }
+            _ => return Ok(None),
+        };
+
+        let output = arrow_fields[child_idx]
+            .as_ref()
+            .clone()
+            .with_data_type(DataType::Boolean);
+        Ok(Some(Box::new(StructArrayReader::new(
+            DataType::Struct(Fields::from(vec![output])),
+            vec![reader],
+            root.def_level,
+            root.rep_level,
+            root.nullable,
+            None,
+        ))))
     }
 
     /// Return the total number of rows

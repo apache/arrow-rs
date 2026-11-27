@@ -11,8 +11,8 @@ use crate::arrow::array_reader::{ArrayReaderBuilder, CacheOptions, RowGroupCache
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use crate::arrow::arrow_reader::selection::{LoadedRowRanges, RowSelectionStrategy};
 use crate::arrow::arrow_reader::{
-    ParquetRecordBatchReader, PredicateOptions, ReadPlanBuilder, RowFilter, RowSelection,
-    RowSelectionPolicy,
+    ArrowPredicate, ParquetRecordBatchReader, PredicateOptions, PushedComparison, ReadPlanBuilder,
+    RowFilter, RowSelection, RowSelectionPolicy,
 };
 use crate::arrow::in_memory_row_group::ColumnChunkData;
 use crate::arrow::push_decoder::reader_builder::data::DataRequestBuilder;
@@ -556,11 +556,13 @@ impl RowGroupReaderBuilder {
 
                 let cache_options = filter_info.cache_builder().producer();
 
-                let array_reader = ArrayReaderBuilder::new(&row_group, &self.metrics)
+                let (array_reader, pushed) = ArrayReaderBuilder::new(&row_group, &self.metrics)
                     .with_batch_size(self.batch_size)
                     .with_cache_options(Some(&cache_options))
                     .with_parquet_metadata(&self.metadata)
-                    .build_array_reader(self.fields.as_deref(), predicate.projection())?;
+                    .build_predicate_reader(self.fields.as_deref(), predicate)?;
+                let mut pushed =
+                    pushed.then(|| PushedComparison::new(predicate.projection().clone()));
 
                 // Auto resolution and loaded ranges are projection-specific, so restore the
                 // configured policy before preparing each predicate.
@@ -586,8 +588,11 @@ impl RowGroupReaderBuilder {
                 // Evaluate the filter via `with_predicate_options`, opting into
                 // early termination when this is the final predicate and an
                 // output limit was set.
-                let mut predicate_options =
-                    PredicateOptions::new(array_reader, filter_info.current_mut());
+                let predicate: &mut dyn ArrowPredicate = match pushed.as_mut() {
+                    Some(pushed) => pushed,
+                    None => filter_info.current_mut(),
+                };
+                let mut predicate_options = PredicateOptions::new(array_reader, predicate);
                 if let Some(limit) = predicate_limit {
                     predicate_options = predicate_options.with_limit(limit, row_count);
                 }
@@ -853,8 +858,14 @@ impl RowGroupReaderBuilder {
         if max_predicate_cache_size == 0 {
             return None;
         }
-        let mut cache_projection = filter.predicates.first()?.projection().clone();
-        for predicate in &filter.predicates {
+        // A predicate with a comparison may be evaluated from encoded pages, which
+        // leaves no decoded column to cache.
+        let mut cached = filter
+            .predicates
+            .iter()
+            .filter(|predicate| predicate.comparison().is_none());
+        let mut cache_projection = cached.next()?.projection().clone();
+        for predicate in cached {
             cache_projection.union(predicate.projection());
         }
         cache_projection.intersect(projection);
