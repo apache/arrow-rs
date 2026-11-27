@@ -763,6 +763,15 @@ impl RowGroupMetaData {
         self.columns.iter().map(|c| c.total_compressed_size).sum()
     }
 
+    pub(super) fn checked_compressed_size(&self) -> Result<i64> {
+        let size: i128 = self
+            .columns
+            .iter()
+            .map(|c| i128::from(c.total_compressed_size))
+            .sum();
+        i64::try_from(size).map_err(|_| general_err!("Row group compressed size exceeds i64 range"))
+    }
+
     /// Returns reference to a schema descriptor.
     pub fn schema_descr(&self) -> &SchemaDescriptor {
         self.schema_descr.as_ref()

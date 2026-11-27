@@ -1023,7 +1023,9 @@ impl ParquetMetaDataReader {
 
         let footer = FooterTail::try_new(&footer)?;
         let metadata_len = footer.metadata_length();
-        let footer_metadata_len = FOOTER_SIZE + metadata_len;
+        let footer_metadata_len = metadata_len
+            .checked_add(FOOTER_SIZE)
+            .ok_or_else(|| general_err!("Footer metadata length exceeds usize::MAX"))?;
         self.metadata_size = Some(footer_metadata_len);
 
         if footer_metadata_len as u64 > file_size {
@@ -1089,24 +1091,27 @@ impl ParquetMetaDataReader {
 
         let footer = FooterTail::try_new(&footer)?;
         let length = footer.metadata_length();
+        let footer_metadata_len = length
+            .checked_add(FOOTER_SIZE)
+            .ok_or_else(|| general_err!("Footer metadata length exceeds usize::MAX"))?;
 
-        if file_size < (length + FOOTER_SIZE) as u64 {
+        if file_size < footer_metadata_len as u64 {
             return Err(eof_err!(
                 "file size of {} is less than footer + metadata {}",
                 file_size,
-                length + FOOTER_SIZE
+                footer_metadata_len
             ));
         }
 
         // Did not fetch the entire file metadata in the initial read, need to make a second request
         if length > suffix_len - FOOTER_SIZE {
-            let metadata_start = file_size - (length + FOOTER_SIZE) as u64;
+            let metadata_start = file_size - footer_metadata_len as u64;
             let meta = fetch
                 .fetch(metadata_start..(file_size - FOOTER_SIZE as u64))
                 .await?;
             Ok((self.decode_footer_metadata(meta, file_size, footer)?, None))
         } else {
-            let metadata_start = (file_size - (length + FOOTER_SIZE) as u64 - footer_start)
+            let metadata_start = (file_size - footer_metadata_len as u64 - footer_start)
                 .try_into()
                 .expect("metadata length should never be larger than u32");
             let slice = suffix.slice(metadata_start..suffix_len - FOOTER_SIZE);
@@ -1143,12 +1148,14 @@ impl ParquetMetaDataReader {
 
         let footer = FooterTail::try_new(&footer)?;
         let length = footer.metadata_length();
+        let metadata_offset = length
+            .checked_add(FOOTER_SIZE)
+            .ok_or_else(|| general_err!("Footer metadata length exceeds usize::MAX"))?;
         // fake file size as we are only parsing the footer metadata here
         // (cant be parsing page indexes without the full file size)
-        let file_size = (length + FOOTER_SIZE) as u64;
+        let file_size = metadata_offset as u64;
 
         // Did not fetch the entire file metadata in the initial read, need to make a second request
-        let metadata_offset = length + FOOTER_SIZE;
         if length > suffix_len - FOOTER_SIZE {
             let meta = fetch.fetch_suffix(metadata_offset).await?;
 
