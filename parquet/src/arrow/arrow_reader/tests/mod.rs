@@ -369,3 +369,20 @@ fn generate_file_with_row_numbers(rng: &mut impl Rng) -> (Bytes, ParquetMetaData
 
     (Bytes::from(buf), metadata)
 }
+
+#[test]
+fn test_dictionary_page_declaring_too_many_values() {
+    // 120 bytes, one INT64 row. Its 8-byte dictionary page declares i32::MAX values.
+    // https://github.com/apache/arrow-rs/issues/12471
+    let hex = "504152311504151015104c15feffffff0f15001200002a000000000000001500150415042c1502151015061506000000021502192c4806736368656d6115020015042500180163001602191c191c26081c150419350006101918016315001602165a165a263c26080000165a160200003f00000050415231";
+    let bytes: Vec<u8> = (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+        .collect();
+    let reader = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(bytes))
+        .unwrap()
+        .build()
+        .unwrap();
+    let err = reader.collect::<Result<Vec<_>, _>>().unwrap_err();
+    assert!(err.to_string().contains("dictionary page"), "{err}");
+}
