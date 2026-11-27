@@ -89,12 +89,9 @@ fn read_varint_array(buf: [u8; 10]) -> Option<(u64, usize)> {
 #[cold]
 fn read_varint_slow(buf: &[u8]) -> Option<(u64, usize)> {
     let mut value = 0;
-    for (count, _byte) in buf.iter().take(10).enumerate() {
-        let byte = buf[count];
+    for (count, &byte) in buf.iter().take(10).enumerate() {
         value |= u64::from(byte & 0x7F) << (count * 7);
         if byte <= 0x7F {
-            // Check for u64::MAX overflow. See [`ConsumeVarint`][1] for details.
-            // [1]: https://github.com/protocolbuffers/protobuf-go/blob/v1.27.1/encoding/protowire/wire.go#L358
             return (count != 9 || byte < 2).then_some((value, count + 1));
         }
     }
