@@ -49,7 +49,7 @@ pub(super) fn extend_nulls(mutable: &mut _MutableArrayData, len: usize) -> Resul
     };
 
     for child in &mut mutable.child_data {
-        child.try_extend_nulls(len * size)?;
+        child.try_extend_nulls_inner(len * size, false)?;
     }
     Ok(())
 }
