@@ -13,43 +13,6 @@
 //! * A dense union can hold child rows that no row references.
 //!
 //! [`minify`] returns a logically equal array without this unused memory.
-//!
-//! # Reuse policy
-//!
-//! [`minify`] copies a buffer only when its allocation is larger than the
-//! visible data needs (rounded up to 64 bytes). Otherwise it reuses the buffer
-//! without a copy. This makes `minify` cheap on an array that is already
-//! minimal, and calling it twice copies nothing the second time.
-//!
-//! A buffer that other arrays share counts as too large when its allocation
-//! is larger than the visible data. `minify` copies it, so the total memory in
-//! use can grow until the other arrays drop the shared buffer.
-//!
-//! A buffer can also appear more than once inside `array`, for example in
-//! two struct columns over the same array, or in two dictionaries over the
-//! same values. Struct columns over the same rows of the same buffers share
-//! one minified column. In other cases `minify` can copy the buffer once per
-//! reference. If the result then uses more memory than `array` (beyond 64
-//! bytes per allocation), `minify` returns `array` unchanged.
-//!
-//! # Null rows
-//!
-//! `minify` gives every null row of a byte, list, map or list view array an
-//! empty value range, and every null row of a byte view array an empty view.
-//! The child array or value buffers then hold only the data of valid rows.
-//!
-//! An O(rows) check over the offsets and the null bitmap finds out if any null
-//! row has a non-empty range. If none has, `minify` copies or slices the
-//! referenced range in one piece. Otherwise it copies the ranges of each run of
-//! valid rows.
-//!
-//! # Limitations
-//!
-//! * `minify` does not deduplicate dictionary values or merge equal runs.
-//! * Null rows of a struct or fixed size list array keep their child data.
-//!   The child rows stay at the same positions, so `minify` cannot drop them.
-//! * The rows of a sparse union keep the data of all children, also of the
-//!   children that their type ids do not select.
 
 use std::collections::HashSet;
 use std::ops::Range;
@@ -72,12 +35,9 @@ use crate::take::take;
 /// only the data that its rows reference.
 ///
 /// The result has an offset of zero, except when `minify` returns `array`
-/// unchanged because aliased buffers would make the result larger (see the
-/// [module documentation](self)). `minify` applies itself recursively to
+/// unchanged because aliased buffers would make the result larger (see
+/// [Reuse policy](#reuse-policy)). `minify` applies itself recursively to
 /// child arrays, dictionary values and run-end encoded values.
-///
-/// See the [module documentation](self) for the policy on when `minify`
-/// reuses a buffer instead of copying it.
 ///
 /// # Example
 ///
@@ -96,10 +56,46 @@ use crate::take::take;
 ///
 /// # Errors
 ///
-/// `minify` returns `InvalidArgumentError` for a time type with an invalid
-/// unit, a dictionary with an invalid key type and a run-end encoded array
-/// with an invalid run end type. It also returns the error of an array
-/// constructor that rejects the minified parts.
+/// `minify` returns `InvalidArgumentError` for an array with an invalid data
+/// type, for example `Time32(Microsecond)` or a dictionary with `Float32`
+/// keys.
+///
+/// # Reuse policy
+///
+/// `minify` copies a buffer only when its allocation is larger than the
+/// visible data needs (rounded up to 64 bytes). Otherwise it reuses the buffer
+/// without a copy. This makes `minify` cheap on an array that is already
+/// minimal, and calling it twice copies nothing the second time.
+///
+/// A buffer that other arrays share counts as too large when its allocation
+/// is larger than the visible data. `minify` copies it, so the total memory in
+/// use can grow until the other arrays drop the shared buffer.
+///
+/// A buffer can also appear more than once inside `array`, for example in
+/// two struct columns over the same array, or in two dictionaries over the
+/// same values. Struct columns over the same rows of the same buffers share
+/// one minified column. In other cases `minify` can copy the buffer once per
+/// reference. If the result then uses more memory than `array` (beyond 64
+/// bytes per allocation), `minify` returns `array` unchanged.
+///
+/// # Null rows
+///
+/// `minify` gives every null row of a byte, list, map or list view array an
+/// empty value range, and every null row of a byte view array an empty view.
+/// The child array or value buffers then hold only the data of valid rows.
+///
+/// An O(rows) check over the offsets and the null bitmap finds out if any null
+/// row has a non-empty range. If none has, `minify` copies or slices the
+/// referenced range in one piece. Otherwise it copies the ranges of each run of
+/// valid rows.
+///
+/// # Limitations
+///
+/// * `minify` does not deduplicate dictionary values or merge equal runs.
+/// * Null rows of a struct or fixed size list array keep their child data.
+///   The child rows stay at the same positions, so `minify` cannot drop them.
+/// * The rows of a sparse union keep the data of all children, also of the
+///   children that their type ids do not select.
 pub fn minify(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     let minified = minify_inner(array)?;
     // Buffers that `array` references more than once can be copied once per
