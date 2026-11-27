@@ -177,9 +177,14 @@ pub(super) fn columns(names: &[&str]) -> ProjectionMask {
 
 /// Decode `file`, pushing exactly the requested ranges. Returns the batches
 /// and every range that the decoder requested, in order.
+///
+/// `last_batch_ends_scan`: the decoder knows that the last batch is the last
+/// when it returns that batch. This is false for batch mode with predicates:
+/// the windows after the last batch can have rows that no predicate passes.
 fn drive_file(
     mut decoder: ParquetPushDecoder,
     file: &Bytes,
+    last_batch_ends_scan: bool,
 ) -> (Vec<RecordBatch>, Vec<Range<u64>>) {
     let mut batches = vec![];
     let mut requested = vec![];
@@ -203,10 +208,13 @@ fn drive_file(
         }
     }
     // The last batch finishes the last row group, which releases its bytes.
-    assert_eq!(
-        buffered_after_last_batch, 0,
-        "bytes left after the last batch"
-    );
+    if last_batch_ends_scan {
+        assert_eq!(
+            buffered_after_last_batch, 0,
+            "bytes left after the last batch"
+        );
+    }
+    assert_eq!(decoder.buffered_bytes(), 0, "bytes left after the scan");
     (batches, requested)
 }
 
@@ -415,10 +423,14 @@ struct Decoded {
 #[track_caller]
 fn assert_same_rows(scan: &Scan) -> Decoded {
     let (schema, expected) = scan.sync_batches();
-    let (actual, requested) = drive_file(scan.row_group_decoder(), scan.data());
+    let (actual, requested) = drive_file(scan.row_group_decoder(), scan.data(), true);
     // `RequestGranularity::Batch` gives the same batches, with the same
     // boundaries.
-    let (batch_mode, mut batch_mode_requested) = drive_file(scan.batch_decoder(), scan.data());
+    let (batch_mode, mut batch_mode_requested) = drive_file(
+        scan.batch_decoder(),
+        scan.data(),
+        scan.predicates.is_empty(),
+    );
     // Do not print the batches: proptest runs a failing scan many times to
     // shrink it.
     assert!(batch_mode == actual, "batch mode differs for {scan:?}");

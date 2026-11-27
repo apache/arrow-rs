@@ -516,8 +516,6 @@ fn test_predicates_do_not_wait_for_the_row_group() {
 /// Resident bytes stay bounded with a selective predicate, including the
 /// bytes of pages that were pushed ahead but that no row needs.
 #[test]
-#[ignore = "prototype: predicates read the full row group, and request a predicate column \
-            chunk as one range, which buffers pushed one page at a time do not satisfy"]
 fn test_predicates_release_bytes_pushed_ahead() {
     let mut decoder = filtered(vec![PredicateSpec::new("a", Cmp::Ge(550))]).batch_decoder();
     // Push the first row group, one buffer per page.
