@@ -159,6 +159,8 @@ struct Args {
 /// Different available commands.
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Close the current server session.
+    CloseSession,
     /// Get catalogs.
     Catalogs,
     /// Get db schemas for a catalog.
@@ -243,6 +245,11 @@ async fn main() -> Result<()> {
         .context("setup client")?;
 
     let flight_info = match args.cmd {
+        Command::CloseSession => {
+            let result = client.close().await.context("close session")?;
+            println!("{result:?}");
+            return Ok(());
+        }
         Command::Catalogs => client.get_catalogs().await.context("get catalogs")?,
         Command::DbSchemas {
             catalog,

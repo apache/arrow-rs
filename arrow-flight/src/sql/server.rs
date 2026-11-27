@@ -21,9 +21,9 @@ use super::{
     SqlInfo, TicketStatementQuery,
 };
 use crate::{
-    Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
-    HandshakeRequest, HandshakeResponse, PutResult, SchemaResult, Ticket,
-    flight_service_server::FlightService, r#gen::PollInfo,
+    Action, ActionType, CloseSessionRequest, CloseSessionResult, Criteria, Empty, FlightData,
+    FlightDescriptor, FlightInfo, HandshakeRequest, HandshakeResponse, PutResult, SchemaResult,
+    Ticket, flight_service_server::FlightService, r#gen::PollInfo,
 };
 use futures::{Stream, StreamExt, stream::Peekable};
 use prost::Message;
@@ -37,6 +37,7 @@ pub(crate) static END_TRANSACTION: &str = "EndTransaction";
 pub(crate) static BEGIN_SAVEPOINT: &str = "BeginSavepoint";
 pub(crate) static END_SAVEPOINT: &str = "EndSavepoint";
 pub(crate) static CANCEL_QUERY: &str = "CancelQuery";
+pub(crate) static CLOSE_SESSION: &str = "CloseSession";
 
 /// Implements FlightSqlService to handle the flight sql protocol
 #[tonic::async_trait]
@@ -459,6 +460,22 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
         None
     }
 
+    /// Close the session identified by the request headers.
+    ///
+    /// `CloseSession` actions are dispatched to this method instead of
+    /// [`Self::do_action_fallback`]. Implementations that previously handled
+    /// `CloseSession` in that fallback should move their session cleanup logic here;
+    /// request decoding and response encoding are handled by the library.
+    async fn do_action_close_session(
+        &self,
+        _query: CloseSessionRequest,
+        _request: Request<Action>,
+    ) -> Result<CloseSessionResult, Status> {
+        Err(Status::unimplemented(
+            "do_action_close_session has no default implementation",
+        ))
+    }
+
     /// Create a prepared statement from given SQL statement.
     async fn do_action_create_prepared_statement(
         &self,
@@ -833,6 +850,13 @@ where
                 Response Message: ActionCancelQueryResult"
                 .into(),
         };
+        let close_session_action_type = ActionType {
+            r#type: CLOSE_SESSION.to_string(),
+            description: "Closes the current session.\n
+                Request Message: CloseSessionRequest\n
+                Response Message: CloseSessionResult"
+                .into(),
+        };
         let mut actions: Vec<Result<ActionType, Status>> = vec![
             Ok(create_prepared_statement_action_type),
             Ok(close_prepared_statement_action_type),
@@ -842,6 +866,7 @@ where
             Ok(begin_savepoint_action_type),
             Ok(end_savepoint_action_type),
             Ok(cancel_query_action_type),
+            Ok(close_session_action_type),
         ];
 
         if let Some(mut custom_actions) = self.list_custom_actions().await {
@@ -964,6 +989,14 @@ where
             let stmt = self.do_action_cancel_query(cmd, request).await?;
             let output = futures::stream::iter(vec![Ok(super::super::r#gen::Result {
                 body: stmt.as_any().encode_to_vec().into(),
+            })]);
+            return Ok(Response::new(Box::pin(output)));
+        } else if request.get_ref().r#type == CLOSE_SESSION {
+            let query = CloseSessionRequest::decode(&*request.get_ref().body)
+                .map_err(decode_error_to_status)?;
+            let result = self.do_action_close_session(query, request).await?;
+            let output = futures::stream::iter(vec![Ok(super::super::r#gen::Result {
+                body: result.encode_to_vec().into(),
             })]);
             return Ok(Response::new(Box::pin(output)));
         }
