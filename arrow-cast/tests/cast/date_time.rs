@@ -2723,3 +2723,58 @@ fn test_cast_temporal_scaling_boundaries() {
     check::<Date64Type, TimestampMicrosecondType>(MICROSECONDS / MILLISECONDS);
     check::<Date64Type, TimestampNanosecondType>(NANOSECONDS / MILLISECONDS);
 }
+
+#[test]
+fn test_cast_timestamp_and_duration_to_coarser_unit() {
+    // Truncates toward zero, as `/` does, and keeps nulls
+    let edges = [
+        i64::MIN,
+        i64::MIN + 1,
+        -1_000_000_001,
+        -1_000_000_000,
+        -999_999_999,
+        -1001,
+        -1000,
+        -999,
+        -1,
+        0,
+        1,
+        999,
+        1000,
+        1001,
+        999_999_999,
+        1_000_000_000,
+        1_000_000_001,
+        i64::MAX - 1,
+        i64::MAX,
+    ];
+    let values: Int64Array = edges.into_iter().map(Some).chain([None]).collect();
+    let units = [
+        TimeUnit::Second,
+        TimeUnit::Millisecond,
+        TimeUnit::Microsecond,
+        TimeUnit::Nanosecond,
+    ];
+    for array in [values.clone(), values.slice(3, 15)] {
+        for (i, from) in units.into_iter().enumerate() {
+            for to in &units[..i] {
+                let ratio = time_unit_multiple(&from) / time_unit_multiple(to);
+                let expected: Int64Array = array.iter().map(|v| v.map(|v| v / ratio)).collect();
+                for (from_type, to_type) in [
+                    (Timestamp(from, None), Timestamp(*to, None)),
+                    (Duration(from), Duration(*to)),
+                ] {
+                    let input = cast(&array, &from_type).unwrap();
+                    let output = cast(&input, &to_type).unwrap();
+                    assert_eq!(output.data_type(), &to_type);
+                    let output = cast(&output, &Int64).unwrap();
+                    assert_eq!(
+                        output.as_primitive::<Int64Type>(),
+                        &expected,
+                        "{from_type} to {to_type}"
+                    );
+                }
+            }
+        }
+    }
+}

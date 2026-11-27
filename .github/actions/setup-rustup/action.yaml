@@ -9,7 +9,7 @@ runs:
   steps:
     - name: Install rustup
       shell: bash
-      run: |
+      run: | # zizmor: ignore[github-env] fixed path, no untrusted input
         curl --proto '=https' --tlsv1.2 --retry 3 -sSf https://sh.rustup.rs \
           | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
         echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"

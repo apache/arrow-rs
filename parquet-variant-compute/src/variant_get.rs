@@ -162,10 +162,16 @@ pub(crate) fn follow_shredded_path_element(
             })?;
 
             let state = ShreddingState::try_from(struct_array)?;
-            Ok(ShreddedPathStep::Success {
-                state,
-                path_nulls: None,
-            })
+            // Encoded Variant nulls and valid typed structs (including empty objects) are present.
+            let path_nulls = state.value_column().nulls().and_then(|value_nulls| {
+                match state.typed_value_column() {
+                    Some(typed_value) => typed_value.logical_nulls().map(|typed_nulls| {
+                        NullBuffer::new(value_nulls.inner() | typed_nulls.inner())
+                    }),
+                    None => Some(value_nulls.clone()),
+                }
+            });
+            Ok(ShreddedPathStep::Success { state, path_nulls })
         }
         VariantPathElement::Index { index } => {
             let typed_value = typed_value.as_ref();
@@ -277,6 +283,7 @@ fn shredded_get_path(
 
     // Peel away the prefix of path elements that traverses the shredded parts of this variant
     // column. Shredding will traverse the rest of the path on a per-row basis.
+    let variant_output = as_field.is_none_or(Field::has_valid_extension_type::<VariantType>);
     let mut shredding_state = input.shredding_state().clone();
     let mut accumulated_nulls = input.inner().nulls().cloned();
     let mut path_index = 0;
@@ -288,8 +295,12 @@ fn shredded_get_path(
                     accumulated_nulls =
                         NullBuffer::union(accumulated_nulls.as_ref(), typed_value.nulls());
                 }
-                accumulated_nulls =
-                    NullBuffer::union(accumulated_nulls.as_ref(), path_nulls.as_ref());
+                // Typed outputs skip this: a missing field's null `typed_value` already
+                // yields NULL we can zero-copy.
+                if variant_output || matches!(path_element, VariantPathElement::Index { .. }) {
+                    accumulated_nulls =
+                        NullBuffer::union(accumulated_nulls.as_ref(), path_nulls.as_ref());
+                }
                 shredding_state = state;
                 path_index += 1;
             }
@@ -1931,6 +1942,58 @@ mod test {
         assert_eq!(result_variant.value(0), Variant::Int32(1));
         // Row 1: expect x=42
         assert_eq!(result_variant.value(1), Variant::Int32(42));
+    }
+
+    #[test]
+    fn test_missing_shredded_object_field_preserves_null_semantics() {
+        let b = DataType::Struct(vec![Field::new("b", DataType::Int64, true)].into());
+        let schema = DataType::Struct(vec![Field::new("a", b, true)].into());
+        let rows = [
+            Some(r#"{"a": {"b": 7}}"#),
+            Some(r#"{"a": {}}"#),
+            Some(r#"{"a": 7}"#),
+            Some(r#"{"a": null}"#),
+            Some("{}"),
+            None,
+        ];
+        let input =
+            json_to_variant(&(Arc::new(StringArray::from(rows.to_vec())) as ArrayRef)).unwrap();
+        let shredded = shred_variant(&input, &schema).unwrap();
+        let cases = [
+            (
+                "a",
+                [
+                    Some(r#"{"b":7}"#),
+                    Some("{}"),
+                    Some("7"),
+                    Some("null"),
+                    None,
+                    None,
+                ],
+            ),
+            ("a.b", [Some("7"), None, None, None, None, None]),
+        ];
+        for (path, expected) in cases {
+            let options = GetOptions::new_with_path(VariantPath::try_from(path).unwrap());
+            let expected = StringArray::from(expected.to_vec());
+            for array in [
+                ArrayRef::from(input.clone()),
+                ArrayRef::from(shredded.clone()),
+            ] {
+                for offset in [0, 1] {
+                    let array = array.slice(offset, array.len() - offset);
+                    let result = variant_get(&array, options.clone()).unwrap();
+                    let result =
+                        crate::unshred_variant(&VariantArray::try_new(&result).unwrap()).unwrap();
+                    let json = crate::variant_to_json(&ArrayRef::from(result)).unwrap();
+                    assert_eq!(
+                        json,
+                        expected.slice(offset, array.len()),
+                        "{path}, offset={offset}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

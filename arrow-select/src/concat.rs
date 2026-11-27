@@ -567,7 +567,7 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
         ));
     } else if arrays.len() == 1 {
         let array = arrays[0];
-        return Ok(array.slice(0, array.len()));
+        return Ok(array.to_arc());
     }
 
     let d = arrays[0].data_type();

@@ -5,7 +5,7 @@
 //! Defines windowing functions, like `shift`ing
 
 use crate::concat::concat;
-use arrow_array::{Array, ArrayRef, make_array, new_null_array};
+use arrow_array::{Array, ArrayRef, new_null_array};
 use arrow_schema::ArrowError;
 use num_traits::abs;
 
@@ -41,7 +41,7 @@ use num_traits::abs;
 pub fn shift(array: &dyn Array, offset: i64) -> Result<ArrayRef, ArrowError> {
     let value_len = array.len() as i64;
     if offset == 0 {
-        Ok(make_array(array.to_data()))
+        Ok(array.to_arc())
     } else if offset == i64::MIN || abs(offset) >= value_len {
         Ok(new_null_array(array.data_type(), array.len()))
     } else {

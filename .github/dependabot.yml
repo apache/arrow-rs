@@ -12,7 +12,7 @@ updates:
       interval: daily
     open-pull-requests-limit: 10
     target-branch: main
-    labels: [auto-dependencies]
+    labels: [dependencies]
     groups:
       prost:
         applies-to: version-updates
@@ -40,7 +40,7 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
-    labels: [auto-dependencies, development-process]
+    labels: [dependencies, development-process]
     groups:
       codeql-actions:
         patterns:
@@ -50,7 +50,7 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
-    labels: [auto-dependencies, development-process]
+    labels: [dependencies, development-process]
     groups:
       all:
         patterns:
@@ -62,6 +62,6 @@ updates:
     schedule:
       interval: "weekly"
       day: "friday"
-    labels: [auto-dependencies, development-process]
+    labels: [dependencies, development-process]
     cooldown:
       default-days: 7

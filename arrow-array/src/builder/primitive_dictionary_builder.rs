@@ -4,11 +4,9 @@
 
 use crate::builder::{ArrayBuilder, PrimitiveBuilder};
 use crate::types::ArrowDictionaryKeyType;
-use crate::{
-    Array, ArrayRef, ArrowPrimitiveType, DictionaryArray, PrimitiveArray, TypedDictionaryArray,
-};
+use crate::{ArrayRef, ArrowPrimitiveType, DictionaryArray, PrimitiveArray, TypedDictionaryArray};
 use arrow_buffer::{ArrowNativeType, ToByteSlice};
-use arrow_schema::{ArrowError, DataType};
+use arrow_schema::ArrowError;
 use num_traits::NumCast;
 use std::any::Any;
 use std::collections::HashMap;
@@ -427,17 +425,9 @@ where
         let values = self.values_builder.finish();
         let keys = self.keys_builder.finish();
 
-        let data_type =
-            DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(values.data_type().clone()));
-
-        let builder = keys
-            .into_data()
-            .into_builder()
-            .data_type(data_type)
-            .child_data(vec![values.into_data()]);
-
-        // SAFETY: builder is constructed from valid key/value arrays produced by the builder
-        DictionaryArray::from(unsafe { builder.build_unchecked() })
+        // SAFETY: keys and values were produced by this builder; the builder
+        // only appends keys that index into the values it has built so far.
+        unsafe { DictionaryArray::new_unchecked(keys, Arc::new(values)) }
     }
 
     /// Builds the `DictionaryArray` without resetting the builder.
@@ -445,17 +435,9 @@ where
         let values = self.values_builder.finish_cloned();
         let keys = self.keys_builder.finish_cloned();
 
-        let data_type =
-            DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(values.data_type().clone()));
-
-        let builder = keys
-            .into_data()
-            .into_builder()
-            .data_type(data_type)
-            .child_data(vec![values.into_data()]);
-
-        // SAFETY: builder is constructed from valid key/value arrays produced by the builder
-        DictionaryArray::from(unsafe { builder.build_unchecked() })
+        // SAFETY: keys and values were produced by this builder; the builder
+        // only appends keys that index into the values it has built so far.
+        unsafe { DictionaryArray::new_unchecked(keys, Arc::new(values)) }
     }
 
     /// Builds the `DictionaryArray` without resetting the values builder or
@@ -479,17 +461,9 @@ where
         let values = self.values_builder.finish_cloned();
         let keys = self.keys_builder.finish();
 
-        let data_type =
-            DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(values.data_type().clone()));
-
-        let builder = keys
-            .into_data()
-            .into_builder()
-            .data_type(data_type)
-            .child_data(vec![values.into_data()]);
-
-        // SAFETY: builder is constructed from valid key/value arrays produced by the builder
-        DictionaryArray::from(unsafe { builder.build_unchecked() })
+        // SAFETY: keys and values were produced by this builder; the builder
+        // only appends keys that index into the values it has built so far.
+        unsafe { DictionaryArray::new_unchecked(keys, Arc::new(values)) }
     }
 
     /// Returns the current dictionary values buffer as a slice
@@ -523,7 +497,7 @@ impl<K: ArrowDictionaryKeyType, P: ArrowPrimitiveType> Extend<Option<P::Native>>
 mod tests {
     use super::*;
 
-    use crate::array::{Int32Array, UInt8Array, UInt32Array};
+    use crate::array::{Array, Int32Array, UInt8Array, UInt32Array};
     use crate::builder::Decimal128Builder;
     use crate::cast::AsArray;
     use crate::types::{
@@ -531,6 +505,7 @@ mod tests {
         Int16Type, Int32Type, Int64Type, TimestampNanosecondType, UInt8Type, UInt16Type,
         UInt32Type, UInt64Type,
     };
+    use arrow_schema::DataType;
 
     #[test]
     fn test_primitive_dictionary_builder() {

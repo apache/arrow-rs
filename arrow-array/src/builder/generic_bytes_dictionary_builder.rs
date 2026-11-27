@@ -8,7 +8,7 @@ use crate::{
     Array, ArrayRef, DictionaryArray, GenericByteArray, PrimitiveArray, TypedDictionaryArray,
 };
 use arrow_buffer::ArrowNativeType;
-use arrow_schema::{ArrowError, DataType};
+use arrow_schema::ArrowError;
 use hashbrown::HashTable;
 use num_traits::NumCast;
 use std::any::Any;
@@ -259,8 +259,8 @@ where
     T: ByteArrayType,
 {
     fn get_or_insert_key(&mut self, value: impl AsRef<T::Native>) -> Result<K::Native, ArrowError> {
-        let value_native: &T::Native = value.as_ref();
-        let value_bytes: &[u8] = value_native.as_ref();
+        let value: &T::Native = value.as_ref();
+        let value_bytes: &[u8] = value.as_ref();
 
         let state = &self.state;
         let storage = &mut self.values_builder;
@@ -488,16 +488,9 @@ where
         let values = self.values_builder.finish();
         let keys = self.keys_builder.finish();
 
-        let data_type = DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(T::DATA_TYPE));
-
-        let builder = keys
-            .into_data()
-            .into_builder()
-            .data_type(data_type)
-            .child_data(vec![values.into_data()]);
-
-        // SAFETY: builder is constructed from valid key/value arrays produced by the builder
-        DictionaryArray::from(unsafe { builder.build_unchecked() })
+        // SAFETY: keys and values were produced by this builder; the builder
+        // only appends keys that index into the values it has built so far.
+        unsafe { DictionaryArray::new_unchecked(keys, Arc::new(values)) }
     }
 
     /// Builds the `DictionaryArray` without resetting the builder.
@@ -505,16 +498,9 @@ where
         let values = self.values_builder.finish_cloned();
         let keys = self.keys_builder.finish_cloned();
 
-        let data_type = DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(T::DATA_TYPE));
-
-        let builder = keys
-            .into_data()
-            .into_builder()
-            .data_type(data_type)
-            .child_data(vec![values.into_data()]);
-
-        // SAFETY: builder is constructed from valid key/value arrays produced by the builder
-        DictionaryArray::from(unsafe { builder.build_unchecked() })
+        // SAFETY: keys and values were produced by this builder; the builder
+        // only appends keys that index into the values it has built so far.
+        unsafe { DictionaryArray::new_unchecked(keys, Arc::new(values)) }
     }
 
     /// Builds the `DictionaryArray` without resetting the values builder or
@@ -538,16 +524,9 @@ where
         let values = self.values_builder.finish_cloned();
         let keys = self.keys_builder.finish();
 
-        let data_type = DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(T::DATA_TYPE));
-
-        let builder = keys
-            .into_data()
-            .into_builder()
-            .data_type(data_type)
-            .child_data(vec![values.into_data()]);
-
-        // SAFETY: builder is constructed from valid key/value arrays produced by the builder
-        DictionaryArray::from(unsafe { builder.build_unchecked() })
+        // SAFETY: keys and values were produced by this builder; the builder
+        // only appends keys that index into the values it has built so far.
+        unsafe { DictionaryArray::new_unchecked(keys, Arc::new(values)) }
     }
 
     /// Returns the current null buffer as a slice
@@ -697,6 +676,7 @@ mod tests {
         BinaryType, Int8Type, Int16Type, Int32Type, UInt8Type, UInt16Type, Utf8Type,
     };
     use crate::{ArrowPrimitiveType, BinaryArray, StringArray};
+    use arrow_schema::DataType;
 
     fn test_bytes_dictionary_builder<T>(values: Vec<&T::Native>)
     where
