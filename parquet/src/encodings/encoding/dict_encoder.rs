@@ -148,6 +148,10 @@ impl<T: DataType> DictEncoder<T> {
 impl<T: DataType> Encoder<T> for DictEncoder<T> {
     fn put(&mut self, values: &[T::T]) -> Result<()> {
         self.indices.reserve(values.len());
+        // Once per batch, not per value. A column with no value yet allocates no table.
+        if !values.is_empty() {
+            self.interner.reserve_if_empty();
+        }
         for i in values {
             self.put_one(i)
         }
@@ -390,16 +394,61 @@ mod tests {
 
     #[test]
     fn test_estimated_memory_size_includes_interner_dedup_table() {
-        // The dedup `HashTable` in `Interner` is preallocated with
-        // `DEFAULT_DEDUP_CAPACITY` slots at construction, independent of any
-        // values pushed.
-        let encoder = DictEncoder::<Int32Type>::new(make_col_desc::<Int32Type>());
+        // The dedup `HashTable` in `Interner` is allocated on the first value,
+        // with room for `DEFAULT_DEDUP_CAPACITY` (4096) keys.
+        let mut encoder = DictEncoder::<Int32Type>::new(make_col_desc::<Int32Type>());
 
+        assert_eq!(encoder.estimated_memory_size(), 0);
+
+        encoder.put(&[1]).unwrap();
         let size = encoder.estimated_memory_size();
+        let without_table = encoder.interner.storage().estimated_memory_size()
+            + encoder.indices.capacity() * std::mem::size_of::<u64>();
+        let full_table = 4096 * std::mem::size_of::<u64>();
 
         assert!(
-            size > 0,
-            "memory size should include the preallocated dedup hash table"
+            size >= without_table + full_table,
+            "memory size {size} should include the 4096-entry dedup hash table"
+        );
+        let table = size - without_table;
+
+        // Later batches do not reserve again. With 3,501 keys stored, another
+        // 4096-entry reserve would resize the table.
+        encoder.put(&(2..3_502).collect::<Vec<i32>>()).unwrap();
+        encoder.put(&[3_502]).unwrap();
+        let without_table = encoder.interner.storage().estimated_memory_size()
+            + encoder.indices.capacity() * std::mem::size_of::<u64>();
+        assert_eq!(
+            encoder.estimated_memory_size() - without_table,
+            table,
+            "a later batch should not resize the dedup hash table"
+        );
+    }
+
+    #[test]
+    fn test_dictionary_and_indices_follow_first_seen_order() {
+        // 10,000 distinct values resize the table reserved for 4096 keys.
+        let values: Vec<i32> = (0..40_000).map(|i| (i * 7919) % 10_000).collect();
+        let mut encoder = DictEncoder::<Int32Type>::new(make_col_desc::<Int32Type>());
+        encoder.put(&values).unwrap();
+
+        let mut uniques = vec![];
+        let mut keys = std::collections::HashMap::new();
+        let expected_indices: Vec<u64> = values
+            .iter()
+            .map(|v| {
+                *keys.entry(*v).or_insert_with(|| {
+                    uniques.push(*v);
+                    (uniques.len() - 1) as u64
+                })
+            })
+            .collect();
+        let expected_dict: Vec<u8> = uniques.iter().flat_map(|v| v.to_le_bytes()).collect();
+
+        assert_eq!(encoder.indices, expected_indices);
+        assert_eq!(
+            encoder.write_dict().unwrap().as_ref(),
+            expected_dict.as_slice()
         );
     }
 
@@ -440,7 +489,7 @@ mod tests {
         let size1 = encoder.estimated_memory_size();
 
         // Push more values to trigger uniques capacity growth.
-        // The pre-allocated dedup hash table is unlikely to be resized.
+        // The dedup hash table reserved by the first `put` is unlikely to be resized.
         let values: Vec<i32> = (64..128).collect();
         encoder.put(&values).unwrap();
         // Flush indices so they don't mask the uniques accounting in the lower bound.
