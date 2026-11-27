@@ -569,7 +569,13 @@ pub(crate) struct AvroField {
 impl AvroField {
     /// Returns the arrow [`Field`]
     pub(crate) fn field(&self) -> Field {
-        self.data_type.field_with_name(&self.name)
+        let field = self.data_type.field_with_name(&self.name);
+        // An Avro `null` column only holds nulls, so its field must be nullable
+        if matches!(self.data_type.codec(), Codec::Null) {
+            field.with_nullable(true)
+        } else {
+            field
+        }
     }
 
     /// Returns the [`AvroDataType`]
