@@ -1021,8 +1021,8 @@ mod tests {
         encoder.put(&input).unwrap();
         let encoded = encoder.flush_buffer().unwrap();
         let mut header = bit_util::BitReader::new(encoded.clone());
-        assert_eq!(header.get_vlq_int(), Some(256));
-        assert_eq!(header.get_vlq_int(), Some(4));
+        assert_eq!(header.get_vlq_int().unwrap(), Some(256));
+        assert_eq!(header.get_vlq_int().unwrap(), Some(4));
 
         let mut decoder = create_test_decoder::<Int32Type>(-1, Encoding::DELTA_BINARY_PACKED);
         decoder.set_data(encoded, input.len()).unwrap();
@@ -1050,8 +1050,8 @@ mod tests {
             encoder.put(&input).unwrap();
             let encoded = encoder.flush_buffer().unwrap();
             let mut header = bit_util::BitReader::new(encoded.clone());
-            assert_eq!(header.get_vlq_int(), Some(256));
-            assert_eq!(header.get_vlq_int(), Some(4));
+            assert_eq!(header.get_vlq_int().unwrap(), Some(256));
+            assert_eq!(header.get_vlq_int().unwrap(), Some(4));
 
             let mut decoder = create_test_decoder::<ByteArrayType>(-1, encoding);
             decoder.set_data(encoded, input.len()).unwrap();

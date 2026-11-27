@@ -303,7 +303,12 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
         let mut shift = 7;
         loop {
             let byte = self.read_byte()?;
-            in_progress |= ((byte & 0x7F) as u64).wrapping_shl(shift);
+            // A u64 needs at most 10 bytes, and the 10th byte (shift == 63) may
+            // only contribute a single bit. Anything more is corrupt input.
+            if shift == 63 && byte > 1 {
+                return Err(ThriftProtocolError::IntegerOverflow);
+            }
+            in_progress |= ((byte & 0x7F) as u64) << shift;
             if byte & 0x80 == 0 {
                 return Ok(in_progress);
             }
@@ -1219,6 +1224,78 @@ pub(crate) mod tests {
         let mut prot = ThriftSliceInputProtocol::new(&buf);
         let read_val = T::read_thrift(&mut prot).unwrap();
         assert_eq!(val, read_val);
+    }
+
+    #[test]
+    fn test_read_vlq() {
+        fn vlq(prefix: &[u8], last: &[u8]) -> Vec<u8> {
+            let mut v = prefix.to_vec();
+            v.extend_from_slice(last);
+            v
+        }
+        let ff9 = [0xFF; 9];
+        let c9 = [0x80; 9];
+
+        // Valid values, including the largest u64 (9 x 0xFF + 0x01)
+        for (bytes, expected) in [
+            (vec![0x00], 0),
+            (vec![0x7F], 127),
+            (vec![0x80, 0x01], 128),
+            (vlq(&ff9, &[0x01]), u64::MAX),
+            (vlq(&c9, &[0x01]), 1 << 63),
+        ] {
+            let mut prot = ThriftSliceInputProtocol::new(&bytes);
+            assert_eq!(prot.read_vlq().unwrap(), expected, "{bytes:?}");
+            assert!(prot.as_slice().is_empty());
+
+            let mut prot = ThriftReadInputProtocol::new(bytes.as_slice());
+            assert_eq!(prot.read_vlq().unwrap(), expected, "{bytes:?}");
+        }
+
+        // u64::MAX zigzag-decodes to i64::MIN
+        let bytes = vlq(&ff9, &[0x01]);
+        let mut prot = ThriftSliceInputProtocol::new(&bytes);
+        assert_eq!(i64::read_thrift(&mut prot).unwrap(), i64::MIN);
+
+        // 10th byte contributes more than the single remaining bit, or has the
+        // continuation bit set (overlong encoding): must error, not wrap
+        for bytes in [
+            vlq(&ff9, &[0x02]),
+            vlq(&ff9, &[0x7F]),
+            vlq(&c9, &[0x81, 0x00]),
+            vlq(&c9, &[0x80, 0x80, 0x00]),
+            vec![0xFF; 32],
+        ] {
+            let mut prot = ThriftSliceInputProtocol::new(&bytes);
+            assert!(
+                matches!(prot.read_vlq(), Err(ThriftProtocolError::IntegerOverflow)),
+                "{bytes:?}"
+            );
+
+            let mut prot = ThriftReadInputProtocol::new(bytes.as_slice());
+            assert!(
+                matches!(prot.read_vlq(), Err(ThriftProtocolError::IntegerOverflow)),
+                "{bytes:?}"
+            );
+        }
+
+        // Truncated input
+        for bytes in [vec![], vec![0x80], ff9.to_vec()] {
+            let mut prot = ThriftSliceInputProtocol::new(&bytes);
+            assert!(
+                matches!(prot.read_vlq(), Err(ThriftProtocolError::Eof)),
+                "{bytes:?}"
+            );
+
+            let mut prot = ThriftReadInputProtocol::new(bytes.as_slice());
+            assert!(
+                matches!(
+                    prot.read_vlq(),
+                    Err(ThriftProtocolError::IO(e)) if e.kind() == ErrorKind::UnexpectedEof
+                ),
+                "{bytes:?}"
+            );
+        }
     }
 
     #[test]

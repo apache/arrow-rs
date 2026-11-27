@@ -716,7 +716,7 @@ impl RleDecoder {
             .as_mut()
             .ok_or_else(|| general_err!("bit_reader should be set"))?;
 
-        if let Some(indicator_value) = bit_reader.get_vlq_int() {
+        if let Some(indicator_value) = bit_reader.get_vlq_int()? {
             // fastparquet adds padding to the end of pages. This is not spec-compliant
             // but is handled by the C++ implementation
             // <https://github.com/apache/arrow/blob/8074496cb41bc8ec8fe9fc814ca5576d89a6eb94/cpp/src/arrow/util/rle_encoding.h#L653>
@@ -755,6 +755,33 @@ mod tests {
     use rand::{self, RngExt, SeedableRng, distr::StandardUniform, rng};
 
     const MAX_WIDTH: usize = 32;
+
+    #[test]
+    fn test_rle_decode_corrupt_vlq_header() {
+        // Run header with more than MAX_VLQ_BYTE_LEN bytes must error, not panic
+        let mut data = vec![0xFF; 11];
+        data.push(0x01);
+        let mut decoder = RleDecoder::new(3);
+        let err = decoder.set_data(data.into()).unwrap_err();
+        assert!(err.to_string().contains("VLQ"), "{err}");
+
+        // Run header whose 10th byte overflows 64 bits
+        let mut data = vec![0xFF; 9];
+        data.push(0x7F);
+        let mut decoder = RleDecoder::new(3);
+        let err = decoder.set_data(data.into()).unwrap_err();
+        assert!(err.to_string().contains("VLQ"), "{err}");
+
+        // A valid RLE run followed by a corrupt run header: error surfaces
+        // from get_batch rather than being treated as end of data
+        let mut data = vec![0x08, 0x05]; // RLE run: 4 x value 5
+        data.extend(std::iter::repeat_n(0x80, 16));
+        let mut decoder = RleDecoder::new(3);
+        decoder.set_data(data.into()).unwrap();
+        let mut buffer = vec![0; 8];
+        let err = decoder.get_batch::<i32>(&mut buffer).unwrap_err();
+        assert!(err.to_string().contains("VLQ"), "{err}");
+    }
 
     #[test]
     fn test_rle_decode_int32() {

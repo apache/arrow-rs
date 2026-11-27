@@ -1154,35 +1154,54 @@ impl BitReader {
     /// The encoded integer must start at the beginning of a byte; the reader
     /// is first advanced to the next byte boundary before decoding.
     ///
-    /// Returns `Some(value)` on success, or `None` if the buffer is exhausted
-    /// before a complete VLQ value is read.
+    /// Returns `Ok(Some(value))` on success, or `Ok(None)` if the buffer is
+    /// exhausted before a complete VLQ value is read.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the encoded integer is longer than [`MAX_VLQ_BYTE_LEN`]
-    /// bytes (bad input).
-    pub fn get_vlq_int(&mut self) -> Option<i64> {
+    /// Returns an error if the encoded integer is longer than
+    /// [`MAX_VLQ_BYTE_LEN`] bytes or does not fit in 64 bits (corrupt input).
+    /// On error the reader is left at the start of the encoded integer.
+    #[inline]
+    pub fn get_vlq_int(&mut self) -> Result<Option<i64>> {
         // Align to byte boundary once, then read bytes directly
         self.byte_offset = self.get_byte_offset();
         self.bit_offset = 0;
 
         let buf = &self.buffer[self.byte_offset..];
-        let mut shift = 0;
-        let mut v: i64 = 0;
 
-        for (i, &byte) in buf.iter().enumerate() {
-            v |= ((byte & 0x7F) as i64) << shift;
-            shift += 7;
-            assert!(
-                shift <= MAX_VLQ_BYTE_LEN * 7,
-                "Num of bytes exceed MAX_VLQ_BYTE_LEN ({MAX_VLQ_BYTE_LEN})"
-            );
+        // Fast path: single byte value (e.g. most RLE run headers)
+        match buf.first() {
+            None => return Ok(None),
+            Some(&byte) if byte & 0x80 == 0 => {
+                self.byte_offset += 1;
+                return Ok(Some(byte as i64));
+            }
+            Some(_) => {}
+        }
+
+        let mut v: u64 = 0;
+        for (i, &byte) in buf.iter().take(MAX_VLQ_BYTE_LEN).enumerate() {
+            v |= ((byte & 0x7F) as u64) << (i * 7);
             if byte & 0x80 == 0 {
+                // The last byte may only contribute the single remaining bit (bit 63)
+                if i == MAX_VLQ_BYTE_LEN - 1 && byte > 1 {
+                    return Err(general_err!(
+                        "Invalid or corrupted VLQ integer: value overflows 64 bits"
+                    ));
+                }
                 self.byte_offset += i + 1;
-                return Some(v);
+                return Ok(Some(v as i64));
             }
         }
-        None
+
+        if buf.len() >= MAX_VLQ_BYTE_LEN {
+            Err(general_err!(
+                "Invalid or corrupted VLQ integer: exceeds {MAX_VLQ_BYTE_LEN} bytes"
+            ))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Reads a zigzag-VLQ-encoded little-endian integer from the
@@ -1198,14 +1217,18 @@ impl BitReader {
     /// the beginning of a byte; the reader is first advanced to the next
     /// byte boundary before decoding.
     ///
-    /// Returns `Some(value)` on success, or `None` if the buffer is exhausted
-    /// before a complete value is read.
+    /// Returns `Ok(Some(value))` on success, or `Ok(None)` if the buffer is
+    /// exhausted before a complete value is read.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error under the same conditions as [`BitReader::get_vlq_int`].
     #[inline]
-    pub fn get_zigzag_vlq_int(&mut self) -> Option<i64> {
-        self.get_vlq_int().map(|v| {
+    pub fn get_zigzag_vlq_int(&mut self) -> Result<Option<i64>> {
+        Ok(self.get_vlq_int()?.map(|v| {
             let u = v as u64;
             (u >> 1) as i64 ^ -((u & 1) as i64)
-        })
+        }))
     }
 
     /// Loads up to the next 8 bytes from `self.buffer` at `self.byte_offset`
@@ -1437,18 +1460,75 @@ mod tests {
         // 10001001 00000001 11110010 10110101 00000110
         let buffer: Vec<u8> = vec![0x89, 0x01, 0xF2, 0xB5, 0x06];
         let mut bit_reader = BitReader::from(buffer);
-        assert_eq!(bit_reader.get_vlq_int(), Some(137));
-        assert_eq!(bit_reader.get_vlq_int(), Some(105202));
+        assert_eq!(bit_reader.get_vlq_int().unwrap(), Some(137));
+        assert_eq!(bit_reader.get_vlq_int().unwrap(), Some(105202));
+    }
+
+    #[test]
+    fn test_bit_reader_get_vlq_int_max_u64() {
+        // u64::MAX: 9 bytes of 0xFF followed by a final byte of 0x01
+        let mut buffer = vec![0xFF; 9];
+        buffer.push(0x01);
+        buffer.push(0x05);
+        let mut bit_reader = BitReader::from(buffer);
+        assert_eq!(bit_reader.get_vlq_int().unwrap(), Some(u64::MAX as i64));
+        assert_eq!(bit_reader.get_vlq_int().unwrap(), Some(5));
+        assert_eq!(bit_reader.get_vlq_int().unwrap(), None);
+    }
+
+    #[test]
+    fn test_bit_reader_get_vlq_int_overlong() {
+        // 11 continuation bytes, with a terminator after: more than MAX_VLQ_BYTE_LEN
+        let mut buffer = vec![0x80; 11];
+        buffer.push(0x00);
+        let mut bit_reader = BitReader::from(buffer);
+        let err = bit_reader.get_vlq_int().unwrap_err();
+        assert!(err.to_string().contains("exceeds 10 bytes"), "{err}");
+        // Reader does not advance on error
+        assert_eq!(bit_reader.get_byte_offset(), 0);
+
+        // Exactly MAX_VLQ_BYTE_LEN continuation bytes
+        let mut bit_reader = BitReader::from(vec![0x80; MAX_VLQ_BYTE_LEN]);
+        assert!(bit_reader.get_vlq_int().is_err());
+
+        let mut bit_reader = BitReader::from(vec![0xFF; 64]);
+        assert!(bit_reader.get_zigzag_vlq_int().is_err());
+    }
+
+    #[test]
+    fn test_bit_reader_get_vlq_int_overflow() {
+        // 10th byte contributes more than the single remaining bit
+        for last in [0x02, 0x7F] {
+            let mut buffer = vec![0xFF; 9];
+            buffer.push(last);
+            let mut bit_reader = BitReader::from(buffer);
+            let err = bit_reader.get_vlq_int().unwrap_err();
+            assert!(err.to_string().contains("overflows 64 bits"), "{err}");
+        }
+    }
+
+    #[test]
+    fn test_bit_reader_get_vlq_int_truncated() {
+        let mut bit_reader = BitReader::from(vec![]);
+        assert_eq!(bit_reader.get_vlq_int().unwrap(), None);
+
+        // Continuation bit set on the final byte of the buffer
+        let mut bit_reader = BitReader::from(vec![0x81]);
+        assert_eq!(bit_reader.get_vlq_int().unwrap(), None);
+
+        let mut bit_reader = BitReader::from(vec![0xFF; MAX_VLQ_BYTE_LEN - 1]);
+        assert_eq!(bit_reader.get_vlq_int().unwrap(), None);
+        assert_eq!(bit_reader.get_zigzag_vlq_int().unwrap(), None);
     }
 
     #[test]
     fn test_bit_reader_get_zigzag_vlq_int() {
         let buffer: Vec<u8> = vec![0, 1, 2, 3];
         let mut bit_reader = BitReader::from(buffer);
-        assert_eq!(bit_reader.get_zigzag_vlq_int(), Some(0));
-        assert_eq!(bit_reader.get_zigzag_vlq_int(), Some(-1));
-        assert_eq!(bit_reader.get_zigzag_vlq_int(), Some(1));
-        assert_eq!(bit_reader.get_zigzag_vlq_int(), Some(-2));
+        assert_eq!(bit_reader.get_zigzag_vlq_int().unwrap(), Some(0));
+        assert_eq!(bit_reader.get_zigzag_vlq_int().unwrap(), Some(-1));
+        assert_eq!(bit_reader.get_zigzag_vlq_int().unwrap(), Some(1));
+        assert_eq!(bit_reader.get_zigzag_vlq_int().unwrap(), Some(-2));
     }
 
     #[test]
@@ -1841,6 +1921,7 @@ mod tests {
         (0..total).for_each(|i| {
             let v = reader
                 .get_vlq_int()
+                .unwrap()
                 .expect("get_vlq_int() should return OK");
             assert_eq!(
                 v as u32, values[i],
@@ -1861,6 +1942,7 @@ mod tests {
         (0..total).for_each(|i| {
             let v = reader
                 .get_zigzag_vlq_int()
+                .unwrap()
                 .expect("get_zigzag_vlq_int() should return OK");
             assert_eq!(
                 v as i32, values[i],
