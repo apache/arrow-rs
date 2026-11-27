@@ -26,7 +26,7 @@ use arrow_array::*;
 use arrow_buffer::{
     ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, ScalarBuffer,
 };
-use arrow_data::{ArrayData, ArrayDataBuilder, UnsafeFlag};
+use arrow_data::{ArrayData, ArrayDataBuilder, BufferSpec, UnsafeFlag, layout};
 use arrow_schema::*;
 
 use crate::compression::{CompressionCodec, DecompressionContext};
@@ -199,12 +199,18 @@ impl RecordBatchDecoder<'_> {
 
                 let value_offsets = match mode {
                     UnionMode::Dense => {
-                        let offsets: ScalarBuffer<i32> = self
+                        let offsets_len =
+                            len.checked_mul(std::mem::size_of::<i32>()).ok_or_else(|| {
+                                ArrowError::IpcError(format!(
+                                    "Union of length {len} overflows the size of its offsets buffer"
+                                ))
+                            })?;
+                        let offsets = self
                             .next_buffer()?
-                            .try_slice_with_length(0, len * 4)
-                            .map_err(|e| ArrowError::IpcError(e.to_string()))?
-                            .into();
-                        Some(offsets)
+                            .try_slice_with_length(0, offsets_len)
+                            .map_err(|e| ArrowError::IpcError(e.to_string()))?;
+                        // The offsets are the second buffer of a dense union
+                        Some(self.create_scalar_buffer::<i32>(offsets, data_type, 1)?)
                     }
                     UnionMode::Sparse => None,
                 };
@@ -290,11 +296,43 @@ impl RecordBatchDecoder<'_> {
     /// Update the ArrayDataBuilder based on settings in this decoder
     fn create_array_from_builder(&self, builder: ArrayDataBuilder) -> Result<ArrayRef, ArrowError> {
         let mut builder = builder.align_buffers(!self.require_alignment);
-        if self.skip_validation.get() {
+        let skip_validation = self.skip_validation.get();
+        if skip_validation {
             // SAFETY: flag can only be set via unsafe code
             unsafe { builder = builder.skip_validation(true) }
         }
-        Ok(make_array(builder.build()?))
+        let data = builder.build()?;
+        if skip_validation && self.require_alignment {
+            // Children were checked as they were created.
+            let layout = layout(data.data_type());
+            for (index, (buffer, spec)) in data.buffers().iter().zip(&layout.buffers).enumerate() {
+                if let BufferSpec::FixedWidth { alignment, .. } = spec {
+                    check_alignment(buffer, *alignment, data.data_type(), index)?;
+                }
+            }
+        }
+        Ok(make_array(data))
+    }
+
+    /// Converts `buffer`, the buffer at `index` in an array of `data_type`, to a
+    /// [`ScalarBuffer`] based on the alignment settings in this decoder
+    ///
+    /// This is the counterpart of [`Self::create_array_from_builder`] for arrays that are
+    /// not built from an [`ArrayDataBuilder`]: a misaligned `buffer` is copied to an aligned
+    /// allocation, unless `require_alignment` is set, in which case it is an error.
+    fn create_scalar_buffer<T: ArrowNativeType>(
+        &self,
+        buffer: Buffer,
+        data_type: &DataType,
+        index: usize,
+    ) -> Result<ScalarBuffer<T>, ArrowError> {
+        let alignment = std::mem::align_of::<T>();
+        if self.require_alignment {
+            check_alignment(&buffer, alignment, data_type, index)?;
+        } else if buffer.as_ptr().align_offset(alignment) != 0 {
+            return Ok(Buffer::from_slice_ref(buffer.as_slice()).into());
+        }
+        Ok(buffer.into())
     }
 
     /// Reads the correct number of buffers based on list type and null_count, and creates a
@@ -438,6 +476,24 @@ impl RecordBatchDecoder<'_> {
     }
 }
 
+/// Returns the error that [`ArrayData::validate`] reports if `buffer`, the buffer at `index`
+/// in an array of `data_type`, is not aligned to `alignment` bytes
+fn check_alignment(
+    buffer: &Buffer,
+    alignment: usize,
+    data_type: &DataType,
+    index: usize,
+) -> Result<(), ArrowError> {
+    let align_offset = buffer.as_ptr().align_offset(alignment);
+    if align_offset != 0 {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "Misaligned buffers[{index}] in array of type {data_type:?}, offset from expected alignment of {alignment} by {}",
+            align_offset.min(alignment - align_offset)
+        )));
+    }
+    Ok(())
+}
+
 /// State for decoding Arrow arrays from an [IPC RecordBatch] structure to
 /// [`RecordBatch`]
 ///
@@ -536,6 +592,9 @@ impl<'a> RecordBatchDecoder<'a> {
     /// - Offset bounds (e.g. list/string offsets pointing past the end of their value buffer)
     /// - UTF-8 validity of string columns (`Utf8` / `LargeUtf8`)
     /// - Null count consistency and buffer length checks
+    ///
+    /// Buffer alignment is not a property of the encoded data, and is still handled as
+    /// described in [`Self::with_require_alignment`].
     ///
     /// # Undefined behavior
     ///
@@ -3669,22 +3728,28 @@ mod tests {
         const OFFSET_RANGE: usize = 128;
 
         // (array, minimum required alignment in bytes)
-        // Fixed-width: alignment == element byte width.
-        // Variable-width (e.g. StringArray): the offsets buffer drives alignment (Int32 → 4).
+        // Fixed-width: alignment == alignment of the native element type.
+        // Variable-width (e.g. StringArray): the offsets buffer drives alignment (Int32 → i32).
         let cases: Vec<(ArrayRef, usize)> = vec![
-            (Arc::new(Int32Array::from_iter(0i32..100)) as _, 4),
-            (Arc::new(Int64Array::from_iter(0i64..100)) as _, 8),
+            (
+                Arc::new(Int32Array::from_iter(0i32..100)) as _,
+                std::mem::align_of::<i32>(),
+            ),
+            (
+                Arc::new(Int64Array::from_iter(0i64..100)) as _,
+                std::mem::align_of::<i64>(),
+            ),
             (
                 Arc::new(StringArray::from_iter_values(
                     (0..100).map(|i| i.to_string()),
                 )) as _,
-                4,
+                std::mem::align_of::<i32>(),
             ),
             (
                 Arc::new(LargeStringArray::from_iter_values(
                     (0..100).map(|i| i.to_string()),
                 )) as _,
-                8,
+                std::mem::align_of::<i64>(),
             ),
         ];
 
@@ -3716,36 +3781,39 @@ mod tests {
                 storage.extend_from_slice(&encoded.arrow_data);
                 let buf = Buffer::from(storage).slice(offset);
 
-                let result = RecordBatchDecoder::try_new(
-                    &buf,
-                    ipc_batch,
-                    batch.schema(),
-                    &Default::default(),
-                    &message.version(),
-                )
-                .unwrap()
-                .with_require_alignment(true)
-                .read_record_batch();
+                // Alignment is required whether or not the data is validated
+                for skip_validation in [false, true] {
+                    let mut flag = UnsafeFlag::new();
+                    // SAFETY: the data was encoded from a valid array above
+                    unsafe { flag.set(skip_validation) };
 
-                if offset % alignment == 0 {
-                    assert!(
-                        result.is_ok(),
-                        "type={} offset={offset}: expected Ok but got {:?}",
-                        array.data_type(),
-                        result.unwrap_err(),
+                    let result = RecordBatchDecoder::try_new(
+                        &buf,
+                        ipc_batch,
+                        batch.schema(),
+                        &Default::default(),
+                        &message.version(),
+                    )
+                    .unwrap()
+                    .with_require_alignment(true)
+                    .with_skip_validation(flag)
+                    .read_record_batch();
+
+                    let case = format!(
+                        "type={} offset={offset} skip_validation={skip_validation}",
+                        array.data_type()
                     );
-                } else {
-                    let err = result
-                        .expect_err(&format!(
-                            "type={} offset={offset}: expected Err for misaligned buffer",
-                            array.data_type()
-                        ))
-                        .to_string();
-                    assert!(
-                        err.contains("Misaligned buffers"),
-                        "type={} offset={offset}: unexpected error: {err}",
-                        array.data_type(),
-                    );
+                    if offset % alignment == 0 {
+                        assert_eq!(result.unwrap(), batch, "{case}");
+                    } else {
+                        let err = result
+                            .expect_err(&format!("{case}: expected Err for misaligned buffer"))
+                            .to_string();
+                        assert!(
+                            err.contains("Misaligned buffers"),
+                            "{case}: unexpected error: {err}",
+                        );
+                    }
                 }
             }
         }
