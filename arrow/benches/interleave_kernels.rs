@@ -210,19 +210,28 @@ fn add_benchmark(c: &mut Criterion) {
 }
 
 // Alternate sources so parent rows cannot coalesce, while each selected list
-// contributes a contiguous range of 15 children. Compare struct children with
-// the existing primitive-copy path, with and without nulls.
+// contributes a contiguous range. Cover the struct dispatch crossover as well
+// as the longer lists used to compare with the primitive-copy path.
 // Both variants use sliced inputs.
 fn bench_list_ranges(c: &mut Criterion) {
     const ROWS: usize = 4096;
     const SOURCES: usize = 6;
     let indices: Vec<_> = (0..ROWS).map(|i| (i % SOURCES, i / SOURCES)).collect();
     for nullable in [false, true] {
-        for primitive in [false, true] {
+        for (primitive, list_len) in [
+            (false, 4),
+            (false, 5),
+            (false, 6),
+            (false, 7),
+            (false, 8),
+            (false, 15),
+            (true, 15),
+        ] {
             let arrays: Vec<ArrayRef> = (0..SOURCES)
                 .map(|source| {
                     let rows = ROWS.div_ceil(SOURCES) + 3;
-                    let offsets = OffsetBuffer::<i32>::from_lengths(std::iter::repeat_n(15, rows));
+                    let offsets =
+                        OffsetBuffer::<i32>::from_lengths(std::iter::repeat_n(list_len, rows));
                     let len = *offsets.as_ref().last().unwrap() as usize;
                     let nulls = |len, period| {
                         (nullable && source % 3 != 0).then(|| {
@@ -275,7 +284,7 @@ fn bench_list_ranges(c: &mut Criterion) {
             let values: Vec<_> = arrays.iter().map(|a| a.as_ref()).collect();
             let child = if primitive { "primitive" } else { "struct" };
             let validity = if nullable { "nulls" } else { "no_nulls" };
-            c.bench_function(&format!("list_ranges/{child}/15/{validity}"), |b| {
+            c.bench_function(&format!("list_ranges/{child}/{list_len}/{validity}"), |b| {
                 b.iter(|| hint::black_box(interleave(&values, &indices).unwrap()))
             });
         }
