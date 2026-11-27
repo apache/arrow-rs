@@ -1202,7 +1202,7 @@ fn minify_dictionary<K: ArrowDictionaryKeyType>(
     let array = garbage_collect_values(array)?;
     let keys = minify_primitive(array.keys());
     let values = minify_inner(array.values().as_ref())?;
-    // SAFETY: `garbage_collect_dictionary` returns valid keys, and `minify`
+    // SAFETY: `garbage_collect_values` returns valid keys, and `minify`
     // keeps the keys and the length of the values
     Ok(Arc::new(unsafe {
         DictionaryArray::<K>::new_unchecked(keys, values)
@@ -1210,8 +1210,9 @@ fn minify_dictionary<K: ArrowDictionaryKeyType>(
 }
 
 /// Like [`garbage_collect_dictionary`], but copies the values with
-/// [`gather_ranges`]. `gather_ranges` keeps child rows that the values share,
-/// and does not merge equal runs of run-end encoded values as `take` does.
+/// [`gather_ranges`] and not with `filter`. `filter` copies a child row that
+/// several values share once per value, and splits a run that two kept
+/// values share. `gather_ranges` does neither.
 ///
 /// [`garbage_collect_dictionary`]: crate::dictionary::garbage_collect_dictionary
 fn garbage_collect_values<K: ArrowDictionaryKeyType>(
