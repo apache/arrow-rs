@@ -25,6 +25,17 @@ pub trait DecimalCast: Sized {
 
     /// Convert a decimal from a f64
     fn from_f64(n: f64) -> Option<Self>;
+
+    /// Multiply, returning `None` on overflow
+    ///
+    /// Unlike [`ArrowNativeTypeOp::mul_checked`], this does not build an error
+    /// message, which keeps per-value closures small enough to inline.
+    fn mul_checked_opt(self, rhs: Self) -> Option<Self>
+    where
+        Self: ArrowNativeTypeOp,
+    {
+        self.mul_checked(rhs).ok()
+    }
 }
 
 impl DecimalCast for i32 {
@@ -50,6 +61,11 @@ impl DecimalCast for i32 {
 
     fn from_f64(n: f64) -> Option<Self> {
         n.to_i32()
+    }
+
+    #[inline]
+    fn mul_checked_opt(self, rhs: Self) -> Option<Self> {
+        self.checked_mul(rhs)
     }
 }
 
@@ -79,6 +95,11 @@ impl DecimalCast for i64 {
         // in arrow-buffer that behaves differently.
         num_traits::ToPrimitive::to_i64(&n)
     }
+
+    #[inline]
+    fn mul_checked_opt(self, rhs: Self) -> Option<Self> {
+        self.checked_mul(rhs)
+    }
 }
 
 impl DecimalCast for i128 {
@@ -104,6 +125,11 @@ impl DecimalCast for i128 {
 
     fn from_f64(n: f64) -> Option<Self> {
         n.to_i128()
+    }
+
+    #[inline]
+    fn mul_checked_opt(self, rhs: Self) -> Option<Self> {
+        self.checked_mul(rhs)
     }
 }
 
@@ -131,6 +157,11 @@ impl DecimalCast for i256 {
     fn from_f64(n: f64) -> Option<Self> {
         i256::from_f64(n)
     }
+
+    #[inline]
+    fn mul_checked_opt(self, rhs: Self) -> Option<Self> {
+        self.checked_mul(rhs)
+    }
 }
 
 /// Construct closures to upscale decimals from `(input_precision, input_scale)` to
@@ -143,8 +174,7 @@ impl DecimalCast for i256 {
 ///
 /// Returns `None` if the required scale increase `delta_scale = output_scale - input_scale`
 /// exceeds the supported precomputed precision table `O::MAX_FOR_EACH_PRECISION`.
-/// In that case, the caller should treat this as an overflow for the output scale
-/// and handle it accordingly (e.g., return a cast error).
+/// In that case, non-zero values overflow the output scale while zero values remain representable.
 #[expect(clippy::type_complexity)]
 fn make_upscaler<I: DecimalType, O: DecimalType>(
     input_precision: u8,
@@ -167,7 +197,7 @@ where
     // handling, which is faster and simpler for scaling by 10^delta_scale.
     let max = O::MAX_FOR_EACH_PRECISION.get(delta_scale as usize)?;
     let mul = max.add_wrapping(O::Native::ONE);
-    let f_fallible = move |x| O::Native::from_decimal(x)?.mul_checked(mul).ok();
+    let f_fallible = move |x| O::Native::from_decimal(x)?.mul_checked_opt(mul);
 
     // if the gain in precision (digits) is greater than the multiplication due to scaling
     // every number will fit into the output type
@@ -226,11 +256,12 @@ where
         // div is >= 10 and so this cannot overflow
         let (d, r) = x.div_rem_wrapping(div);
 
-        // Round result
-        let adjusted = match x >= I::Native::ZERO {
-            true if r >= half => d.add_wrapping(I::Native::ONE),
-            false if r <= half_neg => d.sub_wrapping(I::Native::ONE),
-            _ => d,
+        // Round half away from zero. Whether a value rounds depends on the
+        // data, so select the result instead of branching on it.
+        let adjusted = if x >= I::Native::ZERO {
+            std::hint::select_unpredictable(r >= half, d.add_wrapping(I::Native::ONE), d)
+        } else {
+            std::hint::select_unpredictable(r <= half_neg, d.sub_wrapping(I::Native::ONE), d)
         };
         O::Native::from_decimal(adjusted)
     };
@@ -277,9 +308,9 @@ where
 /// The function first validates that the requested precision and scale are supported for
 /// both the source and destination decimal types. It then either upscales (multiplying
 /// by an appropriate power of ten) or downscales (dividing with rounding) the input value.
-/// When the scaling factor exceeds the precision table of the destination type, the value
-/// is treated as an overflow for upscaling, or rounded to zero for downscaling (as any
-/// possible result would be zero at the requested scale).
+/// When the scaling factor exceeds the precision table of the destination type, zero remains
+/// representable while non-zero values overflow for upscaling, or rounded to zero for downscaling
+/// (as any possible result would be zero at the requested scale).
 ///
 /// This mirrors the column-oriented helpers of decimal casting but operates on a single value
 /// (row-level) instead of an entire array.
@@ -300,9 +331,14 @@ where
     validate_decimal_precision_and_scale::<O>(output_precision, output_scale).ok()?;
 
     if input_scale <= output_scale {
-        let (f, f_infallible) =
-            make_upscaler::<I, O>(input_precision, input_scale, output_precision, output_scale)?;
-        apply_rescaler::<I, O>(value, output_precision, f, f_infallible)
+        if let Some((f, f_infallible)) =
+            make_upscaler::<I, O>(input_precision, input_scale, output_precision, output_scale)
+        {
+            apply_rescaler::<I, O>(value, output_precision, f, f_infallible)
+        } else {
+            // Scale increase exceeds supported precision table; zero remains representable, non-zero overflows
+            (value == I::Native::ZERO).then_some(O::Native::ZERO)
+        }
     } else {
         let Some((f, f_infallible)) =
             make_downscaler::<I, O>(input_precision, input_scale, output_precision, output_scale)
@@ -421,13 +457,17 @@ where
             cast_options,
         )
     } else {
-        // Scale increase exceeds supported precision; return overflow error
-        Err(ArrowError::CastError(format!(
-            "Cannot cast to {}({}, {}). Value overflows for output scale",
-            O::PREFIX,
+        // Scale increase exceeds supported precision table; non-zero values overflow
+        // while zero remains representable.
+        let f_fallible = move |x| (x == I::Native::ZERO).then_some(O::Native::ZERO);
+        apply_decimal_cast(
+            array,
             output_precision,
-            output_scale
-        )))
+            output_scale,
+            f_fallible,
+            None::<fn(I::Native) -> O::Native>,
+            cast_options,
+        )
     }
 }
 
@@ -1029,7 +1069,7 @@ where
         } else if cast_options.safe {
             array.unary_opt::<_, D>(|v| {
                 let v = integer_to_decimal_native::<_, M>(v)
-                    .and_then(|v| v.mul_checked(scale_factor).ok())?;
+                    .and_then(|v| v.mul_checked_opt(scale_factor))?;
                 (D::is_valid_decimal_precision(v, precision)).then_some(v)
             })
         } else {
@@ -1372,5 +1412,25 @@ mod tests {
     fn test_rescale_decimal_invalid_output_precision_scale_returns_none() {
         let result = rescale_decimal::<Decimal128Type, Decimal128Type>(123_i128, 38, 38, 39, 39);
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_rescale_decimal_upscale_large_delta() {
+        // Delta scale 40 exceeds Decimal128 table (38 max precision)
+        let zero = rescale_decimal::<Decimal128Type, Decimal128Type>(0_i128, 5, -2, 38, 38);
+        assert_eq!(zero, Some(0_i128));
+
+        let non_zero = rescale_decimal::<Decimal128Type, Decimal128Type>(1_i128, 5, -2, 38, 38);
+        assert_eq!(non_zero, None);
+
+        let negative = rescale_decimal::<Decimal128Type, Decimal128Type>(-1_i128, 5, -2, 38, 38);
+        assert_eq!(negative, None);
+
+        // Delta scale 19 exceeds Decimal32 table (9 max precision)
+        let zero_d32 = rescale_decimal::<Decimal32Type, Decimal32Type>(0_i32, 3, -10, 9, 9);
+        assert_eq!(zero_d32, Some(0_i32));
+
+        let non_zero_d32 = rescale_decimal::<Decimal32Type, Decimal32Type>(1_i32, 3, -10, 9, 9);
+        assert_eq!(non_zero_d32, None);
     }
 }

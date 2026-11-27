@@ -695,6 +695,10 @@ unsafe impl<T: ArrowDictionaryKeyType> Array for DictionaryArray<T> {
         self
     }
 
+    fn to_arc(&self) -> ArrayRef {
+        Arc::new(self.clone())
+    }
+
     fn to_data(&self) -> ArrayData {
         self.clone().into()
     }
@@ -858,6 +862,10 @@ impl<'a, K: ArrowDictionaryKeyType, V> TypedDictionaryArray<'a, K, V> {
 unsafe impl<K: ArrowDictionaryKeyType, V: Sync> Array for TypedDictionaryArray<'_, K, V> {
     fn as_any(&self) -> &dyn Any {
         self.dictionary
+    }
+
+    fn to_arc(&self) -> ArrayRef {
+        Arc::new(self.dictionary.clone())
     }
 
     fn to_data(&self) -> ArrayData {

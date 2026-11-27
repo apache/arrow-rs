@@ -399,6 +399,34 @@ mod tests {
     }
 
     #[test]
+    fn test_parquet_derive_read_into_non_empty_vec() {
+        #[derive(PartialEq, ParquetRecordWriter, ParquetRecordReader, Debug)]
+        struct ARecord {
+            id: i32,
+        }
+
+        let file = get_temp_file("test_parquet_derive_read_into_non_empty_vec", &[]);
+        let drs = [ARecord { id: 1 }];
+
+        let schema = drs.as_slice().schema().unwrap();
+        let mut writer =
+            SerializedFileWriter::new(file.try_clone().unwrap(), schema, Default::default())
+                .unwrap();
+        let mut row_group = writer.next_row_group().unwrap();
+        drs.as_slice().write_to_row_group(&mut row_group).unwrap();
+        row_group.close().unwrap();
+        writer.close().unwrap();
+
+        use parquet::file::{reader::FileReader, serialized_reader::SerializedFileReader};
+        let reader = SerializedFileReader::new(file).unwrap();
+        let mut out = vec![ARecord { id: 7 }];
+        out.read_from_row_group(&mut *reader.get_row_group(0).unwrap(), 1)
+            .unwrap();
+
+        assert_eq!(out, [ARecord { id: 7 }, ARecord { id: 1 }]);
+    }
+
+    #[test]
     fn test_aliased_result() {
         // Issue 7547, Where aliasing the `Result` led to
         // a collision with the macro internals of derive ParquetRecordReader

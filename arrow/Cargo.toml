@@ -66,10 +66,11 @@ pyarrow-experimental-inspect = ["pyarrow", "arrow-pyarrow/experimental-inspect"]
 # force_validate runs full data validation for all arrays that are created
 # this is not enabled by default as it is too computationally expensive
 # but is run as part of our CI checks
-force_validate = ["arrow-array/force_validate", "arrow-data/force_validate"]
+force_validate = ["arrow-array/force_validate", "arrow-buffer/force_validate", "arrow-data/force_validate"]
 # Enable ffi support
 ffi = ["arrow-schema/ffi", "arrow-data/ffi", "arrow-array/ffi"]
 chrono-tz = ["arrow-array/chrono-tz"]
+jiff = ["arrow-array/jiff"]
 canonical_extension_types = ["arrow-schema/canonical_extension_types"]
 # Enable memory tracking support
 pool = ["arrow-array/pool"]
@@ -320,6 +321,12 @@ required-features = ["test_utils"]
 name = "nullif_kernel"
 harness = false
 required-features = ["test_utils"]
+
+[[bench]]
+name = "named_timezone"
+harness = false
+# Cargo cannot require one of several features. To measure jiff, run with `chrono-tz,jiff`.
+required-features = ["chrono-tz"]
 
 [[test]]
 name = "csv"

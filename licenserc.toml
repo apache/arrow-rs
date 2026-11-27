@@ -13,6 +13,8 @@ SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one
 
 [files]
 excludes = [
+  # Exclusion file for ATR which runs its own header check
+  ".rat-excludes",
   # License and attribution texts do not need source-file headers.
   "**/LICENSE*",
   "**/NOTICE*",
@@ -50,8 +52,6 @@ excludes = [
   ".github/ISSUE_TEMPLATE/bug_report.yml",
   ".github/ISSUE_TEMPLATE/config.yml",
   ".github/ISSUE_TEMPLATE/feature_request.yml",
-  # TODO: figure out this provenance
-  "arrow-flight/examples/data/gen_certs.sh",
 ]
 
 [styles.markdown_asf]

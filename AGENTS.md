@@ -62,6 +62,8 @@ Prefer safe code. Use `unsafe` only when a benchmark shows a gain over the safe 
 
 A performance PR needs benchmarks that show why the change is faster. Name the benchmark(s) the change targets. Say which part of the change produces the gain, and cover both well-predicted input (constant lengths, all valid) and poorly predicted input (random). Name the inputs that get slower. Prefer the smallest change that keeps the gain, and do not add code tuned to the benchmark's data. See [benchmarks](CONTRIBUTING.md#performance-improvements).
 
+If new benchmarks are needed, add them as the first commit of the PR and pass that commit's SHA as `baseline.ref` to the automated benchmark runner.
+
 ## Issue Ownership
 
 The following agent-specific rules are stricter than the general contribution
@@ -71,6 +73,9 @@ guidance in CONTRIBUTING.md:
   Do not work on or submit a pull request for an issue assigned to someone
   other than the user you are assisting. Report the assignment to the user
   and suggest another issue.
+- If the issue's "Willingness to contribute" answer is "I plan to contribute
+  ... independently", treat the reporter as assigned, even when the issue
+  has no assignees.
 - Also check recent comments and linked pull requests for work already in
   progress. If another contributor is working on an unassigned issue, ask
   the user to coordinate with them before proceeding.

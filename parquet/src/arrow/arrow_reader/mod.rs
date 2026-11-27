@@ -780,6 +780,9 @@ impl ArrowReaderOptions {
     /// honored by loading APIs such as [`ArrowReaderMetadata::load`];
     /// [`ArrowReaderMetadata::try_new`] does not load or filter page indexes.
     ///
+    /// See [`PageIndexProvider`] for more details on customizing page index loading.
+    ///
+    /// [`PageIndexProvider`]: crate::file::metadata::page_index::PageIndexProvider
     /// [ColumnIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     pub fn with_column_index_mask(mut self, mask: ColumnChunkMask) -> Self {
         self.column_index_mask = mask;
@@ -797,6 +800,9 @@ impl ArrowReaderOptions {
     /// include those columns in addition to projected columns. The same loading and policy
     /// qualifications as [`Self::with_column_index_mask`] apply.
     ///
+    /// See [`PageIndexProvider`] for more details on customizing page index loading.
+    ///
+    /// [`PageIndexProvider`]: crate::file::metadata::page_index::PageIndexProvider
     /// [OffsetIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     pub fn with_offset_index_mask(mut self, mask: ColumnChunkMask) -> Self {
         self.offset_index_mask = mask;

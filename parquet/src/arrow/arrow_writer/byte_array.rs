@@ -805,14 +805,17 @@ impl ColumnValueEncoder for ByteArrayEncoder {
         unreachable!("should call write_gather instead")
     }
 
-    fn write_gather(&mut self, values: &Self::Values, indices: &[usize]) -> Result<()> {
+    fn write_gather(
+        &mut self,
+        values: &Self::Values,
+        indices: &[usize],
+        num_values_in_batch: usize,
+    ) -> Result<()> {
         if let DataType::Dictionary(key, value) = values.data_type() {
             let dictionary = values.as_any_dictionary().values();
-            if self
-                .dict_encoder
-                .as_ref()
-                .is_some_and(|encoder| encoder.use_dictionary_cache(dictionary, values.len()))
-            {
+            if self.dict_encoder.as_ref().is_some_and(|encoder| {
+                encoder.use_dictionary_cache(dictionary, num_values_in_batch)
+            }) {
                 return downcast_dict_values_op!(
                     key,
                     value,
@@ -828,6 +831,24 @@ impl ColumnValueEncoder for ByteArrayEncoder {
         downcast_op!(values.data_type(), values, encode, indices, self)
     }
 
+    fn max_value_bytes(values: &Self::Values) -> Option<usize> {
+        // An offset array has no bound tighter than its whole payload unless
+        // the code reads every offset.
+        let buffers = match values.data_type() {
+            DataType::Utf8View => {
+                let array = values.as_any().downcast_ref::<StringViewArray>().unwrap();
+                array.data_buffers()
+            }
+            DataType::BinaryView => {
+                let array = values.as_any().downcast_ref::<BinaryViewArray>().unwrap();
+                array.data_buffers()
+            }
+            _ => return None,
+        };
+        // Each plain-encoded value carries a 4-byte length prefix.
+        Some(max_view_value_len(buffers) + std::mem::size_of::<u32>())
+    }
+
     fn count_values_within_byte_budget_gather(
         values: &Self::Values,
         indices: &[usize],
@@ -837,10 +858,11 @@ impl ColumnValueEncoder for ByteArrayEncoder {
         // is the relevant method.
         //
         // Two-stage walk for the simple offset-buffer byte array types:
-        //   1. If indices are contiguous, compute the total payload in
-        //      O(1) via a single subtraction on the offsets buffer.
-        //      When the total fits the budget — the overwhelmingly
-        //      common "small values" case — return immediately.
+        //   1. If indices are strictly increasing, bound the total
+        //      payload by a single subtraction on the offsets buffer.
+        //      The order check is one sequential pass over `indices`.
+        //      When the bound fits the budget (the common small-value
+        //      case), return immediately.
         //   2. Otherwise, walk per-value byte sizes from the offsets
         //      buffer (still cheap, no slice/UTF-8 construction) and
         //      exit at the first value that pushes the cumulative sum
@@ -1138,8 +1160,9 @@ fn count_within_budget_views(
 /// `byte_budget` (boundary value included), for offset-buffer byte arrays
 /// (`Utf8`/`LargeUtf8`/`Binary`/`LargeBinary`).
 ///
-/// `indices` are assumed sorted ascending — they always are here, since
-/// they come from `non_null_indices`, which is built in array order.
+/// `indices` come from `non_null_indices`. They are strictly increasing for
+/// most arrays, but a `ListView` can reference its child values in any
+/// order and more than once.
 fn count_within_budget_offsets<T: ByteArrayType>(
     values: &GenericByteArray<T>,
     indices: &[usize],
@@ -1155,14 +1178,16 @@ fn count_within_budget_offsets<T: ByteArrayType>(
     // Each plain-encoded value carries a 4-byte length prefix on the page.
     let prefix_overhead = std::mem::size_of::<u32>();
 
-    // Stage 1: O(1) span upper bound. The span `offsets[last+1] -
-    // offsets[first]` covers every array position in `[first, last]`, a
-    // superset of `indices` — and the skipped positions in a nullable
-    // column are nulls with zero offset delta, so the span still equals the
-    // exact payload. If it fits the budget, every value fits. Covers the
-    // common small-value case for both non-null and (sparse) nullable
-    // columns.
-    if last >= first {
+    // Stage 1: span upper bound. The span `offsets[last+1] - offsets[first]`
+    // covers every array position in `[first, last]`. If it fits the budget,
+    // every value fits. Covers the common small-value case for both non-null
+    // and (sparse) nullable columns.
+    //
+    // The span bounds the payload only when `indices` are strictly
+    // increasing. A `ListView` gather can repeat an index or jump backwards,
+    // so the span can miss values between the jumps. The order check is one
+    // sequential compare per index. Stage 2 reads two offsets per index.
+    if indices.windows(2).all(|w| w[0] < w[1]) {
         let payload = (offsets[last + 1] - offsets[first]).as_usize();
         if payload + n * prefix_overhead <= byte_budget {
             return n;
