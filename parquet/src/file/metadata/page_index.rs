@@ -264,7 +264,7 @@ pub trait PageIndexProvider: Send + Sync + std::fmt::Debug {
 ///     Ok(())
 /// }
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RowGroupPageIndex {
     row_group_idx: usize,
     page_index: Option<Arc<dyn PageIndexProvider>>,
