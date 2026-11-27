@@ -26,8 +26,9 @@ use crate::errors::ParquetError;
 use crate::file::metadata::page_index::RowGroupPageIndex;
 use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaData};
 use crate::util::push_buffers::{PushBuffers, SharedPushBuffers};
-use arrow_array::{Array, RecordBatch};
-use arrow_select::filter::prep_null_mask_filter;
+use arrow_array::{Array, BooleanArray, RecordBatch};
+use arrow_buffer::BooleanBufferBuilder;
+use arrow_select::filter::{filter_record_batch, prep_null_mask_filter};
 use bytes::Bytes;
 use data::DataRequest;
 use filter::AdvanceResult;
@@ -134,6 +135,8 @@ struct Windows {
     output_reader: Option<StepReader>,
     /// The rows of the current window that the output reader must still read.
     output_rows: VecDeque<Range<usize>>,
+    /// How the output reader passes the rows between `output_rows`.
+    output_gaps: Gaps,
     /// The rows that the output reader read and did not return yet.
     pending_rows: usize,
     /// The pages that end at or before this row are released. See
@@ -154,6 +157,7 @@ impl Windows {
             predicate_readers: (0..num_predicates).map(|_| None).collect(),
             output_reader: None,
             output_rows: VecDeque::new(),
+            output_gaps: Gaps::Skip,
             pending_rows: 0,
             released_before: 0,
         }
@@ -170,17 +174,68 @@ impl std::fmt::Debug for Windows {
     }
 }
 
+/// How a [`StepReader`] passes the unselected rows between two selected
+/// ranges of a window. This is the [`RowSelectionPolicy`] of the scan,
+/// resolved for one window.
+enum Gaps {
+    /// Skip the rows. The reader does not need their pages.
+    Skip,
+    /// Decode the rows, and remove them from the batch with a mask. This is
+    /// faster than many short skips. It needs the pages of the rows, so it
+    /// applies only inside the loaded row ranges. `None`: all rows of the
+    /// window are loaded.
+    Decode(Option<LoadedRowRanges>),
+}
+
+impl Gaps {
+    /// Returns true if the reader decodes the rows of `gap`. The row before
+    /// `gap` is a selected row.
+    fn decodes(&self, gap: &Range<usize>) -> bool {
+        match self {
+            Self::Skip => false,
+            Self::Decode(None) => true,
+            Self::Decode(Some(loaded)) => loaded
+                .end_containing(gap.start - 1)
+                .is_some_and(|end| end >= gap.end),
+        }
+    }
+}
+
 /// An array reader that reads a row group in steps, and its position.
 struct StepReader {
     reader: Box<dyn ArrayReader>,
     /// The first row of the row group that the reader did not pass yet.
     position: usize,
+    /// One bit for each row that the reader decoded since the last batch:
+    /// true for a selected row.
+    mask: BooleanBufferBuilder,
+    /// `mask` has a false bit.
+    decoded_gap: bool,
 }
 
 impl StepReader {
-    /// Read the rows of `range`, and skip the rows before it. The caller
-    /// gets the rows from [`ArrayReader::consume_batch`].
-    fn read(&mut self, range: Range<usize>) -> Result<(), ParquetError> {
+    /// Read the rows of `ranges`, which are sorted. [`Self::take_batch`]
+    /// returns the rows.
+    fn read_rows(&mut self, ranges: &[Range<usize>], gaps: &Gaps) -> Result<(), ParquetError> {
+        let mut previous_end = None;
+        for range in ranges {
+            if let Some(end) = previous_end
+                && end < range.start
+                && gaps.decodes(&(end..range.start))
+            {
+                self.decode(end..range.start)?;
+                self.mask.append_n(range.start - end, false);
+                self.decoded_gap = true;
+            }
+            self.decode(range.clone())?;
+            self.mask.append_n(range.end - range.start, true);
+            previous_end = Some(range.end);
+        }
+        Ok(())
+    }
+
+    /// Decode the rows of `range`, and skip the rows before it.
+    fn decode(&mut self, range: Range<usize>) -> Result<(), ParquetError> {
         let to_skip = range.start - self.position;
         if to_skip > 0 {
             let skipped = self.reader.skip_records(to_skip)?;
@@ -199,6 +254,16 @@ impl StepReader {
         }
         self.position = range.end;
         Ok(())
+    }
+
+    /// The selected rows that the reader read since the last batch.
+    fn take_batch(&mut self) -> Result<RecordBatch, ParquetError> {
+        let batch = consume_record_batch(self.reader.as_mut())?;
+        let mask = self.mask.finish();
+        if !std::mem::take(&mut self.decoded_gap) {
+            return Ok(batch);
+        }
+        Ok(filter_record_batch(&batch, &BooleanArray::new(mask, None))?)
     }
 }
 
@@ -912,11 +977,17 @@ impl RowGroupReaderBuilder {
                 if let Some(mut windows) = windows {
                     // The rows of the window that pass the predicates, the
                     // offset and the limit
-                    windows.output_rows = plan_builder
+                    let rows = plan_builder
                         .selection()
                         .map(selection_to_ranges)
-                        .unwrap_or_default()
-                        .into();
+                        .unwrap_or_default();
+                    windows.output_gaps = match plan_builder.selection() {
+                        Some(selection) => {
+                            self.gaps(row_group_idx, row_count, &self.projection, selection, &rows)
+                        }
+                        None => Gaps::Skip,
+                    };
+                    windows.output_rows = rows.into();
                     let data_request = DataRequestBuilder::new(
                         row_group_idx,
                         row_count,
@@ -1076,7 +1147,7 @@ impl RowGroupReaderBuilder {
             // Return the rows that did not fill a batch
             let result = match windows.output_reader.as_mut() {
                 Some(output) if windows.pending_rows > 0 => RowGroupBuildResult::Batch {
-                    batch: consume_record_batch(output.reader.as_mut())?,
+                    batch: output.take_batch()?,
                     remaining_budget: Some(budget),
                 },
                 _ => RowGroupBuildResult::Finished {
@@ -1224,10 +1295,16 @@ impl RowGroupReaderBuilder {
                 )?)
             }
         };
-        for range in selection_to_ranges(&selection) {
-            reader.read(range)?;
-        }
-        let batch = consume_record_batch(reader.reader.as_mut())?;
+        let rows = selection_to_ranges(&selection);
+        let gaps = self.gaps(
+            row_group_idx,
+            row_count,
+            filter_info.current().projection(),
+            &selection,
+            &rows,
+        );
+        reader.read_rows(&rows, &gaps)?;
+        let batch = reader.take_batch()?;
         let input_rows = batch.num_rows();
         let filter = filter_info.current_mut().evaluate(batch)?;
         if filter.len() != input_rows {
@@ -1313,17 +1390,13 @@ impl RowGroupReaderBuilder {
             }
         };
 
-        while windows.pending_rows < self.batch_size {
-            let Some(rows) = windows.output_rows.front_mut() else {
-                break;
-            };
-            let len = (rows.end - rows.start).min(self.batch_size - windows.pending_rows);
-            output.read(rows.start..rows.start + len)?;
-            windows.pending_rows += len;
-            rows.start += len;
-            if rows.start == rows.end {
-                windows.output_rows.pop_front();
-            }
+        if windows.pending_rows < self.batch_size {
+            let rows = take_rows(
+                &mut windows.output_rows,
+                self.batch_size - windows.pending_rows,
+            );
+            output.read_rows(&rows, &windows.output_gaps)?;
+            windows.pending_rows += rows.iter().map(|r| r.end - r.start).sum::<usize>();
         }
         if windows.output_rows.is_empty()
             && let Some(next) = windows.remaining.front()
@@ -1338,7 +1411,7 @@ impl RowGroupReaderBuilder {
             }));
         }
 
-        let batch = consume_record_batch(output.reader.as_mut())?;
+        let batch = output.take_batch()?;
         windows.pending_rows = 0;
         if !windows.output_rows.is_empty() {
             return Ok(NextState::result(
@@ -1410,7 +1483,43 @@ impl RowGroupReaderBuilder {
         Ok(StepReader {
             reader,
             position: 0,
+            mask: BooleanBufferBuilder::new(0),
+            decoded_gap: false,
         })
+    }
+
+    /// Resolve the [`RowSelectionPolicy`] of the scan for one window.
+    /// `rows` are the selected rows of `selection`, which is the selection of
+    /// the window for the columns of `projection`.
+    fn gaps(
+        &self,
+        row_group_idx: usize,
+        row_count: usize,
+        projection: &ProjectionMask,
+        selection: &RowSelection,
+        rows: &[Range<usize>],
+    ) -> Gaps {
+        let [first, .., last] = rows else {
+            // No gaps
+            return Gaps::Skip;
+        };
+        // `Auto` uses the mean length of the runs. Remove the rows before
+        // and after the window, which are one long skip each.
+        let start = first.start;
+        let window = RowSelection::from_consecutive_ranges(
+            rows.iter().map(|r| r.start - start..r.end - start),
+            last.end - start,
+        );
+        match self.row_selection_policy.resolve(Some(&window)) {
+            RowSelectionStrategy::Selectors => Gaps::Skip,
+            RowSelectionStrategy::Mask => Gaps::Decode(loaded_row_ranges_for_projection(
+                Some(selection),
+                projection,
+                self.row_group_offset_index(row_group_idx),
+                self.metadata.file_metadata().schema_descr().num_columns(),
+                row_count,
+            )),
+        }
     }
 
     /// The index of the active row group, if any.
