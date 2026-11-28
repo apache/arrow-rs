@@ -81,6 +81,26 @@ fn create_primitive_bench_batch_non_null(
     )?)
 }
 
+/// Columns of types that the writer converts to the type it stores, such as `Int8` to
+/// `INT32` and `Decimal128` to `INT32` or `INT64`
+fn create_converted_primitive_bench_batch(size: usize, null_density: f32) -> Result<RecordBatch> {
+    let fields = vec![
+        Field::new("_1", DataType::Int8, true),
+        Field::new("_2", DataType::Int16, true),
+        Field::new("_3", DataType::UInt8, true),
+        Field::new("_4", DataType::UInt16, true),
+        Field::new("_5", DataType::Decimal128(9, 2), true),
+        Field::new("_6", DataType::Decimal128(18, 2), true),
+    ];
+    let schema = Schema::new(fields);
+    Ok(create_random_batch(
+        Arc::new(schema),
+        size,
+        null_density,
+        0.75,
+    )?)
+}
+
 fn create_primitive_dictionary_bench_batch(
     size: usize,
     null_density: f32,
@@ -1236,6 +1256,21 @@ fn create_batches() -> Vec<BatchBenchmark> {
     push_batch!(
         "primitive_non_null",
         create_primitive_bench_batch_non_null(BATCH_SIZE, 0.25, 0.75).unwrap()
+    );
+
+    push_batch!(
+        "converted_primitive",
+        create_converted_primitive_bench_batch(BATCH_SIZE, 0.25).unwrap()
+    );
+
+    push_batch!(
+        "converted_primitive_non_null",
+        create_converted_primitive_bench_batch(BATCH_SIZE, 0.0).unwrap()
+    );
+
+    push_batch!(
+        "converted_primitive_sparse_99pct_null",
+        create_converted_primitive_bench_batch(BATCH_SIZE, 0.99).unwrap()
     );
 
     push_batch!(
