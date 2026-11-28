@@ -59,6 +59,9 @@ mod r#gen {
     include!("arrow.flight.protocol.rs");
 }
 
+/// Encoded protobuf file descriptor set for the Flight service.
+pub const FILE_DESCRIPTOR_SET: &[u8] = include_bytes!("flight_descriptor.bin");
+
 /// Defines a `Flight` for generation or retrieval.
 pub mod flight_descriptor {
     use super::r#gen;
