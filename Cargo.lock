@@ -459,7 +459,6 @@ dependencies = [
  "flate2",
  "futures",
  "half",
- "indexmap",
  "itoa",
  "lexical-core",
  "memchr",
