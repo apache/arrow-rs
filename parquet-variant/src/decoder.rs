@@ -137,6 +137,18 @@ impl OffsetSizeBytes {
         Ok(result)
     }
 
+    /// Build from two `offset_size_minus_one` bits, ignoring the higher bits.
+    #[inline]
+    pub(crate) const fn from_bits(offset_size_minus_one: u8) -> Self {
+        use OffsetSizeBytes::*;
+        match offset_size_minus_one & 0x03 {
+            0 => One,
+            1 => Two,
+            2 => Three,
+            _ => Four,
+        }
+    }
+
     /// Return one unsigned little-endian value from `bytes`.
     ///
     /// * `bytes` – the byte buffer to index

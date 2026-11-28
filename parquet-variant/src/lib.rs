@@ -10,6 +10,7 @@
 //! ## Main APIs
 //! - [`Variant`]: Represents a variant value, which can be an object, list, or primitive.
 //! - [`VariantBuilder`]: For building `Variant` values.
+//! - [`VariantView`]: Reads a few values out of encoded variant bytes without validating the rest.
 //!
 //! ## 🚧 Work In Progress
 //!

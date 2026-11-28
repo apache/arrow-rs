@@ -8,14 +8,14 @@ pub use self::metadata::{
     EMPTY_VARIANT_METADATA, EMPTY_VARIANT_METADATA_BYTES, VARIANT_SPEC_VERSION, VariantMetadata,
 };
 pub use self::object::VariantObject;
+pub use self::view::{VariantListView, VariantMetadataView, VariantObjectView, VariantView};
 
 // Publicly export types used in the API
+pub use crate::decoder::VariantBasicType;
 pub use half::f16;
 pub use uuid::Uuid;
 
-use crate::decoder::{
-    self, VariantBasicType, VariantPrimitiveType, get_basic_type, get_primitive_type,
-};
+use crate::decoder::{self, VariantPrimitiveType, get_basic_type, get_primitive_type};
 use crate::path::{VariantPath, VariantPathElement};
 use crate::utils::{first_byte_from_slice, slice_from_slice};
 use std::ops::Deref;
@@ -27,6 +27,7 @@ mod decimal;
 mod list;
 mod metadata;
 mod object;
+mod view;
 
 const MAX_SHORT_STRING_BYTES: usize = 0x3F;
 
@@ -207,6 +208,9 @@ impl Deref for ShortString<'_> {
 /// knows the underlying bytes were already validated previously, or if the caller intends to
 /// perform a small number of (fallible) accesses to a large variant value.
 ///
+/// A [`VariantView`] reads only the bytes that each access uses, which makes it cheaper than an
+/// _unvalidated_ instance for reading a few values, such as one path per row of a column.
+///
 /// A _validated_ variant value guarantees that the associated [metadata] and all nested [object]
 /// and [array] values are _valid_. Primitive variant subtypes are always _valid_ by construction.
 ///
@@ -381,7 +385,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     }
 
     // The actual constructor, which only performs shallow (constant-time) validation.
-    fn try_new_with_metadata_and_shallow_validation(
+    pub(crate) fn try_new_with_metadata_and_shallow_validation(
         metadata: VariantMetadata<'m>,
         value: &'v [u8],
     ) -> Result<Self, ArrowError> {
