@@ -33,7 +33,7 @@ use crate::column::writer::encoder::ColumnValueEncoder;
 use crate::column::writer::{
     ColumnCloseResult, ColumnWriter, ColumnWriterImpl, GenericColumnWriter, get_column_writer,
 };
-use crate::data_type::{ByteArray, FixedLenByteArray, FixedLenByteArrayType};
+use crate::data_type::{ByteArray, FixedLenByteArray, FixedLenByteArrayType, Int96};
 use std::collections::HashSet;
 type DistinctValuesSet = HashSet<u64>;
 #[cfg(feature = "encryption")]
@@ -1768,8 +1768,46 @@ fn write_leaf(
                 levels,
             },
         ),
-        ColumnWriter::Int96ColumnWriter(_typed) => {
-            unreachable!("Currently unreachable because data type not supported")
+        ColumnWriter::Int96ColumnWriter(typed) => {
+            let (values, nanos_per_unit) = match column.data_type() {
+                ArrowDataType::Timestamp(TimeUnit::Second, _) => (
+                    column.as_primitive::<TimestampSecondType>().values(),
+                    1_000_000_000,
+                ),
+                ArrowDataType::Timestamp(TimeUnit::Millisecond, _) => (
+                    column.as_primitive::<TimestampMillisecondType>().values(),
+                    1_000_000,
+                ),
+                ArrowDataType::Timestamp(TimeUnit::Microsecond, _) => (
+                    column.as_primitive::<TimestampMicrosecondType>().values(),
+                    1_000,
+                ),
+                ArrowDataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                    (column.as_primitive::<TimestampNanosecondType>().values(), 1)
+                }
+                d => return Err(ParquetError::General(format!("Cannot coerce {d} to INT96"))),
+            };
+            let values = indices
+                .iter()
+                .map(|&i| {
+                    Int96::from_epoch_nanos(values[i] as i128 * nanos_per_unit).ok_or_else(|| {
+                        ParquetError::General(format!(
+                            "{} value {} is out of range for INT96",
+                            column.data_type(),
+                            values[i]
+                        ))
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            typed.write_batch_internal(
+                &values,
+                None,
+                levels.def_level_data().as_ref(),
+                levels.rep_level_data().as_ref(),
+                None,
+                None,
+                None,
+            )
         }
         ColumnWriter::FloatColumnWriter(typed) => {
             let array = column.as_primitive::<Float32Type>();
@@ -6648,5 +6686,98 @@ mod tests {
         assert_eq!(direct, (-1, 1), "incorrect direct Parquet stats");
         assert_eq!(fixed, (-1, 1), "incorrect Arrow FixedSizeBinaryArray stats");
         assert_eq!(binary, (-1, 1), "incorrect Arrow BinaryArray stats");
+    }
+
+    #[test]
+    fn arrow_writer_timestamps_to_int96() {
+        let seconds =
+            TimestampSecondArray::from(vec![Some(-1), None, Some(1_700_000_000), None, None]);
+        let micros = TimestampMicrosecondArray::from(vec![
+            Some(0),
+            Some(-1),
+            None,
+            Some(-86_400_000_001),
+            Some(1_700_000_000_123_456),
+        ])
+        .with_timezone("UTC");
+        let nanos = TimestampNanosecondArray::from(vec![
+            Some(1),
+            Some(-1),
+            Some(1_700_000_000_123_456_789),
+            None,
+            Some(-86_400_000_000_001),
+        ]);
+        let millis = TimestampMillisecondArray::from(vec![Some(-1), None, Some(1_700_000_000_123)]);
+        let list = ListArray::new(
+            Arc::new(Field::new("element", millis.data_type().clone(), true)),
+            OffsetBuffer::from_lengths([2, 0, 1, 0, 0]),
+            Arc::new(millis),
+            None,
+        );
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("s", seconds.data_type().clone(), true),
+            Field::new("us", micros.data_type().clone(), true),
+            Field::new("ns", nanos.data_type().clone(), true),
+            Field::new("list", list.data_type().clone(), false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(seconds),
+                Arc::new(micros),
+                Arc::new(nanos),
+                Arc::new(list),
+            ],
+        )
+        .unwrap();
+        let parquet_schema = crate::schema::parser::parse_message_type(
+            "message schema {
+                OPTIONAL INT96 s;
+                OPTIONAL INT96 us;
+                OPTIONAL INT96 ns;
+                REQUIRED group list (LIST) {
+                    REPEATED group list {
+                        OPTIONAL INT96 element;
+                    }
+                }
+            }",
+        )
+        .unwrap();
+        let options = ArrowWriterOptions::new()
+            .with_parquet_schema(SchemaDescriptor::new(Arc::new(parquet_schema)));
+        let mut buf = Vec::new();
+        let mut writer = ArrowWriter::try_new_with_options(&mut buf, schema, options).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(buf)).unwrap();
+        let descr = builder.metadata().file_metadata().schema_descr_ptr();
+        assert!(
+            descr
+                .columns()
+                .iter()
+                .all(|c| c.physical_type() == crate::basic::Type::INT96)
+        );
+        let read = builder.build().unwrap().next().unwrap().unwrap();
+        assert_eq!(read, batch);
+    }
+
+    #[test]
+    fn arrow_writer_timestamp_out_of_int96_range() {
+        let seconds = TimestampSecondArray::from(vec![i64::MAX]);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            seconds.data_type().clone(),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(seconds)]).unwrap();
+        let parquet_schema =
+            crate::schema::parser::parse_message_type("message schema { REQUIRED INT96 s; }")
+                .unwrap();
+        let options = ArrowWriterOptions::new()
+            .with_parquet_schema(SchemaDescriptor::new(Arc::new(parquet_schema)));
+        let mut writer = ArrowWriter::try_new_with_options(Vec::new(), schema, options).unwrap();
+        let err = writer.write(&batch).unwrap_err();
+        assert!(err.to_string().contains("out of range for INT96"), "{err}");
     }
 }
