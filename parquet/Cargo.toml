@@ -147,6 +147,11 @@ required-features = ["cli"]
 path = "./examples/write_parquet.rs"
 
 [[example]]
+name = "read_pipelined"
+required-features = ["arrow", "async"]
+path = "./examples/read_pipelined.rs"
+
+[[example]]
 name = "read_with_rowgroup"
 required-features = ["arrow", "async"]
 path = "./examples/read_with_rowgroup.rs"
