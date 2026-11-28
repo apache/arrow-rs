@@ -274,6 +274,32 @@ impl WriterBuilder {
         self
     }
 
+    /// Returns `true` if this writer is configured to write non-finite floats as strings.
+    pub fn non_finite_floats_as_strings(&self) -> bool {
+        self.0.non_finite_floats_as_strings()
+    }
+
+    /// Set whether to write non-finite floating point values as JSON strings.
+    ///
+    /// JSON has no representation for `NaN` or infinity, so by default they are
+    /// written as `null`. When set to `true`, they are written as the strings
+    /// `"NaN"`, `"Infinity"` and `"-Infinity"`, which [`ReaderBuilder`] parses
+    /// back into floating point columns:
+    ///
+    /// ```json
+    /// {"a":"NaN","b":"Infinity","c":"-Infinity"}
+    /// ```
+    ///
+    /// Default is `false`.
+    ///
+    /// [`ReaderBuilder`]: crate::ReaderBuilder
+    pub fn with_non_finite_floats_as_strings(mut self, non_finite_floats_as_strings: bool) -> Self {
+        self.0 = self
+            .0
+            .with_non_finite_floats_as_strings(non_finite_floats_as_strings);
+        self
+    }
+
     /// Set the JSON file's date format
     pub fn with_date_format(mut self, format: String) -> Self {
         self.0 = self.0.with_date_format(format);
@@ -2802,5 +2828,89 @@ mod tests {
         assert_eq!(values.value(0), "a");
         assert!(values.is_null(1));
         assert_eq!(values.value(2), "b");
+    }
+
+    fn non_finite_floats_batch() -> RecordBatch {
+        let values = [
+            Some(f64::NAN),
+            Some(f64::INFINITY),
+            Some(f64::NEG_INFINITY),
+            Some(1.5),
+            None,
+        ];
+        let f16s: Float16Array = values.iter().map(|v| v.map(half::f16::from_f64)).collect();
+        let f32s: Float32Array = values.iter().map(|v| v.map(|v| v as f32)).collect();
+        let f64s = Float64Array::from(values.to_vec());
+        let list = ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Float64, true)),
+            OffsetBuffer::from_lengths([1; 5]),
+            Arc::new(f64s.clone()),
+            None,
+        );
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("f16", DataType::Float16, true),
+            Field::new("f32", DataType::Float32, true),
+            Field::new("f64", DataType::Float64, true),
+            Field::new("list", list.data_type().clone(), true),
+        ]));
+        RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(f16s),
+                Arc::new(f32s),
+                Arc::new(f64s),
+                Arc::new(list),
+            ],
+        )
+        .unwrap()
+    }
+
+    fn write_non_finite_floats(batch: &RecordBatch, as_strings: bool) -> Vec<u8> {
+        let mut buf = Vec::new();
+        let mut writer = WriterBuilder::new()
+            .with_explicit_nulls(true)
+            .with_non_finite_floats_as_strings(as_strings)
+            .build::<_, LineDelimited>(&mut buf);
+        writer.write(batch).unwrap();
+        writer.finish().unwrap();
+        buf
+    }
+
+    #[test]
+    fn test_writer_non_finite_floats() {
+        let batch = non_finite_floats_batch();
+
+        assert_json_eq(
+            &write_non_finite_floats(&batch, false),
+            r#"{"f16":null,"f32":null,"f64":null,"list":[null]}
+{"f16":null,"f32":null,"f64":null,"list":[null]}
+{"f16":null,"f32":null,"f64":null,"list":[null]}
+{"f16":1.5,"f32":1.5,"f64":1.5,"list":[1.5]}
+{"f16":null,"f32":null,"f64":null,"list":[null]}
+"#,
+        );
+
+        assert_json_eq(
+            &write_non_finite_floats(&batch, true),
+            r#"{"f16":"NaN","f32":"NaN","f64":"NaN","list":["NaN"]}
+{"f16":"Infinity","f32":"Infinity","f64":"Infinity","list":["Infinity"]}
+{"f16":"-Infinity","f32":"-Infinity","f64":"-Infinity","list":["-Infinity"]}
+{"f16":1.5,"f32":1.5,"f64":1.5,"list":[1.5]}
+{"f16":null,"f32":null,"f64":null,"list":[null]}
+"#,
+        );
+    }
+
+    #[test]
+    fn test_non_finite_floats_roundtrip() {
+        let batch = non_finite_floats_batch();
+        let buf = write_non_finite_floats(&batch, true);
+
+        let read: Vec<RecordBatch> = ReaderBuilder::new(batch.schema())
+            .build(std::io::Cursor::new(&buf))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(read, vec![batch]);
     }
 }

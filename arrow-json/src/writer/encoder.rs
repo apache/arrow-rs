@@ -35,6 +35,8 @@ pub struct EncoderOptions {
     timestamp_tz_format: Option<String>,
     /// Optional time format for time arrays
     time_format: Option<String>,
+    /// Whether to write non-finite floats as JSON strings instead of `null`.
+    non_finite_floats_as_strings: bool,
 }
 
 impl EncoderOptions {
@@ -69,6 +71,17 @@ impl EncoderOptions {
     /// Get the optional hook for customizing encoding behavior.
     pub fn encoder_factory(&self) -> Option<&Arc<dyn EncoderFactory>> {
         self.encoder_factory.as_ref()
+    }
+
+    /// Set whether to write `NaN`, `Infinity` and `-Infinity` as JSON strings instead of `null`.
+    pub fn with_non_finite_floats_as_strings(mut self, non_finite_floats_as_strings: bool) -> Self {
+        self.non_finite_floats_as_strings = non_finite_floats_as_strings;
+        self
+    }
+
+    /// Get whether non-finite floats are written as JSON strings instead of `null`.
+    pub fn non_finite_floats_as_strings(&self) -> bool {
+        self.non_finite_floats_as_strings
     }
 
     /// Set the JSON file's date format
@@ -333,6 +346,21 @@ pub fn make_encoder<'a>(
         }};
     }
 
+    macro_rules! float_helper {
+        ($t:ty) => {{
+            if options.non_finite_floats_as_strings() {
+                let array = array.as_primitive::<$t>();
+                let nulls = array.nulls().cloned();
+                NullableEncoder::new(
+                    Box::new(NonFiniteAsStringEncoder(PrimitiveEncoder::new(array))),
+                    nulls,
+                )
+            } else {
+                primitive_helper!($t)
+            }
+        }};
+    }
+
     if let Some(factory) = options.encoder_factory()
         && let Some(encoder) = factory.make_default_encoder(field, array, options)?
     {
@@ -342,9 +370,9 @@ pub fn make_encoder<'a>(
     let nulls = array.nulls().cloned();
     let encoder = downcast_integer! {
         array.data_type() => (primitive_helper),
-        DataType::Float16 => primitive_helper!(Float16Type),
-        DataType::Float32 => primitive_helper!(Float32Type),
-        DataType::Float64 => primitive_helper!(Float64Type),
+        DataType::Float16 => float_helper!(Float16Type),
+        DataType::Float32 => float_helper!(Float32Type),
+        DataType::Float64 => float_helper!(Float64Type),
         DataType::Boolean => {
             let array = array.as_boolean();
             NullableEncoder::new(Box::new(BooleanEncoder(array)), array.nulls().cloned())
@@ -614,6 +642,31 @@ impl PrimitiveEncode for f16 {
     }
 }
 
+trait FloatEncode: PrimitiveEncode {
+    fn non_finite_json_string(self) -> Option<&'static [u8]>;
+}
+
+macro_rules! float_non_finite_encode {
+    ($($t:ty),*) => {
+        $(
+            impl FloatEncode for $t {
+                fn non_finite_json_string(self) -> Option<&'static [u8]> {
+                    if self.is_nan() {
+                        Some(br#""NaN""#)
+                    } else if self == <$t>::INFINITY {
+                        Some(br#""Infinity""#)
+                    } else if self == <$t>::NEG_INFINITY {
+                        Some(br#""-Infinity""#)
+                    } else {
+                        None
+                    }
+                }
+            }
+        )*
+    };
+}
+float_non_finite_encode!(f16, f32, f64);
+
 struct PrimitiveEncoder<N: PrimitiveEncode> {
     values: ScalarBuffer<N>,
     buffer: N::Buffer,
@@ -631,6 +684,17 @@ impl<N: PrimitiveEncode> PrimitiveEncoder<N> {
 impl<N: PrimitiveEncode> Encoder for PrimitiveEncoder<N> {
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         out.extend_from_slice(self.values[idx].encode(&mut self.buffer));
+    }
+}
+
+struct NonFiniteAsStringEncoder<N: FloatEncode>(PrimitiveEncoder<N>);
+
+impl<N: FloatEncode> Encoder for NonFiniteAsStringEncoder<N> {
+    fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
+        match self.0.values[idx].non_finite_json_string() {
+            Some(s) => out.extend_from_slice(s),
+            None => self.0.encode(idx, out),
+        }
     }
 }
 
