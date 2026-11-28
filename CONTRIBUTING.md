@@ -336,6 +336,11 @@ If your PR proposes a performance improvement, include a summary of the benchmar
 
 A benchmark that improves is not enough on its own. State which part of the change produces the gain, for example by removing it and rerunning. Cover both well-predicted input (constant lengths, all valid) and poorly predicted input (random), because branchless code wins on the second and can lose on the first. Name the inputs that get slower and say whether real workloads are likely to hit them.
 
+Before adding a loop that processes bytes or bits a word at a time at one call site, check [`arrow-bitutils`] and [`arrow_buffer::bit_util`]. If they don't cover your case, extend or add a function in `arrow-bitutils` instead. Every caller inherits a change to these functions, so a PR that tunes one shows benchmark results on both x86-64 and aarch64.
+
+[`arrow-bitutils`]: https://docs.rs/arrow-bitutils/latest/arrow_bitutils/
+[`arrow_buffer::bit_util`]: https://docs.rs/arrow-buffer/latest/arrow_buffer/bit_util/index.html
+
 If you need to add new benchmarks to cover your change, add them as the first commit of the same PR. This lets reviewers see the benchmark and implementation together without requiring a separate benchmark PR. The automated benchmark runner can compare the implementation against the first commit by passing its SHA as the baseline:
 
 ```yaml

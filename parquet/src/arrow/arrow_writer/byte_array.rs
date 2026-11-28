@@ -19,7 +19,6 @@ use crate::geospatial::accumulator::{GeoStatsAccumulator, try_new_geo_stats_accu
 use crate::geospatial::statistics::GeospatialStatistics;
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::num_required_bits;
-use crate::util::prefix::common_prefix_length;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{ArrowDictionaryKeyType, ByteArrayType};
 use arrow_array::{
@@ -27,6 +26,7 @@ use arrow_array::{
     FixedSizeBinaryArray, GenericByteArray, LargeBinaryArray, LargeStringArray, StringArray,
     StringViewArray, TypedDictionaryArray,
 };
+use arrow_bitutils::byte_util::{cmp_bytes, common_prefix_len};
 use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_schema::DataType;
 use std::sync::{Arc, Weak};
@@ -209,7 +209,7 @@ impl FallbackEncoder {
                     let value = values.value(idx);
                     let value = value.as_ref();
 
-                    let prefix_length = common_prefix_length(last_value, value);
+                    let prefix_length = common_prefix_len(last_value, value);
                     let suffix_length = value.len() - prefix_length;
 
                     last_value.clear();
@@ -1212,7 +1212,7 @@ fn is_greater(is_decimal: bool, a: &[u8], b: &[u8]) -> bool {
     if is_decimal {
         compare_greater_byte_array_decimals(a, b)
     } else {
-        a > b
+        cmp_bytes(a, b).is_gt()
     }
 }
 

@@ -275,9 +275,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrow-bitutils"
+version = "60.2.0"
+dependencies = [
+ "criterion",
+ "rand",
+]
+
+[[package]]
 name = "arrow-buffer"
 version = "60.2.0"
 dependencies = [
+ "arrow-bitutils",
  "bytes",
  "criterion",
  "half",
@@ -2576,6 +2585,7 @@ dependencies = [
  "ahash",
  "arrow",
  "arrow-array",
+ "arrow-bitutils",
  "arrow-buffer",
  "arrow-cast",
  "arrow-csv",

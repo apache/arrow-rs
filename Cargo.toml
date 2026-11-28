@@ -9,6 +9,7 @@ members = [
     "arrow-arith",
     "arrow-array",
     "arrow-avro",
+    "arrow-bitutils",
     "arrow-buffer",
     "arrow-cast",
     "arrow-csv",
@@ -71,6 +72,7 @@ rust-version = "1.88"
 arrow = { version = "60.2.0", path = "./arrow", default-features = false }
 arrow-arith = { version = "60.2.0", path = "./arrow-arith" }
 arrow-array = { version = "60.2.0", path = "./arrow-array" }
+arrow-bitutils = { version = "60.2.0", path = "./arrow-bitutils" }
 arrow-buffer = { version = "60.2.0", path = "./arrow-buffer" }
 arrow-cast = { version = "60.2.0", path = "./arrow-cast" }
 arrow-csv = { version = "60.2.0", path = "./arrow-csv" }

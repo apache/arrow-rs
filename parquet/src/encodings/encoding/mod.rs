@@ -14,7 +14,7 @@ use crate::errors::{ParquetError, Result};
 use crate::file::properties::ResolvedColumnProperties;
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::{BitWriter, num_required_bits};
-use crate::util::prefix::common_prefix_length;
+use arrow_bitutils::byte_util::common_prefix_len;
 
 pub use alp_encoder::AlpEncoder;
 pub use byte_stream_split_encoder::{ByteStreamSplitEncoder, VariableWidthByteStreamSplitEncoder};
@@ -925,7 +925,7 @@ impl<T: DataType> Encoder<T> for DeltaByteArrayEncoder<T> {
         for byte_array in values {
             let current = byte_array.data();
             // Number of leading bytes shared with the previous value
-            let match_len = common_prefix_length(&self.previous, current);
+            let match_len = common_prefix_len(&self.previous, current);
             prefix_lengths.push(match_len as i32);
             suffixes.push(byte_array.slice(match_len, byte_array.len() - match_len));
             // Update previous for the next prefix

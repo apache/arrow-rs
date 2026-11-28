@@ -4,6 +4,7 @@
 
 //! Contains column writer API.
 
+use arrow_bitutils::byte_util::cmp_bytes;
 use bytes::Bytes;
 use half::f16;
 
@@ -1971,6 +1972,9 @@ fn compare_greater<T: ParquetValueType>(basic_type_info: &BasicTypeInfo, a: &T, 
         }
         Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY if is_decimal_descr(basic_type_info) => {
             return compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
+        }
+        Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY => {
+            return cmp_bytes(a.as_bytes(), b.as_bytes()).is_gt();
         }
 
         _ => {}

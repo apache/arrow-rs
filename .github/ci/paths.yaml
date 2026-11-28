@@ -18,6 +18,7 @@ suites:
   arrow:
     - arrow-arith/**
     - arrow-array/**
+    - arrow-bitutils/**
     - arrow-buffer/**
     - arrow-cast/**
     - arrow-cmp/**
@@ -36,6 +37,7 @@ suites:
     - arrow/**
   arrow-flight:
     - arrow-array/**
+    - arrow-bitutils/**
     - arrow-buffer/**
     - arrow-cast/**
     - arrow-data/**
@@ -47,6 +49,7 @@ suites:
     - arrow/**
     - arrow-arith/**
     - arrow-array/**
+    - arrow-bitutils/**
     - arrow-buffer/**
     - arrow-cast/**
     - arrow-cmp/**
@@ -69,6 +72,7 @@ suites:
   integration:
     - arrow-arith/**
     - arrow-array/**
+    - arrow-bitutils/**
     - arrow-buffer/**
     - arrow-cast/**
     - arrow-cmp/**
