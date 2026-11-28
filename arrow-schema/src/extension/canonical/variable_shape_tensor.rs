@@ -628,6 +628,51 @@ mod tests {
     }
 
     #[test]
+    fn invalid_deserialized_metadata() -> Result<(), ArrowError> {
+        let data_type = DataType::Struct(
+            vec![
+                Field::new_list(
+                    "data",
+                    Field::new_list_field(DataType::Float32, false),
+                    false,
+                ),
+                Field::new_fixed_size_list(
+                    "shape",
+                    Field::new_list_field(DataType::Int32, false),
+                    2,
+                    false,
+                ),
+            ]
+            .into(),
+        );
+        for (json, expected) in [
+            (
+                r#"{"dim_names":["height"]}"#,
+                "dimension names size mismatch",
+            ),
+            (r#"{"permutations":[0]}"#, "permutations size mismatch"),
+            (r#"{"permutations":[0,0]}"#, "permutations invalid"),
+            (r#"{"permutations":[0,2]}"#, "permutations invalid"),
+            (
+                r#"{"uniform_shape":[null]}"#,
+                "uniform shapes size mismatch",
+            ),
+        ] {
+            let metadata = VariableShapeTensor::deserialize_metadata(Some(json))?;
+            for result in [
+                VariableShapeTensor::validate(&data_type, metadata.clone()),
+                <VariableShapeTensor as ExtensionType>::try_new(&data_type, metadata).map(|_| ()),
+            ] {
+                assert!(
+                    matches!(&result, Err(ArrowError::InvalidArgumentError(message)) if message.contains(expected)),
+                    "{json}: expected {expected}, got {result:?}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     #[should_panic(
         expected = "VariableShapeTensor dimension names size mismatch, expected 3, found 2"
     )]
