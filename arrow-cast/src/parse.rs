@@ -157,6 +157,8 @@ impl TimestampParser {
 /// * `1997-01-31 092656`               # close to RCF3339, no fractional seconds
 /// * `1997-01-31 092656+04:00`         # close to RCF3339, no fractional seconds or time separator
 /// * `1997-01-31`                      # close to RCF3339, only date no time
+/// * `+10999-12-31T09:26:56.123Z`      # ISO8601 year with more than four digits, needs a sign
+/// * `-0001-01-31T09:26:56.123Z`       # ISO8601 year before 0000
 ///
 /// [IANA timezones] are only supported if the `arrow-array/chrono-tz` or `arrow-array/jiff` feature is enabled
 ///
@@ -198,8 +200,22 @@ pub fn string_to_datetime<T: TimeZone>(timezone: &T, s: &str) -> Result<DateTime
         return Err(err("timestamp must contain at least 10 characters"));
     }
 
+    // A signed extended year such as "+10999-12-31" makes the date longer; skip the
+    // extra bytes so the time and timezone are found at the usual offsets
+    let (extended_date, skip) = match bytes[0] {
+        b'+' | b'-' => {
+            let (date, len) = parse_extended_date(s).ok_or_else(|| err("error parsing date"))?;
+            (Some(date), len - 10)
+        }
+        _ => (None, 0),
+    };
+    let bytes = &bytes[skip..];
+
     let parser = TimestampParser::new(bytes);
-    let date = parser.date().ok_or_else(|| err("error parsing date"))?;
+    let date = match extended_date {
+        Some(date) => date,
+        None => parser.date().ok_or_else(|| err("error parsing date"))?,
+    };
     if bytes.len() == 10 {
         let datetime = date.and_time(NaiveTime::MIN);
         return resolve_local_datetime(timezone, &datetime)
@@ -230,7 +246,7 @@ pub fn string_to_datetime<T: TimeZone>(timezone: &T, s: &str) -> Result<DateTime
     }
 
     // Parse remainder of string as timezone
-    let parsed_tz: Tz = s[tz_offset..].trim_start().parse()?;
+    let parsed_tz: Tz = s[skip + tz_offset..].trim_start().parse()?;
     let parsed = resolve_local_datetime(&parsed_tz, &datetime)
         .ok_or_else(|| err("error computing timezone offset"))?;
 
@@ -714,6 +730,15 @@ fn parse_extended_ymd(string: &str) -> Option<(i32, u32, u32)> {
     let month: u32 = parts.next()?.parse().ok()?;
     let day: u32 = parts.next()?.parse().ok()?;
     Some((year, month, day))
+}
+
+/// Parse the signed extended-year date (`±YYYY[Y...]-MM-DD`) at the start of
+/// `string`, returning the date and its length in bytes
+fn parse_extended_date(string: &str) -> Option<(NaiveDate, usize)> {
+    // The sign, the year digits, then "-MM-DD"
+    let len = string[1..].find('-')? + 7;
+    let (year, month, day) = parse_extended_ymd(string.get(..len)?)?;
+    Some((NaiveDate::from_ymd_opt(year, month, day)?, len))
 }
 
 fn parse_date(string: &str) -> Option<NaiveDate> {
@@ -1986,6 +2011,36 @@ mod tests {
     }
 
     #[test]
+    fn string_to_timestamp_extended_year() {
+        let cases = [
+            ("+10999-12-31T00:00:00", "+10999-12-31T00:00:00"),
+            ("+10999-12-31 23:59:59.123Z", "+10999-12-31T23:59:59.123"),
+            ("-0001-01-01T00:00:00.123", "-0001-01-01T00:00:00.123"),
+            ("-0001-01-01T00:00:00-05:00", "-0001-01-01T05:00:00"),
+            ("+57216-08-06T00:59:13Z", "+57216-08-06T00:59:13"),
+            ("+10000-01-01T09:26 +01:00", "+10000-01-01T08:26:00"),
+            ("-0001-01-01", "-0001-01-01T00:00:00"),
+        ];
+        for (case, expected) in cases {
+            let expected = NaiveDateTime::parse_from_str(expected, "%Y-%m-%dT%H:%M:%S%.f").unwrap();
+            let custom = string_to_datetime(&Utc, case).unwrap();
+            assert_eq!(expected, custom.naive_utc(), "{case}");
+        }
+
+        // Date64 strings longer than 10 characters are parsed as timestamps
+        let cases = [
+            ("-0001-01-01", -1),
+            ("+10000-01-01", 10000),
+            ("+10000-01-01T00:00:00", 10000),
+        ];
+        for (case, year) in cases {
+            let date = NaiveDate::from_ymd_opt(year, 1, 1).unwrap();
+            let expected = date.and_time(NaiveTime::MIN).and_utc().timestamp_millis();
+            assert_eq!(Date64Type::parse(case), Some(expected), "{case}");
+        }
+    }
+
+    #[test]
     fn string_to_timestamp_without_seconds() {
         let cases = [
             ("2025-08-14T00:00Z", (2025, 8, 14, 0, 0)),
@@ -2026,6 +2081,10 @@ mod tests {
             ("1997-01-10T09:26:Z", "error parsing time"),
             ("1997-01-10T09:26.5Z", "error parsing time"),
             ("1997-01-10T09:61Z", "error parsing time"),
+            ("+999-01-01T00:00:00", "error parsing date"),
+            ("-0001-02-30T00:00:00", "error parsing date"),
+            ("+10999-12-31H00:00:00", "invalid timestamp separator"),
+            ("+10999-12-31T25:00:00", "error parsing time"),
         ];
 
         for (s, ctx) in cases {
