@@ -67,6 +67,13 @@ use crate::iterator::ArrayIter;
 
 /// An array in the [Arrow Columnar Format](https://arrow.apache.org/docs/format/Columnar.html)
 ///
+/// Conceptually, an array is a concrete arrow-rs type that maps one-to-one to a [`DataType`], such
+/// as [`Int32Array`] for [`DataType::Int32`]. For convenience, other types also implement this
+/// trait, such as [`ArrayRef`], `&T`, and the typed views. They are not concrete arrays:
+/// they hold or borrow one, and forward methods such as [`Array::data_type`] to it. Downcasting
+/// methods such as [`Array::as_any`] and [`downcast_arc`](crate::cast::downcast_arc) refer to the
+/// concrete array itself.
+///
 /// # Safety
 ///
 /// Implementations of this trait must ensure that all methods implementations comply with
@@ -85,8 +92,11 @@ use crate::iterator::ArrayIter;
 ///
 /// [this discussion]: https://github.com/apache/arrow-rs/pull/9234#pullrequestreview-3708950936
 pub unsafe trait Array: std::fmt::Debug + Send + Sync {
-    /// Returns the array as [`Any`] so that it can be
-    /// downcasted to a specific implementation.
+    /// Returns a reference to the concrete array that `self` is or wraps as [`Any`], so that it can
+    /// be downcast afterward.
+    ///
+    /// To downcast an [`Arc`] instead of a reference, use
+    /// [`downcast_arc`](crate::cast::downcast_arc).
     ///
     /// # Example:
     ///
@@ -108,6 +118,14 @@ pub unsafe trait Array: std::fmt::Debug + Send + Sync {
     ///     .expect("Failed to downcast");
     /// ```
     fn as_any(&self) -> &dyn Any;
+
+    /// Returns the concrete array that `self` is or wraps as an `Arc<dyn Any + Send + Sync>`, so
+    /// that it can be downcast with [`Arc::downcast`]. This is the `Arc` counterpart of
+    /// [`Self::as_any`]. See also [`downcast_arc`](crate::cast::downcast_arc).
+    ///
+    /// If `self` is or wraps an `Arc` of the concrete array, clone that `Arc`. Otherwise, shallow
+    /// clone the concrete array into a new `Arc` as if by [`Self::to_arc`].
+    fn into_any_arc(self: Arc<Self>) -> Arc<dyn Any + Send + Sync>;
 
     /// Returns an [`ArrayRef`] with the same contents as `self`, sharing its buffers.
     ///
@@ -467,6 +485,10 @@ unsafe impl Array for ArrayRef {
         self.as_ref().as_any()
     }
 
+    fn into_any_arc(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
+        Arc::unwrap_or_clone(self).into_any_arc()
+    }
+
     fn to_arc(&self) -> ArrayRef {
         Arc::clone(self)
     }
@@ -553,6 +575,11 @@ unsafe impl Array for ArrayRef {
 unsafe impl<T: Array> Array for &T {
     fn as_any(&self) -> &dyn Any {
         T::as_any(self)
+    }
+
+    fn into_any_arc(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
+        // `&T` is not a concrete array (even if `T` is), so we can't return `self`
+        T::to_arc(&self).into_any_arc()
     }
 
     fn to_arc(&self) -> ArrayRef {

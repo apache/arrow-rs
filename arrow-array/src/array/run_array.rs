@@ -542,6 +542,10 @@ unsafe impl<T: RunEndIndexType> Array for RunArray<T> {
         self
     }
 
+    fn into_any_arc(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
+        self
+    }
+
     fn to_arc(&self) -> ArrayRef {
         Arc::new(self.clone())
     }
@@ -810,6 +814,11 @@ impl<'a, R: RunEndIndexType, V> TypedRunArray<'a, R, V> {
 unsafe impl<R: RunEndIndexType, V: Sync> Array for TypedRunArray<'_, R, V> {
     fn as_any(&self) -> &dyn Any {
         self.run_array
+    }
+
+    fn into_any_arc(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
+        // Same body as `to_arc`, just coerced to a different trait object
+        Arc::new(self.run_array.clone())
     }
 
     fn to_arc(&self) -> ArrayRef {

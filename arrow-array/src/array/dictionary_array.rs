@@ -695,6 +695,10 @@ unsafe impl<T: ArrowDictionaryKeyType> Array for DictionaryArray<T> {
         self
     }
 
+    fn into_any_arc(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
+        self
+    }
+
     fn to_arc(&self) -> ArrayRef {
         Arc::new(self.clone())
     }
@@ -862,6 +866,11 @@ impl<'a, K: ArrowDictionaryKeyType, V> TypedDictionaryArray<'a, K, V> {
 unsafe impl<K: ArrowDictionaryKeyType, V: Sync> Array for TypedDictionaryArray<'_, K, V> {
     fn as_any(&self) -> &dyn Any {
         self.dictionary
+    }
+
+    fn into_any_arc(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
+        // Same body as `to_arc`, just coerced to a different trait object
+        Arc::new(self.dictionary.clone())
     }
 
     fn to_arc(&self) -> ArrayRef {
