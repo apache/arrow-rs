@@ -89,12 +89,13 @@ impl EncodedBuffer {
 }
 /// Accumulates the IPC metadata produced by [`write_array_data`].
 ///
-/// `nodes` and `buffers` are serialised into the flatbuffer `RecordBatch` (or `DictionaryBatch`)
+/// `nodes`, `buffers` and `variadic_buffer_counts` are serialised into the flatbuffer `RecordBatch` (or `DictionaryBatch`)
 /// header. The companion [`IpcBodySink`] holds the actual encoded bytes.
 #[derive(Default)]
 struct IpcMetadataBuilder {
     nodes: Vec<crate::FieldNode>,
     buffers: Vec<crate::Buffer>,
+    variadic_buffer_counts: Vec<i64>,
 }
 
 /// Destination for the raw Arrow data bytes (the IPC message body) produced by [`write_array_data`].
@@ -1253,7 +1254,6 @@ impl IpcDataGenerator {
             .transpose()?;
 
         let mut meta = IpcMetadataBuilder::default();
-        let mut variadic_buffer_counts: Vec<i64> = vec![];
         let mut offset = 0i64;
 
         for array_data in columns {
@@ -1266,7 +1266,6 @@ impl IpcDataGenerator {
                 ipc_write_context,
                 write_options,
             )?;
-            append_variadic_buffer_counts(&mut variadic_buffer_counts, &array_data);
         }
 
         // Each buffer is padded to the alignment as it is written, so `offset` is
@@ -1277,10 +1276,10 @@ impl IpcDataGenerator {
         let fbb = ipc_write_context.mut_fbb();
         let buffers = fbb.create_vector(&meta.buffers);
         let nodes = fbb.create_vector(&meta.nodes);
-        let variadic_buffer = if variadic_buffer_counts.is_empty() {
+        let variadic_buffer = if meta.variadic_buffer_counts.is_empty() {
             None
         } else {
-            Some(fbb.create_vector(&variadic_buffer_counts))
+            Some(fbb.create_vector(&meta.variadic_buffer_counts))
         };
 
         let mut batch_builder = crate::RecordBatchBuilder::new(fbb);
@@ -1340,25 +1339,6 @@ fn ensure_supported_ipc_data_type(
             ensure_supported_ipc_data_type(field.name(), field.data_type())
         }),
         _ => Ok(()),
-    }
-}
-
-fn append_variadic_buffer_counts(counts: &mut Vec<i64>, array: &ArrayData) {
-    match array.data_type() {
-        DataType::BinaryView | DataType::Utf8View => {
-            // The spec documents the counts only includes the variadic buffers, not the view/null buffers.
-            // https://arrow.apache.org/docs/format/Columnar.html#variadic-buffers
-            counts.push(array.buffers().len() as i64 - 1);
-        }
-        DataType::Dictionary(_, _) => {
-            // Do nothing
-            // Dictionary values are handled in special dictionary messages
-        }
-        _ => {
-            for child in array.child_data() {
-                append_variadic_buffer_counts(counts, child)
-            }
-        }
     }
 }
 
@@ -2477,7 +2457,7 @@ fn get_or_truncate_buffer(array_data: &ArrayData) -> Buffer {
 /// Recursively encodes `array_data` into its IPC representation.
 ///
 /// Output goes to two separate channels:
-/// - `meta`: accumulates IPC metadata (`nodes` and `buffers`) for the flatbuffer header.
+/// - `meta`: accumulates IPC metadata (`nodes`, `buffers` and `variadic_buffer_counts`) for the flatbuffer header.
 /// - `sink`: the raw Arrow data bytes that form the IPC message body.
 fn write_array_data(
     array_data: &ArrayData,
@@ -2549,6 +2529,10 @@ fn write_array_data(
             write_options.alignment,
         )?;
 
+        // The spec documents the counts only includes the variadic buffers, not the view/null buffers.
+        // https://arrow.apache.org/docs/format/Columnar.html#variadic-buffers
+        meta.variadic_buffer_counts
+            .push(array_data.buffers().len() as i64 - 1);
         for buffer in array_data.buffers().iter().skip(1) {
             offset = encode_sink_buffer(
                 buffer.clone(),
