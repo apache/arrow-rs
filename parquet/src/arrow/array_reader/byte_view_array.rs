@@ -245,10 +245,10 @@ impl ByteViewArrayDecoder {
                 )?)
             }
             Encoding::DELTA_LENGTH_BYTE_ARRAY => ByteViewArrayDecoder::DeltaLength(
-                ByteViewArrayDecoderDeltaLength::new(data, validate_utf8)?,
+                ByteViewArrayDecoderDeltaLength::new(data, num_levels, num_values, validate_utf8)?,
             ),
             Encoding::DELTA_BYTE_ARRAY => ByteViewArrayDecoder::DeltaByteArray(
-                ByteViewArrayDecoderDelta::new(data, validate_utf8)?,
+                ByteViewArrayDecoderDelta::new(data, num_levels, num_values, validate_utf8)?,
             ),
             _ => {
                 return Err(general_err!(
@@ -574,10 +574,16 @@ pub struct ByteViewArrayDecoderDeltaLength {
 }
 
 impl ByteViewArrayDecoderDeltaLength {
-    fn new(data: Bytes, validate_utf8: bool) -> Result<Self> {
+    fn new(
+        data: Bytes,
+        num_levels: usize,
+        num_values: Option<usize>,
+        validate_utf8: bool,
+    ) -> Result<Self> {
+        let num_values = num_values.unwrap_or(num_levels);
         let mut len_decoder = DeltaBitPackDecoder::<Int32Type>::new();
-        len_decoder.set_data(data.clone(), 0)?;
-        let values = len_decoder.values_left();
+        len_decoder.set_data(data.clone(), num_values)?;
+        let values = len_decoder.checked_values_left(num_values)?;
 
         let mut lengths = vec![0; values];
         len_decoder.get(&mut lengths)?;
@@ -672,9 +678,14 @@ pub struct ByteViewArrayDecoderDelta {
 }
 
 impl ByteViewArrayDecoderDelta {
-    fn new(data: Bytes, validate_utf8: bool) -> Result<Self> {
+    fn new(
+        data: Bytes,
+        num_levels: usize,
+        num_values: Option<usize>,
+        validate_utf8: bool,
+    ) -> Result<Self> {
         Ok(Self {
-            decoder: DeltaByteArrayDecoder::new(data)?,
+            decoder: DeltaByteArrayDecoder::new(data, num_values.unwrap_or(num_levels))?,
             validate_utf8,
         })
     }
@@ -773,7 +784,9 @@ mod tests {
 
     use crate::{
         arrow::{
-            array_reader::test_util::{byte_array_all_encodings, encode_byte_array, utf8_column},
+            array_reader::test_util::{
+                byte_array_all_encodings, delta_pages_declaring, encode_byte_array, utf8_column,
+            },
             buffer::view_buffer::ViewBuffer,
             record_reader::buffer::ValuesBuffer,
         },
@@ -783,6 +796,54 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn test_byte_view_array_decoder_delta_length_counts() {
+        let column_desc = utf8_column();
+
+        // Length streams declaring more values than the page holds
+        for count in [1 << 31, 1 << 60, 5] {
+            for (encoding, page) in delta_pages_declaring(count, 4) {
+                let mut decoder = ByteViewArrayColumnValueDecoder::new(&column_desc);
+                let err = decoder.set_data(encoding, page, 4, Some(4)).unwrap_err();
+                assert!(
+                    err.to_string().contains("but the page has at most 4"),
+                    "{err}"
+                );
+            }
+        }
+
+        // A length stream declaring more values than its bytes could encode
+        for (encoding, page) in delta_pages_declaring(1000, 1000) {
+            let mut decoder = ByteViewArrayColumnValueDecoder::new(&column_desc);
+            let err = decoder.set_data(encoding, page, 1000, None).unwrap_err();
+            assert!(err.to_string().contains("need at least"), "{err}");
+        }
+
+        let data: Vec<ByteArray> = vec!["hello".into(), "world".into(), "a".into(), "b".into()];
+        for encoding in [
+            Encoding::DELTA_LENGTH_BYTE_ARRAY,
+            Encoding::DELTA_BYTE_ARRAY,
+        ] {
+            let page = encode_byte_array(encoding, &data);
+
+            // A page holding more values than its header declares
+            let mut decoder = ByteViewArrayColumnValueDecoder::new(&column_desc);
+            let err = decoder
+                .set_data(encoding, page.clone(), 3, Some(3))
+                .unwrap_err();
+            assert!(
+                err.to_string().contains("but the page has at most 3"),
+                "{err}"
+            );
+
+            // A page whose levels count nulls the length streams do not
+            let mut output = ViewBuffer::with_capacity(0);
+            decoder.set_data(encoding, page, 6, None).unwrap();
+            assert_eq!(decoder.read(&mut output, 6).unwrap(), 4);
+            assert_eq!(output.views.len(), 4);
+        }
+    }
 
     #[test]
     fn test_byte_array_string_view_decoder() {
