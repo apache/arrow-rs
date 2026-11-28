@@ -98,6 +98,43 @@ impl VariableShapeTensor {
         })
     }
 
+    // Unlike `supports_data_type`, this needs no tensor instance. Borrowing metadata
+    // and returning the element type and rank lets `try_new` reuse validation without
+    // cloning metadata, while `validate` can check it without constructing a tensor.
+    fn validate_impl<'a>(
+        data_type: &'a DataType,
+        metadata: &VariableShapeTensorMetadata,
+    ) -> Result<(&'a DataType, usize), ArrowError> {
+        match data_type {
+            DataType::Struct(fields)
+                if fields.len() == 2
+                    && matches!(fields.find("data"), Some((0, _)))
+                    && matches!(fields.find("shape"), Some((1, _))) =>
+            {
+                let shape_field = &fields[1];
+                match shape_field.data_type() {
+                    DataType::FixedSizeList(_, list_size) => {
+                        let dimensions = usize::try_from(*list_size).expect("conversion failed");
+                        metadata.validate(dimensions)?;
+                        let data_field = &fields[0];
+                        match data_field.data_type() {
+                            DataType::List(field) => Ok((field.data_type(), dimensions)),
+                            data_type => Err(ArrowError::InvalidArgumentError(format!(
+                                "VariableShapeTensor data type mismatch, expected List for data field, found {data_type}"
+                            ))),
+                        }
+                    }
+                    data_type => Err(ArrowError::InvalidArgumentError(format!(
+                        "VariableShapeTensor data type mismatch, expected FixedSizeList for shape field, found {data_type}"
+                    ))),
+                }
+            }
+            data_type => Err(ArrowError::InvalidArgumentError(format!(
+                "VariableShapeTensor data type mismatch, expected Struct with 2 fields (data and shape), found {data_type}"
+            ))),
+        }
+    }
+
     /// Returns the value type of the individual tensor elements.
     pub fn value_type(&self) -> &DataType {
         &self.value_type
@@ -291,55 +328,54 @@ impl VariableShapeTensorMetadata {
         permutations: Option<Vec<usize>>,
         uniform_shapes: Option<Vec<Option<i32>>>,
     ) -> Result<Self, ArrowError> {
-        let dim_names = dimension_names.map(|dimension_names| {
-            if dimension_names.len() != dimensions {
-                Err(ArrowError::InvalidArgumentError(format!(
-                    "VariableShapeTensor dimension names size mismatch, expected {dimensions}, found {}", dimension_names.len()
-                )))
-            } else {
-                Ok(dimension_names)
-            }
-        }).transpose()?;
-
-        let permutations = permutations
-            .map(|permutations| {
-                if permutations.len() != dimensions {
-                    Err(ArrowError::InvalidArgumentError(format!(
-                        "VariableShapeTensor permutations size mismatch, expected {dimensions}, found {}",
-                        permutations.len()
-                    )))
-                } else {
-                    let mut sorted_permutations = permutations.clone();
-                    sorted_permutations.sort_unstable();
-                    if (0..dimensions).zip(sorted_permutations).any(|(a, b)| a != b) {
-                        Err(ArrowError::InvalidArgumentError(format!(
-                            "VariableShapeTensor permutations invalid, expected a permutation of [0, 1, .., N-1], where N is the number of dimensions: {dimensions}"
-                        )))
-                    } else {
-                        Ok(permutations)
-                    }
-                }
-            })
-            .transpose()?;
-
-        let uniform_shape = uniform_shapes
-            .map(|uniform_shapes| {
-                if uniform_shapes.len() != dimensions {
-                    Err(ArrowError::InvalidArgumentError(format!(
-                        "VariableShapeTensor uniform shapes size mismatch, expected {dimensions}, found {}",
-                        uniform_shapes.len()
-                    )))
-                } else {
-                    Ok(uniform_shapes)
-                }
-            })
-            .transpose()?;
-
-        Ok(Self {
-            dim_names,
+        let metadata = Self {
+            dim_names: dimension_names,
             permutations,
-            uniform_shape,
-        })
+            uniform_shape: uniform_shapes,
+        };
+        metadata.validate(dimensions)?;
+        Ok(metadata)
+    }
+
+    fn validate(&self, dimensions: usize) -> Result<(), ArrowError> {
+        if let Some(dimension_names) = &self.dim_names
+            && dimension_names.len() != dimensions
+        {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "VariableShapeTensor dimension names size mismatch, expected {dimensions}, found {}",
+                dimension_names.len()
+            )));
+        }
+
+        if let Some(permutations) = &self.permutations {
+            if permutations.len() != dimensions {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "VariableShapeTensor permutations size mismatch, expected {dimensions}, found {}",
+                    permutations.len()
+                )));
+            }
+            let mut sorted_permutations = permutations.clone();
+            sorted_permutations.sort_unstable();
+            if (0..dimensions)
+                .zip(sorted_permutations)
+                .any(|(a, b)| a != b)
+            {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "VariableShapeTensor permutations invalid, expected a permutation of [0, 1, .., N-1], where N is the number of dimensions: {dimensions}"
+                )));
+            }
+        }
+
+        if let Some(uniform_shapes) = &self.uniform_shape
+            && uniform_shapes.len() != dimensions
+        {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "VariableShapeTensor uniform shapes size mismatch, expected {dimensions}, found {}",
+                uniform_shapes.len()
+            )));
+        }
+
+        Ok(())
     }
 
     /// Returns the names of the dimensions in this variable shape tensor, if
@@ -424,44 +460,16 @@ impl ExtensionType for VariableShapeTensor {
     }
 
     fn try_new(data_type: &DataType, metadata: Self::Metadata) -> Result<Self, ArrowError> {
-        match data_type {
-            DataType::Struct(fields)
-                if fields.len() == 2
-                    && matches!(fields.find("data"), Some((0, _)))
-                    && matches!(fields.find("shape"), Some((1, _))) =>
-            {
-                let shape_field = &fields[1];
-                match shape_field.data_type() {
-                    DataType::FixedSizeList(_, list_size) => {
-                        let dimensions = usize::try_from(*list_size).expect("conversion failed");
-                        // Make sure the metadata is valid.
-                        let metadata = VariableShapeTensorMetadata::try_new(
-                            dimensions,
-                            metadata.dim_names,
-                            metadata.permutations,
-                            metadata.uniform_shape,
-                        )?;
-                        let data_field = &fields[0];
-                        match data_field.data_type() {
-                            DataType::List(field) => Ok(Self {
-                                value_type: field.data_type().clone(),
-                                dimensions,
-                                metadata,
-                            }),
-                            data_type => Err(ArrowError::InvalidArgumentError(format!(
-                                "VariableShapeTensor data type mismatch, expected List for data field, found {data_type}"
-                            ))),
-                        }
-                    }
-                    data_type => Err(ArrowError::InvalidArgumentError(format!(
-                        "VariableShapeTensor data type mismatch, expected FixedSizeList for shape field, found {data_type}"
-                    ))),
-                }
-            }
-            data_type => Err(ArrowError::InvalidArgumentError(format!(
-                "VariableShapeTensor data type mismatch, expected Struct with 2 fields (data and shape), found {data_type}"
-            ))),
-        }
+        let (value_type, dimensions) = Self::validate_impl(data_type, &metadata)?;
+        Ok(Self {
+            value_type: value_type.clone(),
+            dimensions,
+            metadata,
+        })
+    }
+
+    fn validate(data_type: &DataType, metadata: Self::Metadata) -> Result<(), ArrowError> {
+        Self::validate_impl(data_type, &metadata).map(|_| ())
     }
 }
 
@@ -503,6 +511,7 @@ mod tests {
             false,
         );
         field.try_with_extension_type(variable_shape_tensor.clone())?;
+        assert!(field.has_valid_extension_type::<VariableShapeTensor>());
         assert_eq!(
             field.try_extension_type::<VariableShapeTensor>()?,
             variable_shape_tensor
@@ -616,6 +625,38 @@ mod tests {
             ),
         ]);
         field.extension_type::<VariableShapeTensor>();
+    }
+
+    #[test]
+    fn invalid_deserialized_metadata() -> Result<(), ArrowError> {
+        let data_type = DataType::Struct(
+            vec![
+                Field::new_list(
+                    "data",
+                    Field::new_list_field(DataType::Float32, false),
+                    false,
+                ),
+                Field::new_fixed_size_list(
+                    "shape",
+                    Field::new_list_field(DataType::Int32, false),
+                    2,
+                    false,
+                ),
+            ]
+            .into(),
+        );
+        let metadata =
+            VariableShapeTensor::deserialize_metadata(Some(r#"{"dim_names":["height"]}"#))?;
+        for result in [
+            VariableShapeTensor::validate(&data_type, metadata.clone()),
+            <VariableShapeTensor as ExtensionType>::try_new(&data_type, metadata).map(|_| ()),
+        ] {
+            assert!(
+                matches!(&result, Err(ArrowError::InvalidArgumentError(message)) if message.contains("dimension names size mismatch")),
+                "expected dimension names size mismatch, got {result:?}"
+            );
+        }
+        Ok(())
     }
 
     #[test]

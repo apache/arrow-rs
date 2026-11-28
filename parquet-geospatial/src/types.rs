@@ -156,6 +156,10 @@ impl ExtensionType for WkbType {
         wkb.supports_data_type(data_type)?;
         Ok(wkb)
     }
+
+    fn validate(data_type: &DataType, metadata: Self::Metadata) -> ArrowResult<()> {
+        Self(metadata).supports_data_type(data_type)
+    }
 }
 
 #[cfg(test)]
@@ -304,6 +308,7 @@ mod tests {
 
         let mut field = Field::new("geometry", DataType::Binary, false);
         field.try_with_extension_type(wkb_type)?;
+        assert!(field.has_valid_extension_type::<WkbType>());
 
         // Verify we can extract the extension type back
         let extracted = field.try_extension_type::<WkbType>()?;

@@ -181,6 +181,7 @@ mod tests {
     fn valid() -> Result<(), ArrowError> {
         let mut field = Field::new("", DataType::Utf8, false);
         field.try_with_extension_type(Json::default())?;
+        assert!(field.has_valid_extension_type::<Json>());
         assert_eq!(
             field.metadata().get(EXTENSION_TYPE_METADATA_KEY),
             Some(&String::new())
@@ -192,6 +193,7 @@ mod tests {
 
         let mut field = Field::new("", DataType::LargeUtf8, false);
         field.try_with_extension_type(Json(JsonMetadata(Some(Empty {}))))?;
+        assert!(field.has_valid_extension_type::<Json>());
         assert_eq!(
             field.metadata().get(EXTENSION_TYPE_METADATA_KEY),
             Some(&"{}".to_owned())
@@ -203,6 +205,7 @@ mod tests {
 
         let mut field = Field::new("", DataType::Utf8View, false);
         field.try_with_extension_type(Json::default())?;
+        assert!(field.has_valid_extension_type::<Json>());
         field.try_extension_type::<Json>()?;
         #[cfg(feature = "canonical_extension_types")]
         assert_eq!(

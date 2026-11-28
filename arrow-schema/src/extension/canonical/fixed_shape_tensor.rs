@@ -90,6 +90,31 @@ impl FixedShapeTensor {
         })
     }
 
+    // Unlike `supports_data_type`, this needs no tensor instance. Borrowing metadata
+    // and returning the element type lets `try_new` reuse validation without cloning
+    // metadata, while `validate` can check it without constructing a tensor.
+    fn validate_impl<'a>(
+        data_type: &'a DataType,
+        metadata: &FixedShapeTensorMetadata,
+    ) -> Result<&'a DataType, ArrowError> {
+        match data_type {
+            DataType::FixedSizeList(field, list_size) if !field.is_nullable() => {
+                metadata.validate()?;
+                let expected_size = i32::try_from(metadata.list_size()).expect("overflow");
+                if *list_size != expected_size {
+                    Err(ArrowError::InvalidArgumentError(format!(
+                        "FixedShapeTensor list size mismatch, expected {expected_size} (metadata), found {list_size} (data type)"
+                    )))
+                } else {
+                    Ok(field.data_type())
+                }
+            }
+            data_type => Err(ArrowError::InvalidArgumentError(format!(
+                "FixedShapeTensor data type mismatch, expected FixedSizeList with non-nullable field, found {data_type}"
+            ))),
+        }
+    }
+
     /// Returns the value type of the individual tensor elements.
     pub fn value_type(&self) -> &DataType {
         &self.value_type
@@ -321,45 +346,47 @@ impl FixedShapeTensorMetadata {
         dimension_names: Option<Vec<String>>,
         permutations: Option<Vec<usize>>,
     ) -> Result<Self, ArrowError> {
-        let shape = shape.into_iter().collect::<Vec<_>>();
-        let dimensions = shape.len();
-
-        let dim_names = dimension_names.map(|dimension_names| {
-            if dimension_names.len() != dimensions {
-                Err(ArrowError::InvalidArgumentError(format!(
-                    "FixedShapeTensor dimension names size mismatch, expected {dimensions}, found {}", dimension_names.len()
-                )))
-            } else {
-                Ok(dimension_names)
-            }
-        }).transpose()?;
-
-        let permutations = permutations
-            .map(|permutations| {
-                if permutations.len() != dimensions {
-                    Err(ArrowError::InvalidArgumentError(format!(
-                        "FixedShapeTensor permutations size mismatch, expected {dimensions}, found {}",
-                        permutations.len()
-                    )))
-                } else {
-                    let mut sorted_permutations = permutations.clone();
-                    sorted_permutations.sort_unstable();
-                    if (0..dimensions).zip(sorted_permutations).any(|(a, b)| a != b) {
-                        Err(ArrowError::InvalidArgumentError(format!(
-                            "FixedShapeTensor permutations invalid, expected a permutation of [0, 1, .., N-1], where N is the number of dimensions: {dimensions}"
-                        )))
-                    } else {
-                        Ok(permutations)
-                    }
-                }
-            })
-            .transpose()?;
-
-        Ok(Self {
-            shape,
-            dim_names,
+        let metadata = Self {
+            shape: shape.into_iter().collect(),
+            dim_names: dimension_names,
             permutations,
-        })
+        };
+        metadata.validate()?;
+        Ok(metadata)
+    }
+
+    fn validate(&self) -> Result<(), ArrowError> {
+        let dimensions = self.dimensions();
+
+        if let Some(dimension_names) = &self.dim_names
+            && dimension_names.len() != dimensions
+        {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "FixedShapeTensor dimension names size mismatch, expected {dimensions}, found {}",
+                dimension_names.len()
+            )));
+        }
+
+        if let Some(permutations) = &self.permutations {
+            if permutations.len() != dimensions {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "FixedShapeTensor permutations size mismatch, expected {dimensions}, found {}",
+                    permutations.len()
+                )));
+            }
+            let mut sorted_permutations = permutations.clone();
+            sorted_permutations.sort_unstable();
+            if (0..dimensions)
+                .zip(sorted_permutations)
+                .any(|(a, b)| a != b)
+            {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "FixedShapeTensor permutations invalid, expected a permutation of [0, 1, .., N-1], where N is the number of dimensions: {dimensions}"
+                )));
+            }
+        }
+
+        Ok(())
     }
 
     /// Returns the physical shape of the contained tensors.
@@ -447,31 +474,15 @@ impl ExtensionType for FixedShapeTensor {
     }
 
     fn try_new(data_type: &DataType, metadata: Self::Metadata) -> Result<Self, ArrowError> {
-        match data_type {
-            DataType::FixedSizeList(field, list_size) if !field.is_nullable() => {
-                // Make sure the metadata is valid.
-                let metadata = FixedShapeTensorMetadata::try_new(
-                    metadata.shape,
-                    metadata.dim_names,
-                    metadata.permutations,
-                )?;
-                // Make sure it is compatible with this data type.
-                let expected_size = i32::try_from(metadata.list_size()).expect("overflow");
-                if *list_size != expected_size {
-                    Err(ArrowError::InvalidArgumentError(format!(
-                        "FixedShapeTensor list size mismatch, expected {expected_size} (metadata), found {list_size} (data type)"
-                    )))
-                } else {
-                    Ok(Self {
-                        value_type: field.data_type().clone(),
-                        metadata,
-                    })
-                }
-            }
-            data_type => Err(ArrowError::InvalidArgumentError(format!(
-                "FixedShapeTensor data type mismatch, expected FixedSizeList with non-nullable field, found {data_type}"
-            ))),
-        }
+        let value_type = Self::validate_impl(data_type, &metadata)?;
+        Ok(Self {
+            value_type: value_type.clone(),
+            metadata,
+        })
+    }
+
+    fn validate(data_type: &DataType, metadata: Self::Metadata) -> Result<(), ArrowError> {
+        Self::validate_impl(data_type, &metadata).map(|_| ())
     }
 }
 
@@ -501,6 +512,7 @@ mod tests {
             false,
         );
         field.try_with_extension_type(fixed_shape_tensor.clone())?;
+        assert!(field.has_valid_extension_type::<FixedShapeTensor>());
         assert_eq!(
             field.try_extension_type::<FixedShapeTensor>()?,
             fixed_shape_tensor
@@ -600,6 +612,24 @@ mod tests {
             (EXTENSION_TYPE_METADATA_KEY, r#"{ "not-shape": [] }"#),
         ]);
         field.extension_type::<FixedShapeTensor>();
+    }
+
+    #[test]
+    fn invalid_deserialized_metadata() -> Result<(), ArrowError> {
+        let data_type = DataType::new_fixed_size_list(DataType::Float32, 6, false);
+        let metadata = FixedShapeTensor::deserialize_metadata(Some(
+            r#"{"shape":[2,3],"dim_names":["height"]}"#,
+        ))?;
+        for result in [
+            FixedShapeTensor::validate(&data_type, metadata.clone()),
+            <FixedShapeTensor as ExtensionType>::try_new(&data_type, metadata).map(|_| ()),
+        ] {
+            assert!(
+                matches!(&result, Err(ArrowError::InvalidArgumentError(message)) if message.contains("dimension names size mismatch")),
+                "expected dimension names size mismatch, got {result:?}"
+            );
+        }
+        Ok(())
     }
 
     #[test]
