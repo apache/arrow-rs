@@ -983,6 +983,14 @@ pub trait VariantBuilderExt {
     where
         Self: 'a;
 
+    /// Number of containing lists and objects at this insertion point.
+    ///
+    /// Top-level builders use the default of zero. Nested adapters should
+    /// forward the depth of their containing builder.
+    fn container_depth(&self) -> usize {
+        0
+    }
+
     /// Appends a NULL value to this builder. The semantics depend on the implementation, but will
     /// often translate to appending a [`Variant::Null`] value.
     fn append_null(&mut self);
@@ -1257,13 +1265,13 @@ mod tests {
         );
 
         // check metadata builders say it's sorted
-        assert!(variant1.metadata_builder.is_sorted);
-        assert!(variant2.metadata_builder.is_sorted);
+        assert!(variant1.metadata_builder.is_sorted());
+        assert!(variant2.metadata_builder.is_sorted());
 
         {
             // test the bad case and break the sort order
             variant2.add_field_name("a");
-            assert!(!variant2.metadata_builder.is_sorted);
+            assert!(!variant2.metadata_builder.is_sorted());
 
             // per the spec, a variant must have a top-level value; try_finish() rejects empty
             let err = variant2.try_finish().unwrap_err();
@@ -1352,21 +1360,21 @@ mod tests {
     #[test]
     fn test_building_sorted_dictionary() {
         let mut builder = VariantBuilder::new();
-        assert!(!builder.metadata_builder.is_sorted);
+        assert!(!builder.metadata_builder.is_sorted());
         assert_eq!(builder.metadata_builder.num_field_names(), 0);
 
         builder.add_field_name("a");
 
-        assert!(builder.metadata_builder.is_sorted);
+        assert!(builder.metadata_builder.is_sorted());
         assert_eq!(builder.metadata_builder.num_field_names(), 1);
 
         let builder = builder.with_field_names(["b", "c", "d"]);
 
-        assert!(builder.metadata_builder.is_sorted);
+        assert!(builder.metadata_builder.is_sorted());
         assert_eq!(builder.metadata_builder.num_field_names(), 4);
 
         let builder = builder.with_field_names(["z", "y"]);
-        assert!(!builder.metadata_builder.is_sorted);
+        assert!(!builder.metadata_builder.is_sorted());
         assert_eq!(builder.metadata_builder.num_field_names(), 6);
     }
 

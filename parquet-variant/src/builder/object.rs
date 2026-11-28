@@ -66,15 +66,25 @@ pub struct ObjectBuilder<'a, S: BuilderSpecificState> {
     parent_state: ParentState<'a, S>,
     pub(crate) fields: IndexMap<u32, usize>, // (field_id, offset)
     validate_unique_fields: bool,
+    depth: u8,
 }
 
 impl<'a, S: BuilderSpecificState> ObjectBuilder<'a, S> {
     /// Creates a new object builder, nested on top of the given parent state.
     pub fn new(parent_state: ParentState<'a, S>, validate_unique_fields: bool) -> Self {
+        Self::new_at_depth(parent_state, validate_unique_fields, 1)
+    }
+
+    pub(crate) fn new_at_depth(
+        parent_state: ParentState<'a, S>,
+        validate_unique_fields: bool,
+        depth: u8,
+    ) -> Self {
         Self {
             parent_state,
             fields: IndexMap::new(),
             validate_unique_fields,
+            depth,
         }
     }
 
@@ -181,6 +191,16 @@ impl<'a, S: BuilderSpecificState> ObjectBuilder<'a, S> {
         self
     }
 
+    /// Whether inserting a duplicate key into this object returns an error.
+    pub fn validates_unique_fields(&self) -> bool {
+        self.validate_unique_fields
+    }
+
+    /// Whether field IDs can be used as a proxy for name equality in this object.
+    pub fn has_stable_field_ids(&self) -> bool {
+        self.parent_state.metadata_builder.has_stable_field_ids()
+    }
+
     // Returns validate_unique_fields because we can no longer reference self once this method returns.
     fn parent_state<'b>(
         &'b mut self,
@@ -218,8 +238,13 @@ impl<'a, S: BuilderSpecificState> ObjectBuilder<'a, S> {
         &'b mut self,
         key: &str,
     ) -> Result<ObjectBuilder<'b, ObjectState<'b>>, ArrowError> {
+        let depth = self.depth.saturating_add(1);
         let (parent_state, validate_unique_fields) = self.parent_state(key)?;
-        Ok(ObjectBuilder::new(parent_state, validate_unique_fields))
+        Ok(ObjectBuilder::new_at_depth(
+            parent_state,
+            validate_unique_fields,
+            depth,
+        ))
     }
 
     /// Returns a list builder that can be used to append a new (nested) list to this object.
@@ -242,8 +267,13 @@ impl<'a, S: BuilderSpecificState> ObjectBuilder<'a, S> {
         &'b mut self,
         key: &str,
     ) -> Result<ListBuilder<'b, ObjectState<'b>>, ArrowError> {
+        let depth = self.depth.saturating_add(1);
         let (parent_state, validate_unique_fields) = self.parent_state(key)?;
-        Ok(ListBuilder::new(parent_state, validate_unique_fields))
+        Ok(ListBuilder::new_at_depth(
+            parent_state,
+            validate_unique_fields,
+            depth,
+        ))
     }
 
     /// Finalizes this object and appends it to its parent, which otherwise remains unmodified.
@@ -421,6 +451,10 @@ impl<S: BuilderSpecificState> VariantBuilderExt for ObjectFieldBuilder<'_, '_, '
         = ObjectState<'a>
     where
         Self: 'a;
+
+    fn container_depth(&self) -> usize {
+        usize::from(self.builder.depth)
+    }
 
     /// A NULL object field is interpreted as missing, so nothing gets inserted at all.
     fn append_null(&mut self) {}

@@ -5,14 +5,21 @@
 //! Module for parsing JSON strings as Variant
 
 use arrow_schema::ArrowError;
-use parquet_variant::{ObjectFieldBuilder, Variant, VariantBuilderExt};
+use memchr::memchr2;
+use parquet_variant::{MAX_NESTING_DEPTH, ObjectFieldBuilder, Variant, VariantBuilderExt};
 use serde_json::{Number, Value};
+use std::borrow::Cow;
+use std::collections::BTreeMap;
+use std::num::NonZeroUsize;
 
 /// Converts a JSON string to Variant using a [`VariantBuilderExt`], such as
 /// [`VariantBuilder`].
 ///
 /// The resulting `value` and `metadata` buffers can be
 /// extracted using `builder.finish()`
+///
+/// Integers use the smallest fitting integer encoding; integer `-0` is zero.
+/// Other numbers use `Double`.
 ///
 /// # Arguments
 /// * `json` - The JSON string to parse as Variant.
@@ -57,46 +64,564 @@ pub trait JsonToVariant {
 
 impl<T: VariantBuilderExt> JsonToVariant for T {
     fn append_json(&mut self, json: &str) -> Result<(), ArrowError> {
-        let json: Value = serde_json::from_str(json)
-            .map_err(|e| ArrowError::InvalidArgumentError(format!("JSON format error: {e}")))?;
-
-        append_json(&json, self)?;
-        Ok(())
+        let depth = self.container_depth();
+        let mut parser = JsonParser::new(json, depth);
+        if parser.may_exceed_field_budget() {
+            return parser.buffer_value(0)?.append(json, self);
+        }
+        match parser.parse(self) {
+            Ok(()) => Ok(()),
+            Err(DirectParseError::Syntax(error)) => Err(error),
+            Err(DirectParseError::UnstableFieldIds) => JsonParser::new(json, depth)
+                .buffer_value(0)?
+                .append(json, self),
+            // A duplicate (or a missing dictionary key in a field that a duplicate
+            // overwrites) can fail the direct append. The builder has rolled back.
+            Err(DirectParseError::Append(error)) => {
+                let mut parser = JsonParser::new(json, depth);
+                let value = parser.buffer_value(0)?;
+                if parser.saw_duplicate {
+                    value.append(json, self)
+                } else {
+                    Err(error)
+                }
+            }
+        }
     }
 }
 
 fn variant_from_number<'m, 'v>(n: &Number) -> Result<Variant<'m, 'v>, ArrowError> {
     if let Some(i) = n.as_i64() {
-        // Find minimum Integer width to fit
-        if i as i8 as i64 == i {
-            Ok((i as i8).into())
-        } else if i as i16 as i64 == i {
-            Ok((i as i16).into())
-        } else if i as i32 as i64 == i {
-            Ok((i as i32).into())
-        } else {
-            Ok(i.into())
-        }
+        Ok(variant_from_i64(i))
     } else {
-        // Todo: Try decimal once we implement custom JSON parsing where we have access to strings
-        // Try double - currently json_to_variant does not produce decimal
-        match n.as_f64() {
-            Some(f) => return Ok(f.into()),
-            None => Err(ArrowError::InvalidArgumentError(format!(
-                "Failed to parse {n} as number",
-            ))),
-        }?
+        n.as_f64().map(Variant::from).ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!("Failed to parse {n} as number"))
+        })
     }
 }
 
+fn variant_from_i64(i: i64) -> Variant<'static, 'static> {
+    if i as i8 as i64 == i {
+        (i as i8).into()
+    } else if i as i16 as i64 == i {
+        (i as i16).into()
+    } else if i as i32 as i64 == i {
+        (i as i32).into()
+    } else {
+        i.into()
+    }
+}
+
+/// Parses a JSON number whose grammar has already been checked.
+fn parse_float_text(value: &str) -> Result<f64, ArrowError> {
+    match lexical_core::parse::<f64>(value.as_bytes()) {
+        Ok(float) if float.is_finite() => Ok(float),
+        _ => Err(ArrowError::InvalidArgumentError(format!(
+            "Failed to parse {value} as finite number"
+        ))),
+    }
+}
+
+fn first_json_control(bytes: &[u8]) -> Option<usize> {
+    const SUB: u64 = 0x2020_2020_2020_2020;
+    const HIGH_BITS: u64 = 0x8080_8080_8080_8080;
+    let (chunks, remainder) = bytes.as_chunks::<8>();
+    let remainder_start = chunks.len() * 8;
+    for (chunk_index, chunk) in chunks.iter().enumerate() {
+        let word = u64::from_ne_bytes(*chunk);
+        // The word test may overreport a hit; locate and confirm the control byte.
+        if word.wrapping_sub(SUB) & !word & HIGH_BITS != 0
+            && let Some(position) = chunk.iter().position(|byte| *byte < 0x20)
+        {
+            return Some(chunk_index * 8 + position);
+        }
+    }
+    remainder
+        .iter()
+        .position(|byte| *byte < 0x20)
+        .map(|position| remainder_start + position)
+}
+
+// Bound the dictionary width introduced by a single streaming parse. For wide
+// documents, keep the legacy sorted object traversal so rebuilding a sparse
+// projection does not repeatedly search a large unsorted dictionary.
+const DIRECT_OBJECT_FIELD_BUDGET: usize = 64;
+
+struct JsonParser<'a> {
+    input: &'a str,
+    bytes: &'a [u8],
+    offset: usize,
+    container_limit: usize,
+    saw_duplicate: bool,
+}
+
+enum DirectParseError {
+    Syntax(ArrowError),
+    Append(ArrowError),
+    UnstableFieldIds,
+}
+
+impl From<ArrowError> for DirectParseError {
+    fn from(error: ArrowError) -> Self {
+        Self::Syntax(error)
+    }
+}
+
+enum JsonScalar<'a> {
+    Null,
+    Boolean(bool),
+    Integer(i64),
+    Float(f64),
+    String(Cow<'a, str>),
+}
+
+impl JsonScalar<'_> {
+    fn append(self, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+        let variant = match self {
+            Self::Null => Variant::Null,
+            Self::Boolean(value) => value.into(),
+            Self::Integer(value) => variant_from_i64(value),
+            Self::Float(value) => Variant::Double(value),
+            Self::String(value) => return builder.try_append_value(value.as_ref()),
+        };
+        builder.try_append_value(variant)
+    }
+}
+
+enum BufferedValue<'a> {
+    Scalar(JsonScalar<'a>),
+    Array(Vec<BufferedValue<'a>>),
+    Object {
+        fields: BTreeMap<Cow<'a, str>, BufferedValue<'a>>,
+        // The first repeated key starts after the opening brace. Only strict
+        // validation needs to decode it again for an error message.
+        duplicate_at: Option<NonZeroUsize>,
+    },
+}
+
+impl BufferedValue<'_> {
+    fn append(self, input: &str, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+        match self {
+            Self::Scalar(value) => value.append(builder)?,
+            Self::Array(values) => {
+                let mut list = builder.try_new_list()?;
+                for value in values {
+                    value.append(input, &mut list)?;
+                }
+                list.finish();
+            }
+            Self::Object {
+                fields,
+                duplicate_at,
+            } => {
+                let mut object = builder.try_new_object()?;
+                if object.validates_unique_fields()
+                    && let Some(offset) = duplicate_at
+                {
+                    let key = JsonParser::new(&input[offset.get()..], 0).parse_string()?;
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "Duplicate field name: {key}"
+                    )));
+                }
+                for (key, value) in fields {
+                    value.append(
+                        input,
+                        &mut ObjectFieldBuilder::new(key.as_ref(), &mut object),
+                    )?;
+                }
+                object.finish();
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<'a> JsonParser<'a> {
+    fn new(input: &'a str, parent_depth: usize) -> Self {
+        Self {
+            input,
+            bytes: input.as_bytes(),
+            offset: 0,
+            container_limit: MAX_NESTING_DEPTH.saturating_sub(parent_depth),
+            saw_duplicate: false,
+        }
+    }
+
+    fn may_exceed_field_budget(&mut self) -> bool {
+        // Count potential field separators before writing to avoid repeating a
+        // large prefix. A field needs at least four bytes ("":0), and its colon
+        // follows the closing quote of its key. This can overestimate but never
+        // hides a wide object.
+        if self.bytes.len() <= DIRECT_OBJECT_FIELD_BUDGET * 4 {
+            return false;
+        }
+        self.skip_whitespace();
+        let remaining = &self.bytes[self.offset..];
+        if !matches!(self.peek(), Some(b'{' | b'['))
+            || memchr::memchr_iter(b':', remaining)
+                .nth(DIRECT_OBJECT_FIELD_BUDGET)
+                .is_none()
+        {
+            return false;
+        }
+        // The raw count stops early. Search for quotes next so a long string
+        // containing many colons does not require inspecting each one.
+        memchr::memchr_iter(b'"', remaining)
+            .filter(|&index| remaining[index + 1..].trim_ascii_start().first() == Some(&b':'))
+            .nth(DIRECT_OBJECT_FIELD_BUDGET)
+            .is_some()
+    }
+
+    fn parse(&mut self, builder: &mut impl VariantBuilderExt) -> Result<(), DirectParseError> {
+        self.parse_value(builder, 0)?;
+        debug_assert_eq!(self.offset, self.bytes.len());
+        Ok(())
+    }
+
+    fn parse_value(
+        &mut self,
+        builder: &mut impl VariantBuilderExt,
+        depth: usize,
+    ) -> Result<(), DirectParseError> {
+        self.skip_whitespace();
+        match self.peek() {
+            Some(b'[') => {
+                self.check_container_depth(depth)?;
+                self.offset += 1;
+                let mut list = builder.try_new_list().map_err(DirectParseError::Append)?;
+                self.array_items(depth, |parser| parser.parse_value(&mut list, depth + 1))?;
+                list.finish();
+            }
+            Some(b'{') => {
+                self.check_container_depth(depth)?;
+                self.offset += 1;
+                let mut object = builder.try_new_object().map_err(DirectParseError::Append)?;
+                if !object.has_stable_field_ids() {
+                    return Err(DirectParseError::UnstableFieldIds);
+                }
+                object = object.with_validate_unique_fields(true);
+                self.object_fields(depth, |parser, key, _| {
+                    let mut field = ObjectFieldBuilder::new(key.as_ref(), &mut object);
+                    parser.parse_value(&mut field, depth + 1)
+                })?;
+                object.finish();
+            }
+            _ => {
+                let value = self.parse_scalar()?;
+                self.ensure_root_end(depth)?;
+                value.append(builder).map_err(DirectParseError::Append)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn parse_scalar(&mut self) -> Result<JsonScalar<'a>, ArrowError> {
+        let value = match self.peek() {
+            Some(b'n') => {
+                self.parse_literal(b"null")?;
+                JsonScalar::Null
+            }
+            Some(b't') => {
+                self.parse_literal(b"true")?;
+                JsonScalar::Boolean(true)
+            }
+            Some(b'f') => {
+                self.parse_literal(b"false")?;
+                JsonScalar::Boolean(false)
+            }
+            Some(b'"') => JsonScalar::String(self.parse_string()?),
+            Some(b'-' | b'0'..=b'9') => match self.parse_number()? {
+                (_, Some(integer)) => JsonScalar::Integer(integer),
+                (text, None) => JsonScalar::Float(parse_float_text(text)?),
+            },
+            Some(_) => return self.error("expected a JSON value"),
+            None => return self.error("expected a JSON value, found end of input"),
+        };
+        Ok(value)
+    }
+
+    fn array_items<E: From<ArrowError>>(
+        &mut self,
+        depth: usize,
+        mut item: impl FnMut(&mut Self) -> Result<(), E>,
+    ) -> Result<(), E> {
+        self.skip_whitespace();
+        if !self.consume(b']') {
+            loop {
+                item(self)?;
+                self.skip_whitespace();
+                if self.consume(b']') {
+                    break;
+                }
+                self.expect(b',', "expected ',' or ']' after array element")?;
+            }
+        }
+        self.ensure_root_end(depth)?;
+        Ok(())
+    }
+
+    fn object_fields<E: From<ArrowError>>(
+        &mut self,
+        depth: usize,
+        mut field: impl FnMut(&mut Self, Cow<'a, str>, usize) -> Result<(), E>,
+    ) -> Result<(), E> {
+        self.skip_whitespace();
+        if !self.consume(b'}') {
+            loop {
+                if self.peek() != Some(b'"') {
+                    return Err(self.format_error("expected a string object key").into());
+                }
+                let key_start = self.offset;
+                let key = self.parse_string()?;
+                self.skip_whitespace();
+                self.expect(b':', "expected ':' after object key")?;
+                field(self, key, key_start)?;
+                self.skip_whitespace();
+                if self.consume(b'}') {
+                    break;
+                }
+                self.expect(b',', "expected ',' or '}' after object field")?;
+                self.skip_whitespace();
+            }
+        }
+        self.ensure_root_end(depth)?;
+        Ok(())
+    }
+
+    fn buffer_value(&mut self, depth: usize) -> Result<BufferedValue<'a>, ArrowError> {
+        self.skip_whitespace();
+        match self.peek() {
+            Some(b'[') => {
+                self.check_container_depth(depth)?;
+                self.offset += 1;
+                let mut items = Vec::new();
+                self.array_items::<ArrowError>(depth, |parser| {
+                    items.push(parser.buffer_value(depth + 1)?);
+                    Ok(())
+                })?;
+                Ok(BufferedValue::Array(items))
+            }
+            Some(b'{') => {
+                self.check_container_depth(depth)?;
+                self.offset += 1;
+                let mut fields = BTreeMap::new();
+                let mut duplicate_at = None;
+                self.object_fields::<ArrowError>(depth, |parser, key, key_start| {
+                    let value = parser.buffer_value(depth + 1)?;
+                    match fields.entry(key) {
+                        std::collections::btree_map::Entry::Vacant(entry) => {
+                            entry.insert(value);
+                        }
+                        std::collections::btree_map::Entry::Occupied(mut entry) => {
+                            parser.saw_duplicate = true;
+                            if duplicate_at.is_none() {
+                                duplicate_at = NonZeroUsize::new(key_start);
+                            }
+                            entry.insert(value);
+                        }
+                    }
+                    Ok(())
+                })?;
+                Ok(BufferedValue::Object {
+                    fields,
+                    duplicate_at,
+                })
+            }
+            _ => {
+                let value = self.parse_scalar()?;
+                self.ensure_root_end(depth)?;
+                Ok(BufferedValue::Scalar(value))
+            }
+        }
+    }
+
+    fn parse_string(&mut self) -> Result<Cow<'a, str>, ArrowError> {
+        let token_start = self.offset;
+        self.offset += 1;
+        let content_start = self.offset;
+        let mut escaped = false;
+
+        while let Some(byte) = self.peek() {
+            if self.offset - content_start >= 32 && byte != b'"' && byte != b'\\' {
+                let remaining = &self.bytes[self.offset..];
+                let scanned = memchr2(b'"', b'\\', remaining).unwrap_or(remaining.len());
+                if let Some(control_at) = first_json_control(&remaining[..scanned]) {
+                    self.offset += control_at;
+                    return self.error("unescaped control character in string");
+                }
+                self.offset += scanned;
+                continue;
+            }
+            match byte {
+                b'"' => {
+                    let content_end = self.offset;
+                    self.offset += 1;
+                    if escaped {
+                        let value =
+                            serde_json::from_slice::<String>(&self.bytes[token_start..self.offset])
+                                .map_err(|error| {
+                                    ArrowError::InvalidArgumentError(format!(
+                                        "JSON format error in string at byte {token_start}: {error}"
+                                    ))
+                                })?;
+                        return Ok(Cow::Owned(value));
+                    }
+                    let value = self
+                        .input
+                        .get(content_start..content_end)
+                        .ok_or_else(|| self.format_error("invalid string boundary"))?;
+                    return Ok(Cow::Borrowed(value));
+                }
+                b'\\' => {
+                    escaped = true;
+                    self.offset += 1;
+                    if self.peek().is_none() {
+                        return self.error("unterminated string escape");
+                    }
+                    self.offset += 1;
+                }
+                0..=0x1f => return self.error("unescaped control character in string"),
+                _ => self.offset += 1,
+            }
+        }
+        self.error("unterminated string")
+    }
+
+    fn parse_number(&mut self) -> Result<(&'a str, Option<i64>), ArrowError> {
+        let start = self.offset;
+        let negative = self.consume(b'-');
+        let mut integer = Some(0_i64);
+
+        match self.peek() {
+            Some(b'0') => self.offset += 1,
+            Some(b'1'..=b'9') => {
+                while let Some(digit @ b'0'..=b'9') = self.peek() {
+                    if let Some(value) = integer {
+                        integer = value.checked_mul(10).and_then(|value| {
+                            if negative {
+                                value.checked_sub(i64::from(digit - b'0'))
+                            } else {
+                                value.checked_add(i64::from(digit - b'0'))
+                            }
+                        });
+                    }
+                    self.offset += 1;
+                }
+            }
+            _ => return self.error("expected digit in number"),
+        }
+
+        if self.consume(b'.') {
+            integer = None;
+            let fraction_start = self.offset;
+            while matches!(self.peek(), Some(b'0'..=b'9')) {
+                self.offset += 1;
+            }
+            if self.offset == fraction_start {
+                return self.error("expected digit after decimal point");
+            }
+        }
+
+        if matches!(self.peek(), Some(b'e' | b'E')) {
+            integer = None;
+            self.offset += 1;
+            if matches!(self.peek(), Some(b'+' | b'-')) {
+                self.offset += 1;
+            }
+            let exponent_start = self.offset;
+            while matches!(self.peek(), Some(b'0'..=b'9')) {
+                self.offset += 1;
+            }
+            if self.offset == exponent_start {
+                return self.error("expected digit in exponent");
+            }
+        }
+
+        let text = self
+            .input
+            .get(start..self.offset)
+            .ok_or_else(|| self.format_error("invalid number boundary"))?;
+        Ok((text, integer))
+    }
+
+    fn parse_literal(&mut self, literal: &[u8]) -> Result<(), ArrowError> {
+        if self.bytes[self.offset..].starts_with(literal) {
+            self.offset += literal.len();
+            Ok(())
+        } else {
+            self.error("invalid literal")
+        }
+    }
+
+    fn check_container_depth(&self, depth: usize) -> Result<(), ArrowError> {
+        if depth >= self.container_limit {
+            return self.error("recursion limit exceeded");
+        }
+        Ok(())
+    }
+
+    fn ensure_root_end(&mut self, depth: usize) -> Result<(), ArrowError> {
+        if depth != 0 {
+            return Ok(());
+        }
+        self.skip_whitespace();
+        if self.offset == self.bytes.len() {
+            Ok(())
+        } else {
+            self.error("trailing characters")
+        }
+    }
+
+    fn skip_whitespace(&mut self) {
+        while matches!(self.peek(), Some(b' ' | b'\n' | b'\r' | b'\t')) {
+            self.offset += 1;
+        }
+    }
+
+    fn peek(&self) -> Option<u8> {
+        self.bytes.get(self.offset).copied()
+    }
+
+    fn consume(&mut self, expected: u8) -> bool {
+        if self.peek() == Some(expected) {
+            self.offset += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn expect(&mut self, expected: u8, message: &str) -> Result<(), ArrowError> {
+        if self.consume(expected) {
+            Ok(())
+        } else {
+            self.error(message)
+        }
+    }
+
+    fn error<T>(&self, message: &str) -> Result<T, ArrowError> {
+        Err(self.format_error(message))
+    }
+
+    fn format_error(&self, message: impl std::fmt::Display) -> ArrowError {
+        ArrowError::InvalidArgumentError(format!(
+            "JSON format error at byte {}: {message}",
+            self.offset
+        ))
+    }
+}
+
+/// Appends an already parsed [`Value`] to a Variant builder.
+///
+/// Non-integer [`Number`] values use `Double`.
 pub fn append_json(json: &Value, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
     match json {
-        Value::Null => builder.append_value(Variant::Null),
-        Value::Bool(b) => builder.append_value(*b),
+        Value::Null => builder.try_append_value(Variant::Null)?,
+        Value::Bool(b) => builder.try_append_value(*b)?,
         Value::Number(n) => {
-            builder.append_value(variant_from_number(n)?);
+            builder.try_append_value(variant_from_number(n)?)?;
         }
-        Value::String(s) => builder.append_value(s.as_str()),
+        Value::String(s) => builder.try_append_value(s.as_str())?,
         Value::Array(arr) => {
             let mut list_builder = builder.try_new_list()?;
             for val in arr {
@@ -124,6 +649,21 @@ mod test {
     use parquet_variant::{
         ShortString, Variant, VariantBuilder, VariantDecimal4, VariantDecimal8, VariantDecimal16,
     };
+
+    #[test]
+    fn test_first_json_control_across_word_boundaries() {
+        let mut bytes = [b'x'; 64];
+        for position in 0..bytes.len() {
+            for control in 0..0x20 {
+                bytes[position] = control;
+                assert_eq!(first_json_control(&bytes), Some(position));
+                bytes[position] = b'x';
+            }
+        }
+        bytes[7] = 0x80;
+        bytes[8] = 0xff;
+        assert_eq!(first_json_control(&bytes), None);
+    }
 
     struct JsonToVariantTest<'a> {
         json: &'a str,
@@ -211,6 +751,22 @@ mod test {
             expected: Variant::Int64(92842754201389),
         }
         .run()
+    }
+
+    #[test]
+    fn test_json_to_variant_number_boundaries() -> Result<(), ArrowError> {
+        for (json, expected) in [
+            ("-9223372036854775808", Variant::Int64(i64::MIN)),
+            ("9223372036854775807", Variant::Int64(i64::MAX)),
+            ("9223372036854775808", Variant::Double(2_f64.powi(63))),
+            ("-9223372036854775809", Variant::Double(-2_f64.powi(63))),
+            ("18446744073709551615", Variant::Double(2_f64.powi(64))),
+            ("-0", Variant::Int8(0)),
+            ("1.23", Variant::Double(1.23)),
+        ] {
+            JsonToVariantTest { json, expected }.run()?;
+        }
+        Ok(())
     }
 
     #[ignore]
@@ -371,7 +927,8 @@ mod test {
     fn test_json_to_variant_double_precision() -> Result<(), ArrowError> {
         JsonToVariantTest {
             json: "0.79228162514264337593543950335",
-            expected: Variant::Double(0.792_281_625_142_643_4_f64),
+            // The old serde fallback rounded this one ULP higher.
+            expected: Variant::Double(f64::from_bits(0x3fe9_5a5e_fea6_b347)),
         }
         .run()
     }
@@ -392,6 +949,25 @@ mod test {
             expected: Variant::Double(-15e-1f64),
         }
         .run()
+    }
+
+    #[test]
+    fn test_json_to_variant_rounds_floats_correctly() -> Result<(), ArrowError> {
+        // Without float_roundtrip, serde_json misrounds the first two values.
+        for (json, bits) in [
+            ("0.9999999999999999", 0x3fef_ffff_ffff_ffff),
+            ("2.2250738585072011e-308", 0x000f_ffff_ffff_ffff),
+            ("-0.0", (-0.0_f64).to_bits()),
+        ] {
+            let mut builder = VariantBuilder::new();
+            builder.append_json(json)?;
+            let (metadata, value) = builder.finish();
+            let Variant::Double(actual) = Variant::try_new(&metadata, &value)? else {
+                panic!("expected a Double for {json}")
+            };
+            assert_eq!(actual.to_bits(), bits, "{json}");
+        }
+        Ok(())
     }
 
     #[test]
@@ -653,5 +1229,310 @@ mod test {
             expected: variant,
         }
         .run()
+    }
+
+    #[test]
+    fn test_json_to_variant_rejects_invalid_json() -> Result<(), ArrowError> {
+        let long_control = format!("\"{}\u{001f}\"", "x".repeat(64));
+        let invalid = [
+            "",
+            "nul",
+            "True",
+            "[",
+            "{",
+            "[1,]",
+            "[1 2]",
+            "[1,,2]",
+            "{\"a\":1,}",
+            "{\"a\" 1}",
+            "{\"a\":1 \"b\":2}",
+            r#"{"a":0,"a":[1,],"a":2}"#,
+            concat!("{", "a:1}"),
+            "01",
+            "-01",
+            "+1",
+            ".1",
+            "1.",
+            "1e",
+            "1e+",
+            "true false",
+            "\"unterminated",
+            "\"bad\\xescape\"",
+            "\"bad\\u12x4\"",
+            "\"lone high surrogate: \\ud800\"",
+            "\"lone low surrogate: \\udc00\"",
+            "\"control \u{0001} byte\"",
+            &long_control,
+            "1e400",
+            "1x",
+            "[]x",
+            "{}x",
+        ];
+
+        for json in invalid {
+            let mut builder = VariantBuilder::new();
+            assert!(builder.append_json(json).is_err(), "accepted {json:?}");
+            builder.append_json("2")?;
+            let (metadata, value) = builder.finish();
+            assert_eq!(
+                Variant::try_new(&metadata, &value)?,
+                Variant::Int8(2),
+                "{json:?}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_json_to_variant_limits_nesting_depth() -> Result<(), ArrowError> {
+        // An empty innermost container still counts toward the limit.
+        for (innermost, containers) in [("0", 0), ("[]", 1), ("{}", 1)] {
+            let depth = MAX_NESTING_DEPTH - containers;
+            let nested = |n| format!("{}{innermost}{}", "[".repeat(n), "]".repeat(n));
+            let mut builder = VariantBuilder::new();
+            builder.append_json(&nested(depth))?;
+            let (metadata, value) = builder.finish();
+            Variant::try_new(&metadata, &value)?;
+
+            let error = VariantBuilder::new()
+                .append_json(&nested(depth + 1))
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("recursion limit"), "{innermost}: {error}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_nested_json_counts_its_parent_container() -> Result<(), ArrowError> {
+        let nested = |depth| format!("{}[]{}", "[".repeat(depth), "]".repeat(depth));
+        let mut builder = VariantBuilder::new();
+        let mut list = builder.new_list();
+        assert!(list.append_json(&nested(MAX_NESTING_DEPTH - 1)).is_err());
+        list.append_json(&nested(MAX_NESTING_DEPTH - 2))?;
+        list.finish();
+        let (metadata, value) = builder.finish();
+        Variant::try_new(&metadata, &value)?;
+
+        let mut builder = VariantBuilder::new();
+        let mut object = builder.new_object();
+        let mut list = object.new_list("items");
+        assert!(list.append_json(&nested(MAX_NESTING_DEPTH - 2)).is_err());
+        list.append_json(&nested(MAX_NESTING_DEPTH - 3))?;
+        list.finish();
+        object.finish();
+        let (metadata, value) = builder.finish();
+        Variant::try_new(&metadata, &value)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_json_parse_failure_preserves_existing_dictionary_order() -> Result<(), ArrowError> {
+        fn build(first: &str, fail: bool) -> Result<(Vec<u8>, Vec<u8>), ArrowError> {
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_json(first)?;
+            if fail {
+                assert!(list.append_json(r#"{"A":0,}"#).is_err());
+            }
+            list.append_json("1")?;
+            list.finish();
+            Ok(builder.finish())
+        }
+
+        for first in [r#"{"a":0,"b":1}"#, r#"{"b":0,"a":1}"#] {
+            assert_eq!(build(first, true)?, build(first, false)?);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_wide_json_preserves_sorted_dictionary() -> Result<(), ArrowError> {
+        use parquet_variant::VariantMetadata;
+
+        let fields = 4096;
+        let name = |id| format!("field_{id:026}");
+        let entry = |id| format!("\"{}\":{id}", name(id));
+        let flat = (0..fields).rev().map(entry).collect::<Vec<_>>().join(",");
+        let nested = (0..fields)
+            .step_by(2)
+            .map(|id| format!("{{{},{}}}", entry(id + 1), entry(id)))
+            .collect::<Vec<_>>()
+            .join(",");
+        for json in [format!("{{{flat}}}"), format!("[{nested}]")] {
+            let mut builder = VariantBuilder::new();
+            builder.append_json(&json)?;
+            let (metadata, value) = builder.finish();
+            let dictionary = VariantMetadata::try_new(&metadata)?;
+            assert!(dictionary.is_sorted());
+            assert_eq!(dictionary.len(), fields);
+            assert_eq!(dictionary.get(0)?, name(0));
+            assert_eq!(dictionary.get(fields - 1)?, name(fields - 1));
+            let variant = Variant::try_new(&metadata, &value)?;
+            let object = variant.get_list_element(0).unwrap_or(variant);
+            assert_eq!(object.get_object_field(&name(0)), Some(Variant::Int8(0)));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_wide_json_budget_and_duplicate_validation() -> Result<(), ArrowError> {
+        let fields = (0..DIRECT_OBJECT_FIELD_BUDGET)
+            .rev()
+            .map(|id| format!("\"field_{id:02}\" \n:\t0"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let at_budget = format!("{{{fields}}}");
+        let over_budget = format!("{{{fields},\"\\u0066ield_00\":1}}");
+        let timestamps = format!(
+            "[{}]",
+            vec![r#""12:34:56""#; DIRECT_OBJECT_FIELD_BUDGET + 1].join(",")
+        );
+        let long_string = format!("{{\"payload\":\"{}\"}}", ":".repeat(2048));
+        assert!(!JsonParser::new(&at_budget, 0).may_exceed_field_budget());
+        assert!(JsonParser::new(&over_budget, 0).may_exceed_field_budget());
+        assert!(!JsonParser::new(&timestamps, 0).may_exceed_field_budget());
+        assert!(!JsonParser::new(&long_string, 0).may_exceed_field_budget());
+
+        let mut builder = VariantBuilder::new().with_validate_unique_fields(true);
+        let mut list = builder.new_list();
+        list.append_json("1")?;
+        let error = list.append_json(&over_budget).unwrap_err().to_string();
+        assert!(error.contains("Duplicate field name: field_00"), "{error}");
+        list.append_json("2")?;
+        list.finish();
+        let (metadata, value) = builder.finish();
+        let value = Variant::try_new(&metadata, &value)?;
+        assert_eq!(value.get_list_element(0), Some(Variant::Int8(1)));
+        assert_eq!(value.get_list_element(1), Some(Variant::Int8(2)));
+        assert_eq!(value.get_list_element(2), None);
+        Ok(())
+    }
+
+    #[test]
+    fn test_json_duplicate_does_not_encode_overwritten_payload() -> Result<(), ArrowError> {
+        fn encode(json: &str) -> Result<(Vec<u8>, Vec<u8>), ArrowError> {
+            let mut builder = VariantBuilder::new();
+            builder.append_json(json)?;
+            Ok(builder.finish())
+        }
+
+        let json = r#"{"a":{"discarded":"overwritten payload"},"\u0061":0}"#;
+        assert_eq!(encode(json)?, encode(r#"{"a":0}"#)?);
+        Ok(())
+    }
+
+    #[test]
+    fn test_json_duplicates_with_unstable_field_ids() -> Result<(), ArrowError> {
+        use parquet_variant::{ListBuilder, MetadataBuilder, ParentState, ValueBuilder};
+
+        #[derive(Debug, Default)]
+        struct FreshIds(Vec<String>);
+
+        impl MetadataBuilder for FreshIds {
+            fn try_upsert_field_name(&mut self, name: &str) -> Result<u32, ArrowError> {
+                let id = u32::try_from(self.0.len()).unwrap();
+                self.0.push(name.to_owned());
+                Ok(id)
+            }
+
+            fn field_name(&self, id: usize) -> &str {
+                &self.0[id]
+            }
+
+            fn num_field_names(&self) -> usize {
+                self.0.len()
+            }
+
+            fn truncate_field_names(&mut self, size: usize) {
+                self.0.truncate(size);
+            }
+
+            fn finish(&mut self) -> usize {
+                unreachable!("the test encodes the dictionary separately")
+            }
+        }
+
+        for strict in [false, true] {
+            let mut values = ValueBuilder::new();
+            let mut dictionary = FreshIds::default();
+            let mut list =
+                ListBuilder::new(ParentState::variant(&mut values, &mut dictionary), strict);
+            let parsed = list.append_json(r#"{"a":1,"\u0061":2}"#);
+            if strict {
+                assert!(
+                    parsed
+                        .unwrap_err()
+                        .to_string()
+                        .contains("Duplicate field name: a")
+                );
+                list.append_json("0")?;
+            } else {
+                parsed?;
+            }
+            list.finish();
+
+            let expected_names: &[&str] = if strict { &[] } else { &["a"] };
+            assert_eq!(dictionary.0, expected_names);
+            let mut builder =
+                VariantBuilder::new().with_field_names(dictionary.0.iter().map(String::as_str));
+            builder.append_value(Variant::Null);
+            let (metadata, _) = builder.finish();
+            let values = values.into_inner();
+            let item = Variant::try_new(&metadata, &values)?
+                .get_list_element(0)
+                .expect("one list element");
+            if strict {
+                assert_eq!(item, Variant::Int8(0));
+            } else {
+                assert_eq!(item.get_object_field("a"), Some(Variant::Int8(2)));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_json_to_variant_duplicate_keys_respect_validation() -> Result<(), ArrowError> {
+        let mut builder = VariantBuilder::new().with_validate_unique_fields(true);
+        let error = builder
+            .append_json(r#"{"a":1,"a":2}"#)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Duplicate field name: a"), "{error}");
+
+        builder.append_json(r#"{"a":3}"#)?;
+        let (metadata, value) = builder.finish();
+        let variant = Variant::try_new(&metadata, &value)?;
+        assert_eq!(variant.to_json_string()?, r#"{"a":3}"#);
+        Ok(())
+    }
+
+    #[test]
+    fn test_json_parser_matches_serde_for_non_numeric_semantics() -> Result<(), ArrowError> {
+        let long_escaped = format!("\"{}\\n\\u00e9{}\"", "x".repeat(40), "y".repeat(40));
+        let long_multibyte = format!("\"{}\u{e9}{}\"", "x".repeat(31), "\u{1f600}".repeat(10));
+        let cases = [
+            "null",
+            "true",
+            r#""plain""#,
+            r#""escaped\ntext\t\"quote\"""#,
+            r#""\uD834\uDD1E""#,
+            r#"[null,true,false,"text",["nested"]]"#,
+            r#"{"z":null,"a":[true,{"unicode":"\u2764"}]}"#,
+            r#"{"duplicate":"first","duplicate":"last"}"#,
+            r#"{"line\nkey":"quote: \"; slash: \\; unicode: \u2764"}"#,
+            &long_escaped,
+            &long_multibyte,
+        ];
+
+        for json in cases {
+            let expected: Value = serde_json::from_str(json).unwrap();
+            let mut builder = VariantBuilder::new();
+            builder.append_json(json)?;
+            let (metadata, value) = builder.finish();
+            let actual = Variant::try_new(&metadata, &value)?.to_json_value()?;
+            assert_eq!(actual, expected, "mismatch for {json}");
+        }
+        Ok(())
     }
 }

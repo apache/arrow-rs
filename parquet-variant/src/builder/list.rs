@@ -34,15 +34,25 @@ pub struct ListBuilder<'a, S: BuilderSpecificState> {
     parent_state: ParentState<'a, S>,
     offsets: Vec<usize>,
     validate_unique_fields: bool,
+    depth: u8,
 }
 
 impl<'a, S: BuilderSpecificState> ListBuilder<'a, S> {
     /// Creates a new list builder, nested on top of the given parent state.
     pub fn new(parent_state: ParentState<'a, S>, validate_unique_fields: bool) -> Self {
+        Self::new_at_depth(parent_state, validate_unique_fields, 1)
+    }
+
+    pub(crate) fn new_at_depth(
+        parent_state: ParentState<'a, S>,
+        validate_unique_fields: bool,
+        depth: u8,
+    ) -> Self {
         Self {
             parent_state,
             offsets: vec![],
             validate_unique_fields,
+            depth,
         }
     }
 
@@ -70,16 +80,18 @@ impl<'a, S: BuilderSpecificState> ListBuilder<'a, S> {
     ///
     /// WARNING: The builder will have no effect unless/until [`ObjectBuilder::finish`] is called.
     pub fn new_object(&mut self) -> ObjectBuilder<'_, ListState<'_>> {
+        let depth = self.depth.saturating_add(1);
         let (parent_state, validate_unique_fields) = self.parent_state();
-        ObjectBuilder::new(parent_state, validate_unique_fields)
+        ObjectBuilder::new_at_depth(parent_state, validate_unique_fields, depth)
     }
 
     /// Returns a list builder that can be used to append a new (nested) list to this list.
     ///
     /// WARNING: The builder will have no effect unless/until [`ListBuilder::finish`] is called.
     pub fn new_list(&mut self) -> ListBuilder<'_, ListState<'_>> {
+        let depth = self.depth.saturating_add(1);
         let (parent_state, validate_unique_fields) = self.parent_state();
-        ListBuilder::new(parent_state, validate_unique_fields)
+        ListBuilder::new_at_depth(parent_state, validate_unique_fields, depth)
     }
 
     /// Appends a variant to the list.
@@ -185,6 +197,10 @@ impl<S: BuilderSpecificState> VariantBuilderExt for ListBuilder<'_, S> {
         = ListState<'s>
     where
         Self: 's;
+
+    fn container_depth(&self) -> usize {
+        usize::from(self.depth)
+    }
 
     /// Variant arrays cannot encode NULL values, only `Variant::Null`.
     fn append_null(&mut self) {

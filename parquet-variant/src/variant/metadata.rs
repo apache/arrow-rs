@@ -472,6 +472,10 @@ impl<'m> VariantMetadata<'m> {
             return Some((field_id, self.get_impl(field_id as _)));
         }
 
+        self.get_entry_by_name(field_name)
+    }
+
+    pub(crate) fn get_entry_by_name(&self, field_name: &str) -> Option<(u32, &'m str)> {
         let field_id = if self.is_sorted() && self.len() > 10 {
             // Binary search is faster for a not-tiny sorted metadata dictionary
             let cmp = |i| Some(self.get_impl(i).cmp(field_name));
