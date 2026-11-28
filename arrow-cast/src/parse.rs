@@ -1986,6 +1986,36 @@ mod tests {
     }
 
     #[test]
+    fn string_to_timestamp_extended_year() {
+        let cases = [
+            ("+10999-12-31T00:00:00", "+10999-12-31T00:00:00"),
+            ("+10999-12-31 23:59:59.123Z", "+10999-12-31T23:59:59.123"),
+            ("-0001-01-01T00:00:00.123", "-0001-01-01T00:00:00.123"),
+            ("-0001-01-01T00:00:00-05:00", "-0001-01-01T05:00:00"),
+            ("+57216-08-06T00:59:13Z", "+57216-08-06T00:59:13"),
+            ("+10000-01-01T09:26 +01:00", "+10000-01-01T08:26:00"),
+            ("-0001-01-01", "-0001-01-01T00:00:00"),
+        ];
+        for (case, expected) in cases {
+            let expected = NaiveDateTime::parse_from_str(expected, "%Y-%m-%dT%H:%M:%S%.f").unwrap();
+            let custom = string_to_datetime(&Utc, case).unwrap();
+            assert_eq!(expected, custom.naive_utc(), "{case}");
+        }
+
+        // Date64 strings longer than 10 characters are parsed as timestamps
+        let cases = [
+            ("-0001-01-01", -1),
+            ("+10000-01-01", 10000),
+            ("+10000-01-01T00:00:00", 10000),
+        ];
+        for (case, year) in cases {
+            let date = NaiveDate::from_ymd_opt(year, 1, 1).unwrap();
+            let expected = date.and_time(NaiveTime::MIN).and_utc().timestamp_millis();
+            assert_eq!(Date64Type::parse(case), Some(expected), "{case}");
+        }
+    }
+
+    #[test]
     fn string_to_timestamp_without_seconds() {
         let cases = [
             ("2025-08-14T00:00Z", (2025, 8, 14, 0, 0)),
@@ -2026,6 +2056,10 @@ mod tests {
             ("1997-01-10T09:26:Z", "error parsing time"),
             ("1997-01-10T09:26.5Z", "error parsing time"),
             ("1997-01-10T09:61Z", "error parsing time"),
+            ("+999-01-01T00:00:00", "error parsing date"),
+            ("-0001-02-30T00:00:00", "error parsing date"),
+            ("+10999-12-31H00:00:00", "invalid timestamp separator"),
+            ("+10999-12-31T25:00:00", "error parsing time"),
         ];
 
         for (s, ctx) in cases {
