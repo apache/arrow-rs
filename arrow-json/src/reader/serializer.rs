@@ -31,7 +31,7 @@ impl serde_core::ser::Error for SerializerError {
 
 /// [`Serializer`] for [`TapeElement`]
 ///
-/// Heavily based on <https://serde.rs/impl-serializer.html>
+/// Inspired by <https://serde.rs/impl-serializer.html>
 pub struct TapeSerializer<'a> {
     elements: &'a mut Vec<TapeElement>,
 

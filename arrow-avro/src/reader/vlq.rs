@@ -59,7 +59,7 @@ pub(crate) fn read_varint(buf: &[u8]) -> Option<(u64, usize)> {
     read_varint_slow(buf)
 }
 
-/// Based on
+/// Varint decoding references:
 /// - <https://github.com/tokio-rs/prost/blob/master/prost/src/encoding/varint.rs#L71>
 /// - <https://github.com/google/protobuf/blob/3.3.x/src/google/protobuf/io/coded_stream.cc#L365-L406>
 /// - <https://github.com/protocolbuffers/protobuf-go/blob/v1.27.1/encoding/protowire/wire.go#L358>
@@ -79,16 +79,19 @@ fn read_varint_array(buf: [u8; 10]) -> Option<(u64, usize)> {
     (b < 0x02).then_some((in_progress, 10))
 }
 
+// Copyright 2022 Dan Burkert & Tokio Contributors (prost, Apache-2.0)
+/// Adapted from prost's decode_varint_slow to read a slice and return
+/// both the decoded value and the number of bytes consumed.
+///
+/// Historical reference implementation:
+/// <https://github.com/tokio-rs/prost/blob/5ae30c5fd2725132c4daa0ef9f6d2f14f1308bd5/prost/src/encoding/varint.rs>
 #[inline(never)]
 #[cold]
 fn read_varint_slow(buf: &[u8]) -> Option<(u64, usize)> {
     let mut value = 0;
-    for (count, _byte) in buf.iter().take(10).enumerate() {
-        let byte = buf[count];
+    for (count, &byte) in buf.iter().take(10).enumerate() {
         value |= u64::from(byte & 0x7F) << (count * 7);
         if byte <= 0x7F {
-            // Check for u64::MAX overflow. See [`ConsumeVarint`][1] for details.
-            // [1]: https://github.com/protocolbuffers/protobuf-go/blob/v1.27.1/encoding/protowire/wire.go#L358
             return (count != 9 || byte < 2).then_some((value, count + 1));
         }
     }
