@@ -1408,6 +1408,10 @@ fn check_logical_type(logical_type: Option<&LogicalType>) -> Result<()> {
     Ok(())
 }
 
+// The schema is decoded and later walked by recursion, so its depth bounds stack
+// use. Real schemas are far shallower; an untrusted footer can be much deeper.
+const MAX_SCHEMA_DEPTH: usize = 128;
+
 // convert thrift decoded array of `SchemaElement` into this crate's representation of
 // parquet types. this function consumes `elements`.
 pub(crate) fn parquet_schema_from_array(elements: Vec<SchemaElement<'_>>) -> Result<TypePtr> {
@@ -1419,7 +1423,7 @@ pub(crate) fn parquet_schema_from_array(elements: Vec<SchemaElement<'_>>) -> Res
     let mut elements = elements.into_iter();
 
     while index < num_elements {
-        let t = schema_from_array_helper(&mut elements, num_elements, index)?;
+        let t = schema_from_array_helper(&mut elements, num_elements, index, 0)?;
         index = t.0;
         schema_nodes.push(t.1);
     }
@@ -1442,7 +1446,15 @@ fn schema_from_array_helper(
     elements: &mut IntoIter<SchemaElement<'_>>,
     num_elements: usize,
     index: usize,
+    depth: usize,
 ) -> Result<(usize, TypePtr)> {
+    if depth > MAX_SCHEMA_DEPTH {
+        return Err(general_err!(
+            "Schema nesting depth exceeds the maximum of {}",
+            MAX_SCHEMA_DEPTH
+        ));
+    }
+
     // Whether or not the current node is root (message type).
     // There is only one message type node in the schema tree.
     let is_root_node = index == 0;
@@ -1530,7 +1542,8 @@ fn schema_from_array_helper(
             let mut fields = Vec::with_capacity(num_children);
             let mut next_index = index + 1;
             for _ in 0..num_children {
-                let child_result = schema_from_array_helper(elements, num_elements, next_index)?;
+                let child_result =
+                    schema_from_array_helper(elements, num_elements, next_index, depth + 1)?;
                 next_index = child_result.0;
                 fields.push(child_result.1);
             }
@@ -2866,5 +2879,62 @@ mod tests {
         }];
         let result = parquet_schema_from_array(elements);
         assert!(result.unwrap_err().to_string().contains("Integer overflow"));
+    }
+
+    /// A root, `groups` nested optional groups, and an INT32 leaf
+    fn nested_schema_elements(groups: usize) -> Vec<SchemaElement<'static>> {
+        let group = |name| SchemaElement {
+            r#type: None,
+            type_length: None,
+            repetition_type: Some(Repetition::OPTIONAL),
+            name,
+            num_children: Some(1),
+            converted_type: None,
+            scale: None,
+            precision: None,
+            field_id: None,
+            logical_type: None,
+        };
+        let mut elements = vec![SchemaElement {
+            repetition_type: None,
+            ..group("schema")
+        }];
+        elements.extend((0..groups).map(|_| group("g")));
+        elements.push(SchemaElement {
+            r#type: Some(PhysicalType::INT32),
+            num_children: None,
+            ..group("x")
+        });
+        elements
+    }
+
+    #[test]
+    fn test_parquet_schema_from_array_accepts_max_depth() {
+        let elements = nested_schema_elements(MAX_SCHEMA_DEPTH - 1);
+        parquet_schema_from_array(elements).unwrap();
+    }
+
+    #[test]
+    fn test_parquet_schema_from_array_rejects_excessive_depth() {
+        let elements = nested_schema_elements(MAX_SCHEMA_DEPTH);
+        let err = parquet_schema_from_array(elements).unwrap_err().to_string();
+        assert!(
+            err.contains("Schema nesting depth exceeds the maximum of 128"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn test_parquet_schema_from_array_rejects_deep_schema_without_overflow() {
+        // Deep enough to overflow a 2 MiB stack without the depth check
+        let elements = nested_schema_elements(100_000);
+        let err = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || parquet_schema_from_array(elements).map(|_| ()))
+            .unwrap()
+            .join()
+            .unwrap()
+            .unwrap_err();
+        assert!(err.to_string().contains("Schema nesting depth"), "{err}");
     }
 }
