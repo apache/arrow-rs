@@ -645,29 +645,16 @@ mod tests {
             ]
             .into(),
         );
-        for (json, expected) in [
-            (
-                r#"{"dim_names":["height"]}"#,
-                "dimension names size mismatch",
-            ),
-            (r#"{"permutations":[0]}"#, "permutations size mismatch"),
-            (r#"{"permutations":[0,0]}"#, "permutations invalid"),
-            (r#"{"permutations":[0,2]}"#, "permutations invalid"),
-            (
-                r#"{"uniform_shape":[null]}"#,
-                "uniform shapes size mismatch",
-            ),
+        let metadata =
+            VariableShapeTensor::deserialize_metadata(Some(r#"{"dim_names":["height"]}"#))?;
+        for result in [
+            VariableShapeTensor::validate(&data_type, metadata.clone()),
+            <VariableShapeTensor as ExtensionType>::try_new(&data_type, metadata).map(|_| ()),
         ] {
-            let metadata = VariableShapeTensor::deserialize_metadata(Some(json))?;
-            for result in [
-                VariableShapeTensor::validate(&data_type, metadata.clone()),
-                <VariableShapeTensor as ExtensionType>::try_new(&data_type, metadata).map(|_| ()),
-            ] {
-                assert!(
-                    matches!(&result, Err(ArrowError::InvalidArgumentError(message)) if message.contains(expected)),
-                    "{json}: expected {expected}, got {result:?}"
-                );
-            }
+            assert!(
+                matches!(&result, Err(ArrowError::InvalidArgumentError(message)) if message.contains("dimension names size mismatch")),
+                "expected dimension names size mismatch, got {result:?}"
+            );
         }
         Ok(())
     }

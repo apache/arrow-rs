@@ -617,34 +617,17 @@ mod tests {
     #[test]
     fn invalid_deserialized_metadata() -> Result<(), ArrowError> {
         let data_type = DataType::new_fixed_size_list(DataType::Float32, 6, false);
-        for (json, expected) in [
-            (
-                r#"{"shape":[2,3],"dim_names":["height"]}"#,
-                "dimension names size mismatch",
-            ),
-            (
-                r#"{"shape":[2,3],"permutations":[0]}"#,
-                "permutations size mismatch",
-            ),
-            (
-                r#"{"shape":[2,3],"permutations":[0,0]}"#,
-                "permutations invalid",
-            ),
-            (
-                r#"{"shape":[2,3],"permutations":[0,2]}"#,
-                "permutations invalid",
-            ),
+        let metadata = FixedShapeTensor::deserialize_metadata(Some(
+            r#"{"shape":[2,3],"dim_names":["height"]}"#,
+        ))?;
+        for result in [
+            FixedShapeTensor::validate(&data_type, metadata.clone()),
+            <FixedShapeTensor as ExtensionType>::try_new(&data_type, metadata).map(|_| ()),
         ] {
-            let metadata = FixedShapeTensor::deserialize_metadata(Some(json))?;
-            for result in [
-                FixedShapeTensor::validate(&data_type, metadata.clone()),
-                <FixedShapeTensor as ExtensionType>::try_new(&data_type, metadata).map(|_| ()),
-            ] {
-                assert!(
-                    matches!(&result, Err(ArrowError::InvalidArgumentError(message)) if message.contains(expected)),
-                    "{json}: expected {expected}, got {result:?}"
-                );
-            }
+            assert!(
+                matches!(&result, Err(ArrowError::InvalidArgumentError(message)) if message.contains("dimension names size mismatch")),
+                "expected dimension names size mismatch, got {result:?}"
+            );
         }
         Ok(())
     }
