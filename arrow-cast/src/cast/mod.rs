@@ -42,7 +42,7 @@ use crate::cast::dictionary::*;
 use crate::cast::list::*;
 use crate::cast::map::*;
 pub(crate) use crate::cast::numeric::{
-    cast_bool_to_numeric, cast_numeric_arrays, cast_numeric_to_bool,
+    cast_bool_to_numeric, cast_numeric_arrays, cast_numeric_to_bool, f64_to_f16,
 };
 pub use crate::cast::numeric::{cast_num_to_bool, num_cast, single_bool_to_numeric};
 use crate::cast::run_array::*;
@@ -1558,7 +1558,11 @@ pub fn cast_with_options(
         (Float64, Int16) => cast_numeric_arrays::<Float64Type, Int16Type>(array, cast_options),
         (Float64, Int32) => cast_numeric_arrays::<Float64Type, Int32Type>(array, cast_options),
         (Float64, Int64) => cast_numeric_arrays::<Float64Type, Int64Type>(array, cast_options),
-        (Float64, Float16) => cast_numeric_arrays::<Float64Type, Float16Type>(array, cast_options),
+        (Float64, Float16) => Ok(Arc::new(
+            array
+                .as_primitive::<Float64Type>()
+                .unary::<_, Float16Type>(f64_to_f16),
+        )),
         (Float64, Float32) => cast_numeric_arrays::<Float64Type, Float32Type>(array, cast_options),
         // end numeric casts
 
