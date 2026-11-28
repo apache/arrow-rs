@@ -245,5 +245,31 @@ fn to_integer(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, downscale, downscale_small, to_integer);
+fn to_float(c: &mut Criterion) {
+    let mut group = c.benchmark_group("decimal_to_float");
+    bench_cast(
+        &mut group,
+        "decimal128 (15, 6) -> float64 all fast-path",
+        inputs::<Decimal128Type>(15, 38, 6),
+        DataType::Float64,
+        &[true],
+    );
+    bench_cast(
+        &mut group,
+        "decimal128 (38, 6) -> float64 large values",
+        inputs::<Decimal128Type>(38, 38, 6),
+        DataType::Float64,
+        &[true],
+    );
+    bench_cast(
+        &mut group,
+        "decimal256 (60, 20) -> float64 large values",
+        inputs::<Decimal256Type>(60, 76, 20),
+        DataType::Float64,
+        &[true],
+    );
+    group.finish();
+}
+
+criterion_group!(benches, downscale, downscale_small, to_integer, to_float);
 criterion_main!(benches);
