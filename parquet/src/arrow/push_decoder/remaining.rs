@@ -9,11 +9,9 @@ use crate::arrow::push_decoder::reader_builder::{
 };
 use crate::arrow::push_decoder::scan_plan::{NextRowGroup, RowBudget, RowGroupFrontier, ScanPlan};
 use crate::errors::ParquetError;
-use crate::file::metadata::ParquetMetaData;
-use arrow_schema::SchemaRef;
+
 use bytes::Bytes;
 use std::ops::Range;
-use std::sync::Arc;
 
 /// State machine that tracks the remaining high level chunks (row groups) of
 /// Parquet data left to read.
@@ -22,11 +20,6 @@ use std::sync::Arc;
 /// work item. [`RowGroupReaderBuilder`] owns decoding for the active row group.
 #[derive(Debug)]
 pub(crate) struct RemainingRowGroups {
-    /// The arrow schema of the decoded output. Carried only so
-    /// [`Self::into_parts`] can hand it to a rebuilt builder; unused while
-    /// decoding.
-    schema: SchemaRef,
-
     /// Cross-row-group scan state for queued work.
     frontier: RowGroupFrontier,
 
@@ -43,10 +36,6 @@ pub(crate) struct RemainingRowGroups {
 /// decoded so a builder reconstructed from it resumes where the decoder left off.
 #[derive(Debug)]
 pub(crate) struct RemainingRowGroupsParts {
-    /// The arrow schema of the decoded output.
-    pub schema: SchemaRef,
-    /// The Parquet file metadata.
-    pub metadata: Arc<ParquetMetaData>,
     /// Row groups and selections not yet handed to the reader builder.
     pub row_group_plan: RowGroupPlan,
     /// Offset still to be skipped before the next readable row group.
@@ -59,17 +48,14 @@ pub(crate) struct RemainingRowGroupsParts {
 
 impl RemainingRowGroups {
     pub fn new(
-        schema: SchemaRef,
-        parquet_metadata: Arc<ParquetMetaData>,
         row_group_plan: RowGroupPlan,
         budget: RowBudget,
         has_predicates: bool,
         row_group_reader_builder: RowGroupReaderBuilder,
     ) -> Result<Self, ParquetError> {
         Ok(Self {
-            schema,
             frontier: RowGroupFrontier::new(
-                parquet_metadata,
+                row_group_reader_builder.reader_metadata.metadata().clone(),
                 row_group_plan,
                 budget,
                 has_predicates,
@@ -86,16 +72,13 @@ impl RemainingRowGroups {
     /// decode state is discarded; its buffered bytes are carried through.
     pub(crate) fn into_parts(self) -> RemainingRowGroupsParts {
         let Self {
-            schema,
             frontier,
             row_group_reader_builder,
             active_row_group: _,
         } = self;
         // `has_predicates` is recomputed by `build()` from the filter.
-        let (parquet_metadata, row_group_plan, budget) = frontier.into_parts();
+        let (_, row_group_plan, budget) = frontier.into_parts();
         RemainingRowGroupsParts {
-            schema,
-            metadata: parquet_metadata,
             row_group_plan,
             offset: budget.offset(),
             limit: budget.limit(),

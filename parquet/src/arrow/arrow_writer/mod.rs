@@ -39,10 +39,12 @@ type DistinctValuesSet = HashSet<u64>;
 #[cfg(feature = "encryption")]
 use crate::encryption::encrypt::FileEncryptor;
 use crate::errors::{ParquetError, Result};
+use crate::file::metadata::extensions::{self as metadata_extensions, HookHandle, SiteInfo};
+#[cfg(any(feature = "experimental", test))]
+use crate::file::metadata::extensions::{MetadataExtensionHook, MetadataExtensionSelection};
 use crate::file::metadata::{KeyValue, ParquetMetaData, RowGroupMetaData};
 use crate::file::properties::{WriterProperties, WriterPropertiesPtr};
 use crate::file::writer::{SerializedFileWriter, SerializedRowGroupWriter};
-use crate::parquet_thrift::{ThriftCompactOutputProtocol, WriteThrift};
 use crate::schema::types::{ColumnDescPtr, SchemaDescriptor};
 use levels::{ArrayLevels, calculate_array_levels};
 
@@ -291,6 +293,30 @@ impl<W: Write + Send> ArrowWriter<W> {
             max_row_group_bytes,
             cdc_chunkers,
         })
+    }
+
+    /// Install one hook and its complete target list for this file. Targets are
+    /// ORed; overlaps invoke the hook once. Call before writing record batches.
+    ///
+    /// # Errors
+    ///
+    /// Fails for empty targets, a second installation, or after writing starts.
+    #[cfg(any(feature = "experimental", test))]
+    #[doc(hidden)]
+    pub fn with_metadata_extension_hook<H: MetadataExtensionHook + 'static>(
+        mut self,
+        targets: impl IntoIterator<Item = MetadataExtensionSelection>,
+        hook: H,
+    ) -> Result<Self> {
+        if self.in_progress.is_some() {
+            return Err(general_err!(
+                "Cannot install a metadata extension hook after Arrow writing starts"
+            ));
+        }
+        self.writer = self.writer.with_metadata_extension_hook(targets, hook)?;
+        self.row_group_writer_factory.metadata_extension_hook =
+            self.writer.metadata_extension_hook();
+        Ok(self)
     }
 
     /// Returns metadata for any flushed row groups
@@ -806,8 +832,17 @@ impl Iterator for StreamingColumnChunkPages {
 /// [`ArrowRowGroupWriter`] on flush, without requiring self-referential borrows
 type SharedColumnChunk = Arc<Mutex<ArrowColumnChunkData>>;
 
+/// The hook and stable column identity used when serializing page headers.
+struct PageHeaderMetadataExtensionHook {
+    hook: HookHandle,
+    row_group_index: usize,
+    column_index: usize,
+    data_page_index: usize,
+}
+
 struct ArrowPageWriter {
     buffer: SharedColumnChunk,
+    metadata_extension_hook: Option<PageHeaderMetadataExtensionHook>,
     #[cfg(feature = "encryption")]
     page_encryptor: Option<PageEncryptor>,
 }
@@ -817,9 +852,15 @@ impl ArrowPageWriter {
     fn new(store: Box<dyn PageStore>) -> Self {
         Self {
             buffer: Arc::new(Mutex::new(ArrowColumnChunkData::new(store))),
+            metadata_extension_hook: None,
             #[cfg(feature = "encryption")]
             page_encryptor: None,
         }
+    }
+
+    fn with_metadata_extension_hook(mut self, hook: PageHeaderMetadataExtensionHook) -> Self {
+        self.metadata_extension_hook = Some(hook);
+        self
     }
 
     #[cfg(feature = "encryption")]
@@ -856,17 +897,38 @@ impl PageWriter for ArrowPageWriter {
         let header = {
             let mut header = Vec::with_capacity(1024);
 
-            match self.page_encryptor_mut() {
+            #[cfg(feature = "encryption")]
+            let page_encryptor = self.page_encryptor.as_mut();
+            #[cfg(not(feature = "encryption"))]
+            let page_encryptor: Option<&mut PageEncryptor> = None;
+            let metadata_extension_hook = self.metadata_extension_hook.as_ref();
+            let page_index = metadata_extension_hook
+                .filter(|_| page.compressed_page().is_data_page())
+                .map_or(0, |context| context.data_page_index);
+            let encode = |buffer: &mut Vec<u8>| {
+                metadata_extensions::write_thrift(
+                    &page_header,
+                    buffer,
+                    metadata_extension_hook.map(|context| &context.hook),
+                    || {
+                        let context = metadata_extension_hook.expect("hook has a column binding");
+                        SiteInfo::page_header(
+                            context.row_group_index,
+                            context.column_index,
+                            page_index,
+                            page.page_type(),
+                        )
+                    },
+                )
+            };
+            match page_encryptor {
                 Some(page_encryptor) => {
-                    page_encryptor.encrypt_page_header(&page_header, &mut header)?;
+                    page_encryptor.encrypt_page_header(page_header.r#type, &mut header, encode)?;
                     if page.compressed_page().is_data_page() {
                         page_encryptor.increment_page();
                     }
                 }
-                None => {
-                    let mut protocol = ThriftCompactOutputProtocol::new(&mut header);
-                    page_header.write_thrift(&mut protocol)?;
-                }
+                None => encode(&mut header)?,
             }
 
             Bytes::from(header)
@@ -894,6 +956,9 @@ impl PageWriter for ArrowPageWriter {
         } else {
             buf.push(header)?;
             buf.push(data)?;
+            if let Some(context) = &mut self.metadata_extension_hook {
+                context.data_page_index += 1;
+            }
         }
 
         Ok(spec)
@@ -1452,6 +1517,7 @@ pub struct ArrowRowGroupWriterFactory {
     // from_schema_plan to accept the plan without a Result.
     schema_plan: std::result::Result<Arc<ArrowWriteSchemaPlan>, ArrowWriteSchemaPlanError>,
     props: WriterPropertiesPtr,
+    metadata_extension_hook: Option<HookHandle>,
     page_store_factory: Arc<dyn PageStoreFactory>,
     #[cfg(feature = "encryption")]
     file_encryptor: Option<Arc<FileEncryptor>>,
@@ -1480,6 +1546,9 @@ impl ArrowRowGroupWriterFactory {
     /// Try to create a new [`ArrowRowGroupWriterFactory`] for the provided file writer and Arrow schema.
     ///
     /// Validates and caches the schema-only field-to-leaf mapping for reuse across row groups.
+    /// Install any metadata extension hook on the file writer before creating this
+    /// factory. The factory captures the current hook; subsequent changes to the
+    /// file writer do not update this factory.
     ///
     /// # Errors
     ///
@@ -1505,6 +1574,7 @@ impl ArrowRowGroupWriterFactory {
         Self {
             schema_plan,
             props,
+            metadata_extension_hook: file_writer.metadata_extension_hook(),
             page_store_factory: Arc::new(InMemoryPageStoreFactory),
             #[cfg(feature = "encryption")]
             file_encryptor: file_writer.file_encryptor(),
@@ -1564,11 +1634,15 @@ impl ArrowRowGroupWriterFactory {
         ArrowColumnWriterFactory::new()
             .with_page_store_factory(self.page_store_factory.clone())
             .with_file_encryptor(row_group_idx, self.file_encryptor.clone())
+            .with_metadata_extension_hook(self.metadata_extension_hook.clone())
     }
 
     #[cfg(not(feature = "encryption"))]
-    fn column_writer_factory(&self, _row_group_idx: usize) -> ArrowColumnWriterFactory {
-        ArrowColumnWriterFactory::new().with_page_store_factory(self.page_store_factory.clone())
+    fn column_writer_factory(&self, row_group_idx: usize) -> ArrowColumnWriterFactory {
+        let mut factory = ArrowColumnWriterFactory::new()
+            .with_page_store_factory(self.page_store_factory.clone());
+        factory.row_group_index = row_group_idx;
+        factory.with_metadata_extension_hook(self.metadata_extension_hook.clone())
     }
 }
 
@@ -1576,7 +1650,7 @@ impl ArrowRowGroupWriterFactory {
 struct ArrowColumnWriterFactory {
     /// Allocates the per-column-chunk [`PageStore`] backing each page writer.
     page_store_factory: Arc<dyn PageStoreFactory>,
-    #[cfg(feature = "encryption")]
+    metadata_extension_hook: Option<HookHandle>,
     row_group_index: usize,
     #[cfg(feature = "encryption")]
     file_encryptor: Option<Arc<FileEncryptor>>,
@@ -1586,7 +1660,7 @@ impl ArrowColumnWriterFactory {
     pub fn new() -> Self {
         Self {
             page_store_factory: Arc::new(InMemoryPageStoreFactory),
-            #[cfg(feature = "encryption")]
+            metadata_extension_hook: None,
             row_group_index: 0,
             #[cfg(feature = "encryption")]
             file_encryptor: None,
@@ -1602,6 +1676,11 @@ impl ArrowColumnWriterFactory {
         self
     }
 
+    fn with_metadata_extension_hook(mut self, hook: Option<HookHandle>) -> Self {
+        self.metadata_extension_hook = hook;
+        self
+    }
+
     #[cfg(feature = "encryption")]
     pub fn with_file_encryptor(
         mut self,
@@ -1613,27 +1692,6 @@ impl ArrowColumnWriterFactory {
         self
     }
 
-    #[cfg(feature = "encryption")]
-    fn create_page_writer(
-        &self,
-        column_descriptor: &ColumnDescPtr,
-        column_index: usize,
-    ) -> Result<Box<ArrowPageWriter>> {
-        let column_path = column_descriptor.path().string();
-        let page_encryptor = PageEncryptor::create_if_column_encrypted(
-            self.file_encryptor.as_ref(),
-            self.row_group_index,
-            column_index,
-            &column_path,
-        )?;
-        let args = PageStoreArgs::new(column_index, column_descriptor);
-        let store = self.page_store_factory.create(&args)?;
-        Ok(Box::new(
-            ArrowPageWriter::new(store).with_encryptor(page_encryptor),
-        ))
-    }
-
-    #[cfg(not(feature = "encryption"))]
     fn create_page_writer(
         &self,
         column_descriptor: &ColumnDescPtr,
@@ -1641,7 +1699,31 @@ impl ArrowColumnWriterFactory {
     ) -> Result<Box<ArrowPageWriter>> {
         let args = PageStoreArgs::new(column_index, column_descriptor);
         let store = self.page_store_factory.create(&args)?;
-        Ok(Box::new(ArrowPageWriter::new(store)))
+        let mut writer = ArrowPageWriter::new(store);
+        if let Some(hook) = &self.metadata_extension_hook
+            && hook
+                .targets
+                .iter()
+                .any(|t| t.accepts_pages(self.row_group_index, column_index))
+        {
+            writer = writer.with_metadata_extension_hook(PageHeaderMetadataExtensionHook {
+                hook: hook.clone(),
+                row_group_index: self.row_group_index,
+                column_index,
+                data_page_index: 0,
+            });
+        }
+        #[cfg(feature = "encryption")]
+        {
+            let page_encryptor = PageEncryptor::create_if_column_encrypted(
+                self.file_encryptor.as_ref(),
+                self.row_group_index,
+                column_index,
+                &column_descriptor.path().string(),
+            )?;
+            writer = writer.with_encryptor(page_encryptor);
+        }
+        Ok(Box::new(writer))
     }
 
     /// Gets an [`ArrowColumnWriter`] for the given `data_type`, appending the

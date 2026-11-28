@@ -66,6 +66,14 @@ pub trait ChunkReader: Length + Send + Sync {
     /// Similarly to [`Self::get_read`], this method may have side-effects on
     /// previously returned readers.
     fn get_bytes(&self, start: u64, length: usize) -> Result<Bytes>;
+
+    /// Borrow a complete, already-resident range without I/O, seeking, or copying
+    /// its contents. Returns `None` if the range is not available contiguously.
+    /// This capability lets metadata decoders borrow payloads instead of treating
+    /// memory-backed input as a non-rewindable stream.
+    fn try_get_buffered_range(&self, _start: u64, _length: usize) -> Option<Bytes> {
+        None
+    }
 }
 
 impl Length for File {
@@ -108,6 +116,13 @@ impl Length for Bytes {
 
 impl ChunkReader for Bytes {
     type T = bytes::buf::Reader<Bytes>;
+
+    fn try_get_buffered_range(&self, start: u64, length: usize) -> Option<Bytes> {
+        let start = usize::try_from(start).ok()?;
+        let end = start.checked_add(length)?;
+        self.get(start..end)?;
+        Some(self.slice(start..end))
+    }
 
     fn get_read(&self, start: u64) -> Result<Self::T> {
         let start = start as usize;

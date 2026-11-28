@@ -19,8 +19,8 @@ use crate::compression::{CodecOptions, create_codec};
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::CryptoContext;
 use crate::errors::{ParquetError, Result};
-#[cfg(feature = "encryption")]
 use crate::file::metadata::ColumnChunkMetaData;
+#[cfg(any(test, feature = "encryption"))]
 use crate::file::metadata::ParquetMetaData;
 use crate::file::serialized_reader::{
     SerializedPageReaderContext, decode_page, read_page_header_len_from_bytes, verify_page_size,
@@ -48,6 +48,7 @@ use std::sync::Arc;
 /// that need that guarantee (for example, to use the dictionary as an exact
 /// membership index) must check that themselves, e.g. via
 /// [`crate::file::metadata::ColumnChunkMetaData::page_encoding_stats_mask`].
+#[cfg(test)]
 pub(crate) fn decode_dictionary_page(
     buffer: Bytes,
     parquet_meta_data: &ParquetMetaData,
@@ -57,6 +58,25 @@ pub(crate) fn decode_dictionary_page(
     let column_metadata = parquet_meta_data
         .row_group(row_group_idx)
         .column(column_idx);
+    let context = SerializedPageReaderContext {
+        read_stats: true,
+        #[cfg(feature = "encryption")]
+        crypto_context: dictionary_page_crypto_context(
+            parquet_meta_data,
+            column_metadata,
+            row_group_idx,
+            column_idx,
+        )?,
+        ..Default::default()
+    };
+    read_dictionary_page(buffer, column_metadata, &context)
+}
+
+pub(crate) fn read_dictionary_page(
+    buffer: Bytes,
+    column_metadata: &ColumnChunkMetaData,
+    page_context: &SerializedPageReaderContext,
+) -> Result<ArrayRef> {
     let column_descriptor = column_metadata.column_descr();
 
     if column_descriptor.physical_type() != PhysicalType::BYTE_ARRAY {
@@ -66,23 +86,8 @@ pub(crate) fn decode_dictionary_page(
         )));
     }
 
-    // Dictionary pages are subject to the same modular encryption as data
-    // pages: both the page header and the page body may be ciphertext, so
-    // we must route through the same crypto-aware header/data path that
-    // `SerializedPageReader` uses rather than parsing the header directly.
-    let page_context = SerializedPageReaderContext {
-        read_stats: true,
-        #[cfg(feature = "encryption")]
-        crypto_context: dictionary_page_crypto_context(
-            parquet_meta_data,
-            column_metadata,
-            row_group_idx,
-            column_idx,
-        )?,
-    };
-
     let (consumed, header) =
-        read_page_header_len_from_bytes(&page_context, buffer.as_ref(), 0, true)?;
+        read_page_header_len_from_bytes(page_context, buffer.as_ref(), 0, true)?;
     if header.r#type != PageType::DICTIONARY_PAGE {
         return Err(ParquetError::General(format!(
             "Expected a dictionary page, found {:?}",
@@ -144,34 +149,31 @@ pub(crate) fn decode_dictionary_page(
     Ok(offsets.into_array(None, ArrowType::Binary))
 }
 
-/// Builds the crypto context needed to decrypt the dictionary page of
-/// `column_metadata`, or `None` if the file (or this column) isn't encrypted.
+/// Decryption setup for standalone dictionaries, independent of observation.
+/// Preserve the dictionary reader's checks of the file's stored row-group ordinal.
 #[cfg(feature = "encryption")]
-fn dictionary_page_crypto_context(
-    parquet_meta_data: &ParquetMetaData,
+pub(crate) fn dictionary_page_crypto_context(
+    metadata: &ParquetMetaData,
     column_metadata: &ColumnChunkMetaData,
-    row_group_idx: usize,
-    column_idx: usize,
+    row_group: usize,
+    column: usize,
 ) -> Result<Option<Arc<CryptoContext>>> {
-    let Some(file_decryptor) = parquet_meta_data.file_decryptor() else {
+    let Some(decryptor) = metadata.file_decryptor() else {
         return Ok(None);
     };
     let Some(crypto_metadata) = column_metadata.crypto_metadata() else {
         return Ok(None);
     };
-    let ordinal = parquet_meta_data
-        .row_group(row_group_idx)
+    let ordinal = metadata
+        .row_group(row_group)
         .ordinal()
-        .ok_or_else(|| {
-            ParquetError::General("Encrypted row group is missing its file ordinal".to_string())
-        })?;
-    let ordinal = usize::try_from(ordinal).map_err(|_| {
-        ParquetError::General("Encrypted row group has an invalid file ordinal".to_string())
-    })?;
-    let crypto_context =
-        CryptoContext::for_column(file_decryptor, crypto_metadata, ordinal, column_idx)?
-            .for_dictionary_page();
-    Ok(Some(Arc::new(crypto_context)))
+        .ok_or_else(|| general_err!("Encrypted row group is missing its file ordinal"))?;
+    let ordinal = usize::try_from(ordinal)
+        .map_err(|_| general_err!("Encrypted row group has an invalid file ordinal"))?;
+    Ok(Some(Arc::new(
+        CryptoContext::for_column(decryptor, crypto_metadata, ordinal, column)?
+            .for_dictionary_page(),
+    )))
 }
 
 #[cfg(test)]
@@ -269,8 +271,7 @@ mod tests {
         let buffer = data.get_bytes(start, (end - start) as usize).unwrap();
         let context = SerializedPageReaderContext {
             read_stats: true,
-            #[cfg(feature = "encryption")]
-            crypto_context: None,
+            ..Default::default()
         };
         let (header_len, mut header) =
             read_page_header_len_from_bytes(&context, &buffer, 0, true).unwrap();

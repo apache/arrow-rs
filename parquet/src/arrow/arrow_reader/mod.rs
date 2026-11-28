@@ -28,11 +28,17 @@ use crate::column::page::{PageIterator, PageReader};
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
+#[cfg(feature = "experimental")]
+use crate::file::metadata::extensions::{
+    self, MetadataExtensionListener, MetadataExtensionSelection,
+};
 use crate::file::metadata::{
     ColumnChunkMask, PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions,
     ParquetMetaDataReader, ParquetStatisticsPolicy, RowGroupMetaData,
 };
+use crate::file::properties::ReaderProperties;
 use crate::file::reader::{ChunkReader, SerializedPageReader};
+use crate::file::serialized_reader::SerializedPageReaderContext;
 use crate::schema::types::SchemaDescriptor;
 
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
@@ -220,11 +226,7 @@ pub struct ArrowReaderBuilder<T> {
     /// [`PushDecoderInput`]: crate::arrow::push_decoder::PushDecoderInput
     pub(crate) input: T,
 
-    pub(crate) metadata: Arc<ParquetMetaData>,
-
-    pub(crate) schema: SchemaRef,
-
-    pub(crate) fields: Option<Arc<ParquetField>>,
+    pub(crate) reader_metadata: ArrowReaderMetadata,
 
     pub(crate) batch_size: usize,
 
@@ -249,9 +251,7 @@ impl<T: Debug> Debug for ArrowReaderBuilder<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ArrowReaderBuilder<T>")
             .field("input", &self.input)
-            .field("metadata", &self.metadata)
-            .field("schema", &self.schema)
-            .field("fields", &self.fields)
+            .field("reader_metadata", &self.reader_metadata)
             .field("batch_size", &self.batch_size)
             .field("row_group_plan", &self.row_group_plan)
             .field("projection", &self.projection)
@@ -265,12 +265,27 @@ impl<T: Debug> Debug for ArrowReaderBuilder<T> {
 }
 
 impl<T> ArrowReaderBuilder<T> {
+    /// Install one listener and its complete target list for future reads.
+    /// Empty lists and a second installation are errors. Loaded metadata is not replayed. To also receive footer extensions,
+    /// use [`ArrowReaderOptions::with_metadata_extension_listener`] before loading.
+    #[cfg(feature = "experimental")]
+    pub fn with_metadata_extension_listener(
+        mut self,
+        targets: impl IntoIterator<Item = MetadataExtensionSelection>,
+        listener: impl MetadataExtensionListener + 'static,
+    ) -> Result<Self> {
+        extensions::install(
+            &mut self.reader_metadata.extension_observer,
+            targets,
+            |targets| extensions::ObserverHandle::new(targets, listener),
+        )?;
+        Ok(self)
+    }
+
     pub(crate) fn new_builder(input: T, metadata: ArrowReaderMetadata) -> Self {
         Self {
             input,
-            metadata: metadata.metadata,
-            schema: metadata.schema,
-            fields: metadata.fields,
+            reader_metadata: metadata,
             batch_size: DEFAULT_BATCH_SIZE,
             row_group_plan: RowGroupPlan::Global {
                 row_groups: None,
@@ -288,17 +303,17 @@ impl<T> ArrowReaderBuilder<T> {
 
     /// Returns a reference to the [`ParquetMetaData`] for this parquet file
     pub fn metadata(&self) -> &Arc<ParquetMetaData> {
-        &self.metadata
+        self.reader_metadata.metadata()
     }
 
     /// Returns the parquet [`SchemaDescriptor`] for this parquet file
     pub fn parquet_schema(&self) -> &SchemaDescriptor {
-        self.metadata.file_metadata().schema_descr()
+        self.reader_metadata.parquet_schema()
     }
 
     /// Returns the arrow [`SchemaRef`] for this parquet file
     pub fn schema(&self) -> &SchemaRef {
-        &self.schema
+        self.reader_metadata.schema()
     }
 
     /// Set the size of [`RecordBatch`] to produce. Defaults to [`DEFAULT_BATCH_SIZE`].
@@ -309,7 +324,7 @@ impl<T> ArrowReaderBuilder<T> {
     /// If `batch_size` is more than the file row count, use the file row count.
     pub fn with_batch_size(self, batch_size: usize) -> Self {
         // Try to avoid allocate large buffer
-        let batch_size = batch_size.min(self.metadata.file_metadata().num_rows() as usize);
+        let batch_size = batch_size.min(self.metadata().file_metadata().num_rows() as usize);
         Self { batch_size, ..self }
     }
 
@@ -592,6 +607,20 @@ pub struct ArrowReaderOptions {
 }
 
 impl ArrowReaderOptions {
+    /// Install one listener and its complete target list, shared with derived
+    /// builders and footer reads. Empty lists and a second installation are errors.
+    #[cfg(feature = "experimental")]
+    pub fn with_metadata_extension_listener(
+        mut self,
+        targets: impl IntoIterator<Item = MetadataExtensionSelection>,
+        listener: impl MetadataExtensionListener + 'static,
+    ) -> Result<Self> {
+        self.metadata_options = self
+            .metadata_options
+            .with_metadata_extension_listener(targets, listener)?;
+        Ok(self)
+    }
+
     /// Create a new [`ArrowReaderOptions`] with the default settings
     pub fn new() -> Self {
         Self::default()
@@ -1053,6 +1082,10 @@ impl ParquetMetaDataReader {
 /// 2. Using a cached copy of the [`ParquetMetadata`] rather than reading it
 ///    from the file each time a reader is constructed.
 ///
+/// The configured metadata extension observer is retained for subsequent reads.
+/// Clones share the observer, and builders created from this metadata inherit it.
+/// Reusing decoded metadata does not replay callbacks or perform additional I/O.
+///
 /// [`ParquetMetadata`]: crate::file::metadata::ParquetMetaData
 #[derive(Debug, Clone)]
 pub struct ArrowReaderMetadata {
@@ -1062,6 +1095,8 @@ pub struct ArrowReaderMetadata {
     pub(crate) schema: SchemaRef,
     /// The Parquet schema (root field)
     pub(crate) fields: Option<Arc<ParquetField>>,
+    /// Observer inherited by readers built from this metadata.
+    pub(crate) extension_observer: Option<crate::file::metadata::extensions::ObserverHandle>,
 }
 
 impl ArrowReaderMetadata {
@@ -1101,12 +1136,12 @@ impl ArrowReaderMetadata {
     /// This function will not attempt to load the PageIndex if not present in the metadata, regardless
     /// of the settings in `options`. See [`Self::load`] to load metadata including the page index if needed.
     pub fn try_new(metadata: Arc<ParquetMetaData>, options: ArrowReaderOptions) -> Result<Self> {
-        match options.supplied_schema {
-            Some(supplied_schema) => Self::with_supplied_schema(
-                metadata,
-                supplied_schema.clone(),
+        let (schema, fields) = match options.supplied_schema {
+            Some(supplied_schema) => Self::supplied_schema_and_fields(
+                &metadata,
+                supplied_schema,
                 &options.virtual_columns,
-            ),
+            )?,
             None => {
                 let kv_metadata = match options.skip_arrow_metadata {
                     true => None,
@@ -1120,20 +1155,22 @@ impl ArrowReaderMetadata {
                     &options.virtual_columns,
                 )?;
 
-                Ok(Self {
-                    metadata,
-                    schema: Arc::new(schema),
-                    fields: fields.map(Arc::new),
-                })
+                (Arc::new(schema), fields.map(Arc::new))
             }
-        }
+        };
+        Ok(Self {
+            metadata,
+            schema,
+            fields,
+            extension_observer: options.metadata_options.extension_observer,
+        })
     }
 
-    fn with_supplied_schema(
-        metadata: Arc<ParquetMetaData>,
+    fn supplied_schema_and_fields(
+        metadata: &ParquetMetaData,
         supplied_schema: SchemaRef,
         virtual_columns: &[FieldRef],
-    ) -> Result<Self> {
+    ) -> Result<(SchemaRef, Option<Arc<ParquetField>>)> {
         let parquet_schema = metadata.file_metadata().schema_descr();
         let field_levels = parquet_to_arrow_field_levels_with_virtual(
             parquet_schema,
@@ -1203,11 +1240,7 @@ impl ArrowReaderMetadata {
             ))
         };
 
-        Ok(Self {
-            metadata,
-            schema,
-            fields: field_levels.levels.map(Arc::new),
-        })
+        Ok((schema, field_levels.levels.map(Arc::new)))
     }
 
     /// Returns a reference to the [`ParquetMetaData`] for this parquet file
@@ -1340,10 +1373,14 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
         row_group_idx: usize,
         column_idx: usize,
     ) -> Result<Option<Sbbf>> {
-        let metadata = self.metadata.row_group(row_group_idx);
-        let column_metadata = metadata.column(column_idx);
-
-        Sbbf::read_from_column_chunk(column_metadata, &self.input.0)
+        let column = self.metadata().row_group(row_group_idx).column(column_idx);
+        Sbbf::read_from_column_chunk_with_context(
+            column,
+            &self.input.0,
+            self.reader_metadata.extension_observer.as_ref(),
+            Some(row_group_idx),
+            Some(column_idx),
+        )
     }
 
     /// Build a [`ParquetRecordBatchReader`]
@@ -1352,9 +1389,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
     pub fn build(self) -> Result<ParquetRecordBatchReader> {
         let Self {
             input,
-            metadata,
-            schema: _,
-            fields,
+            reader_metadata,
             batch_size,
             row_group_plan,
             projection,
@@ -1367,6 +1402,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             max_predicate_cache_size: _,
         } = self;
 
+        let metadata = reader_metadata.metadata();
         // Try to avoid allocate large buffer
         let batch_size = batch_size.min(metadata.file_metadata().num_rows() as usize);
 
@@ -1376,7 +1412,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
 
         let reader = ReaderRowGroups {
             reader: Arc::new(input.0),
-            metadata,
+            reader_metadata,
             row_groups,
         };
 
@@ -1397,8 +1433,11 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
 
                 let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
                     .with_batch_size(batch_size)
-                    .with_parquet_metadata(&reader.metadata)
-                    .build_array_reader(fields.as_deref(), predicate.projection())?;
+                    .with_parquet_metadata(reader.reader_metadata.metadata())
+                    .build_array_reader(
+                        reader.reader_metadata.fields.as_deref(),
+                        predicate.projection(),
+                    )?;
 
                 plan_builder = plan_builder.with_predicate(array_reader, predicate.as_mut())?;
             }
@@ -1406,8 +1445,8 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
 
         let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
             .with_batch_size(batch_size)
-            .with_parquet_metadata(&reader.metadata)
-            .build_array_reader(fields.as_deref(), &projection)?;
+            .with_parquet_metadata(reader.reader_metadata.metadata())
+            .build_array_reader(reader.reader_metadata.fields.as_deref(), &projection)?;
 
         let read_plan = plan_builder
             .limited(reader.num_rows())
@@ -1422,15 +1461,14 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
 
 struct ReaderRowGroups<T: ChunkReader> {
     reader: Arc<T>,
-
-    metadata: Arc<ParquetMetaData>,
+    reader_metadata: ArrowReaderMetadata,
     /// Optional list of row group indices to scan
     row_groups: Vec<usize>,
 }
 
 impl<T: ChunkReader + 'static> RowGroups for ReaderRowGroups<T> {
     fn num_rows(&self) -> usize {
-        let meta = self.metadata.row_groups();
+        let meta = self.reader_metadata.metadata().row_groups();
         self.row_groups
             .iter()
             .map(|x| meta[*x].num_rows() as usize)
@@ -1441,7 +1479,7 @@ impl<T: ChunkReader + 'static> RowGroups for ReaderRowGroups<T> {
         Ok(Box::new(ReaderPageIterator {
             column_idx: i,
             reader: self.reader.clone(),
-            metadata: self.metadata.clone(),
+            reader_metadata: self.reader_metadata.clone(),
             row_groups: self.row_groups.clone().into_iter(),
         }))
     }
@@ -1450,12 +1488,12 @@ impl<T: ChunkReader + 'static> RowGroups for ReaderRowGroups<T> {
         Box::new(
             self.row_groups
                 .iter()
-                .map(move |i| self.metadata.row_group(*i)),
+                .map(move |i| self.reader_metadata.metadata().row_group(*i)),
         )
     }
 
     fn metadata(&self) -> &ParquetMetaData {
-        self.metadata.as_ref()
+        self.reader_metadata.metadata()
     }
 }
 
@@ -1463,29 +1501,42 @@ struct ReaderPageIterator<T: ChunkReader> {
     reader: Arc<T>,
     column_idx: usize,
     row_groups: std::vec::IntoIter<usize>,
-    metadata: Arc<ParquetMetaData>,
+    reader_metadata: ArrowReaderMetadata,
 }
 
 impl<T: ChunkReader + 'static> ReaderPageIterator<T> {
     /// Return the next SerializedPageReader
     fn next_page_reader(&self, rg_idx: usize) -> Result<SerializedPageReader<T>> {
-        let rg = self.metadata.row_group(rg_idx);
-        let column_chunk_metadata = rg.column(self.column_idx);
-        let page_locations = self
-            .metadata
+        let metadata = self.reader_metadata.metadata();
+        let rg = metadata.row_group(rg_idx);
+        let page_locations = metadata
             .page_index()
             .map(|i| i.page_locations(rg_idx, self.column_idx).cloned())
             .unwrap_or(None);
         let total_rows = rg.num_rows() as usize;
         let reader = self.reader.clone();
 
-        SerializedPageReader::new(reader, column_chunk_metadata, total_rows, page_locations)?
-            .add_crypto_context(
-                rg_idx,
-                self.column_idx,
-                self.metadata.as_ref(),
-                column_chunk_metadata,
-            )
+        let context = SerializedPageReaderContext {
+            extension_observer: self.reader_metadata.extension_observer.clone(),
+            row_group: Some(rg_idx),
+            column: Some(self.column_idx),
+            ..Default::default()
+        };
+        let props = ReaderProperties::builder().build();
+        SerializedPageReader::new_with_context(
+            reader,
+            rg.column(self.column_idx),
+            total_rows,
+            page_locations,
+            props.codec_options(),
+            context,
+        )?
+        .add_crypto_context(
+            rg_idx,
+            self.column_idx,
+            metadata,
+            rg.column(self.column_idx),
+        )
     }
 }
 

@@ -13,6 +13,8 @@
 //! * [`WriteThrift`]: Trait implemented by serializable objects.
 //! * [`WriteThriftField`]: Trait implemented by serializable objects that are fields in Thrift structs.
 
+#[cfg(test)]
+use crate::file::metadata::extensions::ThriftStruct;
 use std::{
     cmp::Ordering,
     io::{Read, Write},
@@ -20,11 +22,23 @@ use std::{
 
 use crate::{
     errors::{ParquetError, Result},
+    file::metadata::extensions::{
+        BufferedReadExtensions, DecoderScope, FooterScope, KnownSite, ObserverHandle,
+        ReadExtensions, RootObserver, RootReadExtensions, SiteInfo, ThriftPathSegment, WriteState,
+    },
     write_thrift_field,
 };
 use std::io::Error;
 use std::num::TryFromIntError;
 use std::str::Utf8Error;
+
+/// Maximum recursion budget for skipping one unknown Thrift value.
+///
+/// This is a defensive implementation limit, not a Parquet/Thrift wire-format
+/// restriction. Known Parquet metadata nests much less deeply, but unknown fields
+/// may contain additional structs or collections. The budget starts at the
+/// skipped value, excluding any enclosing structures already decoded normally.
+pub(crate) const MAX_SKIP_DEPTH: i8 = 64;
 
 #[derive(Debug)]
 pub(crate) enum ThriftProtocolError {
@@ -38,12 +52,14 @@ pub(crate) enum ThriftProtocolError {
     Utf8Error,
     SkipDepth(FieldType),
     SkipUnsupportedType(FieldType),
+    Extension(Box<ParquetError>),
 }
 
 impl From<ThriftProtocolError> for ParquetError {
     #[inline(never)]
     fn from(e: ThriftProtocolError) -> Self {
         match e {
+            ThriftProtocolError::Extension(e) => *e,
             ThriftProtocolError::Eof => eof_err!("Unexpected EOF"),
             ThriftProtocolError::IO(e) => e.into(),
             ThriftProtocolError::InvalidFieldType(value) => match FieldType::try_from(value) {
@@ -71,6 +87,12 @@ impl From<ThriftProtocolError> for ParquetError {
                 general_err!("cannot skip field type {:?}", field_type)
             }
         }
+    }
+}
+
+impl From<ParquetError> for ThriftProtocolError {
+    fn from(error: ParquetError) -> Self {
+        Self::Extension(Box::new(error))
     }
 }
 
@@ -235,6 +257,7 @@ impl TryFrom<u8> for ElementType {
 /// Struct used to describe a [thrift struct] field during decoding.
 ///
 /// [thrift struct]: https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#struct-encoding
+#[derive(Clone, Copy)]
 pub(crate) struct FieldIdentifier {
     /// The type for the field.
     pub(crate) field_type: FieldType,
@@ -270,7 +293,151 @@ pub(crate) struct ListIdentifier {
 /// here to perform deserialization.
 ///
 /// [compact]: https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md
-pub(crate) trait ThriftCompactInputProtocol<'a> {
+pub(crate) trait ThriftCompactInputProtocol<'a>: Sized {
+    type Tracking: InputTracking;
+
+    fn tracking(&mut self) -> &mut Self::Tracking;
+
+    /// Track a struct boundary, including union envelopes (which use the same wire format).
+    fn read_struct_begin(&mut self) -> ThriftProtocolResult<()> {
+        self.tracking().begin()
+    }
+
+    fn with_path_segment<T, E: From<ParquetError>>(
+        &mut self,
+        segment: ThriftPathSegment,
+        f: impl FnOnce(&mut Self) -> Result<T, E>,
+    ) -> Result<T, E> {
+        let len = self.tracking().push(segment).map_err(E::from)?;
+        let result = f(self);
+        self.tracking().truncate(len);
+        result
+    }
+
+    fn with_list_element<T, E: From<ParquetError>>(
+        &mut self,
+        index: usize,
+        f: impl FnOnce(&mut Self) -> Result<T, E>,
+    ) -> Result<T, E> {
+        self.with_path_segment(ThriftPathSegment::Element(index), f)
+    }
+
+    /// Retain a known footer scope. Unobserved and streaming protocols erase
+    /// this operation; buffered decoding retains only the nearest known scope.
+    #[inline(always)]
+    fn with_footer_scope<T, E>(
+        &mut self,
+        scope: FooterScope,
+        f: impl FnOnce(&mut Self) -> Result<T, E>,
+    ) -> Result<T, E> {
+        if !Self::Tracking::SCOPED {
+            return f(self);
+        }
+        let remaining = self.remaining_bytes();
+        let previous = self.tracking().enter_scope(scope, remaining);
+        let result = f(self);
+        self.tracking().leave_scope(previous);
+        result
+    }
+
+    /// The decoder knows this field belongs to the current scope itself, not
+    /// to an unknown nested value. Do not speculate based on remaining STOPs.
+    fn skip_field_at_scope(
+        &mut self,
+        field: FieldIdentifier,
+        location: FooterScope,
+    ) -> ThriftProtocolResult<()> {
+        if Self::Tracking::ENABLED
+            && field.id == i16::MAX
+            && (!Self::Tracking::ROOT_ONLY || location == FooterScope::Root)
+        {
+            if field.field_type != FieldType::Binary {
+                return Err(ThriftProtocolError::InvalidFieldType(
+                    field.field_type as u8,
+                ));
+            }
+            self.read_extension_at(location)
+        } else {
+            self.skip_field(field)
+        }
+    }
+
+    /// Supply facts already known by a typed codec, only when it finds an extension.
+    #[inline(always)]
+    fn skip_field_at_site(
+        &mut self,
+        field: FieldIdentifier,
+        site: KnownSite,
+    ) -> ThriftProtocolResult<()> {
+        if field.id == i16::MAX
+            && Self::Tracking::ENABLED
+            && (!Self::Tracking::ROOT_ONLY || site == KnownSite::Root)
+            && let Some(scope) = self.tracking().known_scope(site)
+        {
+            return self.skip_field_at_scope(field, scope);
+        }
+        self.skip_field(field)
+    }
+
+    /// Read one extension using owned bytes (the streaming implementation).
+    /// Slice-backed protocols override this to borrow directly from their input.
+    fn read_extension(&mut self) -> ThriftProtocolResult<()> {
+        let bytes = self.read_bytes_owned()?;
+        self.tracking()
+            .observe(&bytes, None)
+            .map_err(|e| ThriftProtocolError::Extension(Box::new(e)))
+    }
+
+    /// Streaming protocols already retain ancestry and do not need the hint.
+    fn read_extension_at(&mut self, _scope: FooterScope) -> ThriftProtocolResult<()> {
+        self.read_extension()
+    }
+
+    /// Skip an ordinary struct field, observing a reserved binary extension if enabled.
+    /// Union codecs skip variant values with `skip` instead: envelopes cannot carry extensions.
+    fn skip_field(&mut self, field: FieldIdentifier) -> ThriftProtocolResult<()> {
+        self.skip_field_till_depth(field, MAX_SKIP_DEPTH)
+    }
+
+    // Keep the extension/depth routing in its caller; an extra call per skipped
+    // field is measurable when whole statistics subtrees are skipped. The actual
+    // recursive value decoder below is still shared by all tracking policies.
+    #[inline(always)]
+    fn skip_field_till_depth(
+        &mut self,
+        field: FieldIdentifier,
+        depth: i8,
+    ) -> ThriftProtocolResult<()> {
+        if depth == 0 {
+            return Err(ThriftProtocolError::SkipDepth(field.field_type));
+        }
+        if field.id == i16::MAX && Self::Tracking::ENABLED && !Self::Tracking::ROOT_ONLY {
+            if field.field_type != FieldType::Binary {
+                return Err(ThriftProtocolError::InvalidFieldType(
+                    field.field_type as u8,
+                ));
+            }
+            self.read_extension()
+        } else {
+            self.skip_till_depth(field.field_type, depth)
+        }
+    }
+
+    /// Test entry point for an ordinary root without a generated schema codec.
+    #[cfg(test)]
+    fn skip_root(&mut self) -> ThriftProtocolResult<()> {
+        self.read_struct_begin()?;
+        let mut last = 0;
+        loop {
+            let field = self.read_field_begin(last)?;
+            if field.field_type == FieldType::Stop {
+                return Ok(());
+            }
+            last = field.id;
+            self.skip_field_at_scope(field, FooterScope::Root)?;
+        }
+    }
+
     /// Read a single byte from the input.
     fn read_byte(&mut self) -> ThriftProtocolResult<u8>;
 
@@ -369,7 +536,17 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
         // - the type
         // - the field delta and the type
         let field_type = self.read_byte()?;
+        self.read_field_begin_with_byte(last_field_id, field_type)
+    }
+
+    #[inline(always)]
+    fn read_field_begin_with_byte(
+        &mut self,
+        last_field_id: i16,
+        field_type: u8,
+    ) -> ThriftProtocolResult<FieldIdentifier> {
         if field_type & 0xf == 0 {
+            self.tracking().end()?;
             return Ok(FieldIdentifier {
                 field_type: FieldType::Stop,
                 id: 0,
@@ -390,6 +567,13 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
             self.read_full_field_id()?
         };
 
+        // Only compound values can lead to another struct's extension context.
+        if matches!(
+            field_type,
+            FieldType::Struct | FieldType::List | FieldType::Set | FieldType::Map
+        ) {
+            self.tracking().field(id)?;
+        }
         Ok(FieldIdentifier { field_type, id })
     }
 
@@ -470,22 +654,34 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
         self.skip_bytes(len)
     }
 
-    /// Skip a field with type `field_type` recursively until the default
-    /// maximum skip depth (currently 64) is reached.
+    /// Skip a value by type up to [`MAX_SKIP_DEPTH`] levels.
+    /// For ordinary struct fields use `skip_field` so their IDs are available.
     fn skip(&mut self, field_type: FieldType) -> ThriftProtocolResult<()> {
-        const DEFAULT_SKIP_DEPTH: i8 = 64;
-        self.skip_till_depth(field_type, DEFAULT_SKIP_DEPTH)
+        self.skip_till_depth(field_type, MAX_SKIP_DEPTH)
     }
 
-    /// Empty structs in unions consist of a single byte of 0 for the field stop record.
-    /// This skips that byte without encuring the cost of processing the [`FieldIdentifier`].
-    /// Will return an error if the struct is not actually empty.
+    /// Skip a nominally empty struct, including forward-compatible extension fields.
+    #[inline]
     fn skip_empty_struct(&mut self) -> Result<()> {
-        let b = self.read_byte()?;
-        if b != 0 {
-            Err(general_err!("Empty struct has fields"))
-        } else {
-            Ok(())
+        let byte = self.read_byte()?;
+        // Empty structs have no extensions and leave the enclosing path unchanged.
+        if byte & 0xf == 0 {
+            return Ok(());
+        }
+        self.skip_nonempty_marker(byte)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn skip_nonempty_marker(&mut self, byte: u8) -> Result<()> {
+        self.read_struct_begin()?;
+        let mut field = self.read_field_begin_with_byte(0, byte)?;
+        loop {
+            self.skip_field_till_depth(field, MAX_SKIP_DEPTH - 1)?;
+            field = self.read_field_begin(field.id)?;
+            if field.field_type == FieldType::Stop {
+                return Ok(());
+            }
         }
     }
 
@@ -506,13 +702,15 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
             FieldType::Binary => self.skip_binary(),
             // see https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#struct
             FieldType::Struct => {
+                self.read_struct_begin()?;
+                let mut last_field_id = 0;
                 loop {
-                    // we don't need field id for skipping, so always pass 0 for last id
-                    let field_ident = self.read_field_begin(0)?;
+                    let field_ident = self.read_field_begin(last_field_id)?;
                     if field_ident.field_type == FieldType::Stop {
                         break;
                     }
-                    self.skip_till_depth(field_ident.field_type, depth - 1)?;
+                    last_field_id = field_ident.id;
+                    self.skip_field_till_depth(field_ident, depth - 1)?;
                 }
                 Ok(())
             }
@@ -524,8 +722,17 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
                     self.skip_bool_list(list_ident.size, depth - 1)
                 } else {
                     let field_type = list_ident.element_type.into();
-                    for _ in 0..list_ident.size {
-                        self.skip_till_depth(field_type, depth - 1)?;
+                    for i in 0..list_ident.size as usize {
+                        if matches!(
+                            field_type,
+                            FieldType::Struct | FieldType::List | FieldType::Set | FieldType::Map
+                        ) {
+                            self.with_list_element(i, |prot| {
+                                prot.skip_till_depth(field_type, depth - 1)
+                            })?;
+                        } else {
+                            self.skip_till_depth(field_type, depth - 1)?;
+                        }
                     }
                     Ok(())
                 }
@@ -555,12 +762,30 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
             let kv = self.read_byte()?;
             let key_type = ElementType::try_from(kv >> 4)?;
             let val_type = ElementType::try_from(kv & 0xf)?;
-            for _ in 0..size {
-                self.skip_element_till_depth(key_type, depth - 1)?;
-                self.skip_element_till_depth(val_type, depth - 1)?;
+            for i in 0..size as usize {
+                self.skip_element_at(key_type, ThriftPathSegment::MapKey(i), depth - 1)?;
+                self.skip_element_at(val_type, ThriftPathSegment::MapValue(i), depth - 1)?;
             }
         }
         Ok(())
+    }
+
+    fn skip_element_at(
+        &mut self,
+        element_type: ElementType,
+        segment: ThriftPathSegment,
+        depth: i8,
+    ) -> ThriftProtocolResult<()> {
+        if matches!(
+            element_type,
+            ElementType::Struct | ElementType::List | ElementType::Set | ElementType::Map
+        ) {
+            self.with_path_segment(segment, |prot| {
+                prot.skip_element_till_depth(element_type, depth)
+            })
+        } else {
+            self.skip_element_till_depth(element_type, depth)
+        }
     }
 
     /// Collection booleans have a payload byte, unlike inline struct fields.
@@ -579,15 +804,130 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
     }
 }
 
+/// Storage policy for the shared input codecs. `()` adds no state to plain input.
+pub(crate) trait InputTracking {
+    const ENABLED: bool;
+    const ROOT_ONLY: bool = false;
+
+    #[inline]
+    fn known_scope(&self, site: KnownSite) -> Option<FooterScope> {
+        (site == KnownSite::Root).then_some(FooterScope::Root)
+    }
+
+    fn observe(&mut self, bytes: &[u8], remaining: Option<usize>) -> Result<()>;
+
+    fn observe_at(
+        &mut self,
+        bytes: &[u8],
+        remaining: Option<usize>,
+        _scope: FooterScope,
+    ) -> Result<()> {
+        self.observe(bytes, remaining)
+    }
+
+    const SCOPED: bool = false;
+
+    #[inline]
+    fn enter_scope(&mut self, _scope: FooterScope, _remaining: Option<usize>) -> DecoderScope {
+        DecoderScope::default()
+    }
+
+    #[inline]
+    fn leave_scope(&mut self, _scope: DecoderScope) {}
+
+    #[inline]
+    fn begin(&mut self) -> ThriftProtocolResult<()> {
+        Ok(())
+    }
+
+    #[inline]
+    fn end(&mut self) -> ThriftProtocolResult<()> {
+        Ok(())
+    }
+
+    #[inline]
+    fn field(&mut self, _id: i16) -> ThriftProtocolResult<()> {
+        Ok(())
+    }
+
+    #[inline]
+    fn push(&mut self, _segment: ThriftPathSegment) -> Result<Option<usize>> {
+        Ok(None)
+    }
+
+    #[inline]
+    fn truncate(&mut self, _len: Option<usize>) {}
+}
+
+impl InputTracking for () {
+    const ENABLED: bool = false;
+
+    fn observe(&mut self, _: &[u8], _: Option<usize>) -> Result<()> {
+        unreachable!("Observation is disabled")
+    }
+}
+
 /// A high performance Thrift reader that reads from a slice of bytes.
-pub(crate) struct ThriftSliceInputProtocol<'a> {
+pub(crate) struct ThriftSliceInputProtocol<'a, S = ()> {
     buf: &'a [u8],
+    extensions: S,
 }
 
 impl<'a> ThriftSliceInputProtocol<'a> {
     /// Create a new `ThriftSliceInputProtocol` using the bytes in `buf`.
     pub fn new(buf: &'a [u8]) -> Self {
-        Self { buf }
+        Self {
+            buf,
+            extensions: (),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn with_observer<'o>(
+        self,
+        observer: &'o ObserverHandle,
+        root: SiteInfo,
+    ) -> ThriftSliceInputProtocol<'a, RootReadExtensions<'a, 'o>> {
+        ThriftSliceInputProtocol {
+            buf: self.buf,
+            extensions: RootReadExtensions::new(observer, root, self.buf),
+        }
+    }
+
+    pub(crate) fn with_root_observer<'o>(
+        self,
+        observer: &'o ObserverHandle,
+        root: SiteInfo,
+    ) -> ThriftSliceInputProtocol<'a, RootObserver<'o>> {
+        ThriftSliceInputProtocol {
+            buf: self.buf,
+            extensions: RootObserver::new(observer, root),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn with_footer_observer<'o>(
+        self,
+        observer: &'o ObserverHandle,
+        root: SiteInfo,
+    ) -> ThriftSliceInputProtocol<'a, BufferedReadExtensions<'a, 'o>> {
+        ThriftSliceInputProtocol {
+            buf: self.buf,
+            extensions: BufferedReadExtensions::new(observer, root, self.buf),
+        }
+    }
+}
+
+impl<'a, S> ThriftSliceInputProtocol<'a, S> {
+    #[inline]
+    fn extension_bytes(&mut self) -> ThriftProtocolResult<&'a [u8]>
+    where
+        S: InputTracking,
+    {
+        let len = i32::try_from(self.read_vlq()?)? as usize;
+        let bytes = self.buf.get(..len).ok_or(ThriftProtocolError::Eof)?;
+        self.buf = &self.buf[len..];
+        Ok(bytes)
     }
 
     /// Return the current buffer as a slice.
@@ -596,7 +936,29 @@ impl<'a> ThriftSliceInputProtocol<'a> {
     }
 }
 
-impl<'b, 'a: 'b> ThriftCompactInputProtocol<'b> for ThriftSliceInputProtocol<'a> {
+impl<'b, 'a: 'b, S: InputTracking> ThriftCompactInputProtocol<'b>
+    for ThriftSliceInputProtocol<'a, S>
+{
+    type Tracking = S;
+
+    fn tracking(&mut self) -> &mut S {
+        &mut self.extensions
+    }
+
+    fn read_extension(&mut self) -> ThriftProtocolResult<()> {
+        let bytes = self.extension_bytes()?;
+        self.extensions
+            .observe(bytes, Some(self.buf.len()))
+            .map_err(|e| ThriftProtocolError::Extension(Box::new(e)))
+    }
+    #[inline]
+    fn read_extension_at(&mut self, scope: FooterScope) -> ThriftProtocolResult<()> {
+        let bytes = self.extension_bytes()?;
+        self.extensions
+            .observe_at(bytes, Some(self.buf.len()), scope)
+            .map_err(|e| ThriftProtocolError::Extension(Box::new(e)))
+    }
+
     #[inline]
     fn read_byte(&mut self) -> ThriftProtocolResult<u8> {
         let ret = *self.buf.first().ok_or(ThriftProtocolError::Eof)?;
@@ -638,19 +1000,55 @@ impl<'b, 'a: 'b> ThriftCompactInputProtocol<'b> for ThriftSliceInputProtocol<'a>
 
 /// A Thrift input protocol that wraps a [`Read`] object.
 ///
-/// Note that this is only intended for use in reading Parquet page headers. This will panic
-/// if Thrift `binary` data is encountered because a slice of that data cannot be returned.
-pub(crate) struct ThriftReadInputProtocol<R: Read> {
+/// Intended for reading Parquet page headers. Borrowed binary reads are not
+/// supported; owned binary reads (including extension payloads) use a temporary
+/// buffer because the underlying stream cannot lend a slice.
+pub(crate) struct ThriftReadInputProtocol<R: Read, S = ()> {
     reader: R,
+    extensions: S,
 }
 
 impl<R: Read> ThriftReadInputProtocol<R> {
     pub(crate) fn new(reader: R) -> Self {
-        Self { reader }
+        Self {
+            reader,
+            extensions: (),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn with_observer(
+        self,
+        observer: &ObserverHandle,
+        root: SiteInfo,
+    ) -> ThriftReadInputProtocol<R, ReadExtensions<'_>> {
+        ThriftReadInputProtocol {
+            reader: self.reader,
+            extensions: ReadExtensions::new(observer, root),
+        }
+    }
+
+    pub(crate) fn with_root_observer(
+        self,
+        observer: &ObserverHandle,
+        root: SiteInfo,
+    ) -> ThriftReadInputProtocol<R, RootObserver<'_>> {
+        ThriftReadInputProtocol {
+            reader: self.reader,
+            extensions: RootObserver::new(observer, root),
+        }
     }
 }
 
-impl<'a, R: Read> ThriftCompactInputProtocol<'a> for ThriftReadInputProtocol<R> {
+impl<'a, R: Read, S: InputTracking> ThriftCompactInputProtocol<'a>
+    for ThriftReadInputProtocol<R, S>
+{
+    type Tracking = S;
+
+    fn tracking(&mut self) -> &mut S {
+        &mut self.extensions
+    }
+
     #[inline]
     fn read_byte(&mut self) -> ThriftProtocolResult<u8> {
         let mut buf = [0_u8; 1];
@@ -664,12 +1062,29 @@ impl<'a, R: Read> ThriftCompactInputProtocol<'a> for ThriftReadInputProtocol<R> 
 
     fn read_bytes_owned(&mut self) -> ThriftProtocolResult<Vec<u8>> {
         let len = self.read_binary_len()?;
-        let mut v = Vec::with_capacity(len.min(8 * 1024));
-        let copied = std::io::copy(&mut self.reader.by_ref().take(len as u64), &mut v)?;
-        if copied != len as u64 {
+        // Receive a bounded prefix before allocating. Most metadata payloads
+        // fit here, avoiding read_to_end's growth and extra EOF capacity probe.
+        // A malicious declared length never causes a proportional allocation.
+        let mut prefix = [0u8; 128];
+        let received = len.min(prefix.len());
+        if let Err(error) = self.reader.read_exact(&mut prefix[..received]) {
+            return Err(if error.kind() == std::io::ErrorKind::UnexpectedEof {
+                ThriftProtocolError::Eof
+            } else {
+                error.into()
+            });
+        }
+        let mut bytes = prefix[..received].to_vec();
+        if received < len {
+            self.reader
+                .by_ref()
+                .take((len - received) as u64)
+                .read_to_end(&mut bytes)?;
+        }
+        if bytes.len() != len {
             return Err(ThriftProtocolError::Eof);
         }
-        Ok(v)
+        Ok(bytes)
     }
 
     fn skip_bytes(&mut self, n: usize) -> ThriftProtocolResult<()> {
@@ -761,13 +1176,31 @@ where
     R: ThriftCompactInputProtocol<'a>,
     T: ReadThrift<'a, R> + WriteThrift,
 {
+    read_thrift_vec_with(prot, |_, prot| T::read_thrift(prot))
+}
+
+pub(crate) fn read_thrift_vec_with<'a, T, R>(
+    prot: &mut R,
+    mut read: impl FnMut(usize, &mut R) -> Result<T>,
+) -> Result<Vec<T>>
+where
+    R: ThriftCompactInputProtocol<'a>,
+    T: WriteThrift,
+{
     let list_ident = prot.read_list_begin()?;
     validate_list_type(T::ELEMENT_TYPE, &list_ident)?;
     let size = list_ident.size as usize;
     check_list_size(prot.remaining_bytes(), size)?;
     let mut res = Vec::with_capacity(size);
-    for _ in 0..list_ident.size {
-        let val = T::read_thrift(prot)?;
+    for i in 0..size {
+        let val = if matches!(
+            T::ELEMENT_TYPE,
+            ElementType::Struct | ElementType::List | ElementType::Set | ElementType::Map
+        ) {
+            prot.with_list_element(i, |prot| read(i, prot))?
+        } else {
+            read(i, prot)?
+        };
         res.push(val);
     }
     Ok(res)
@@ -812,21 +1245,209 @@ pub(crate) fn check_list_size(remaining: Option<usize>, size: usize) -> Result<(
 /// as functions used in the encoding of lists and structs. This should rarely be used directly,
 /// but is instead intended for use by implementers of [`WriteThrift`] and [`WriteThriftField`].
 ///
+/// The root binding selects `TRACK` once. Both modes share the serializers, but
+/// the untracked mode can eliminate hook traversal from primitive operations.
+///
 /// [compact output]: https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md
-pub(crate) struct ThriftCompactOutputProtocol<W: Write> {
+pub(crate) struct ThriftCompactOutputProtocol<'s, 'a, W: Write, const TRACK: bool = false> {
     writer: W,
     write_path_in_schema: bool,
     write_rg_ordinal: bool,
+    metadata_extensions: Option<&'s mut WriteState<'a>>,
 }
 
-impl<W: Write> ThriftCompactOutputProtocol<W> {
+impl<'s, 'a, W: Write> ThriftCompactOutputProtocol<'s, 'a, W, false> {
     /// Create a new `ThriftCompactOutputProtocol` wrapping the byte sink `writer`.
     pub(crate) fn new(writer: W) -> Self {
         Self {
             writer,
             write_path_in_schema: true,
             write_rg_ordinal: true,
+            metadata_extensions: None,
         }
+    }
+
+    pub(crate) fn with_root_extension(writer: W, state: &'s mut WriteState<'a>) -> Self {
+        Self {
+            metadata_extensions: Some(state),
+            ..Self::new(writer)
+        }
+    }
+}
+
+impl<'s, 'a, W: Write> ThriftCompactOutputProtocol<'s, 'a, W, true> {
+    pub(crate) fn with_metadata_extensions(writer: W, state: &'s mut WriteState<'a>) -> Self {
+        Self {
+            writer,
+            write_path_in_schema: true,
+            write_rg_ordinal: true,
+            metadata_extensions: Some(state),
+        }
+    }
+}
+
+impl<W: Write, const TRACK: bool> ThriftCompactOutputProtocol<'_, '_, W, TRACK> {
+    /// Supply ownership already known by a typed footer serializer. This is a
+    /// scoped hint, not a path update or an eagerly constructed public context.
+    /// Typed serializer scopes expose existing owner indices without resolving
+    /// the structural path.
+    #[inline]
+    pub(crate) fn with_footer_scope<T>(
+        &mut self,
+        scope: FooterScope,
+        f: impl FnOnce(&mut Self) -> Result<T>,
+    ) -> Result<T> {
+        if !TRACK {
+            return f(self);
+        }
+        let previous = self
+            .metadata_extensions
+            .as_deref_mut()
+            .map(|s| s.replace_scope(scope));
+        let result = f(self);
+        if let (Some(state), Some(previous)) = (self.metadata_extensions.as_deref_mut(), previous) {
+            state.replace_scope(previous);
+        }
+        result
+    }
+    /// Borrow the same transport and format flags, with observation erased.
+    pub(crate) fn untracked(&mut self) -> ThriftCompactOutputProtocol<'_, '_, &mut W> {
+        ThriftCompactOutputProtocol {
+            writer: &mut self.writer,
+            write_path_in_schema: self.write_path_in_schema,
+            write_rg_ordinal: self.write_rg_ordinal,
+            metadata_extensions: None,
+        }
+    }
+
+    pub(crate) fn write_footer_element(
+        &mut self,
+        scope: FooterScope,
+        index: usize,
+        object: &impl WriteThrift,
+    ) -> Result<()> {
+        if TRACK
+            && self
+                .metadata_extensions
+                .as_ref()
+                .is_some_and(|s| !s.descendants().any(|t| t.accepts_scope(scope)))
+        {
+            return object.write_thrift(&mut self.untracked());
+        }
+        self.with_list_element(index, |writer| {
+            writer.with_footer_scope(scope, |writer| object.write_thrift(writer))
+        })
+    }
+
+    #[inline]
+    pub(crate) fn write_footer_column(
+        &mut self,
+        index: usize,
+        sorting: bool,
+        object: &impl WriteThrift,
+    ) -> Result<()> {
+        let row_group = if TRACK {
+            self.metadata_extensions
+                .as_deref()
+                .and_then(|s| s.row_group())
+        } else {
+            None
+        };
+        if let Some(row_group) = row_group {
+            let scope = if sorting {
+                FooterScope::SortingColumn { row_group, index }
+            } else {
+                FooterScope::Column {
+                    row_group,
+                    column: index,
+                }
+            };
+            self.write_footer_element(scope, index, object)
+        } else {
+            self.with_list_element(index, |writer| object.write_thrift(writer))
+        }
+    }
+
+    pub(crate) fn schema_extensions(&self) -> bool {
+        TRACK
+            && self
+                .metadata_extensions
+                .as_ref()
+                .is_some_and(|s| s.descendants().any(|t| t.accepts_schema()))
+    }
+
+    /// Borrow schema ownership for this element and all its nested annotations.
+    /// The scoped protocol shares the parent's structural tracking, not a copy.
+    pub(crate) fn write_schema_element(
+        &mut self,
+        element: &impl WriteThrift,
+        index: usize,
+        column: Option<usize>,
+    ) -> Result<()> {
+        if !TRACK {
+            return element.write_thrift(self);
+        }
+        if self.metadata_extensions.as_ref().is_some_and(|state| {
+            !state.descendants().any(|t| {
+                t.accepts_context(crate::file::metadata::extensions::MetadataContext {
+                    column_ordinal: column,
+                    ..Default::default()
+                })
+            })
+        }) {
+            return element.write_thrift(&mut self.untracked());
+        }
+        self.with_list_element(index, |writer| {
+            let Some(state) = writer.metadata_extensions.as_deref_mut() else {
+                return element.write_thrift(writer);
+            };
+            let mut state = state.with_schema(index, column);
+            let mut scoped = ThriftCompactOutputProtocol::<_, true> {
+                writer: &mut writer.writer,
+                write_path_in_schema: writer.write_path_in_schema,
+                write_rg_ordinal: writer.write_rg_ordinal,
+                metadata_extensions: Some(&mut state),
+            };
+            element.write_thrift(&mut scoped)
+        })
+    }
+
+    #[cfg(debug_assertions)]
+    pub(crate) fn assert_metadata_extensions_balanced(&self) {
+        if TRACK && let Some(state) = &self.metadata_extensions {
+            state.assert_balanced();
+        }
+    }
+
+    pub(crate) fn write_struct_begin(&mut self) -> Result<()> {
+        if TRACK && let Some(state) = &mut self.metadata_extensions {
+            state.begin()?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn write_union_begin(&mut self) -> Result<()> {
+        self.write_struct_begin()
+    }
+
+    pub(crate) fn with_list_element<T>(
+        &mut self,
+        index: usize,
+        f: impl FnOnce(&mut Self) -> Result<T>,
+    ) -> Result<T> {
+        if !TRACK {
+            return f(self);
+        }
+        let n = self
+            .metadata_extensions
+            .as_mut()
+            .map(|s| s.element(index))
+            .transpose()?;
+        let result = f(self);
+        if let (Some(state), Some(n)) = (&mut self.metadata_extensions, n) {
+            state.truncate(n);
+        }
+        result
     }
 
     // TODO(ets): at some point there should probably be a properties object
@@ -883,12 +1504,23 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
     /// is used to compute a delta to the given `field_id` per the compact protocol [spec].
     ///
     /// [spec]: https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#struct-encoding
+    #[inline(always)]
     pub(crate) fn write_field_begin(
         &mut self,
         field_type: FieldType,
         field_id: i16,
         last_field_id: i16,
     ) -> Result<()> {
+        // Only compound values can lead to a nested struct's physical path.
+        if TRACK
+            && matches!(
+                field_type,
+                FieldType::Struct | FieldType::List | FieldType::Set | FieldType::Map
+            )
+            && let Some(state) = &mut self.metadata_extensions
+        {
+            state.field(field_id)?;
+        }
         let delta = field_id.wrapping_sub(last_field_id);
         if delta > 0 && delta <= 0xf {
             self.write_byte(((delta as u8) << 4) | field_type as u8)
@@ -911,7 +1543,55 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
     /// Used to mark the end of a struct. This must be called after all fields of the struct have
     /// been written.
     pub(crate) fn write_struct_end(&mut self) -> Result<()> {
+        self.write_end(true, false)
+    }
+
+    /// Finish an independently encoded root. Root-only hooks use the untracked
+    /// protocol for every child and are invoked exactly here, without a depth counter.
+    pub(crate) fn write_root_end(&mut self) -> Result<()> {
+        self.write_end(true, true)
+    }
+
+    /// Union envelopes have ancestry but never receive an extension payload.
+    pub(crate) fn write_union_end(&mut self) -> Result<()> {
+        self.write_end(false, false)
+    }
+
+    fn write_end(&mut self, ordinary_struct: bool, root: bool) -> Result<()> {
+        if (TRACK || root)
+            && let Some(state) = self.metadata_extensions.take()
+        {
+            // The hook only supplies bytes. Validate and write them afterward,
+            // while its borrowed payload is alive, on the ordinary error path.
+            let payload = if TRACK {
+                state.end(ordinary_struct)
+            } else {
+                state.root_payload()
+            };
+            let result = payload.and_then(|payload| {
+                if let Some(payload) = payload {
+                    self.write_metadata_extension_header(payload.len())?;
+                    self.writer.write_all(payload)?;
+                }
+                Ok(())
+            });
+            self.metadata_extensions = Some(state);
+            result?;
+        }
         self.write_byte(0)
+    }
+
+    /// Validate the payload length before emitting any extension framing.
+    fn write_metadata_extension_header(&mut self, length: usize) -> Result<()> {
+        if length > i32::MAX as usize {
+            return Err(general_err!(
+                "Metadata extension payload exceeds i32::MAX bytes"
+            ));
+        }
+        // Explicit signed field ID: ZigZag(32767), not ULEB128(32767).
+        self.write_byte(FieldType::Binary as u8)?;
+        self.write_i16(i16::MAX)?;
+        self.write_vlq(length as u64)
     }
 
     /// Serialize a slice of `u8`s. This will encode a length, and then write the bytes without
@@ -926,8 +1606,9 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
     /// This simply encodes the field id and then immediately writes the end-of-struct marker.
     pub(crate) fn write_empty_struct(&mut self, field_id: i16, last_field_id: i16) -> Result<i16> {
         self.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
+        self.write_struct_begin()?;
         self.write_struct_end()?;
-        Ok(last_field_id)
+        Ok(field_id)
     }
 
     /// Write a boolean value.
@@ -974,7 +1655,10 @@ pub(crate) trait WriteThrift {
     const ELEMENT_TYPE: ElementType;
 
     /// Serialize this object to the given `writer`.
-    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()>;
+    fn write_thrift<W: Write, const TRACK: bool>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
+    ) -> Result<()>;
 }
 
 /// Implementation for a vector of thrift serializable objects that implement [`WriteThrift`].
@@ -985,10 +1669,17 @@ where
 {
     const ELEMENT_TYPE: ElementType = ElementType::List;
 
-    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+    fn write_thrift<W: Write, const TRACK: bool>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
+    ) -> Result<()> {
         writer.write_list_begin(T::ELEMENT_TYPE, self.len())?;
-        for item in self {
-            item.write_thrift(writer)?;
+        for (index, item) in self.iter().enumerate() {
+            if matches!(T::ELEMENT_TYPE, ElementType::Struct | ElementType::List) {
+                writer.with_list_element(index, |writer| item.write_thrift(writer))?;
+            } else {
+                item.write_thrift(writer)?;
+            }
         }
         Ok(())
     }
@@ -997,7 +1688,10 @@ where
 impl WriteThrift for bool {
     const ELEMENT_TYPE: ElementType = ElementType::Bool;
 
-    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+    fn write_thrift<W: Write, const TRACK: bool>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
+    ) -> Result<()> {
         writer.write_bool(*self)
     }
 }
@@ -1005,7 +1699,10 @@ impl WriteThrift for bool {
 impl WriteThrift for i8 {
     const ELEMENT_TYPE: ElementType = ElementType::Byte;
 
-    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+    fn write_thrift<W: Write, const TRACK: bool>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
+    ) -> Result<()> {
         writer.write_i8(*self)
     }
 }
@@ -1013,7 +1710,10 @@ impl WriteThrift for i8 {
 impl WriteThrift for i16 {
     const ELEMENT_TYPE: ElementType = ElementType::I16;
 
-    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+    fn write_thrift<W: Write, const TRACK: bool>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
+    ) -> Result<()> {
         writer.write_i16(*self)
     }
 }
@@ -1021,7 +1721,10 @@ impl WriteThrift for i16 {
 impl WriteThrift for i32 {
     const ELEMENT_TYPE: ElementType = ElementType::I32;
 
-    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+    fn write_thrift<W: Write, const TRACK: bool>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
+    ) -> Result<()> {
         writer.write_i32(*self)
     }
 }
@@ -1029,7 +1732,10 @@ impl WriteThrift for i32 {
 impl WriteThrift for i64 {
     const ELEMENT_TYPE: ElementType = ElementType::I64;
 
-    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+    fn write_thrift<W: Write, const TRACK: bool>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
+    ) -> Result<()> {
         writer.write_i64(*self)
     }
 }
@@ -1037,7 +1743,10 @@ impl WriteThrift for i64 {
 impl WriteThrift for OrderedF64 {
     const ELEMENT_TYPE: ElementType = ElementType::Double;
 
-    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+    fn write_thrift<W: Write, const TRACK: bool>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
+    ) -> Result<()> {
         writer.write_double(self.0)
     }
 }
@@ -1045,7 +1754,10 @@ impl WriteThrift for OrderedF64 {
 impl WriteThrift for f64 {
     const ELEMENT_TYPE: ElementType = ElementType::Double;
 
-    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+    fn write_thrift<W: Write, const TRACK: bool>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
+    ) -> Result<()> {
         writer.write_double(*self)
     }
 }
@@ -1053,7 +1765,10 @@ impl WriteThrift for f64 {
 impl WriteThrift for &[u8] {
     const ELEMENT_TYPE: ElementType = ElementType::Binary;
 
-    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+    fn write_thrift<W: Write, const TRACK: bool>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
+    ) -> Result<()> {
         writer.write_bytes(self)
     }
 }
@@ -1061,7 +1776,10 @@ impl WriteThrift for &[u8] {
 impl WriteThrift for &str {
     const ELEMENT_TYPE: ElementType = ElementType::Binary;
 
-    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+    fn write_thrift<W: Write, const TRACK: bool>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
+    ) -> Result<()> {
         writer.write_bytes(self.as_bytes())
     }
 }
@@ -1069,7 +1787,10 @@ impl WriteThrift for &str {
 impl WriteThrift for String {
     const ELEMENT_TYPE: ElementType = ElementType::Binary;
 
-    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+    fn write_thrift<W: Write, const TRACK: bool>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
+    ) -> Result<()> {
         writer.write_bytes(self.as_bytes())
     }
 }
@@ -1099,7 +1820,10 @@ impl WriteThrift for String {
 ///
 /// ```ignore
 /// impl WriteThrift for MyStruct {
-///   fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+///   const ELEMENT_TYPE: ElementType = ElementType::Struct;
+///
+///   fn write_thrift<W: Write, const TRACK: bool>(&self, writer: &mut ThriftCompactOutputProtocol<W, TRACK>) -> Result<()> {
+///     writer.write_struct_begin()?;
 ///     let mut last_field_id = 0i16;
 ///     last_field_id = self.field1.write_thrift_field(writer, 1, last_field_id)?;
 ///     if self.field2.is_some() {
@@ -1123,9 +1847,9 @@ pub(crate) trait WriteThriftField {
     /// to be used in chaining.
     ///
     /// [compact protocol]: https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#struct-encoding
-    fn write_thrift_field<W: Write>(
+    fn write_thrift_field<W: Write, const TRACK: bool>(
         &self,
-        writer: &mut ThriftCompactOutputProtocol<W>,
+        writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
         field_id: i16,
         last_field_id: i16,
     ) -> Result<i16>;
@@ -1133,9 +1857,9 @@ pub(crate) trait WriteThriftField {
 
 // bool struct fields are written differently to bool values
 impl WriteThriftField for bool {
-    fn write_thrift_field<W: Write>(
+    fn write_thrift_field<W: Write, const TRACK: bool>(
         &self,
-        writer: &mut ThriftCompactOutputProtocol<W>,
+        writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
         field_id: i16,
         last_field_id: i16,
     ) -> Result<i16> {
@@ -1157,9 +1881,9 @@ write_thrift_field!(f64, FieldType::Double);
 write_thrift_field!(String, FieldType::Binary);
 
 impl WriteThriftField for &[u8] {
-    fn write_thrift_field<W: Write>(
+    fn write_thrift_field<W: Write, const TRACK: bool>(
         &self,
-        writer: &mut ThriftCompactOutputProtocol<W>,
+        writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
         field_id: i16,
         last_field_id: i16,
     ) -> Result<i16> {
@@ -1170,9 +1894,9 @@ impl WriteThriftField for &[u8] {
 }
 
 impl WriteThriftField for &str {
-    fn write_thrift_field<W: Write>(
+    fn write_thrift_field<W: Write, const TRACK: bool>(
         &self,
-        writer: &mut ThriftCompactOutputProtocol<W>,
+        writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
         field_id: i16,
         last_field_id: i16,
     ) -> Result<i16> {
@@ -1186,9 +1910,9 @@ impl<T> WriteThriftField for Vec<T>
 where
     T: WriteThrift,
 {
-    fn write_thrift_field<W: Write>(
+    fn write_thrift_field<W: Write, const TRACK: bool>(
         &self,
-        writer: &mut ThriftCompactOutputProtocol<W>,
+        writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
         field_id: i16,
         last_field_id: i16,
     ) -> Result<i16> {
@@ -1201,6 +1925,9 @@ where
 #[cfg(test)]
 pub(crate) mod tests {
     use crate::basic::{TimeUnit, Type};
+    use crate::file::metadata::extensions::{
+        MetadataExtensionHook, MetadataSite, SiteInfo, ThriftPathSegment, write_with_hook,
+    };
 
     use super::*;
     use std::fmt::Debug;
@@ -1331,6 +2058,249 @@ pub(crate) mod tests {
         test_roundtrip(TimeUnit::MILLIS);
         test_roundtrip(TimeUnit::MICROS);
         test_roundtrip(TimeUnit::NANOS);
+    }
+
+    #[test]
+    fn test_metadata_extension_callbacks_and_payloads() {
+        use crate::basic::{Encoding, PageType};
+        use crate::file::metadata::thrift::{DictionaryPageHeader, PageHeader};
+        use crate::file::metadata::thrift_fields::page_header;
+        use ThriftPathSegment::Field;
+
+        let header = PageHeader {
+            r#type: PageType::DICTIONARY_PAGE,
+            uncompressed_page_size: 4,
+            compressed_page_size: 4,
+            crc: None,
+            data_page_header: None,
+            index_page_header: None,
+            dictionary_page_header: Some(DictionaryPageHeader {
+                num_values: 1,
+                encoding: Encoding::PLAIN,
+                is_sorted: None,
+            }),
+            data_page_header_v2: None,
+        };
+        let root = SiteInfo::page_header(3, 2, 0, PageType::DICTIONARY_PAGE);
+        #[derive(Default)]
+        struct Payload {
+            paths: Vec<Vec<ThriftPathSegment>>,
+            buffer: Vec<u8>,
+        }
+        impl MetadataExtensionHook for Payload {
+            fn on_site(&mut self, site: &mut MetadataSite<'_>) -> Result<Option<&[u8]>> {
+                let info = site.context()?;
+                assert_eq!(site.root(), ThriftStruct::DictionaryPage);
+                assert_eq!(info.page_ordinal, Some(0));
+                assert_eq!(info.row_group_ordinal, Some(3));
+                assert_eq!(info.column_ordinal, Some(2));
+                let path = crate::file::metadata::extensions::test_util::coordinates(site)?;
+                self.paths.push(path.clone());
+                // Reuse hook-owned storage; each payload must be consumed before
+                // the next callback overwrites it.
+                self.buffer.clear();
+                self.buffer
+                    .extend_from_slice(if path.is_empty() { b"root" } else { b"child" });
+                Ok(Some(&self.buffer))
+            }
+        }
+        let mut plain = Vec::new();
+        header
+            .write_thrift(&mut ThriftCompactOutputProtocol::new(&mut plain))
+            .unwrap();
+        let mut hook = Payload::default();
+        let mut bytes = Vec::new();
+        write_with_hook(&header, &mut bytes, &mut hook, root).unwrap();
+        assert_eq!(
+            hook.paths,
+            [vec![Field(page_header::DICTIONARY_PAGE_HEADER)], vec![]]
+        );
+        // The child is the final field: replace its STOP and the parent's STOP
+        // with binary field 32767, payload length, payload, and STOP at each level.
+        assert!(plain.ends_with(&[0, 0]));
+        let mut expected = plain[..plain.len() - 2].to_vec();
+        expected.extend_from_slice(&[8, 0xfe, 0xff, 3, 5]);
+        expected.extend_from_slice(b"child");
+        expected.extend_from_slice(&[0, 8, 0xfe, 0xff, 3, 4]);
+        expected.extend_from_slice(b"root");
+        expected.push(0);
+        assert_eq!(bytes, expected);
+        let mut reader = ThriftSliceInputProtocol::new(&bytes);
+        assert_eq!(PageHeader::read_thrift(&mut reader).unwrap(), header);
+        assert!(reader.as_slice().is_empty());
+
+        let mut no_op = |_: &mut MetadataSite<'_>| -> Result<Option<&'static [u8]>> { Ok(None) };
+        bytes.clear();
+        write_with_hook(&header, &mut bytes, &mut no_op, root).unwrap();
+        assert_eq!(bytes, plain);
+    }
+
+    #[test]
+    fn test_metadata_extension_empty_union_member() {
+        use crate::file::metadata::thrift_fields::time_unit;
+        let mut calls = 0;
+        let mut hook = |site: &mut MetadataSite<'_>| -> Result<Option<&'static [u8]>> {
+            // Only the ordinary empty member, never the union envelope.
+            assert_eq!(site.root(), ThriftStruct::FileCryptoMetaData);
+            assert_eq!(
+                crate::file::metadata::extensions::test_util::coordinates(site)?,
+                &[ThriftPathSegment::Field(time_unit::MILLIS)]
+            );
+            calls += 1;
+            Ok(Some(b""))
+        };
+        let mut bytes = Vec::new();
+        write_with_hook(
+            &TimeUnit::MILLIS,
+            &mut bytes,
+            &mut hook,
+            SiteInfo::new(ThriftStruct::FileCryptoMetaData),
+        )
+        .unwrap();
+        assert_eq!(calls, 1);
+        // A present zero-length binary field, followed by member and union STOPs.
+        assert_eq!(bytes, [0x1c, 8, 0xfe, 0xff, 3, 0, 0, 0]);
+        let mut reader = ThriftSliceInputProtocol::new(&bytes);
+        assert_eq!(
+            TimeUnit::read_thrift(&mut reader).unwrap(),
+            TimeUnit::MILLIS
+        );
+        assert!(reader.as_slice().is_empty());
+    }
+
+    #[cfg(feature = "encryption")]
+    #[test]
+    fn test_metadata_extension_payload_is_encrypted() {
+        use crate::encryption::ciphers::{
+            BlockDecryptor, BlockEncryptor, RingGcmBlockDecryptor, RingGcmBlockEncryptor,
+        };
+        use crate::encryption::encrypt::encrypt_thrift;
+
+        let key = [0u8; 16];
+        let aad = b"metadata-extension-test";
+        let payload = b"encrypted-extension-payload";
+        let mut encryptor: Box<dyn BlockEncryptor> =
+            Box::new(RingGcmBlockEncryptor::new(&key).unwrap());
+        let mut calls = 0;
+        let mut ciphertext = Vec::new();
+        {
+            let mut hook = |site: &mut MetadataSite<'_>| -> Result<Option<&'static [u8]>> {
+                let info = site.context()?;
+                assert_eq!(site.root(), ThriftStruct::ColumnMetaData);
+                assert_eq!(info.row_group_ordinal, Some(0));
+                assert_eq!(info.column_ordinal, None);
+                calls += 1;
+                Ok(Some(payload))
+            };
+            encrypt_thrift(
+                |buffer| {
+                    write_with_hook(
+                        &TimeUnit::MILLIS,
+                        buffer,
+                        &mut hook,
+                        SiteInfo::column(ThriftStruct::ColumnMetaData, Some(0), None),
+                    )
+                },
+                &mut encryptor,
+                &mut ciphertext,
+                aad,
+            )
+            .unwrap();
+        }
+        assert_eq!(calls, 1);
+        assert!(
+            !ciphertext
+                .windows(payload.len())
+                .any(|bytes| bytes == payload)
+        );
+        let plaintext = RingGcmBlockDecryptor::new(&key)
+            .unwrap()
+            .decrypt(&ciphertext, aad)
+            .unwrap();
+        let mut expected = vec![0x1c, 8, 0xfe, 0xff, 3, payload.len() as u8];
+        expected.extend_from_slice(payload);
+        expected.extend_from_slice(&[0, 0]);
+        assert_eq!(plaintext, expected);
+    }
+
+    #[test]
+    fn streaming_binary_prefix_handles_short_reads_and_truncation() {
+        struct Chunked<'a>(&'a [u8]);
+        impl Read for Chunked<'_> {
+            fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+                let n = out.len().min(self.0.len()).min(3);
+                out[..n].copy_from_slice(&self.0[..n]);
+                self.0 = &self.0[n..];
+                Ok(n)
+            }
+        }
+        for len in [0, 1, 100, 127, 128, 129, 4096, 8192] {
+            let payload: Vec<_> = (0..len).map(|i| (i % 251) as u8).collect();
+            let mut encoded = Vec::new();
+            ThriftCompactOutputProtocol::new(&mut encoded)
+                .write_bytes(&payload)
+                .unwrap();
+            let mut with_sentinel = encoded.clone();
+            with_sentinel.push(0x7a);
+            let mut reader = ThriftReadInputProtocol::new(Chunked(&with_sentinel));
+            assert_eq!(reader.read_bytes_owned().unwrap(), payload);
+            assert_eq!(reader.read_byte().unwrap(), 0x7a);
+            if len > 0 {
+                encoded.pop();
+                assert!(matches!(
+                    ThriftReadInputProtocol::new(Chunked(&encoded)).read_bytes_owned(),
+                    Err(ThriftProtocolError::Eof)
+                ));
+            }
+        }
+        // Huge declared length, but no payload: fail without allocating that length.
+        let mut encoded = Vec::new();
+        ThriftCompactOutputProtocol::new(&mut encoded)
+            .write_vlq(i32::MAX as u64)
+            .unwrap();
+        assert!(matches!(
+            ThriftReadInputProtocol::new(Chunked(&encoded)).read_bytes_owned(),
+            Err(ThriftProtocolError::Eof)
+        ));
+    }
+
+    #[test]
+    fn streaming_binary_prefix_preserves_io_errors() {
+        struct Failed;
+        impl Read for Failed {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+            }
+        }
+        let input = std::io::Cursor::new([1]).chain(Failed);
+        let error = ThriftReadInputProtocol::new(input)
+            .read_bytes_owned()
+            .unwrap_err();
+        assert!(
+            matches!(error, ThriftProtocolError::IO(error) if error.kind() == std::io::ErrorKind::PermissionDenied)
+        );
+    }
+
+    #[test]
+    fn test_metadata_extension_length_validation() {
+        // Exercise the serializer's length guard without allocating a >2 GiB slice.
+        let mut bytes = Vec::new();
+        let mut writer = ThriftCompactOutputProtocol::new(&mut bytes);
+        assert!(
+            writer
+                .write_metadata_extension_header(i32::MAX as usize + 1)
+                .is_err()
+        );
+        assert!(bytes.is_empty()); // No field framing was emitted on invalid length.
+        let mut writer = ThriftCompactOutputProtocol::new(&mut bytes);
+        writer
+            .write_metadata_extension_header(i32::MAX as usize)
+            .unwrap();
+        let mut reader = ThriftSliceInputProtocol::new(&bytes);
+        let field = reader.read_field_begin(0).unwrap();
+        assert_eq!(field.id, i16::MAX);
+        assert_eq!(field.field_type, FieldType::Binary);
+        assert_eq!(reader.read_vlq().unwrap(), i32::MAX as u64);
     }
 
     #[test]

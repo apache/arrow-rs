@@ -5,6 +5,14 @@
 //! [`SerializedFileWriter`]: Low level Parquet writer API
 
 use crate::bloom_filter::Sbbf;
+use crate::file::metadata::extensions::ThriftStruct;
+use crate::file::metadata::extensions::{
+    self as metadata_extensions, HookHandle, HookStorage, SiteInfo,
+};
+#[cfg(any(feature = "experimental", test))]
+use crate::file::metadata::extensions::{
+    HookState, MetadataExtensionHook, MetadataExtensionSelection,
+};
 use crate::file::metadata::page_index::PageIndex;
 use crate::file::metadata::thrift::PageHeader;
 use crate::file::page_index::column_index::ColumnIndexMetaData;
@@ -144,6 +152,7 @@ pub type OnCloseRowGroup<'a, W> = Box<
 /// - Write subsequent row groups, if necessary.
 /// - After all row groups have been written, close the file writer using `close` method.
 pub struct SerializedFileWriter<W: Write> {
+    metadata_extension_hook: Option<HookHandle>,
     buf: TrackedWrite<W>,
     descr: SchemaDescPtr,
     props: WriterPropertiesPtr,
@@ -183,6 +192,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
 
         Self::start_file(&properties, &mut buf)?;
         Ok(Self {
+            metadata_extension_hook: None,
             buf,
             descr: Arc::new(schema_descriptor),
             props: properties,
@@ -196,6 +206,31 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             #[cfg(feature = "encryption")]
             file_encryptor,
         })
+    }
+
+    /// Install one hook and its complete target list before creating child writers
+    /// or factories. Targets are ORed; overlaps invoke the hook once per site.
+    /// Empty target lists and a second installation are errors.
+    ///
+    /// # Errors
+    ///
+    /// Fails after a row group is requested or file finalization starts.
+    #[cfg(any(feature = "experimental", test))]
+    #[doc(hidden)]
+    pub fn with_metadata_extension_hook<H: MetadataExtensionHook + 'static>(
+        mut self,
+        targets: impl IntoIterator<Item = MetadataExtensionSelection>,
+        hook: H,
+    ) -> Result<Self> {
+        if self.row_group_index != 0 || self.finished {
+            return Err(general_err!(
+                "Cannot install a metadata extension hook after writing starts"
+            ));
+        }
+        metadata_extensions::install(&mut self.metadata_extension_hook, targets, |targets| {
+            Arc::new(HookState::new(targets, hook))
+        })?;
+        Ok(self)
     }
 
     #[cfg(feature = "encryption")]
@@ -266,6 +301,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             .ok_or_else(|| ParquetError::General("Row group index overflowed".to_string()))?;
 
         let bloom_filter_position = self.properties().bloom_filter_position();
+        let bloom_metadata_extension_hook = self.metadata_extension_hook.clone();
         let row_groups = &mut self.row_groups;
         let row_bloom_filters = &mut self.bloom_filters;
         let row_column_indexes = &mut self.column_indexes;
@@ -280,9 +316,12 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             row_offset_indexes.push(row_group_offset_index);
             // write bloom filters out immediately after the row group if requested
             match bloom_filter_position {
-                BloomFilterPosition::AfterRowGroup => {
-                    write_bloom_filters(buf, row_bloom_filters, &mut metadata)?
-                }
+                BloomFilterPosition::AfterRowGroup => write_bloom_filters(
+                    buf,
+                    row_bloom_filters,
+                    &mut metadata,
+                    bloom_metadata_extension_hook.as_ref(),
+                )?,
                 BloomFilterPosition::End => (),
             }
             row_groups.push(metadata);
@@ -295,7 +334,8 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             &mut self.buf,
             ordinal,
             Some(Box::new(on_close)),
-        );
+        )
+        .with_metadata_extensions(self.metadata_extension_hook.clone());
         #[cfg(feature = "encryption")]
         let row_group_writer = row_group_writer.with_file_encryptor(self.file_encryptor.clone());
 
@@ -347,7 +387,12 @@ impl<W: Write + Send> SerializedFileWriter<W> {
 
         // write out any remaining bloom filters after all row groups
         for row_group in &mut self.row_groups {
-            write_bloom_filters(&mut self.buf, &mut self.bloom_filters, row_group)?;
+            write_bloom_filters(
+                &mut self.buf,
+                &mut self.bloom_filters,
+                row_group,
+                self.metadata_extension_hook.as_ref(),
+            )?;
         }
 
         let key_value_metadata = match self.props.key_value_metadata() {
@@ -370,7 +415,8 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             self.props.writer_version().as_num(),
             write_path_in_schema,
             false,
-        );
+        )
+        .with_extensions(self.metadata_extension_hook.clone());
 
         #[cfg(feature = "encryption")]
         {
@@ -486,6 +532,11 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         self.buf.bytes_written()
     }
 
+    #[cfg(feature = "arrow")]
+    pub(crate) fn metadata_extension_hook(&self) -> Option<HookHandle> {
+        self.metadata_extension_hook.clone()
+    }
+
     /// Get the file encryptor used by this instance to encrypt data
     #[cfg(feature = "encryption")]
     pub(crate) fn file_encryptor(&self) -> Option<Arc<FileEncryptor>> {
@@ -499,6 +550,7 @@ fn write_bloom_filters<W: Write + Send>(
     buf: &mut TrackedWrite<W>,
     bloom_filters: &mut [Vec<Option<Sbbf>>],
     row_group: &mut RowGroupMetaData,
+    metadata_extension_hook: Option<&HookHandle>,
 ) -> Result<()> {
     // iter row group
     // iter each column
@@ -518,14 +570,28 @@ fn write_bloom_filters<W: Write + Send>(
     for (column_idx, column_chunk) in row_group.columns_mut().iter_mut().enumerate() {
         if let Some(bloom_filter) = bloom_filters[row_group_idx][column_idx].take() {
             let start_offset = buf.bytes_written();
-            bloom_filter.write(&mut *buf)?;
+            metadata_extensions::write_thrift(
+                &bloom_filter.header(),
+                &mut *buf,
+                metadata_extension_hook,
+                || {
+                    SiteInfo::column(
+                        ThriftStruct::BloomFilterHeader,
+                        Some(row_group_idx),
+                        Some(column_idx),
+                    )
+                },
+            )?;
+            bloom_filter.write_bitset(&mut *buf)?;
             let end_offset = buf.bytes_written();
+            let length = i32::try_from(end_offset - start_offset)
+                .map_err(|_| general_err!("Bloom filter length exceeds i32::MAX bytes"))?;
             // set offset and index for bloom filter
             *column_chunk = column_chunk
                 .clone()
                 .into_builder()
                 .set_bloom_filter_offset(Some(start_offset as i64))
-                .set_bloom_filter_length(Some((end_offset - start_offset) as i32))
+                .set_bloom_filter_length(Some(length))
                 .build()?;
         }
     }
@@ -545,6 +611,7 @@ fn write_bloom_filters<W: Write + Send>(
 ///   method. The close method will return row group metadata and is no-op
 ///   on already closed row group.
 pub struct SerializedRowGroupWriter<'a, W: Write> {
+    metadata_extension_hook: Option<HookHandle>,
     descr: SchemaDescPtr,
     props: WriterPropertiesPtr,
     buf: &'a mut TrackedWrite<W>,
@@ -587,6 +654,7 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
             row_group_index,
             file_offset,
             on_close,
+            metadata_extension_hook: None,
             total_rows_written: None,
             descr: schema_descr,
             props: properties,
@@ -601,6 +669,31 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
             #[cfg(feature = "encryption")]
             file_encryptor: None,
         }
+    }
+
+    /// Install one page-header hook and its complete target list. Empty lists or
+    /// a second installation (including an inherited file hook) are errors.
+    /// For a file-wide hook, use [`SerializedFileWriter::with_metadata_extension_hook`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error after the first column has been requested.
+    #[cfg(any(feature = "experimental", test))]
+    #[doc(hidden)]
+    pub fn with_metadata_extension_hook<H: MetadataExtensionHook + 'static>(
+        mut self,
+        targets: impl IntoIterator<Item = MetadataExtensionSelection>,
+        hook: H,
+    ) -> Result<Self> {
+        if self.column_index != 0 {
+            return Err(general_err!(
+                "Cannot install a metadata extension hook after row-group writing starts"
+            ));
+        }
+        metadata_extensions::install(&mut self.metadata_extension_hook, targets, |targets| {
+            Arc::new(HookState::new(targets, hook))
+        })?;
+        Ok(self)
     }
 
     #[cfg(feature = "encryption")]
@@ -656,6 +749,11 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         (self.buf, Box::new(on_close))
     }
 
+    fn with_metadata_extensions(mut self, metadata_extension_hook: Option<HookHandle>) -> Self {
+        self.metadata_extension_hook = metadata_extension_hook;
+        self
+    }
+
     /// Returns the next column writer, if available, using the factory function;
     /// otherwise returns `None`.
     pub(crate) fn next_column_with_factory<'b, F, C>(&'b mut self, factory: F) -> Result<Option<C>>
@@ -670,13 +768,27 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         self.assert_previous_writer_closed()?;
 
         let encryptor_context = self.get_page_encryptor_context();
+        let metadata_extension_context = (
+            self.metadata_extension_hook.clone(),
+            self.row_group_index as usize,
+            self.column_index,
+        );
 
         Ok(match self.next_column_desc() {
             Some(column) => {
                 let props = self.props.clone();
                 let (buf, on_close) = self.get_on_close();
 
-                let page_writer = SerializedPageWriter::new(buf);
+                let mut page_writer = SerializedPageWriter::new(buf);
+                if let Some(hook) = metadata_extension_context.0
+                    && hook.targets.iter().any(|t| {
+                        t.accepts_pages(metadata_extension_context.1, metadata_extension_context.2)
+                    })
+                {
+                    page_writer.metadata_extension_hook = Some(HookStorage::Shared(hook));
+                    page_writer.metadata_extension_column =
+                        Some((metadata_extension_context.1, metadata_extension_context.2));
+                }
                 let page_writer =
                     Self::set_page_writer_encryptor(&column, encryptor_context, page_writer)?;
 
@@ -1042,6 +1154,9 @@ impl<'a> SerializedColumnWriter<'a> {
 /// `SerializedPageWriter` should not be used after calling `close()`.
 pub struct SerializedPageWriter<'a, W: Write> {
     sink: &'a mut TrackedWrite<W>,
+    metadata_extension_hook: Option<HookStorage<'a>>,
+    metadata_extension_column: Option<(usize, usize)>,
+    page_index: usize,
     #[cfg(feature = "encryption")]
     page_encryptor: Option<PageEncryptor>,
 }
@@ -1051,63 +1166,111 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
     pub fn new(sink: &'a mut TrackedWrite<W>) -> Self {
         Self {
             sink,
+            metadata_extension_hook: None,
+            metadata_extension_column: None,
+            page_index: 0,
             #[cfg(feature = "encryption")]
             page_encryptor: None,
         }
     }
 
-    /// Serializes page header into Thrift.
-    /// Returns number of bytes that have been written into the sink.
-    #[inline]
+    /// Sets the [`MetadataExtensionHook`] for subsequent page headers; earlier pages
+    /// are unaffected. `row_group` is the zero-based file position and `column`
+    /// is the zero-based leaf-column position in the Parquet schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for empty targets or if a hook is already installed.
+    #[cfg(any(feature = "experimental", test))]
+    #[doc(hidden)]
+    pub fn with_metadata_extension_hook<H: MetadataExtensionHook + 'a>(
+        mut self,
+        row_group: usize,
+        column: usize,
+        targets: impl IntoIterator<Item = MetadataExtensionSelection>,
+        hook: H,
+    ) -> Result<Self> {
+        metadata_extensions::install(&mut self.metadata_extension_hook, targets, |targets| {
+            HookStorage::Owned(Box::new(HookState::new(targets, hook)))
+        })?;
+        self.metadata_extension_column = Some((row_group, column));
+        Ok(self)
+    }
+
+    fn write_header<T: Write>(
+        header: &PageHeader,
+        sink: T,
+        hooks: Option<&mut HookStorage<'_>>,
+        root: impl FnOnce() -> SiteInfo,
+    ) -> Result<()> {
+        if let Some(hooks) = hooks {
+            let root = root();
+            if metadata_extensions::root_only(hooks.targets(), root).is_some() {
+                return hooks.run(|targets, hook, tracking| {
+                    metadata_extensions::write_with_tracking(
+                        header, sink, hook, root, tracking, targets,
+                    )
+                });
+            }
+        }
+        header.write_thrift(&mut ThriftCompactOutputProtocol::new(sink))
+    }
+
+    /// Serializes a header, including any extension payloads.
     fn serialize_page_header(&mut self, header: PageHeader) -> Result<usize> {
         let start_pos = self.sink.bytes_written();
-        match self.page_encryptor_and_sink_mut() {
-            Some((page_encryptor, sink)) => {
-                page_encryptor.encrypt_page_header(&header, sink)?;
+        #[cfg(feature = "encryption")]
+        let page_encryptor = self.page_encryptor.as_mut();
+        #[cfg(not(feature = "encryption"))]
+        let page_encryptor: Option<&mut PageEncryptor> = None;
+        let column = self.metadata_extension_column;
+        let page = self.page_index;
+        let root = || {
+            let (row_group, column) = column.expect("metadata extension column");
+            SiteInfo::page_header(
+                row_group,
+                column,
+                if header.r#type == crate::basic::PageType::DICTIONARY_PAGE {
+                    0
+                } else {
+                    page
+                },
+                header.r#type,
+            )
+        };
+        let hooks = self.metadata_extension_hook.as_mut();
+        match page_encryptor {
+            Some(encryptor) => {
+                encryptor.encrypt_page_header(header.r#type, self.sink, |buffer| {
+                    Self::write_header(&header, buffer, hooks, root)
+                })?
             }
-            None => {
-                let mut protocol = ThriftCompactOutputProtocol::new(&mut *self.sink);
-                header.write_thrift(&mut protocol)?;
-            }
+            None => Self::write_header(&header, &mut *self.sink, hooks, root)?,
+        }
+        if header.r#type != crate::basic::PageType::DICTIONARY_PAGE {
+            self.page_index += 1;
         }
         Ok(self.sink.bytes_written() - start_pos)
     }
-}
 
-#[cfg(feature = "encryption")]
-impl<W: Write> SerializedPageWriter<'_, W> {
     /// Set the encryptor to use to encrypt page data
+    #[cfg(feature = "encryption")]
     fn with_page_encryptor(mut self, page_encryptor: Option<PageEncryptor>) -> Self {
         self.page_encryptor = page_encryptor;
         self
     }
 
+    #[cfg(feature = "encryption")]
     fn page_encryptor_mut(&mut self) -> Option<&mut PageEncryptor> {
         self.page_encryptor.as_mut()
     }
 
-    fn page_encryptor_and_sink_mut(
-        &mut self,
-    ) -> Option<(&mut PageEncryptor, &mut TrackedWrite<W>)> {
-        self.page_encryptor.as_mut().map(|pe| (pe, &mut *self.sink))
-    }
-}
-
-// These mirror the signatures of the encryption-enabled versions above, so that the
-// callers do not need a `cfg` of their own.
-#[cfg(not(feature = "encryption"))]
-#[expect(
-    clippy::needless_pass_by_ref_mut,
-    reason = "mirrors the encryption-enabled signatures"
-)]
-impl<W: Write> SerializedPageWriter<'_, W> {
+    #[cfg(not(feature = "encryption"))]
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "mirrors the encryption-enabled signature"
+    )]
     fn page_encryptor_mut(&mut self) -> Option<&mut PageEncryptor> {
-        None
-    }
-
-    fn page_encryptor_and_sink_mut(
-        &mut self,
-    ) -> Option<(&mut PageEncryptor, &mut TrackedWrite<W>)> {
         None
     }
 }

@@ -5,10 +5,9 @@
 //! [`DataRequest`] tracks and holds data needed to construct InMemoryRowGroups
 
 use crate::arrow::ProjectionMask;
-use crate::arrow::arrow_reader::RowSelection;
+use crate::arrow::arrow_reader::{ArrowReaderMetadata, RowSelection};
 use crate::arrow::in_memory_row_group::{ColumnChunkData, FetchRanges, InMemoryRowGroup};
 use crate::errors::ParquetError;
-use crate::file::metadata::ParquetMetaData;
 use crate::file::reader::ChunkReader;
 use crate::util::push_buffers::PushBuffers;
 use bytes::Bytes;
@@ -66,7 +65,7 @@ impl DataRequest {
         self,
         row_group_idx: usize,
         row_count: usize,
-        parquet_metadata: &'a ParquetMetaData,
+        reader_metadata: &'a ArrowReaderMetadata,
         projection: &ProjectionMask,
         buffers: &mut PushBuffers,
     ) -> Result<InMemoryRowGroup<'a>, ParquetError> {
@@ -78,6 +77,7 @@ impl DataRequest {
             page_start_offsets,
         } = self;
 
+        let parquet_metadata = reader_metadata.metadata();
         let page_index = if parquet_metadata
             .page_index()
             .is_some_and(|pi| pi.has_offset_indexes())
@@ -91,11 +91,11 @@ impl DataRequest {
         // temporary structure used to tell the ArrowReaders what pages are
         // needed for decoding
         let mut in_memory_row_group = InMemoryRowGroup {
-            row_count,
-            column_chunks,
             page_index,
+            column_chunks,
+            row_count,
             row_group_idx,
-            metadata: parquet_metadata,
+            reader_metadata,
         };
 
         in_memory_row_group.fill_column_chunks(projection, page_start_offsets, chunks);
@@ -115,8 +115,8 @@ pub(super) struct DataRequestBuilder<'a> {
     row_count: usize,
     /// The batch size to read
     batch_size: usize,
-    /// The parquet metadata
-    parquet_metadata: &'a ParquetMetaData,
+    /// The file metadata and reader configuration.
+    reader_metadata: &'a ArrowReaderMetadata,
     /// The projection mask (which columns to read)
     projection: &'a ProjectionMask,
     /// Optional row selection to apply
@@ -134,14 +134,14 @@ impl<'a> DataRequestBuilder<'a> {
         row_group_idx: usize,
         row_count: usize,
         batch_size: usize,
-        parquet_metadata: &'a ParquetMetaData,
+        reader_metadata: &'a ArrowReaderMetadata,
         projection: &'a ProjectionMask,
     ) -> Self {
         Self {
             row_group_idx,
             row_count,
             batch_size,
-            parquet_metadata,
+            reader_metadata,
             projection,
             selection: None,
             cache_projection: None,
@@ -178,13 +178,14 @@ impl<'a> DataRequestBuilder<'a> {
             row_group_idx,
             row_count,
             batch_size,
-            parquet_metadata,
+            reader_metadata,
             projection,
             selection,
             cache_projection,
             column_chunks,
         } = self;
 
+        let parquet_metadata = reader_metadata.metadata();
         let row_group_meta_data = parquet_metadata.row_group(row_group_idx);
 
         // If no previously read column chunks are provided, create a new location to hold them
@@ -204,11 +205,11 @@ impl<'a> DataRequestBuilder<'a> {
         // temporary structure used to tell the ArrowReaders what pages are
         // needed for decoding
         let row_group = InMemoryRowGroup {
-            row_count,
-            column_chunks,
             page_index,
+            column_chunks,
+            row_count,
             row_group_idx,
-            metadata: parquet_metadata,
+            reader_metadata,
         };
 
         let FetchRanges {

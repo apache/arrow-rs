@@ -2,9 +2,19 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use crate::errors::{ParquetError, Result};
+use crate::file::metadata::extensions::ThriftStruct;
+#[cfg(any(feature = "experimental", test))]
+use crate::file::metadata::extensions::{
+    self as extensions, HookState, MetadataExtensionHook, MetadataExtensionSelection,
+};
+use crate::file::metadata::extensions::{HookHandle, SiteInfo};
 use crate::file::metadata::page_index::PageIndexProvider;
 use crate::file::metadata::thrift::FileMeta;
 use crate::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
+use crate::file::page_index::column_index::ColumnIndexMetaData;
+#[cfg(feature = "encryption")]
+use crate::parquet_thrift::ThriftCompactOutputProtocol;
 use crate::schema::types::{SchemaDescPtr, SchemaDescriptor};
 use crate::{
     basic::ColumnOrder,
@@ -13,24 +23,20 @@ use crate::{
 #[cfg(feature = "encryption")]
 use crate::{
     encryption::{
-        encrypt::{FileEncryptor, encrypt_thrift_object, write_signed_plaintext_thrift_object},
+        encrypt::{FileEncryptor, encrypt_thrift, write_signed_plaintext_thrift},
         modules::{ModuleType, create_footer_aad, create_module_aad},
     },
     file::column_crypto_metadata::ColumnCryptoMetaData,
     file::metadata::thrift::encryption::{AesGcmV1, EncryptionAlgorithm, FileCryptoMetaData},
 };
-use crate::{errors::Result, file::page_index::column_index::ColumnIndexMetaData};
 
+use crate::file::{
+    metadata::{KeyValue, ParquetMetaData},
+    page_index::offset_index::OffsetIndexMetaData,
+};
 use crate::{
     file::writer::{TrackedWrite, get_file_magic},
     parquet_thrift::WriteThrift,
-};
-use crate::{
-    file::{
-        metadata::{KeyValue, ParquetMetaData},
-        page_index::offset_index::OffsetIndexMetaData,
-    },
-    parquet_thrift::ThriftCompactOutputProtocol,
 };
 use std::io::Write;
 use std::sync::Arc;
@@ -73,9 +79,11 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
                         &mut *self.buf,
                     )?;
                     let end_offset = self.buf.bytes_written();
+                    let length = i32::try_from(end_offset - start_offset)
+                        .map_err(|_| general_err!("Offset index length exceeds i32::MAX bytes"))?;
                     // set offset and index for offset index
                     column_metadata.offset_index_offset = Some(start_offset as i64);
-                    column_metadata.offset_index_length = Some((end_offset - start_offset) as i32);
+                    column_metadata.offset_index_length = Some(length);
                 } else if !self.preserve_page_index_locations {
                     column_metadata.offset_index_offset = None;
                     column_metadata.offset_index_length = None;
@@ -107,10 +115,12 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
                         &mut *self.buf,
                     )? {
                         let end_offset = self.buf.bytes_written();
-                        // set offset and index for offset index
+                        let length = i32::try_from(end_offset - start_offset).map_err(|_| {
+                            general_err!("Column index length exceeds i32::MAX bytes")
+                        })?;
+                        // set offset and length for column index
                         column_metadata.column_index_offset = Some(start_offset as i64);
-                        column_metadata.column_index_length =
-                            Some((end_offset - start_offset) as i32);
+                        column_metadata.column_index_length = Some(length);
                     }
                 } else if !self.preserve_page_index_locations {
                     column_metadata.column_index_offset = None;
@@ -207,7 +217,8 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         let end_pos = self.buf.bytes_written();
 
         // Write footer
-        let metadata_len = (end_pos - start_pos) as u32;
+        let metadata_len = u32::try_from(end_pos - start_pos)
+            .map_err(|_| general_err!("File metadata length exceeds u32::MAX bytes"))?;
 
         self.buf.write_all(&metadata_len.to_le_bytes())?;
         self.buf.write_all(self.object_writer.get_file_magic())?;
@@ -250,6 +261,11 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             write_path_in_schema,
             preserve_page_index_locations,
         }
+    }
+
+    pub(crate) fn with_extensions(mut self, hook: Option<HookHandle>) -> Self {
+        self.object_writer.metadata_extension_hook = hook;
+        self
     }
 
     pub(crate) fn with_page_index(mut self, page_index: Arc<dyn PageIndexProvider>) -> Self {
@@ -359,6 +375,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
 /// assert!(!buffer.is_empty());
 /// ```
 pub struct ParquetMetaDataWriter<'a, W: Write> {
+    metadata_extension_hook: Option<HookHandle>,
     buf: TrackedWrite<W>,
     metadata: &'a ParquetMetaData,
     write_path_in_schema: bool,
@@ -387,9 +404,25 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
         Self {
             buf,
             metadata,
+            metadata_extension_hook: None,
             write_path_in_schema: true,
             preserve_page_index_locations: true,
         }
+    }
+
+    /// Install one hook and its complete target list for the footer and page indexes.
+    /// Existing data pages are not rewritten. Empty lists or a second installation fail.
+    #[cfg(any(feature = "experimental", test))]
+    #[doc(hidden)]
+    pub fn with_metadata_extension_hook<H: MetadataExtensionHook + 'static>(
+        mut self,
+        targets: impl IntoIterator<Item = MetadataExtensionSelection>,
+        hook: H,
+    ) -> Result<Self> {
+        extensions::install(&mut self.metadata_extension_hook, targets, |targets| {
+            Arc::new(HookState::new(targets, hook))
+        })?;
+        Ok(self)
     }
 
     /// Set whether or not to write the `path_in_schema` field in the Thrift `ColumnMetaData`
@@ -440,7 +473,8 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
             file_metadata.version(),
             self.write_path_in_schema,
             self.preserve_page_index_locations,
-        );
+        )
+        .with_extensions(self.metadata_extension_hook);
 
         if let Some(page_index_arc) = self.metadata.page_index.clone() {
             encoder = encoder.with_page_index(page_index_arc);
@@ -457,195 +491,165 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
 
 #[derive(Debug, Default)]
 struct MetadataObjectWriter {
+    metadata_extension_hook: Option<HookHandle>,
     #[cfg(feature = "encryption")]
     file_encryptor: Option<Arc<FileEncryptor>>,
 }
 
 impl MetadataObjectWriter {
-    #[inline]
-    fn write_thrift_object(object: &impl WriteThrift, sink: impl Write) -> Result<()> {
-        let mut protocol = ThriftCompactOutputProtocol::new(sink);
-        object.write_thrift(&mut protocol)?;
-        Ok(())
-    }
-}
-
-/// Implementations of [`MetadataObjectWriter`] methods for when encryption is disabled
-#[cfg(not(feature = "encryption"))]
-impl MetadataObjectWriter {
-    /// Write [`FileMetaData`] in Thrift format
-    ///
-    /// [`FileMetaData`]: https://github.com/apache/parquet-format/tree/master?tab=readme-ov-file#metadata
-    fn write_file_metadata(&self, file_metadata: &FileMeta, sink: impl Write) -> Result<()> {
-        Self::write_thrift_object(file_metadata, sink)
-    }
-
-    /// Write a column [`OffsetIndex`] in Thrift format
-    ///
-    /// [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
-    fn write_offset_index(
+    fn write_thrift_object(
         &self,
-        offset_index: &OffsetIndexMetaData,
-        _column_chunk: &ColumnChunkMetaData,
-        _row_group_idx: usize,
-        _column_idx: usize,
+        object: &impl WriteThrift,
         sink: impl Write,
+        root: impl FnOnce() -> SiteInfo,
     ) -> Result<()> {
-        Self::write_thrift_object(offset_index, sink)
+        crate::file::metadata::extensions::write_thrift(
+            object,
+            sink,
+            self.metadata_extension_hook.as_ref(),
+            root,
+        )
     }
 
-    /// Write a column [`ColumnIndex`] in Thrift format
-    ///
-    /// Returns `true` unless there is an error.
-    ///
-    /// [`ColumnIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
-    fn write_column_index(
-        &self,
-        column_index: &ColumnIndexMetaData,
-        _column_chunk: &ColumnChunkMetaData,
-        _row_group_idx: usize,
-        _column_idx: usize,
-        sink: impl Write,
-    ) -> Result<bool> {
-        Self::write_thrift_object(column_index, sink)?;
-        Ok(true)
-    }
-
-    /// No-op implementation of row-group metadata encryption
-    fn apply_row_group_encryption(
-        &self,
-        row_groups: Vec<RowGroupMetaData>,
-    ) -> Result<(Vec<RowGroupMetaData>, Option<Vec<RowGroupMetaData>>)> {
-        Ok((row_groups, None))
-    }
-
-    /// Get the "magic" bytes identifying the file type
-    pub fn get_file_magic(&self) -> &[u8; 4] {
-        get_file_magic()
-    }
-}
-
-/// Implementations of [`MetadataObjectWriter`] methods that rely on encryption being enabled
-#[cfg(feature = "encryption")]
-impl MetadataObjectWriter {
-    /// Set the file encryptor to use
+    #[cfg(feature = "encryption")]
     fn with_file_encryptor(mut self, encryptor: Option<Arc<FileEncryptor>>) -> Self {
         self.file_encryptor = encryptor;
         self
     }
 
-    /// Write [`FileMetaData`] in Thrift format, possibly encrypting it if required
-    ///
-    /// [`FileMetaData`]: https://github.com/apache/parquet-format/tree/master?tab=readme-ov-file#metadata
-    fn write_file_metadata(&self, file_metadata: &FileMeta, mut sink: impl Write) -> Result<()> {
-        match self.file_encryptor.as_ref() {
-            Some(file_encryptor) if file_encryptor.properties().encrypt_footer() => {
-                // First write FileCryptoMetadata
-                let crypto_metadata = Self::file_crypto_metadata(file_encryptor)?;
-                let mut protocol = ThriftCompactOutputProtocol::new(&mut sink);
-                crypto_metadata.write_thrift(&mut protocol)?;
-
-                // Then write encrypted footer
-                let aad = create_footer_aad(file_encryptor.file_aad())?;
-                let mut encryptor = file_encryptor.get_footer_encryptor()?;
-                encrypt_thrift_object(file_metadata, &mut encryptor, &mut sink, &aad)
+    fn write_file_metadata(&self, file_metadata: &FileMeta, sink: impl Write) -> Result<()> {
+        let root = || SiteInfo::new(ThriftStruct::FileMetaData);
+        #[cfg(feature = "encryption")]
+        {
+            let mut sink = sink;
+            if let Some(file_encryptor) = &self.file_encryptor {
+                if file_encryptor.properties().encrypt_footer() {
+                    let crypto = Self::file_crypto_metadata(file_encryptor)?;
+                    self.write_thrift_object(&crypto, &mut sink, || {
+                        SiteInfo::new(ThriftStruct::FileCryptoMetaData)
+                    })?;
+                    let aad = create_footer_aad(file_encryptor.file_aad())?;
+                    let mut encryptor = file_encryptor.get_footer_encryptor()?;
+                    return encrypt_thrift(
+                        |buffer| self.write_thrift_object(file_metadata, buffer, root),
+                        &mut encryptor,
+                        &mut sink,
+                        &aad,
+                    );
+                }
+                if file_metadata.file_metadata.encryption_algorithm.is_some() {
+                    let aad = create_footer_aad(file_encryptor.file_aad())?;
+                    let mut encryptor = file_encryptor.get_footer_encryptor()?;
+                    return write_signed_plaintext_thrift(
+                        |buffer| self.write_thrift_object(file_metadata, buffer, root),
+                        &mut encryptor,
+                        &mut sink,
+                        &aad,
+                    );
+                }
             }
-            Some(file_encryptor) if file_metadata.file_metadata.encryption_algorithm.is_some() => {
-                let aad = create_footer_aad(file_encryptor.file_aad())?;
-                let mut encryptor = file_encryptor.get_footer_encryptor()?;
-                write_signed_plaintext_thrift_object(file_metadata, &mut encryptor, &mut sink, &aad)
-            }
-            _ => Self::write_thrift_object(file_metadata, &mut sink),
+            self.write_thrift_object(file_metadata, sink, root)
         }
+        #[cfg(not(feature = "encryption"))]
+        self.write_thrift_object(file_metadata, sink, root)
     }
 
-    /// Write a column [`OffsetIndex`] in Thrift format, possibly encrypting it if required
-    ///
-    /// [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     fn write_offset_index(
         &self,
-        offset_index: &OffsetIndexMetaData,
-        column_chunk: &ColumnChunkMetaData,
-        row_group_idx: usize,
-        column_idx: usize,
+        index: &OffsetIndexMetaData,
+        column: &ColumnChunkMetaData,
+        row_group: usize,
+        column_index: usize,
         sink: impl Write,
     ) -> Result<()> {
-        match &self.file_encryptor {
-            Some(file_encryptor) => Self::write_thrift_object_with_encryption(
-                offset_index,
-                sink,
-                file_encryptor,
-                column_chunk,
-                ModuleType::OffsetIndex,
-                row_group_idx,
-                column_idx,
-            ),
-            None => Self::write_thrift_object(offset_index, sink),
-        }
+        self.write_index(
+            index,
+            column,
+            ThriftStruct::OffsetIndex,
+            (row_group, column_index),
+            sink,
+        )
     }
 
-    /// Write a column [`ColumnIndex`] in Thrift format, possibly encrypting it if required
-    ///
-    /// Returns `true` unless there is an error.
-    ///
-    /// [`ColumnIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     fn write_column_index(
         &self,
-        column_index: &ColumnIndexMetaData,
-        column_chunk: &ColumnChunkMetaData,
-        row_group_idx: usize,
-        column_idx: usize,
+        index: &ColumnIndexMetaData,
+        column: &ColumnChunkMetaData,
+        row_group: usize,
+        column_index: usize,
         sink: impl Write,
     ) -> Result<bool> {
-        match &self.file_encryptor {
-            Some(file_encryptor) => Self::write_thrift_object_with_encryption(
-                column_index,
-                sink,
-                file_encryptor,
-                column_chunk,
-                ModuleType::ColumnIndex,
-                row_group_idx,
-                column_idx,
-            )?,
-            None => Self::write_thrift_object(column_index, sink)?,
-        }
+        self.write_index(
+            index,
+            column,
+            ThriftStruct::ColumnIndex,
+            (row_group, column_index),
+            sink,
+        )?;
         Ok(true)
     }
 
-    /// If encryption is enabled and configured, encrypt row group metadata.
-    /// Returns a tuple of the row group metadata to write,
-    /// and possibly unencrypted metadata to be returned to clients if data was encrypted.
+    fn write_index(
+        &self,
+        object: &impl WriteThrift,
+        column: &ColumnChunkMetaData,
+        kind: ThriftStruct,
+        position: (usize, usize),
+        sink: impl Write,
+    ) -> Result<()> {
+        #[cfg(feature = "encryption")]
+        if let Some(encryptor) = &self.file_encryptor {
+            let module = match kind {
+                ThriftStruct::OffsetIndex => ModuleType::OffsetIndex,
+                ThriftStruct::ColumnIndex => ModuleType::ColumnIndex,
+                _ => unreachable!("only page indexes use this helper"),
+            };
+            return self.write_thrift_object_with_encryption(
+                object, sink, encryptor, column, module, position,
+            );
+        }
+        #[cfg(not(feature = "encryption"))]
+        let _ = column;
+        self.write_thrift_object(object, sink, || {
+            SiteInfo::column(kind, Some(position.0), Some(position.1))
+        })
+    }
+
     fn apply_row_group_encryption(
         &self,
         row_groups: Vec<RowGroupMetaData>,
     ) -> Result<(Vec<RowGroupMetaData>, Option<Vec<RowGroupMetaData>>)> {
-        match &self.file_encryptor {
-            Some(file_encryptor) => {
-                let unencrypted_row_groups = row_groups.clone();
-                let encrypted_row_groups = Self::encrypt_row_groups(row_groups, file_encryptor)?;
-                Ok((encrypted_row_groups, Some(unencrypted_row_groups)))
-            }
-            None => Ok((row_groups, None)),
+        #[cfg(feature = "encryption")]
+        if let Some(encryptor) = &self.file_encryptor {
+            let unencrypted = row_groups.clone();
+            return Ok((
+                self.encrypt_row_groups(row_groups, encryptor)?,
+                Some(unencrypted),
+            ));
+        }
+        Ok((row_groups, None))
+    }
+
+    fn get_file_magic(&self) -> &[u8; 4] {
+        #[cfg(feature = "encryption")]
+        {
+            get_file_magic(self.file_encryptor.as_ref().map(|e| e.properties()))
+        }
+        #[cfg(not(feature = "encryption"))]
+        {
+            get_file_magic()
         }
     }
 
-    /// Get the "magic" bytes identifying the file type
-    fn get_file_magic(&self) -> &[u8; 4] {
-        get_file_magic(
-            self.file_encryptor
-                .as_ref()
-                .map(|encryptor| encryptor.properties()),
-        )
-    }
-
+    #[cfg(feature = "encryption")]
     fn write_thrift_object_with_encryption(
+        &self,
         object: &impl WriteThrift,
         mut sink: impl Write,
         file_encryptor: &FileEncryptor,
         column_metadata: &ColumnChunkMetaData,
         module_type: ModuleType,
-        row_group_index: usize,
-        column_index: usize,
+        (row_group_index, column_index): (usize, usize),
     ) -> Result<()> {
         let column_path_vec = column_metadata.column_path().as_ref();
 
@@ -657,9 +661,14 @@ impl MetadataObjectWriter {
             &joined_column_path
         };
 
-        if file_encryptor.is_column_encrypted(column_path) {
-            use crate::encryption::encrypt::encrypt_thrift_object;
-
+        let encrypted = file_encryptor.is_column_encrypted(column_path);
+        let kind = match module_type {
+            ModuleType::OffsetIndex => ThriftStruct::OffsetIndex,
+            ModuleType::ColumnIndex => ThriftStruct::ColumnIndex,
+            _ => unreachable!("Only indexes use this helper"),
+        };
+        let root = || SiteInfo::column(kind, Some(row_group_index), Some(column_index));
+        if encrypted {
             let aad = create_module_aad(
                 file_encryptor.file_aad(),
                 module_type,
@@ -668,12 +677,18 @@ impl MetadataObjectWriter {
                 None,
             )?;
             let mut encryptor = file_encryptor.get_column_encryptor(column_path)?;
-            encrypt_thrift_object(object, &mut encryptor, &mut sink, &aad)
+            encrypt_thrift(
+                |buffer| self.write_thrift_object(object, buffer, root),
+                &mut encryptor,
+                &mut sink,
+                &aad,
+            )
         } else {
-            Self::write_thrift_object(object, sink)
+            self.write_thrift_object(object, sink, root)
         }
     }
 
+    #[cfg(feature = "encryption")]
     fn get_plaintext_footer_crypto_metadata(
         &self,
     ) -> (Option<EncryptionAlgorithm>, Option<Vec<u8>>) {
@@ -690,6 +705,7 @@ impl MetadataObjectWriter {
         (None, None)
     }
 
+    #[cfg(feature = "encryption")]
     fn encryption_algorithm_from_encryptor(file_encryptor: &FileEncryptor) -> EncryptionAlgorithm {
         let supply_aad_prefix = file_encryptor
             .properties()
@@ -707,6 +723,7 @@ impl MetadataObjectWriter {
         })
     }
 
+    #[cfg(feature = "encryption")]
     fn file_crypto_metadata(file_encryptor: &'_ FileEncryptor) -> Result<FileCryptoMetaData<'_>> {
         let properties = file_encryptor.properties();
         Ok(FileCryptoMetaData {
@@ -715,7 +732,9 @@ impl MetadataObjectWriter {
         })
     }
 
+    #[cfg(feature = "encryption")]
     fn encrypt_row_groups(
+        &self,
         row_groups: Vec<RowGroupMetaData>,
         file_encryptor: &Arc<FileEncryptor>,
     ) -> Result<Vec<RowGroupMetaData>> {
@@ -728,7 +747,7 @@ impl MetadataObjectWriter {
                     .into_iter()
                     .enumerate()
                     .map(|(col_idx, c)| {
-                        Self::encrypt_column_chunk(c, file_encryptor, rg_idx, col_idx)
+                        self.encrypt_column_chunk(c, file_encryptor, rg_idx, col_idx)
                     })
                     .collect();
                 rg.columns = cols?;
@@ -738,7 +757,9 @@ impl MetadataObjectWriter {
     }
 
     /// Apply column encryption to column chunk metadata
+    #[cfg(feature = "encryption")]
     fn encrypt_column_chunk(
+        &self,
         mut column_chunk: ColumnChunkMetaData,
         file_encryptor: &Arc<FileEncryptor>,
         row_group_index: usize,
@@ -780,8 +801,25 @@ impl MetadataObjectWriter {
             // create temp ColumnMetaData that we can encrypt
             let mut buffer: Vec<u8> = vec![];
             {
-                let mut prot = ThriftCompactOutputProtocol::new(&mut buffer);
-                serialize_column_meta_data(&column_chunk, &mut prot)?;
+                struct ColumnMeta<'a>(&'a ColumnChunkMetaData);
+                impl WriteThrift for ColumnMeta<'_> {
+                    const ELEMENT_TYPE: crate::parquet_thrift::ElementType =
+                        crate::parquet_thrift::ElementType::Struct;
+                    fn write_thrift<W: Write, const TRACK: bool>(
+                        &self,
+                        writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
+                    ) -> Result<()> {
+                        serialize_column_meta_data(self.0, writer, true)
+                    }
+                }
+                let metadata = ColumnMeta(&column_chunk);
+                self.write_thrift_object(&metadata, &mut buffer, || {
+                    SiteInfo::column(
+                        ThriftStruct::ColumnMetaData,
+                        Some(row_group_index),
+                        Some(column_index),
+                    )
+                })?;
             }
             let ciphertext = encryptor.encrypt(&buffer, &aad)?;
             column_chunk.encrypted_column_metadata = Some(ciphertext);
@@ -791,5 +829,154 @@ impl MetadataObjectWriter {
         }
 
         Ok(column_chunk)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::file::metadata::extensions::{MetadataSite, ThriftPathSegment, ThriftStruct};
+    use crate::file::metadata::page_index::PageIndexBuilder;
+    use crate::file::metadata::thrift_fields::{file_meta_data, offset_index};
+    use crate::file::page_index::offset_index::PageLocation;
+    use crate::schema::parser::parse_message_type;
+
+    // Reuse one small buffer, discarding the output rather than allocating GiBs.
+    struct RepeatedPayload(Vec<u8>);
+
+    impl MetadataExtensionHook for RepeatedPayload {
+        fn on_site(&mut self, site: &mut MetadataSite<'_>) -> Result<Option<&[u8]>> {
+            use ThriftPathSegment::{Element, Field};
+            let coordinates = crate::file::metadata::extensions::test_util::coordinates(site)?;
+            Ok(match (site.root(), coordinates.as_slice()) {
+                (ThriftStruct::OffsetIndex, [Field(offset_index::PAGE_LOCATIONS), Element(_)])
+                | (
+                    ThriftStruct::FileMetaData,
+                    [Field(file_meta_data::KEY_VALUE_METADATA), Element(_)],
+                ) => Some(self.0.as_slice()),
+                _ => None,
+            })
+        }
+    }
+
+    fn metadata(key_value_metadata: Option<Vec<KeyValue>>) -> ParquetMetaData {
+        let schema = Arc::new(SchemaDescriptor::new(Arc::new(
+            parse_message_type("message m { REQUIRED INT32 id; }").unwrap(),
+        )));
+        let column = ColumnChunkMetaData::builder(schema.column(0))
+            .build()
+            .unwrap();
+        let row_group = RowGroupMetaData::builder(schema.clone())
+            .set_column_metadata(vec![column])
+            .build()
+            .unwrap();
+        ParquetMetaDataBuilder::new(FileMetaData::new(
+            1,
+            0,
+            None,
+            key_value_metadata,
+            schema,
+            None,
+        ))
+        .set_row_groups(vec![row_group])
+        .build()
+    }
+
+    #[cfg(feature = "experimental")]
+    #[test]
+    fn test_metadata_extension_footer_suffix() {
+        use crate::file::metadata::extensions::{
+            MetadataExtensionSelection, UNSIGNED_FOOTER_EXTENSION_SUFFIX_SIZE,
+        };
+        let metadata = metadata(None);
+        let mut bytes = Vec::new();
+        ParquetMetaDataWriter::new(&mut bytes, &metadata)
+            .with_metadata_extension_hook(
+                [MetadataExtensionSelection::roots([ThriftStruct::FileMetaData]).root_only()],
+                |site: &mut MetadataSite<'_>| -> Result<Option<&'static [u8]>> {
+                    assert!(site.at_root());
+                    Ok(Some(b"footer"))
+                },
+            )
+            .unwrap()
+            .finish()
+            .unwrap();
+        let end = bytes.len() - UNSIGNED_FOOTER_EXTENSION_SUFFIX_SIZE;
+        assert_eq!(&bytes[end - 6..end], b"footer");
+    }
+
+    #[test]
+    fn test_metadata_extension_offset_index_length_overflow() {
+        for page_count in [2047, 2048] {
+            let mut page_index = PageIndexBuilder::new(1, 1);
+            page_index
+                .try_put_offset_index(
+                    OffsetIndexMetaData {
+                        page_locations: (0..page_count)
+                            .map(|i| PageLocation {
+                                offset: i,
+                                compressed_page_size: 1,
+                                first_row_index: i,
+                            })
+                            .collect(),
+                        unencoded_byte_array_data_bytes: None,
+                    },
+                    0,
+                    0,
+                )
+                .unwrap();
+            let metadata = metadata(None)
+                .into_builder()
+                .set_page_index(Some(Arc::new(page_index.build())))
+                .build();
+            let mut sink = TrackedWrite::new(std::io::sink());
+            let result = ParquetMetaDataWriter::new(&mut sink, &metadata)
+                .with_metadata_extension_hook(
+                    [Default::default()],
+                    RepeatedPayload(vec![0; 1024 * 1024]),
+                )
+                .unwrap()
+                .finish();
+            if page_count == 2047 {
+                result.unwrap();
+                assert!(sink.bytes_written() < i32::MAX as usize);
+            } else {
+                assert_eq!(
+                    result.unwrap_err().to_string(),
+                    "Parquet error: Offset index length exceeds i32::MAX bytes"
+                );
+                assert!(sink.bytes_written() > i32::MAX as usize);
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn test_metadata_extension_footer_length_overflow() {
+        for entry_count in [4095, 4096] {
+            let metadata = metadata(Some(
+                (0..entry_count)
+                    .map(|i| KeyValue::new(i.to_string(), None))
+                    .collect(),
+            ));
+            let mut sink = TrackedWrite::new(std::io::sink());
+            let result = ParquetMetaDataWriter::new(&mut sink, &metadata)
+                .with_metadata_extension_hook(
+                    [Default::default()],
+                    RepeatedPayload(vec![0; 1024 * 1024]),
+                )
+                .unwrap()
+                .finish();
+            if entry_count == 4095 {
+                result.unwrap();
+                assert!(sink.bytes_written() < u32::MAX as usize);
+            } else {
+                assert_eq!(
+                    result.unwrap_err().to_string(),
+                    "Parquet error: File metadata length exceeds u32::MAX bytes"
+                );
+                assert!(sink.bytes_written() > u32::MAX as usize);
+            }
+        }
     }
 }

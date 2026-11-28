@@ -26,7 +26,7 @@ fn test_reuse_schema() {
     let file = get_test_file("parquet/alltypes-java.parquet");
 
     let builder = ParquetRecordBatchReaderBuilder::try_new(file.try_clone().unwrap()).unwrap();
-    let expected = builder.metadata;
+    let expected = builder.metadata().clone();
     let schema = expected.file_metadata().schema_descr_ptr();
 
     let arrow_options = ArrowReaderOptions::new().with_parquet_schema(schema.clone());
@@ -34,7 +34,7 @@ fn test_reuse_schema() {
         ParquetRecordBatchReaderBuilder::try_new_with_options(file, arrow_options).unwrap();
 
     // Verify that the metadata matches
-    assert_eq!(expected.as_ref(), builder.metadata.as_ref());
+    assert_eq!(expected.as_ref(), builder.metadata().as_ref());
 }
 
 #[test]

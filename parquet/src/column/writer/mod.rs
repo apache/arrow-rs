@@ -1770,8 +1770,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         // update offset index
         // compressed_size = header_size + compressed_data_size
         if let Some(builder) = self.offset_index_builder.as_mut() {
-            builder
-                .append_offset_and_size(page_spec.offset as i64, page_spec.compressed_size as i32)
+            let compressed_size = i32::try_from(page_spec.compressed_size).map_err(|_| {
+                general_err!("Encoded page size exceeds i32::MAX bytes for offset index")
+            })?;
+            builder.append_offset_and_size(page_spec.offset as i64, compressed_size)
         }
         self.update_metrics_for_page(page_spec);
         Ok(())
@@ -4596,6 +4598,53 @@ mod tests {
         assert_eq!(4, offset_index.page_locations[1].first_row_index);
     }
 
+    #[test]
+    fn test_column_offset_index_page_size_bounds() {
+        for compressed_size in [i32::MAX as usize, i32::MAX as usize + 1] {
+            for offset_index_disabled in [false, true] {
+                // Model a large extended header plus one plain-encoded i32,
+                // without allocating the header bytes.
+                let page_writer = Box::new(TestPageWriter {
+                    header_size: compressed_size - size_of::<i32>(),
+                    ..Default::default()
+                });
+                let props = WriterProperties::builder()
+                    .set_dictionary_enabled(false)
+                    .set_encoding(Encoding::PLAIN)
+                    .set_statistics_enabled(EnabledStatistics::None)
+                    .set_offset_index_disabled(offset_index_disabled)
+                    .build()
+                    .into();
+                let mut writer = get_test_column_writer::<Int32Type>(page_writer, 0, 0, props);
+                writer.write_batch(&[42], None, None).unwrap();
+                let result = writer.flush_data_pages();
+
+                if !offset_index_disabled && compressed_size > i32::MAX as usize {
+                    assert_eq!(
+                        result.unwrap_err().to_string(),
+                        "Parquet error: Encoded page size exceeds i32::MAX bytes for offset index"
+                    );
+                    let offset_index = writer.offset_index_builder.take().unwrap().build();
+                    assert!(offset_index.page_locations.is_empty());
+                } else {
+                    result.unwrap();
+                    let result = writer.close().unwrap();
+                    assert_eq!(result.metadata.compressed_size(), compressed_size as i64);
+                    if offset_index_disabled {
+                        assert!(result.offset_index.is_none());
+                    } else {
+                        let offset_index = result.offset_index.unwrap();
+                        assert_eq!(offset_index.page_locations.len(), 1);
+                        assert_eq!(
+                            offset_index.page_locations[0].compressed_page_size,
+                            i32::MAX
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     /// Verify min/max value truncation in the column index works as expected
     #[test]
     fn test_column_offset_index_metadata_truncating() {
@@ -5952,17 +6001,18 @@ mod tests {
     #[derive(Default)]
     struct TestPageWriter {
         bytes_written: u64,
+        header_size: usize,
     }
 
     impl PageWriter for TestPageWriter {
         fn write_page(&mut self, page: CompressedPage) -> Result<PageWriteSpec> {
             let mut res = PageWriteSpec::new();
             res.page_type = page.page_type();
-            res.uncompressed_size = page.uncompressed_size();
-            res.compressed_size = page.compressed_size();
+            res.uncompressed_size = page.uncompressed_size() + self.header_size;
+            res.compressed_size = page.compressed_size() + self.header_size;
             res.num_values = page.num_values();
             res.offset = self.bytes_written;
-            res.bytes_written = page.data().len() as u64;
+            res.bytes_written = (page.data().len() + self.header_size) as u64;
             self.bytes_written += res.bytes_written;
             Ok(res)
         }

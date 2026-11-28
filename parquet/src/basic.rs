@@ -12,7 +12,7 @@ use std::str::FromStr;
 use std::{fmt, str};
 
 pub use crate::compression::{BrotliLevel, GzipLevel, ZstdLevel};
-use crate::file::metadata::HeapSize;
+use crate::file::metadata::{HeapSize, thrift_fields as fields};
 use crate::parquet_thrift::{
     ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol, ThriftCompactOutputProtocol,
     WriteThrift, WriteThriftField, validate_list_type,
@@ -164,9 +164,9 @@ enum ConvertedType {
 thrift_union_all_empty!(
 /// Time unit for `Time` and `Timestamp` logical types.
 union TimeUnit {
-  1: MilliSeconds MILLIS
-  2: MicroSeconds MICROS
-  3: NanoSeconds NANOS
+  fields::time_unit::MILLIS: MilliSeconds MILLIS
+  fields::time_unit::MICROS: MicroSeconds MICROS
+  fields::time_unit::NANOS: NanoSeconds NANOS
 }
 );
 
@@ -176,18 +176,18 @@ union TimeUnit {
 thrift_struct!(
 pub struct DecimalType {
   /// The number of digits in the decimal.
-  1: required i32 scale
+  fields::decimal_type::SCALE: required i32 scale
   /// The location of the decimal point.
-  2: required i32 precision
+  fields::decimal_type::PRECISION: required i32 precision
 }
 );
 
 thrift_struct!(
 pub struct TimestampType {
   /// Whether the timestamp is adjusted to UTC.
-  1: required bool is_adjusted_to_u_t_c
+  fields::timestamp_type::IS_ADJUSTED_TO_UTC: required bool is_adjusted_to_u_t_c
   /// The unit of time.
-  2: required TimeUnit unit
+  fields::timestamp_type::UNIT: required TimeUnit unit
 }
 );
 
@@ -197,9 +197,9 @@ pub use TimestampType as TimeType;
 thrift_struct!(
 pub struct IntType {
   /// The number of bits in the integer.
-  1: required i8 bit_width
+  fields::int_type::BIT_WIDTH: required i8 bit_width
   /// Whether the integer is signed.
-  2: required bool is_signed
+  fields::int_type::IS_SIGNED: required bool is_signed
 }
 );
 
@@ -207,7 +207,7 @@ thrift_struct!(
 pub struct VariantType {
   /// The version of the variant specification that the variant was
   /// written with.
-  1: optional i8 specification_version
+  fields::variant_type::SPECIFICATION_VERSION: optional i8 specification_version
 }
 );
 
@@ -215,17 +215,17 @@ thrift_struct!(
 pub struct GeometryType {
   /// A custom CRS. If unset the CRS `OGC:CRS84` should be used, which means that the geometries
   /// must be stored in longitude, latitude based on the WGS84 datum.
-  1: optional string crs;
+  fields::geometry_type::CRS: optional string crs;
 }
 );
 
 thrift_struct!(
 pub struct GeographyType {
   /// A custom CRS. If unset the CRS `OGC:CRS84` should be used.
-  1: optional string crs;
+  fields::geography_type::CRS: optional string crs;
   /// An optional algorithm can be set to correctly interpret edges interpolation
   /// of the geometries. If unset, the `SPHERICAL` algorithm should be used.
-  2: optional EdgeInterpolationAlgorithm algorithm;
+  fields::geography_type::ALGORITHM: optional EdgeInterpolationAlgorithm algorithm;
 }
 );
 
@@ -248,42 +248,42 @@ thrift_union_with_unknown!(
 /// [`ConvertedType`]. Please see the README.md for more details.
 union LogicalType {
    /// A UTF8 encoded string.
-   1:  String
+   fields::logical_type::STRING: String
    /// A map of key-value pairs.
-   2:  Map
+   fields::logical_type::MAP: Map
    /// A list of elements.
-   3:  List
+   fields::logical_type::LIST: List
    /// A set of predefined values.
-   4:  Enum
+   fields::logical_type::ENUM: Enum
    /// A decimal value with a specified scale and precision.
-   5:  (DecimalType) Decimal
+   fields::logical_type::DECIMAL: (DecimalType) Decimal
    /// A date stored as days since Unix epoch.
-   6:  Date
+   fields::logical_type::DATE: Date
    /// A time stored as [`TimeUnit`] since midnight.
-   7:  (TimeType) Time
+   fields::logical_type::TIME: (TimeType) Time
    /// A timestamp stored as [`TimeUnit`] since Unix epoch.
-   8:  (TimestampType) Timestamp
+   fields::logical_type::TIMESTAMP: (TimestampType) Timestamp
    // 9: reserved for INTERVAL
    /// An integer with a specified bit width and signedness.
-   10: (IntType) Integer
+   fields::logical_type::INTEGER: (IntType) Integer
    /// An unknown logical type.
-   11: Unknown
+   fields::logical_type::UNKNOWN: Unknown
    /// A JSON document.
-   12: Json
+   fields::logical_type::JSON: Json
    /// A BSON document.
-   13: Bson
+   fields::logical_type::BSON: Bson
    /// A UUID.
-   14: Uuid
+   fields::logical_type::UUID: Uuid
    /// A 16-bit floating point number.
-   15: Float16
+   fields::logical_type::FLOAT16: Float16
    /// A Variant value.
-   16: (VariantType) Variant
+   fields::logical_type::VARIANT: (VariantType) Variant
    /// A geospatial feature in the Well-Known Binary (WKB) format with linear/planar edges interpolation.
-   17: (GeometryType) Geometry
+   fields::logical_type::GEOMETRY: (GeometryType) Geometry
    /// A geospatial feature in the WKB format with an explicit (non-linear/non-planar) edges interpolation.
-   18: (GeographyType) Geography
+   fields::logical_type::GEOGRAPHY: (GeographyType) Geography
    /// A reference to a range of bytes, stored inline or in an external file.
-   19: File
+   fields::logical_type::FILE: File
 }
 );
 
@@ -912,7 +912,10 @@ impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for EdgeInterpolat
 
 impl WriteThrift for EdgeInterpolationAlgorithm {
     const ELEMENT_TYPE: ElementType = ElementType::I32;
-    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+    fn write_thrift<W: Write, const TRACK: bool>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
+    ) -> Result<()> {
         let val: i32 = match *self {
             Self::SPHERICAL => 0,
             Self::VINCENTY => 1,
@@ -934,7 +937,7 @@ thrift_union_all_empty!(
 /// The algorithm used in Bloom filter.
 union BloomFilterAlgorithm {
   /// Block-based Bloom filter.
-  1: SplitBlockAlgorithm BLOCK;
+  fields::bloom_filter_algorithm::BLOCK: SplitBlockAlgorithm BLOCK;
 }
 );
 
@@ -946,7 +949,7 @@ thrift_union_all_empty!(
 /// using plain encoding.
 union BloomFilterHash {
   /// xxHash Strategy.
-  1: XxHash XXHASH;
+  fields::bloom_filter_hash::XXHASH: XxHash XXHASH;
 }
 );
 
@@ -956,7 +959,7 @@ union BloomFilterHash {
 thrift_union_all_empty!(
 /// The compression used in the Bloom filter.
 union BloomFilterCompression {
-  1: Uncompressed UNCOMPRESSED;
+  fields::bloom_filter_compression::UNCOMPRESSED: Uncompressed UNCOMPRESSED;
 }
 );
 
@@ -1210,25 +1213,27 @@ impl ColumnOrder {
 
 impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for ColumnOrder {
     fn read_thrift(prot: &mut R) -> Result<Self> {
+        prot.read_struct_begin()?;
         let field_ident = prot.read_field_begin(0)?;
         if field_ident.field_type == FieldType::Stop {
             return Err(general_err!("Received empty union from remote ColumnOrder"));
         }
         let ret = match field_ident.id {
-            1 => {
+            fields::column_order::TYPE_ORDER => {
                 // NOTE: the sort order needs to be set correctly after parsing.
                 prot.skip_empty_struct()?;
                 Self::TYPE_DEFINED_ORDER(SortOrder::SIGNED)
             }
-            2 => {
+            fields::column_order::IEEE_754_TOTAL_ORDER => {
                 prot.skip_empty_struct()?;
                 Self::IEEE_754_TOTAL_ORDER
             }
-            3 => {
+            fields::column_order::INT96_TIMESTAMP_ORDER => {
                 prot.skip_empty_struct()?;
                 Self::INT96_TIMESTAMP_ORDER
             }
             _ => {
+                // Union variants are values, not extension-bearing envelope fields.
                 prot.skip(field_ident.field_type)?;
                 Self::UNKNOWN
             }
@@ -1246,24 +1251,24 @@ impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for ColumnOrder {
 impl WriteThrift for ColumnOrder {
     const ELEMENT_TYPE: ElementType = ElementType::Struct;
 
-    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+    fn write_thrift<W: Write, const TRACK: bool>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W, TRACK>,
+    ) -> Result<()> {
+        writer.write_union_begin()?;
         match *self {
             Self::TYPE_DEFINED_ORDER(_) => {
-                writer.write_field_begin(FieldType::Struct, 1, 0)?;
-                writer.write_struct_end()?;
+                writer.write_empty_struct(fields::column_order::TYPE_ORDER, 0)?;
             }
             Self::IEEE_754_TOTAL_ORDER => {
-                writer.write_field_begin(FieldType::Struct, 2, 0)?;
-                writer.write_struct_end()?;
+                writer.write_empty_struct(fields::column_order::IEEE_754_TOTAL_ORDER, 0)?;
             }
             Self::INT96_TIMESTAMP_ORDER => {
-                writer.write_field_begin(FieldType::Struct, 3, 0)?;
-                writer.write_struct_end()?;
+                writer.write_empty_struct(fields::column_order::INT96_TIMESTAMP_ORDER, 0)?;
             }
             _ => return Err(general_err!("Attempt to write undefined ColumnOrder")),
         }
-        // write end of struct for this union
-        writer.write_struct_end()
+        writer.write_union_end()
     }
 }
 

@@ -6,11 +6,13 @@
 //!
 //! [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 
+use crate::file::metadata::thrift_fields::{offset_index as oi, page_location as pl};
 use std::io::Write;
 
 use crate::parquet_thrift::{
     ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol, ThriftCompactOutputProtocol,
-    WriteThrift, WriteThriftField, check_list_size, read_thrift_vec, validate_list_type,
+    ThriftSliceInputProtocol, WriteThrift, WriteThriftField, check_list_size, read_thrift_vec,
+    validate_list_type,
 };
 use crate::{
     errors::{ParquetError, Result},
@@ -21,17 +23,18 @@ thrift_struct!(
 /// Page location information for [`OffsetIndexMetaData`]
 pub struct PageLocation {
   /// Offset of the page in the file
-  1: required i64 offset
+  pl::OFFSET: required i64 offset
   /// Size of the page, including header. Sum of compressed_page_size and header
-  2: required i32 compressed_page_size
+  pl::COMPRESSED_PAGE_SIZE: required i32 compressed_page_size
   /// Index within the RowGroup of the first row of the page. When an
   /// OffsetIndex is present, pages must begin on row boundaries
   /// (repetition_level = 0).
-  3: required i64 first_row_index
+  pl::FIRST_ROW_INDEX: required i64 first_row_index
 }
 );
 
-thrift_struct!(
+thrift_struct!(@root
+
 /// [`OffsetIndex`] information for a column chunk. Contains offsets and sizes for each page
 /// in the chunk. Optionally stores fully decoded page sizes for BYTE_ARRAY columns.
 ///
@@ -41,10 +44,10 @@ thrift_struct!(
 /// [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 pub struct OffsetIndexMetaData {
   /// Vector of [`PageLocation`] objects, one per page in the chunk.
-  1: required list<PageLocation> page_locations
+  oi::PAGE_LOCATIONS: required list<PageLocation> page_locations
   /// Optional vector of unencoded page sizes, one per page in the chunk.
   /// Only defined for BYTE_ARRAY columns.
-  2: optional list<i64> unencoded_byte_array_data_bytes
+  oi::UNENCODED_BYTE_ARRAY_DATA_BYTES: optional list<i64> unencoded_byte_array_data_bytes
 }
 );
 
@@ -60,18 +63,18 @@ impl OffsetIndexMetaData {
         self.unencoded_byte_array_data_bytes.as_ref()
     }
 
-    // Fast-path read of offset index. This works because we expect all field deltas to be 1,
-    // and there's no nesting beyond PageLocation, so no need to save the last field id. Like
-    // read_page_locations(), this will fail if absolute field id's are used.
-    pub(super) fn try_from_fast<'a, R: ThriftCompactInputProtocol<'a>>(
-        prot: &mut R,
-    ) -> Result<Self> {
+    // Fast-path read of canonical fields, optionally followed by one root
+    // extension. No listener is invoked here. Return a borrowed payload only
+    // after validating the root STOP; all other layouts use the general decoder.
+    pub(super) fn try_from_fast<'a>(
+        prot: &mut ThriftSliceInputProtocol<'a>,
+    ) -> Result<(Self, Option<&'a [u8]>)> {
         // Offset index is a struct with 2 fields. First field is an array of PageLocations,
         // the second an optional array of i64.
 
         // read field 1 header, then list header, then vec of PageLocations
         let (field_type, delta) = prot.read_field_header()?;
-        if delta != 1 || field_type != FieldType::List as u8 {
+        if i16::from(delta) != oi::PAGE_LOCATIONS || field_type != FieldType::List as u8 {
             return Err(general_err!("error reading OffsetIndex::page_locations"));
         }
 
@@ -89,30 +92,50 @@ impl OffsetIndexMetaData {
         let mut unencoded_byte_array_data_bytes: Option<Vec<i64>> = None;
 
         // read second field...if it's Stop we're done
-        let (mut field_type, delta) = prot.read_field_header()?;
+        let (mut field_type, mut delta) = prot.read_field_header()?;
         if field_type == FieldType::List as u8 {
-            if delta != 1 {
+            if i16::from(delta) != oi::UNENCODED_BYTE_ARRAY_DATA_BYTES - oi::PAGE_LOCATIONS {
                 return Err(general_err!(
                     "encountered unknown field while reading OffsetIndex"
                 ));
             }
-            let vec = read_thrift_vec::<i64, R>(&mut *prot)?;
+            let vec = read_thrift_vec::<i64, _>(&mut *prot)?;
             unencoded_byte_array_data_bytes = Some(vec);
 
-            // this one should be Stop
-            (field_type, _) = prot.read_field_header()?;
+            (field_type, delta) = prot.read_field_header()?;
         }
 
+        let mut extension = None;
+        if field_type == FieldType::Binary as u8 && delta == 0 {
+            if prot.read_i16()? != i16::MAX {
+                return Err(general_err!(
+                    "encountered unknown field while reading OffsetIndex"
+                ));
+            }
+            let len = i32::try_from(prot.read_vlq()?)
+                .map_err(|_| general_err!("Invalid extension length"))?
+                as usize;
+            extension = Some(
+                prot.as_slice()
+                    .get(..len)
+                    .ok_or_else(|| eof_err!("Unexpected EOF"))?,
+            );
+            prot.skip_bytes(len)?;
+            (field_type, _) = prot.read_field_header()?;
+        }
         if field_type != FieldType::Stop as u8 {
             return Err(general_err!(
                 "encountered unknown field while reading OffsetIndex"
             ));
         }
 
-        Ok(Self {
-            page_locations,
-            unencoded_byte_array_data_bytes,
-        })
+        Ok((
+            Self {
+                page_locations,
+                unencoded_byte_array_data_bytes,
+            },
+            extension,
+        ))
     }
 }
 
@@ -123,13 +146,15 @@ impl OffsetIndexMetaData {
 fn read_page_location<'a, R: ThriftCompactInputProtocol<'a>>(prot: &mut R) -> Result<PageLocation> {
     // there are 3 fields, all mandatory, so all field deltas should be 1
     let (field_type, delta) = prot.read_field_header()?;
-    if delta != 1 || field_type != FieldType::I64 as u8 {
+    if i16::from(delta) != pl::OFFSET || field_type != FieldType::I64 as u8 {
         return Err(general_err!("error reading PageLocation::offset"));
     }
     let offset = prot.read_i64()?;
 
     let (field_type, delta) = prot.read_field_header()?;
-    if delta != 1 || field_type != FieldType::I32 as u8 {
+    if i16::from(delta) != pl::COMPRESSED_PAGE_SIZE - pl::OFFSET
+        || field_type != FieldType::I32 as u8
+    {
         return Err(general_err!(
             "error reading PageLocation::compressed_page_size"
         ));
@@ -137,7 +162,9 @@ fn read_page_location<'a, R: ThriftCompactInputProtocol<'a>>(prot: &mut R) -> Re
     let compressed_page_size = prot.read_i32()?;
 
     let (field_type, delta) = prot.read_field_header()?;
-    if delta != 1 || field_type != FieldType::I64 as u8 {
+    if i16::from(delta) != pl::FIRST_ROW_INDEX - pl::COMPRESSED_PAGE_SIZE
+        || field_type != FieldType::I64 as u8
+    {
         return Err(general_err!("error reading PageLocation::first_row_index"));
     }
     let first_row_index = prot.read_i64()?;
@@ -196,7 +223,7 @@ mod tests {
             let mut prot = ThriftSliceInputProtocol::new(&data);
             assert_eq!(
                 OffsetIndexMetaData::try_from_fast(&mut prot).unwrap(),
-                index
+                (index.clone(), None)
             );
             assert_eq!(decode_offset_index(&data).unwrap(), index);
         }
