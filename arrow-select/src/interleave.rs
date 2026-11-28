@@ -264,33 +264,76 @@ fn interleave_dictionaries<K: ArrowDictionaryKeyType>(
     let dictionaries: Vec<_> = arrays.iter().map(|x| x.as_dictionary::<K>()).collect();
     let (should_merge, has_overflow) =
         should_merge_dictionary_values::<K>(&dictionaries, indices.len());
-    if !should_merge {
-        return if has_overflow {
-            interleave_fallback(arrays, indices)
+    let strategy = if should_merge {
+        DictionaryInterleaveStrategy::MergeDictionaries
+    } else {
+        let first_values = dictionaries[0].values();
+        if dictionaries
+            .iter()
+            .skip(1)
+            .all(|dictionary| Arc::ptr_eq(first_values, dictionary.values()))
+        {
+            DictionaryInterleaveStrategy::SharedDictionary
+        } else if has_overflow {
+            DictionaryInterleaveStrategy::Fallback
         } else {
-            interleave_fallback_dictionary::<K>(&dictionaries, indices)
-        };
-    }
+            DictionaryInterleaveStrategy::FallbackDictionary
+        }
+    };
 
+    match strategy {
+        DictionaryInterleaveStrategy::SharedDictionary => {
+            // SAFETY: the strategy is selected only after verifying that every dictionary's
+            // values array is pointer-equal to `dictionaries[0].values()`.
+            unsafe {
+                interleave_shared_dictionary(&dictionaries, indices, dictionaries[0].values())
+            }
+        }
+        DictionaryInterleaveStrategy::MergeDictionaries => {
+            interleave_merged_dictionaries(&dictionaries, indices)
+        }
+        DictionaryInterleaveStrategy::Fallback => interleave_fallback(arrays, indices),
+        DictionaryInterleaveStrategy::FallbackDictionary => {
+            interleave_fallback_dictionary::<K>(&dictionaries, indices)
+        }
+    }
+}
+
+enum DictionaryInterleaveStrategy {
+    SharedDictionary,
+    MergeDictionaries,
+    Fallback,
+    FallbackDictionary,
+}
+
+// Keep merge-path code generation independent of shared-mapping detection.
+#[inline(never)]
+fn interleave_merged_dictionaries<K: ArrowDictionaryKeyType>(
+    dictionaries: &[&DictionaryArray<K>],
+    indices: &[(usize, usize)],
+) -> Result<ArrayRef, ArrowError> {
     let masks_and_lookups: Result<Vec<_>, ArrowError> = dictionaries
         .iter()
-        .enumerate()
-        .map(|(a_idx, dictionary)| {
+        .map(|dictionary| {
             let buffer = MutableBuffer::try_from_len_zeroed(bit_util::ceil(dictionary.len(), 8))
                 .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
-            let mut key_mask = BooleanBufferBuilder::new_from_buffer(buffer, dictionary.len());
-
-            let mut lookups = 0;
-            for (_, key_idx) in indices.iter().filter(|(a, _)| *a == a_idx) {
-                key_mask.set_bit(*key_idx, true);
-                lookups += 1;
-            }
-            Ok((key_mask.finish(), lookups))
+            Ok((
+                BooleanBufferBuilder::new_from_buffer(buffer, dictionary.len()),
+                0,
+            ))
         })
         .collect();
-    let (masks, key_lookups): (Vec<_>, Vec<_>) = masks_and_lookups?.into_iter().unzip();
+    let mut masks_and_lookups = masks_and_lookups?;
+    for &(array_idx, key_idx) in indices {
+        masks_and_lookups[array_idx].0.set_bit(key_idx, true);
+        masks_and_lookups[array_idx].1 += 1;
+    }
+    let (masks, key_lookups): (Vec<_>, Vec<_>) = masks_and_lookups
+        .into_iter()
+        .map(|(mut mask, lookups)| (mask.finish(), lookups))
+        .unzip();
 
-    let merged = merge_dictionary_values(&dictionaries, Some(&masks), Some(&key_lookups))?;
+    let merged = merge_dictionary_values(dictionaries, Some(&masks), Some(&key_lookups))?;
 
     // Recompute keys
     let mut keys = PrimitiveBuilder::<K>::with_capacity(indices.len());
@@ -309,6 +352,28 @@ fn interleave_dictionaries<K: ArrowDictionaryKeyType>(
         }
     }
     let array = unsafe { DictionaryArray::new_unchecked(keys.finish(), merged.values) };
+    Ok(Arc::new(array))
+}
+
+/// Interleaves dictionary keys without copying their shared values array.
+///
+/// # Safety
+///
+/// Every dictionary's values array must be pointer-equal to `shared_values`.
+unsafe fn interleave_shared_dictionary<K: ArrowDictionaryKeyType>(
+    dictionaries: &[&DictionaryArray<K>],
+    indices: &[(usize, usize)],
+    shared_values: &ArrayRef,
+) -> Result<ArrayRef, ArrowError> {
+    let key_arrays: Vec<&dyn Array> = dictionaries
+        .iter()
+        .map(|dictionary| dictionary.keys() as &dyn Array)
+        .collect();
+    let keys = interleave_primitive::<K>(&key_arrays, indices, dictionaries[0].keys().data_type())?;
+    // SAFETY: every non-null key came from a dictionary backed by `shared_values`.
+    let array = unsafe {
+        DictionaryArray::new_unchecked(keys.as_primitive::<K>().clone(), Arc::clone(shared_values))
+    };
     Ok(Arc::new(array))
 }
 
@@ -1198,16 +1263,52 @@ mod tests {
     }
 
     #[test]
-    fn test_interleave_dictionary_overflow_same_values() {
+    fn test_interleave_dictionary_reuses_shared_values() {
+        let values: ArrayRef = Arc::new(StringArray::from_iter_values(["a", "b", "c"]));
+        let dict_a = DictionaryArray::<Int32Type>::new(
+            Int32Array::from(vec![Some(0), None, Some(2)]),
+            Arc::clone(&values),
+        );
+        let dict_b = DictionaryArray::<Int32Type>::new(
+            Int32Array::from(vec![Some(1), Some(0)]),
+            Arc::clone(&values),
+        );
+
+        let result = interleave(
+            &[&dict_a, &dict_b],
+            &[(0, 2), (1, 0), (0, 1), (1, 1), (0, 0)],
+        )
+        .unwrap();
+        let result = result.as_dictionary::<Int32Type>();
+
+        assert!(Arc::ptr_eq(result.values(), &values));
+        assert_eq!(
+            result.keys(),
+            &Int32Array::from(vec![Some(2), Some(1), None, Some(0), Some(0)])
+        );
+    }
+
+    #[test]
+    fn test_interleave_dictionary_empty_values() {
+        let values: ArrayRef = Arc::new(StringArray::new_null(0));
+        let dictionary =
+            DictionaryArray::<Int8Type>::new(Int8Array::new_null(2), Arc::clone(&values));
+
+        let result = interleave(&[&dictionary], &[(0, 1), (0, 0)]).unwrap();
+        let result = result.as_dictionary::<Int8Type>();
+
+        assert!(Arc::ptr_eq(result.values(), &values));
+        assert_eq!(result.keys(), &Int8Array::new_null(2));
+    }
+
+    #[test]
+    fn test_interleave_dictionary_shared_values_avoid_key_overflow() {
         let values: ArrayRef = Arc::new(StringArray::from_iter_values(
             (0..50).map(|i| format!("v{i}")),
         ));
 
-        // With 3 dictionaries of 50 values each, relative_offsets = [0, 50, 100]
-        // Accessing key 49 from dict3 gives 100 + 49 = 149 which overflows Int8
-        // (max 127).
-        // This test case falls back to interleave_fallback because the
-        // dictionaries share the same underlying values slice.
+        // Concatenating the three mappings would overflow Int8, but the shared
+        // values mapping lets interleave keep the original keys.
         let dict1 = DictionaryArray::<Int8Type>::new(
             Int8Array::from_iter_values([0, 1, 2]),
             values.clone(),
@@ -1230,6 +1331,25 @@ mod tests {
             .map(|x| x.unwrap())
             .collect();
         assert_eq!(string_result, vec!["v0", "v0", "v49"]);
+        assert!(Arc::ptr_eq(dict_result.values(), &values));
+    }
+
+    #[test]
+    fn test_interleave_dictionary_distinct_values_overflow_returns_err() {
+        let values_a: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..200).map(|i| format!("a{i}")),
+        ));
+        let values_b: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..200).map(|i| format!("b{i}")),
+        ));
+        let dict_a =
+            DictionaryArray::<UInt8Type>::new(UInt8Array::from_iter_values(0..200), values_a);
+        let dict_b =
+            DictionaryArray::<UInt8Type>::new(UInt8Array::from_iter_values(0..200), values_b);
+        let indices: Vec<_> = (0..200).flat_map(|i| [(0, i), (1, i)]).collect();
+
+        let err = interleave(&[&dict_a, &dict_b], &indices).unwrap_err();
+        assert!(matches!(err, ArrowError::DictionaryKeyOverflowError));
     }
 
     fn test_interleave_lists<O: OffsetSizeTrait>() {
