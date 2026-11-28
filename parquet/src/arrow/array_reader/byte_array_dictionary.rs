@@ -23,7 +23,9 @@ use crate::arrow::record_reader::GenericRecordReader;
 use crate::arrow::schema::parquet_to_arrow_field;
 use crate::basic::{ConvertedType, Encoding, Type};
 use crate::column::page::PageIterator;
-use crate::column::reader::decoder::{ColumnValueDecoder, normalize_fixed_len_byte_array_payload};
+use crate::column::reader::decoder::{
+    ColumnValueDecoder, check_dictionary_page_values, normalize_fixed_len_byte_array_payload,
+};
 use crate::encodings::rle::{MAX_RLE_DICTIONARY_BIT_WIDTH, RleDecoder};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
@@ -398,6 +400,7 @@ where
                 ));
             }
         } else {
+            check_dictionary_page_values(Type::BYTE_ARRAY, 0, buf.len(), len)?;
             ByteArrayDecoderPlain::new(buf, len, Some(len), self.validate_utf8)
                 .read(&mut buffer, usize::MAX)?;
         }
@@ -924,7 +927,7 @@ mod tests {
         let mut decoder = DictionaryDecoder::new(&column_desc);
 
         decoder
-            .set_dict(encoded_dictionary, 4, Encoding::PLAIN_DICTIONARY, false)
+            .set_dict(encoded_dictionary, 0, Encoding::PLAIN_DICTIONARY, false)
             .unwrap();
 
         for (encoding, page) in pages.clone() {
@@ -1007,5 +1010,20 @@ mod tests {
             err.to_string(),
             "Parquet error: Invalid or corrupted RLE value 255 exceeds bit width 1"
         );
+    }
+
+    #[test]
+    fn test_dictionary_page_declaring_too_many_values() {
+        let column_desc = utf8_column();
+        let mut decoder = DictionaryDecoder::<i32, i32>::new(&column_desc);
+        let err = decoder
+            .set_dict(
+                Bytes::from_static(b"12345678"),
+                i32::MAX as u32,
+                Encoding::PLAIN,
+                false,
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("holds at most"), "{err}");
     }
 }

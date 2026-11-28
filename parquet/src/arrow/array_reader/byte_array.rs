@@ -8,9 +8,9 @@ use crate::arrow::buffer::offset_buffer::OffsetBuffer;
 use crate::arrow::decoder::{DeltaByteArrayDecoder, DictIndexDecoder};
 use crate::arrow::record_reader::GenericRecordReader;
 use crate::arrow::schema::parquet_to_arrow_field;
-use crate::basic::{ConvertedType, Encoding};
+use crate::basic::{ConvertedType, Encoding, Type};
 use crate::column::page::PageIterator;
-use crate::column::reader::decoder::ColumnValueDecoder;
+use crate::column::reader::decoder::{ColumnValueDecoder, check_dictionary_page_values};
 use crate::data_type::Int32Type;
 use crate::encodings::decoding::{Decoder, DeltaBitPackDecoder};
 use crate::errors::{ParquetError, Result};
@@ -210,6 +210,8 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
                 encoding
             ));
         }
+
+        check_dictionary_page_values(Type::BYTE_ARRAY, 0, buf.len(), num_values as usize)?;
 
         let mut buffer = OffsetBuffer::with_capacity(0);
         let mut decoder = ByteArrayDecoderPlain::new(
@@ -754,7 +756,7 @@ mod tests {
         let mut decoder = ByteArrayColumnValueDecoder::new(&column_desc);
 
         decoder
-            .set_dict(encoded_dictionary, 4, Encoding::RLE_DICTIONARY, false)
+            .set_dict(encoded_dictionary, 0, Encoding::RLE_DICTIONARY, false)
             .unwrap();
 
         // test nulls read
@@ -930,5 +932,20 @@ mod tests {
         assert_eq!(output.offsets, vec![0, i32::MAX, i32::MAX]);
         assert_eq!(decoder.skip(1).unwrap(), 1);
         assert_eq!(decoder.read(&mut output, 1).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_dictionary_page_declaring_too_many_values() {
+        let column_desc = utf8_column();
+        let mut decoder = ByteArrayColumnValueDecoder::<i32>::new(&column_desc);
+        let err = decoder
+            .set_dict(
+                Bytes::from_static(b"12345678"),
+                i32::MAX as u32,
+                Encoding::PLAIN,
+                false,
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("holds at most"), "{err}");
     }
 }

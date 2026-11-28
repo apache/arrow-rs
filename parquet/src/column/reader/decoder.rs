@@ -157,6 +157,30 @@ pub(crate) fn normalize_fixed_len_byte_array_payload(
     )
 }
 
+/// Reject a dictionary page whose declared `num_values` exceeds what its
+/// decompressed bytes can hold at the smallest plain width, before any
+/// allocation is sized from the count.
+pub(crate) fn check_dictionary_page_values(
+    physical_type: Type,
+    type_length: i32,
+    num_bytes: usize,
+    num_values: usize,
+) -> Result<()> {
+    let max_values = match physical_type {
+        Type::BOOLEAN => num_bytes.saturating_mul(8),
+        Type::INT32 | Type::FLOAT | Type::BYTE_ARRAY => num_bytes / 4,
+        Type::INT64 | Type::DOUBLE => num_bytes / 8,
+        Type::INT96 => num_bytes / 12,
+        Type::FIXED_LEN_BYTE_ARRAY => num_bytes / type_length.max(1) as usize,
+    };
+    if num_values > max_values {
+        return Err(general_err!(
+            "dictionary page declares {num_values} values but holds at most {max_values}"
+        ));
+    }
+    Ok(())
+}
+
 /// Prepare a complete FLBA data-page value section after extracting the levels.
 /// PLAIN requires exact size validation; other compliant encodings are unchanged.
 pub(crate) fn normalize_fixed_len_byte_array_data(
@@ -334,6 +358,12 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
             } else {
                 buf
             };
+            check_dictionary_page_values(
+                self.descr.physical_type(),
+                self.descr.type_length(),
+                buf.len(),
+                num_values as usize,
+            )?;
             let mut dictionary = PlainDecoder::<T>::new(self.descr.type_length());
             dictionary.set_data(buf, num_values as usize)?;
 
@@ -924,6 +954,31 @@ mod tests {
                 remaining_records -= records;
                 assert_ne!(remaining_records, 0);
             }
+        }
+    }
+
+    #[test]
+    fn dictionary_page_value_counts() {
+        // 8 bytes hold one INT64 value, two INT32 values, 64 BOOLEAN values.
+        for (physical_type, type_length, num_values) in [
+            (Type::INT64, 0, 2),
+            (Type::INT32, 0, 3),
+            (Type::BOOLEAN, 0, 65),
+            (Type::BYTE_ARRAY, 0, 3),
+            (Type::FIXED_LEN_BYTE_ARRAY, 4, 3),
+        ] {
+            let err = check_dictionary_page_values(physical_type, type_length, 8, num_values)
+                .unwrap_err();
+            assert!(err.to_string().contains("holds at most"), "{err}");
+        }
+        for (physical_type, type_length, num_values) in [
+            (Type::INT64, 0, 1),
+            (Type::INT32, 0, 2),
+            (Type::BOOLEAN, 0, 64),
+            (Type::BYTE_ARRAY, 0, 2),
+            (Type::FIXED_LEN_BYTE_ARRAY, 4, 2),
+        ] {
+            check_dictionary_page_values(physical_type, type_length, 8, num_values).unwrap();
         }
     }
 }
