@@ -70,6 +70,21 @@ pub(crate) fn calculate_array_levels(array: &ArrayRef, field: &Field) -> Result<
     Ok(builder.finish())
 }
 
+/// Like [`calculate_array_levels`], for only the rows of `array` at the indices `rows`,
+/// which must be sorted and distinct
+///
+/// The `non_null_indices` of the levels still index the leaf arrays of `array`, so they
+/// skip the values of the rows not in `rows`.
+pub(crate) fn calculate_array_levels_for_rows(
+    array: &ArrayRef,
+    field: &Field,
+    rows: &[usize],
+) -> Result<Vec<ArrayLevels>> {
+    let mut builder = LevelInfoBuilder::try_new(field, Default::default(), array)?;
+    builder.write_rows(rows);
+    Ok(builder.finish())
+}
+
 /// Returns true if the DataType can be represented as a primitive parquet column,
 /// i.e. a leaf array with no children
 fn is_leaf(data_type: &DataType) -> bool {
@@ -387,13 +402,7 @@ impl LevelInfoBuilder {
         match self {
             LevelInfoBuilder::Required(child, nulls, name) => {
                 if let Some(index) = range.clone().find(|&index| nulls.is_null(index)) {
-                    let message =
-                        format!("Found null at index {index} for required field '{name}'");
-                    child.visit_leaves(|leaf| {
-                        if leaf.validation_error.is_none() {
-                            leaf.validation_error = Some(message.clone());
-                        }
-                    });
+                    Self::reject_null(child, name, index);
                 }
                 // Parents still need the child levels to backfill list boundaries;
                 // the recorded error prevents these invalid values from being encoded.
@@ -419,6 +428,46 @@ impl LevelInfoBuilder {
                 Self::write_struct(children, ctx, nulls.as_ref(), range)
             }
         }
+    }
+
+    /// Writes the level data for the elements at the indices `rows`, which must be sorted
+    /// and distinct, as calling [`Self::write`] for each run of consecutive rows does
+    ///
+    /// Leaves and structs handle all rows at once, as there can be many runs of a few rows
+    /// each.
+    fn write_rows(&mut self, rows: &[usize]) {
+        match self {
+            LevelInfoBuilder::Required(child, nulls, name) => {
+                if let Some(&row) = rows.iter().find(|&&row| nulls.is_null(row)) {
+                    Self::reject_null(child, name, row);
+                }
+                child.write_rows(rows);
+            }
+            LevelInfoBuilder::Primitive(info) => Self::write_leaf_rows(info, rows),
+            LevelInfoBuilder::Struct(children, ctx, nulls) => {
+                Self::write_struct_rows(children, ctx, nulls.as_ref(), rows)
+            }
+            _ => {
+                let mut start = 0;
+                for end in 1..=rows.len() {
+                    if end == rows.len() || rows[end] != rows[end - 1] + 1 {
+                        self.write(rows[start]..rows[end - 1] + 1);
+                        start = end;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Records that the required field `name`, of which `child` holds the values, is null
+    /// at `index`
+    fn reject_null(child: &mut LevelInfoBuilder, name: &str, index: usize) {
+        let message = format!("Found null at index {index} for required field '{name}'");
+        child.visit_leaves(|leaf| {
+            if leaf.validation_error.is_none() {
+                leaf.validation_error = Some(message.clone());
+            }
+        });
     }
 
     /// Returns `true` if the child contains no nested repetition levels, meaning
@@ -823,6 +872,42 @@ impl LevelInfoBuilder {
         }
     }
 
+    /// Like [`Self::write_struct`], for the rows at the indices `rows`, which must be
+    /// sorted and distinct
+    fn write_struct_rows(
+        children: &mut [LevelInfoBuilder],
+        ctx: &LevelContext,
+        nulls: Option<&NullBuffer>,
+        rows: &[usize],
+    ) {
+        let Some(nulls) = nulls.filter(|nulls| nulls.null_count() != 0) else {
+            for child in children {
+                child.write_rows(rows);
+            }
+            return;
+        };
+
+        // Write each run of rows that are all valid or all null at once
+        let mut rest = rows;
+        while let Some(&first) = rest.first() {
+            let valid = nulls.is_valid(first);
+            let len = rest
+                .iter()
+                .position(|&row| nulls.is_valid(row) != valid)
+                .unwrap_or(rest.len());
+            let (run, after) = rest.split_at(len);
+            for child in children.iter_mut() {
+                match valid {
+                    true => child.write_rows(run),
+                    false => child.visit_leaves(|info| {
+                        info.extend_uniform_levels(ctx.def_level - 1, ctx.rep_level, len)
+                    }),
+                }
+            }
+            rest = after;
+        }
+    }
+
     /// Write `range` elements from FixedSizeListArray with child data `values` and null bitmap `nulls`.
     fn write_fixed_size_list(
         child: &mut LevelInfoBuilder,
@@ -979,6 +1064,60 @@ impl LevelInfoBuilder {
         if !matches!(info.rep_levels, LevelData::Absent) {
             info.append_rep_level_run(info.max_rep_level, len);
         }
+    }
+
+    /// Like [`Self::write_leaf`], for the rows at the indices `rows`, which must be sorted
+    /// and distinct
+    ///
+    /// Writes the levels of rows that are all valid or all null as a run, as
+    /// [`Self::write_leaf`] does for the array that `filter_record_batch` returns for those
+    /// rows, so that the column writer splits them into the same pages.
+    fn write_leaf_rows(info: &mut ArrayLevels, rows: &[usize]) {
+        match &info.logical_nulls {
+            Some(nulls) if !matches!(info.def_levels, LevelData::Absent) => {
+                let all_null = nulls.null_count() == nulls.len();
+                let first_valid = !all_null && rows.first().is_some_and(|&r| nulls.is_valid(r));
+                let uniform = all_null || rows.iter().all(|&r| nulls.is_valid(r) == first_valid);
+                // Filtering a dictionary keeps its values, and so any nulls among them, which
+                // make `write_leaf` write levels one by one even for rows that are all valid
+                let keeps_nulls = || {
+                    info.array
+                        .as_any_dictionary_opt()
+                        .is_some_and(|dictionary| dictionary.values().logical_nulls().is_some())
+                };
+                if uniform && !first_valid {
+                    info.def_levels
+                        .append_run(info.max_def_level - 1, rows.len());
+                } else if uniform && !keeps_nulls() {
+                    info.def_levels.append_run(info.max_def_level, rows.len());
+                    info.non_null_indices.extend_from_slice(rows);
+                } else {
+                    let max_def_level = info.max_def_level;
+                    let def_levels = info
+                        .def_levels
+                        .materialize_mut()
+                        .expect("definition levels present");
+                    def_levels.reserve(rows.len());
+                    // Stores the index of every row, but keeps only those of valid rows,
+                    // as branching on validity would mispredict for random nulls
+                    let indices = &mut info.non_null_indices;
+                    let mut len = indices.len();
+                    indices.resize(len + rows.len(), 0);
+                    for &row in rows {
+                        let valid = nulls.is_valid(row);
+                        def_levels.push(max_def_level - i16::from(!valid));
+                        indices[len] = row;
+                        len += usize::from(valid);
+                    }
+                    indices.truncate(len);
+                }
+            }
+            _ => {
+                info.def_levels.append_run(info.max_def_level, rows.len());
+                info.non_null_indices.extend_from_slice(rows);
+            }
+        }
+        info.rep_levels.append_run(info.max_rep_level, rows.len());
     }
 
     /// Visits all children of this node in depth first order

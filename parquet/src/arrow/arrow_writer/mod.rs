@@ -14,17 +14,22 @@ use std::sync::{Arc, Mutex};
 use std::vec::IntoIter;
 
 use arrow_array::cast::AsArray;
-use arrow_array::{ArrayRef, Int32Array, RecordBatch, RecordBatchWriter, new_empty_array};
+use arrow_array::{
+    ArrayRef, BooleanArray, Int32Array, RecordBatch, RecordBatchWriter, new_empty_array,
+};
 use arrow_array::{PrimitiveArray, types::*};
+use arrow_buffer::BooleanBuffer;
 use arrow_schema::{
     ArrowError, DataType as ArrowDataType, Field, FieldRef, IntervalUnit, SchemaRef, TimeUnit,
 };
+use arrow_select::filter::filter_record_batch;
 
 use super::schema::{
     add_encoded_arrow_schema_to_metadata, decimal_length_from_precision, validate_map_key_type,
 };
 
 use crate::arrow::ArrowSchemaConverter;
+use crate::arrow::arrow_reader::RowSelection;
 use crate::arrow::arrow_writer::byte_array::ByteArrayEncoder;
 use crate::basic::PageType;
 use crate::column::page::{CompressedPage, PageWriteSpec, PageWriter};
@@ -44,7 +49,7 @@ use crate::file::properties::{WriterProperties, WriterPropertiesPtr};
 use crate::file::writer::{SerializedFileWriter, SerializedRowGroupWriter};
 use crate::parquet_thrift::{ThriftCompactOutputProtocol, WriteThrift};
 use crate::schema::types::{ColumnDescPtr, SchemaDescriptor};
-use levels::{ArrayLevels, calculate_array_levels};
+use levels::{ArrayLevels, calculate_array_levels, calculate_array_levels_for_rows};
 
 mod byte_array;
 mod levels;
@@ -356,11 +361,81 @@ impl<W: Write + Send> ArrowWriter<W> {
         if batch.num_rows() == 0 {
             return Ok(());
         }
+        self.write_rows(batch.clone())
+    }
 
-        // Rows not yet handed to a row group writer. Splitting iterates here instead of
-        // recursing, so a small row group limit over a large batch cannot exhaust the stack.
-        let mut remaining = batch.clone();
+    /// Encodes the rows of `batch` that `selection` selects
+    ///
+    /// This writes the rows that [`filter_record_batch`] would return for the same
+    /// selection, as [`Self::write`] would write them, but without first copying them to a
+    /// new batch. The pages of a nullable column can still differ when one call writes rows
+    /// to more than one row group and only some of them have nulls in that column.
+    ///
+    /// With content-defined chunking enabled, this writes a filtered copy of `batch` with
+    /// [`Self::write`].
+    ///
+    /// A `selection` that selects no rows writes nothing. This fails in the same cases as
+    /// [`Self::write`] would for the filtered batch, and, without writing any rows, if
+    /// `selection` does not span exactly `batch.num_rows()` rows.
+    ///
+    /// [`filter_record_batch`]: arrow_select::filter::filter_record_batch
+    ///
+    /// # Example
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow_array::{ArrayRef, Int64Array, RecordBatch};
+    /// # use arrow_array::cast::AsArray;
+    /// # use arrow_array::types::Int64Type;
+    /// # use arrow_buffer::BooleanBuffer;
+    /// # use bytes::Bytes;
+    /// # use parquet::arrow::ArrowWriter;
+    /// # use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, RowSelection};
+    /// let col = Arc::new(Int64Array::from_iter_values([1, 2, 3, 4])) as ArrayRef;
+    /// let batch = RecordBatch::try_from_iter([("col", col)]).unwrap();
+    /// // Skip the second row
+    /// let mask = BooleanBuffer::from(vec![true, false, true, true]);
+    /// let selection = RowSelection::from_boolean_buffer(mask);
+    ///
+    /// let mut buffer = Vec::new();
+    /// let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), None).unwrap();
+    /// writer.write_with_selection(&batch, &selection).unwrap();
+    /// writer.close().unwrap();
+    ///
+    /// let mut reader = ParquetRecordBatchReader::try_new(Bytes::from(buffer), 1024).unwrap();
+    /// let read = reader.next().unwrap().unwrap();
+    /// let expected = Int64Array::from(vec![1, 3, 4]);
+    /// assert_eq!(read.column(0).as_primitive::<Int64Type>(), &expected);
+    /// ```
+    pub fn write_with_selection(
+        &mut self,
+        batch: &RecordBatch,
+        selection: &RowSelection,
+    ) -> Result<()> {
+        check_selection_len(selection, batch.num_rows())?;
+        let mask = || match selection.as_mask() {
+            Some(mask) => mask.clone(),
+            None => selection.clone().into_boolean_buffer(),
+        };
+        match selection.row_count() {
+            0 => Ok(()),
+            num_rows if num_rows == batch.num_rows() => self.write(batch),
+            _ if self.cdc_chunkers.is_some() => {
+                let filter = BooleanArray::new(mask(), None);
+                self.write(&filter_record_batch(batch, &filter)?)
+            }
+            num_rows => self.write_rows(SelectedRows {
+                batch: batch.clone(),
+                selection: mask(),
+                num_rows,
+            }),
+        }
+    }
 
+    /// Writes `remaining` to the in progress row group, and to as many new row groups
+    /// as the row group limits require
+    fn write_rows(&mut self, mut remaining: impl RowsToWrite) -> Result<()> {
+        // Splitting iterates here instead of recursing, so a small row group limit over a
+        // large batch cannot exhaust the stack.
         loop {
             let in_progress = match &mut self.in_progress {
                 Some(in_progress) => in_progress,
@@ -416,17 +491,10 @@ impl<W: Write + Send> ArrowWriter<W> {
                 }
             }
 
-            let rest = split_at.map(|to_write| {
-                let rest = remaining.slice(to_write, remaining.num_rows() - to_write);
-                remaining = remaining.slice(0, to_write);
-                rest
-            });
+            let rest = split_at.map(|to_write| remaining.split_off(to_write));
 
             let in_progress = self.in_progress.as_mut().unwrap();
-            match self.cdc_chunkers.as_mut() {
-                Some(chunkers) => in_progress.write_with_chunkers(&remaining, chunkers)?,
-                None => in_progress.write(&remaining)?,
-            }
+            remaining.write_to(in_progress, self.cdc_chunkers.as_deref_mut())?;
 
             let should_flush = self
                 .max_row_group_row_count
@@ -543,6 +611,111 @@ impl<W: Write + Send> RecordBatchWriter for ArrowWriter<W> {
     fn close(self) -> std::result::Result<(), ArrowError> {
         self.close()?;
         Ok(())
+    }
+}
+
+/// Rows that [`ArrowWriter`] writes to one or more row groups
+trait RowsToWrite: Sized {
+    /// Returns the number of rows
+    fn num_rows(&self) -> usize;
+
+    /// Keeps the first `at` rows, returning the others
+    ///
+    /// `at` must be greater than zero and less than [`Self::num_rows`].
+    fn split_off(&mut self, at: usize) -> Self;
+
+    /// Writes the rows to `writer`, using `chunkers` for content-defined chunking
+    fn write_to(
+        &self,
+        writer: &mut ArrowRowGroupWriter,
+        chunkers: Option<&mut [ContentDefinedChunker]>,
+    ) -> Result<()>;
+}
+
+impl RowsToWrite for RecordBatch {
+    fn num_rows(&self) -> usize {
+        RecordBatch::num_rows(self)
+    }
+
+    fn split_off(&mut self, at: usize) -> Self {
+        let rest = self.slice(at, RecordBatch::num_rows(self) - at);
+        *self = self.slice(0, at);
+        rest
+    }
+
+    fn write_to(
+        &self,
+        writer: &mut ArrowRowGroupWriter,
+        chunkers: Option<&mut [ContentDefinedChunker]>,
+    ) -> Result<()> {
+        match chunkers {
+            Some(chunkers) => writer.write_with_chunkers(self, chunkers),
+            None => writer.write(self),
+        }
+    }
+}
+
+/// The rows of a [`RecordBatch`] that a selection selects
+struct SelectedRows {
+    batch: RecordBatch,
+    /// Selects the rows of `batch` whose bits are set
+    selection: BooleanBuffer,
+    num_rows: usize,
+}
+
+impl RowsToWrite for SelectedRows {
+    fn num_rows(&self) -> usize {
+        self.num_rows
+    }
+
+    fn split_off(&mut self, at: usize) -> Self {
+        // Each part holds only its own rows, so that work proportional to the length of
+        // the arrays, such as decoding run-end encoded arrays, does not repeat for each
+        // row group
+        let split = self.selection.find_nth_set_bit_position(0, at);
+        let rest_len = self.selection.len() - split;
+        let rest = Self {
+            batch: self.batch.slice(split, rest_len),
+            selection: self.selection.slice(split, rest_len),
+            num_rows: self.num_rows - at,
+        };
+        self.batch = self.batch.slice(0, split);
+        self.selection = self.selection.slice(0, split);
+        self.num_rows = at;
+        rest
+    }
+
+    fn write_to(
+        &self,
+        writer: &mut ArrowRowGroupWriter,
+        chunkers: Option<&mut [ContentDefinedChunker]>,
+    ) -> Result<()> {
+        // `ArrowWriter::write_with_selection` writes a filtered copy instead with
+        // content-defined chunking
+        debug_assert!(chunkers.is_none());
+        let mut rows = Vec::with_capacity(self.num_rows);
+        rows.extend(self.selection.set_indices());
+        writer.write_selected(&self.batch, &rows)
+    }
+}
+
+/// Returns an error unless `selection` spans exactly `num_rows` rows
+fn check_selection_len(selection: &RowSelection, num_rows: usize) -> Result<()> {
+    let total_rows = match selection.as_mask() {
+        Some(mask) => Some(mask.len()),
+        None => selection.iter().try_fold(0_usize, |total, selector| {
+            total.checked_add(selector.row_count)
+        }),
+    };
+    match total_rows {
+        Some(total_rows) if total_rows == num_rows => Ok(()),
+        Some(total_rows) => Err(general_err!(
+            "RowSelection spans {total_rows} rows, but the batch has {num_rows} rows"
+        )),
+        None => Err(general_err!(
+            "RowSelection spans more than {} rows, but the batch has {num_rows} rows",
+            usize::MAX
+        )),
     }
 }
 
@@ -1378,6 +1551,25 @@ impl ArrowRowGroupWriter {
             for (offset, leaf) in leaves.into_iter().enumerate() {
                 let leaf_idx = field.leaf_range.start + offset;
                 self.writers[leaf_idx].write_with_chunker(&leaf, &mut chunkers[leaf_idx])?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Writes the rows of `batch` at the indices `rows`, which must be sorted and distinct
+    fn write_selected(&mut self, batch: &RecordBatch, rows: &[usize]) -> Result<()> {
+        self.validate_batch_shape(batch, None)?;
+        self.buffered_rows += rows.len();
+
+        for (column_idx, field) in self.schema_plan.fields.iter().enumerate() {
+            let leaves = calculate_array_levels_for_rows(
+                batch.column(column_idx),
+                field.field.as_ref(),
+                rows,
+            )?;
+            self.validate_leaf_count(field, leaves.len())?;
+            for (offset, leaf) in leaves.into_iter().enumerate() {
+                self.writers[field.leaf_range.start + offset].write(&ArrowLeafColumn(leaf))?;
             }
         }
         Ok(())
@@ -2335,7 +2527,9 @@ mod tests {
     use std::fs::File;
 
     use crate::arrow::ARROW_SCHEMA_META_KEY;
-    use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
+    use crate::arrow::arrow_reader::{
+        ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder, RowSelector,
+    };
     use crate::column::page::{Page, PageReader};
     use crate::file::metadata::thrift::PageHeader;
     use crate::file::page_index::column_index::ColumnIndexMetaData;
@@ -2344,18 +2538,20 @@ mod tests {
     use crate::schema::types::ColumnPath;
     use arrow::datatypes::{DataType, Schema};
     use arrow::error::Result as ArrowResult;
-    use arrow::util::data_gen::create_random_array;
+    use arrow::util::data_gen::{create_random_array, create_random_batch};
     use arrow::util::pretty::pretty_format_batches;
     use arrow::{array::*, buffer::Buffer, compute::cast};
-    use arrow_buffer::{IntervalMonthDayNano, NullBuffer, OffsetBuffer};
+    use arrow_buffer::{BooleanBuffer, IntervalMonthDayNano, NullBuffer, OffsetBuffer};
     use arrow_schema::Fields;
     use arrow_select::concat::concat;
+    use arrow_select::filter::filter_record_batch;
+    use rand::{RngExt, SeedableRng, rngs::StdRng};
 
     use crate::basic::{Encoding, EncodingMask};
     use crate::data_type::AsBytes;
     use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaData, ParquetMetaDataReader};
     use crate::file::properties::{
-        BloomFilterPosition, EnabledStatistics, ReaderProperties, WriterVersion,
+        BloomFilterPosition, CdcOptions, EnabledStatistics, ReaderProperties, WriterVersion,
     };
     use crate::file::serialized_reader::ReadOptionsBuilder;
     use crate::file::{
@@ -6241,6 +6437,379 @@ mod tests {
                 row_group.total_byte_size(),
             );
         }
+    }
+
+    /// Returns a batch, sliced from larger arrays, with a column for each kind of array
+    /// that [`ArrowWriter`] computes levels for, and for each way it encodes leaf values
+    fn selection_test_batch() -> RecordBatch {
+        let num_rows = 128;
+        let schema = Schema::new(vec![
+            Field::new("required", DataType::Int64, false),
+            Field::new("int8", DataType::Int8, true),
+            Field::new("decimal", DataType::Decimal128(10, 2), true),
+            Field::new("float", DataType::Float32, true),
+            Field::new("bool", DataType::Boolean, true),
+            Field::new("string", DataType::Utf8, true),
+            Field::new("view", DataType::Utf8View, true),
+            Field::new("fsb", DataType::FixedSizeBinary(3), true),
+            Field::new_dictionary("dict", DataType::Int32, DataType::Utf8, true),
+            Field::new_dictionary("int_dict", DataType::Int16, DataType::Int64, true),
+            Field::new("ree", run_end_type(DataType::Int32, true), true),
+            Field::new_struct(
+                "struct",
+                vec![
+                    Field::new("a", DataType::Int32, true),
+                    Field::new("b", DataType::Utf8, true),
+                ],
+                true,
+            ),
+        ]);
+        let batch = create_random_batch(Arc::new(schema), num_rows, 0.2, 0.5).unwrap();
+        let (schema, mut columns, _) = batch.into_parts();
+        let mut fields = schema.fields().to_vec();
+
+        let mut rng = StdRng::seed_from_u64(42);
+        let mut list = ListBuilder::new(Int64Builder::new());
+        let mut map = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+        for _ in 0..num_rows {
+            if rng.random_bool(0.2) {
+                list.append_null();
+                map.append(false).unwrap();
+                continue;
+            }
+            for key in 0..rng.random_range(0..4) {
+                let value = rng.random_bool(0.8).then(|| rng.random::<i64>());
+                list.values().append_option(value);
+                map.keys().append_value(format!("{key}"));
+                map.values().append_option(value.map(|v| v as i32));
+            }
+            list.append(true);
+            map.append(true).unwrap();
+        }
+        let item = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let values: ArrayRef = Arc::new(Int32Array::from_iter(
+            (0..2 * num_rows as i32).map(|v| (v % 3 != 0).then_some(v)),
+        ));
+        let nulls = NullBuffer::from_iter((0..num_rows).map(|row| row % 5 != 0));
+        let fixed_size_list =
+            FixedSizeListArray::new(item.clone(), 2, values.clone(), Some(nulls.clone()));
+        let list_view = ListViewArray::new(
+            item,
+            (0..num_rows as i32).map(|row| row * 37 % 250).collect(),
+            (0..num_rows as i32).map(|row| row % 4).collect(),
+            values,
+            Some(nulls),
+        );
+
+        // Most selections skip the first and last row of the sliced batch, so they select
+        // only valid or only null rows from columns with nulls or values only in those rows
+        let edge = |row: usize| row == 9 || row == 108;
+        let edge_nulls = Int32Array::from_iter((0..num_rows).map(|row| {
+            let value = row as i32;
+            (!edge(row)).then_some(value)
+        }));
+        let edge_values = Int32Array::from_iter((0..num_rows).map(|row| {
+            let value = row as i32;
+            edge(row).then_some(value)
+        }));
+        let edge_null_values = DictionaryArray::new(
+            Int8Array::from_iter_values((0..num_rows).map(|row| match edge(row) {
+                true => 1,
+                false => 2 * (row % 2) as i8,
+            })),
+            Arc::new(StringArray::from(vec![Some("a"), None, Some("b")])),
+        );
+
+        let more_columns: [(&str, ArrayRef); 7] = [
+            ("edge_nulls", Arc::new(edge_nulls)),
+            ("edge_values", Arc::new(edge_values)),
+            ("edge_null_values", Arc::new(edge_null_values)),
+            ("list", Arc::new(list.finish())),
+            ("map", Arc::new(map.finish())),
+            ("fixed_size_list", Arc::new(fixed_size_list)),
+            ("list_view", Arc::new(list_view)),
+        ];
+        for (name, column) in more_columns {
+            fields.push(Arc::new(Field::new(name, column.data_type().clone(), true)));
+            columns.push(column);
+        }
+        RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)
+            .unwrap()
+            .slice(9, 100)
+    }
+
+    /// Asserts that [`ArrowWriter::write_with_selection`] writes the same file as
+    /// [`filter_record_batch`] and [`ArrowWriter::write`], with selections of `batch`
+    /// backed by bitmaps and by runs
+    fn assert_selected_rows_match_filtered_rows(batch: &RecordBatch, props: WriterProperties) {
+        let num_rows = batch.num_rows();
+        let mut rng = StdRng::seed_from_u64(7);
+        let masks = [
+            BooleanBuffer::from_iter((0..num_rows).map(|row| row % 2 == 0)),
+            BooleanBuffer::from_iter((0..num_rows).map(|_| rng.random_bool(0.5))),
+            BooleanBuffer::from_iter((0..num_rows).map(|row| [3, 41, 42, 97].contains(&row))),
+            BooleanBuffer::from_iter((0..num_rows).map(|row| (5..30).contains(&row))),
+            BooleanBuffer::from_iter((0..num_rows + 3).map(|row| row % 3 != 0)).slice(3, num_rows),
+            BooleanBuffer::new_set(num_rows),
+            BooleanBuffer::new_unset(num_rows),
+        ];
+
+        let write = |write_rows: &dyn Fn(&mut ArrowWriter<&mut Vec<u8>>, &BooleanBuffer)| {
+            let mut buffer = Vec::new();
+            let mut writer =
+                ArrowWriter::try_new(&mut buffer, batch.schema(), Some(props.clone())).unwrap();
+            writer.write(&batch.slice(0, 10)).unwrap();
+            for mask in &masks {
+                write_rows(&mut writer, mask);
+            }
+            writer.close().unwrap();
+            buffer
+        };
+        let filtered = write(&|writer, mask| {
+            let filter = BooleanArray::new(mask.clone(), None);
+            let filtered = filter_record_batch(batch, &filter).unwrap();
+            writer.write(&filtered).unwrap();
+        });
+        let selected_bitmaps = write(&|writer, mask| {
+            let selection = RowSelection::from_boolean_buffer(mask.clone());
+            assert!(selection.as_mask().is_some());
+            writer.write_with_selection(batch, &selection).unwrap();
+        });
+        let selected_runs = write(&|writer, mask| {
+            let selection = RowSelection::from_filters(&[BooleanArray::new(mask.clone(), None)]);
+            assert!(selection.as_mask().is_none());
+            writer.write_with_selection(batch, &selection).unwrap();
+        });
+        assert!(selected_bitmaps == filtered, "bitmap selections: {props:?}");
+        assert!(
+            selected_runs == filtered,
+            "run length selections: {props:?}"
+        );
+    }
+
+    #[test]
+    fn write_with_selection_matches_filter_and_write() {
+        let batch = selection_test_batch();
+        for props in [
+            WriterProperties::default(),
+            // When a call writes rows to more than one row group, the levels of a column can
+            // be uniform for its selected rows but not its filtered ones. A write batch size
+            // equal to the page row count limit keeps the pages the same either way.
+            WriterProperties::builder()
+                .set_max_row_group_row_count(Some(17))
+                .set_data_page_row_count_limit(4)
+                .set_write_batch_size(4)
+                .set_bloom_filter_enabled(true)
+                .build(),
+            WriterProperties::builder()
+                .set_writer_version(WriterVersion::PARQUET_2_0)
+                .set_dictionary_enabled(false)
+                .set_max_row_group_bytes(Some(4096))
+                .build(),
+        ] {
+            assert_selected_rows_match_filtered_rows(&batch, props);
+        }
+    }
+
+    #[test]
+    fn write_with_selection_matches_filter_and_write_pages() {
+        // More selected rows than fit in a page by default, so that pages split at different
+        // rows if the levels of selected rows are written differently from filtered ones
+        let num_rows = 42_000;
+        let selected = |row: usize| row.is_multiple_of(2);
+        let skipped_nulls = |row: usize| selected(row).then_some(row as i32);
+        let selected_nulls = |row: usize| (!selected(row)).then_some(row as i32);
+
+        let run_ends = Int32Array::from_iter_values(1..=num_rows as i32);
+        let run_values = Int32Array::from_iter((0..num_rows).map(skipped_nulls));
+        let child = Field::new("a", DataType::Int32, true);
+        let structs = StructArray::new(
+            Fields::from(vec![child]),
+            vec![Arc::new(Int32Array::from_iter(
+                (0..num_rows).map(skipped_nulls),
+            ))],
+            Some(NullBuffer::from_iter((0..num_rows).map(selected))),
+        );
+        // Selected rows refer to valid values, skipped rows to a null value
+        let dictionary = DictionaryArray::new(
+            Int8Array::from_iter_values((0..num_rows).map(|row| match selected(row) {
+                true => (row % 4) as i8,
+                false => 1,
+            })),
+            Arc::new(Int32Array::from(vec![Some(10), None, Some(20)])),
+        );
+        let list = ListArray::from_iter_primitive::<Int32Type, _, _>((0..num_rows).map(|row| {
+            selected(row).then(|| (0..row % 3).map(|v| Some(v as i32)).collect::<Vec<_>>())
+        }));
+        let columns: [(&str, ArrayRef); 8] = [
+            (
+                "skipped_nulls",
+                Arc::new(Int32Array::from_iter((0..num_rows).map(skipped_nulls))),
+            ),
+            (
+                "selected_nulls",
+                Arc::new(Int32Array::from_iter((0..num_rows).map(selected_nulls))),
+            ),
+            (
+                "mixed_nulls",
+                Arc::new(Int32Array::from_iter(
+                    (0..num_rows).map(|row| (row % 3 != 0).then_some(row as i32)),
+                )),
+            ),
+            (
+                "string",
+                Arc::new(StringArray::from_iter(
+                    (0..num_rows).map(|row| skipped_nulls(row).map(|v| v.to_string())),
+                )),
+            ),
+            (
+                "run_end_encoded",
+                Arc::new(Int32RunArray::try_new(&run_ends, &run_values).unwrap()),
+            ),
+            ("struct", Arc::new(structs)),
+            ("dictionary", Arc::new(dictionary)),
+            ("list", Arc::new(list)),
+        ];
+        let batch = RecordBatch::try_from_iter_with_nullable(
+            columns.map(|(name, column)| (name, column, true)),
+        )
+        .unwrap();
+        let mask = BooleanBuffer::from_iter((0..num_rows).map(selected));
+        let filter = BooleanArray::new(mask.clone(), None);
+        let filtered = filter_record_batch(&batch, &filter).unwrap();
+
+        for props in [
+            WriterProperties::default(),
+            WriterProperties::builder()
+                .set_data_page_row_count_limit(1000)
+                .build(),
+        ] {
+            let write = |write_rows: &dyn Fn(&mut ArrowWriter<&mut Vec<u8>>)| {
+                let mut buffer = Vec::new();
+                let mut writer =
+                    ArrowWriter::try_new(&mut buffer, batch.schema(), Some(props.clone())).unwrap();
+                write_rows(&mut writer);
+                writer.close().unwrap();
+                buffer
+            };
+            let expected = write(&|writer| writer.write(&filtered).unwrap());
+            for selection in [
+                RowSelection::from_boolean_buffer(mask.clone()),
+                RowSelection::from_filters(std::slice::from_ref(&filter)),
+            ] {
+                let actual =
+                    write(&|writer| writer.write_with_selection(&batch, &selection).unwrap());
+                assert!(actual == expected, "{props:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn write_with_selection_matches_filter_and_write_with_cdc() {
+        let batch = selection_test_batch();
+        // Leave out the list view column, which `write` cannot chunk (#12391)
+        let columns: Vec<usize> = (0..batch.num_columns() - 1).collect();
+        let props = WriterProperties::builder()
+            .set_content_defined_chunking(Some(CdcOptions {
+                min_chunk_size: 16,
+                max_chunk_size: 128,
+                norm_level: 0,
+            }))
+            .build();
+        assert_selected_rows_match_filtered_rows(&batch.project(&columns).unwrap(), props);
+    }
+
+    #[test]
+    fn write_with_selection_checks_required_fields_at_selected_rows() {
+        let nullable = Arc::new(Schema::new(vec![Field::new("c", DataType::Int32, true)]));
+        let required = Arc::new(Schema::new(vec![Field::new("c", DataType::Int32, false)]));
+        let values = Int32Array::from(vec![Some(1), None, Some(3)]);
+        let batch = RecordBatch::try_new(nullable, vec![Arc::new(values)]).unwrap();
+
+        let mut buffer = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buffer, required.clone(), None).unwrap();
+        let skip_null = BooleanBuffer::from(vec![true, false, true]);
+        writer
+            .write_with_selection(&batch, &RowSelection::from_boolean_buffer(skip_null))
+            .unwrap();
+        writer.close().unwrap();
+        let read = ParquetRecordBatchReader::try_new(Bytes::from(buffer), 1024)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            read.column(0).as_primitive::<Int32Type>(),
+            &Int32Array::from(vec![1, 3])
+        );
+
+        let mut writer = ArrowWriter::try_new(Vec::new(), required, None).unwrap();
+        let select_null = RowSelection::from(vec![RowSelector::skip(1), RowSelector::select(2)]);
+        let err = writer
+            .write_with_selection(&batch, &select_null)
+            .unwrap_err();
+        // The index is that of the null in the batch, not among the selected rows
+        assert!(
+            err.to_string()
+                .contains("Found null at index 1 for required field 'c'"),
+            "{err}"
+        );
+
+        // Under a nullable struct, a null of a required child is only invalid at a selected
+        // row where the struct is valid
+        let child = |nullable| Fields::from(vec![Field::new("c", DataType::Int32, nullable)]);
+        let target = Field::new("s", DataType::Struct(child(false)), true);
+        let schema = Arc::new(Schema::new(vec![target]));
+        let structs = StructArray::new(
+            child(true),
+            vec![Arc::new(Int32Array::from(vec![Some(1), None, None]))],
+            Some(NullBuffer::from(vec![true, false, true])),
+        );
+        let batch = RecordBatch::try_from_iter([("s", Arc::new(structs) as ArrayRef)]).unwrap();
+        for (selected, valid) in [([true, true, false], true), ([false, true, true], false)] {
+            let selection = RowSelection::from_boolean_buffer(BooleanBuffer::from(&selected[..]));
+            let mut writer = ArrowWriter::try_new(Vec::new(), schema.clone(), None).unwrap();
+            let result = writer.write_with_selection(&batch, &selection);
+            assert_eq!(result.is_ok(), valid, "{selected:?}: {result:?}");
+        }
+    }
+
+    #[test]
+    fn write_with_selection_requires_selection_of_batch_rows() {
+        let values = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let batch = RecordBatch::try_from_iter([("c", values)]).unwrap();
+        let mut writer = ArrowWriter::try_new(Vec::new(), batch.schema(), None).unwrap();
+        for (selection, selection_rows) in [
+            (
+                RowSelection::from_boolean_buffer(BooleanBuffer::new_set(2)),
+                "2".to_string(),
+            ),
+            (
+                RowSelection::from(vec![RowSelector::select(3), RowSelector::skip(1)]),
+                "4".to_string(),
+            ),
+            (
+                RowSelection::from(vec![RowSelector::skip(usize::MAX), RowSelector::select(1)]),
+                format!("more than {}", usize::MAX),
+            ),
+        ] {
+            let err = writer.write_with_selection(&batch, &selection).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                format!(
+                    "Parquet error: RowSelection spans {selection_rows} rows, but the batch has 3 rows"
+                )
+            );
+        }
+
+        // Selecting no rows writes nothing, even from an empty batch
+        let skip_all = RowSelection::from(vec![RowSelector::skip(3)]);
+        writer.write_with_selection(&batch, &skip_all).unwrap();
+        writer
+            .write_with_selection(&batch.slice(0, 0), &RowSelection::default())
+            .unwrap();
+        assert_eq!(writer.in_progress_rows(), 0);
+        assert_eq!(writer.close().unwrap().num_row_groups(), 0);
     }
 
     #[test]
