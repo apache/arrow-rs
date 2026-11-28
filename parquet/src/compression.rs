@@ -50,9 +50,9 @@ pub trait Codec: Send {
 
     /// Decompresses data stored in slice `input_buf` and appends output to `output_buf`.
     ///
-    /// If the uncompress_size is provided it will allocate the exact amount of memory.
-    /// Otherwise, it will estimate the uncompressed size, allocating an amount of memory
-    /// greater or equal to the real uncompress_size.
+    /// If `uncompress_size` is provided, decompression is bounded by this limit to protect
+    /// against unbounded memory allocations from malformed or hostile payloads.
+    /// Without a supplied size, decompression continues until the stream is exhausted.
     ///
     /// Returns the total number of bytes written.
     fn decompress(
@@ -273,7 +273,7 @@ mod gzip_codec {
     use flate2::{Compression, read, write};
 
     use crate::compression::Codec;
-    use crate::errors::Result;
+    use crate::errors::{ParquetError, Result};
 
     use super::GzipLevel;
 
@@ -294,10 +294,41 @@ mod gzip_codec {
             &mut self,
             input_buf: &[u8],
             output_buf: &mut Vec<u8>,
-            _uncompress_size: Option<usize>,
+            uncompress_size: Option<usize>,
         ) -> Result<usize> {
             let mut decoder = read::MultiGzDecoder::new(input_buf);
-            decoder.read_to_end(output_buf).map_err(|e| e.into())
+            match uncompress_size {
+                Some(max_size) => {
+                    let initial_len = output_buf.len();
+                    let probe_limit = (max_size as u64).saturating_add(1);
+                    match decoder.take(probe_limit).read_to_end(output_buf) {
+                        Ok(bytes_read) => {
+                            if bytes_read > max_size {
+                                output_buf.truncate(initial_len);
+                                Err(ParquetError::General(format!(
+                                    "GZip decompressed size exceeds declared page uncompressed size (expected at most {max_size} bytes)"
+                                )))
+                            } else {
+                                Ok(bytes_read)
+                            }
+                        }
+                        Err(e) => {
+                            output_buf.truncate(initial_len);
+                            Err(e.into())
+                        }
+                    }
+                }
+                None => {
+                    let initial_len = output_buf.len();
+                    match decoder.read_to_end(output_buf) {
+                        Ok(bytes_read) => Ok(bytes_read),
+                        Err(e) => {
+                            output_buf.truncate(initial_len);
+                            Err(e.into())
+                        }
+                    }
+                }
+            }
         }
 
         fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
@@ -376,7 +407,7 @@ mod brotli_codec {
     use std::io::{Read, Write};
 
     use crate::compression::Codec;
-    use crate::errors::Result;
+    use crate::errors::{ParquetError, Result};
 
     use super::BrotliLevel;
 
@@ -402,10 +433,42 @@ mod brotli_codec {
             output_buf: &mut Vec<u8>,
             uncompress_size: Option<usize>,
         ) -> Result<usize> {
-            let buffer_size = uncompress_size.unwrap_or(BROTLI_DEFAULT_BUFFER_SIZE);
-            brotli::Decompressor::new(input_buf, buffer_size)
-                .read_to_end(output_buf)
-                .map_err(|e| e.into())
+            match uncompress_size {
+                Some(max_size) => {
+                    let initial_len = output_buf.len();
+                    let buffer_size = max_size.clamp(1, BROTLI_DEFAULT_BUFFER_SIZE);
+                    let decompressor = brotli::Decompressor::new(input_buf, buffer_size);
+                    let probe_limit = (max_size as u64).saturating_add(1);
+                    match decompressor.take(probe_limit).read_to_end(output_buf) {
+                        Ok(bytes_read) => {
+                            if bytes_read > max_size {
+                                output_buf.truncate(initial_len);
+                                Err(ParquetError::General(format!(
+                                    "Brotli decompressed size exceeds declared page uncompressed size (expected at most {max_size} bytes)"
+                                )))
+                            } else {
+                                Ok(bytes_read)
+                            }
+                        }
+                        Err(e) => {
+                            output_buf.truncate(initial_len);
+                            Err(e.into())
+                        }
+                    }
+                }
+                None => {
+                    let initial_len = output_buf.len();
+                    let mut decompressor =
+                        brotli::Decompressor::new(input_buf, BROTLI_DEFAULT_BUFFER_SIZE);
+                    match decompressor.read_to_end(output_buf) {
+                        Ok(bytes_read) => Ok(bytes_read),
+                        Err(e) => {
+                            output_buf.truncate(initial_len);
+                            Err(e.into())
+                        }
+                    }
+                }
+            }
         }
 
         fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
@@ -970,5 +1033,346 @@ mod tests {
     #[cfg_attr(miri, ignore)] // Takes too long
     fn test_codec_lz4_raw() {
         test_codec_with_size(CodecType::LZ4_RAW);
+    }
+
+    fn test_bounded_decompression_suite(codec_type: CodecType) {
+        let codec_options = CodecOptionsBuilder::default().build();
+        let mut compressor = create_codec(codec_type, &codec_options).unwrap().unwrap();
+        let mut decompressor = create_codec(codec_type, &codec_options).unwrap().unwrap();
+
+        // 1. Exact declared size
+        let payload =
+            b"The quick brown fox jumps over the lazy dog. A swift breeze stirs the leaves.";
+        let mut compressed = Vec::new();
+        compressor.compress(payload, &mut compressed).unwrap();
+
+        let mut out = Vec::new();
+        let n = decompressor
+            .decompress(&compressed, &mut out, Some(payload.len()))
+            .expect("exact size decompress should succeed");
+        assert_eq!(n, payload.len());
+        assert_eq!(out.as_slice(), payload);
+
+        // 2. Output smaller than declared size
+        out.clear();
+        let declared_larger = payload.len() + 1024;
+        let n = decompressor
+            .decompress(&compressed, &mut out, Some(declared_larger))
+            .expect("output smaller than declared size should succeed");
+        assert_eq!(n, payload.len());
+        assert_eq!(out.as_slice(), payload);
+
+        // 3. Output larger than declared size
+        out.clear();
+        let declared_smaller = payload.len() - 1;
+        let err = decompressor
+            .decompress(&compressed, &mut out, Some(declared_smaller))
+            .expect_err("output larger than declared size must fail");
+        assert!(
+            err.to_string()
+                .contains("exceeds declared page uncompressed size"),
+            "Error did not contain expected message: {err}"
+        );
+        assert_eq!(out.len(), 0, "Buffer should be empty on failure");
+
+        // 4. Zero-length output
+        let empty_payload = b"";
+        let mut empty_compressed = Vec::new();
+        compressor
+            .compress(empty_payload, &mut empty_compressed)
+            .unwrap();
+
+        out.clear();
+        let n = decompressor
+            .decompress(&empty_compressed, &mut out, Some(0))
+            .expect("zero-length decompress with declared size 0 should succeed");
+        assert_eq!(n, 0);
+        assert_eq!(out.len(), 0);
+
+        // Zero-length declared size when output is non-empty must fail
+        out.clear();
+        let err = decompressor
+            .decompress(&compressed, &mut out, Some(0))
+            .expect_err("non-empty payload with declared size 0 must fail");
+        assert!(
+            err.to_string()
+                .contains("exceeds declared page uncompressed size")
+        );
+        assert_eq!(out.len(), 0);
+
+        // 5. Empty compressed input handling
+        out.clear();
+        let res = decompressor.decompress(&[], &mut out, Some(100));
+        if let Ok(n) = res {
+            assert_eq!(n, 0);
+        }
+        assert_eq!(out.len(), 0);
+
+        // 6. Pre-populated output buffer on success
+        let prefix = b"EXISTING_PREFIX_DATA_";
+        out.clear();
+        out.extend_from_slice(prefix);
+        let n = decompressor
+            .decompress(&compressed, &mut out, Some(payload.len()))
+            .expect("decompress into pre-populated buffer should succeed");
+        assert_eq!(n, payload.len());
+        assert_eq!(&out[..prefix.len()], prefix);
+        assert_eq!(&out[prefix.len()..], payload);
+
+        // 7. Failure leaves caller's pre-populated buffer untouched
+        out.clear();
+        out.extend_from_slice(prefix);
+        let err = decompressor
+            .decompress(&compressed, &mut out, Some(declared_smaller))
+            .expect_err("overflow failure into pre-populated buffer must fail");
+        assert!(
+            err.to_string()
+                .contains("exceeds declared page uncompressed size")
+        );
+        assert_eq!(
+            out.as_slice(),
+            prefix,
+            "Pre-populated buffer must remain unchanged on failure"
+        );
+
+        // Failure on corrupt input also preserves pre-populated buffer
+        out.clear();
+        out.extend_from_slice(prefix);
+        let corrupt = b"THIS_IS_CORRUPT_NOT_VALID_COMPRESSED_DATA";
+        decompressor
+            .decompress(corrupt, &mut out, Some(100))
+            .expect_err("corrupt compressed input must fail");
+        assert_eq!(
+            out.as_slice(),
+            prefix,
+            "Pre-populated buffer must remain unchanged on decode error"
+        );
+
+        // Truncated compressed input handling within suite
+        let cut = compressed.len() / 2;
+        if cut > 0 {
+            out.clear();
+            out.extend_from_slice(prefix);
+            let truncated = &compressed[..cut];
+            match decompressor.decompress(truncated, &mut out, Some(payload.len())) {
+                Ok(bytes_read) => {
+                    assert!(
+                        bytes_read <= payload.len(),
+                        "Decompressed bytes ({bytes_read}) must not exceed declared bound ({})",
+                        payload.len()
+                    );
+                    assert_eq!(&out[..prefix.len()], prefix);
+                }
+                Err(_) => {
+                    assert_eq!(
+                        out.as_slice(),
+                        prefix,
+                        "Pre-populated buffer must remain unchanged on truncated stream error"
+                    );
+                }
+            }
+        }
+
+        // 8. Missing declared size (None) preserves expected behavior
+        out.clear();
+        let n = decompressor
+            .decompress(&compressed, &mut out, None)
+            .expect("unbounded decompress should succeed when uncompress_size is None");
+        assert_eq!(n, payload.len());
+        assert_eq!(out.as_slice(), payload);
+
+        // 9. Boundary values and safe integer handling (probe limit calculation)
+        out.clear();
+        let n = decompressor
+            .decompress(&compressed, &mut out, Some(usize::MAX))
+            .expect("usize::MAX declared size should decompress normally without overflow");
+        assert_eq!(n, payload.len());
+        assert_eq!(out.as_slice(), payload);
+
+        // 10. Substantially larger payload (zip-bomb scenario)
+        let large_payload = vec![b'X'; 50_000];
+        let mut large_compressed = Vec::new();
+        compressor
+            .compress(&large_payload, &mut large_compressed)
+            .unwrap();
+
+        out.clear();
+        let err = decompressor
+            .decompress(&large_compressed, &mut out, Some(100))
+            .expect_err("50KB payload with 100-byte declared limit must fail");
+        assert!(
+            err.to_string()
+                .contains("exceeds declared page uncompressed size")
+        );
+        assert_eq!(out.len(), 0, "Buffer should not retain expanded payload");
+
+        out.clear();
+        let n = decompressor
+            .decompress(&large_compressed, &mut out, Some(50_000))
+            .expect("50KB payload with exact declared limit should succeed");
+        assert_eq!(n, 50_000);
+        assert_eq!(out.as_slice(), large_payload.as_slice());
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn test_gzip_bounded_decompression() {
+        for level in GzipLevel::MINIMUM_LEVEL..=GzipLevel::MAXIMUM_LEVEL {
+            let level = GzipLevel::try_new(level).unwrap();
+            test_bounded_decompression_suite(CodecType::GZIP(level));
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn test_brotli_bounded_decompression() {
+        for level in BrotliLevel::MINIMUM_LEVEL..=BrotliLevel::MAXIMUM_LEVEL {
+            let level = BrotliLevel::try_new(level).unwrap();
+            test_bounded_decompression_suite(CodecType::BROTLI(level));
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn test_gzip_truncated_compressed_stream() {
+        let codec_options = CodecOptionsBuilder::default().build();
+        let mut compressor = create_codec(CodecType::GZIP(GzipLevel::default()), &codec_options)
+            .unwrap()
+            .unwrap();
+        let mut decompressor = create_codec(CodecType::GZIP(GzipLevel::default()), &codec_options)
+            .unwrap()
+            .unwrap();
+
+        let payload =
+            b"The quick brown fox jumps over the lazy dog. A swift breeze stirs the leaves.";
+        let mut compressed = Vec::new();
+        compressor.compress(payload, &mut compressed).unwrap();
+        assert!(compressed.len() > 18); // GZip header is 10 bytes, trailer is 8 bytes
+
+        let prefix = b"EXISTING_CALLER_BUFFER_PREFIX_";
+
+        // Scenario A: Valid 10-byte header, truncated body
+        let header_only = &compressed[..10];
+        let mut out = Vec::new();
+        out.extend_from_slice(prefix);
+        decompressor
+            .decompress(header_only, &mut out, Some(payload.len()))
+            .expect_err("truncated body must return error");
+        assert_eq!(
+            out.as_slice(),
+            prefix,
+            "Caller buffer must be preserved on truncated body"
+        );
+
+        // Scenario B: Header + half of compressed body
+        let half_body = &compressed[..compressed.len() / 2];
+        out.clear();
+        out.extend_from_slice(prefix);
+        decompressor
+            .decompress(half_body, &mut out, Some(payload.len()))
+            .expect_err("half compressed body must return error");
+        assert_eq!(
+            out.as_slice(),
+            prefix,
+            "Caller buffer must be preserved on half body"
+        );
+
+        // Scenario C: Valid header + body, truncated 8-byte trailer
+        let truncated_trailer = &compressed[..compressed.len() - 4];
+        out.clear();
+        out.extend_from_slice(prefix);
+        decompressor
+            .decompress(truncated_trailer, &mut out, Some(payload.len()))
+            .expect_err("truncated trailer must return error");
+        assert_eq!(
+            out.as_slice(),
+            prefix,
+            "Caller buffer must be preserved on truncated trailer"
+        );
+
+        // Scenario D: Truncated stream with uncompress_size = None (unbounded mode)
+        out.clear();
+        out.extend_from_slice(prefix);
+        decompressor
+            .decompress(half_body, &mut out, None)
+            .expect_err("truncated stream in unbounded mode must return error");
+        assert_eq!(
+            out.as_slice(),
+            prefix,
+            "Caller buffer must be preserved in unbounded mode on error"
+        );
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn test_brotli_truncated_compressed_stream() {
+        let codec_options = CodecOptionsBuilder::default().build();
+        let mut compressor =
+            create_codec(CodecType::BROTLI(BrotliLevel::default()), &codec_options)
+                .unwrap()
+                .unwrap();
+        let mut decompressor =
+            create_codec(CodecType::BROTLI(BrotliLevel::default()), &codec_options)
+                .unwrap()
+                .unwrap();
+
+        let payload =
+            b"The quick brown fox jumps over the lazy dog. A swift breeze stirs the leaves.";
+        let mut compressed = Vec::new();
+        compressor.compress(payload, &mut compressed).unwrap();
+        assert!(compressed.len() > 10);
+
+        let prefix = b"EXISTING_CALLER_BUFFER_PREFIX_";
+
+        // Scenario A: 1-byte header truncation
+        let one_byte = &compressed[..1];
+        let mut out = Vec::new();
+        out.extend_from_slice(prefix);
+        decompressor
+            .decompress(one_byte, &mut out, Some(payload.len()))
+            .expect_err("1-byte truncated Brotli stream must return error");
+        assert_eq!(
+            out.as_slice(),
+            prefix,
+            "Caller buffer must be preserved on 1-byte truncated stream"
+        );
+
+        // Scenario B: Half compressed stream
+        let half_stream = &compressed[..compressed.len() / 2];
+        out.clear();
+        out.extend_from_slice(prefix);
+        decompressor
+            .decompress(half_stream, &mut out, Some(payload.len()))
+            .expect_err("half Brotli stream must return error");
+        assert_eq!(
+            out.as_slice(),
+            prefix,
+            "Caller buffer must be preserved on half stream"
+        );
+
+        // Scenario C: Truncated 1 byte before end
+        let truncated_end = &compressed[..compressed.len() - 1];
+        out.clear();
+        out.extend_from_slice(prefix);
+        decompressor
+            .decompress(truncated_end, &mut out, Some(payload.len()))
+            .expect_err("truncated near end must return error");
+        assert_eq!(
+            out.as_slice(),
+            prefix,
+            "Caller buffer must be preserved on truncated near end"
+        );
+
+        // Scenario D: Truncated stream with uncompress_size = None (unbounded mode)
+        out.clear();
+        out.extend_from_slice(prefix);
+        decompressor
+            .decompress(half_stream, &mut out, None)
+            .expect_err("truncated Brotli stream in unbounded mode must return error");
+        assert_eq!(
+            out.as_slice(),
+            prefix,
+            "Caller buffer must be preserved in unbounded mode on error"
+        );
     }
 }
