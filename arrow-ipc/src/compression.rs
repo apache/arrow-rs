@@ -6,6 +6,8 @@ use crate::CompressionType;
 use arrow_buffer::Buffer;
 use arrow_schema::ArrowError;
 use flatbuffers::FlatBufferBuilder;
+#[cfg(feature = "lz4")]
+use std::io::Read;
 
 const LENGTH_NO_COMPRESSED_DATA: i64 = -1;
 const LENGTH_OF_PREFIX_DATA: i64 = 8;
@@ -418,7 +420,9 @@ fn compress_lz4(
 
 #[cfg(feature = "lz4")]
 fn decompress_lz4(input: &[u8], decompressed_size: usize) -> Result<Vec<u8>, ArrowError> {
-    use std::io::Read;
+    if let Some(output) = decompress_lz4_frame(input, decompressed_size)? {
+        return Ok(output);
+    }
     let mut output = Vec::with_capacity(decompressed_size.min(crate::reader::MAX_PREALLOC_BYTES));
     let mut decoder = lz4_flex::frame::FrameDecoder::new(input);
     decoder
@@ -433,6 +437,92 @@ fn decompress_lz4(input: &[u8], decompressed_size: usize) -> Result<Vec<u8>, Arr
         )));
     }
     Ok(output)
+}
+
+/// EXPERIMENT: decodes a single lz4 frame with independent blocks and no checksums straight into
+/// an output of the advertised size, skipping `FrameDecoder`'s block buffers and copies.
+/// Returns `None` for anything else, which then goes through `FrameDecoder`.
+/// Does not verify the header checksum.
+#[cfg(feature = "lz4")]
+fn decompress_lz4_frame(
+    input: &[u8],
+    decompressed_size: usize,
+) -> Result<Option<Vec<u8>>, ArrowError> {
+    const MAGIC: u32 = 0x184D2204;
+    const FLG_INDEPENDENT_BLOCKS: u8 = 0x20;
+    const FLG_BLOCK_CHECKSUMS: u8 = 0x10;
+    const FLG_CONTENT_SIZE: u8 = 0x08;
+    const FLG_CONTENT_CHECKSUM: u8 = 0x04;
+    const FLG_DICT_ID: u8 = 0x01;
+    const BLOCK_UNCOMPRESSED: u32 = 0x8000_0000;
+
+    if decompressed_size > crate::reader::MAX_PREALLOC_BYTES {
+        return Ok(None);
+    }
+    let Some(&[m0, m1, m2, m3, flg, bd]) = input.first_chunk::<6>() else {
+        return Ok(None);
+    };
+    if u32::from_le_bytes([m0, m1, m2, m3]) != MAGIC
+        || flg >> 6 != 0b01
+        || flg & FLG_INDEPENDENT_BLOCKS == 0
+        || flg & (FLG_BLOCK_CHECKSUMS | FLG_CONTENT_CHECKSUM | FLG_DICT_ID) != 0
+    {
+        return Ok(None);
+    }
+    let max_block_size: usize = match (bd >> 4) & 0x7 {
+        4 => 64 << 10,
+        5 => 256 << 10,
+        6 => 1 << 20,
+        7 => 4 << 20,
+        _ => return Ok(None),
+    };
+    let invalid = |msg: &str| ArrowError::IpcError(format!("Invalid LZ4 frame: {msg}"));
+    let exceeds = || {
+        ArrowError::IpcError(format!(
+            "LZ4 decompressed buffer exceeds advertised size of {decompressed_size}"
+        ))
+    };
+    // Descriptor (FLG, BD, optional content size) followed by the 1 byte header checksum.
+    let mut pos = 4 + 2 + if flg & FLG_CONTENT_SIZE != 0 { 8 } else { 0 } + 1;
+
+    let mut output = vec![0u8; decompressed_size];
+    let mut written = 0;
+    loop {
+        let block_info = input
+            .get(pos..pos + 4)
+            .ok_or_else(|| invalid("truncated block header"))?;
+        let block_info = u32::from_le_bytes(block_info.try_into().unwrap());
+        pos += 4;
+        if block_info == 0 {
+            break;
+        }
+        let len = (block_info & !BLOCK_UNCOMPRESSED) as usize;
+        if len > max_block_size {
+            return Err(invalid("block too big"));
+        }
+        let block = input
+            .get(pos..pos + len)
+            .ok_or_else(|| invalid("truncated block"))?;
+        pos += len;
+        let out = &mut output[written..];
+        written += if block_info & BLOCK_UNCOMPRESSED != 0 {
+            out.get_mut(..len)
+                .ok_or_else(exceeds)?
+                .copy_from_slice(block);
+            len
+        } else {
+            lz4_flex::block::decompress_into(block, out).map_err(|e| match e {
+                lz4_flex::block::DecompressError::OutputTooSmall { .. } => exceeds(),
+                e => ArrowError::ExternalError(Box::new(e)),
+            })?
+        };
+    }
+    if pos != input.len() {
+        // Trailing data, such as concatenated frames.
+        return Ok(None);
+    }
+    output.truncate(written);
+    Ok(Some(output))
 }
 
 #[cfg(not(feature = "lz4"))]
