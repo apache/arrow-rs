@@ -136,6 +136,19 @@ fn test_arrow_gh_47662() {
     );
 }
 
+#[test]
+fn test_arrow_rs_gh_11136_byte_stream_split_truncated_page() {
+    // Checked-in malformed page: declared value count exceeds BYTE_STREAM_SPLIT payload.
+    let file = Bytes::from_static(include_bytes!("ARROW-RS-GH-11136-bss-truncated.parquet"));
+    let reader = ArrowReaderBuilder::try_new(file).unwrap().build().unwrap();
+    let err = reader.collect::<Result<Vec<_>, _>>().unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("insufficient values read from column"),
+        "{err}"
+    );
+}
+
 /// Reads the file and tries to return the total row count
 /// Returns an error if the file is invalid
 fn read_file(name: &str) -> Result<usize, ParquetError> {
