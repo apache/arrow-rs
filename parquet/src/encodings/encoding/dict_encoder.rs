@@ -27,6 +27,16 @@ struct KeyStorage<T: DataType> {
     type_length: usize,
 }
 
+impl<T: DataType> KeyStorage<T> {
+    fn new(type_length: usize) -> Self {
+        Self {
+            uniques: vec![],
+            size_in_bytes: 0,
+            type_length,
+        }
+    }
+}
+
 impl<T: DataType> Storage for KeyStorage<T> {
     type Key = u64;
     type Value = T::T;
@@ -71,7 +81,11 @@ impl<T: DataType> Storage for KeyStorage<T> {
 /// (max bit width = 32), followed by the values encoded using RLE/Bit packed described
 /// above (with the given bit width).
 pub struct DictEncoder<T: DataType> {
-    interner: Interner<KeyStorage<T>>,
+    /// Created by the first non-empty `put`, so a column that gets no value
+    /// does not allocate the dedup table.
+    interner: Option<Interner<KeyStorage<T>>>,
+
+    type_length: usize,
 
     /// The buffered indices
     indices: Vec<u64>,
@@ -80,16 +94,15 @@ pub struct DictEncoder<T: DataType> {
 impl<T: DataType> DictEncoder<T> {
     /// Creates new dictionary encoder.
     pub fn new(desc: ColumnDescPtr) -> Self {
-        let storage = KeyStorage {
-            uniques: vec![],
-            size_in_bytes: 0,
-            type_length: desc.type_length() as usize,
-        };
-
         Self {
-            interner: Interner::new(storage),
+            interner: None,
+            type_length: desc.type_length() as usize,
             indices: vec![],
         }
+    }
+
+    fn storage(&self) -> Option<&KeyStorage<T>> {
+        self.interner.as_ref().map(Interner::storage)
     }
 
     /// Returns true if dictionary entries are sorted, false otherwise.
@@ -100,24 +113,24 @@ impl<T: DataType> DictEncoder<T> {
 
     /// Returns number of unique values (keys) in the dictionary.
     pub fn num_entries(&self) -> usize {
-        self.interner.storage().uniques.len()
+        self.uniques().len()
     }
 
     /// Returns the distinct values interned so far, in dictionary order.
     pub fn uniques(&self) -> &[T::T] {
-        &self.interner.storage().uniques
+        self.storage().map_or(&[], |s| s.uniques.as_slice())
     }
 
     /// Returns size of unique values (keys) in the dictionary, in bytes.
     pub fn dict_encoded_size(&self) -> usize {
-        self.interner.storage().size_in_bytes
+        self.storage().map_or(0, |s| s.size_in_bytes)
     }
 
     /// Writes out the dictionary values with PLAIN encoding in a byte buffer, and return
     /// the result.
     pub fn write_dict(&self) -> Result<Bytes> {
         let mut plain_encoder = PlainEncoder::<T>::new();
-        plain_encoder.put(&self.interner.storage().uniques)?;
+        plain_encoder.put(self.uniques())?;
         plain_encoder.flush_buffer()
     }
 
@@ -135,10 +148,6 @@ impl<T: DataType> DictEncoder<T> {
         Ok(encoder.consume().into())
     }
 
-    fn put_one(&mut self, value: &T::T) {
-        self.indices.push(self.interner.intern(value));
-    }
-
     #[inline]
     fn bit_width(&self) -> u8 {
         num_required_bits(self.num_entries().saturating_sub(1) as u64)
@@ -147,9 +156,15 @@ impl<T: DataType> DictEncoder<T> {
 
 impl<T: DataType> Encoder<T> for DictEncoder<T> {
     fn put(&mut self, values: &[T::T]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        }
+        let interner = self
+            .interner
+            .get_or_insert_with(|| Interner::new(KeyStorage::new(self.type_length)));
         self.indices.reserve(values.len());
         for i in values {
-            self.put_one(i)
+            self.indices.push(interner.intern(i));
         }
         Ok(())
     }
@@ -178,7 +193,10 @@ impl<T: DataType> Encoder<T> for DictEncoder<T> {
     ///
     /// For this encoder, the indices are unencoded bytes (refer to [`Self::write_indices`]).
     fn estimated_memory_size(&self) -> usize {
-        self.interner.estimated_memory_size() + self.indices.capacity() * std::mem::size_of::<u64>()
+        self.interner
+            .as_ref()
+            .map_or(0, Interner::estimated_memory_size)
+            + self.indices.capacity() * std::mem::size_of::<u64>()
     }
 }
 
@@ -210,10 +228,16 @@ mod tests {
         ))
     }
 
+    /// The memory of an interner with no values. The encoder creates its interner
+    /// on the first value, so the tests measure the growth from this size.
+    fn empty_interner_size<T: DataType>(encoder: &DictEncoder<T>) -> usize {
+        Interner::new(KeyStorage::<T>::new(encoder.type_length)).estimated_memory_size()
+    }
+
     #[test]
     fn test_estimated_memory_size_primitive_with_duplicates() {
         let mut encoder = DictEncoder::<Int32Type>::new(make_col_desc::<Int32Type>());
-        let empty_size = encoder.estimated_memory_size();
+        let empty_size = empty_interner_size(&encoder);
 
         // 3 distinct values, repeated to produce 9 indices total.
         encoder.put(&[1, 2, 3, 1, 2, 3, 1, 2, 3]).unwrap();
@@ -238,7 +262,7 @@ mod tests {
     #[test]
     fn test_estimated_memory_size_primitive_all_distinct() {
         let mut encoder = DictEncoder::<Int32Type>::new(make_col_desc::<Int32Type>());
-        let empty_size = encoder.estimated_memory_size();
+        let empty_size = empty_interner_size(&encoder);
 
         let values: Vec<i32> = (0..100).collect();
         encoder.put(&values).unwrap();
@@ -263,7 +287,7 @@ mod tests {
     #[test]
     fn test_estimated_memory_size_byte_array_with_duplicates() {
         let mut encoder = DictEncoder::<ByteArrayType>::new(make_col_desc::<ByteArrayType>());
-        let empty_size = encoder.estimated_memory_size();
+        let empty_size = empty_interner_size(&encoder);
 
         // 3 distinct byte strings ("foo", "bar", "baz" — 3 bytes each), repeated to produce
         // 9 indices total.
@@ -295,7 +319,7 @@ mod tests {
     #[test]
     fn test_estimated_memory_size_byte_array_all_distinct() {
         let mut encoder = DictEncoder::<ByteArrayType>::new(make_col_desc::<ByteArrayType>());
-        let empty_size = encoder.estimated_memory_size();
+        let empty_size = empty_interner_size(&encoder);
 
         // 100 distinct values: "0".."9" (1 byte each) and "10".."99" (2 bytes each).
         let values: Vec<ByteArray> = (0..100_u32)
@@ -327,7 +351,7 @@ mod tests {
         let mut encoder = DictEncoder::<FixedLenByteArrayType>::new(make_col_desc_with_length::<
             FixedLenByteArrayType,
         >(TYPE_LEN as i32));
-        let empty_size = encoder.estimated_memory_size();
+        let empty_size = empty_interner_size(&encoder);
 
         // 3 distinct 3-byte values, repeated to produce 9 indices total.
         let vals = [
@@ -362,7 +386,7 @@ mod tests {
         let mut encoder = DictEncoder::<FixedLenByteArrayType>::new(make_col_desc_with_length::<
             FixedLenByteArrayType,
         >(TYPE_LEN as i32));
-        let empty_size = encoder.estimated_memory_size();
+        let empty_size = empty_interner_size(&encoder);
 
         // 100 distinct 3-byte values: zero-padded big-endian u8 indices.
         let values = (0..100_u8)
@@ -390,17 +414,37 @@ mod tests {
 
     #[test]
     fn test_estimated_memory_size_includes_interner_dedup_table() {
-        // The dedup `HashTable` in `Interner` is preallocated with
-        // `DEFAULT_DEDUP_CAPACITY` slots at construction, independent of any
-        // values pushed.
-        let encoder = DictEncoder::<Int32Type>::new(make_col_desc::<Int32Type>());
+        // The `Interner`, and with it the dedup `HashTable` with room for
+        // `DEFAULT_DEDUP_CAPACITY` (4096) keys, is created on the first value.
+        let mut encoder = DictEncoder::<Int32Type>::new(make_col_desc::<Int32Type>());
+        encoder.put(&[]).unwrap();
+        assert_eq!(encoder.estimated_memory_size(), 0);
 
+        encoder.put(&[1]).unwrap();
         let size = encoder.estimated_memory_size();
+        let without_table = encoder.storage().unwrap().estimated_memory_size()
+            + encoder.indices.capacity() * std::mem::size_of::<u64>();
+        let full_table = hashbrown::HashTable::<u64>::with_capacity(4096).allocation_size();
 
-        assert!(
-            size > 0,
-            "memory size should include the preallocated dedup hash table"
+        assert_eq!(
+            size - without_table,
+            full_table,
+            "memory size {size} should include the 4096-entry dedup hash table"
         );
+    }
+
+    #[test]
+    fn test_encoder_without_values_writes_empty_dictionary() {
+        let mut encoder = DictEncoder::<Int32Type>::new(make_col_desc::<Int32Type>());
+        encoder.put(&[]).unwrap();
+
+        assert_eq!(encoder.num_entries(), 0);
+        assert!(encoder.uniques().is_empty());
+        assert_eq!(encoder.dict_encoded_size(), 0);
+        assert!(encoder.write_dict().unwrap().is_empty());
+        assert_eq!(encoder.estimated_data_encoded_size(), 0);
+        // A data page of an all-null column holds only the bit width, which is 0.
+        assert_eq!(encoder.flush_buffer().unwrap().as_ref(), &[0]);
     }
 
     #[test]
@@ -440,7 +484,7 @@ mod tests {
         let size1 = encoder.estimated_memory_size();
 
         // Push more values to trigger uniques capacity growth.
-        // The pre-allocated dedup hash table is unlikely to be resized.
+        // The dedup hash table created by the first `put` is unlikely to be resized.
         let values: Vec<i32> = (64..128).collect();
         encoder.put(&values).unwrap();
         // Flush indices so they don't mask the uniques accounting in the lower bound.

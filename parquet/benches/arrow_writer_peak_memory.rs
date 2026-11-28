@@ -318,6 +318,29 @@ fn create_primitive_bench_batch_non_null(
     )?)
 }
 
+/// A wide schema of nullable Int64 columns where only one column in
+/// `populated_every` has values and the rest are all null, so per-column
+/// writer state dominates the writer's memory.
+fn create_wide_sparse_int64_bench_batch(
+    num_columns: usize,
+    size: usize,
+    populated_every: usize,
+) -> RecordBatch {
+    let fields: Vec<Field> = (0..num_columns)
+        .map(|i| Field::new(format!("_{i}"), DataType::Int64, true))
+        .collect();
+    let columns: Vec<ArrayRef> = (0..num_columns)
+        .map(|i| {
+            if i % populated_every == 0 {
+                Arc::new(Int64Array::from_iter_values((0..size).map(|v| v as i64))) as ArrayRef
+            } else {
+                Arc::new(Int64Array::new_null(size)) as ArrayRef
+            }
+        })
+        .collect();
+    RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap()
+}
+
 fn create_bool_bench_batch_non_null(
     size: usize,
     null_density: f32,
@@ -858,6 +881,10 @@ fn create_batches() -> Vec<BatchBenchmark> {
         (
             "primitive_sparse_99pct_null",
             create_primitive_bench_batch(BATCH_SIZE, 0.99, 0.75).unwrap(),
+        ),
+        (
+            "wide_sparse_int64",
+            create_wide_sparse_int64_bench_batch(1_000, 1024, 100),
         ),
         (
             "bool_non_null",
