@@ -353,6 +353,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrow-encoded"
+version = "60.2.0"
+dependencies = [
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-cast",
+ "arrow-schema",
+ "arrow-select",
+]
+
+[[package]]
 name = "arrow-flight"
 version = "60.2.0"
 dependencies = [
@@ -2580,6 +2591,7 @@ dependencies = [
  "arrow-cast",
  "arrow-csv",
  "arrow-data",
+ "arrow-encoded",
  "arrow-ipc",
  "arrow-schema",
  "arrow-select",

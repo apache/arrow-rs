@@ -30,6 +30,7 @@ arrow-data = { workspace = true, optional = true }
 arrow-schema = { workspace = true, optional = true }
 arrow-select = { workspace = true, optional = true }
 arrow-ipc = { workspace = true, optional = true }
+arrow-encoded = { workspace = true, optional = true }
 parquet-geospatial = { workspace = true, optional = true }
 parquet-variant = { workspace = true, optional = true }
 parquet-variant-compute = { workspace = true, optional = true }
@@ -102,7 +103,7 @@ json = ["serde_json", "base64"]
 # Enable internal testing APIs
 test_common = ["arrow/test_utils"]
 # Experimental, unstable functionality primarily used for testing
-experimental = ["variant_experimental", "file_experimental"]
+experimental = ["variant_experimental", "file_experimental", "encoded_experimental"]
 # Enable async APIs
 async = ["futures", "tokio"]
 # Enable object_store integration
@@ -125,6 +126,8 @@ flate2-zlib-rs = ["flate2/zlib-rs"]
 variant_experimental = ["arrow", "parquet-variant", "parquet-variant-compute"]
 # Enable parquet FILE logical type support
 file_experimental = ["arrow"]
+# Enable encoded arrays backed by Parquet pages
+encoded_experimental = ["arrow", "dep:arrow-encoded"]
 # Enable geospatial support
 geospatial = ["parquet-geospatial"]
 # Alias for typo. TODO: Remove in future major version bump.

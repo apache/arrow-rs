@@ -180,6 +180,8 @@ pub mod arrow_reader;
 pub mod arrow_writer;
 pub mod bloom_filter;
 mod buffer;
+#[cfg(feature = "encoded_experimental")]
+pub mod encoded;
 #[cfg(feature = "file_experimental")]
 pub mod file_type;
 pub(crate) use buffer::offset_buffer::OffsetBuffer;
