@@ -17,7 +17,7 @@ use arrow::compute::CastOptions;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, TimeUnit};
 use arrow::error::{ArrowError, Result};
 use indexmap::IndexMap;
-use parquet_variant::{Variant, VariantBuilderExt, VariantPath, VariantPathElement};
+use parquet_variant::{Variant, VariantBuilderExt, VariantPath, VariantPathElement, VariantType};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -339,9 +339,58 @@ impl<'a> VariantToShreddedArrayVariantRowBuilder<'a> {
     }
 }
 
+enum ObjectFieldBuilder<'a> {
+    Typed(Box<VariantToShreddedVariantRowBuilder<'a>>),
+    Untyped {
+        value: VariantValueArrayBuilder,
+        nulls: NullBufferBuilder,
+    },
+}
+
+impl ObjectFieldBuilder<'_> {
+    fn append_null(&mut self) -> Result<()> {
+        match self {
+            Self::Typed(builder) => builder.append_null(),
+            Self::Untyped { value, nulls } => {
+                NullValue::ObjectField.append_to(nulls, value);
+                Ok(())
+            }
+        }
+    }
+
+    fn append_value(&mut self, value: Variant<'_, '_>) -> Result<bool> {
+        match self {
+            Self::Typed(builder) => builder.append_value(value),
+            Self::Untyped {
+                value: builder,
+                nulls,
+            } => {
+                builder.append_value(value);
+                nulls.append_non_null();
+                Ok(true)
+            }
+        }
+    }
+
+    fn finish(self) -> Result<ShreddedVariantFieldArray> {
+        let (value, typed_value, nulls) = match self {
+            Self::Typed(builder) => {
+                let (value, typed_value, nulls) = builder.finish()?;
+                (value, Some(typed_value), nulls)
+            }
+            Self::Untyped { value, mut nulls } => (value.build()?, None, nulls.finish()),
+        };
+        Ok(ShreddedVariantFieldArray::from_parts(
+            Arc::new(value),
+            typed_value,
+            nulls,
+        ))
+    }
+}
+
 pub(crate) struct VariantToShreddedObjectVariantRowBuilder<'a> {
     value_builder: VariantValueArrayBuilder,
-    typed_value_builders: IndexMap<&'a str, VariantToShreddedVariantRowBuilder<'a>>,
+    typed_value_builders: IndexMap<&'a str, ObjectFieldBuilder<'a>>,
     typed_value_nulls: NullBufferBuilder,
     nulls: NullBufferBuilder,
     null_value: NullValue,
@@ -359,13 +408,22 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
         cast_mode: VariantCastMode,
     ) -> Result<Self> {
         let typed_value_builders = fields.iter().map(|field| {
-            let builder = make_variant_to_shredded_variant_arrow_row_builder(
-                field.data_type(),
-                cast_options,
-                capacity,
-                NullValue::ObjectField,
-                cast_mode,
-            )?;
+            let builder = if field.has_valid_extension_type::<VariantType>() {
+                ObjectFieldBuilder::Untyped {
+                    value: VariantValueArrayBuilder::new(capacity),
+                    nulls: NullBufferBuilder::new(capacity),
+                }
+            } else {
+                ObjectFieldBuilder::Typed(Box::new(
+                    make_variant_to_shredded_variant_arrow_row_builder(
+                        field.data_type(),
+                        cast_options,
+                        capacity,
+                        NullValue::ObjectField,
+                        cast_mode,
+                    )?,
+                ))
+            };
             Ok((field.name().as_str(), builder))
         });
         let typed_value_builders: IndexMap<_, _> = typed_value_builders.collect::<Result<_>>()?;
@@ -456,9 +514,7 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
     fn finish(mut self) -> Result<(BinaryViewArray, ArrayRef, Option<NullBuffer>)> {
         let mut builder = StructArrayAssembler::new();
         for (field_name, typed_value_builder) in self.typed_value_builders {
-            let (value, typed_value, nulls) = typed_value_builder.finish()?;
-            let array =
-                ShreddedVariantFieldArray::from_parts(Arc::new(value), Some(typed_value), nulls);
+            let array = typed_value_builder.finish()?;
             builder = builder.with_field(field_name, ArrayRef::from(array), false);
         }
         if let Some(nulls) = self.typed_value_nulls.finish() {
@@ -475,15 +531,13 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
 /// Field configuration captured by the builder (data type + nullability).
 #[derive(Clone)]
 pub struct ShreddingField {
-    data_type: DataType,
-    nullable: bool,
+    field: Field,
 }
 
 impl ShreddingField {
     fn new(data_type: DataType, nullable: bool) -> Self {
         Self {
-            data_type,
-            nullable,
+            field: Field::new("", data_type, nullable),
         }
     }
 
@@ -499,7 +553,9 @@ pub trait IntoShreddingField {
 
 impl IntoShreddingField for FieldRef {
     fn into_shredding_field(self) -> ShreddingField {
-        ShreddingField::new(self.data_type().clone(), self.is_nullable())
+        ShreddingField {
+            field: self.as_ref().clone(),
+        }
     }
 }
 
@@ -694,7 +750,7 @@ impl VariantSchemaNode {
     /// Returns the [`DataType`] for passing to [`shred_variant`].
     fn to_shredding_type(&self) -> Option<DataType> {
         match self {
-            Self::Leaf(field) => Some(field.data_type.clone()),
+            Self::Leaf(field) => Some(field.field.data_type().clone()),
             Self::Struct(children) => {
                 let child_fields: Vec<_> = children
                     .iter()
@@ -712,11 +768,7 @@ impl VariantSchemaNode {
 
     fn to_shredding_field(&self, name: &str) -> Option<FieldRef> {
         match self {
-            Self::Leaf(field) => Some(Arc::new(Field::new(
-                name,
-                field.data_type.clone(),
-                field.nullable,
-            ))),
+            Self::Leaf(field) => Some(Arc::new(field.field.clone().with_name(name))),
             Self::Struct(_) | Self::List(_) => self
                 .to_shredding_type()
                 .map(|data_type| Arc::new(Field::new(name, data_type, true))),
@@ -3084,6 +3136,129 @@ mod tests {
 
         // Row 2
         assert!(result.is_null(2));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_untyped_variant_child_shredding() -> Result<()> {
+        let input = build_variant_array(vec![
+            VariantRow::Object(vec![
+                ("id", VariantValue::from(123_i64)),
+                (
+                    "payload",
+                    VariantValue::Object(vec![(
+                        "arbitrary",
+                        VariantValue::List(vec![
+                            VariantValue::from(1_i64),
+                            VariantValue::from("x"),
+                        ]),
+                    )]),
+                ),
+                ("debug", VariantValue::from("keep")),
+            ]),
+            VariantRow::Object(vec![
+                ("id", VariantValue::from(456_i64)),
+                ("payload", VariantValue::Null),
+            ]),
+            VariantRow::Object(vec![("id", VariantValue::from(789_i64))]),
+        ]);
+
+        let schema = DataType::Struct(Fields::from(vec![
+            Field::new("id", DataType::Int64, true),
+            input.field("payload"),
+        ]));
+
+        let result = shred_variant(&input, &schema)?;
+        let typed = result
+            .typed_value_column()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+
+        let payload = ShreddedVariantFieldArray::try_new(typed.column_by_name("payload").unwrap())?;
+
+        // An untyped child has a value column, but no typed_value column.
+        assert!(payload.typed_value_column().is_none());
+        assert!(!payload.value_column().is_null(0));
+        assert!(!payload.value_column().is_null(1));
+        assert!(payload.value_column().is_null(2));
+
+        // Unselected object fields remain in the parent residual.
+        assert!(!result.value_column().is_null(0));
+
+        let restored = crate::unshred_variant(&result)?;
+        assert!(matches!(
+            restored.value(0).get_object_field("payload"),
+            Some(Variant::Object(_))
+        ));
+        assert!(restored.value(0).get_object_field("debug").is_some());
+        assert_eq!(
+            restored.value(1).get_object_field("payload"),
+            Some(Variant::Null)
+        );
+        assert!(restored.value(2).get_object_field("payload").is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_schema_builder_preserves_variant_extension() -> Result<()> {
+        let input = build_variant_array(vec![VariantRow::Object(vec![
+            ("id", VariantValue::from(1_i64)),
+            ("payload", VariantValue::from("free")),
+            (
+                "nested",
+                VariantValue::Object(vec![("data", VariantValue::from("inside"))]),
+            ),
+        ])]);
+
+        let variant_field = input.field("original_name");
+        let schema = ShreddedSchemaBuilder::default()
+            .with_path("id", (&DataType::Int64, false))?
+            .with_path("payload", Arc::new(variant_field.clone()))?
+            .with_path("nested.data", Arc::new(variant_field))?
+            .build();
+
+        let DataType::Struct(fields) = &schema else {
+            panic!("expected struct schema");
+        };
+
+        let payload_field = fields.iter().find(|f| f.name() == "payload").unwrap();
+        assert!(payload_field.has_valid_extension_type::<VariantType>());
+
+        let nested_field = fields.iter().find(|f| f.name() == "nested").unwrap();
+        let DataType::Struct(children) = nested_field.data_type() else {
+            panic!("expected nested struct");
+        };
+        let data_field = children.iter().find(|f| f.name() == "data").unwrap();
+        assert!(data_field.has_valid_extension_type::<VariantType>());
+
+        let result = shred_variant(&input, &schema)?;
+        let root = result
+            .typed_value_column()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+
+        let id = ShreddedVariantFieldArray::try_new(root.column_by_name("id").unwrap())?;
+        assert!(id.typed_value_column().is_some());
+
+        let payload = ShreddedVariantFieldArray::try_new(root.column_by_name("payload").unwrap())?;
+        assert!(payload.typed_value_column().is_none());
+
+        let nested = ShreddedVariantFieldArray::try_new(root.column_by_name("nested").unwrap())?;
+        let nested_typed = nested
+            .typed_value_column()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let data =
+            ShreddedVariantFieldArray::try_new(nested_typed.column_by_name("data").unwrap())?;
+        assert!(data.typed_value_column().is_none());
 
         Ok(())
     }
