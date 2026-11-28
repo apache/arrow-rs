@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use arrow_schema::ArrowError;
@@ -29,6 +30,13 @@ pub trait MetadataBuilder: std::fmt::Debug {
     /// Retrieves the field name for a given field id, which must be less than
     /// [`Self::num_field_names`]. Panics if the field id is out of bounds.
     fn field_name(&self, field_id: usize) -> &str;
+
+    /// Compares the field names of two field ids, which must be less than
+    /// [`Self::num_field_names`]. Panics if a field id is out of bounds.
+    fn cmp_field_names(&self, field_a_id: u32, field_b_id: u32) -> Ordering {
+        self.field_name(field_a_id as _)
+            .cmp(self.field_name(field_b_id as _))
+    }
 
     /// Returns the number of field names stored in this metadata builder. Any number less than this
     /// is a valid field id. The builder can be reverted back to this size later on (discarding any
@@ -116,6 +124,17 @@ impl MetadataBuilder for ReadOnlyMetadataBuilder<'_> {
     }
     fn field_name(&self, field_id: usize) -> &str {
         &self.metadata[field_id]
+    }
+    /// Compares the field names of two field ids, which must be less than
+    /// [`Self::num_field_names`]. Panics if a field id is out of bounds.
+    fn cmp_field_names(&self, field_a_id: u32, field_b_id: u32) -> Ordering {
+        let view = self.metadata.view();
+        let name = |id: u32| {
+            view.entry(id as _)
+                .expect("Invalid metadata dictionary entry")
+        };
+        // Byte order is `str` order, so the comparison needs no UTF-8 validation.
+        name(field_a_id).cmp(name(field_b_id))
     }
     fn num_field_names(&self) -> usize {
         self.metadata.len()

@@ -57,6 +57,7 @@ pub(crate) fn array_from_slice<const N: usize>(
         .map_err(|e: TryFromSliceError| ArrowError::InvalidArgumentError(e.to_string()))
 }
 
+#[inline]
 pub(crate) fn first_byte_from_slice(slice: &[u8]) -> Result<u8, ArrowError> {
     slice
         .first()
@@ -93,40 +94,23 @@ pub(crate) fn str_from_bytes(bytes: &[u8]) -> Result<&str, ArrowError> {
         .map_err(|_| ArrowError::InvalidArgumentError("invalid UTF-8 string".to_string()))
 }
 
-/// Performs a binary search over a range using a fallible key extraction function; a failed key
-/// extraction immediately terminates the search.
+/// Binary search over `range` with a fallible comparison, which returns the first error it hits.
 ///
-/// This is similar to the standard library's `binary_search_by`, but generalized to ranges instead
-/// of slices.
-///
-/// # Arguments
-/// * `range` - The range to search in
-/// * `target` - The target value to search for
-/// * `key_extractor` - A function that extracts a comparable key from slice elements.
-///   This function can fail and return None.
-///
-/// # Returns
-/// * `Some(Ok(index))` - Element found at the given index
-/// * `Some(Err(index))` - Element not found, but would be inserted at the given index
-/// * `None` - Key extraction failed
-pub(crate) fn try_binary_search_range_by<F>(
+/// Returns the index for which `cmp` returns [`Ordering::Equal`], if any.
+pub(crate) fn try_binary_search_range_by(
     range: Range<usize>,
-    cmp: F,
-) -> Option<Result<usize, usize>>
-where
-    F: Fn(usize) -> Option<Ordering>,
-{
+    cmp: impl Fn(usize) -> Result<Ordering, ArrowError>,
+) -> Result<Option<usize>, ArrowError> {
     let Range { mut start, mut end } = range;
     while start < end {
         let mid = start + (end - start) / 2;
         match cmp(mid)? {
-            Ordering::Equal => return Some(Ok(mid)),
+            Ordering::Equal => return Ok(Some(mid)),
             Ordering::Greater => end = mid,
             Ordering::Less => start = mid + 1,
         }
     }
-
-    Some(Err(start))
+    Ok(None)
 }
 
 /// Verifies the expected size of type T, for a type that should only grow if absolutely necessary.
