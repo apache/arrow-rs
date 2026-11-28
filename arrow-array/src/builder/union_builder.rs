@@ -4,14 +4,32 @@
 
 use crate::builder::ArrayBuilder;
 use crate::builder::buffer_builder::{Int8BufferBuilder, Int32BufferBuilder};
-use crate::{ArrayRef, ArrowPrimitiveType, UnionArray, make_array};
+use crate::{ArrayRef, ArrowPrimitiveType, PrimitiveArray, UnionArray};
 use arrow_buffer::NullBufferBuilder;
-use arrow_buffer::{ArrowNativeType, Buffer, ScalarBuffer};
-use arrow_data::ArrayDataBuilder;
+use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, ScalarBuffer};
 use arrow_schema::{ArrowError, DataType, Field};
 use std::any::Any;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+
+/// Builds the child array for a field from its finished values buffer.
+type FinishFieldFn = fn(Buffer, &DataType, usize, Option<NullBuffer>) -> ArrayRef;
+
+/// Builds a [`PrimitiveArray`] of `T` directly from a values buffer.
+///
+/// `with_data_type` asserts that `data_type` is compatible with `T`, which is the
+/// same check [`PrimitiveArray::from`] performs when it consumes `ArrayData`.
+/// It also keeps the field's data type on the child array for the decimal and
+/// timestamp types, whose precision, scale and timezone are not in `T::DATA_TYPE`.
+fn finish_primitive_array<T: ArrowPrimitiveType>(
+    values: Buffer,
+    data_type: &DataType,
+    len: usize,
+    nulls: Option<NullBuffer>,
+) -> ArrayRef {
+    let array = PrimitiveArray::<T>::new(ScalarBuffer::new(values, 0, len), nulls);
+    Arc::new(array.with_data_type(data_type.clone()))
+}
 
 /// `FieldData` is a helper struct to track the state of the fields in the `UnionBuilder`.
 #[derive(Debug)]
@@ -26,6 +44,11 @@ struct FieldData {
     slots: usize,
     /// A builder for the null bitmap
     null_buffer_builder: NullBufferBuilder,
+    /// Builds the child array for this field.
+    ///
+    /// The value type is erased from `values_buffer`, but it is known when the
+    /// field is created, so the typed constructor is stored here.
+    finish: FinishFieldFn,
 }
 
 /// A type-erased growable value buffer used by [`FieldData`]
@@ -66,6 +89,7 @@ impl FieldData {
             slots: 0,
             values_buffer: Box::new(Vec::<T::Native>::with_capacity(capacity)),
             null_buffer_builder: NullBufferBuilder::new(capacity),
+            finish: finish_primitive_array::<T>,
         }
     }
 
@@ -282,17 +306,12 @@ impl UnionBuilder {
                         mut values_buffer,
                         slots,
                         mut null_buffer_builder,
+                        finish,
                     },
                 )| {
-                    // SAFETY: builder is constructed from valid value buffer, slot count, and null buffer maintained by the builder
-                    let array_ref = make_array(unsafe {
-                        ArrayDataBuilder::new(data_type.clone())
-                            .add_buffer(values_buffer.finish())
-                            .len(slots)
-                            .nulls(null_buffer_builder.finish())
-                            .build_unchecked()
-                    });
-                    children.push(array_ref);
+                    let values = values_buffer.finish();
+                    let nulls = null_buffer_builder.finish();
+                    children.push(finish(values, &data_type, slots, nulls));
                     (type_id, Arc::new(Field::new(name, data_type, false)))
                 },
             )
@@ -320,17 +339,12 @@ impl UnionBuilder {
                     values_buffer,
                     slots,
                     null_buffer_builder,
+                    finish,
                 } = field_data;
 
-                // SAFETY: builder is constructed from valid value buffer, slot count, and null buffer maintained by the builder
-                let array_ref = make_array(unsafe {
-                    ArrayDataBuilder::new(data_type.clone())
-                        .add_buffer(values_buffer.finish_cloned())
-                        .len(*slots)
-                        .nulls(null_buffer_builder.finish_cloned())
-                        .build_unchecked()
-                });
-                children.push(array_ref);
+                let values = values_buffer.finish_cloned();
+                let nulls = null_buffer_builder.finish_cloned();
+                children.push(finish(values, data_type, *slots, nulls));
                 (
                     *type_id,
                     Arc::new(Field::new(name.clone(), data_type.clone(), false)),
@@ -441,6 +455,40 @@ mod tests {
         assert_eq!(int_array2.value(1), 4);
         assert_eq!(float_array2.value(0), 3.0);
         assert_eq!(float_array2.value(1), 5.0);
+    }
+
+    #[test]
+    fn test_union_builder_child_data_types() {
+        use crate::types::{Decimal128Type, TimestampMicrosecondType};
+
+        let mut builder = UnionBuilder::new_dense();
+        builder.append::<Int32Type>("i", 1).unwrap();
+        builder
+            .append::<TimestampMicrosecondType>("ts", 1_000_000)
+            .unwrap();
+        builder.append_null::<Decimal128Type>("d").unwrap();
+        builder.append::<Decimal128Type>("d", 123).unwrap();
+        builder.append_null::<Int32Type>("i").unwrap();
+
+        let union = builder.build().unwrap();
+        assert_eq!(union.len(), 5);
+
+        let int_array = union.child(0).as_primitive::<Int32Type>();
+        assert_eq!(int_array.data_type(), &DataType::Int32);
+        assert_eq!(int_array.len(), 2);
+        assert!(int_array.is_null(1));
+
+        let ts_array = union.child(1).as_primitive::<TimestampMicrosecondType>();
+        assert_eq!(
+            ts_array.data_type(),
+            &DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None)
+        );
+        assert_eq!(ts_array.value(0), 1_000_000);
+
+        let decimal_array = union.child(2).as_primitive::<Decimal128Type>();
+        assert_eq!(decimal_array.data_type(), &DataType::Decimal128(38, 10));
+        assert!(decimal_array.is_null(0));
+        assert_eq!(decimal_array.value(1), 123);
     }
 
     #[test]
