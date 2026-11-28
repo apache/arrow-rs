@@ -99,8 +99,14 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
     /// [`BinaryArray`]: crate::BinaryArray
     #[inline]
     pub fn append_value(&mut self, value: impl AsRef<T::Native>) {
+        let bytes: &[u8] = value.as_ref().as_ref();
+
         self.value_builder
-            .extend_from_slice(value.as_ref().as_ref());
+            .len()
+            .checked_add(bytes.len())
+            .expect("byte array length overflow");
+
+        self.value_builder.extend_from_slice(bytes);
         self.null_buffer_builder.append(true);
         self.offsets_builder.push(self.next_offset());
     }
