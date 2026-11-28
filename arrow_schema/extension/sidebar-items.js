@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["EXTENSION_TYPE_METADATA_KEY","EXTENSION_TYPE_NAME_KEY"],"enum":["CanonicalExtensionType"],"mod":["bool8","canonical","fixed_shape_tensor","json","opaque","timestamp_with_offset","uuid","variable_shape_tensor","variant"],"trait":["ExtensionType"]};

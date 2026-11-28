@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["bool_to_numeric_cast","cast_bool_to_numeric","cast_num_to_bool","cast_numeric_arrays","cast_numeric_to_bool","is_infallible_numeric_cast","num_cast","single_bool_to_numeric"],"macro":[["numeric_native",1]],"struct":["NumericKind"],"trait":["NumericNative"]};

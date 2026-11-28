@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["DecoderMode"],"fn":["is_incomplete_data"],"mod":["async_reader","block","cursor","header","record","vlq"],"struct":["Decoder","Reader","ReaderBuilder"]};

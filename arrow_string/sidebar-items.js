@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["binary_like","binary_predicate","concat_elements","length","like","predicate","regexp","substring"]};

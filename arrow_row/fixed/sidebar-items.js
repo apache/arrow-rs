@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["encode","encode_boolean","encode_boolean_not_null","encode_fixed_size_binary","encode_not_null","encoded_len","split_off","try_decode_bool","try_decode_fixed_size_binary","try_decode_nulls","try_decode_primitive"],"macro":[["encode_signed",1],["encode_unsigned",1]],"trait":["FixedLengthEncoding","FromSlice"]};

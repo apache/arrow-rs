@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["take","take_arrays","take_arrays_unchecked","take_record_batch"],"struct":["TakeOptions"]};

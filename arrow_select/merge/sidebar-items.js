@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["merge","merge_n","merge_n_with_interleave","merge_with_interleave"],"trait":["MergeIndex"]};
