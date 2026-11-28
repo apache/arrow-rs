@@ -38,6 +38,7 @@ half = { version = "2.1", default-features = false }
 [dev-dependencies]
 criterion = { workspace = true, default-features = false }
 rand = { version = "0.10", default-features = false, features = ["std", "std_rng", "thread_rng"] }
+rstest = { workspace = true }
 
 [[bench]]
 name = "bit_mask"

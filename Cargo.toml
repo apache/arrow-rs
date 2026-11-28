@@ -98,6 +98,8 @@ insta = { version = "1.46.3", default-features = false }
 
 object_store = { version = "0.14.1", default-features = false }
 
+rstest = { version = "0.28.0", default-features = false }
+
 simdutf8 = { version = "0.1.5", default-features = false }
 
 # Lints that are shared by every crate in the workspace.

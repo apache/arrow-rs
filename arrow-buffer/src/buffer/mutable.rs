@@ -1309,6 +1309,7 @@ impl<T: ArrowNativeType> std::iter::FromIterator<T> for MutableBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     #[test]
     fn test_mutable_new() {
@@ -1727,49 +1728,23 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_different_size_of_i32_repeat_slice() {
-        let data: &[i32] = &[1, 2, 3];
-        let data_with_single_item: &[i32] = &[42];
-
-        for data in &[data, data_with_single_item] {
-            for item in 1..=9 {
-                let base_repeat_count = 2_usize.pow(item);
-                test_repeat_count(base_repeat_count - 1, data);
-                test_repeat_count(base_repeat_count, data);
-                test_repeat_count(base_repeat_count + 1, data);
-            }
-        }
-    }
-
-    #[test]
-    fn test_different_size_of_u8_repeat_slice() {
-        let data: &[u8] = &[1, 2, 3];
-        let data_with_single_item: &[u8] = &[10];
-
-        for data in &[data, data_with_single_item] {
-            for item in 1..=9 {
-                let base_repeat_count = 2_usize.pow(item);
-                test_repeat_count(base_repeat_count - 1, data);
-                test_repeat_count(base_repeat_count, data);
-                test_repeat_count(base_repeat_count + 1, data);
-            }
-        }
-    }
-
-    #[test]
-    fn test_different_size_of_u16_repeat_slice() {
-        let data: &[u16] = &[1, 2, 3];
-        let data_with_single_item: &[u16] = &[10];
-
-        for data in &[data, data_with_single_item] {
-            for item in 1..=9 {
-                let base_repeat_count = 2_usize.pow(item);
-                test_repeat_count(base_repeat_count - 1, data);
-                test_repeat_count(base_repeat_count, data);
-                test_repeat_count(base_repeat_count + 1, data);
-            }
-        }
+    #[rstest]
+    #[case::i32_multiple(&[1_i32, 2, 3])]
+    #[case::i32_single(&[42_i32])]
+    #[case::u8_multiple(&[1_u8, 2, 3])]
+    #[case::u8_single(&[10_u8])]
+    #[case::u16_multiple(&[1_u16, 2, 3])]
+    #[case::u16_single(&[10_u16])]
+    fn test_different_size_repeat_slice<T>(
+        #[case] data: &[T],
+        #[values(1, 2, 3, 4, 5, 6, 7, 8, 9)] exponent: u32,
+    ) where
+        T: ArrowNativeType + PartialEq + std::fmt::Debug,
+    {
+        let base_repeat_count = 2_usize.pow(exponent);
+        test_repeat_count(base_repeat_count - 1, data);
+        test_repeat_count(base_repeat_count, data);
+        test_repeat_count(base_repeat_count + 1, data);
     }
 
     #[test]

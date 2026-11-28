@@ -1843,6 +1843,7 @@ mod tests {
     use crate::cast::downcast_array;
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
     use arrow_schema::TimeUnit;
+    use rstest::rstest;
 
     #[test]
     fn test_primitive_array_from_vec() {
@@ -2621,54 +2622,74 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_decimal_validate_precision_with_negative_scale() {
-        fn check<T: DecimalType>()
-        where
-            T::Native: From<i32>,
-        {
-            for scale in [i8::MIN, -2, -1, 0, 2] {
-                let array = PrimitiveArray::<T>::from_iter(
-                    [Some(-99), Some(0), Some(1), Some(99), None]
-                        .into_iter()
-                        .map(|v| v.map(T::Native::from)),
-                )
-                .with_precision_and_scale(2, scale)
-                .unwrap();
-                array.validate_decimal_precision(2).unwrap();
+    #[rstest]
+    #[case::decimal32(Decimal32Type {})]
+    #[case::decimal64(Decimal64Type {})]
+    #[case::decimal128(Decimal128Type {})]
+    #[case::decimal256(Decimal256Type {})]
+    fn test_decimal_validate_precision_with_negative_scale<T: DecimalType>(
+        #[case] decimal_type: T,
+        #[values(i8::MIN, -2, -1, 0, 2)] scale: i8,
+    ) where
+        T::Native: From<i32>,
+    {
+        let _ = decimal_type;
+        let array = PrimitiveArray::<T>::from_iter(
+            [Some(-99), Some(0), Some(1), Some(99), None]
+                .into_iter()
+                .map(|v| v.map(T::Native::from)),
+        )
+        .with_precision_and_scale(2, scale)
+        .unwrap();
+        array.validate_decimal_precision(2).unwrap();
 
-                for value in [-100, 100] {
-                    let array = PrimitiveArray::<T>::from_iter_values([T::Native::from(value)])
-                        .with_precision_and_scale(3, scale)
-                        .unwrap();
-                    assert!(array.validate_decimal_precision(2).is_err());
-                }
-            }
-
-            let array = PrimitiveArray::<T>::from_iter_values([T::Native::from(100)])
-                .with_precision_and_scale(3, -2)
+        for value in [-100, 100] {
+            let array = PrimitiveArray::<T>::from_iter_values([T::Native::from(value)])
+                .with_precision_and_scale(3, scale)
                 .unwrap();
-            assert_eq!(
-                array.validate_decimal_precision(2).unwrap_err().to_string(),
-                format!(
-                    "Invalid argument error: 10000 is too large to store in a {} of precision 2. Max is 9900",
-                    T::PREFIX
-                )
-            );
-
-            let array = PrimitiveArray::<T>::from_iter_values([T::Native::from(0)])
-                .with_precision_and_scale(2, 2)
-                .unwrap();
-            assert_eq!(
-                array.validate_decimal_precision(1).unwrap_err().to_string(),
-                "Invalid argument error: Decimal precision 1 is less than scale 2"
-            );
+            assert!(array.validate_decimal_precision(2).is_err());
         }
+    }
 
-        check::<Decimal32Type>();
-        check::<Decimal64Type>();
-        check::<Decimal128Type>();
-        check::<Decimal256Type>();
+    #[rstest]
+    #[case::decimal32(Decimal32Type {})]
+    #[case::decimal64(Decimal64Type {})]
+    #[case::decimal128(Decimal128Type {})]
+    #[case::decimal256(Decimal256Type {})]
+    fn test_decimal_negative_scale_error_message<T: DecimalType>(#[case] decimal_type: T)
+    where
+        T::Native: From<i32>,
+    {
+        let _ = decimal_type;
+        let array = PrimitiveArray::<T>::from_iter_values([T::Native::from(100)])
+            .with_precision_and_scale(3, -2)
+            .unwrap();
+        assert_eq!(
+            array.validate_decimal_precision(2).unwrap_err().to_string(),
+            format!(
+                "Invalid argument error: 10000 is too large to store in a {} of precision 2. Max is 9900",
+                T::PREFIX
+            )
+        );
+    }
+
+    #[rstest]
+    #[case::decimal32(Decimal32Type {})]
+    #[case::decimal64(Decimal64Type {})]
+    #[case::decimal128(Decimal128Type {})]
+    #[case::decimal256(Decimal256Type {})]
+    fn test_decimal_precision_less_than_scale<T: DecimalType>(#[case] decimal_type: T)
+    where
+        T::Native: From<i32>,
+    {
+        let _ = decimal_type;
+        let array = PrimitiveArray::<T>::from_iter_values([T::Native::from(0)])
+            .with_precision_and_scale(2, 2)
+            .unwrap();
+        assert_eq!(
+            array.validate_decimal_precision(1).unwrap_err().to_string(),
+            "Invalid argument error: Decimal precision 1 is less than scale 2"
+        );
     }
 
     #[test]
