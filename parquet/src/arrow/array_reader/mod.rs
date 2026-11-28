@@ -22,6 +22,7 @@ mod byte_array;
 mod byte_array_dictionary;
 mod byte_view_array;
 mod cached_array_reader;
+mod comparison;
 mod empty_array;
 mod fixed_len_byte_array;
 mod fixed_size_list_array;

@@ -5,7 +5,8 @@
 use crate::arrow::ProjectionMask;
 use crate::arrow::arrow_reader::{RowSelection, RowSelectionPolicy};
 use crate::schema::types::SchemaDescriptor;
-use arrow_array::{Array, BooleanArray, RecordBatch};
+use arrow_array::cast::AsArray;
+use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, Scalar};
 use arrow_buffer::BooleanBuffer;
 use arrow_schema::ArrowError;
 use arrow_select::filter::{SlicesIterator, filter_record_batch, prep_null_mask_filter};
@@ -35,6 +36,63 @@ pub trait ArrowPredicate: Send + 'static {
     /// * `true`:the row should be returned
     /// * `false` or `null`: the row should not be returned
     fn evaluate(&mut self, batch: RecordBatch) -> Result<BooleanArray, ArrowError>;
+
+    /// Describes this predicate as a comparison of its only projected column
+    /// with a scalar, if it is one.
+    ///
+    /// The reader may then evaluate the comparison while decoding instead of
+    /// calling [`evaluate`](Self::evaluate), for example from encoded pages. It
+    /// must select exactly the rows that [`evaluate`](Self::evaluate) selects.
+    /// The reader ignores it unless [`projection`](Self::projection) selects a
+    /// single leaf column.
+    fn comparison(&self) -> Option<&ColumnComparison> {
+        None
+    }
+}
+
+/// Comparison operator of a [`ColumnComparison`]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComparisonOp {
+    /// `column = scalar`
+    Eq,
+    /// `column != scalar`
+    NotEq,
+    /// `column < scalar`
+    Lt,
+    /// `column <= scalar`
+    LtEq,
+    /// `column > scalar`
+    Gt,
+    /// `column >= scalar`
+    GtEq,
+}
+
+/// A predicate of the form `column <op> scalar`, see [`ArrowPredicate::comparison`]
+///
+/// Semantics are those of Arrow's comparison kernels: floats compare in IEEE 754
+/// totalOrder, so `NaN` sorts above every other value and `-0.0` below `0.0`,
+/// and null rows are not selected.
+#[derive(Debug, Clone)]
+pub struct ColumnComparison {
+    op: ComparisonOp,
+    scalar: Scalar<ArrayRef>,
+}
+
+impl ColumnComparison {
+    /// Create a comparison of the projected column with `scalar`
+    pub fn new(op: ComparisonOp, scalar: Scalar<ArrayRef>) -> Self {
+        Self { op, scalar }
+    }
+
+    /// The comparison operator
+    pub fn op(&self) -> ComparisonOp {
+        self.op
+    }
+
+    /// The scalar the column is compared with
+    pub fn scalar(&self) -> &Scalar<ArrayRef> {
+        &self.scalar
+    }
 }
 
 /// An [`ArrowPredicate`] created from an [`FnMut`] and a [`ProjectionMask`]
@@ -97,6 +155,7 @@ pub trait ArrowPredicate: Send + 'static {
 pub struct ArrowPredicateFn<F> {
     f: F,
     projection: ProjectionMask,
+    comparison: Option<ColumnComparison>,
 }
 
 impl<F> ArrowPredicateFn<F>
@@ -106,7 +165,17 @@ where
     /// Create a new [`ArrowPredicateFn`] that invokes `f` on the columns
     /// specified in `projection`.
     pub fn new(projection: ProjectionMask, f: F) -> Self {
-        Self { f, projection }
+        Self {
+            f,
+            projection,
+            comparison: None,
+        }
+    }
+
+    /// Declare that `f` computes `comparison`, see [`ArrowPredicate::comparison`]
+    pub fn with_comparison(mut self, comparison: ColumnComparison) -> Self {
+        self.comparison = Some(comparison);
+        self
     }
 }
 
@@ -120,6 +189,32 @@ where
 
     fn evaluate(&mut self, batch: RecordBatch) -> Result<BooleanArray, ArrowError> {
         (self.f)(batch)
+    }
+
+    fn comparison(&self) -> Option<&ColumnComparison> {
+        self.comparison.as_ref()
+    }
+}
+
+/// Stands in for a predicate whose comparison the reader evaluates while
+/// decoding: the batch's only column already holds the result.
+pub(crate) struct PushedComparison {
+    projection: ProjectionMask,
+}
+
+impl PushedComparison {
+    pub(crate) fn new(projection: ProjectionMask) -> Self {
+        Self { projection }
+    }
+}
+
+impl ArrowPredicate for PushedComparison {
+    fn projection(&self) -> &ProjectionMask {
+        &self.projection
+    }
+
+    fn evaluate(&mut self, batch: RecordBatch) -> Result<BooleanArray, ArrowError> {
+        Ok(batch.column(0).as_boolean().clone())
     }
 }
 
@@ -200,7 +295,10 @@ impl RowFilter {
             Vec::with_capacity(self.predicates.len());
         let mut group: Vec<Box<dyn ArrowPredicate>> = Vec::new();
         let mut flush_group = |group: &mut Vec<Box<dyn ArrowPredicate>>| {
-            if group.len() > 1 && can_fuse_projection(group[0].projection(), parquet_schema) {
+            // One top-level, non-repeated leaf limits compaction costs.
+            if group.len() > 1
+                && single_top_level_leaf(group[0].projection(), parquet_schema).is_some()
+            {
                 let group = std::mem::take(group);
                 predicates.push(Box::new(FusedPredicate::new(group)));
             } else {
@@ -223,19 +321,20 @@ impl RowFilter {
     }
 }
 
-/// Restrict fusion to one top-level, non-repeated leaf to limit compaction costs.
-fn can_fuse_projection(projection: &ProjectionMask, parquet_schema: &SchemaDescriptor) -> bool {
+/// The only leaf `projection` selects, if it is a top-level, non-repeated column.
+pub(crate) fn single_top_level_leaf(
+    projection: &ProjectionMask,
+    parquet_schema: &SchemaDescriptor,
+) -> Option<usize> {
     let mut leaf_indices =
         (0..parquet_schema.num_columns()).filter(|idx| projection.leaf_included(*idx));
-    let Some(leaf_idx) = leaf_indices.next() else {
-        return false;
-    };
+    let leaf_idx = leaf_indices.next()?;
     if leaf_indices.next().is_some() {
-        return false;
+        return None;
     }
 
     let column = parquet_schema.column(leaf_idx);
-    column.path().parts().len() == 1 && column.max_rep_level() == 0
+    (column.path().parts().len() == 1 && column.max_rep_level() == 0).then_some(leaf_idx)
 }
 
 /// Evaluate same-projection predicates in order on one decoded batch.
@@ -395,21 +494,19 @@ mod tests {
     }
 
     #[test]
-    fn can_fuse_projection_requires_one_top_level_leaf() {
+    fn single_top_level_leaf_requires_one_top_level_leaf() {
         let schema = test_schema();
 
         let one_leaf = ProjectionMask::leaves(&schema, [1]);
         let two_leaves = ProjectionMask::leaves(&schema, [0, 2]);
         let nested_leaf = ProjectionMask::leaves(&schema, [3]);
         let repeated_leaf = ProjectionMask::leaves(&schema, [4]);
-        assert!(can_fuse_projection(&one_leaf, &schema));
-        assert!(!can_fuse_projection(&two_leaves, &schema));
-        assert!(!can_fuse_projection(&nested_leaf, &schema));
-        assert!(!can_fuse_projection(&repeated_leaf, &schema));
-        assert!(!can_fuse_projection(
-            &ProjectionMask::none(schema.num_columns()),
-            &schema
-        ));
+        let none = ProjectionMask::none(schema.num_columns());
+        assert_eq!(single_top_level_leaf(&one_leaf, &schema), Some(1));
+        assert_eq!(single_top_level_leaf(&two_leaves, &schema), None);
+        assert_eq!(single_top_level_leaf(&nested_leaf, &schema), None);
+        assert_eq!(single_top_level_leaf(&repeated_leaf, &schema), None);
+        assert_eq!(single_top_level_leaf(&none, &schema), None);
     }
 
     fn accept_all(projection: ProjectionMask) -> Box<dyn ArrowPredicate> {

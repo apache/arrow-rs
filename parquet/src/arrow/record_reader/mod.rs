@@ -29,6 +29,8 @@ pub type RecordReader<T> = GenericRecordReader<Vec<<T as DataType>::T>, ColumnVa
 pub(crate) type ColumnReader<CV> =
     GenericColumnReader<RepetitionLevelDecoderImpl, DefinitionLevelBufferDecoder, CV>;
 
+type ConfigureDecoder<CV> = Box<dyn Fn(&mut CV) + Send>;
+
 /// A generic stateful column reader that delimits semantic records
 ///
 /// This type is hidden from the docs, and relies on private traits with no
@@ -75,6 +77,8 @@ pub struct GenericRecordReader<V, CV> {
     /// as the valid_mask for `pad_nulls` (via `as_slice()`) and as the null
     /// bitmap consumed by the leaf reader (via `consume_compact_bitmap`).
     compact_bitmap: Option<BooleanBufferBuilder>,
+    /// Applied to every values decoder [`Self::set_page_reader`] creates.
+    configure_values_decoder: Option<ConfigureDecoder<CV>>,
 }
 
 impl<V, CV> GenericRecordReader<V, CV>
@@ -105,6 +109,7 @@ where
             padding_threshold: None,
             compact_bitmap: None,
             validate_utf8: false,
+            configure_values_decoder: None,
         }
     }
 
@@ -113,6 +118,9 @@ where
         let descr = &self.column_desc;
         let mut values_decoder = CV::new(descr);
         values_decoder.set_validate_utf8(self.validate_utf8);
+        if let Some(configure) = &self.configure_values_decoder {
+            configure(&mut values_decoder);
+        }
 
         let def_level_decoder = (descr.max_def_level() != 0).then(|| {
             DefinitionLevelBufferDecoder::new(descr.max_def_level(), packed_null_mask(descr))
@@ -220,6 +228,11 @@ where
     /// skipping list-level padding entries (def < threshold).
     pub fn set_padding_threshold(&mut self, threshold: i16) {
         self.padding_threshold = Some(threshold);
+    }
+
+    /// Configure each values decoder this reader creates, one per column chunk.
+    pub fn set_configure_values_decoder(&mut self, configure: impl Fn(&mut CV) + Send + 'static) {
+        self.configure_values_decoder = Some(Box::new(configure));
     }
 
     /// Validate decoded values as UTF-8 even if the column is not annotated as a string.

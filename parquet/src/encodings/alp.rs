@@ -249,6 +249,7 @@ impl AlpExact for u32 {
     const WIDTH: usize = 4;
     type Signed = i32;
 
+    #[inline(always)]
     fn from_le_slice(slice: &[u8]) -> Self {
         u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]])
     }
@@ -282,6 +283,7 @@ impl AlpExact for u64 {
     const WIDTH: usize = 8;
     type Signed = i64;
 
+    #[inline(always)]
     fn from_le_slice(slice: &[u8]) -> Self {
         u64::from_le_bytes([
             slice[0], slice[1], slice[2], slice[3], slice[4], slice[5], slice[6], slice[7],
