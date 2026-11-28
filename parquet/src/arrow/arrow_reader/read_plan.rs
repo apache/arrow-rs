@@ -15,6 +15,7 @@ use crate::arrow::arrow_reader::{
 use crate::errors::{ParquetError, Result};
 use arrow_array::{Array, BooleanArray};
 use arrow_buffer::BooleanBuffer;
+use arrow_schema::SchemaRef;
 use arrow_select::filter::prep_null_mask_filter;
 use std::sync::Arc;
 
@@ -24,6 +25,8 @@ pub struct PredicateOptions<'a> {
     predicate: &'a mut dyn ArrowPredicate,
     limit: Option<usize>,
     total_rows: usize,
+    /// Requested schema and byte limit for staged `Utf8`/`Binary` leaves.
+    capacity_staging: Option<(SchemaRef, usize)>,
 }
 
 impl<'a> PredicateOptions<'a> {
@@ -39,7 +42,20 @@ impl<'a> PredicateOptions<'a> {
             predicate,
             limit: None,
             total_rows: 0,
+            capacity_staging: None,
         }
+    }
+
+    /// Restore the predicate input to `schema`, which the predicate reader's
+    /// staged `Utf8`/`Binary` leaves were decoded from, splitting batches whose
+    /// leaves exceed `byte_array_capacity`. `None` disables staging.
+    pub(crate) fn with_capacity_staging(
+        mut self,
+        schema: SchemaRef,
+        byte_array_capacity: Option<usize>,
+    ) -> Self {
+        self.capacity_staging = byte_array_capacity.map(|capacity| (schema, capacity));
+        self
     }
 
     /// Stop scanning `array_reader` once `limit` matches have accumulated.
@@ -176,6 +192,7 @@ impl ReadPlanBuilder {
             predicate,
             limit,
             total_rows,
+            capacity_staging,
         } = options;
 
         // Target length for the concatenated filter output:
@@ -189,7 +206,15 @@ impl ReadPlanBuilder {
             None => limit.map(|_| total_rows),
         };
 
-        let reader = ParquetRecordBatchReader::new(array_reader, self.clone().build());
+        let reader = match capacity_staging {
+            Some((schema, capacity)) => ParquetRecordBatchReader::new_with_capacity_staging(
+                array_reader,
+                self.clone().build(),
+                schema,
+                Some(capacity),
+            ),
+            None => ParquetRecordBatchReader::new(array_reader, self.clone().build()),
+        };
         let mut filters = vec![];
         let mut processed_rows: usize = 0;
         let mut matched_rows: usize = 0;
