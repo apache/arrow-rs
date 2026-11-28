@@ -1575,11 +1575,19 @@ impl ArrayData {
                 let child = &self.child_data[0];
                 if !field.is_nullable() {
                     let element_len = *len as usize;
-                    let child_nulls = child.nulls().map(|nulls| {
-                        nulls.slice(self.offset * element_len, self.len * element_len)
-                    });
-                    let expanded = self.nulls.as_ref().map(|nulls| nulls.expand(element_len));
-                    self.validate_non_nullable(expanded.as_ref(), child, child_nulls.as_ref())?;
+                    let child_nulls = child
+                        .nulls()
+                        .map(|nulls| nulls.slice(self.offset * element_len, self.len * element_len))
+                        .filter(|nulls| nulls.null_count() != 0);
+                    if let Some(child_nulls) = child_nulls {
+                        let expanded = self
+                            .nulls
+                            .as_ref()
+                            .map(|nulls| nulls.try_expand(element_len))
+                            .transpose()
+                            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+                        self.validate_non_nullable(expanded.as_ref(), child, Some(&child_nulls))?;
+                    }
                 }
             }
             DataType::Struct(fields) => {
@@ -2681,6 +2689,13 @@ mod tests {
 
         assert!(build(vec![true, false, true, true]).is_ok());
         assert!(build(vec![true, true, false, true]).is_err());
+    }
+
+    #[test]
+    fn test_fixed_size_list_skips_unnecessary_null_expansion() {
+        let field = Field::new_list_field(DataType::Null, false);
+        let data = ArrayData::new_null(&DataType::FixedSizeList(field.into(), 128), 65_536);
+        data.validate_full().unwrap();
     }
 
     #[test]
