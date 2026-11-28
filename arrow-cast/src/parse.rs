@@ -157,6 +157,8 @@ impl TimestampParser {
 /// * `1997-01-31 092656`               # close to RCF3339, no fractional seconds
 /// * `1997-01-31 092656+04:00`         # close to RCF3339, no fractional seconds or time separator
 /// * `1997-01-31`                      # close to RCF3339, only date no time
+/// * `+10999-12-31T09:26:56.123Z`      # ISO8601 year with more than four digits, needs a sign
+/// * `-0001-01-31T09:26:56.123Z`       # ISO8601 year before 0000
 ///
 /// [IANA timezones] are only supported if the `arrow-array/chrono-tz` or `arrow-array/jiff` feature is enabled
 ///
@@ -198,8 +200,22 @@ pub fn string_to_datetime<T: TimeZone>(timezone: &T, s: &str) -> Result<DateTime
         return Err(err("timestamp must contain at least 10 characters"));
     }
 
+    // A signed extended year such as "+10999-12-31" makes the date longer; skip the
+    // extra bytes so the time and timezone are found at the usual offsets
+    let (extended_date, skip) = match bytes[0] {
+        b'+' | b'-' => {
+            let (date, len) = parse_extended_date(s).ok_or_else(|| err("error parsing date"))?;
+            (Some(date), len - 10)
+        }
+        _ => (None, 0),
+    };
+    let bytes = &bytes[skip..];
+
     let parser = TimestampParser::new(bytes);
-    let date = parser.date().ok_or_else(|| err("error parsing date"))?;
+    let date = match extended_date {
+        Some(date) => date,
+        None => parser.date().ok_or_else(|| err("error parsing date"))?,
+    };
     if bytes.len() == 10 {
         let datetime = date.and_time(NaiveTime::MIN);
         return resolve_local_datetime(timezone, &datetime)
@@ -230,7 +246,7 @@ pub fn string_to_datetime<T: TimeZone>(timezone: &T, s: &str) -> Result<DateTime
     }
 
     // Parse remainder of string as timezone
-    let parsed_tz: Tz = s[tz_offset..].trim_start().parse()?;
+    let parsed_tz: Tz = s[skip + tz_offset..].trim_start().parse()?;
     let parsed = resolve_local_datetime(&parsed_tz, &datetime)
         .ok_or_else(|| err("error computing timezone offset"))?;
 
@@ -714,6 +730,15 @@ fn parse_extended_ymd(string: &str) -> Option<(i32, u32, u32)> {
     let month: u32 = parts.next()?.parse().ok()?;
     let day: u32 = parts.next()?.parse().ok()?;
     Some((year, month, day))
+}
+
+/// Parse the signed extended-year date (`±YYYY[Y...]-MM-DD`) at the start of
+/// `string`, returning the date and its length in bytes
+fn parse_extended_date(string: &str) -> Option<(NaiveDate, usize)> {
+    // The sign, the year digits, then "-MM-DD"
+    let len = string[1..].find('-')? + 7;
+    let (year, month, day) = parse_extended_ymd(string.get(..len)?)?;
+    Some((NaiveDate::from_ymd_opt(year, month, day)?, len))
 }
 
 fn parse_date(string: &str) -> Option<NaiveDate> {
