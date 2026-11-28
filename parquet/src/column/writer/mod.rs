@@ -8,7 +8,7 @@ use bytes::Bytes;
 use half::f16;
 
 use crate::bloom_filter::Sbbf;
-use crate::file::page_index::column_index::ColumnIndexMetaData;
+use crate::file::page_index::column_index::{ColumnIndexMetaData, PrimitiveColumnIndex};
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, VecDeque};
@@ -475,13 +475,6 @@ pub struct GenericColumnWriter<'a, E: ColumnValueEncoder> {
     // column index and offset index
     column_index_builder: ColumnIndexBuilder,
     offset_index_builder: Option<OffsetIndexBuilder>,
-
-    // Below fields used to incrementally check boundary order across data pages.
-    // We assume they are ascending/descending until proven wrong.
-    data_page_boundary_ascending: bool,
-    data_page_boundary_descending: bool,
-    /// (min, max)
-    last_non_null_data_page_min_max: Option<(E::T, E::T)>,
 }
 
 impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
@@ -544,9 +537,6 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             offset_index_builder,
             encodings,
             encoding_stats: vec![],
-            data_page_boundary_ascending: true,
-            data_page_boundary_descending: true,
-            last_non_null_data_page_min_max: None,
         }
     }
 
@@ -826,20 +816,13 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             .flush_bloom_filter()
             .filter(|_| write_bloom_filter);
 
-        let boundary_order = match (
-            self.data_page_boundary_ascending,
-            self.data_page_boundary_descending,
-        ) {
-            // If the lists are composed of equal elements then will be marked as ascending
-            // (Also the case if all pages are null pages)
-            (true, _) => BoundaryOrder::ASCENDING,
-            (false, true) => BoundaryOrder::DESCENDING,
-            (false, false) => BoundaryOrder::UNORDERED,
-        };
-        self.column_index_builder.set_boundary_order(boundary_order);
-
         let column_index = match self.column_index_builder.valid() {
-            true => Some(self.column_index_builder.build()?),
+            true => {
+                let mut index = self.column_index_builder.build()?;
+                let order = boundary_order_of(self.descr.get_basic_info(), &index);
+                index.set_boundary_order(order);
+                Some(index)
+            }
             false => None,
         };
 
@@ -1290,31 +1273,6 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                     self.column_index_builder.to_invalid();
                 }
                 Some(stat) => {
-                    // Check if min/max are still ascending/descending across pages
-                    let new_min = stat.min_opt().unwrap();
-                    let new_max = stat.max_opt().unwrap();
-                    if let Some((last_min, last_max)) = &self.last_non_null_data_page_min_max {
-                        let basic_info = self.descr.get_basic_info();
-                        if self.data_page_boundary_ascending {
-                            // If last min/max are greater than new min/max then not ascending anymore
-                            let not_ascending = compare_greater(basic_info, last_min, new_min)
-                                || compare_greater(basic_info, last_max, new_max);
-                            if not_ascending {
-                                self.data_page_boundary_ascending = false;
-                            }
-                        }
-
-                        if self.data_page_boundary_descending {
-                            // If new min/max are greater than last min/max then not descending anymore
-                            let not_descending = compare_greater(basic_info, new_min, last_min)
-                                || compare_greater(basic_info, new_max, last_max);
-                            if not_descending {
-                                self.data_page_boundary_descending = false;
-                            }
-                        }
-                    }
-                    self.last_non_null_data_page_min_max = Some((new_min.clone(), new_max.clone()));
-
                     if self.can_truncate_value() {
                         self.column_index_builder.append(
                             null_page,
@@ -1943,6 +1901,70 @@ where
 {
     if should_update(cur) {
         *cur = val.clone();
+    }
+}
+
+/// Returns `ASCENDING` or `DESCENDING` when the min values and the max values in `index` are
+/// both in that order, and `UNORDERED` otherwise.
+fn boundary_order_of(basic_info: &BasicTypeInfo, index: &ColumnIndexMetaData) -> BoundaryOrder {
+    match index {
+        ColumnIndexMetaData::BOOLEAN(index) => primitive_boundary_order(basic_info, index),
+        ColumnIndexMetaData::INT32(index) => primitive_boundary_order(basic_info, index),
+        ColumnIndexMetaData::INT64(index) => primitive_boundary_order(basic_info, index),
+        ColumnIndexMetaData::INT96(index) => primitive_boundary_order(basic_info, index),
+        ColumnIndexMetaData::FLOAT(index) => primitive_boundary_order(basic_info, index),
+        ColumnIndexMetaData::DOUBLE(index) => primitive_boundary_order(basic_info, index),
+        ColumnIndexMetaData::BYTE_ARRAY(bytes)
+        | ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(bytes) => {
+            // The same choice as `compare_greater` makes, on the bytes the index holds.
+            let float16 = matches!(index, ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(_))
+                && matches!(basic_info.sort_order(), SortOrder::TOTAL_ORDER);
+
+            let greater: fn(&[u8], &[u8]) -> bool = if float16 {
+                compare_greater_f16
+            } else if is_decimal_descr(basic_info) {
+                compare_greater_byte_array_decimals
+            } else {
+                |a, b| a > b
+            };
+
+            let pages = 0..bytes.num_pages() as usize;
+            let mins = pages.clone().filter_map(|page| bytes.min_value(page));
+            let maxes = pages.filter_map(|page| bytes.max_value(page));
+            boundary_order_of_values(mins, maxes, greater)
+        }
+    }
+}
+
+/// [`boundary_order_of`] for an index of `T` values, which [`compare_greater`] compares.
+fn primitive_boundary_order<T: ParquetValueType>(
+    basic_info: &BasicTypeInfo,
+    index: &PrimitiveColumnIndex<T>,
+) -> BoundaryOrder {
+    // Null pages have no min and max, and do not take part in the order.
+    let pages = 0..index.num_pages() as usize;
+    let mins = pages.clone().filter_map(|page| index.min_value(page));
+    let maxes = pages.filter_map(|page| index.max_value(page));
+    boundary_order_of_values(mins, maxes, |a, b| compare_greater(basic_info, a, b))
+}
+
+/// Computes the boundary order of the given `mins` and `maxes`.
+fn boundary_order_of_values<V: Copy>(
+    mins: impl Iterator<Item = V> + Clone,
+    maxes: impl Iterator<Item = V> + Clone,
+    greater: impl Fn(V, V) -> bool,
+) -> BoundaryOrder {
+    let le = |a: &V, b: &V| !greater(*a, *b);
+    let ge = |a: &V, b: &V| !greater(*b, *a);
+    let ascending = mins.clone().is_sorted_by(le) && maxes.clone().is_sorted_by(le);
+    let descending = mins.is_sorted_by(ge) && maxes.is_sorted_by(ge);
+
+    match (ascending, descending) {
+        // If the lists are composed of equal elements then will be marked as ascending
+        // (Also the case if all pages are null pages)
+        (true, _) => BoundaryOrder::ASCENDING,
+        (false, true) => BoundaryOrder::DESCENDING,
+        (false, false) => BoundaryOrder::UNORDERED,
     }
 }
 
@@ -5461,6 +5483,43 @@ mod tests {
     }
 
     #[test]
+    fn test_boundary_order_of_truncated_values() -> Result<()> {
+        let descr = Arc::new(get_test_column_descr::<ByteArrayType>(1, 0));
+        // The column index holds a lower and an upper bound for each page. By default the writer
+        // cuts an upper bound longer than 64 bytes to its first 64 bytes and adds one. For `long`
+        // the addition carries into the first byte. Each page holds one value:
+        //
+        //   +------+------------------------+-------------+-------------+
+        //   | page | actual min and max     | lower bound | upper bound |
+        //   +------+------------------------+-------------+-------------+
+        //   | 0    | long  = 01, FF * 64    | 01, FF * 63 | 02, 00 * 63 |
+        //   | 1    | short = 02             | 02          | 02          |
+        //   +------+------------------------+-------------+-------------+
+        //
+        // The actual min and max ascend and so do the lower bounds, while the upper bounds
+        // descend.
+        let mut long = vec![0xFF; 65];
+        long[0] = 1;
+        let long = ByteArray::from(long);
+        let short = ByteArray::from(vec![2_u8]);
+        assert!(long < short);
+
+        let column_close_result =
+            write_multiple_pages::<ByteArrayType>(&descr, &[&[Some(long)], &[Some(short)]])?;
+
+        let Some(ColumnIndexMetaData::BYTE_ARRAY(column_index)) = column_close_result.column_index
+        else {
+            panic!("expected a byte array column index")
+        };
+
+        assert!(column_index.min_value(0) < column_index.min_value(1));
+        assert!(column_index.max_value(0) > column_index.max_value(1));
+        assert_eq!(column_index.boundary_order, BoundaryOrder::UNORDERED);
+
+        Ok(())
+    }
+
+    #[test]
     fn test_boundary_order_logical_type() -> Result<()> {
         // ensure that logical types account for different sort order than underlying
         // physical type representation
@@ -5506,6 +5565,21 @@ mod tests {
             .unwrap()
             .get_boundary_order();
         assert_eq!(boundary_order, Some(BoundaryOrder::UNORDERED));
+
+        // decimals are signed: -1 sorts before 1, their bytes the other way round
+        let decimal_descr = Arc::new(get_test_decimals_column_descr::<ByteArrayType>(1, 0));
+        let column_close_result = write_multiple_pages::<ByteArrayType>(
+            &decimal_descr,
+            &[
+                &[Some(ByteArray::from(vec![0xFF_u8]))],
+                &[Some(ByteArray::from(vec![0x01_u8]))],
+            ],
+        )?;
+        let boundary_order = column_close_result
+            .column_index
+            .unwrap()
+            .get_boundary_order();
+        assert_eq!(boundary_order, Some(BoundaryOrder::ASCENDING));
 
         Ok(())
     }

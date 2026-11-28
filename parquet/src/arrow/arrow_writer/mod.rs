@@ -2351,7 +2351,7 @@ mod tests {
     use arrow_schema::Fields;
     use arrow_select::concat::concat;
 
-    use crate::basic::{Encoding, EncodingMask};
+    use crate::basic::{BoundaryOrder, Encoding, EncodingMask};
     use crate::data_type::AsBytes;
     use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaData, ParquetMetaDataReader};
     use crate::file::properties::{
@@ -5039,6 +5039,65 @@ mod tests {
 
         assert_eq!(index.num_data_pages(0, 0), Some(1)); // 1 page
         assert_eq!(index.num_data_pages(0, 1), Some(1)); // 1 page
+    }
+
+    #[test]
+    fn test_column_index_boundary_order_of_truncated_values() {
+        // Writes a single string column: 30,000 rows of `first`, then 30,000 rows of `second`.
+        //
+        //   first  = "a" * 63 + "éé"  (67 bytes)
+        //   second = "a" * 63 + "b"   (64 bytes)
+        //
+        // The column index holds a lower and an upper bound for each page. The writer cuts them
+        // to at most 64 bytes, at a character boundary. In `first` the two-byte `é`
+        // (U+00E9) covers bytes 64 and 65, so the last character boundary within 64 bytes is
+        // after byte 63, and `first` is cut to its first 63 bytes. An upper bound that is cut
+        // also has its last character incremented. `second` is 64 bytes and is not cut.
+        //
+        // A data page holds about 20,000 rows, so the rows fall into three pages:
+        //
+        //   +------+------------------+------------+------------+-------------+----------------+
+        //   | page | values           | actual min | actual max | lower bound | upper bound    |
+        //   +------+------------------+------------+------------+-------------+----------------+
+        //   | 0    | first            | first      | first      | "a" * 63    | "a" * 62 + "b" |
+        //   | 1    | first and second | second     | first      | second      | "a" * 62 + "b" |
+        //   | 2    | second           | second     | second     | second      | second         |
+        //   +------+------------------+------------+------------+-------------+----------------+
+        //
+        // The actual min and max descend, while the lower bounds ascend and the upper bounds
+        // descend. The boundary order must describe the bounds: `UNORDERED`.
+        let first = format!("{}\u{e9}\u{e9}", "a".repeat(63));
+        let second = format!("{}b", "a".repeat(63));
+        assert!(first > second);
+
+        let values = std::iter::repeat_n(first.as_str(), 30_000)
+            .chain(std::iter::repeat_n(second.as_str(), 30_000));
+        let array = Arc::new(StringArray::from_iter_values(values)) as ArrayRef;
+        let batch = RecordBatch::try_from_iter([("a", array)]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_data_page_row_count_limit(20_000)
+            .set_column_index_truncate_length(Some(64))
+            .build();
+        let mut buf = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let options = ReadOptionsBuilder::new().with_page_index().build();
+        let reader = SerializedFileReader::new_with_options(Bytes::from(buf), options).unwrap();
+        let index = reader.metadata().page_index().unwrap().column_index(0, 0);
+        let Some(ColumnIndexMetaData::BYTE_ARRAY(index)) = index else {
+            panic!("expected a byte array column index, got {index:?}")
+        };
+
+        let mins: Vec<_> = index.min_values_iter().flatten().collect();
+        let maxes: Vec<_> = index.max_values_iter().flatten().collect();
+        assert!(mins.len() > 1);
+        assert_eq!(mins.len(), maxes.len());
+        assert!(mins.first() < mins.last(), "{mins:?}");
+        assert!(maxes.first() > maxes.last(), "{maxes:?}");
+        assert_eq!(index.boundary_order, BoundaryOrder::UNORDERED);
     }
 
     #[test]
