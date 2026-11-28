@@ -302,6 +302,8 @@ fn to_timestamp_nanos(dt: NaiveDateTime) -> Result<i64, ArrowError> {
 ///
 /// Internally, this function uses the `chrono` library for the time parsing
 ///
+/// Leap seconds are rejected because Arrow time types cannot represent them.
+///
 /// ## Timezone / Offset Handling
 ///
 /// This function does not support parsing strings with a timezone
@@ -404,18 +406,18 @@ fn string_to_time(s: &str) -> Option<NaiveTime> {
         (h, None) => h,
     };
 
-    // Handle leap second
-    let (second, nanoseconds) = match digits[4] * 10 + digits[5] {
-        60 => (59, nanoseconds + 1_000_000_000),
-        s => (s, nanoseconds),
-    };
-
     NaiveTime::from_hms_nano_opt(
         hour as _,
         (digits[2] * 10 + digits[3]) as _,
-        second as _,
+        (digits[4] * 10 + digits[5]) as _,
         nanoseconds,
     )
+}
+
+fn string_to_time_formatted(string: &str, format: &str) -> Option<NaiveTime> {
+    let time = NaiveTime::parse_from_str(string, format).ok()?;
+    // Chrono represents leap seconds with a nanosecond value of at least 1_000_000_000.
+    (time.nanosecond() < 1_000_000_000).then_some(time)
 }
 
 /// Specialized parsing implementations to convert strings to Arrow types.
@@ -604,7 +606,7 @@ impl Parser for Time64NanosecondType {
     }
 
     fn parse_formatted(string: &str, format: &str) -> Option<Self::Native> {
-        let nt = NaiveTime::parse_from_str(string, format).ok()?;
+        let nt = string_to_time_formatted(string, format)?;
         Some(nt.num_seconds_from_midnight() as i64 * 1_000_000_000 + nt.nanosecond() as i64)
     }
 }
@@ -629,7 +631,7 @@ impl Parser for Time64MicrosecondType {
     }
 
     fn parse_formatted(string: &str, format: &str) -> Option<Self::Native> {
-        let nt = NaiveTime::parse_from_str(string, format).ok()?;
+        let nt = string_to_time_formatted(string, format)?;
         Some(nt.num_seconds_from_midnight() as i64 * 1_000_000 + nt.nanosecond() as i64 / 1_000)
     }
 }
@@ -654,7 +656,7 @@ impl Parser for Time32MillisecondType {
     }
 
     fn parse_formatted(string: &str, format: &str) -> Option<Self::Native> {
-        let nt = NaiveTime::parse_from_str(string, format).ok()?;
+        let nt = string_to_time_formatted(string, format)?;
         Some(nt.num_seconds_from_midnight() as i32 * 1_000 + nt.nanosecond() as i32 / 1_000_000)
     }
 }
@@ -679,7 +681,7 @@ impl Parser for Time32SecondType {
     }
 
     fn parse_formatted(string: &str, format: &str) -> Option<Self::Native> {
-        let nt = NaiveTime::parse_from_str(string, format).ok()?;
+        let nt = string_to_time_formatted(string, format)?;
         Some(nt.num_seconds_from_midnight() as i32 + nt.nanosecond() as i32 / 1_000_000_000)
     }
 }
@@ -2253,10 +2255,7 @@ mod tests {
         assert_eq!(Time64NanosecondType::parse("1"), Some(1));
 
         // leap second
-        assert_eq!(
-            Time64NanosecondType::parse("23:59:60"),
-            Some(86_400_000_000_000)
-        );
+        assert_eq!(Time64NanosecondType::parse("23:59:60"), None);
 
         // custom format
         assert_eq!(
@@ -2330,10 +2329,7 @@ mod tests {
         assert_eq!(Time64MicrosecondType::parse("1"), Some(1));
 
         // leap second
-        assert_eq!(
-            Time64MicrosecondType::parse("23:59:60"),
-            Some(86_400_000_000)
-        );
+        assert_eq!(Time64MicrosecondType::parse("23:59:60"), None);
 
         // custom format
         assert_eq!(
@@ -2380,7 +2376,7 @@ mod tests {
         assert_eq!(Time32MillisecondType::parse("1"), Some(1));
 
         // leap second
-        assert_eq!(Time32MillisecondType::parse("23:59:60"), Some(86_400_000));
+        assert_eq!(Time32MillisecondType::parse("23:59:60"), None);
 
         // custom format
         assert_eq!(
@@ -2410,13 +2406,49 @@ mod tests {
         assert_eq!(Time32SecondType::parse("1"), Some(1));
 
         // leap second
-        assert_eq!(Time32SecondType::parse("23:59:60"), Some(86400));
+        assert_eq!(Time32SecondType::parse("23:59:60"), None);
 
         // custom format
         assert_eq!(
             Time32SecondType::parse_formatted("02 - 10 - 01", "%H - %M - %S"),
             Some(7_801)
         );
+    }
+
+    #[test]
+    fn parse_time_boundaries() {
+        fn check<T: Parser>(units_per_second: i64)
+        where
+            T::Native: Into<i64>,
+        {
+            for (input, format, expected) in [
+                ("00:00:00", "%H:%M:%S", Some(0)),
+                (
+                    "23:59:59.999999999",
+                    "%H:%M:%S%.f",
+                    Some(86_400 * units_per_second - 1),
+                ),
+                ("23:59:60", "%H:%M:%S", None),
+                ("23:59:60.5", "%H:%M:%S%.f", None),
+                ("12:34:60", "%H:%M:%S", None),
+                ("11:59:60 PM", "%I:%M:%S %p", None),
+            ] {
+                assert_eq!(T::parse(input).map(Into::into), expected, "{input}");
+                assert_eq!(
+                    T::parse_formatted(input, format).map(Into::into),
+                    expected,
+                    "{input} ({format})"
+                );
+            }
+            assert_eq!(T::parse(" 23:59:60 "), None);
+        }
+
+        check::<Time32SecondType>(1);
+        check::<Time32MillisecondType>(1_000);
+        check::<Time64MicrosecondType>(1_000_000);
+        check::<Time64NanosecondType>(1_000_000_000);
+
+        assert!(string_to_time_nanoseconds("23:59:60").is_err());
     }
 
     #[test]
